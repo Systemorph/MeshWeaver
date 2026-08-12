@@ -52,10 +52,20 @@ public static class ActivityLayoutAreas
 
     /// <summary>
     /// Area id of the script RESULT inside <see cref="Progress"/> / <see cref="Overview"/> —
-    /// the control a script returned, rendered live. Named (not auto-numbered) so the
-    /// indicator and log keep their positions and so tests address it by name.
+    /// the control a script returned, rendered live. It comes FIRST: it is what the reader
+    /// pressed Run for.
     /// </summary>
     public const string ResultArea = "Result";
+
+    /// <summary>Area id of the message log inside <see cref="Progress"/> / <see cref="Overview"/>.</summary>
+    public const string LogArea = "Log";
+
+    /// <summary>
+    /// Area id of the run's status inside <see cref="Progress"/> / <see cref="Overview"/> — the
+    /// live bar while running, the terminal "✓ Done" line afterwards. LAST, and quiet: see
+    /// <see cref="Progress"/>.
+    /// </summary>
+    public const string StatusArea = "Status";
 
     /// <summary>
     /// The control a script RETURNED, as a live stream — the missing half of #915.
@@ -116,11 +126,14 @@ public static class ActivityLayoutAreas
 
                 var stack = Controls.Stack
                     .WithStyle("padding: 16px; gap: 12px;")
-                    .WithView(BuildHeader(log, zoneId))
-                    .WithView(BuildProgressIndicator(log))
-                    .WithView(BuildLog(log, locale: host.ViewerLocale(), hasResult: result is not null));
+                    .WithView(BuildHeader(log, zoneId));
+                // Same reading order as the cell pane: what the run PRODUCED, then what it printed,
+                // then how it ended. The header already carries the status badge.
                 if (result is not null)
                     stack = stack.WithView(result, ResultArea);
+                stack = stack
+                    .WithView(BuildLog(log, locale: host.ViewerLocale(), hasResult: result is not null), LogArea)
+                    .WithView(BuildProgressIndicator(log), StatusArea);
 
                 // While running: Cancel button. Per the Activity Control Plane
                 // pattern (Doc/Architecture/ActivityControlPlane.md), cancellation
@@ -197,13 +210,18 @@ public static class ActivityLayoutAreas
     /// Compact running-progress view for embedding next to an executable Code
     /// node (or anywhere a caller wants live script feedback). Streams the same
     /// ActivityLog content as <see cref="Overview"/> but trims chrome and shows
-    /// only the live progress indicator + message log + the script's rendered
-    /// result + inline Cancel button (while running). No header, no Re-run.
+    /// only the script's rendered result + message log + run status + inline
+    /// Cancel button (while running). No header, no Re-run.
     /// Built from framework controls.
     /// <para>This IS the code cell's output pane (<c>CodeLayoutAreas.BuildContent</c>
     /// embeds it), so a script whose result is a control renders that control HERE —
-    /// see <see cref="RenderedResult"/>. Order follows a notebook cell: status,
-    /// printed lines, then the result.</para>
+    /// see <see cref="RenderedResult"/>.</para>
+    /// <para>🚨 <b>The RESULT leads; the status is a footer.</b> A cell's output pane is not a
+    /// run report — the reader pressed Run to see the grid, and "✓ Done" is metadata about how
+    /// the run ended. Rendering the status first (as an <c>H4</c>, no less) made the pane READ
+    /// as "Done" with the actual answer somewhere below, which is precisely how it was reported:
+    /// <i>"output must show control and not Done"</i>. So: result, then whatever the script
+    /// printed, then one quiet status line at the foot.</para>
     /// </summary>
     public static IObservable<UiControl?> Progress(LayoutAreaHost host, RenderingContext _)
     {
@@ -214,12 +232,12 @@ public static class ActivityLayoutAreas
                     return (UiControl?)Controls.Label(host.Localize("ui.noActivityYet"))
                         .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);");
 
-                var stack = Controls.Stack
-                    .WithStyle("gap: 8px;")
-                    .WithView(BuildProgressIndicator(log))
-                    .WithView(BuildLog(log, locale: host.ViewerLocale(), hasResult: result is not null));
+                var stack = Controls.Stack.WithStyle("gap: 8px;");
                 if (result is not null)
                     stack = stack.WithView(result, ResultArea);
+                stack = stack
+                    .WithView(BuildLog(log, locale: host.ViewerLocale(), hasResult: result is not null), LogArea)
+                    .WithView(BuildProgressIndicator(log, compact: result is not null), StatusArea);
 
                 // Inline Cancel: same content-patch pattern as the Overview's
                 // button. Only rendered while the activity is actually running
@@ -276,7 +294,15 @@ public static class ActivityLayoutAreas
     /// final message. Passing <c>null</c> as the progress value is what drives the
     /// indeterminate FluentProgress in <c>ProgressView.razor</c>.
     /// </summary>
-    public static UiControl BuildProgressIndicator(ActivityLog log)
+    /// <param name="log">The activity log to render the status of.</param>
+    /// <param name="compact">
+    /// True when the caller renders this as a FOOTER under a result the reader actually came for
+    /// (see <see cref="Progress"/>). The terminal line then drops to small print instead of an
+    /// <c>H4</c> — a heading-sized "✓ Done" is what made the pane read as a status report with
+    /// the answer hidden underneath. The RUNNING bar is unaffected: while a run is in flight it
+    /// is the only content there is.
+    /// </param>
+    public static UiControl BuildProgressIndicator(ActivityLog log, bool compact = false)
     {
         var latest = log.Messages.Count > 0 ? log.Messages[^1].Message : null;
 
@@ -299,8 +325,10 @@ public static class ActivityLayoutAreas
         };
 
         var text = string.IsNullOrEmpty(latest) ? $"{glyph} {label}" : $"{latest}\n{glyph} {label}";
-        return Controls.H4(text)
-            .WithStyle($"color: {StatusColor(log.Status)}; white-space: pre-wrap; margin: 0;");
+        var style = $"color: {StatusColor(log.Status)}; white-space: pre-wrap; margin: 0;";
+        return compact
+            ? Controls.Label(text).WithStyle(style + " font-size: 0.8rem;")
+            : Controls.H4(text).WithStyle(style);
     }
 
     /// <summary>
