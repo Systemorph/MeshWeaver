@@ -4,7 +4,7 @@
 
 @* The wrapper is the positioning context for the floating "Comment" button (position: relative
    in the .css), so the button can be placed over the selection. *@
-<div class="commentable-wrapper" @ref="containerRef">
+<div class="commentable-wrapper@(ClassSuffix)" style="@Style" @ref="containerRef">
     <div class="commentable-content">
         @foreach (var area in ViewModel.Areas)
         {

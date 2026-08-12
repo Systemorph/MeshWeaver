@@ -158,7 +158,11 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
                 // whose dropped/faulting-observer warnings are the only trace when a change
                 // notification is lost on the fan-out (the frozen-$security-access class).
                 logger: _provider.Logger,
-                readPool: _provider.ReadPool);
+                readPool: _provider.ReadPool,
+                // 🚨 BOTH pools, always. Omitting ioPool here silently handed every per-schema
+                // adapter IoPool.Unbounded for its writes — no bound at all in front of the
+                // shared 50-connection NpgsqlDataSource (#1310).
+                ioPool: _provider.WritePool);
             // Wire the new per-schema adapter's Changes into the routing
             // adapter's merged feed. Once-per-schema cost — the inner adapter
             // is itself cached in _adaptersBySchema.

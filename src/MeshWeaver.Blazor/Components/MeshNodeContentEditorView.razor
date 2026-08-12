@@ -13,7 +13,7 @@ else if (Fields.Count == 0)
 }
 else
 {
-    <div class="mesh-node-content-editor" style="display: flex; flex-direction: column; gap: 14px; width: 100%;">
+    <div class="mesh-node-content-editor@(ClassSuffix)" style="display: flex; flex-direction: column; gap: 14px; width: 100%;@StyleSuffix">
         @foreach (var f in Fields)
         {
             <div class="field" style="display: flex; flex-direction: column; gap: 4px; width: 100%;">

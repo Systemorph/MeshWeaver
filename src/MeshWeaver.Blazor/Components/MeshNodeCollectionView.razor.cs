@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -20,7 +21,12 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
 {
     private List<MeshNode> _items = [];
     private bool _isLoading = true;
-    private readonly List<IDisposable> _subscriptions = new();
+    // 🚨 CompositeDisposable, registered in the base's Disposables so component teardown makes it
+    // terminal (issue #1308). Two defects in the List<IDisposable> this replaces: DeleteItem
+    // re-runs LoadItems from the DeleteNode observable's callback — off the renderer — so the
+    // clear-then-refill raced a renderer-thread LoadItems ("Collection was modified"); and nothing
+    // ever disposed the list on component teardown, so every query subscription outlived the view.
+    private readonly CompositeDisposable _subscriptions = new();
 
     /// <summary>
     /// Tears down prior per-query subscriptions and starts a fresh live subscription for
@@ -29,13 +35,23 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
     protected override void BindData()
     {
         base.BindData();
+        // Idempotent: Disposables is a set-like composite in effect — re-adding the same instance
+        // across re-binds is harmless because the base disposes each entry exactly once, and the
+        // composite is only ever disposed at teardown.
+        if (!_registeredForDisposal)
+        {
+            _registeredForDisposal = true;
+            Disposables.Add(_subscriptions);
+        }
         LoadItems();
     }
 
+    private bool _registeredForDisposal;
+
     private void LoadItems()
     {
-        // Tear down any prior live subscriptions before re-binding.
-        foreach (var s in _subscriptions) s.Dispose();
+        // Tear down any prior live subscriptions before re-binding. Clear (not Dispose) — the
+        // composite must stay usable for the fresh per-query subscriptions below.
         _subscriptions.Clear();
 
         _isLoading = true;

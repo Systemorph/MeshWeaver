@@ -187,6 +187,18 @@ public partial class CollaborativeMarkdownView
     };
 
     /// <summary>
+    /// The container's own classes plus the author-declared <c>Class</c>, joined as a token list.
+    /// Composed here because Razor cannot parse two adjacent expressions in one attribute value.
+    /// <para>The tokens are exactly the ones emitted before; the only difference is that the trailing
+    /// space left behind when <see cref="ViewModeClass"/> is empty (the default mode) is no longer
+    /// emitted. A class attribute is a whitespace-separated token list, so that space never
+    /// participated in any selector match.</para>
+    /// </summary>
+    private string ContainerClass =>
+        string.Join(" ", new[] { "collab-md-container", ViewModeClass, Class }
+            .Where(token => !string.IsNullOrWhiteSpace(token)));
+
+    /// <summary>
     /// Binds the node path, annotation mode, comment list, and tracked-change state
     /// from the layout-area stream, and subscribes to reactive comment and change feeds.
     /// </summary>

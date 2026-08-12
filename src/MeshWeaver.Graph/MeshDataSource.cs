@@ -1522,8 +1522,15 @@ public static class MeshDataSourceExtensions
                                 // disposed in the Finally below. It must not install the per-node
                                 // control plane — those watchers would only open `sync/` sub-hubs
                                 // and then fault as this hub is torn down out from under them.
+                                // Stamp the NodeType path so the WithContentType inside the
+                                // NodeType's configuration records an EXACT registry entry from the
+                                // probe too — a probe reaches WithContentType exactly as a real
+                                // activation does, so leaving it unstamped would make registration
+                                // depend on which of the two ran first (see NodeTypePathHolder).
                                 var subHub = hub.GetHostedHub(dummyAddress, c =>
-                                    matching.HubConfiguration(c.AddData()).AsTransientNodeProbe());
+                                    matching.HubConfiguration(
+                                        c.AddData().WithNodeTypePath(matching.NodeType ?? hubPath))
+                                        .AsTransientNodeProbe());
 
                                 var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
                                 return subHub.Observe(schemaDelivery)
@@ -2098,8 +2105,16 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         // the mesh singleton is process-wide and survives a re-import, so the degrade seams can
         // re-type content that the domain-agnostic cache hub deserialised to a bare JsonElement
         // (the GitSync-reimport-renders-empty bug). See IMeshContentTypeRegistry.
+        //
+        // 🚨 The NodeType path is what makes the entry EXACT. A content type's discriminator is its
+        // bare CLR name, unique only inside its own package — one customer repo ships `Currency` in
+        // four packages — so a name-keyed entry has to refuse whenever two packages collide, and the
+        // refusal leaves consumers reading a default-valued record. Keyed by NodeType path there is
+        // nothing to collide: every reader has `node.NodeType` in hand and gets ITS package's type.
+        // The path arrives ambiently (NodeTypePathHolder) because this call site lives in mesh
+        // content, not in this repo.
         Workspace.Hub.ServiceProvider.GetService<Mesh.Services.IMeshContentTypeRegistry>()
-            ?.Register(dataType);
+            ?.Register(dataType, Workspace.Hub.Configuration.Get<NodeTypePathHolder>()?.Path);
 
         // Store ContentType for UI integration (editor generation, etc.)
         // Content is accessed via MeshNode.Content - there's no separate TypeSource

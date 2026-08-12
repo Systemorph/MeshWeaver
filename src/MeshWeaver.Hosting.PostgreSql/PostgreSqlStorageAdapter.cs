@@ -36,8 +36,27 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     // there is no standalone semaphore anywhere. Unbounded fallback when no registry is wired
     // (in-memory / tests): reads still offload off the hub scheduler, just without the cap.
     private readonly IIoPool _readPool;
-    // The pg:{adapter} write I/O pool — every WRITE / provisioning DB round-trip runs inside it
-    // (Invoke), never a bare Observable.FromAsync. Unbounded fallback when no registry is wired.
+    // The pg:{adapter} write I/O pool — every WRITE DB round-trip runs inside it (Invoke), never a
+    // bare Observable.FromAsync. Unbounded fallback when no registry is wired.
+    //
+    // 🚨 WRITES ONLY, and that boundary is load-bearing (issues #1310/#1312/#1313/#1316). Reads —
+    // Read, ReadMany, Exists, FindBestPrefixMatch, ResolvePath, GetPartitionObjects,
+    // GetPartitionMaxTimestamp, ListPartitionSubPaths — used to run here too, which was wrong twice
+    // over. This pool is capped at ONE (IoPoolNames.PostgresAdapterPrefix: "the gate IS the
+    // connection"), so filing a read here means either every single-node read in the silo
+    // serialises behind one connection (once the pool is wired) or — as was actually the case
+    // while nobody passed `ioPool:` — the hottest read path in the portal runs completely
+    // UNBOUNDED against a shared 50-connection NpgsqlDataSource. It was the latter: per-node-hub
+    // activation seeds (MeshNodeTypeSource.DurableSeed), URL resolution (ResolvePath), write-guard
+    // probes and the per-path Read fan-out inside StorageAdapterMeshQueryProvider all bypassed the
+    // pg-read: cap that exists precisely to bound them, and memex-cloud duly hit "the connection
+    // pool has been exhausted (currently 50)".
+    //
+    // Keeping reads OFF this pool is also what makes the cap-1 write gate safe: a read issued from
+    // inside a write (PartitionWriteGuardValidator's probe, Write's refused-upsert re-read) would
+    // otherwise be a same-pool re-entry on a cap-1 gate — the one documented way to deadlock an
+    // IIoPool (ControlledIoPooling.md → "Never let an IIoPool call resolve an observable that
+    // itself acquires the same pool").
     private readonly IIoPool _ioPool;
     // NOT a Subject<T>. Subject fan-out is synchronous and ordered, so the first observer that
     // throws aborts delivery to every observer after it — and the publish sites used to wrap that
@@ -105,6 +124,22 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         _readPool = readPool ?? IoPool.Unbounded;
         _ioPool = ioPool ?? IoPool.Unbounded;
     }
+
+    /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): the per-adapter WRITE pool actually in force
+    /// (<c>pg:{adapter}</c>, cap 1) — or <see cref="IoPool.Unbounded"/> when no pool was wired.
+    /// <para>Exposed because "the bound is not wired" is invisible from behaviour until the shared
+    /// connection pool is already exhausted in production: an unwired adapter works perfectly under
+    /// test load and only fails at 50 concurrent connections. See
+    /// <c>PartitionAdapterIoPoolWiringTests</c>.</para>
+    /// </summary>
+    internal IIoPool WritePool => _ioPool;
+
+    /// <summary>
+    /// Test seam (<c>InternalsVisibleTo</c>): the per-adapter READ pool actually in force
+    /// (<c>pg-read:{adapter}</c>) — or <see cref="IoPool.Unbounded"/> when no pool was wired.
+    /// </summary>
+    internal IIoPool ReadPool => _readPool;
 
     /// <summary>
     /// Pumps a read <see cref="IAsyncEnumerable{T}"/> through the per-adapter READ pool
@@ -323,7 +358,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => WithTransientRetry(() => _ioPool.Invoke(ct => ReadAsyncCore(path, options, ct)), "Read");
+        => WithTransientRetry(() => _readPool.Invoke(ct => ReadAsyncCore(path, options, ct)), "Read");
 
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -381,7 +416,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     // subscriber that is the grain-wedge / dropped-initial-emission defect
     // (see PartitionObjectsSubscriberIndependenceTest for the repro shape).
     public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-        => _ioPool.InvokeStream(ct => ReadManyAsyncCore(paths, options, ct));
+        => _readPool.InvokeStream(ct => ReadManyAsyncCore(paths, options, ct));
 
     private async IAsyncEnumerable<MeshNode> ReadManyAsyncCore(
         IReadOnlyCollection<string> paths,
@@ -857,7 +892,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     /// <inheritdoc />
     public IObservable<bool> Exists(string path)
-        => WithTransientRetry(() => _ioPool.Invoke(ct => ExistsAsyncCore(path, ct)), "Exists")
+        => WithTransientRetry(() => _readPool.Invoke(ct => ExistsAsyncCore(path, ct)), "Exists")
             .Catch<bool, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return(false)
                 : Observable.Throw<bool>(ex));
@@ -883,7 +918,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
-        => WithTransientRetry(() => _ioPool.Invoke(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct)), "FindBestPrefixMatch")
+        => WithTransientRetry(() => _readPool.Invoke(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct)), "FindBestPrefixMatch")
             .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(MeshNode?, int)>((null, 0))
                 : Observable.Throw<(MeshNode?, int)>(ex));
@@ -926,7 +961,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// </summary>
     public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
         string fullPath, JsonSerializerOptions options)
-        => WithTransientRetry(() => _ioPool.Invoke(ct => ResolvePathAsyncCore(fullPath, options, ct)), "ResolvePath")
+        => WithTransientRetry(() => _readPool.Invoke(ct => ResolvePathAsyncCore(fullPath, options, ct)), "ResolvePath")
             .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<(MeshNode?, int)>((null, 0))
                 : Observable.Throw<(MeshNode?, int)>(ex));
@@ -994,7 +1029,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
+        => _readPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
             .Catch<object, Exception>(ex => IsUndefinedTable(ex)
                 // Absent schema (router resolved synchronously, schema never
                 // created) → nothing to read. Complete empty, don't fault.
@@ -1103,7 +1138,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => _ioPool.Invoke(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct))
+        => _readPool.Invoke(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct))
             .Catch<DateTimeOffset?, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return<DateTimeOffset?>(null)
                 : Observable.Throw<DateTimeOffset?>(ex));
@@ -1130,7 +1165,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
     /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-        => _ioPool.Invoke(ct => ListPartitionSubPathsAsyncCore(nodePath, ct))
+        => _readPool.Invoke(ct => ListPartitionSubPathsAsyncCore(nodePath, ct))
             .Catch<IEnumerable<string>, Exception>(ex => IsUndefinedTable(ex)
                 ? Observable.Return(Enumerable.Empty<string>())
                 : Observable.Throw<IEnumerable<string>>(ex));

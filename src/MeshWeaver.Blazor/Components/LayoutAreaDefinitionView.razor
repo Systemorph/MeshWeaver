@@ -1,7 +1,7 @@
 ﻿@inherits BlazorView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>
 
 
-<a href="@ViewModel.Definition.Url" class="card layout-area-card text-decoration-none">
+<a href="@ViewModel.Definition.Url" class="card layout-area-card text-decoration-none@(ClassSuffix)" style="@Style">
     <div class="layout-area-card-header">
         <h5 class="layout-area-card-title">@ViewModel.Definition.Title</h5>
     </div>

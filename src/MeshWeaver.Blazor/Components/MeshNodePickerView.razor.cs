@@ -76,6 +76,12 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
 
     // Compact "thin" rendering + open-upward dropdown, driven by the control's Layout/Open.
     private bool IsThin => ViewModel?.Layout == MeshNodePickerLayout.Thin;
+
+    /// <summary>
+    /// The picker's own layout classes plus the author-declared <c>Class</c>. Composed here because
+    /// Razor cannot parse two adjacent explicit expressions in one attribute value.
+    /// </summary>
+    private string PickerClass => $"mesh-node-picker{(IsThin ? " mesh-node-picker--thin" : "")}{ClassSuffix}";
     private bool OpensUp => ViewModel?.Open == MeshNodePickerOpenDirection.Up;
 
     /// <summary>
