@@ -3,17 +3,16 @@
     <ProjectGuid>{d7a2e1f3-8c4b-4e9d-b5a6-3f1c2d8e7a9b}</ProjectGuid>
     <ImplicitUsings>enable</ImplicitUsings>
     <NoWarn>$(NoWarn);xUnit1051</NoWarn>
-    <!-- 🚨 STOP STEPPING ON A CoreCLR BUG. This project's recurring `exit=139` (SIGSEGV) in CI was
-         root-caused in #613 to a background-GC fault — a null MethodTable in `background_sweep`,
-         explicitly NOT teardown and NOT ALC unload. Every completed test passes and the process then
-         segfaults at/near exit, which reds whichever PR happens to be running (it took out #1265
-         while nothing in that diff touches this project).
-         `background_sweep` only exists when background (concurrent) GC is enabled, so disabling it
-         here removes the faulting path. The runtime bug is upstream and unfixed — this does not fix
-         it, it stops this project walking into it. Scoped to this one test project deliberately: if
-         the same signature appears elsewhere, move it to test/Directory.Build.props rather than
-         sprinkling it. Verified in the generated runtimeconfig.json ("System.GC.Concurrent": false). -->
-    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <!-- 🚨 DO NOT re-add <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection> here.
+         #1274 set it, reasoning that this project's recurring `exit=139` was a null MethodTable in
+         `WKS::gc_heap::background_sweep()` and that `background_sweep` only runs with background GC
+         enabled. Two core dumps from the window AFTER it merged (runs 31590331741 and 31597122789,
+         runtime 10.0.11) fault at the identical instruction — `mov ecx,[rax]` with `RAX=0`, i.e. a
+         MethodTable pointer of zero — inside `WKS::gc_heap::plan_phase(int)`, which is the
+         stop-the-world plan step of a BLOCKING collection and runs whether or not concurrent GC is
+         on. So the mechanism the property targets is not the one firing, the measured CI rate did not
+         move (4.2% -> 3.8%), and leaving it reads as "GC was already ruled out" when nothing was.
+         Full evidence: Doc/Architecture/DebuggingNativeCrashes -> "2026-08-12". Issue #613. -->
   </PropertyGroup>
 
   <ItemGroup>
