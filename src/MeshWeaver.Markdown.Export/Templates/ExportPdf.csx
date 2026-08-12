@@ -25,11 +25,14 @@ using MeshWeaver.Markdown.Export;
 using MeshWeaver.Markdown.Export.Ast;
 using MeshWeaver.Markdown.Export.Branding;
 using MeshWeaver.Markdown.Export.Configuration;
+using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Markdown.Export.Pdf;
 using MeshWeaver.Markdown.Export.Pixel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -62,7 +65,7 @@ if (rootNode is null)
 
 var jsonOptions = Mesh.JsonSerializerOptions;
 
-List<(string, string)> chapters;
+List<ExportChapter> chapters;
 DocumentExportOptions effectiveOptions;
 string title;
 
@@ -145,6 +148,28 @@ if (rootNode.NodeType == DeckNodeType.NodeType)
 
         var html = SlidePrintComposer.Compose(title, printSlides);
 
+        // A slide can embed a LIVE layout area with `@@(…)`. The markdown pipeline emits an EMPTY
+        // anchor div for it and leaves the filling to a browser session — but this print document
+        // is loaded from file:// under a CSP of `default-src 'none'` with the browser's resolver
+        // pointed at nothing, so it can never fetch the area. Unresolved, the embed prints as a
+        // silent blank. Resolve it here, server-side, BEFORE asset inlining so any content the area
+        // itself references gets inlined too.
+        //
+        // Only round-trip the DOM when there is actually something to resolve: a deck with no
+        // embeds must come out of this byte-identical to what the composer produced.
+        if (html.Contains(LayoutAreaMarkdownRenderer.LayoutArea, StringComparison.Ordinal))
+        {
+            var printDocument = new HtmlAgilityPack.HtmlDocument();
+            printDocument.LoadHtml(html);
+            var areaResult = await LayoutAreaResolver
+                .Resolve(printDocument, Mesh, new DocumentHtmlOptions(PortalBaseUrl(Mesh, options)), Log)
+                .FirstAsync()
+                .ToTask(Ct);
+            Log.LogInformation("Pixel export resolved {Resolved} layout-area embed(s), {Unresolved} unavailable",
+                areaResult.Resolved, areaResult.Unresolved);
+            html = printDocument.DocumentNode.OuterHtml;
+        }
+
         // Images live behind the access-controlled api/content route, which a file:// document
         // cannot fetch. Resolve them here — under the exporting user's identity — and inline them
         // so the print document is genuinely self-contained. An asset that cannot be read is left
@@ -169,10 +194,10 @@ if (rootNode.NodeType == DeckNodeType.NodeType)
     }
 
     chapters = slideNodes
-        .Select(s => (s.Name ?? s.Id, ExtractSlideMarkdown(s, jsonOptions)))
+        .Select(s => new ExportChapter(s.Name ?? s.Id, ExtractSlideMarkdown(s, jsonOptions), s.Path))
         .ToList();
     if (chapters.Count == 0)
-        chapters.Add((title, "*This deck has no slides yet.*"));
+        chapters.Add(new ExportChapter(title, "*This deck has no slides yet.*", sourcePath));
 
     // 16:9 slides read best in landscape, and every slide starts on its own page — and ONLY
     // slide boundaries break pages. A slide whose body opens with a heading must not be split
@@ -196,9 +221,9 @@ else
             + "Exporting content-faithful.", sourcePath, rootNode.NodeType);
     title = explicitTitle ?? options.Title ?? rootNode.Name ?? rootNode.Id;
     effectiveOptions = options;
-    chapters = new List<(string, string)>
+chapters = new List<ExportChapter>
     {
-        (title, ExtractMarkdown(rootNode))
+        new ExportChapter(title, ExtractMarkdown(rootNode), sourcePath)
     };
     if (options.IncludeChildren)
     {
@@ -220,7 +245,7 @@ else
                 }
                 var md = ExtractMarkdown(desc);
                 if (!string.IsNullOrWhiteSpace(md))
-                    chapters.Add((desc.Name ?? desc.Id, md));
+                    chapters.Add(new ExportChapter(desc.Name ?? desc.Id, md, desc.Path));
             }
         }
         finally
@@ -235,8 +260,19 @@ Log.LogInformation("Resolving branding");
 var brandingResolver = Mesh.ServiceProvider.GetRequiredService<BrandingResolver>();
 var branding = await brandingResolver.Resolve(brandPath).FirstAsync().ToTask(Ct);
 
+// Resolve embedded layout areas BEFORE the (synchronous) document build. Reading an area is
+// reactive and cross-hub; the builder walk is not. Without this pass the export's Markdig pipeline
+// still PARSES `@@(…)` but has nothing to put there, and the embed degrades to a visible notice
+// instead of the view the author placed.
+Log.LogInformation("Resolving embedded layout areas");
+var resolvedAreas = await DocumentAreaResolution
+    .Resolve(Mesh, chapters, new DocumentHtmlOptions(PortalBaseUrl(Mesh, options)), Log)
+    .FirstAsync()
+    .ToTask(Ct);
+
 Log.LogInformation("Rendering PDF");
-var document = new DocumentBuilder().Build(title, chapters, effectiveOptions, branding);
+var document = new DocumentBuilder(sourcePath, resolvedAreas)
+    .Build(title, chapters, effectiveOptions, branding);
 var bytes = new PdfDocumentRenderer().Render(document);
 Log.LogInformation("Rendered {Bytes} bytes", bytes.Length);
 
@@ -251,6 +287,19 @@ static string ExtractMarkdown(MeshNode node)
     if (node.Content is MarkdownContent mc) return mc.Content ?? "";
     if (node.Content is string s) return s;
     return "";
+}
+
+// The portal's public origin. A resolved layout area can carry links, and a link with no origin is
+// dead the moment the PDF leaves this machine — the reader has no page to resolve it against.
+// Same key order the invitation mailer and the HTML export use, so the three never disagree.
+static string PortalBaseUrl(IMessageHub mesh, DocumentExportOptions options)
+{
+    if (!string.IsNullOrWhiteSpace(options.BaseUrl)) return options.BaseUrl;
+    var configuration = mesh.ServiceProvider.GetService<IConfiguration>();
+    return configuration?["Portal:BaseUrl"]
+           ?? configuration?["PublicBaseUrl"]
+           ?? configuration?["Email:WebhookBaseUrl"]
+           ?? "";
 }
 
 static string ExtractSlideMarkdown(MeshNode node, JsonSerializerOptions options)
