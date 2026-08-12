@@ -28,9 +28,3 @@ the cue to retry — so anything with its own recovery simply reconnects instead
 
 Nothing waits longer than before, and no new deadline was introduced: the answer comes from a fact
 the platform already knows the instant shutdown begins.
-
-Alongside this, mesh write operations now genuinely honour the operation timeout the platform has
-always documented. It was configurable and described in the manual, and on one path it was really
-applied — but the main one read the setting and never used it. A slow or lost write therefore ran on
-a budget nobody had chosen. It is now enforced, and when it trips, the error names the operation,
-the node, and the setting to change.

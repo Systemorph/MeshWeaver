@@ -1383,26 +1383,40 @@ hub.Observe(new DeleteNodeRequest(path) { Recursive = true }, o => o.WithTarget(
 thread instead of reaching your code — the failure becomes a wedge somewhere unrelated rather than
 a logged, handled error at the call site.
 
-## Every reactive chain must have a timeout
+## Every reactive chain must have a timeout — and know which ones already do
 
-A hand-built `Observable.Create(observer => ...)` can hang forever if nothing ever calls
-`observer.OnNext` / `OnError` — e.g. a response posted to the wrong address, or a
-hub torn down between the post and the response. **Always** apply `.Timeout(opts.Timeout)` on
-the public surface:
+**A `hub.Observe(...)` is already bounded.** `MessageHub.Observe` applies the hub's
+`RequestTimeout` (default 60 s, set with `WithRequestTimeout`) to its own response subject, so a
+lost, misrouted or never-answered request surfaces as a named `TimeoutException`, and a routing
+failure as a `DeliveryFailureException`. Do not stack a second ceiling on one of those.
+
+What is **not** bounded is a chain **you** built. A hand-written
+`Observable.Create(observer => ...)` can hang forever if nothing ever calls `observer.OnNext` /
+`OnError`; so can a wait on a stream emission that never comes. Bound those explicitly, with a
+budget the call site owns:
 
 ```csharp
-return hub.Observe(new DeleteNodeRequest(path) { Recursive = true },
-                   o => o.WithTarget(new Address(path)))
-    .Select(d => d.Message.Success)
-    .Timeout(OpTimeout);   // ← NEVER OMIT
+return Observable.Create<Foo>(observer => { /* … */ })
+    .Timeout(MyBudget);   // ← a chain with no hub round trip needs its own bound
 ```
 
-`hub.Observe(...)` already applies the framework timeout to its own subject, so the outer
-`.Timeout` matters most for chains you compose on top of it (`SelectMany` fan-outs, an
-`Observable.Create` you wrote yourself).
+### 🗑️ There is no `OpTimeout` on `IMeshService` — and adding one is not the fix
 
-Default `OpTimeout` is 30 s (`MeshOperationOptions.Timeout`). Tune with
-`WithMeshOperationTimeout`. A `TimeoutException` is always better than a hang.
+This section used to show `.Timeout(OpTimeout); // ← NEVER OMIT` on `IMeshService`'s surface.
+`MeshService.OpTimeout` was **declared and never read**, so the instruction described a rule the
+code did not follow, and #1270 removed both.
+
+`MeshOperationOptions.Timeout` itself is real and stays — it is applied **server-side** by
+`HandleDeleteNodeRequest` (and `HandleValidateDeleteRequest`), which own the fan-out they bound.
+Tune it with `WithMeshOperationTimeout`.
+
+🚨 **Do not "restore" the client-side ceiling.** A timeout on the CALLER's side of a mesh write
+cancels nothing — the create is still running in the mesh — so the operation's continuation
+outlives the caller's DI scope and resolves services from it after disposal. Measured on #1270's
+first CI run: `[FATAL ERROR] System.ObjectDisposedException : Instances cannot be resolved … from
+this LifetimeScope`, on a thread-pool thread, killing a test host that had just reported 90/90
+passing. A bound whose failure mode is an unhandled exception in someone else's scope is worse
+than the hang it replaces. To make a mesh operation fail sooner, set the hub's `RequestTimeout`.
 
 ## Route write-request handlers to the node's own hub
 
