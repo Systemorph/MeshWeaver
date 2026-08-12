@@ -1871,7 +1871,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // (no hot-path cost) — this is what cures the GitSync-reimport-renders-empty bug
                 // WITHOUT waiting for a manual recycle. Only genuinely-unresolvable content falls
                 // through to the loud warning below.
-                var recovered = contentTypeRegistry?.TryRecover(degraded, options);
+                var recovered = contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, degraded, options);
                 if (recovered is not null)
                     return node with { Content = recovered };
 
@@ -2111,7 +2111,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // Self-heal via the mesh-wide content-type registry before warning — same cure as
                 // the GetStream seam above: re-type a dynamically-compiled NodeType's content that
                 // this domain-agnostic hub's frozen options can't resolve (reimport-renders-empty).
-                var recovered = contentTypeRegistry?.TryRecover(degraded, options);
+                var recovered = contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, degraded, options);
                 if (recovered is not null)
                     return node with { Content = recovered };
 

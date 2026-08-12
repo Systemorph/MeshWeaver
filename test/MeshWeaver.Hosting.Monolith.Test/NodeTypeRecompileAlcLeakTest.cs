@@ -91,7 +91,13 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         // stream is what does that (the compile watcher is installed from the hub's init hook).
         var first = await WhenCompiled(TypePath, d => d.CompilationStatus == CompilationStatus.Ok, null);
         var lastSucceeded = first.LastCompileSucceededAt;
-        Output.WriteLine($"initial compile settled at {lastSucceeded:HH:mm:ss.fff} — contexts: {LiveContexts()}");
+        FullyCollect();
+        // Baseline AFTER the first compile, so the comparison is recompile-to-recompile and does not
+        // charge the steady-state cost of having one built type to the recompiles.
+        var managedBaseline = AfterCollectionBytes();
+        Output.WriteLine(
+            $"initial compile settled at {lastSucceeded:HH:mm:ss.fff} — contexts: {LiveContexts()}, "
+            + $"managed baseline = {managedBaseline / (1024 * 1024)} MB");
 
         for (var i = 1; i <= Recompiles; i++)
         {
@@ -122,12 +128,34 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
             lastSucceeded = settled.LastCompileSucceededAt;
 
             FullyCollect();
-            Output.WriteLine($"after recompile {generation}: live contexts = {LiveContexts()}");
+            Output.WriteLine(
+                $"after recompile {generation}: live contexts = {LiveContexts()}, "
+                + $"managed = {AfterCollectionBytes() / (1024 * 1024)} MB");
         }
 
         FullyCollect();
         var live = LiveContexts();
+        var managedGrowth = AfterCollectionBytes() - managedBaseline;
+
+        // WHERE the bytes went. The contexts unload (above), so the retained memory belongs to
+        // ordinary managed objects — and the leading suspect is per-compile BOOKKEEPING: every compile
+        // mints {typePath}/_Activity/compile-<timestamp> plus a compile-state node, and a mesh node
+        // means a per-node hub with its own DI container and sync streams. If these counts climb with
+        // the recompiles, that is the retainer; if they are flat, the bytes are Roslyn state and the
+        // hunt moves there. Diagnostic output, deliberately not asserted — it names the direction for
+        // issue #1324 rather than pinning a number nobody has justified yet.
+        var hubs = System.Text.RegularExpressions.Regex
+            .Matches(Mesh.GetDisposalDiagnostics(), @"deferred=\d+").Count;
+        var activities = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{TypePath}/_Activity"))
+            .Should().Within(30.Seconds()).Emit();
+        Output.WriteLine(
+            $"WHERE: live hubs = {hubs}, compile-activity nodes under {TypePath}/_Activity = "
+            + $"{activities?.Items?.Count ?? -1} after {Recompiles} recompiles");
         Output.WriteLine($"FINAL live contexts for {TypePath} after {Recompiles} recompiles: {live}");
+        Output.WriteLine(
+            $"FINAL managed growth over {Recompiles} recompiles: "
+            + $"{managedGrowth / (1024 * 1024)} MB ({managedGrowth / Recompiles / (1024 * 1024)} MB per recompile)");
 
         // ≤2, not ==1: the newest build is legitimately live, and one predecessor may still be
         // inside its unload (a pin drained, the LoaderAllocator awaiting the next GC). What must
@@ -136,7 +164,29 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         live.Should().BeLessThanOrEqualTo(2,
             $"every superseded DynamicNode_ context must be collectable after unload; {live} alive "
             + $"after {Recompiles} recompiles means a generation is pinned per rebuild");
+
+        // 🚨 BYTES, not just context counts. Contexts unloading proves the ALC bookkeeping is right;
+        // it does NOT prove a recompile hands its memory back — Roslyn compilations, metadata and
+        // symbol graphs are ordinary managed objects that outlive an unloaded context if anything
+        // still references them. On memex-cloud the process grew 130–340 MB/min while contexts stayed
+        // bounded, which is exactly the gap this assertion closes.
+        //
+        // 32 MB/recompile is a ceiling, not a target: a trivial `config => config` type compiles to a
+        // few KB of IL, so anything approaching this bound means per-compile state is being retained.
+        // Measured after three aggressive blocking collections, so transient allocation is excluded.
+        var perRecompile = managedGrowth / Recompiles;
+        perRecompile.Should().BeLessThan(32 * 1024 * 1024,
+            $"a recompile of a trivial type must return its memory; {perRecompile / (1024 * 1024)} MB "
+            + $"retained per recompile ({managedGrowth / (1024 * 1024)} MB over {Recompiles}) means "
+            + "compile state survives the context that owned it");
     }
+
+    /// <summary>
+    /// Managed bytes with a full collection forced FIRST — the opposite choice from
+    /// <c>MemoryDelta</c>, which must never collect because it runs in production. Here the question
+    /// is what SURVIVES collection, so paying for the collection is the point.
+    /// </summary>
+    private static long AfterCollectionBytes() => GC.GetTotalMemory(forceFullCollection: true);
 
     /// <summary>
     /// 🚨 THE SAME LOOP, BUT WITH A LIVE INSTANCE HUB — which is the shape production actually runs.

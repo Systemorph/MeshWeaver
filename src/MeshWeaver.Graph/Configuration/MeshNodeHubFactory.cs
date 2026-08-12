@@ -24,15 +24,36 @@ internal class MeshNodeHubFactory(
             .Take(1)
             .Select(enriched =>
             {
+                // 🚨 Stamp the NodeType path BEFORE the NodeType's own configuration runs, so the
+                // WithContentType inside it records the content type under an exact, mesh-unique key
+                // (see NodeTypePathHolder). This is the single funnel BOTH real activation paths go
+                // through — MonolithRoutingService and MessageHubGrain — so stamping here covers
+                // both hosts; the transient probe hubs stamp their own.
+                //
+                // For a NodeType DEFINITION node, `NodeType` is the literal "NodeType" and the
+                // semantically-correct value is the node's own Path — that is the type every
+                // instance of it will declare.
+                var nodeTypePath = string.Equals(enriched.NodeType, MeshNode.NodeTypePath, StringComparison.Ordinal)
+                    ? enriched.Path
+                    : enriched.NodeType;
+
                 var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
+                var nodeConfig = enriched.HubConfiguration;
                 if (defaultConfig != null)
                 {
-                    var nodeConfig = enriched.HubConfiguration;
                     enriched = enriched with
                     {
                         HubConfiguration = nodeConfig != null
-                            ? (Func<MessageHubConfiguration, MessageHubConfiguration>)(config => nodeConfig(defaultConfig(config)))
-                            : defaultConfig
+                            ? (Func<MessageHubConfiguration, MessageHubConfiguration>)(config =>
+                                nodeConfig(defaultConfig(config).WithNodeTypePath(nodeTypePath)))
+                            : config => defaultConfig(config).WithNodeTypePath(nodeTypePath)
+                    };
+                }
+                else if (nodeConfig != null)
+                {
+                    enriched = enriched with
+                    {
+                        HubConfiguration = config => nodeConfig(config.WithNodeTypePath(nodeTypePath))
                     };
                 }
 
