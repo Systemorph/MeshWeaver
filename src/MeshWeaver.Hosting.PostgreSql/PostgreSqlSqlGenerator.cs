@@ -338,7 +338,11 @@ public class PostgreSqlSqlGenerator
                 "ELSE 0 END) DESC, n.last_modified DESC NULLS LAST");
         }
 
-        if (query.Limit.HasValue)
+        // 🚨 POSITIVE limits only. A non-positive limit is the framework's "no clip" encoding
+        // (MeshQueryRequest.NoLimit; MeshQuery.ClipMergedInitial only clips when limit > 0) — emit
+        // NO LIMIT clause for it. `LIMIT -1` is a syntax error and `LIMIT 0` returns nothing, and
+        // both would surface as an empty result for a caller that asked for everything.
+        if (query.Limit is > 0)
             sql.Append($" LIMIT {query.Limit.Value}");
 
         return (sql.ToString(), parameters);
@@ -721,7 +725,8 @@ public class PostgreSqlSqlGenerator
                 "ELSE 0 END) DESC, last_modified DESC NULLS LAST";
         }
 
-        if (query.Limit.HasValue)
+        // Positive limits only — see the sibling overload above.
+        if (query.Limit is > 0)
             sql += $" LIMIT {query.Limit.Value}";
 
         return (sql, parameters);

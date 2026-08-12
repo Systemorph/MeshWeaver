@@ -361,7 +361,20 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             ? $"{PostgreSqlSqlGenerator.MapSelector(query.OrderBy.Property)} {(query.OrderBy.Descending ? "DESC" : "ASC")}"
             : "n.last_modified DESC";
 
-        var limit = query.Limit ?? 50;
+        // 🚨 THREE cases, and conflating the last two is how spaces go silently stale.
+        //   • no limit stated  → DefaultFanOutLimit. An unanchored UNION over every partition
+        //     schema needs SOME bound, and a search wants a page anyway.
+        //   • MeshQueryRequest.NoLimit (non-positive) → the caller declared this an ENUMERATION,
+        //     so return every match. `LIMIT 0` / `LIMIT -1` must never reach SQL; the largest INT
+        //     is `LIMIT ALL` in practice and needs no change to the stored function.
+        //   • a positive limit → honour it.
+        var limit = query.Limit switch
+        {
+            null => DefaultFanOutLimit,
+            <= 0 => int.MaxValue,
+            var stated => stated.Value,
+        };
+        var clippedByDefault = query.Limit is null;
 
         _logger?.LogInformation(
             "[CrossSchema] search_across_schemas(where='{Where}', user='{User}', order='{Order}', limit={Limit})",
@@ -407,8 +420,32 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         finally
         {
             LogFanOutTiming("search_across_schemas", sw.ElapsedMilliseconds, firstRowMs, rows, limit);
+
+            // 🚨 A DEFAULT that clipped must never be silent. The caller stated no limit, so it
+            // cannot distinguish "these are all the matches" from "these are the 50 most recently
+            // modified matches" — and because the order is `last_modified DESC`, the rows that fall
+            // off are precisely the ones that have gone longest without being touched. That makes
+            // the omission self-reinforcing: processing a row refreshes it, so the winners stay in
+            // the window and the stragglers sink further. #1216 (batch bake saw 50 of thousands of
+            // Code nodes) and #1326 (9 of 43 Spaces never re-synced while the webhook reported
+            // success) are the same line of code seen twice. Say so, and name the cure.
+            if (clippedByDefault && rows >= DefaultFanOutLimit)
+                _logger?.LogWarning(
+                    "[CrossSchema] TRUNCATED at the default fan-out limit of {Limit} rows "
+                    + "(where='{Where}', order='{Order}'). The caller stated no limit, so this result "
+                    + "is a PAGE — the most recently modified matches — not the complete set, and "
+                    + "there is no way for it to tell. If the caller enumerates the result as the "
+                    + "whole set, it must say MeshQueryRequest.Complete().",
+                    DefaultFanOutLimit, filterClause, orderBy);
         }
     }
+
+    /// <summary>
+    /// Rows returned to a cross-schema query that states NO limit. A page size for a search, never
+    /// a completeness guarantee — see the truncation warning in
+    /// <c>QueryAcrossSchemasAsync</c> and <c>MeshQueryRequest.Complete()</c>.
+    /// </summary>
+    internal const int DefaultFanOutLimit = 50;
 
     /// <summary>Elapsed above which a cross-schema fan-out is logged as a Warning, not Debug.</summary>
     internal const long SlowFanOutMs = 1000;
