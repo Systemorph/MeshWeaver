@@ -1112,8 +1112,8 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     /// pedestrian provider about, for an explicit <c>UserId = ""</c>).
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
-        => QueryIdentityResolver
-            .Resolve(request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId)
-            .EnsureResolved(request)
-            .UserId;
+        => QueryIdentityResolver.ResolveAndReport(
+            request,
+            _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId,
+            _logger).UserId;
 }

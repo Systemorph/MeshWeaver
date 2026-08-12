@@ -121,20 +121,29 @@ hopped a scheduler, a pool or a change feed. Whether the caller's ambient `Async
 theirs depended on Rx plumbing rather than on anything the author wrote: the same code returned the
 caller's rows in a test and the Anonymous view in production.
 
-So identity is now resolved **once, at the call boundary**, and stamped onto the request:
+So identity is captured as **early as it can be known**, and reported where it becomes **final**:
 
 ```text
 caller (ambient context is still theirs)
    │
    ├─ MeshService.Query  ──► QueryIdentityResolver.Resolve(request, ambient)
-   │                          • stamps request.UserId — never null afterwards
-   │                          • warns / throws on Unresolved
+   │                          • stamps request.UserId when a viewer WAS resolved
+   │                          • leaves it null otherwise — see below
    │
-   └─ MeshQuery fan-out ──► providers read a request that already knows the answer
+   └─ provider           ──► QueryIdentityResolver.ResolveAndReport(request, ambient, logger)
+                              • the last word: warns / throws on Unresolved
 ```
 
-Below that boundary the providers still call the resolver, but only as defence in depth for a caller
-that constructed a provider directly (tests, tooling). They no longer *decide* anything.
+🚨 **The boundary stamps what it resolved, never the fallback.** Pinning the Anonymous fallback at
+the boundary would make it the last word, and it is not: a caller whose ambient context is empty at
+*call* time can still have one at *subscribe* time — the plugin installer constructs its queries
+outside the `ImpersonateAsSystem` scope it subscribes them in. An unconditional stamp froze those
+reads as Anonymous and the Store package installed **0 nodes**. Leaving `UserId` null preserves the
+provider's late resolution byte-for-byte, which is why this change is additive rather than a
+behaviour swap.
+
+That is also why the diagnostic lives in the provider: it is the point at which "nobody named a
+viewer" is finally true, so it can neither cry wolf nor miss.
 
 ## The same rule applies to single-node reads
 

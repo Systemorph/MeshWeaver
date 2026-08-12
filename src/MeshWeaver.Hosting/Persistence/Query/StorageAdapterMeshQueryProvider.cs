@@ -175,10 +175,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// constructed a provider directly (tests, tooling) — never the primary mechanism.</para>
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
-        => QueryIdentityResolver
-            .Resolve(request, accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId)
-            .EnsureResolved(request)
-            .UserId;
+        => QueryIdentityResolver.ResolveAndReport(
+            request,
+            accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId,
+            logger).UserId;
 
     /// <summary>
     /// Pure-IObservable query: composes <see cref="FindMatchingNodes"/> across every

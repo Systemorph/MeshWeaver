@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mesh.Security;
 
@@ -135,13 +136,14 @@ public class QueryIdentityUnresolvedException : InvalidOperationException
 /// context" in the other four, so the same request answered differently depending on which
 /// storage backend served it. Both spellings of the System bypass were in circulation too.</para>
 ///
-/// <para><b>Why it is early.</b> Identity resolution belongs at the CALL BOUNDARY, where the
-/// caller's ambient context is still theirs — not inside a singleton provider reached through an
-/// <see cref="IObservable{T}"/> subscribe that may have hopped a pool, a change feed or a
-/// scheduler first. Resolving late made the answer depend on Rx plumbing: the same code returned
-/// the caller's rows in a test and the Anonymous view in production. <c>MeshService.Query</c>
-/// resolves ONCE, up front, and stamps the result on the request; the providers below it read a
-/// request that already knows the answer.</para>
+/// <para><b>Where it runs.</b> <c>MeshService.Query</c> resolves at the CALL BOUNDARY, where the
+/// caller's ambient context is still reliably theirs, and stamps the result on the request — but
+/// ONLY when it actually resolved one. It must never pin the Anonymous FALLBACK, because the
+/// boundary is not the last word: a caller whose ambient context is empty at call time can still
+/// have one at SUBSCRIBE time (the plugin installer constructs its queries outside the
+/// <c>ImpersonateAsSystem</c> scope it subscribes them in — pinning there installed 0 nodes).
+/// The provider therefore resolves again, through <see cref="ResolveAndReport"/>, and that is
+/// where the unresolved-viewer diagnostic fires: the point at which the answer is final.</para>
 /// </summary>
 public static class QueryIdentityResolver
 {
@@ -200,6 +202,40 @@ public static class QueryIdentityResolver
             return new QueryIdentity(ambientUserId, QueryIdentitySource.Ambient);
 
         return new QueryIdentity(WellKnownUsers.Anonymous, QueryIdentitySource.Unresolved);
+    }
+
+    /// <summary>
+    /// Resolves the viewer AND reports it when nothing named one — the shape every storage provider
+    /// uses, so the diagnostic fires exactly once, at the point the answer becomes final.
+    ///
+    /// <para>🚨 The diagnostic lives HERE rather than at the <c>MeshService</c> boundary because the
+    /// boundary is not the last word: a read whose ambient context is empty at CALL time can still
+    /// pick one up at SUBSCRIBE time (the plugin installer constructs its queries outside the
+    /// <c>ImpersonateAsSystem</c> scope it subscribes them in). Warning at the boundary would cry
+    /// wolf for every one of those, and — far worse — <i>pinning</i> Anonymous there would break
+    /// them outright. The provider is where the viewer is finally decided, so it is where "nobody
+    /// decided" is finally true.</para>
+    /// </summary>
+    /// <param name="request">The read whose viewer is being decided.</param>
+    /// <param name="ambientUserId">The caller's ambient identity, or null.</param>
+    /// <param name="logger">Diagnostic sink; may be null.</param>
+    /// <returns>The resolved viewer.</returns>
+    /// <exception cref="QueryIdentityUnresolvedException">
+    /// The read declared <see cref="QueryIdentityFallback.Fail"/> and no viewer could be resolved.
+    /// </exception>
+    public static QueryIdentity ResolveAndReport(
+        MeshQueryRequest request, string? ambientUserId, ILogger? logger)
+    {
+        var identity = Resolve(request, ambientUserId);
+        if (!identity.IsUnresolved)
+            return identity;
+        identity.EnsureResolved(request);
+        // Only a read aimed INTO a named partition is worth warning about — an unscoped read
+        // answering as Anonymous returns the mesh's public subset, which is a sensible answer and
+        // the shape a genuine mesh-wide catalog has. See TargetsNamedPartition.
+        if (TargetsNamedPartition(request))
+            logger?.LogWarning("{Diagnostic}", DescribeUnresolved(request.Query, forError: false));
+        return identity;
     }
 
     /// <summary>

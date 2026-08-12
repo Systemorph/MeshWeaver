@@ -11,6 +11,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Snowflake;
 
@@ -23,6 +24,8 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 {
     private readonly SnowflakeStorageAdapter _adapter;
     private readonly AccessService? _accessService;
+    // Diagnostic sink for the unresolved-viewer warning (QueryIdentityResolver.ResolveAndReport).
+    private readonly ILogger<SnowflakeMeshQuery>? _logger;
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private long _version;
@@ -79,8 +82,10 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         MeshConfiguration? meshConfiguration = null,
         IEnumerable<string>? excludedNamespaces = null,
         IEmbeddingProvider? embeddingProvider = null,
-        IoPoolRegistry? ioPoolRegistry = null)
+        IoPoolRegistry? ioPoolRegistry = null,
+        ILogger<SnowflakeMeshQuery>? logger = null)
     {
+        _logger = logger;
         _adapter = adapter;
         _accessService = accessService;
         _meshConfiguration = meshConfiguration;
@@ -149,10 +154,10 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// definition of the rule, shared with the pedestrian and Postgres providers.
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
-        => QueryIdentityResolver
-            .Resolve(request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId)
-            .EnsureResolved(request)
-            .RlsUserId;
+        => QueryIdentityResolver.ResolveAndReport(
+            request,
+            _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId,
+            _logger).RlsUserId;
 
     /// <inheritdoc/>
     /// <remarks>

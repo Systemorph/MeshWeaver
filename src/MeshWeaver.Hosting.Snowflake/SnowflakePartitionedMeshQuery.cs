@@ -642,8 +642,8 @@ public sealed class SnowflakePartitionedMeshQuery : IMeshQueryProvider
     /// definition of the rule, which this method used to duplicate.
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
-        => QueryIdentityResolver
-            .Resolve(request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId)
-            .EnsureResolved(request)
-            .UserId;
+        => QueryIdentityResolver.ResolveAndReport(
+            request,
+            _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId,
+            _logger).UserId;
 }

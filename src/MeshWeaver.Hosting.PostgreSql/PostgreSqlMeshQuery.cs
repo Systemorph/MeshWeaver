@@ -11,6 +11,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.PostgreSql;
 
@@ -22,6 +23,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 {
     private readonly PostgreSqlStorageAdapter _adapter;
     private readonly AccessService? _accessService;
+    // Diagnostic sink for the unresolved-viewer warning (QueryIdentityResolver.ResolveAndReport).
+    private readonly ILogger<PostgreSqlMeshQuery>? _logger;
     private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private long _version;
@@ -104,8 +107,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         IEnumerable<string>? excludedNamespaces = null,
         IEmbeddingProvider? embeddingProvider = null,
         IoPoolRegistry? ioPoolRegistry = null,
-        IObservable<DataChangeNotification>? changeFeed = null)
+        IObservable<DataChangeNotification>? changeFeed = null,
+        ILogger<PostgreSqlMeshQuery>? logger = null)
     {
+        _logger = logger;
         _adapter = adapter;
         // The feed this query watches for invalidation. Defaults to the adapter's own, but a
         // PARTITIONED host passes the routing adapter's MERGED feed — see _changeFeed.
@@ -179,10 +184,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
     /// visitor" there and fell through to the ambient context here).
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
-        => QueryIdentityResolver
-            .Resolve(request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId)
-            .EnsureResolved(request)
-            .RlsUserId;
+        => QueryIdentityResolver.ResolveAndReport(
+            request,
+            _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId,
+            _logger).RlsUserId;
 
     /// <inheritdoc/>
     /// <remarks>

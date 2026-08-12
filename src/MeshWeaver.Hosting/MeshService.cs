@@ -283,21 +283,13 @@ internal sealed class MeshService(
     // === Query (delegated to MeshQuery — IObservable only) ===
 
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
-    {
-        if (!TryStampViewer(ref request, out var unresolved))
-            return Observable.Throw<QueryResultChange<T>>(unresolved!);
-        return _query.Query<T>(request);
-    }
+        => _query.Query<T>(StampViewer(request));
 
     public IObservable<T?> Select<T>(string path, string property)
         => _query.Select<T>(path, property);
 
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
-    {
-        if (!TryStampViewer(ref request, out var unresolved))
-            return Observable.Throw<IReadOnlyCollection<QueryResult>>(unresolved!);
-        return _query.Query(request);
-    }
+        => _query.Query(StampViewer(request));
 
     /// <summary>
     /// 🚨 THE identity boundary for every secured read. Resolves the viewer ONCE, here, and stamps
@@ -323,49 +315,27 @@ internal sealed class MeshService(
     /// block, an Rx continuation, a background service. That is worth a warning that names the
     /// query.</para>
     /// </summary>
-    /// <param name="request">The read; stamped in place with the resolved viewer.</param>
-    /// <param name="unresolved">
-    /// Set when the read declared <see cref="QueryIdentityFallback.Fail"/> and no viewer could be
-    /// resolved — the caller turns it into an <c>Observable.Throw</c> so the failure stays reactive.
-    /// </param>
-    /// <returns>False when the read must fail closed.</returns>
-    private bool TryStampViewer(ref MeshQueryRequest request, out QueryIdentityUnresolvedException? unresolved)
+    /// <param name="request">The read to stamp.</param>
+    /// <returns>The request, carrying the caller's viewer when one could be resolved here.</returns>
+    private MeshQueryRequest StampViewer(MeshQueryRequest request)
     {
-        unresolved = null;
-
         // 🚨 An explicitly-stamped UserId always wins — including the EMPTY string, which is the
         // "evaluate as the anonymous visitor" marker tests and public surfaces pass deliberately.
         // Stamping over it with the ambient (DevLogin admin) context made an anonymous-view
         // assertion observe the admin's view instead (2026-05-22 trace).
         var identity = QueryIdentityResolver.Resolve(request, CaptureContext()?.ObjectId);
 
-        if (identity.IsUnresolved)
-        {
-            if (request.IdentityFallback == QueryIdentityFallback.Fail)
-            {
-                unresolved = new QueryIdentityUnresolvedException(request.Query);
-                return false;
-            }
-
-            // Only a read aimed INTO a named partition is worth warning about. An unscoped read
-            // that evaluates as Anonymous returns the mesh's public subset — a sensible answer, and
-            // the shape a genuine mesh-wide catalog has (stamping the viewer THERE would fold each
-            // visitor's private copies into the public list). See TargetsNamedPartition.
-            if (QueryIdentityResolver.TargetsNamedPartition(request))
-                Logger?.LogWarning(
-                    "{Diagnostic}", QueryIdentityResolver.DescribeUnresolved(request.Query, forError: false));
-        }
-
-        // Stamp unconditionally: after this line UserId is never null, so no provider below has to
-        // re-derive it from an ambient context that no longer belongs to the caller.
-        request = request with { UserId = identity.UserId };
-        return true;
+        // 🚨 Stamp ONLY what we actually resolved. Pinning the Anonymous FALLBACK here would make
+        // this boundary the last word, and it is not: a caller whose ambient context is empty at
+        // CALL time can still have one at SUBSCRIBE time — the plugin installer constructs its
+        // queries outside the ImpersonateAsSystem scope it subscribes them in. An unconditional
+        // stamp froze those reads as Anonymous and the Store package installed 0 nodes (caught by
+        // the cross-repo plugins gate, which is the only thing that compiles and RUNS the node
+        // repos). Leaving UserId null preserves the provider's late resolution byte-for-byte; the
+        // provider is also where the unresolved-viewer diagnostic fires, because that is where the
+        // answer becomes final. See Doc/Architecture/QueryIdentity.
+        return identity.IsUnresolved ? request : request with { UserId = identity.UserId };
     }
-
-    private ILogger? _logger;
-
-    private ILogger? Logger => _logger ??=
-        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshService>();
 
     public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath, string prefix,
