@@ -25,7 +25,7 @@ namespace MeshWeaver.Blazor.Components;
 /// 1. PrecomputedGroups (new) - server-side grouping, just renders results
 /// 2. HiddenQuery/VisibleQuery (legacy) - client-side query via IMeshService
 /// </summary>
-public partial class MeshSearchView : IDisposable
+public partial class MeshSearchView
 {
     private MonacoEditorView? monacoEditor;
     private string _currentValue = "";
@@ -93,27 +93,19 @@ public partial class MeshSearchView : IDisposable
     [Inject]
     private NavigationManager Navigation { get; set; } = default!;
 
+    /// <summary>
+    /// The MESH hub from DI — deliberately NOT <see cref="BlazorView{TViewModel,TView}.Hub"/>, which is
+    /// the per-circuit PORTAL hub (<c>PortalApplication.Hub</c>). This view's catalog queries and
+    /// delete-permission probes have always run against the mesh hub; the re-base onto
+    /// <c>BlazorView</c> (#1333) must not silently move them onto a different hub, so the injected one
+    /// keeps its own name rather than shadowing the base member.
+    /// </summary>
     [Inject]
-    private MeshWeaver.Messaging.IMessageHub Hub { get; set; } = default!;
+    private MeshWeaver.Messaging.IMessageHub MeshHub { get; set; } = default!;
 
-    /// <summary>
-    /// The <c>MeshSearchControl</c> that drives this view's query configuration,
-    /// grouping options, and display settings.
-    /// </summary>
-    [Parameter]
-    public MeshSearchControl? ViewModel { get; set; }
-
-    /// <summary>
-    /// The synchronization stream supplying data context for data-bound values within the search control.
-    /// </summary>
-    [Parameter]
-    public ISynchronizationStream<JsonElement>? Stream { get; set; }
-
-    /// <summary>
-    /// The layout-area identifier under which this search view is rendered.
-    /// </summary>
-    [Parameter]
-    public string? Area { get; set; }
+    // ViewModel / Stream / Area are the base class's. They used to be declared here as local
+    // [Parameter]s, which is precisely what kept this view outside BlazorView.BindData — so Id, Class
+    // and Style were never bound at all (#1333), and no markup change could have fixed that.
 
     /// <summary>
     /// When set, clicking a card selects the node instead of navigating.
@@ -632,7 +624,7 @@ public partial class MeshSearchView : IDisposable
                 {
                     if (!ReferenceEquals(accumulator, _resultAccumulator))
                         return;
-                    var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()
+                    var logger = MeshHub.ServiceProvider.GetService<ILoggerFactory>()
                         ?.CreateLogger("MeshWeaver.MeshSearchView");
                     logger?.LogWarning(ex, "MeshSearchView query failed: {Query}", BuildFullQuery());
                     _nodes = new List<MeshNode>();
@@ -1172,7 +1164,7 @@ public partial class MeshSearchView : IDisposable
     }
 
     private ILogger? TreeLogger =>
-        Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.MeshSearchView");
+        MeshHub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.MeshSearchView");
 
     /// <summary>
     /// Per-level query: the hidden query's filters with namespace: forced to
@@ -1214,7 +1206,7 @@ public partial class MeshSearchView : IDisposable
     /// <summary>
     /// Tears down the tree's live subscriptions. Also runs on <see cref="ResetTree"/>, so the probe
     /// accumulator is CLEARED (disposes its contents, stays usable) rather than disposed; only
-    /// <see cref="Dispose"/> makes it terminal.
+    /// <see cref="DisposeAsync"/> makes it terminal.
     /// </summary>
     private void DisposeTreeSubscriptions()
     {
@@ -1565,10 +1557,10 @@ public partial class MeshSearchView : IDisposable
         // hub.GetQuery is the canonical synced-query surface (delegates to workspace → the shared
         // IMeshNodeStreamCache): live, deduped, all-Initial gated, provider-fanned, injects hub
         // JsonSerializerOptions. The below id keys on the doc toggle so each variant caches separately.
-        var below = Hub.GetQuery($"nav-below:{root}:{_includeDocuments}", BuildNavBelowQuery(root));
+        var below = MeshHub.GetQuery($"nav-below:{root}:{_includeDocuments}", BuildNavBelowQuery(root));
         var above = string.IsNullOrEmpty(root)
             ? Observable.Return<IEnumerable<MeshNode>>(Array.Empty<MeshNode>())
-            : Hub.GetQuery($"nav-above:{root}", BuildNavAboveQuery(root));
+            : MeshHub.GetQuery($"nav-above:{root}", BuildNavAboveQuery(root));
 
         _navSubscription = below
             .CombineLatest(above, (b, a) => (Below: b, Above: a))
@@ -1663,7 +1655,7 @@ public partial class MeshSearchView : IDisposable
                 continue;
 
             var capturedPath = path;
-            var sub = Hub.CheckPermissionOutcome(capturedPath, Permission.Delete)
+            var sub = MeshHub.CheckPermissionOutcome(capturedPath, Permission.Delete)
                 // Take(1) — a snapshot, and the fold never completes on its own. Sanctioned here
                 // (not TakeDecisionOutsideGate): the continuation is a pure UI projection that
                 // queues onto the renderer, it does no storage I/O and publishes no change.
@@ -1755,7 +1747,7 @@ public partial class MeshSearchView : IDisposable
             _ => { },
             ex =>
             {
-                var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()
+                var logger = MeshHub.ServiceProvider.GetService<ILoggerFactory>()
                     ?.CreateLogger("MeshWeaver.MeshSearchView");
                 logger?.LogWarning(ex, "MeshSearchView delete failed: {Path}", path);
             }));
@@ -1898,11 +1890,18 @@ public partial class MeshSearchView : IDisposable
 
     /// <summary>
     /// Disposes all reactive subscriptions (search results, navigation, tree, affordance) held by
-    /// this view. Every step is idempotent and none of them enumerates a collection another thread
-    /// can be writing — which is what makes this safe against the live result stream still
-    /// emitting while the circuit tears down (issue #1308).
+    /// this view, then the base's data bindings. Every step is idempotent and none of them
+    /// enumerates a collection another thread can be writing — which is what makes this safe
+    /// against the live result stream still emitting while the circuit tears down (issue #1308).
     /// </summary>
-    public void Dispose()
+    /// <remarks>
+    /// 🚨 This MUST be the async override, not a plain <c>Dispose()</c>. <c>BlazorView</c> implements
+    /// <see cref="IAsyncDisposable"/>, and Blazor's <c>ComponentState</c> disposes a component through
+    /// <c>IAsyncDisposable</c> <b>or</b> <c>IDisposable</c> — never both. Keeping the old
+    /// <c>IDisposable.Dispose</c> alongside the inherited <c>DisposeAsync</c> would have left every
+    /// subscription below unreleased for the life of the circuit.
+    /// </remarks>
+    public override ValueTask DisposeAsync()
     {
         _reactiveSubscription?.Dispose();
         DisposeTreeSubscriptions();
@@ -1912,5 +1911,6 @@ public partial class MeshSearchView : IDisposable
         // being retained forever.
         _treeProbeSubscriptions.Dispose();
         _affordanceSubscriptions.Dispose();
+        return base.DisposeAsync();
     }
 }
