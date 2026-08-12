@@ -214,6 +214,40 @@ public class GetDataStreamUnsetIdTest(ITestOutputHelper output) : HubTestBase(ou
     }
 
     /// <summary>
+    /// How a "seeded" id becomes a never-set id by accident: <see cref="LayoutAreaHost.UpdateData"/>
+    /// is a <b>silent no-op for null</b>. So <c>host.UpdateData(id, node.Description)</c> on a node
+    /// whose Description is null writes nothing, and every downstream <c>.Take(1)</c> guard on that id
+    /// is silently dead — while the calling code reads as though the id were seeded.
+    /// <para>This is why <c>AgentView</c> seeds all nine of its form ids as
+    /// <c>node.X ?? ""</c>: the empty string writes, the null does not. Seed a sentinel, never a
+    /// nullable straight from the model.</para>
+    /// </summary>
+    [HubFact]
+    public async Task UpdateDataWithNull_WritesNothing_LeavingTheIdNeverSet()
+    {
+        var host = await RenderProbeAreaAsync();
+
+        // Looks like a seed, is not one.
+        host.UpdateData(LateId, null);
+
+        var window = host.GetDataStream<string>(LateId)
+            .TakeUntil(ControlLanded(host))
+            .ToArray()
+            .Replay(1);
+
+        using var connection = window.Connect();
+
+        host.UpdateData(ControlId, ControlLate);
+
+        var emissions = await window.Should().Within(10.Seconds()).Emit();
+
+        emissions.Should().BeEmpty(
+            "UpdateData ignores null, so the id stays never-set and the stream stays silent. Seeding "
+            + "with a nullable straight off the model (host.UpdateData(id, node.Description)) is the "
+            + "usual way a guard ends up dead — seed a sentinel such as `?? \"\"` instead.");
+    }
+
+    /// <summary>
     /// Same semantics on the OTHER overload — <c>host.Stream.GetDataStream&lt;T&gt;(id)</c>
     /// (<see cref="LayoutExtensions"/>), which is the one <c>EditorExtensions</c> actually calls and the
     /// one with no <c>where T : class</c> constraint, so it also covers the <c>bool</c> edit-state ids.
