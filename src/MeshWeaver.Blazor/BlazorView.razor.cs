@@ -157,7 +157,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     /// <summary>
     /// <see cref="Class"/> rendered as a space-prefixed suffix, for views whose root element already
-    /// carries a FIXED class list of its own (<c>class="markdown-body@ClassSuffix"</c>). Emits the empty
+    /// carries a FIXED class list of its own. 🚨 The Razor form is the PARENTHESISED one —
+    /// <c>class="markdown-body@(ClassSuffix)"</c>: written bare as <c>markdown-body@ClassSuffix</c> it
+    /// hits Razor's email-address heuristic (<c>word@word</c>) and is emitted as LITERAL TEXT, with no
+    /// error. Emits the empty
     /// string when the author declared no class, so an unstyled control's markup stays byte-identical to
     /// what it was before the class was honoured — appending <c> @Class</c> literally instead would leave
     /// a trailing space in every such attribute.
