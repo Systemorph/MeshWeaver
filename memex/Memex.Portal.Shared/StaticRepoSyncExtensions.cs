@@ -3,6 +3,7 @@ using MeshWeaver.AI;
 using MeshWeaver.Documentation;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Diagnostics;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -109,13 +110,22 @@ internal sealed class StaticRepoImportHostedService(
         // import, ImportAll verifies each SERVED catalog (Agent/Provider/Harness/Skill that a source
         // actually backs this run) is registered in the cross-schema search index, force-re-syncing it
         // and surfacing a startup-failure notification for any that materialized but stayed unindexed.
+        // What this import COSTS, appended to the line that already reports its outcome — no new log
+        // volume. Cumulative since the import started, so the last partition's line is the whole
+        // import's bill. The suspected driver of the memex-cloud growth (2.5 GB → 24.5 GB at
+        // 130–340 MB/min) is this path plus the sync-stream churn it causes, and until now nothing
+        // inside the process reported what one import cost — the growth was only ever inferrable from
+        // a container gauge hours later. See MemoryDelta.
+        var importMemory = MemoryDelta.Start();
+
         _subscription = StaticRepoImporter
             .ImportAll(hub, logger, syncModeOverrides, AiContentSources.ContentPartitions)
             .SubscribeOn(System.Reactive.Concurrency.TaskPoolScheduler.Default)
             .Subscribe(
                 r => logger?.LogInformation(
-                    "[StaticRepoImport] {Partition}: {Outcome} ({Count} node(s)).",
-                    r.Partition, r.Outcome, r.Count),
+                    "[StaticRepoImport] {Partition}: {Outcome} ({Count} node(s)) — {Memory} "
+                    + "(cumulative since import start).",
+                    r.Partition, r.Outcome, r.Count, importMemory.ToString()),
                 ex =>
                 {
                     logger?.LogWarning(ex, "[StaticRepoImport] sync-context init failed.");
