@@ -22,8 +22,11 @@ namespace MeshWeaver.Hosting;
 /// nothing), and <b>never Task return types</b> on the public surface.
 /// See <c>Doc/Architecture/AsynchronousCalls</c>.
 ///
-/// Each call is bounded by <see cref="MeshOperationOptions.Timeout"/> so a lost/slow response
-/// surfaces as <see cref="TimeoutException"/> within a few seconds — never a hang.
+/// Each WRITE is bounded by <see cref="MeshOperationOptions.Timeout"/> (default 30 s) so a lost or
+/// stalled response surfaces as a named <see cref="TimeoutException"/> — never a hang. Reads are
+/// deliberately unbounded: they are live streams. See <see cref="OpTimeout"/> for why the claim
+/// used to be false, and for what the bound adds over the hub's own per-leg
+/// <c>RequestTimeout</c>.
 /// </summary>
 internal sealed class MeshService(
     IEnumerable<IMeshQueryProvider> providers,
@@ -70,13 +73,52 @@ internal sealed class MeshService(
     private IMessageHub IssuingHub => _issuingHub ??= hub.NodeOperationIssuingHub();
 
     /// <summary>
-    /// Per-call timeout ceiling. Every CRUD observable is bounded by this so a lost response
-    /// (routing failure, deleted hub, stuck handler) surfaces as TimeoutException within
-    /// a few seconds instead of hanging forever. Default 30s, configurable via
-    /// <c>WithMeshOperationTimeout</c>.
+    /// Per-call timeout ceiling. Every WRITE observable below is bounded by this so a lost
+    /// response (routing failure, deleted hub, stuck handler) surfaces as a named
+    /// <see cref="TimeoutException"/> instead of hanging. Default 30 s, configurable via
+    /// <c>WithMeshOperationTimeout</c>. Resolved once — the option is a singleton and this service
+    /// is scoped, so re-resolving per call bought nothing.
+    ///
+    /// <para>🚨 Until #1270 this property was DECLARED AND NEVER READ: the class doc promised
+    /// "each call is bounded … never a hang", <c>Doc/Architecture/AsynchronousCalls</c> told every
+    /// author to write <c>.Timeout(OpTimeout); ← NEVER OMIT</c> on this surface, and `grep` found
+    /// no <c>.Timeout(</c> anywhere in this file. An advertised bound that nothing enforces is
+    /// worse than no bound, because callers believe they are protected.</para>
+    ///
+    /// <para>🚨 It bounds the whole OPERATION, which is more than either half already gives.
+    /// <c>hub.Observe(...)</c> bounds one LEG (its own response subject, at the hub's
+    /// <c>RequestTimeout</c>), and <c>HandleDeleteNodeRequest</c> already applies THIS option
+    /// server-side to the delete fan-out — so honouring it here is the client side of a contract
+    /// the mesh hub keeps already, not a new invention. What was unbounded is the COMPOSITION:
+    /// <see cref="UpdateNode"/> runs a multi-stage validation pipeline, and a
+    /// <see cref="CreateNode"/> landing on a not-yet-bootstrapped partition fans out into nested
+    /// creates (<c>EnsurePartitionBootstrap</c> → provision, root, creator grant) chained with
+    /// <c>SelectMany</c>, where no single leg's budget describes the caller's wait.</para>
+    ///
+    /// <para>🚨 Writes ONLY. <see cref="Query{T}"/> and friends return LIVE streams meant to stay
+    /// open across quiet periods; a ceiling there would fault a healthy subscription.</para>
     /// </summary>
+    private TimeSpan? _opTimeout;
     private TimeSpan OpTimeout =>
-        (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
+        _opTimeout ??= (hub.ServiceProvider.GetService<MeshOperationOptions>()
+                        ?? new MeshOperationOptions()).Timeout;
+
+    /// <summary>
+    /// Applies <see cref="OpTimeout"/> to a write, with a message naming the operation, the node
+    /// and the knob — a bare <c>TimeoutException</c> ("The operation has timed out.") tells an
+    /// operator neither which write stalled nor how to widen the budget.
+    ///
+    /// <para>The wording deliberately avoids every phrase the mesh classifies on
+    /// (<c>MeshNodeStreamCache.IsTransientOwnerFailure</c> / <c>IsMissingNodeFailure</c>), so a
+    /// slow write is never mistaken for a recycling owner or a provably-absent node.</para>
+    /// </summary>
+    private IObservable<T> Bounded<T>(IObservable<T> source, string operation, string path)
+        => source.Timeout(OpTimeout, Observable.Defer(() => Observable.Throw<T>(
+            new TimeoutException(
+                $"Mesh operation {operation} on '{path}' did not complete within "
+                + $"{OpTimeout.TotalSeconds:0.###}s (MeshOperationOptions.Timeout). Raise it with "
+                + "WithMeshOperationTimeout for a genuinely long batch; otherwise the operation "
+                + "stalled and this budget is what made that visible."))));
 
     private AccessContext? CaptureContext()
     {
@@ -123,7 +165,7 @@ internal sealed class MeshService(
         // (prod 2026-06-18: System compile/import writes posted as Anonymous → the Doc/_Policy
         // Create=false cap denied them → activities never landed → phantom-path NotFound storm.)
         var captured = CaptureContext();
-        return Observable.Defer(() =>
+        var operation = Observable.Defer(() =>
         {
             var request = new CreateNodeRequest(node);
             if (string.IsNullOrEmpty(request.CreatedBy)
@@ -144,7 +186,9 @@ internal sealed class MeshService(
                         _ => new InvalidOperationException(r.Error ?? "Node creation failed")
                     });
                 });
-        }).CarryAccessContext(hub.ServiceProvider);
+        });
+        return Bounded(operation, nameof(CreateNode), node.Path)
+            .CarryAccessContext(hub.ServiceProvider);
     }
 
     public IObservable<CreateNodesResponse> CreateNodes(IReadOnlyCollection<MeshNode> nodes)
@@ -152,7 +196,7 @@ internal sealed class MeshService(
         // Same eager identity capture as CreateNode — see the 🚨 note there: the request FIELD
         // survives the cross-hub post and an emission-thread Subscribe; the ambient context does not.
         var captured = CaptureContext();
-        return Observable.Defer(() =>
+        var operation = Observable.Defer(() =>
         {
             var request = new CreateNodesRequest(nodes as ImmutableList<MeshNode> ?? nodes.ToImmutableList());
             if (string.IsNullOrEmpty(request.CreatedBy)
@@ -171,7 +215,10 @@ internal sealed class MeshService(
                         _ => new InvalidOperationException(r.Error ?? "Bulk node creation failed"),
                     });
                 });
-        }).CarryAccessContext(hub.ServiceProvider);
+        });
+        return Bounded(operation, nameof(CreateNodes),
+                nodes.Count == 1 ? nodes.First().Path : $"{nodes.Count} node(s)")
+            .CarryAccessContext(hub.ServiceProvider);
     }
 
     public IObservable<MeshNode> UpdateNode(MeshNode node)
@@ -184,7 +231,8 @@ internal sealed class MeshService(
         // UnauthorizedAccessException; the owner re-stamps auditing and persists durably
         // (the PatchDataResponse acks off the storage flush, so a subsequent read sees the
         // write). Observable.Defer keeps the write cold so it fires on Subscribe.
-        => Observable.Defer(() => NodeUpdatePipeline.UpdateWithValidation(hub, node))
+        => Bounded(Observable.Defer(() => NodeUpdatePipeline.UpdateWithValidation(hub, node)),
+                nameof(UpdateNode), node.Path)
             .CarryAccessContext(hub.ServiceProvider);
 
     public IObservable<MeshNode> CreateOrUpdateNode(MeshNode node)
@@ -195,7 +243,7 @@ internal sealed class MeshService(
         // checks Create (absent) or Update (present) dynamically — race-free, unlike a client-side
         // CreateNode/UpdateNode split.
         var captured = CaptureContext();
-        return Observable.Defer(() =>
+        var operation = Observable.Defer(() =>
         {
             var request = new CreateOrUpdateNodeRequest(node);
             if (string.IsNullOrEmpty(request.RequestedBy)
@@ -214,7 +262,9 @@ internal sealed class MeshService(
                         _ => new InvalidOperationException(r.Error ?? "Node upsert failed")
                     });
                 });
-        }).CarryAccessContext(hub.ServiceProvider);
+        });
+        return Bounded(operation, nameof(CreateOrUpdateNode), node.Path)
+            .CarryAccessContext(hub.ServiceProvider);
     }
 
     public IObservable<bool> DeleteNode(string path)
@@ -223,7 +273,7 @@ internal sealed class MeshService(
         // site so it survives the cross-hub post / emission-thread Subscribe (RlsNodeValidator
         // reads DeletedBy first → System deletes authorise against read-only-_Policy partitions).
         var captured = CaptureContext();
-        return Observable.Defer(() =>
+        var operation = Observable.Defer(() =>
         {
             var request = new DeleteNodeRequest(path) { Recursive = true };
             if (string.IsNullOrEmpty(request.DeletedBy)
@@ -246,12 +296,18 @@ internal sealed class MeshService(
                         _ => new InvalidOperationException(r.Error ?? "Node deletion failed")
                     });
                 });
-        }).CarryAccessContext(hub.ServiceProvider);
+        });
+        // 🚨 A recursive delete of a cold subtree can genuinely run for tens of seconds — each
+        // descendant activates its own per-node hub. That is not a stall, and the SERVER already
+        // bounds it with this very option (HandleDeleteNodeRequest), so the client budget matches
+        // the handler's rather than pre-empting it with a tighter number.
+        return Bounded(operation, nameof(DeleteNode), path)
+            .CarryAccessContext(hub.ServiceProvider);
     }
 
     public IObservable<MeshNode> CopyNode(string sourcePath, string targetPath,
         bool includeDescendants = true, bool includeSatellites = false)
-        => Observable.Defer(() =>
+        => Bounded(Observable.Defer(() =>
         {
             var captured = CaptureContext();
             var req = new CopyNodeRequest(sourcePath, targetPath)
@@ -276,7 +332,8 @@ internal sealed class MeshService(
                         _ => new InvalidOperationException(r.Error ?? "Node copy failed")
                     });
                 });
-        }).CarryAccessContext(hub.ServiceProvider);
+        }), nameof(CopyNode), $"{sourcePath} -> {targetPath}")
+            .CarryAccessContext(hub.ServiceProvider);
 
     // === Query (delegated to MeshQuery — IObservable only) ===
 
