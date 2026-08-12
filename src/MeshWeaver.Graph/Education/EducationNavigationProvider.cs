@@ -3,6 +3,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -72,23 +73,31 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
             : segments[0];
 
         var hub = host.Hub;
-        var centralCourse = EducationLayoutAreas.ToSourcePath(root, viewer);
+        var courseSlug = CourseProgress.CourseSlug(root);
 
-        // The learner's progress record decorates the index (✓ on visited lessons). Starts empty
-        // so a slow or absent record can never hold the menu back.
+        // The learner's visit markers decorate the index (✓ on visited lessons). Starts empty so
+        // a slow or absent record can never hold the menu back.
         var visitedStream = string.IsNullOrEmpty(viewer)
             ? Observable.Return(NoLessons)
             : hub.GetQuery(
-                    $"course-progress:{viewer}:{centralCourse}",
-                    $"path:{CourseProgress.RecordPath(viewer, centralCourse)}")
-                .Select(nodes => CourseProgress.VisitedLessons(nodes.FirstOrDefault()?.Content))
+                    $"course-progress:{viewer}:{courseSlug}",
+                    $"path:{CourseProgress.VisitedPath(viewer, courseSlug)} scope:descendants select:path,id")
+                .Select(markers => CourseProgress.VisitedSlugs(markers))
                 .Catch((Exception _) => Observable.Return(NoLessons))
                 .StartWith(NoLessons);
 
+        // The visit WRITE is prepared HERE, on the render turn, where the viewer's identity is
+        // ambient — CreateOrUpdateNode captures the AccessContext when it is CALLED, so building
+        // it inside a delayed callback would stamp whatever identity that scheduler hop carries
+        // (the resume record's writer documents the same rule). It is an idempotent no-read
+        // upsert of a self-describing marker, so there is no read-modify-write to race.
+        var visitWrite = PrepareVisitWrite(host, viewer, root, courseSlug, currentPath);
+
         // ONE subtree query per course, shared by every page of it (synced + RLS-wrapped).
-        // Defer wraps a per-subscription flag: the first CLAIMED index this page renders also
-        // records the visit into {viewer}/_Progress — once per page open, idempotent on re-renders
-        // (CourseProgress.MergeVisit writes nothing when the record already says it all).
+        // Defer wraps a per-subscription flag: the first CLAIMED index this page renders arms the
+        // visit write — once per page open, and only after CourseProgress.VisitDwell so a page the
+        // reader merely paged through is never marked read. Leaving CANCELS the dwell: the
+        // subscription is registered for disposal with the area.
         return Observable.Defer(() =>
         {
             var recorded = false;
@@ -96,15 +105,34 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
                     $"edu-course-index:{root}",
                     $"path:{root} scope:subtree is:main select:path,id,name,order,nodeType,icon")
                 .CombineLatest(visitedStream, (nodes, visited) =>
-                    DecorateVisited(BuildNavigation(root, nodes.ToList(), currentPath), visited, viewer))
+                    DecorateVisited(BuildNavigation(root, nodes.ToList(), currentPath), visited))
                 .Do(navigation =>
                 {
-                    if (navigation is null || recorded)
+                    if (navigation is null || recorded || visitWrite is null)
                         return;
                     recorded = true;
-                    CourseProgress.RecordVisit(hub, viewer, root, currentPath, navigation);
+                    host.RegisterForDisposal(visitWrite
+                        .DelaySubscription(CourseProgress.VisitDwell)
+                        .Take(1)
+                        .Subscribe(_ => { }, _ => { }));
                 });
         });
+    }
+
+    // The marker upsert for this page, built on the render turn (see GetNavigation), or null when
+    // there is nothing to record: no signed-in home, or the page is not under a lesson.
+    private static IObservable<MeshNode>? PrepareVisitWrite(
+        LayoutAreaHost host, string? viewer, string root, string courseSlug, string currentPath)
+    {
+        if (string.IsNullOrEmpty(viewer))
+            return null;
+        var lessonSlug = CourseProgress.LessonSlug(root, currentPath);
+        if (lessonSlug is null)
+            return null;
+
+        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+        return meshService?.CreateOrUpdateNode(CourseProgress.VisitMarker(
+            viewer, courseSlug, lessonSlug, currentPath, DateTimeOffset.UtcNow.ToString("O")));
     }
 
     // The empty visited set — shared, never mutated.
@@ -112,24 +140,22 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
 
     /// <summary>
     /// Marks visited lessons with a leading ✓ — the glyph is language-neutral and rides the label,
-    /// so it needs nothing from the renderer. <paramref name="visitedCentral"/> holds CENTRAL
-    /// lesson paths (how <see cref="CourseProgress"/> stores them); entries are compared through
-    /// <see cref="EducationLayoutAreas.ToSourcePath"/> so the learner's own copy decorates
-    /// identically. Pure.
+    /// so it needs nothing from the renderer. <paramref name="visitedSlugs"/> holds LESSON KEYS
+    /// (folder names — <see cref="CourseProgress.LessonSlug"/>), which the central course and the
+    /// learner's copy share, so both decorate identically. Pure.
     /// </summary>
     /// <param name="navigation">The built index, or null (declined — passes through).</param>
-    /// <param name="visitedCentral">Central lesson paths the learner has opened.</param>
-    /// <param name="viewer">The viewer's home partition, or null.</param>
+    /// <param name="visitedSlugs">Lesson keys the learner has opened.</param>
     public static NodeNavigation? DecorateVisited(
-        NodeNavigation? navigation, IReadOnlySet<string> visitedCentral, string? viewer)
+        NodeNavigation? navigation, IReadOnlySet<string> visitedSlugs)
     {
-        if (navigation is null || visitedCentral.Count == 0)
+        if (navigation is null || visitedSlugs.Count == 0)
             return navigation;
 
         return navigation with
         {
             Entries = navigation.Entries
-                .Select(e => visitedCentral.Contains(EducationLayoutAreas.ToSourcePath(e.Path, viewer))
+                .Select(e => visitedSlugs.Contains(new string(EducationLayoutAreas.LastSegment(e.Path)))
                     ? e with { Label = $"✓ {e.Label}" }
                     : e)
                 .ToList(),
