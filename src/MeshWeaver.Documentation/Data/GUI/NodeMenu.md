@@ -168,11 +168,11 @@ private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> MoreActi
 
 Give a pure grouping parent an area from **`NodeMenuItemDefinition.GroupArea(name)`** — `_group:Export` — the sibling of the long-standing `"_separator"`. It makes the wire self-describing: a client that cannot nest can still tell "this is a group, not an action" instead of rendering a dead row that navigates to `/{path}/`.
 
-🚨 **A prefix, not one shared `"_group"` constant.** `Area` is also the stable key the [menu-presentation catalog](../Architecture/MenuAsData) matches on, and the key another entry names to become a child. One shared sentinel would make every group the same key — an admin could not re-word, re-icon, re-order or hide a *specific* group, and only the first would be addressable as a parent.
+🚨 **A prefix, not one shared `"_group"` constant.** `Area` is also the stable key the [menu-presentation catalog](../../Architecture/MenuAsData) matches on, and the key another entry names to become a child. One shared sentinel would make every group the same key — an admin could not re-word, re-icon, re-order or hide a *specific* group, and only the first would be addressable as a parent.
 
 ### Nesting has two origins, and they compose
 
-A sub-menu can come from **code** (a provider emitting `Children`) or from **data** (a catalog entry's `parent` moving an item under another — [MenuAsData](../Architecture/MenuAsData)). `RenderMenus` runs the overlay first and normalizes afterwards, so both origins land in the same shape and obey the same rules. A grouping created purely by a node edit sorts and prunes exactly like a compiled one.
+A sub-menu can come from **code** (a provider emitting `Children`) or from **data** (a catalog entry's `parent` moving an item under another — [MenuAsData](../../Architecture/MenuAsData)). `RenderMenus` runs the overlay first and normalizes afterwards, so both origins land in the same shape and obey the same rules. A grouping created purely by a node edit sorts and prunes exactly like a compiled one.
 
 The catalog also descends into compiled groups, so grouping entries in code does not make them un-editable: `ExportDocx` sits inside 📦 Export and is still addressable by its own area.
 
