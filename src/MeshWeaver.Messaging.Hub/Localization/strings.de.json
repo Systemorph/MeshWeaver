@@ -425,6 +425,8 @@
   "ui.iconName": "Symbolname:",
   "ui.language": "Sprache:",
   "ui.openCoupon": "Gutschein öffnen:",
+  "ui.couponUnlocksEverything": "alles",
+  "ui.couponUnlocksRedeemedOn": "das Paket, auf dem er eingelöst wird",
   "ui.typeDeleteToConfirm": "Zum Bestätigen DELETE eingeben:",
   "ui.createRelease": "Release erstellen",
   "ui.runTests": "Tests ausführen",
