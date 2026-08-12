@@ -33,8 +33,11 @@ public static class PluginCatalogConfigurationExtensions
             .AddMeshNodes(CreateInstalledPartitionPolicy())
             .AddMeshNodes(CreateRegistryCredentialNodeType())
             .AddMeshNodes(CreateModuleDiscoveryNodeType())
+            .AddMeshNodes(CreateDefaultInstallLedgerNodeType())
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
+            // Bookkeeping, never pickable content — same reason as the credential above.
+            .AddAutocompleteExcludedTypes(InstanceAutoRegistrationService.LedgerNodeType)
             // The build-completion subscriber. A mesh-scoped SINGLETON, so its subscriptions live
             // and die with the mesh rather than surviving disposal into the next test
             // (Doc/Architecture/NoStaticState). The IHostedService registration is what STARTS it —
@@ -162,6 +165,30 @@ public static class PluginCatalogConfigurationExtensions
             .AddDefaultLayoutAreas()
             .AddMeshDataSource(s => s.WithContentType<ModuleDiscovery>()),
     };
+
+    // 🚨 The default-install ledger's own NodeType. Registering the CONTENT type
+    // (AddPluginCatalogTypes' WithType<DefaultInstallLedger>) is only half of it: CreateNode
+    // validates node.NodeType against the registered NodeType MeshNodes, so without this the
+    // ledger write died every boot with "NodeType 'DefaultInstallLedger' is not registered"
+    // (memex 2026-08-10, 07:16:45 and 11:46:24). RecordSeeded swallows that as a warning —
+    // correctly, since a lost ledger must not fail a boot — so the failure was silent, and the
+    // ledger stayed permanently empty. Consequence: SeedLedger() always answered "nothing seeded",
+    // so EVERY boot re-ran the FULL default install (upserting every plugin partition root) rather
+    // than the intended repair-only pass, and the "a failed package is retried next boot" design
+    // could never distinguish a repair from a re-run of work already done.
+    // Same trap ApiToken and MeshWeaverInstance hit — the content type is not the node type.
+    private static MeshNode CreateDefaultInstallLedgerNodeType() =>
+        new(InstanceAutoRegistrationService.LedgerNodeType)
+        {
+            Name = "Default Install Ledger",
+            Icon = "/static/NodeTypeIcons/box.svg",
+            // Bookkeeping, not a satellite of anything: it is a single node in the Plugins
+            // partition, addressed by a fixed path, exactly like the credential node type.
+            IsSatelliteType = false,
+            ExcludeFromContext = new HashSet<string> { "search", "create" },
+            HubConfiguration = config => config
+                .AddMeshDataSource(s => s.WithContentType<DefaultInstallLedger>()),
+        };
 
     // Read-only, world-readable policy for the install-records partition — the same shape every
     // other built-in catalog ships (BuiltInAgentProvider / BuiltInSkillProvider / the model
