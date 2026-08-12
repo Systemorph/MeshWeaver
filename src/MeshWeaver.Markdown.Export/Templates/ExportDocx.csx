@@ -64,27 +64,24 @@ if (options.IncludeChildren)
     Log.LogInformation("Collecting descendants");
     var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     var rootDepth = sourcePath.Count(c => c == '/');
-    var enumerator = meshService
-        .QueryAsync<MeshNode>("path:" + sourcePath + " scope:descendants")
-        .GetAsyncEnumerator(Ct);
-    try
+    // One-shot snapshot off the LIVE query surface: filter on the emission SHAPE
+    // (Initial), never on a count — a change feed can race the initial-snapshot path.
+    var descendants = await meshService
+        .Query<MeshNode>(MeshQueryRequest.FromQuery("path:" + sourcePath + " scope:descendants"))
+        .Where(c => c.ChangeType == QueryChangeType.Initial)
+        .Select(c => c.Items)
+        .FirstAsync()
+        .ToTask(Ct);
+    foreach (var desc in descendants)
     {
-        while (await enumerator.MoveNextAsync())
+        if (options.MaxDepth > 0)
         {
-            var desc = enumerator.Current;
-            if (options.MaxDepth > 0)
-            {
-                var depth = desc.Path.Count(c => c == '/') - rootDepth;
-                if (depth > options.MaxDepth) continue;
-            }
-            var md = ExtractMarkdown(desc);
-            if (!string.IsNullOrWhiteSpace(md))
-                chapters.Add(new ExportChapter(desc.Name ?? desc.Id, md, desc.Path));
+            var depth = desc.Path.Count(c => c == '/') - rootDepth;
+            if (depth > options.MaxDepth) continue;
         }
-    }
-    finally
-    {
-        await enumerator.DisposeAsync();
+        var md = ExtractMarkdown(desc);
+        if (!string.IsNullOrWhiteSpace(md))
+            chapters.Add(new ExportChapter(desc.Name ?? desc.Id, md, desc.Path));
     }
     Log.LogInformation("Collected {Count} chapters", chapters.Count);
 }

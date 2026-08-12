@@ -93,22 +93,17 @@ if (isDeck)
     else if (!string.IsNullOrWhiteSpace(query))
     {
         var deckQueryService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var matched = new List<MeshNode>();
-        var slideEnumerator = deckQueryService.QueryAsync<MeshNode>(query).GetAsyncEnumerator(Ct);
-        try
-        {
-            while (await slideEnumerator.MoveNextAsync())
-            {
-                var n = slideEnumerator.Current;
-                if (string.Equals(n.Path, sourcePath, StringComparison.Ordinal)) continue;
-                if (n.Segments.Skip(1).Any(s => s.StartsWith('_'))) continue;
-                matched.Add(n);
-            }
-        }
-        finally
-        {
-            await slideEnumerator.DisposeAsync();
-        }
+        // One-shot snapshot off the LIVE query surface: filter on the emission SHAPE
+        // (Initial), never on a count — a change feed can race the initial-snapshot path.
+        var slideMatches = await deckQueryService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Select(c => c.Items)
+            .FirstAsync()
+            .ToTask(Ct);
+        var matched = slideMatches
+            .Where(n => !string.Equals(n.Path, sourcePath, StringComparison.Ordinal))
+            .Where(n => !n.Segments.Skip(1).Any(s => s.StartsWith('_')));
         slides = matched
             .OrderBy(n => n.Order ?? int.MaxValue)
             .ThenBy(n => n.Path, StringComparer.Ordinal)
@@ -129,29 +124,24 @@ else if (options.IncludeChildren)
     Log.LogInformation("Collecting descendants");
     var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     var rootDepth = sourcePath.Count(c => c == '/');
-    var enumerator = meshService
-        .QueryAsync<MeshNode>("path:" + sourcePath + " scope:descendants")
-        .GetAsyncEnumerator(Ct);
-    try
+    var descendants = await meshService
+        .Query<MeshNode>(MeshQueryRequest.FromQuery("path:" + sourcePath + " scope:descendants"))
+        .Where(c => c.ChangeType == QueryChangeType.Initial)
+        .Select(c => c.Items)
+        .FirstAsync()
+        .ToTask(Ct);
+    foreach (var desc in descendants)
     {
-        while (await enumerator.MoveNextAsync())
+        if (options.MaxDepth > 0)
         {
-            var desc = enumerator.Current;
-            if (options.MaxDepth > 0)
-            {
-                var depth = desc.Path.Count(c => c == '/') - rootDepth;
-                if (depth > options.MaxDepth) continue;
-            }
-            var body = ExtractMarkdown(desc);
-            if (string.IsNullOrWhiteSpace(body)) continue;
-            markdown.AppendLine().AppendLine();
-            markdown.Append("## ").AppendLine(desc.Name ?? desc.Id);
-            markdown.AppendLine().Append(body);
+            var depth = desc.Path.Count(c => c == '/') - rootDepth;
+            if (depth > options.MaxDepth) continue;
         }
-    }
-    finally
-    {
-        await enumerator.DisposeAsync();
+        var body = ExtractMarkdown(desc);
+        if (string.IsNullOrWhiteSpace(body)) continue;
+        markdown.AppendLine().AppendLine();
+        markdown.Append("## ").AppendLine(desc.Name ?? desc.Id);
+        markdown.AppendLine().Append(body);
     }
 }
 
