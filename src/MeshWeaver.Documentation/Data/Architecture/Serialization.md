@@ -200,7 +200,6 @@ All adapters implement the same interface and accept the same options — swappi
 | `FileSystemStorageAdapter` | Local `.json` files |
 | `PostgreSqlStorageAdapter` | PostgreSQL (the production backend) |
 | `CosmosStorageAdapter` | Azure Cosmos DB documents |
-| `AzureBlobStorageAdapter` | Azure Blob Storage |
 | `SqliteStorageAdapter` | SQLite |
 | `InMemoryStorageAdapter` | In-memory store for testing |
 
