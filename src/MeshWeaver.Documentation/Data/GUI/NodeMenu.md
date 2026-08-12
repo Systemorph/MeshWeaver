@@ -145,7 +145,7 @@ Items from `AddNodeMenuItems()` are merged with the defaults and sorted by `Orde
 
 ## Hierarchical Sub-Menus
 
-Set the `Children` property to nest items under a parent entry. The portal renders the parent with an expand-on-hover sub-menu. A provider emits its complete set — including the parent and all its children — on every emission.
+Set the `Children` property to nest items under a parent entry. A provider emits its complete set — including the parent and all its children — on every emission.
 
 ```csharp
 // Group multiple items under a parent — a provider emits its complete set per emission.
@@ -153,21 +153,49 @@ private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> MoreActi
     LayoutAreaHost host, RenderingContext ctx)
     => Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>(
     [
-        new NodeMenuItemDefinition("More Actions", "MoreActions", Order: 50,
+        new NodeMenuItemDefinition("More Actions", NodeMenuItemDefinition.GroupArea, Icon: "🧰", Order: 50,
             Children:
             [
-                new("Action 1", "Action1Area", Order: 1),
-                new("Action 2", "Action2Area", Order: 2),
+                new("Action 1", "Action1Area", Icon: "1️⃣", Order: 1),
+                new("Action 2", "Action2Area", Icon: "2️⃣", Order: 2),
             ]),
     ]);
 ```
+
+### A parent is never activatable
+
+**Any entry carrying `Children` is a sub-menu parent, and no client will activate it** — its own `Area` / `Href` is ignored for activation. That is not a policy invented here; it is what both web component libraries do. FAST's `fluent-menu-item` (Blazor) and Fluent React v9's `MenuTrigger`-wrapped item both *toggle* the sub-menu on click or Enter rather than invoking the parent, so "a parent that also navigates somewhere" is not expressible in either.
+
+Give a pure grouping parent the **`NodeMenuItemDefinition.GroupArea`** sentinel (`"_group"`) — the sibling of the long-standing `"_separator"`. It makes the wire self-describing: a client that cannot nest can still tell "this is a group, not an action" instead of rendering a dead row that navigates to `/{path}/`.
+
+### The aggregator normalizes the tree
+
+Two things happen once, in `RenderMenus`, so every renderer can stay dumb:
+
+- **Children are sorted by `Order` at every depth**, with the same comparer the top level uses. Before this, only the top level was sorted and a sub-menu came out in whatever order its provider appended.
+- **A `_group` parent with no surviving children is dropped.** Items are permission-filtered by the *provider*, never by the renderer, so a provider that gates each child individually can legitimately end up emitting a parent whose children all vanished for this viewer. Rendering that would give a sub-menu that opens onto nothing. Pruning runs bottom-up, so a group whose only child was itself an emptied group disappears too. A parent with a **real** `Area` of its own survives — it still has somewhere to go.
+
+### How each client renders it
+
+Parity across clients means equivalent **capability**, not an identical gesture — the mobile client deliberately differs:
+
+| Client | Rendering |
+|---|---|
+| Blazor portal (`NodeMenuItemList.razor`) | `<FluentMenuItem MenuItems="…">` → `<fluent-menu slot="submenu">` — FAST's native flyout |
+| portal-next / React (`HeaderMenus.tsx` → `MenuEntries`) | nested Fluent v9 `<Menu>` + `<MenuTrigger>` inside the parent `<MenuList>` |
+| React Native (`leftMenu.tsx` → `LeftMenuView`) | **drill-down**: tapping a parent replaces the list with its children plus a back control |
+| MAUI (`PortalShellPage`) | recursive inline expander |
+
+The web clients get the conventional nested flyout, with the component library supplying roles, `aria-haspopup` / `aria-expanded` and the keyboard model (Enter / ArrowRight to open, ArrowLeft / Escape to close) — **a sub-menu is never hover-only**. The mobile client drills down instead: a flyout that opens a second panel beside the first needs hover and width, and a phone has neither, so exactly one level is on screen at a time, parents carry a `›` chevron, and rows clear the 44 pt touch target.
+
+Nesting depth is unbounded — every renderer recurses. Nothing ships deeper than two levels today.
 
 The built-in node menu does **not** use this pattern. `DefaultNodeMenuProvider` (in `NodeMenuItemsExtensions`, registered alongside `DefaultMeshMenuProvider`) emits Edit, Pin, Move, Copy, Delete and the rest as one **flat** list — no `Children`, no "Actions" parent — grouped by `Order` band and rendered with `_separator` dividers rather than by nesting:
 
 | Order band | Section | Icons |
 |---|---|---|
 | 10–18 | edit / organize | ✏️ 🔖 ➡️ 📋 🗑️ |
-| 27–30 | export / share / approval (contributed by other packages) | 📄 📝 📤 ✅ |
+| 27–30 | export / share / approval (contributed by other packages) | 📦 (→ 📄 📝 📤) ✅ |
 | 30–38 | content / history / sync | 📁 🧾 🕘 🔌 🔄 |
 | 50 | lifecycle | ♻️ |
 
@@ -178,7 +206,7 @@ bare label and reads as a foreign group wedged between the iconed ones — which
 export/share block did before it was given 📄 📝 📤. `MarkdownExportMenuTest` asserts this as an
 invariant over the whole menu, so a new icon-less entry fails the build rather than shipping.
 
-Because the aggregator re-sorts every provider's items by `Order`, a plugin's item slots into the right section just by picking a number in that band — which is why the built-in set stays flat. Use `Children` when you genuinely want a hover sub-menu of your own.
+Because the aggregator re-sorts every provider's items by `Order`, a plugin's item slots into the right section just by picking a number in that band — which is why the built-in set stays mostly flat. Reach for `Children` when several entries share one sentence: the export block (📄 PDF / 📝 DOCX / 📤 email) is grouped under a single **📦 Export** parent precisely because "take this document somewhere else" describes all three, and because it was the largest contiguous run in a menu that had grown to roughly fifteen flat rows.
 
 ---
 
@@ -192,7 +220,10 @@ Because the aggregator re-sorts every provider's items by `Order`, a plugin's it
 | `RequiredPermission` | `Permission` | Permission the user must have (e.g., `Permission.Update`) |
 | `Order` | `int` | Sort order within the menu (lower = earlier) |
 | `Href` | `string?` | Optional absolute href — when set, navigates directly instead of using Area |
-| `Children` | `IReadOnlyList<NodeMenuItemDefinition>?` | Child items for hierarchical sub-menus |
+| `Children` | `IReadOnlyList<NodeMenuItemDefinition>?` | Child items for hierarchical sub-menus. Any entry carrying them is a parent and is never activatable; sorted by `Order` and pruned when empty by the aggregator |
+| `Tooltip` | `string?` | Hover tooltip; falls back to `Label` |
+
+Two sentinel `Area` values are reserved: **`NodeMenuItemDefinition.SeparatorArea`** (`"_separator"`) draws a divider, and **`NodeMenuItemDefinition.GroupArea`** (`"_group"`) marks a pure grouping parent. Neither is ever activated.
 
 ---
 

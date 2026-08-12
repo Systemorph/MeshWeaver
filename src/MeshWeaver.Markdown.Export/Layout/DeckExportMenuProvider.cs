@@ -50,6 +50,12 @@ public class DeckExportMenuProvider : INodeMenuProvider
 
                 return
                 [
+                    // Grouped under the SAME "Export" parent the Markdown provider uses — a Deck's
+                    // export entries are the identical actions, so they must sit in the identical
+                    // place. (The two providers are mutually exclusive by NodeType, so only one ever
+                    // contributes an Export group to a given node's menu.)
+                    MarkdownExportMenuProvider.ExportGroup(
+                    [
                     // Same icons AND the same LabelKeys as the Markdown provider: a Deck's entries
                     // are the identical actions, so they must read identically — including for a
                     // German viewer. These two carried no LabelKey at all, so they rendered English
@@ -70,6 +76,7 @@ public class DeckExportMenuProvider : INodeMenuProvider
                         Order: 29,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
                         { LabelKey = "menu.sendToContacts" },
+                    ]),
                 ];
             });
     }

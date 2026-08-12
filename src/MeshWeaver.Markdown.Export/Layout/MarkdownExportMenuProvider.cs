@@ -41,6 +41,38 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
     /// </summary>
     public const string SendIcon = "📤";
 
+    /// <summary>English label of the parent that holds the export/share entries.</summary>
+    public const string ExportGroupLabel = "Export";
+
+    /// <summary>
+    /// Icon for the export group — a package, the thing the three children between them produce.
+    /// Distinct at 16 px from all three of its own children (📄 📝 📤).
+    /// </summary>
+    public const string ExportGroupIcon = "📦";
+
+    /// <summary>
+    /// The export/share entries as ONE collapsible parent.
+    ///
+    /// <para>These three were the largest contiguous block in a node menu that had grown to ~15 flat
+    /// entries. They also share a single sentence — "take this document somewhere else" — which is
+    /// exactly what makes a submenu the right shape rather than another divider. The parent carries
+    /// <see cref="NodeMenuItemDefinition.GroupArea"/>, so no renderer will ever let it be activated;
+    /// it exists only to open.</para>
+    ///
+    /// <para>Children keep their original <c>Order</c> values (27/28/29) — the aggregator sorts each
+    /// submenu by <c>Order</c> exactly as it sorts the top level, so the block's established reading
+    /// order survives the move into the group.</para>
+    /// </summary>
+    internal static NodeMenuItemDefinition ExportGroup(IReadOnlyList<NodeMenuItemDefinition> children)
+        => new(
+            Label: ExportGroupLabel,
+            Area: NodeMenuItemDefinition.GroupArea,
+            Icon: ExportGroupIcon,
+            RequiredPermission: Permission.Read,
+            Order: 27,
+            Children: children)
+        { LabelKey = "menu.exportGroup", TooltipKey = "menu.exportGroupTooltip" };
+
     /// <summary>The menu context this provider contributes to — the Node menu.</summary>
     public string Context => NodeMenuItemsExtensions.NodeMenuContext;
 
@@ -71,6 +103,8 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
 
                 return
                 [
+                    ExportGroup(
+                    [
                     new NodeMenuItemDefinition(
                         Label: PdfLabel,
                         Area: ExportDocumentLayoutArea.PdfArea,
@@ -99,6 +133,7 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                         Order: 29,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
                         { LabelKey = "menu.sendToContacts" },
+                    ]),
                 ];
             });
     }

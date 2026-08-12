@@ -2,13 +2,13 @@
 //   - search relevance scoring (MeshSearch.ComputeRelevanceScore tiers, normalized per term)
 //   - path-proximity boost (PathProximity.ComputeBoost — MaxBoost/(1+segmentDistance))
 //   - the URL remainder → (area, id) split (ParseSidePanelRemainder / SplitAreaRemainder)
-//   - hierarchical menu flattening (PortalLayoutBase.FlattenMenuItems)
+//   - submenu-parent classification (NodeMenuItemDefinition.IsSubmenuParent)
 //   - avatar initials (UserProfile.GetInitials)
 
 import { describe, expect, it } from "vitest";
 import { proximityBoost, relevanceScore } from "../src/client/SearchBar";
 import { splitRemainder } from "../src/server/snapshot";
-import { flattenMenuItems, type MenuItemDef } from "../src/client/HeaderMenus";
+import { GROUP_AREA, isSubmenuParent, type MenuItemDef } from "../src/client/HeaderMenus";
 import { initialsOf } from "../src/client/UserProfileMenu";
 
 describe("relevanceScore (MeshSearch.ComputeRelevanceScore port)", () => {
@@ -86,23 +86,29 @@ describe("splitRemainder (the {area}/{id} URL split)", () => {
   });
 });
 
-describe("flattenMenuItems (PortalLayoutBase.FlattenMenuItems port)", () => {
+// The old tests here pinned `flattenMenuItems` — the port of Blazor's FlattenMenuItems, which
+// DELETED a parent and spliced its children inline behind a divider. That behaviour is gone: nested
+// items now render as real Fluent sub-menus (see headerMenus.test.tsx for the DOM assertions), so
+// what remains to pin here is which entries count as parents in the first place.
+describe("isSubmenuParent (NodeMenuItemDefinition.IsSubmenuParent port)", () => {
   const leaf = (label: string): MenuItemDef => ({ label, area: label });
 
-  it("returns flat lists unchanged", () => {
-    const items = [leaf("A"), leaf("B")];
-    expect(flattenMenuItems(items)).toBe(items);
+  it("treats a plain entry as activatable", () => {
+    expect(isSubmenuParent(leaf("A"))).toBe(false);
   });
 
-  it("inlines children behind a separator", () => {
-    const items: MenuItemDef[] = [leaf("A"), { label: "Parent", area: "P", children: [leaf("C1"), leaf("C2")] }];
-    const flat = flattenMenuItems(items);
-    expect(flat.map((i) => i.area)).toEqual(["A", "_separator", "C1", "C2"]);
+  it("treats any entry carrying children as a parent", () => {
+    expect(isSubmenuParent({ label: "Parent", area: "P", children: [leaf("C1")] })).toBe(true);
   });
 
-  it("emits no leading separator when the parent comes first", () => {
-    const items: MenuItemDef[] = [{ label: "Parent", area: "P", children: [leaf("C1")] }, leaf("A")];
-    expect(flattenMenuItems(items).map((i) => i.area)).toEqual(["C1", "A"]);
+  it("treats the _group sentinel as a parent even before children arrive", () => {
+    expect(isSubmenuParent({ label: "Export", area: GROUP_AREA })).toBe(true);
+  });
+
+  it("does not treat an empty children array as a parent", () => {
+    // The server prunes emptied groups, but a client must not render a submenu that opens onto
+    // nothing if one ever slips through.
+    expect(isSubmenuParent({ label: "Parent", area: "P", children: [] })).toBe(false);
   });
 });
 

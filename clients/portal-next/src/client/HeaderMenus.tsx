@@ -7,8 +7,8 @@
 //     permission-filtered MenuControl into the $Menu:{Node|Mesh|AI} slots of the SAME layout-area
 //     stream the page renders — this component reads those slots off the current page's live
 //     AreaSource (the React twin of MenuStreamExtensions.GetMenu / IMenuItemsProvider).
-//   - Hierarchical items flatten inline with separators (FlattenMenuItems); the current node's
-//     name headlines the Node and Mesh menus.
+//   - Hierarchical items render as nested Fluent sub-menus (MenuEntries, the twin of Blazor's
+//     NodeMenuItemList); the current node's name headlines the Node and Mesh menus.
 //   - Item click: Href wins; the AI menu's "ai-new-thread" sentinel opens the chat side panel
 //     fresh; otherwise navigate /{currentPath}/{area}.
 //   - Settings gear: per-node /{path}/Settings; at the root, /GlobalSettings for platform admins
@@ -51,7 +51,28 @@ export interface MenuItemDef {
   children?: MenuItemDef[];
 }
 
-const SEPARATOR: MenuItemDef = { label: "", area: "_separator" };
+/** NodeMenuItemDefinition.SeparatorArea — a divider, never activatable. */
+export const SEPARATOR_AREA = "_separator";
+
+/**
+ * NodeMenuItemDefinition.GroupArea — a pure GROUPING parent: it exists only to hold `children` and
+ * has nowhere of its own to go. Rendered as a submenu, never activated.
+ */
+export const GROUP_AREA = "_group";
+
+/**
+ * A submenu parent. Any entry carrying children is one — its own area/href is deliberately ignored
+ * for activation, because Fluent v9 (like FAST on the Blazor side) makes a `MenuTrigger`-wrapped
+ * item toggle its submenu rather than invoke. Mirrors NodeMenuItemDefinition.IsSubmenuParent.
+ */
+export function isSubmenuParent(item: MenuItemDef): boolean {
+  return (item.children != null && item.children.length > 0) || item.area === GROUP_AREA;
+}
+
+/** Ascending by `order` — the wire's sort key at every depth. */
+function sortByOrder(items: MenuItemDef[]): MenuItemDef[] {
+  return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
 
 /** The sentinel area of the AI menu's "New thread" item (PortalLayoutBase.AiNewThreadAction). */
 export const AI_NEW_THREAD_ACTION = "ai-new-thread";
@@ -80,19 +101,61 @@ function toMenuItem(raw: Json): MenuItemDef | null {
   };
 }
 
-/** PortalLayoutBase.FlattenMenuItems — parents with children inline as separator + children. */
-export function flattenMenuItems(items: MenuItemDef[]): MenuItemDef[] {
-  if (!items.some((i) => i.children && i.children.length > 0)) return items;
-  const result: MenuItemDef[] = [];
-  for (const item of items) {
-    if (item.children && item.children.length > 0) {
-      if (result.length > 0) result.push(SEPARATOR);
-      result.push(...item.children);
-    } else {
-      result.push(item);
-    }
-  }
-  return result;
+/**
+ * Renders one level of the menu, recursing into `children` as NATIVE Fluent v9 sub-menus.
+ *
+ * This replaces `flattenMenuItems`, which mirrored Blazor's `FlattenMenuItems`: it DELETED the parent
+ * and spliced its children inline behind a divider, throwing away the label/icon/tooltip that told
+ * them apart (with two GitHub sync sources you got two identical action triplets and no way to know
+ * which repo either belonged to).
+ *
+ * The nesting is the component library's own: a `<Menu>` whose `<MenuTrigger>` wraps a `<MenuItem>`
+ * inside the parent `<MenuList>` is Fluent v9's documented submenu shape, so roles, `aria-haspopup` /
+ * `aria-expanded`, and the keyboard model (Enter / ArrowRight to open, ArrowLeft / Escape to close)
+ * all come from Fluent. A parent gets NO onClick — it opens, it never navigates.
+ *
+ * Depth is unbounded — the function recurses into itself.
+ */
+export function MenuEntries({
+  items,
+  onItem,
+}: {
+  items: MenuItemDef[];
+  onItem: (item: MenuItemDef) => void;
+}) {
+  return (
+    <>
+      {items.map((item, i) => {
+        if (item.area === SEPARATOR_AREA) return <MenuDivider key={`sep-${i}`} />;
+        const key = `${item.area}-${item.label}-${i}`;
+        if (isSubmenuParent(item)) {
+          return (
+            <Menu key={key}>
+              <MenuTrigger disableButtonEnhancement>
+                <MenuItem title={item.tooltip ?? item.label}>
+                  <MenuItemIcon icon={item.icon} />
+                  {item.label}
+                </MenuItem>
+              </MenuTrigger>
+              <MenuPopover>
+                <MenuList>
+                  {/* Sorted here as well as on the server: `order` must mean the same thing at
+                      every depth, and the client is the last place that can guarantee it. */}
+                  <MenuEntries items={sortByOrder(item.children ?? [])} onItem={onItem} />
+                </MenuList>
+              </MenuPopover>
+            </Menu>
+          );
+        }
+        return (
+          <MenuItem key={key} title={item.tooltip ?? item.label} onClick={() => onItem(item)}>
+            <MenuItemIcon icon={item.icon} />
+            {item.label}
+          </MenuItem>
+        );
+      })}
+    </>
+  );
 }
 
 /** Read the $Menu:{context} MenuControl items off the current page's live area tree. */
@@ -124,7 +187,6 @@ function MenuButton({
   header?: string | null;
   onItem: (item: MenuItemDef) => void;
 }) {
-  const flat = flattenMenuItems(items);
   return (
     <Menu positioning="below-end">
       <MenuTrigger disableButtonEnhancement>
@@ -154,21 +216,12 @@ function MenuButton({
               <MenuDivider />
             </>
           )}
-          {flat.length === 0 && (
+          {items.length === 0 && (
             <div style={{ padding: "6px 12px", fontSize: "0.8rem", color: "var(--colorNeutralForeground3)" }}>
               No actions available
             </div>
           )}
-          {flat.map((item, i) =>
-            item.area === "_separator" ? (
-              <MenuDivider key={`sep-${i}`} />
-            ) : (
-              <MenuItem key={`${item.area}-${item.label}-${i}`} title={item.tooltip ?? item.label} onClick={() => onItem(item)}>
-                <MenuItemIcon icon={item.icon} />
-                {item.label}
-              </MenuItem>
-            ),
-          )}
+          <MenuEntries items={items} onItem={onItem} />
         </MenuList>
       </MenuPopover>
     </Menu>
