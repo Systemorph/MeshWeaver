@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{7b3e1a52-6c04-4d19-9f28-3a5d8e0c1b47}</ProjectGuid>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Deliberately NO Markdig / DocumentFormat.OpenXml / HtmlAgilityPack. This assembly holds
+         only the wire shapes an export CALLER needs; the rendering engine and its package
+         dependencies stay in MeshWeaver.Markdown.Export. That split is the whole point: it is what
+         keeps the renderer (and a headless-browser-driven PDF path) out of MeshWeaver.Blazor's
+         transitive closure. If you find yourself adding a package reference here, the type you are
+         adding almost certainly belongs in the engine instead. -->
+    <ProjectReference Include="..\MeshWeaver.Domain\MeshWeaver.Domain.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Messaging.Contract\MeshWeaver.Messaging.Contract.csproj" />
+    <!-- For ExportDocumentControl, which AddMarkdownExportTypes registers. The control itself
+         correctly lives in MeshWeaver.Layout — Layout is the control vocabulary every renderer
+         (Blazor, React, React Native, MAUI) agrees on, so a UiControl belongs there by
+         construction. Only the non-control types moved here. -->
+    <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+  </ItemGroup>
+</Project>

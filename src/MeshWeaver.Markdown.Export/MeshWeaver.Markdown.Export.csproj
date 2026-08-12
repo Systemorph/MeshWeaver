@@ -33,6 +33,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The wire contract (request/response, options, RenderedDocument, CorporateIdentity). Split
+         out so MeshWeaver.Blazor can drive an export without pulling this engine — and with it
+         Markdig, DocumentFormat.OpenXml and HtmlAgilityPack — into its transitive closure. -->
+    <ProjectReference Include="..\MeshWeaver.Markdown.Export.Contract\MeshWeaver.Markdown.Export.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
