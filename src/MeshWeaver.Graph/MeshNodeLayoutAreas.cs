@@ -192,6 +192,7 @@ public static class MeshNodeLayoutAreas
             .WithView(PinLayoutArea.PinArea, PinLayoutArea.Pin)
             .WithView(PinLayoutArea.UnpinArea, PinLayoutArea.Unpin)
             .WithView(PinLayoutArea.PinnedThumbnailArea, PinLayoutArea.PinnedThumbnail)
+            .WithView(OgCardLayoutArea.AreaName, OgCardLayoutArea.Render)
             .WithView(StopSyncLayoutArea.StopSyncArea, StopSyncLayoutArea.StopSync)
             // UCR special areas
             .WithView(DataArea, Data)

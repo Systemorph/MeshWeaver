@@ -124,6 +124,9 @@ public static class PackageInstaller
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Package '{manifest.Id}' has no installable content files."));
 
+        if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
+            return shadowed;
+
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         return EnsurePartitionsProvisioned(hub, partition, InstalledPartition)
@@ -150,6 +153,66 @@ public static class PackageInstaller
                     .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
             });
+    }
+
+    /// <summary>
+    /// The reason this install must be REFUSED because one or more of its nodes would land at a
+    /// path a registered <see cref="IStaticNodeProvider"/> already SERVES on this host — or
+    /// <c>null</c> when there is no such collision (the overwhelmingly common case: zero I/O, one
+    /// in-memory sweep of the static providers).
+    ///
+    /// <para>🚨 Why REFUSING beats writing (#1209). A statically-served path is not persistence-
+    /// backed: the static claim wins every serve seam, so the per-node hub at that path is seeded
+    /// from a node that is by design never persisted and emits one Full snapshot at v0, forever.
+    /// An install into it therefore cannot succeed in any useful sense — the root's create is
+    /// answered "node already exists" by the static entry, the fallback UPDATE lands on the
+    /// static-served hub and is never reconciled or persisted, and the install's own post-write
+    /// confirmation (<c>RootRetypeReconciled</c>) waits out its 30 s and throws a bare
+    /// <see cref="TimeoutException"/> with nothing naming the cause. That is exactly how the
+    /// <c>Agent</c>/<c>Skill</c> plugin packages failed on a host calling bare <c>.AddAI()</c>
+    /// (2026-08-11): a deterministic 30 s hang per package, 0 nodes imported, no diagnostic.</para>
+    ///
+    /// <para>The check is deliberately EXACT-PATH, never prefix: a package writing <c>X/Child</c>
+    /// while only <c>X</c> is served statically is a different (and separately guarded) situation,
+    /// and a prefix rule would refuse legitimate installs. Static-only hosts — the ones that serve
+    /// <c>Doc</c>/<c>Agent</c>/<c>Harness</c>/<c>Skill</c> from memory and install NO durable
+    /// package there — see an empty collision set and are completely unaffected.</para>
+    /// </summary>
+    internal static string? StaticShadowedReason(
+        IMessageHub hub, PackageManifest manifest, IEnumerable<MeshNode> nodes)
+    {
+        var collisions = nodes
+            .Select(n => n.Path)
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            // Shortest path first so the package ROOT — the collision that matters and the one an
+            // operator recognises — leads the list and supplies the detailed explanation.
+            .OrderBy(p => p.Length).ThenBy(p => p, StringComparer.Ordinal)
+            .Select(p => (Path: p, Detail: hub.ServiceProvider.DescribeStaticServeCollision(p)))
+            .Where(c => c.Detail is not null)
+            .ToArray();
+        if (collisions.Length == 0)
+            return null;
+        return $"Install of '{manifest.Id}' REFUSED: {collisions.Length} of its node path(s) are "
+               + "already served by a static node provider on this host "
+               + $"[{string.Join(", ", collisions.Select(c => c.Path))}]. {collisions[0].Detail}";
+    }
+
+    /// <summary>
+    /// <see cref="StaticShadowedReason"/> as a terminal install outcome: the failing observable to
+    /// return, or <c>null</c> to proceed. Fails LOUDLY and IMMEDIATELY — before any write — instead
+    /// of writing into a shadowed path and timing out 30 s later somewhere downstream.
+    /// </summary>
+    private static IObservable<InstallResult>? RefuseIfStaticShadowed(
+        IMessageHub hub, PackageManifest manifest, IEnumerable<MeshNode> nodes, ILogger? logger)
+    {
+        var reason = StaticShadowedReason(hub, manifest, nodes);
+        if (reason is null)
+            return null;
+        logger?.LogError(
+            "Package {Id}: static/durable path collision — refusing the install. {Reason}",
+            manifest.Id, reason);
+        return Observable.Throw<InstallResult>(new InvalidOperationException(reason));
     }
 
     /// <summary>
@@ -268,7 +331,8 @@ public static class PackageInstaller
     ///     baseline, fully public: <c>PartitionAccessPolicy { PublicRead = true }</c> at
     ///     <c>{partition}/_Policy</c> (#902). Declared segments are irrelevant — everything is
     ///     readable.</item>
-    ///   <item><b>Free</b> (<see cref="PackageManifest.Price"/> 0 or absent) with no declared
+    ///   <item><b>Free</b> (<see cref="PackageManifest.Price"/> 0 or absent AND no
+    ///     <see cref="PackageManifest.ContactEmail"/>) with no declared
     ///     <see cref="PackageManifest.PublicSegments"/> — the same fully-public policy: a free
     ///     package that a catalog hands out must be readable by everyone, signed in or not.</item>
     ///   <item><b>Free with declared <see cref="PackageManifest.PublicSegments"/></b> — public read
@@ -278,10 +342,12 @@ public static class PackageInstaller
     ///     Store's <c>CatalogGate</c> seeds for <c>/Store</c> (#200/#204). Underscore satellites
     ///     and the well-known <c>Public</c> segment follow the <c>PluginGate</c> conventions so the
     ///     two mechanisms converge instead of fighting.</item>
-    ///   <item><b>Priced</b> (any non-zero <see cref="PackageManifest.Price"/> — positive =
-    ///     purchasable, negative = coupon-only) — the installer writes NOTHING: the partition lands
-    ///     gated, readable only via the entitlement machinery (PluginGate / purchase), which is
-    ///     exactly the point of a price.</item>
+    ///   <item><b>Commercial</b> (<see cref="PackageEntitlement.IsCommercial"/>: any non-zero
+    ///     <see cref="PackageManifest.Price"/> — positive = purchasable, negative = coupon-only —
+    ///     or a <see cref="PackageManifest.ContactEmail"/>, i.e. sold contact-sales) — the installer
+    ///     writes NOTHING: the partition lands gated, readable only via the entitlement machinery
+    ///     (PluginGate / purchase / an admin-issued grant), which is exactly the point of asking to
+    ///     be paid or to be called.</item>
     /// </list>
     ///
     /// <para><b>Why the installer owns it.</b> An installed package is written entirely under
@@ -315,13 +381,14 @@ public static class PackageInstaller
         if (string.IsNullOrWhiteSpace(partition))
             return Observable.Return(Unit.Default);
 
-        // A priced package (positive = purchasable, negative = coupon-only) installs GATED: no
-        // public read of any kind — entitlement (PluginGate / purchase / coupon) is the only way
-        // in. Pre-installed overrides a price: platform baseline is public by definition.
+        // A commercial package — priced (positive = purchasable, negative = coupon-only) or
+        // contact-sales — installs GATED: no public read of any kind, entitlement (PluginGate /
+        // purchase / coupon / a grant issued after the sales conversation) is the only way in.
+        // Pre-installed overrides both: platform baseline is public by definition.
         if (!manifest.PreInstalled && manifest.IsCommercial())
         {
             logger?.LogDebug(
-                "[PackageInstaller] {Id} is priced — {Partition} stays gated (entitlement only)",
+                "[PackageInstaller] {Id} is commercial — {Partition} stays gated (entitlement only)",
                 manifest.Id, partition);
             return Observable.Return(Unit.Default);
         }
@@ -724,6 +791,60 @@ public static class PackageInstaller
     }
 
     /// <summary>
+    /// How many times the content publish re-asks a root that answered "I am recycling". Two
+    /// recycles can hit one install (the installer's own and the framework's rebind watcher), so
+    /// this only has to outlast those; it is a guard against an unforeseen recycle LOOP, never a
+    /// budget to be widened. Each re-ask is gated on an observed teardown completing, so the
+    /// attempts cannot spin.
+    /// </summary>
+    private const int RootRecycleReAsks = 4;
+
+    /// <summary>
+    /// Whether a publish failure is the framework's TRANSIENT recycle verdict — the node is
+    /// coming back and the honest response is to ask again — rather than a real failure.
+    /// Typed on <see cref="ErrorType.ShuttingDown"/> / <see cref="HubDisposingException"/>, never
+    /// on message text, so an application error can never be mistaken for a recycle.
+    /// </summary>
+    private static bool IsRootRecycling(Exception exception)
+    {
+        for (var e = exception; e is not null; e = e.InnerException)
+        {
+            if (e is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
+                return true;
+            if (HubDisposingException.IsHubDisposal(e))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Completes once the teardown that just rejected a publish has finished, so the re-ask lands
+    /// on a fresh activation instead of racing the same dying instance. Event-driven: it observes
+    /// that hub instance's <see cref="IMessageHub.DisposalCompleted"/>. When nothing is there to
+    /// wait for — no local instance, or one that is not disposing (the recycle already finished,
+    /// or the hub lives on another silo) — the re-ask proceeds immediately.
+    /// </summary>
+    private static IObservable<Unit> RootTeardownSettled(IMessageHub hub, string rootPath)
+    {
+        var live = hub.GetHostedHub(new Address(rootPath), HostedHubCreation.Never);
+        if (live is null || !live.IsDisposing)
+            return Observable.Return(Unit.Default);
+        return live.DisposalCompleted
+            .Take(1)
+            .Timeout(RootRecycleTimeout)
+            .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+            .DefaultIfEmpty(Unit.Default);
+    }
+
+    /// <summary>
+    /// How long the install waits for a root recycle it issued to actually finish. Generous
+    /// because it is only ever reached when a hub's teardown itself wedges; the normal case
+    /// completes in a few milliseconds and the wait ends the instant it does.
+    /// </summary>
+    private static readonly TimeSpan RootRecycleTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Whether the CONTENT publish may touch <paramref name="rootPath"/> yet — the gate in front
     /// of <see cref="SyncPackageContent"/>, and the second half of the warm's guard above.
     ///
@@ -1060,6 +1181,27 @@ public static class PackageInstaller
                     ? response.FilesImported
                     : throw new InvalidOperationException(
                         response.Error ?? "content sync failed without an error message"))
+                // 🚨 "The address may reactivate (recycle / restart); retry to get the
+                // authoritative answer" is not advice — it is the framework's TRANSIENT verdict,
+                // and this is the one consumer that used to throw it away and declare the
+                // package's binaries lost. A root is recycled TWICE during an install: once by the
+                // installer itself (sequenced by SettleRetypedRoot, and probed again by
+                // WaitForRootReady just above) and once by the framework's NodeTypeRebindWatcher
+                // when the change feed reports the retype. That second one belongs to nobody and
+                // can land AFTER the readiness probe has passed, which is why the proactive wait
+                // needs this reactive backstop behind it — the probe answers "is it up now", not
+                // "will it still be up when the bytes arrive".
+                //
+                // Not a blind retry, and nothing to sleep on: the re-ask waits for the exact
+                // teardown that rejected it (that hub instance's own DisposalCompleted) and then
+                // asks the address again, which activates the FINAL hub. Only a typed transient
+                // is re-asked — an application failure, a bad path, a missing collection all still
+                // fail on the first answer, so a genuinely broken publish cannot hide in a loop.
+                .RetryWhen(faults => faults
+                    .Select((fault, attempt) => (fault, attempt))
+                    .SelectMany(f => IsRootRecycling(f.fault) && f.attempt < RootRecycleReAsks
+                        ? RootTeardownSettled(hub, sync.NodePath)
+                        : Observable.Throw<Unit>(f.fault)))
                 .Catch<int, Exception>(exception =>
                 {
                     logger?.LogWarning(exception,
@@ -1138,10 +1280,13 @@ public static class PackageInstaller
             };
             // System-impersonated like every installer write (Using — see Upsert): this runs after
             // barrier scheduler hops, where no ambient context survives.
+            // Off-router issuing: the boot default-install runs with the DI root mesh hub — a
+            // target-less CreateOrUpdateNodeRequest posted there runs on the router (ROUTER_TRAFFIC).
             return Observable.Using(
                     () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
                           ?? System.Reactive.Disposables.Disposable.Empty,
-                    _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record)))
+                    _ => hub.NodeOperationIssuingHub()
+                        .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(record)))
                 .FirstAsync().Select(d => d.Message)
                 .SelectMany(resp => resp.Success
                     ? Observable.Return(resp.Node!)
@@ -1187,6 +1332,10 @@ public static class PackageInstaller
         };
 
         var all = new[] { nodeTypeNode }.Concat(sourceNodes).ToArray();
+
+        if (RefuseIfStaticShadowed(hub, manifest, all, logger) is { } shadowed)
+            return shadowed;
+
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
 
@@ -1315,55 +1464,71 @@ public static class PackageInstaller
             return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal)
                 && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal);
         // Otherwise compare the full content, applying the incoming over current so an omitted field
-        // does not read as a change — with the incoming ALIGNED to the current content's TYPE first
-        // (see AlignedIncoming): the persisted side is often typed and materializes C# property
-        // defaults the repo file legitimately omits.
-        return ContentSignature(AlignedIncoming(current.Content, incoming.Content, options) ?? current.Content, options)
-            == ContentSignature(current.Content, options);
+        // does not read as a change — with WHICHEVER side is a raw JsonElement ALIGNED to the other
+        // side's TYPE first (see AlignToPeer). Both mirror cases are live:
+        //   • current typed / incoming element — the persisted side materialized C# defaults the
+        //     repo file legitimately omits (the diagnosed PluginContent.Currency = "CHF" churn).
+        //   • current element / incoming typed — the reading hub had not resolved the module's own
+        //     type when the persisted side was read, while the incoming file deserialized typed and
+        //     materializes defaults the persisted element omits (FractalStars/Stars, 2026-08-11:
+        //     cur(JsonElement) {preset} vs inc(FractalContent) {children, deflection, generations,
+        //     preset, stepFactor} — the idempotence flap that SURVIVED the one-sided alignment; its
+        //     nondeterminism was exactly which side of the module's type-registration race the
+        //     persisted read landed on).
+        var effectiveIncoming = incoming.Content ?? current.Content;
+        return ContentSignature(AlignToPeer(effectiveIncoming, current.Content, options), options)
+            == ContentSignature(AlignToPeer(current.Content, effectiveIncoming, options), options);
     }
 
     /// <summary>
-    /// Materialized-default alignment for the content compare. The persisted side is often TYPED —
-    /// the owning hub re-serialized it, materializing C# property defaults (the diagnosed case:
-    /// <c>PluginContent.Currency = "CHF"</c>) — while the incoming side is the repo file's raw
-    /// <c>JsonElement</c>, which legitimately OMITS defaulted properties. Signing them as-is reads
-    /// every materialized default as a change: the NONDETERMINISTIC "re-install of the unchanged
-    /// snapshot wrote 1 node(s)" root churn behind the plugins gate's flapping idempotence check
-    /// (~14 packages allow-listed) — nondeterministic because it fires only once the hub happens to
-    /// have re-serialized the node before the re-install's read. Deserializing the incoming element
-    /// to the CURRENT content's type makes both sides materialize the same defaults.
+    /// Materialized-default alignment for the content compare: when ONE side is a raw
+    /// <c>JsonElement</c> and its peer is TYPED, deserialize the element to the peer's type so both
+    /// sides materialize the same C# property defaults. Signing a raw element against a typed peer
+    /// reads every materialized default as a change: the NONDETERMINISTIC "re-install of the
+    /// unchanged snapshot wrote 1 node(s)" root churn behind the plugins gate's flapping
+    /// idempotence check. The asymmetry runs BOTH ways — which is why the compare calls this once
+    /// per side: typed-current/element-incoming (the hub re-serialized the persisted node,
+    /// <c>PluginContent.Currency = "CHF"</c>) and element-current/typed-incoming (the persisted
+    /// read landed before the module's type registration while the repo file deserialized typed —
+    /// FractalStars/Stars, the flap that survived one-sided alignment).
     ///
-    /// <para>Guards: alignment happens only when the element's <c>$type</c> matches the current
+    /// <para>Guards: alignment happens only when the element's <c>$type</c> matches the peer
     /// content's serialized discriminator (a differing <c>$type</c> IS a real change and must never
     /// be masked by coercing into the wrong type), and a failed deserialize falls back to the raw
     /// element — worst case an idempotent rewrite, never a missed change.</para>
     /// </summary>
-    private static object? AlignedIncoming(object? current, object? incoming, JsonSerializerOptions options)
+    private static object? AlignToPeer(object? candidate, object? peer, JsonSerializerOptions options)
     {
-        if (incoming is not JsonElement { ValueKind: JsonValueKind.Object } el
-            || current is null or JsonElement)
-            return incoming;
+        if (candidate is not JsonElement { ValueKind: JsonValueKind.Object } el
+            || peer is null or JsonElement)
+            return candidate;
         try
         {
             // A differing $type IS a real change — never mask it by coercing into the wrong type.
-            // Both discriminators read defensively: a non-string $type on either side skips
-            // alignment (raw compare → change detected).
-            var incomingType = el.TryGetProperty("$type", out var it) && it.ValueKind == JsonValueKind.String
-                ? it.GetString()
+            // Three discriminator cases on the element side, each deliberate:
+            //   • absent      → align. Repo content files legitimately omit the discriminator (the
+            //                   node's nodeType implies the content type); skipping here would
+            //                   re-open the default-churn for every discriminator-less file.
+            //   • string      → align only when it MATCHES the peer's discriminator.
+            //   • non-string  → malformed; skip alignment entirely (raw compare → the malformed
+            //                   value shows as a change instead of being silently repaired).
+            var hasDiscriminator = el.TryGetProperty("$type", out var it);
+            if (hasDiscriminator && it.ValueKind != JsonValueKind.String)
+                return candidate;
+            var candidateType = hasDiscriminator ? it.GetString() : null;
+            var peerType = JsonSerializer.SerializeToNode(peer, options)
+                    is System.Text.Json.Nodes.JsonObject peerNode
+                && peerNode.TryGetPropertyValue("$type", out var pt)
+                && pt is System.Text.Json.Nodes.JsonValue pv
+                && pv.TryGetValue<string>(out var pts)
+                ? pts
                 : null;
-            var currentType = JsonSerializer.SerializeToNode(current, options)
-                    is System.Text.Json.Nodes.JsonObject curNode
-                && curNode.TryGetPropertyValue("$type", out var ct)
-                && ct is System.Text.Json.Nodes.JsonValue cv
-                && cv.TryGetValue<string>(out var cts)
-                ? cts
-                : null;
-            if (incomingType is not null
-                && !string.Equals(incomingType, currentType, StringComparison.Ordinal))
-                return incoming;
+            if (candidateType is not null
+                && !string.Equals(candidateType, peerType, StringComparison.Ordinal))
+                return candidate;
 
             // Deserialize WITHOUT tolerating unknown members: with the ambient Skip handling, a
-            // property the file ADDS but the current type lacks would be silently dropped and a
+            // property the element carries but the peer type lacks would be silently dropped and a
             // real change read as unchanged. Disallow makes that case throw → the catch below →
             // raw compare → change detected (worst case an idempotent rewrite, never a miss).
             // The $type discriminator is stripped first — deserializing to the CONCRETE type
@@ -1374,11 +1539,11 @@ public static class PackageInstaller
             };
             var withoutDiscriminator = System.Text.Json.Nodes.JsonObject.Create(el)!;
             withoutDiscriminator.Remove("$type");
-            return withoutDiscriminator.Deserialize(current.GetType(), strict) ?? incoming;
+            return withoutDiscriminator.Deserialize(peer.GetType(), strict) ?? candidate;
         }
         catch (JsonException)
         {
-            return incoming;                        // schema drift / unknown member — raw compare
+            return candidate;                       // schema drift / unknown member — raw compare
         }
     }
 
@@ -1445,6 +1610,9 @@ public static class PackageInstaller
         if (nodes.Length == 0)
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Node-repo plugin '{manifest.Id}' has no installable nodes."));
+
+        if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
+            return shadowed;
 
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
@@ -1792,13 +1960,18 @@ public static class PackageInstaller
                     // synthesized resolutions are never cached, and a fill that lands after its
                     // own invalidation is discarded (PathResolutionCachePoisonTest).
                     //
-                    // 🚨 …and it recurred AGAIN on a build carrying that fix (#1104), because
-                    // fixing RESOLUTION cannot help a hub a bad resolution has ALREADY activated:
-                    // GetHostedHub pins by address and the hub never re-reads its NodeType. That
-                    // is why this Post is no longer where the guarantee lives. It is fire-and-
-                    // forget, conditional on the placeholder dance having run, and available to
-                    // nobody but this installer — while ANY writer can retype a node. The
-                    // framework now un-pins on its own: every activation arms
+                    // 🚨 …and it recurred AGAIN on a build carrying that fix (#1104) — plugin-gate
+                    // run 31361446933, whose available-areas list was EXACTLY
+                    // ConfigureDefaultNodeHub's set (AddDefaultLayoutAreas + Invite) and not one
+                    // area of the node's real type. That list IS the fingerprint: it says the hub
+                    // bound the mesh DEFAULT configuration, not a stale type and not the Space
+                    // placeholder, which is what distinguishes this defect from a compile failure.
+                    // It recurred because fixing RESOLUTION cannot help a hub a bad resolution has
+                    // ALREADY activated: GetHostedHub pins by address and the hub never re-reads
+                    // its NodeType. That is why this Post is no longer where the guarantee lives.
+                    // It is fire-and-forget, conditional on the placeholder dance having run, and
+                    // available to nobody but this installer — while ANY writer can retype a node.
+                    // The framework now un-pins on its own: every activation arms
                     // NodeTypeRebindWatcher, which recycles the hub the first time the mesh change
                     // feed reports a different NodeType for its path. This Post stays as the fast
                     // path (it recycles immediately rather than on the feed hop) and as the marker
@@ -1932,6 +2105,9 @@ public static class PackageInstaller
             .Select(f => ParseCanonical(parsers, f, logger))
             .Where(n => n is not null).Select(n => n!)
             .ToArray();
+
+        if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
+            return shadowed;
 
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
@@ -2116,11 +2292,15 @@ public static class PackageInstaller
     // post happens when hub.Observe's stream is SUBSCRIBED, so the impersonation must still be
     // alive then (Defer+using disposes it before the post — the exact trap the Edu redeemer
     // documented). The admin-gated install is the authorization (see Install).
+    // Off-router issuing (NodeOperationIssuingHub): the boot default-install seed calls this with
+    // the DI root mesh hub, and a target-less CreateOrUpdateNodeRequest posted there EXECUTES the
+    // whole bulk upsert on the router's action block (ROUTER_TRAFFIC). No-op for any other caller.
     private static IObservable<int> Upsert(IMessageHub hub, MeshNode node) =>
         Observable.Using(
                 () => hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem()
                       ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
+                _ => hub.NodeOperationIssuingHub()
+                    .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
             .FirstAsync().Select(d => d.Message)
             .SelectMany(resp => resp.Success
                 ? Observable.Return(1)

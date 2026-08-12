@@ -102,8 +102,8 @@ public static class ArticleLayoutAreas
             container = container.WithView(Controls.Markdown(rawContent));
         }
 
-        // Children area
-        container = container.WithView(LayoutAreaControl.Children(host.Hub));
+        // No children section — children are injected inline with the @@(query) operator, or
+        // browsed via the Catalog / Search areas (the framework dropped its hardcoded one too).
 
         return container;
     }

@@ -752,7 +752,10 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
             State = MeshNodeState.Active,
             Content = record,
         };
-        return AsSystem(() => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
+        // Off-router issuing: this hosted service holds the DI root mesh hub — a target-less
+        // CreateOrUpdateNodeRequest posted there runs on the router (ROUTER_TRAFFIC).
+        return AsSystem(() => hub.NodeOperationIssuingHub()
+                .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node)))
             .FirstAsync()
             .Select(delivery => delivery.Message)
             .SelectMany(response => response.Success

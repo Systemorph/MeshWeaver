@@ -103,9 +103,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     // not a detached hub.Observe subscription.
     private static readonly TimeSpan UpdateResponseWaitBound = TimeSpan.FromSeconds(2);
 
-    // 🚨 Retry budget for the ONE provably-safe late-NACK case (OwnerDisposing — the owner
-    // stated the patch NEVER applied). Each re-enqueue re-runs the ORIGINAL update lambda
-    // against the freshest state and re-diffs, so a superseding write makes it a no-op;
+    // 🚨 Retry budget for the provably-safe NACK cases — the ones where the owner STATED the
+    // patch never applied: OwnerDisposing, OwnerNotReady, and Conflict. Each re-enqueue re-runs
+    // the ORIGINAL update lambda against the freshest state and re-diffs, so a superseding write
+    // makes it a no-op;
     // two re-enqueues cover a re-enqueue that itself lands on a disposing fresh activation
     // (recycle churn). NEVER retried: silence (a busy owner still applies the original
     // patch) and every other NACK code (validation/RLS/NotFound are terminal verdicts).
@@ -1078,9 +1079,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     resp.Error ?? "Update rejected by owner");
                                 // OwnerNotReady carries the same provably-never-applied contract
                                 // as OwnerDisposing (activation had not loaded its state — #667),
-                                // so the same idempotent re-enqueue applies.
+                                // so the same idempotent re-enqueue applies — and so does Conflict,
+                                // which the owner emits only when nothing landed (see the primary
+                                // rejection site for the concurrent-writer data loss it caused).
                                 if (lateErr.Code is MeshNodeErrorCode.OwnerDisposing
                                         or MeshNodeErrorCode.OwnerNotReady
+                                        or MeshNodeErrorCode.Conflict
                                     && attempt < MaxOwnerDisposingReenqueues)
                                 {
                                     diagLogger?.LogWarning(
@@ -1156,8 +1160,28 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             // (the re-diff against the freshest state makes it
                                             // idempotent), chaining its outcome to THIS caller.
                                             // Every other code stays a fail-fast terminal.
+                                            // 🚨 Conflict belongs to this set, and dropping it
+                                            // was silent data loss. The owner emits Conflict ONLY
+                                            // when the merge refused keys AND the node is
+                                            // byte-identical to its pre-merge state — i.e. nothing
+                                            // landed — and its own message says "re-read and
+                                            // re-apply". Nobody did: the write was surfaced as a
+                                            // terminal error and the caller's change vanished.
+                                            // That is exactly what stream.Update promises NOT to
+                                            // do; concurrent writers are supposed to coalesce.
+                                            // Re-enqueueing re-runs the update lambda against the
+                                            // owner's current state, which IS the re-read-and-
+                                            // re-apply the owner asked for.
+                                            //
+                                            // Measured: 5 concurrent TrackActivity calls, 4
+                                            // increments (UserActivityTrackingTests
+                                            // .TrackActivity_ConcurrentSamePath_DoesNotRaceAlreadyExists,
+                                            // CI shard 1) — one writer composed against a base the
+                                            // other four had already moved, was refused, and its
+                                            // increment was thrown away.
                                             if (err.Code is MeshNodeErrorCode.OwnerDisposing
                                                     or MeshNodeErrorCode.OwnerNotReady
+                                                    or MeshNodeErrorCode.Conflict
                                                 && attempt < MaxOwnerDisposingReenqueues)
                                             {
                                                 diagLogger?.LogWarning(
@@ -1432,7 +1456,9 @@ public static class MeshNodeStreamExtensions
     /// subscribed (no <c>.Take(1)</c>). See <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </para>
     /// </summary>
-    /// <param name="hub">The hub that posts the read.</param>
+    /// <param name="hub">The hub the caller holds. When it is the ROOT MESH HUB (the router), the
+    /// read is issued on <see cref="MeshExtensions.NodeOperationIssuingHub"/> instead — the router
+    /// must be neither end of a delivery (ROUTER_TRAFFIC).</param>
     /// <param name="path">The mesh path to read.</param>
     /// <param name="timeout">Wall-clock budget for the read; defaults to 10 seconds.</param>
     /// <param name="onTimeout">
@@ -1447,6 +1473,16 @@ public static class MeshNodeStreamExtensions
         ReadTimeoutBehavior onTimeout = ReadTimeoutBehavior.Throw)
         => Observable.Create<MeshNode?>(observer =>
         {
+            // 🚨 Never issue the read on the ROOT MESH HUB — the router. Mesh-singleton services
+            // (plugin-catalog boot, log-incident ingest, credential resolvers) hold the DI-injected
+            // root hub, and a GetDataRequest posted there makes the router an END of the delivery in
+            // both directions: the request reaches the per-node hub stamped Sender = mesh/{id}, and
+            // the GetDataResponse (or, for a missing node, the DeliveryFailure) is addressed straight
+            // back at mesh/{id} — both exactly what the ROUTER_TRAFFIC detector reports (production
+            // 2026-08: "GetDataResponse has the mesh hub as target (sender: Hosting/_Access/…)" /
+            // "DeliveryFailure … (sender: Plugins/_DefaultInstallLedger)"). Same seam MeshService
+            // uses for CRUD; a non-router caller gets itself back, unchanged.
+            var issuingHub = hub.NodeOperationIssuingHub();
             var budget = timeout ?? TimeSpan.FromSeconds(10);
             var started = Stopwatch.StartNew();
             var cts = new CancellationTokenSource(budget);
@@ -1489,7 +1525,9 @@ public static class MeshNodeStreamExtensions
                 if (Volatile.Read(ref emitted) != 0) return;
                 var elapsed = started.Elapsed;
                 string diagnostics;
-                try { diagnostics = hub.GetPendingRequestDiagnostics(); }
+                // The pending-request snapshot must come from the ISSUING hub — that is where our
+                // GetDataRequest's callback is registered and where a lost reply shows as pending.
+                try { diagnostics = issuingHub.GetPendingRequestDiagnostics(); }
                 catch (Exception diagEx) { diagnostics = $"<diagnostics unavailable: {diagEx.GetType().Name}>"; }
                 // …and the OWNER's state, which is what actually decides the verdict. The reader's
                 // snapshot alone proves only that the reader is innocent (idle queues + our request
@@ -1550,7 +1588,7 @@ public static class MeshNodeStreamExtensions
                 // reply was dropped and this read hung to its timeout. That was the intermittent bulk flake
                 // in WorkspaceCacheEvictionTest (ReadNode -> GetMeshNode), proven deterministically by
                 // GetMeshNode_WarmOwner_DropsResponse_WhenSubjectRegisteredAfterPost.
-                innerSubscription = hub
+                innerSubscription = issuingHub
                     .Observe<GetDataResponse>(
                         new GetDataRequest(new MeshNodeReference()),
                         o => o.WithTarget(new Address(path)))

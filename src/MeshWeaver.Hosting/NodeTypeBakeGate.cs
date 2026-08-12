@@ -37,8 +37,35 @@ public sealed class NodeTypeBakeGateState
 {
     private readonly ConcurrentDictionary<string, string> regressions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> unevaluated = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> contentBroken = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> retracted = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// For each DERIVED regression (an <c>Upstream*</c> outcome), the upstream that blocked it —
+    /// see <see cref="PreWarmOutcome.BlockedBy"/>. Retracting a blocker cascades to these, because
+    /// their only evidence was the blocker's verdict. Guarded by <see cref="verdict"/>.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> blockedBy = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Guards the (regressions ↔ phase ↔ detail) invariant across the four writers, so a
+    /// retraction that empties the set cannot interleave with a fresh regression and leave the
+    /// phase disagreeing with the dictionary.
+    ///
+    /// <para>Writers only. <see cref="Phase"/> and <see cref="Detail"/> stay lock-free
+    /// (<see cref="Volatile"/> / <c>volatile</c>) because the readiness probe reads them
+    /// synchronously from ASP.NET's health endpoint — a probe that can block on a lock is a probe
+    /// that can take the pod out of rotation under load. Nothing awaits inside the lock; it is a
+    /// handful of dictionary operations and a string build.</para>
+    /// </summary>
+    private readonly object verdict = new();
+
     private int phase = (int)BakePhase.NotStarted;
     private volatile string detail = "pre-warm not started";
+
+    /// <summary>The message <see cref="MarkComplete"/> was given, or <c>null</c> while the sweep
+    /// is still running. Guarded by <see cref="verdict"/>.</summary>
+    private string? completedMessage;
 
     /// <summary>
     /// Whether a readiness probe actually CONSUMES this state — i.e. the host registered its
@@ -72,11 +99,30 @@ public sealed class NodeTypeBakeGateState
     /// </summary>
     public IReadOnlyDictionary<string, string> Unevaluated => unevaluated;
 
+    /// <summary>
+    /// Types broken by CONTENT on this image — their declared source queries match zero Code nodes
+    /// (the sources were deleted from the mesh), or an upstream in that state blocks them. Visible
+    /// for diagnosis, deliberately NOT readiness-blocking: no image caused it and no rollout can
+    /// fix it. See <see cref="PreWarmStatus.NoSources"/> for the incident that mandates this.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ContentBroken => contentBroken;
+
+    /// <summary>
+    /// Regressions that were RETRACTED because the type has since been observed reaching a usable
+    /// build on this image — see <see cref="RetractRegression"/>. Kept (rather than simply
+    /// forgotten) so a rollout that recovered by itself still says so in the health payload: a
+    /// silently-vanished regression is indistinguishable from one that never happened.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Retracted => retracted;
+
     /// <summary>The sweep has begun.</summary>
     public void MarkRunning(string message)
     {
-        Interlocked.Exchange(ref phase, (int)BakePhase.Running);
-        detail = message;
+        lock (verdict)
+        {
+            Interlocked.Exchange(ref phase, (int)BakePhase.Running);
+            detail = message;
+        }
     }
 
     /// <summary>
@@ -85,10 +131,22 @@ public sealed class NodeTypeBakeGateState
     /// broken in production right now, and blocking every future rollout on it would let one
     /// abandoned NodeType freeze the platform.
     /// </summary>
-    public void MarkOutcome(PreWarmOutcome outcome)
+    /// <returns>
+    /// <c>true</c> when this outcome recorded a regression the caller should WATCH FOR RECOVERY —
+    /// a DIRECTLY-MEASURED verdict on a type the sweep actually compiled
+    /// (<see cref="RetractRegression"/> is what a recovery then calls).
+    ///
+    /// <para><c>false</c> for every non-gating outcome AND for a DERIVED regression (one carrying
+    /// <see cref="PreWarmOutcome.BlockedBy"/>), which is still recorded and still gates but must
+    /// NOT be watched: the sweep skipped that type precisely to avoid activating its hub, and
+    /// watching it would activate every skipped dependent of one broken upstream and hold them for
+    /// the pod's lifetime. A derived regression is retracted through its blocker instead — see the
+    /// cascade in <see cref="RetractRegression"/>.</para>
+    /// </returns>
+    public bool MarkOutcome(PreWarmOutcome outcome)
     {
         if (outcome.ReachedUsableBuild || !outcome.WasHealthyBeforeBake)
-            return;
+            return false;
 
         // 🚨 A TIMEOUT IS NOT A VERDICT. The per-type budget elapsing means the sweep never got an
         // answer — it says nothing about whether the type builds. During a roll the baking pod and
@@ -115,35 +173,200 @@ public sealed class NodeTypeBakeGateState
         if (outcome.Status is PreWarmStatus.TimedOut or PreWarmStatus.UpstreamUnevaluated)
         {
             unevaluated[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
-            return;
+            return false;
         }
 
-        regressions[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
-        Interlocked.Exchange(ref phase, (int)BakePhase.Regressed);
-        detail = $"{regressions.Count} NodeType(s) regressed on this image";
+        // A CONTENT verdict is not an IMAGE verdict. NoSources means the type's declared source
+        // queries no longer match anything on the mesh — its sources were deleted out from under
+        // it (2026-08-10: four KmuBasics/* types whose course was re-installed under a new id,
+        // the type nodes left behind, stalled memex-cloud's self-update across two images). No
+        // image can change what a mesh query matches, so no rollout may be held hostage to it —
+        // the same deploy-freeze rule as WasHealthyBeforeBake, arriving through content deletion
+        // instead of an abandoned Error record. UpstreamContentBroken is the same condition one
+        // hop downstream (the depth-1 rule, again).
+        if (outcome.Status is PreWarmStatus.NoSources or PreWarmStatus.UpstreamContentBroken)
+        {
+            contentBroken[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
+            return false;
+        }
+
+        lock (verdict)
+        {
+            regressions[outcome.TypePath] = $"{outcome.Status}: {outcome.Detail ?? "(no detail)"}";
+            // A fresh verdict supersedes an earlier retraction of the SAME type: if it broke again
+            // after recovering, the health payload must say "regressed", not "recovered".
+            retracted.TryRemove(outcome.TypePath, out _);
+            if (outcome.BlockedBy is { Length: > 0 } blocker)
+                blockedBy[outcome.TypePath] = blocker;
+            else
+                blockedBy.TryRemove(outcome.TypePath, out _);
+            Interlocked.Exchange(ref phase, (int)BakePhase.Regressed);
+            detail = RegressedDetail();
+        }
+        return outcome.BlockedBy is null;
+    }
+
+    /// <summary>
+    /// 🚨 A REGRESSION IS A MEASUREMENT, NOT A LABEL — retract it when the type it names is
+    /// afterwards observed reaching a usable build ON THIS IMAGE.
+    ///
+    /// <para>This is NOT "completion is absolution", which <see cref="MarkComplete"/> still
+    /// refuses: the sweep finishing proves nothing about a type that failed during it. This is the
+    /// opposite direction — a LATER, BETTER measurement of the SAME type on the SAME image
+    /// supersedes an earlier one. A type that compiles here cannot also be evidence that this image
+    /// broke it, and the gate exists to stop a bad IMAGE.</para>
+    ///
+    /// <para><b>The incident this exists for (memex-cloud, 2026-08-11 11:04–11:12 UTC, issue
+    /// #1214).</b> A gated pod refused readiness with four <c>Store/*</c> types "regressed" and
+    /// CS0117 diagnostics naming <c>Localizer</c> members. Nothing was wrong with the image: the
+    /// plugins repo had reverted a branch and the portal's plugin auto-update was applying that
+    /// revert WHILE the bake compiled — <c>Store/Plugin/Source/Localizer</c> landed at 11:04:59
+    /// (members gone) and its callers at 11:06:57. The bake, running 10:47→11:06, compiled against
+    /// the gap between the two writes, so Roslyn's verdict described a source set that existed for
+    /// roughly two minutes and never again.</para>
+    ///
+    /// <para>The platform itself already treats such a failure as provisional:
+    /// <c>NodeTypeCompileParkRegistry.ShouldRetryForSourceChange</c> un-parks and recompiles a
+    /// failed type the moment its source snapshot changes, so those four types went green seconds
+    /// after the content converged. The ONLY thing that stayed broken was this record — latched,
+    /// sticky, and never re-read — so the pod never became Ready and the rollout hung until a human
+    /// noticed. Making the latch level-triggered on the truth it claims to represent is the fix;
+    /// widening a timeout or ignoring CompileErrors would not be.</para>
+    ///
+    /// <para><b>It cannot launder a real regression.</b> The retraction is driven by the type
+    /// reaching a usable build — a genuinely broken type never does, so a real compile error on a
+    /// stable source set gates exactly as long as it did before: forever. No timer, no retry, no
+    /// budget; the caller merely observes state the platform already publishes.</para>
+    /// </summary>
+    /// <param name="typePath">The NodeType whose regression is being retracted.</param>
+    /// <param name="reason">Why — recorded in <see cref="Retracted"/> and the health payload.</param>
+    /// <returns><c>true</c> if a regression was actually held for this type and has now been removed.</returns>
+    public bool RetractRegression(string typePath, string reason)
+    {
+        lock (verdict)
+        {
+            if (!regressions.TryRemove(typePath, out var was))
+                return false;
+
+            retracted[typePath] = $"{reason} (had been {was})";
+
+            // 🚨 CASCADE THROUGH THE DERIVED VERDICTS. A dependent skipped as UpstreamFailed was
+            // never compiled — its regression's ENTIRE evidence is "my upstream failed". With that
+            // verdict withdrawn there is nothing left saying this type is broken, so it must be
+            // withdrawn too; leaving it would keep the pod out of rotation on a claim whose basis
+            // no longer exists. This is the same principle the Upstream* statuses already encode —
+            // a derived verdict is only ever as strong as the one it derives from.
+            //
+            // Transitive (a dependent of a dependent), and terminating: each round removes at least
+            // one entry from a finite, shrinking set.
+            var cascade = new Queue<string>();
+            cascade.Enqueue(typePath);
+            while (cascade.Count > 0)
+            {
+                var blocker = cascade.Dequeue();
+                foreach (var dependent in blockedBy
+                             .Where(kv => string.Equals(
+                                 kv.Value, blocker, StringComparison.OrdinalIgnoreCase))
+                             .Select(kv => kv.Key)
+                             .ToList())
+                {
+                    blockedBy.TryRemove(dependent, out _);
+                    if (!regressions.TryRemove(dependent, out var derived))
+                        continue;
+                    retracted[dependent] = $"its blocker {blocker} was retracted (had been {derived})";
+                    cascade.Enqueue(dependent);
+                }
+            }
+
+            if (!regressions.IsEmpty)
+            {
+                // Still red on other types — only the wording changes.
+                detail = RegressedDetail();
+                return true;
+            }
+
+            // That was the last one. Where the gate lands depends on whether the sweep has
+            // finished: mid-sweep it goes back to Running (still measuring), afterwards to the
+            // Complete verdict MarkComplete would have produced had this type never failed.
+            if (completedMessage is not { } done)
+            {
+                Interlocked.Exchange(ref phase, (int)BakePhase.Running);
+                detail = "the last recorded regression was retracted — sweep still running";
+                return true;
+            }
+
+            Interlocked.Exchange(ref phase, (int)BakePhase.Complete);
+            detail = CompleteDetail(done);
+            return true;
+        }
     }
 
     /// <summary>
     /// The sweep finished. A run that recorded a regression STAYS regressed — completion is not
-    /// absolution.
+    /// absolution. (What DOES absolve a single type is that type building on this image afterwards
+    /// — see <see cref="RetractRegression"/>, which is a fresh measurement rather than an amnesty.)
     /// </summary>
     public void MarkComplete(string message)
     {
-        if (!regressions.IsEmpty)
+        lock (verdict)
         {
-            detail = $"{regressions.Count} NodeType(s) regressed on this image: "
-                + string.Join(", ", regressions.Keys.OrderBy(k => k, StringComparer.Ordinal));
-            return;
-        }
+            // Remembered so a retraction arriving AFTER the sweep can land on the Complete verdict
+            // this call would have produced, instead of leaving the pod stuck mid-sweep forever.
+            completedMessage = message;
 
-        Interlocked.Exchange(ref phase, (int)BakePhase.Complete);
-        // Ready, but say so honestly: a type we could not evaluate is not a type we verified.
-        // Surfacing it in the health payload is what keeps "non-blocking" from becoming "invisible"
-        // — a silently-swallowed timeout is how a real regression would hide behind this change.
-        detail = unevaluated.IsEmpty
+            if (!regressions.IsEmpty)
+            {
+                detail = RegressedDetail();
+                return;
+            }
+
+            Interlocked.Exchange(ref phase, (int)BakePhase.Complete);
+            detail = CompleteDetail(message);
+        }
+    }
+
+    /// <summary>
+    /// The health payload while at least one regression stands. Names any RETRACTED regression
+    /// too: on a pod that is still red, "these other types failed and then rebuilt" is exactly the
+    /// signal that tells an operator they are looking at a content race rather than a bad image —
+    /// hiding it until the gate happens to go green would withhold it precisely when it is needed.
+    /// Caller holds <see cref="verdict"/>.
+    /// </summary>
+    private string RegressedDetail()
+    {
+        var head = $"{regressions.Count} NodeType(s) regressed on this image: "
+            + string.Join(", ", regressions.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        return retracted.IsEmpty
+            ? head
+            : $"{head} ({retracted.Count} further regression(s) retracted after the type rebuilt "
+                + "on this image — "
+                + string.Join(", ", retracted.Keys.OrderBy(k => k, StringComparer.Ordinal)) + ")";
+    }
+
+    /// <summary>
+    /// The health payload for a pod that may serve. Ready, but say so honestly: a type we could not
+    /// evaluate is not a type we verified, a content-broken type is broken RIGHT NOW even though it
+    /// must not stall the rollout, and a retracted regression means this pod DID record damage that
+    /// later healed. Surfacing all three is what keeps "non-blocking" from becoming "invisible" — a
+    /// silently-swallowed bucket is how a real problem would hide behind this leniency.
+    /// Caller holds <see cref="verdict"/>.
+    /// </summary>
+    private string CompleteDetail(string message)
+    {
+        var addenda = new List<string>(3);
+        if (!unevaluated.IsEmpty)
+            addenda.Add($"{unevaluated.Count} not evaluated — "
+                + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!contentBroken.IsEmpty)
+            addenda.Add($"{contentBroken.Count} content-broken, sources missing — "
+                + string.Join(", ", contentBroken.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!retracted.IsEmpty)
+            addenda.Add($"{retracted.Count} regression(s) retracted after the type rebuilt on this "
+                + "image — "
+                + string.Join(", ", retracted.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        return addenda.Count == 0
             ? message
-            : $"{message} ({unevaluated.Count} not evaluated — "
-                + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)) + ")";
+            : $"{message} ({string.Join("; ", addenda)})";
     }
 }
 

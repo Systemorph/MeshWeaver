@@ -21,6 +21,14 @@
 {
     <meta name="description" content="@_description" />
     <link rel="canonical" href="@_canonical" />
+    @if (_icon is not null)
+    {
+        @* The NODE's own icon, so a node page identifies itself rather than the portal it lives
+           in — for the browser tab, for our own OgCard link previews, and for any Slack / Teams /
+           LinkedIn unfurl. Declared AFTER App.razor's site-wide favicon so it wins: an icon later
+           in the head outranks an earlier one of equal rank. *@
+        <link rel="icon" href="@_icon.Href" type="@_icon.Type" />
+    }
     <meta property="og:site_name" content="@SiteName" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="@_data.Node.Name" />
@@ -49,6 +57,7 @@
     private string? _canonical;
     private string? _image;
     private string? _jsonLd;
+    private PageIcon? _icon;
 
     private string SiteName =>
         Configuration["Portal:SiteName"] ?? Configuration["Portal:InstanceName"] ?? "Memex";
@@ -74,6 +83,7 @@
         var baseUrl = $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}";
         _canonical = $"{baseUrl}/{node.Path}";
         _image = _data.Image is { } img && img.StartsWith('/') ? baseUrl + img : _data.Image;
+        _icon = SeoResolver.ResolveIcon(node);
         _jsonLd = BuildJsonLd(node, _description, _image, _canonical);
     }
 

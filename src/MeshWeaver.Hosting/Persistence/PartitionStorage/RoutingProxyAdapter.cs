@@ -41,6 +41,29 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
         _callerHub = callerHub;
         _router = router;
         _logger = logger;
+
+        // Probed once, replayed. A hub with no providers registered answers indeterminate, which
+        // keeps the healing behaviour rather than silently switching it off.
+        _legacyPartitionExists = Observable
+            .Defer(() =>
+            {
+                var providers = callerHub.ServiceProvider
+                    .GetService(typeof(IEnumerable<IPartitionStorageProvider>))
+                        as IEnumerable<IPartitionStorageProvider>;
+                var all = providers?.ToList() ?? [];
+                return all.Count == 0
+                    ? Observable.Return<bool?>(null)
+                    : Observable
+                        .Merge(all.Select(p =>
+                            p.PartitionExists(LegacyUserPartitionRepair.LegacyPartition)
+                                .Catch((Exception _) => Observable.Return<bool?>(null))))
+                        .ToList()
+                        .Select(answers => answers.Any(a => a is true)
+                            ? true
+                            : answers.All(a => a is false) ? false : (bool?)null);
+            })
+            .Replay(1)
+            .RefCount();
     }
 
     /// <inheritdoc/>
@@ -54,7 +77,20 @@ public sealed class RoutingProxyAdapter : IStorageAdapter
             path,
             p => ReadCore(p, options),
             n => Write(n, options),
-            _logger);
+            _logger,
+            LegacyPartitionExists);
+
+    /// <summary>
+    /// Does the legacy <c>User</c> partition exist? Same OR-fold and same reason as
+    /// <c>PersistenceService.LegacyPartitionExists</c> — and this seam needs it MORE, not less:
+    /// it is the one that actually routes a <c>User/{id}</c> read to a partition hub, so on a
+    /// store that never had a legacy partition it is where the probe turns a root miss into a
+    /// <c>42P01</c>. Resolved from the caller hub (the proxy is registered per hub) and answered
+    /// once, replayed.
+    /// </summary>
+    private IObservable<bool?> LegacyPartitionExists() => _legacyPartitionExists;
+
+    private readonly IObservable<bool?> _legacyPartitionExists;
 
     private IObservable<MeshNode?> ReadCore(string path, JsonSerializerOptions options)
         => _router.AddressFor(path).SelectMany(addr =>

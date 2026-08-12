@@ -285,25 +285,47 @@ public static class PluginGateRunner
                 if (!type.DeclaresTestsArea)
                     return Observable.Return(afterRender with { Tests = CheckOutcome.Skipped });
                 return CreateTestsProbe(harness, type.Path)
-                    .SelectMany(hostPath => AreaProbe.ExecuteTestsArea(
-                        harness.Client, hostPath, options.RenderTimeout))
-                    .Catch((Exception ex) => Observable.Return(new AreaVerdict(
-                        CheckOutcome.Failed,
-                        $"could not execute Tests area: {ex.GetType().Name}: {ex.Message}")))
-                    .Select(tests => afterRender with
+                    .Select(hostPath => new TestsHost(
+                        hostPath,
+                        $"{hostPath} — the probe instance the gate created for this check"))
+                    // Bounded: creating the probe is a CreateNode round-trip with no budget of its
+                    // own, so an unbounded wait here would spend the whole JOB timeout and report
+                    // nothing. Same budget as the render it feeds; the create is sub-second when it
+                    // works.
+                    .Timeout(options.RenderTimeout)
+                    .Catch((TimeoutException _) => Observable.Return(new TestsHost(
+                        Path: null,
+                        Description: $"unresolved — no probe instance under {type.Path} within " +
+                                     $"{options.RenderTimeout.TotalSeconds:F0}s")))
+                    .SelectMany(host => (host.Path is null
+                            ? Observable.Return(new AreaVerdict(
+                                CheckOutcome.Failed, "no host to execute the Tests area on"))
+                            : AreaProbe.ExecuteTestsArea(
+                                harness.Client, host.Path, options.RenderTimeout))
+                        .Catch((Exception ex) => Observable.Return(new AreaVerdict(
+                            CheckOutcome.Failed,
+                            $"could not execute Tests area: {ex.GetType().Name}: {ex.Message}")))
+                        .Select(tests => afterRender with
+                        {
+                            Tests = tests.Outcome,
+                            TestsDetail = tests.Detail,
+                            TestsHost = host.Description,
+                        }))
+                    .Catch((Exception ex) => Observable.Return(afterRender with
                     {
-                        Tests = tests.Outcome,
-                        TestsDetail = tests.Detail,
-                    });
+                        Tests = CheckOutcome.Failed,
+                        TestsDetail = $"could not create the Tests probe: " +
+                                      $"{ex.GetType().Name}: {ex.Message}",
+                    }));
             });
 
-    /// <summary>
-    /// The node whose hub serves the type's <c>Tests</c> area: the area is registered by the
-    /// type's compiled configuration, which runs on INSTANCE hubs (the type node itself is
-    /// served by the NodeType editor). Prefers an instance the package ships; otherwise creates
-    /// a throwaway probe instance under the type path (system-impersonated — the same footing
-    /// as the install).
-    /// </summary>
+    /// <summary>The node whose hub ran a type's <c>Tests</c> area.</summary>
+    /// <param name="Path">The host node's path; null when no host could be created.</param>
+    /// <param name="Description">The human-readable account printed in the report — so a
+    /// <c>No renderer is registered for area `Tests` on hub X</c> can be read without guessing
+    /// which node X was (issue #1077).</param>
+    private sealed record TestsHost(string? Path, string Description);
+
     /// <summary>
     /// The Tests probe ALWAYS runs on a freshly created instance, never on a shipped one.
     ///
@@ -407,7 +429,7 @@ public static class PluginGateRunner
                 // The AI node types (Agent / Skill / Model / …) — plugin packages ship Agent
                 // and Skill nodes (LinkedIn, Feedback, ExplainerVideo), and a portal always
                 // registers these; without them those installs are refused "not registered".
-                .AddAI()
+                .AddAI(MeshWeaver.AI.AiContentSources.ContentPartitions)
                 .AddPluginCatalog()
                 .AddMeshNodes(RootAdminAccess())
                 // Per-run isolated assembly store + compilation cache (AddInMemoryPersistence
@@ -440,8 +462,14 @@ public static class PluginGateRunner
                     _ = mesh.GetHostedHub(new Address(nodeTypePath), config);
             }
 
-            // The gate's admin circuit identity (DevLogin analogue).
-            provider.GetRequiredService<AccessService>().SetCircuitContext(GateAdmin);
+            // The gate's admin identity (DevLogin analogue). `mw-plugin-test` is a
+            // SINGLE-IDENTITY host — one gate admin for the whole run, no Blazor circuit — so this
+            // is SetHostIdentity, not SetCircuitContext: the identity must survive every Rx /
+            // scheduler hop, including the layout-area sync-stream subscribe the AreaProbe drives.
+            // (SetCircuitContext writes only the calling flow's AsyncLocal; a gate identity set
+            // there is gone by the time the render probe subscribes, and the area never
+            // materialises because RLS denies the context-less read.)
+            provider.GetRequiredService<AccessService>().SetHostIdentity(GateAdmin);
 
             // Activate hosted services DI registered but nothing started (no generic host here).
             foreach (var hosted in provider.GetServices<IHostedService>())

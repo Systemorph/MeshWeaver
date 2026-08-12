@@ -55,7 +55,10 @@ public sealed class MessageHub : IMessageHub
         System.Reactive.Subjects.AsyncSubject<IMessageDelivery> Subject,
         string RequestType,
         Address? Target,
-        long RegisteredAtTicks);
+        long RegisteredAtTicks,
+        // Opt-in sub-key from the request itself (IDiagnosticKeyed) — what makes N identical-looking
+        // pending callbacks legible: N distinct keys is a fan-out, one key repeated is a retry loop.
+        string? DiagnosticKey = null);
 
     /// <summary>
     /// Handler-side trail for the requests this hub TREE is awaiting (see
@@ -476,6 +479,26 @@ public sealed class MessageHub : IMessageHub
             })
             .Catch((Exception ex) =>
             {
+                // Recognized shutdown, NOT a failure: this hub is being torn down (its own Dispose
+                // began, or an ancestor's disposal froze the subtree) and the teardown is what ended
+                // the BuildupAction — canonically an ObjectDisposedException from a disposing hub
+                // erroring its pending response subjects into a child's in-flight init request (the
+                // $model-probe → sync/{id} race, issues #1122–#1125: a transient probe hub is
+                // DESIGNED to be disposed mid-life, so its children's dispose-during-init is a
+                // normal path). Reporting it as "initialization failed → FAILED state" logged a
+                // fail-level error and left FAILED residue on a hub that was already dying — the
+                // same defect class as the CompileWatcher shutdown-as-fault reports. Terminate the
+                // init cleanly instead: no error log, no FAILED marker; still open the gate so any
+                // remaining lifecycle traffic (the disposal state machine) flows.
+                if (IsShuttingDown)
+                {
+                    logger.LogDebug(ex,
+                        "Hub {Address} initialization ended by shutdown ({ExceptionType}) — recognized "
+                        + "shutdown outcome, no failure state recorded.", Address, ex.GetType().Name);
+                    OpenGate(MessageHubConfiguration.InitializeGateName);
+                    return Observable.Return(request.Processed());
+                }
+
                 // Init failed — a BuildupAction faulted (threw) or HUNG (TimeoutException from the bound
                 // above). Do NOT leave the gate closed (→ the 30s-per-message deferral wedge): enter a
                 // FAILED state that surfaces a clear DeliveryFailure for every later request, then
@@ -909,7 +932,8 @@ public sealed class MessageHub : IMessageHub
         // gets the same composed PostOptions via WithMessageId chaining.
         var probeOptions = options(new PostOptions(Address));
         var requestType = r?.GetType().Name ?? "<null>";
-        var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target);
+        var subject = GetOrAddResponseSubject(messageId, requestType, probeOptions.Target,
+            (r as IDiagnosticKeyed)?.DiagnosticKey);
         // 🔍 DIAGNOSTIC ONLY (#981) — records and RETHROWS; it changes no behaviour.
         //
         // The callback is registered on the line above and the delivery is posted on the line
@@ -1034,7 +1058,8 @@ public sealed class MessageHub : IMessageHub
     private System.Reactive.Subjects.AsyncSubject<IMessageDelivery> GetOrAddResponseSubject(
         string messageId,
         string requestType = "<unknown>",
-        Address? target = null)
+        Address? target = null,
+        string? diagnosticKey = null)
     {
         lock (responseSubjects)
         {
@@ -1051,7 +1076,8 @@ public sealed class MessageHub : IMessageHub
                     new System.Reactive.Subjects.AsyncSubject<IMessageDelivery>(),
                     requestType,
                     target,
-                    Stopwatch.GetTimestamp());
+                    Stopwatch.GetTimestamp(),
+                    diagnosticKey);
                 responseSubjects[messageId] = entry;
                 // THE one place a hub starts awaiting a reply — so it is also the one place the
                 // handler-side trail starts. "Tracked" and "awaited" are the same set by
@@ -1278,7 +1304,11 @@ public sealed class MessageHub : IMessageHub
     {
         // The rule itself is a pure predicate — see RouterTrafficRule, where it is unit-tested.
         // Target = where the delivery is ADDRESSED, not where it is currently being handled.
-        var role = RouterTrafficRule.RoleOf(delivery.Target?.Type, delivery.Sender?.Type, delivery.Message);
+        // isResponse: the RequestId correlation marks a delivery that ANSWERS a request — the shape
+        // of the routing layer's own undeliverable-mail NACK, which posts from the mesh hub via
+        // ResponseFor (see RouterTrafficRule.RoleOf's isResponse doc).
+        var role = RouterTrafficRule.RoleOf(delivery.Target?.Type, delivery.Sender?.Type, delivery.Message,
+            delivery.Properties.ContainsKey(PostOptions.RequestId));
         if (role is null)
             return;
 
@@ -1368,6 +1398,17 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     public bool IsDisposing => disposalStarted;
     private volatile bool disposalStarted;
+
+    /// <summary>
+    /// True when this hub is part of a shutdown: its own <see cref="Dispose"/> has begun, OR an
+    /// ANCESTOR's disposal has frozen hosted-hub creation across the subtree
+    /// (<see cref="HostedHubsCollection.CloseCreation"/> cascades at the first instant of the
+    /// ancestor's <c>Dispose()</c>, strictly BEFORE this hub's own <see cref="IsDisposing"/>
+    /// flips — the <c>DisposeRequest</c> only reaches it in the ancestor's DisposeHostedHubs
+    /// phase). A frozen subtree means disposal of this hub is already in progress or imminent,
+    /// so anything that terminates because of it is a recognized shutdown outcome, not a fault.
+    /// </summary>
+    public bool IsShuttingDown => disposalStarted || hostedHubs.IsCreationFrozen;
 
     /// <inheritdoc />
     // Native reactive view of the completion subject — NOT bridged from a Task. Fires Unit +
@@ -2013,7 +2054,8 @@ public sealed class MessageHub : IMessageHub
     private void OnQuiesceComplete(
         bool drainedOk,
         Stopwatch quiesceSw,
-        (string MessageId, string RequestType, Address? Target, long AgeMs)[] initialPendingSnapshot)
+        (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[]
+            initialPendingSnapshot)
     {
         try
         {
@@ -2178,7 +2220,8 @@ public sealed class MessageHub : IMessageHub
     /// phase and by <see cref="GetDisposalDiagnostics"/> so a hung dispose names *what*
     /// the hub was waiting on, not just that it was waiting.
     /// </summary>
-    private (string MessageId, string RequestType, Address? Target, long AgeMs)[] SnapshotPendingCallbacks()
+    private (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[]
+        SnapshotPendingCallbacks()
     {
         lock (responseSubjects)
         {
@@ -2188,7 +2231,8 @@ public sealed class MessageHub : IMessageHub
                     kv.Key,
                     kv.Value.RequestType,
                     kv.Value.Target,
-                    (long)((nowTicks - kv.Value.RegisteredAtTicks) * 1000.0 / Stopwatch.Frequency)))
+                    (long)((nowTicks - kv.Value.RegisteredAtTicks) * 1000.0 / Stopwatch.Frequency),
+                    kv.Value.DiagnosticKey))
                 .ToArray();
         }
     }
@@ -2196,7 +2240,7 @@ public sealed class MessageHub : IMessageHub
     private const int PendingCallbackLogCap = 20;
 
     private static string FormatPendingCallbacks(
-        (string MessageId, string RequestType, Address? Target, long AgeMs)[] pending)
+        (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[] pending)
     {
         if (pending.Length == 0)
             return "<none>";
@@ -2212,11 +2256,14 @@ public sealed class MessageHub : IMessageHub
         }
         var head = string.Join(", ", pending.Take(PendingCallbackLogCap).Select(p =>
             $"{p.MessageId}={p.RequestType}@{p.Target}({p.AgeMs}ms)"));
-        var rest = pending.Skip(PendingCallbackLogCap)
-            .GroupBy(p => $"{p.RequestType}@{p.Target}")
-            .OrderByDescending(g => g.Count())
-            .Select(g => $"{g.Key}×{g.Count()}");
-        return $"{head}, …+{pending.Length - PendingCallbackLogCap} more [{string.Join(", ", rest)}]";
+        // 🚨 The tally groups by (type, target) — which on memex-cloud 2026-08-12 collapsed 167
+        // pending SubscribeRequests into one indistinguishable bucket. `keys=` is what tells the two
+        // mechanisms apart: keys≈count ⇒ that many SEPARATE streams (a fan-out); keys=1 ⇒ one stream
+        // re-asking (a retry loop). See IDiagnosticKeyed. Groups whose requests carry no key print
+        // no `keys=`, so nothing changes for message types that opt out.
+        var rest = PendingCallbackReport.Tally(pending.Skip(PendingCallbackLogCap)
+            .Select(p => new PendingCallbackInfo(p.RequestType, p.Target?.ToString(), p.DiagnosticKey)));
+        return $"{head}, …+{pending.Length - PendingCallbackLogCap} more [{rest}]";
     }
 
     /// <summary>
@@ -2235,7 +2282,7 @@ public sealed class MessageHub : IMessageHub
     /// <param name="pending">The still-pending callbacks, as snapshotted at the timeout.</param>
     /// <returns>A newline-prefixed block, or the empty string when there is nothing to report.</returns>
     private string FormatPendingCallbackFates(
-        (string MessageId, string RequestType, Address? Target, long AgeMs)[] pending)
+        (string MessageId, string RequestType, Address? Target, long AgeMs, string? DiagnosticKey)[] pending)
     {
         if (pending.Length == 0)
             return string.Empty;

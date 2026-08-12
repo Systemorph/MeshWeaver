@@ -113,7 +113,7 @@ public class OrleansTopLevelPartitionGuardTest(ITestOutputHelper output)
         // Act AS the real user (NOT System — System legitimately provisions partitions and
         // bypasses the guard). Root admin (seeded below) means RLS grants Create everywhere,
         // so a rejection here can only come from the partition-type invariant.
-        access.SetCircuitContext(new AccessContext
+        access.SetHostIdentity(new AccessContext
         {
             ObjectId = TestUserId, Name = TestUserId, Email = $"{TestUserId}@meshweaver.io"
         });
@@ -139,7 +139,7 @@ public class OrleansTopLevelPartitionGuardTest(ITestOutputHelper output)
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 
@@ -161,7 +161,7 @@ public class OrleansTopLevelPartitionGuardTest(ITestOutputHelper output)
         var spaceId = "Sp" + Guid.NewGuid().ToString("N")[..10];
         var schema = spaceId.ToLowerInvariant();
 
-        access.SetCircuitContext(new AccessContext
+        access.SetHostIdentity(new AccessContext
         {
             ObjectId = TestUserId, Name = TestUserId, Email = $"{TestUserId}@meshweaver.io"
         });
@@ -184,7 +184,7 @@ public class OrleansTopLevelPartitionGuardTest(ITestOutputHelper output)
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 

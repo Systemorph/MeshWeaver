@@ -185,11 +185,30 @@ public static class GraphConfigurationExtensions
                 // IMessageHub, so the registry checked is the validating hub's own chain.
                 services.AddScoped<INodeValidator, Security.ContentDiscriminatorValidator>();
 
+                // Keeps the batch bake's "the union is every Code node" claim true BY
+                // CONSTRUCTION (issue #1235): a Code node named after a code-table routing
+                // segment (Source/Test) lands in the code table but has a namespace that
+                // carries no such segment, so no global source query can ever see it — while
+                // a `shared=@X/Source` reference still selects it, yielding a PARTIAL source
+                // set and a false CS0103. Stateless integrity rule, no hub dependency.
+                services.AddScoped<INodeValidator, CodeNodeSegmentNameValidator>();
+
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
 
                 // Register compilation cache service
                 services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
+
+                // Mesh-scoped Open Graph link-preview reader for the OgCard layout area:
+                // one promise-cached fetch per external URL, replayed to every card render.
+                // The named client keeps auto-redirects OFF — an og fetch follows markdown-
+                // authored URLs, and a public target 302-ing to a private/metadata address must
+                // not be silently followed (the DNS-side gate in the service vets only the
+                // original host). A redirecting page degrades to the URL-only fallback card.
+                services.AddHttpClient(OpenGraphPreviewService.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() =>
+                        new HttpClientHandler { AllowAutoRedirect = false });
+                services.AddSingleton<OpenGraphPreviewService>();
 
                 // NuGet package resolver for #r "nuget:..." directives
                 services.AddNuGetResolver();

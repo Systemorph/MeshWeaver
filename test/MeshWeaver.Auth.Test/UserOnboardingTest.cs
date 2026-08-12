@@ -51,7 +51,7 @@ public class UserOnboardingTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// </summary>
     private void ImpersonateAsUser(string userId)
         => Mesh.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+            .SetHostIdentity(new AccessContext { ObjectId = userId, Name = userId });
 
     [Fact(Timeout = 15000)]
     public async Task CreateUserNode_GrantsSelfAdminRole_OnOwnPartition()

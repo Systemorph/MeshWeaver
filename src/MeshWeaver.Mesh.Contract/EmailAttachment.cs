@@ -12,4 +12,24 @@ namespace MeshWeaver.Mesh;
 /// <param name="FileName">Suggested file name including extension (e.g. <c>Pitch Deck.pdf</c>).</param>
 /// <param name="MimeType">MIME type of the content (e.g. <c>application/pdf</c>).</param>
 /// <param name="Content">Raw file bytes.</param>
-public sealed record EmailAttachment(string FileName, string MimeType, byte[] Content);
+/// <param name="ContentId">
+/// When set, this part is <b>INLINE</b> rather than a listed attachment: the HTML body references
+/// it as <c>&lt;img src="cid:{ContentId}"&gt;</c> and the client draws it in place.
+///
+/// <para>This is how a picture reliably reaches a reader. The two obvious alternatives both fail
+/// in common configurations: a <c>data:</c> URI is stripped by classic Outlook for Windows, and a
+/// remote <c>https</c> image is blocked behind "Download pictures" in most clients by default. A
+/// content-ID part travels INSIDE the message, so it renders immediately, needs no fetch, leaks no
+/// read-receipt beacon, and survives forwarding.</para>
+///
+/// <para>Null (the default) keeps the original behaviour — an ordinary attachment.</para>
+/// </param>
+public sealed record EmailAttachment(
+    string FileName,
+    string MimeType,
+    byte[] Content,
+    string? ContentId = null)
+{
+    /// <summary>True when this part is referenced from the body by <c>cid:</c> rather than listed.</summary>
+    public bool IsInline => !string.IsNullOrEmpty(ContentId);
+}

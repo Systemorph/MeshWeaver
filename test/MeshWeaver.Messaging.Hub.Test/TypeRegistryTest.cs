@@ -225,27 +225,39 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// 🚨 A registry entry from a COLLECTIBLE assembly must not survive that assembly's load context.
+    /// 🚨 The TWO invariants of collectible-type eviction, pinned together because fixing one used
+    /// to break the other:
     ///
-    /// <para>Dynamically compiled nodes live in collectible <c>AssemblyLoadContext</c>s and every
-    /// recompile unloads the previous one. A registry that keeps the old <see cref="Type"/> both roots
-    /// the context (it can never be collected) and leaves a landmine: anything that walks the registry
-    /// afterwards dereferences freed metadata. <c>PolymorphicTypeInfoResolver.ComputeDerivedTypes</c>
-    /// does exactly that — it enumerates <c>Types</c> and calls <c>IsAssignableFrom</c> on each entry —
-    /// and a CI core dump caught it faulting there with FutuRe's node types at recompile v5/v8/v15
-    /// (<c>exit=139</c>, AccessViolation, no failing test to point at).</para>
+    /// <para><b>(1) A live user of the assembly keeps resolving (issue #1169).</b>
+    /// <c>AssemblyLoadContext.Unload()</c> is COOPERATIVE — the <c>Unloading</c> event fires at
+    /// INITIATION, while hubs whose configuration lives in that assembly are still running on it
+    /// (a NodeType recompile unloads the SUPERSEDED context the moment the new build loads;
+    /// <c>CompilationCacheService.EvictSupersededContexts</c> documents "a context still referenced
+    /// by a live hub stays fully mapped and usable"). The registry's original eviction (dfac3366d)
+    /// REMOVED the entries at that instant, so a live Store hub's own <c>StorePackage</c>
+    /// registration vanished mid-render: <c>Workspace.GetStream</c> threw "Type StorePackage is
+    /// unknown" while the hub's DataContext still knew the type source. While ANYTHING still holds
+    /// the assembly alive, the registry must keep resolving its types — by name, by type, and on
+    /// the enumeration the polymorphic resolver walks.</para>
     ///
-    /// <para>Asserted as the INVARIANT rather than by provoking the crash: an access violation takes
-    /// the whole test host down, so "no stale entry survives unload" is what a test can pin
-    /// deterministically — and it is the property the fix has to hold.</para>
+    /// <para><b>(2) The registry must not ROOT the context (dfac3366d's leak + SIGSEGV).</b> Once
+    /// the last real user drops the assembly, the registry must not be what keeps it alive — a
+    /// strong entry makes every recompile leak its whole load context, and a registry outliving
+    /// freed metadata is the <c>ComputeDerivedTypes</c> AccessViolation (CI core dump, FutuRe at
+    /// recompile v5/v8/v15, exit=139). Pinned STRUCTURALLY (via reflection over the private maps)
+    /// rather than by asserting actual GC collection: the xunit v3 host roots every collectible
+    /// context loaded inside a test (verified with a registry-free baseline — load + Unload +
+    /// 10×GC.Collect never collects), so a GC-based assert can only ever fail for environmental
+    /// reasons. Structurally, non-rooting means: after Unloading fires, NO strong map
+    /// (<c>typeByName</c>/<c>nameByType</c>/<c>aliasByName</c>) holds the type — it is served
+    /// exclusively from the weak shadow (<c>WeakReference</c> + <c>ConditionalWeakTable</c>,
+    /// neither of which roots), whose dead entries are skipped and pruned.</para>
     /// </summary>
     [Fact]
-    public void CollectibleType_IsEvictedWhenItsLoadContextUnloads()
+    public void CollectibleType_SurvivesUnloadInitiationWhileAlive_ButLeavesNoStrongEntry()
     {
         var typeRegistry = GetHost().ServiceProvider.GetRequiredService<ITypeRegistry>();
 
-        // A real collectible context holding a real assembly: load THIS assembly again into its own
-        // context, so the type has a genuinely distinct CLR identity — the recompile shape exactly.
         var context = new AssemblyLoadContext("evict-test", isCollectible: true);
         var reloaded = context.LoadFromAssemblyPath(typeof(HelloEvent).Assembly.Location);
         var collectibleType = reloaded.GetType(typeof(HelloEvent).FullName!)!;
@@ -258,12 +270,130 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
 
         context.Unload();
 
-        // The registry must have dropped it — by name, by type, and (the one the crash walked) from
-        // the enumeration the polymorphic resolver iterates.
-        typeRegistry.TryGetType("EvictMe", out _).Should()
-            .BeFalse("an entry from an unloaded context is freed metadata, not a resolvable type");
-        typeRegistry.Types.Should().NotContain(t => t.Key == "EvictMe",
-            "ComputeDerivedTypes walks this enumeration and calls IsAssignableFrom on every entry");
+        // ── Invariant 1: while the assembly is still ALIVE (this test holds the Type, exactly
+        // like a live hub's configuration closure), unload INITIATION must not strip it.
+        typeRegistry.TryGetType("EvictMe", out var demoted).Should().BeTrue(
+            "a hub still running on a superseded assembly must keep resolving its own types "
+            + "(issue #1169: 'Type StorePackage is unknown' mid-render)");
+        demoted!.Type.Should().BeSameAs(collectibleType);
+        typeRegistry.TryGetCollectionName(collectibleType, out var name).Should().BeTrue(
+            "Workspace.GetStream<T>() asks exactly this and threw 'Type StorePackage is unknown'");
+        name.Should().Be("EvictMe");
+        typeRegistry.Types.Should().Contain(t => t.Key == "EvictMe",
+            "the polymorphic resolver still needs the $type discriminator for the live hub's data");
+
+        // ── Invariant 2: no STRONG map may still hold the type — it is served exclusively from
+        // the weak shadow, so the registry cannot root the superseded context (the leak) and
+        // cannot outlive its metadata (the SIGSEGV walk) once real users let go.
+        StrongMapsHolding(typeRegistry, collectibleType).Should().BeEmpty(
+            "after Unloading fires, only the weak shadow may serve the type — a strong entry "
+            + "would root the superseded load context forever (the recompile ALC leak dfac3366d closed)");
+    }
+
+    /// <summary>
+    /// A registration arriving AFTER its context began unloading (a serializer touching a
+    /// superseded type mid-supersession) must ALSO go to the weak shadow: the Unloading event
+    /// has already fired and will never fire again, so a strong entry could never be evicted —
+    /// a permanent root. And it must still resolve while the assembly is alive.
+    /// </summary>
+    [Fact]
+    public void LateRegistration_FromUnloadingContext_GoesToTheWeakShadow_NotAStrongRoot()
+    {
+        var typeRegistry = GetHost().ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        var context = new AssemblyLoadContext("late-register-test", isCollectible: true);
+        var reloaded = context.LoadFromAssemblyPath(typeof(HelloEvent).Assembly.Location);
+        var collectibleType = reloaded.GetType(typeof(HelloEvent).FullName!)!;
+
+        // Teach the registry about the context (subscribes Unloading), then supersede it.
+        typeRegistry.WithType(collectibleType, "LateOriginal");
+        context.Unload();
+
+        // The late registration — after the Unloading event already fired.
+        typeRegistry.WithType(collectibleType, "LateArrival");
+
+        // It must still resolve while alive…
+        typeRegistry.TryGetType("LateArrival", out var late).Should().BeTrue();
+        late!.Type.Should().BeSameAs(collectibleType);
+        // …but never through a strong entry (see the invariant-2 note above).
+        StrongMapsHolding(typeRegistry, collectibleType).Should().BeEmpty(
+            "a registration made AFTER the context began unloading can never be evicted by the "
+            + "Unloading event (it already fired), so a strong entry would root the context forever");
+    }
+
+    /// <summary>
+    /// Names of the registry's STRONG maps that still hold <paramref name="type"/>. Reflection
+    /// over the private fields — there is deliberately no public surface for this (the project
+    /// avoids assembly-wide InternalsVisibleTo), and the property under test is precisely the
+    /// registry's internal storage shape: strong entry = roots the load context, weak-shadow
+    /// entry = does not.
+    /// </summary>
+    private static IReadOnlyList<string> StrongMapsHolding(ITypeRegistry typeRegistry, Type type)
+    {
+        var impl = typeRegistry.GetType();
+        var holding = new List<string>();
+        var typeByName = (System.Collections.IDictionary?)GetField("typeByName");
+        var aliasByName = (System.Collections.IDictionary?)GetField("aliasByName");
+        var nameByType = (System.Collections.IDictionary?)GetField("nameByType");
+        // All three, not just the first: this helper reaches into private fields by name, so a
+        // rename is the expected way it breaks. Asserting each one says WHICH field moved; the
+        // null-forgiving dereference below would instead throw a NullReferenceException that
+        // names nothing and reads like a defect in the registry rather than in this test.
+        typeByName.Should().NotBeNull("the test must track the registry's storage-field shape");
+        aliasByName.Should().NotBeNull("the test must track the registry's storage-field shape");
+        nameByType.Should().NotBeNull("the test must track the registry's storage-field shape");
+        if (typeByName!.Values.Cast<object>().Any(d => ReferenceEquals(GetDefinitionType(d), type)))
+            holding.Add("typeByName");
+        if (aliasByName!.Values.Cast<object>().Any(d => ReferenceEquals(GetDefinitionType(d), type)))
+            holding.Add("aliasByName");
+        if (nameByType!.Keys.Cast<object>().Any(k => ReferenceEquals(k, type)))
+            holding.Add("nameByType");
+        return holding;
+
+        object? GetField(string fieldName) => impl
+            .GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.GetValue(typeRegistry);
+
+        static Type? GetDefinitionType(object definition) =>
+            (Type?)definition.GetType().GetProperty("Type")?.GetValue(definition);
+    }
+
+    /// <summary>
+    /// 🚨 A RECOMPILE must win the full-name alias. Every recompile of a dynamic node mints a new
+    /// collectible assembly whose types carry the SAME full name as the previous build's, and the
+    /// alias index is what resolves a full-name <c>$type</c> discriminator on the way in.
+    ///
+    /// <para><c>IndexFullNameAlias</c> used <c>TryAdd</c> for everything, on the reasoning that full
+    /// names are unique — true for an ordinary assembly, false for a rebuilt node. So the FIRST
+    /// build owned the alias forever. That was masked while a superseded context unloaded promptly
+    /// and its entries were swept; it is not masked now, because those entries are DEMOTED to the
+    /// weak shadow rather than dropped, and a context leased by a live hub does not begin unloading
+    /// at all. Resolving a live payload to a superseded assembly's type is the foreign-content
+    /// class: <c>Content is X</c> goes false and the bound view renders empty or never emits.</para>
+    /// </summary>
+    [Fact]
+    public void RecompiledCollectibleType_ReplacesTheFullNameAlias_RatherThanKeepingTheFirst()
+    {
+        var typeRegistry = GetHost().ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        // Two builds of "the same" node type: same full name, different collectible assemblies —
+        // exactly what a recompile produces.
+        var v1 = EmitCollectibleType("RecompiledEntry", "Position");
+        var v2 = EmitCollectibleType("RecompiledEntry", "Position");
+        v1.Should().NotBeSameAs(v2, "the fixture must reproduce two distinct builds");
+        v1.FullName.Should().Be(v2.FullName, "a recompile keeps the type's full name");
+
+        // Registered under DISTINCT canonical names, so ONLY the full-name alias is under test —
+        // typeByName's last-write-wins cannot mask the defect.
+        typeRegistry.WithType(v1, "RecompiledEntry_v1");
+        typeRegistry.WithType(v2, "RecompiledEntry_v2");
+
+        typeRegistry.TryGetType(v2.FullName!, out var resolved).Should().BeTrue(
+            "the full name must still resolve after the recompile");
+        resolved!.Type.Should().BeSameAs(v2,
+            "the alias must resolve the CURRENT build; keeping the first one pins a superseded "
+            + "assembly's type, and content deserialised into it fails every 'Content is X' check "
+            + "downstream — the view then renders empty or waits forever");
     }
 
     private sealed class CapturingLogger(ConcurrentQueue<string> sink) : ILogger

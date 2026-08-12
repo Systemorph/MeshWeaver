@@ -226,8 +226,8 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         // prod defect where the config-node query ran as anonymous and matched NOTHING on an
         // access-gated portal. The processor must impersonate System for its own lookups.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.ClearPersistentCircuitContext();
-        accessService.SetCircuitContext(null);
+        accessService.ClearHostIdentity();
+        accessService.SetHostIdentity(null);
         accessService.SetContext(null);
         int recorded;
         try
@@ -268,7 +268,7 @@ public class GitHubWebhookProcessorTest(ITestOutputHelper output) : GitHubSyncTe
         }
         finally
         {
-            accessService.SetCircuitContext(new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
+            accessService.SetHostIdentity(new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
         }
         Assert.Equal(1, recorded);   // the build completion was recorded
 

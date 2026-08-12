@@ -25,6 +25,14 @@
     <ProjectReference Include="..\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.NuGet.AzureBlob\MeshWeaver.NuGet.AzureBlob.csproj" />
+    <!-- 🚨 Referenced for IN-MESH compiles, not for this project's own code. NodeType sources are
+         compiled at runtime against TRUSTED_PLATFORM_ASSEMBLIES — i.e. whatever is in the publish
+         output — so an assembly this portal does not reference is invisible to them no matter that
+         the framework ships it. Memex.Portal.Monolith already references it, which is why
+         `Northwind/Product` (and Cornerstone/Pricing's Excel sample loader) compile in dev and fail
+         on memex-cloud with `CS0234: the type or namespace name 'Import' does not exist in the
+         namespace 'MeshWeaver'`. Do not "clean up" as unused. -->
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
   </ItemGroup>
 
   <!-- Ship nuget.config into the image so the runtime `#r "nuget:..."` resolver can

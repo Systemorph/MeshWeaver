@@ -27,6 +27,8 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Features" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+    <!-- IHttpClientFactory for the OgCard Open Graph fetcher (OpenGraphPreviewService). -->
+    <PackageReference Include="Microsoft.Extensions.Http" />
   </ItemGroup>
 
   <ItemGroup>
