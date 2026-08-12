@@ -1,10 +1,12 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Text.Json;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Messaging.Hub.Test;
@@ -152,6 +154,61 @@ public class MeshContentTypeRegistryTest
         registry.TryResolveByNodeType("ClaimsDeepfield/Currency", out var b).Should().BeTrue();
         b.Should().BeSameAs(claims);
         registry.TryResolveByDiscriminator("Currency", out _).Should().BeFalse();
+    }
+
+    /// <summary>Captures the warning lines so the collision report can be asserted on.</summary>
+    private sealed class CapturingLogger : ILogger<MeshContentTypeRegistry>
+    {
+        public List<string> Warnings { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings.Add(formatter(state, exception));
+        }
+    }
+
+    /// <summary>The collision is reported once, naming both declarations — the only place it is
+    /// visible, and what an operator needs in order to rename one of the two records.</summary>
+    [Fact(Timeout = 30000)]
+    public void TheCollisionIsReportedOnce_NamingBothDeclarations()
+    {
+        var logger = new CapturingLogger();
+        var registry = new MeshContentTypeRegistry(logger);
+
+        registry.Register(EmitType("Ifrs17_Currency", "Currency"));
+        registry.Register(EmitType("ClaimsDeepfield_Currency", "Currency"));
+
+        logger.Warnings.Should().ContainSingle().Which
+            .Should().Contain("Currency")
+            .And.Contain("Ifrs17_Currency")
+            .And.Contain("ClaimsDeepfield_Currency");
+    }
+
+    /// <summary>
+    /// A REBUILD of a claimant whose name is already contested must not report the collision again
+    /// — it would print "two different declarations (X and X)", a misleading line about a name whose
+    /// collision was already reported, on every recompile.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void RebuildOfAContestedClaimant_DoesNotReportItAgain()
+    {
+        var logger = new CapturingLogger();
+        var registry = new MeshContentTypeRegistry(logger);
+        registry.Register(EmitType("Ifrs17_Currency", "Currency"));
+        registry.Register(EmitType("ClaimsDeepfield_Currency", "Currency"));
+        logger.Warnings.Clear();
+
+        registry.Register(EmitType("Ifrs17_Currency", "Currency"));
+
+        logger.Warnings.Should().BeEmpty(
+            "a rebuild is the same declaration — there is no new collision to report");
     }
 
     /// <summary>
