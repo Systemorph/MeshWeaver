@@ -622,7 +622,7 @@ Never use `IMeshStorage` or `IMeshCatalog` directly — internal infrastructure 
 
 | Operation | API |
 |---|---|
-| Read (query) | `IMeshService.QueryAsync(...)` |
+| Read (query) | `IMeshService.Query<T>(request)` — reactive. 🚨 There is **no** `QueryAsync` on the production interface; it survives only as a test-only bridge in `MeshWeaver.Fixture`. One-shot snapshot = `.Where(c => c.ChangeType == QueryChangeType.Initial).Select(c => c.Items).FirstAsync()` |
 | Read (single node) | `workspace.GetMeshNodeStream(path)` |
 | Create/Delete | `meshService.CreateNode(node).Subscribe(...)` / `meshService.DeleteNode(path).Subscribe(...)` |
 | Update | `workspace.GetMeshNodeStream(path).Update(current => current with { … })` |

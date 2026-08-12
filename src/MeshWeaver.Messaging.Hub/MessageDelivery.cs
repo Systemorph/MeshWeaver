@@ -188,7 +188,18 @@ public abstract record MessageDelivery : IMessageDelivery
                 return this;
             var serialized = JsonSerializer.Serialize(message, options ?? fallbackOptions);
             var rawJson = new RawJson(serialized);
-            return WithMessage(rawJson);
+            var packaged = WithMessage(rawJson);
+            // 🚨 Carry the payload's IDENTITY across the type erasure. From here on the delivery
+            // is `type=RawJson` and nothing downstream can tell WHAT it is about without parsing
+            // the payload — which the receiving hub's storm breaker runs far too hot to do (it
+            // sees every inbound delivery, before the turn loop). Stamping the already-computed
+            // DiagnosticKey onto the envelope here is free next to the Serialize above, and the
+            // envelope's properties survive the router hop and the wire. Without it, N legitimate
+            // cross-hub writes to N DISTINCT things collapse into one storm-breaker bucket and get
+            // dropped as if they were one thing looping (#1200).
+            return message is IDiagnosticKeyed keyed && keyed.DiagnosticKey is { Length: > 0 } key
+                ? packaged.SetProperty(IDiagnosticKeyed.DeliveryProperty, key)
+                : packaged;
         }
         catch (Exception e)
         {
