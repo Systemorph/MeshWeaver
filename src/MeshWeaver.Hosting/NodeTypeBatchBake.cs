@@ -356,8 +356,7 @@ internal static class NodeTypeBatchBake
             {
                 Query = bounded,
                 Limit = SourceDiscoveryLimit,
-                UserId = WellKnownUsers.System,
-            }))
+            }.AsSystem()))
             .Scan(
                 ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
                 MeshNodeCompilationService.ApplyQueryChange)
