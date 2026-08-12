@@ -163,73 +163,63 @@ public class EducationNavigationProviderTest
 
     // ── Progress: captured in the learner's home, decorated back into the menu ──
 
-    private static readonly System.DateTimeOffset Now =
-        System.DateTimeOffset.Parse("2026-08-12T10:00:00Z");
-
     [Fact]
-    public void MergeVisit_FirstVisit_StampsLessonAndPosition()
+    public void LessonSlug_IsTheSegmentUnderTheRoot_InBothTrees()
     {
-        var merged = CourseProgress.MergeVisit(null, Course, $"{L1}/Quiz", L1, Now);
-
-        (merged is null).Should().BeFalse();
-        merged!["coursePath"]!.GetValue<string>().Should().Be(Course);
-        merged["lastPath"]!.GetValue<string>().Should().Be($"{L1}/Quiz");
-        CourseProgress.VisitedLessons(merged).OrderBy(x => x).Should().Equal(L1);
+        CourseProgress.LessonSlug(Course, $"{L1}/Solution/S1").Should().Be("01-Trap");
+        CourseProgress.LessonSlug(Course, L2).Should().Be("02-Specify");
+        CourseProgress.LessonSlug($"learner/{Course}", $"learner/{L1}/Exercise/E1")
+            .Should().Be("01-Trap", "the copy and the central course share lesson keys");
+        (CourseProgress.LessonSlug(Course, Course) is null)
+            .Should().BeTrue("the course home is not a lesson");
+        (CourseProgress.LessonSlug(Course, $"{Course}/_Policy/p1") is null)
+            .Should().BeTrue("a satellite is never a lesson");
     }
 
     [Fact]
-    public void MergeVisit_NothingNew_ReturnsNull_SoNothingIsWritten()
+    public void VisitMarker_IsSelfDescribing_AndKeyedForIdempotentUpsert()
     {
-        var first = CourseProgress.MergeVisit(null, Course, $"{L1}/Quiz", L1, Now);
+        var marker = CourseProgress.VisitMarker(
+            "learner", "ThinkInStreams", "01-Trap", $"{L1}/Quiz", "2026-08-12T10:00:00Z");
 
-        // The same page again: the record already says everything — render-driven capture
-        // must not produce a write per render.
-        (CourseProgress.MergeVisit(first, Course, $"{L1}/Quiz", L1, Now.AddMinutes(5)) is null)
-            .Should().BeTrue();
+        marker.Path.Should().Be("learner/_Progress/ThinkInStreams/Visited/01-Trap",
+            "one marker per lesson — a re-visit upserts the SAME node, no read-modify-write");
+        marker.NodeType.Should().Be("Markdown");
+
+        // The resume record (Edu #428) lives at learner/_Progress/ThinkInStreams — the marker is
+        // its CHILD, so the two writers can never clobber each other.
+        marker.Path.Should().StartWith("learner/_Progress/ThinkInStreams/");
     }
 
     [Fact]
-    public void MergeVisit_AccumulatesLessons_AndKeepsFirstVisitStamps()
+    public void VisitedSlugs_ReadsTheMarkerIds()
     {
-        var first = CourseProgress.MergeVisit(null, Course, L1, L1, Now);
-        var second = CourseProgress.MergeVisit(first, Course, L2, L2, Now.AddHours(1));
+        var markers = new[]
+        {
+            CourseProgress.VisitMarker("learner", "ThinkInStreams", "01-Trap", L1, "2026-08-12T10:00:00Z"),
+            CourseProgress.VisitMarker("learner", "ThinkInStreams", "03-Combine", L3, "2026-08-12T11:00:00Z"),
+        };
 
-        CourseProgress.VisitedLessons(second).OrderBy(x => x).Should().Equal(L1, L2);
-        second!["visited"]![L1]!.GetValue<string>().Should().Be(Now.ToString("O"),
-            "a re-visit never overwrites when the lesson was FIRST opened");
+        CourseProgress.VisitedSlugs(markers).OrderBy(x => x).Should().Equal("01-Trap", "03-Combine");
     }
 
     [Fact]
-    public void MergeVisit_ReadsTheRecordInWhateverShapeItArrives()
-    {
-        // Content round-trips as a JsonElement on foreign hubs — the shape-tolerance rule.
-        var asElement = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
-            CourseProgress.MergeVisit(null, Course, L1, L1, Now)!.ToJsonString());
-
-        CourseProgress.VisitedLessons(asElement).OrderBy(x => x).Should().Equal(L1);
-        (CourseProgress.MergeVisit(asElement, Course, L1, L1, Now.AddDays(1)) is null)
-            .Should().BeTrue("the element shape must be READ, not treated as an empty record");
-    }
-
-    [Fact]
-    public void DecorateVisited_MarksVisitedLessons_MappingTheLearnersCopyToCentral()
+    public void DecorateVisited_MarksVisitedLessons_InBothTrees()
     {
         var nav = EducationNavigationProvider.BuildNavigation(Course, CourseSubtree(), L2)!;
+        var visited = new HashSet<string>(System.StringComparer.Ordinal) { "01-Trap" };
 
-        var decorated = EducationNavigationProvider.DecorateVisited(
-            nav, new HashSet<string>(System.StringComparer.Ordinal) { L1 }, viewer: null)!;
-
+        var decorated = EducationNavigationProvider.DecorateVisited(nav, visited)!;
         decorated.Entries.Single(e => e.Path == L1).Label.Should().StartWith("✓ ");
         decorated.Entries.Single(e => e.Path == L2).Label.Should().NotStartWith("✓ ");
 
-        // The learner's own copy decorates identically: entry paths are viewer-prefixed, the
-        // record stays central.
+        // The learner's own copy decorates identically: lesson KEYS are folder names, shared by
+        // both trees.
         var copyNav = nav with
         {
             Entries = nav.Entries.Select(e => e with { Path = $"learner/{e.Path}" }).ToList(),
         };
-        var copyDecorated = EducationNavigationProvider.DecorateVisited(
-            copyNav, new HashSet<string>(System.StringComparer.Ordinal) { L1 }, viewer: "learner")!;
-        copyDecorated.Entries.Single(e => e.Path == $"learner/{L1}").Label.Should().StartWith("✓ ");
+        EducationNavigationProvider.DecorateVisited(copyNav, visited)!
+            .Entries.Single(e => e.Path == $"learner/{L1}").Label.Should().StartWith("✓ ");
     }
 }
