@@ -35,18 +35,35 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
         // after the update sees the new snapshot, not a cached pre-update one) and
         // refreshes synced-query providers.
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
+        // 🚨 THIS is the ONE durable write for a patch-driven own-node change (#1249). Record the
+        // version it made durable so the per-node persistence sampler — which sees the very same
+        // commit and would otherwise post a SECOND, unordered write of it — drops the duplicate in
+        // MeshDataSource's SaveMeshNodeRequest handler. Recorded only on the write's EMISSION, so a
+        // flush that failed leaves the sampler as the writer of record; recorded at the version the
+        // store reports durable, which is HIGHER than ours when the backend's version-conditional
+        // upsert kept a newer row. See PostCommitFlushRegistry for the whole mechanism.
+        // 🚨 A null emission is the try-then-claim sentinel — "this adapter does not own this path",
+        // NOT a successful write (the same reason WriteAndPublishUpdated skips its feed publish on
+        // null). Recording it would suppress the sampler's write for a row nobody persisted, which
+        // would turn a duplicate-write bug into a lost-write one.
+        var flushed = hub.ServiceProvider.GetService<PostCommitFlushRegistry>();
         return storage.WriteAndPublishUpdated(node, hub.JsonSerializerOptions, changeFeed)
+            .Do(saved =>
+            {
+                if (saved is not null)
+                    flushed?.Record(node.Path, Math.Max(node.Version, saved.Version));
+            })
             .Select(_ => true)
             .DefaultIfEmpty(true);
     }
 
-    // Feed-only publish for the MeshNode cross-hub ATOMIC apply (ApplyMeshNodePatchInTurn),
-    // which persists off-turn via DataSourceWithStorage.Synchronize and so must NOT call Flush
-    // (that would double-write). The atomic path dropped the post-commit Flush to keep the ack
-    // emit-onstart — but Flush was ALSO what published the Updated event that evicts the
-    // Workspace's _remoteStreamCache. Without this, a fresh subscriber after a cross-hub MeshNode
+    // Feed-only publish for a write path that persists by SOME OTHER route and so must not call
+    // Flush (that would double-write) while still needing the Updated event that evicts the
+    // Workspace's _remoteStreamCache — without it a fresh subscriber after a cross-hub MeshNode
     // update reads a stale cached snapshot (WorkspaceCacheEviction.NewSubscriber_AfterUpdate).
     // A plain Subject.OnNext — no IO, no re-entrancy — so it never reintroduces the prod wedge.
+    // 🚨 No callers today: the cross-hub atomic apply chains Flush and acks off the durable write.
+    // See IPostCommitFlush.PublishUpdated for why that must stay the arrangement (#1249).
     public void PublishUpdated(object committed)
     {
         if (committed is not MeshNode node)

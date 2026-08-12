@@ -858,10 +858,14 @@ public class MeshQuery : IMeshQueryCore
     ///
     /// <para>🚨 An <c>Added</c> for a path that is ALREADY live is NOT dropped — it flows through
     /// exactly like an <c>Updated</c>. Dropping it was the terminal dropped-update of issue #889:
-    /// two providers legitimately race the same write (the pedestrian
-    /// <c>StorageAdapterMeshQueryProvider</c> supplements its re-query with the change
-    /// notification's raw entity and usually emits FIRST; the per-schema PostgreSQL delegate
-    /// re-queries storage and emits the authoritative row a beat LATER — both as <c>Added</c>).
+    /// two providers legitimately race the same write and both announce it as <c>Added</c>, at
+    /// different times and with different content. (The #889 instance was the pedestrian
+    /// <c>StorageAdapterMeshQueryProvider</c> supplementing its re-query with the change
+    /// notification's raw entity and emitting FIRST, while the per-schema PostgreSQL delegate
+    /// re-queried storage and emitted the authoritative row a beat LATER. #1250 deleted that
+    /// supplement — the pedestrian now only ever emits what its own read returned — so that
+    /// particular race is retired, but the merge still fans in independent providers and the
+    /// contract below is what keeps their races safe.)
     /// The old dedup forwarded whichever arrived first and DISCARDED the second — discarding the
     /// authoritative content correction. When the raced write was the LAST write touching the
     /// query (PaywallRealGateShapeTests' buyer grant), no later change ever healed the snapshot:

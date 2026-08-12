@@ -10,10 +10,7 @@
     "displayName": "Roland Buergi",
     "roles": [
       {
-        "role": "Editor"
-      },
-      {
-        "role": "Admin"
+        "role": "Viewer"
       }
     ]
   }

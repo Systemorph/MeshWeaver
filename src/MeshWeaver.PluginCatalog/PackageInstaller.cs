@@ -872,6 +872,27 @@ public static class PackageInstaller
     /// immediate, and recoverable — the assets are published by the next install once the type
     /// compiles, which for a package under auto-update is the very next poll. The log names the
     /// type so the cause is the package's compile error, not a mystery 404.</para>
+    ///
+    /// <para>🚨 <b>"A rebuild has run" is a RECORDED fact, not something this wait may insist on
+    /// WITNESSING</b> (#1277 — the same shape as #1114/#1168, one caller further out). The
+    /// <c>Compiled</c> latch below only turns true on an emission that shows the type
+    /// Pending/Compiling. An install touches this gate TWICE — once from
+    /// <see cref="SettleRetypedRoot"/> while the rebuild is still running, and once from
+    /// <see cref="SyncPackageContent"/> a moment later — and by the second call the compile is
+    /// over. With nothing left to emit, the fold could never reach <c>Settled</c> and the answer
+    /// came only from <see cref="RootTypeSettleTimeout"/> elapsing: measured on
+    /// <c>StaleStampRootBindingTest</c>, the first call answered in 3.2 s and the second burned
+    /// the whole 90 s — a 93 s install of a package the installer had ALREADY decided to skip.
+    /// So the fold also consults <see cref="NodeTypeCompileParkRegistry"/>, which is precisely the
+    /// process's record of "no compile is coming for this type until its source changes". Nothing
+    /// is retried and no bound moves; a wait for an event that provably cannot occur is replaced
+    /// by the answer already in hand.</para>
+    ///
+    /// <para>The park is honoured only while NO release request is outstanding
+    /// (<c>RequestedReleaseAt &gt; LastReleaseRequestHandledAt</c> — the release watcher's own
+    /// trigger predicate, and the watcher un-parks before promoting it to Pending). A queued
+    /// retry means a compile IS coming, so the wait stays a wait — the short-circuit can never
+    /// jump ahead of a rebuild this very install asked for.</para>
     /// </summary>
     private static IObservable<bool> MayPublishIntoRoot(
         IMessageHub hub, string rootPath, IReadOnlyCollection<MeshNode> nodes, ILogger? logger)
@@ -880,18 +901,31 @@ public static class PackageInstaller
         if (declaredType is null)
             return Observable.Return(true);
 
-        // Fold the type's stream into "has a compile been in flight since we started?" so a
-        // rebuild that ends WITHOUT a loadable build is recognised as a final answer instead of
-        // waited out to the cap.
+        var options = hub.JsonSerializerOptions;
+        // Absent on a host without AddGraph (a unit-test hub): the fold then behaves exactly as
+        // the pre-#1277 two-phase wait did.
+        var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
+
+        // Fold the type's stream into "is the answer known yet?" — the type has a loadable build,
+        // or a rebuild we WITNESSED has ended without one, or the process has already RECORDED
+        // that no rebuild is coming.
         return hub.GetWorkspace().GetMeshNodeStream(declaredType)
             .Where(node => node is not null)
             .Scan((Compiled: false, Loadable: false, Settled: false), (state, node) =>
             {
-                var inFlight = node.Content is NodeTypeDefinition def
-                    && def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling;
+                // ContentAs, never `is NodeTypeDefinition`: a cross-hub mirror snapshot is
+                // routinely un-materialized JSON, and a CLR type test blinds this to an in-flight
+                // compile (the same reason NodeTypeEnrichmentHelpers.IsCompileInFlight reads it
+                // this way).
+                var def = node.ContentAs<NodeTypeDefinition>(options);
+                var inFlight = def?.CompilationStatus
+                    is CompilationStatus.Pending or CompilationStatus.Compiling;
                 var compiled = state.Compiled || inFlight;
                 var loadable = node.HasLoadableBuild();
-                return (compiled, loadable, loadable || (compiled && !inFlight));
+                var parked = !inFlight
+                    && !ReleaseRequestOutstanding(def)
+                    && parkRegistry?.IsParked(declaredType) == true;
+                return (compiled, loadable, loadable || parked || (compiled && !inFlight));
             })
             .Where(state => state.Settled)
             .Take(1)
@@ -910,6 +944,18 @@ public static class PackageInstaller
                         rootPath, declaredType);
             });
     }
+
+    /// <summary>
+    /// Whether a release request has been flipped on the NodeType and not yet handled — the exact
+    /// predicate <c>NodeTypeCompilationHelpers.InstallReleaseRequestWatcher</c> dispatches on. It
+    /// is the one state in which a PARKED type is nonetheless about to recompile (the watcher
+    /// un-parks before promoting the request to <c>Pending</c>), so the parked short-circuit in
+    /// <see cref="MayPublishIntoRoot"/> must stand down while it holds.
+    /// </summary>
+    private static bool ReleaseRequestOutstanding(NodeTypeDefinition? def) =>
+        def?.RequestedReleaseAt is { } requested
+        && (def.LastReleaseRequestHandledAt is null
+            || requested > def.LastReleaseRequestHandledAt.Value);
 
     /// <summary>
     /// Activates the roots this install just wrote, so a freshly installed package is not dark
