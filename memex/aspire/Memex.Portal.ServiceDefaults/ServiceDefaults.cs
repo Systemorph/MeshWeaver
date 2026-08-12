@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
+using MeshWeaver.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -136,6 +137,41 @@ public static class ServiceDefaults
         app.MapHealthChecks("/alive", new HealthCheckOptions { Predicate = r => r.Tags.Contains("live") });
 
         app.MapVersionEndpoint();
+        app.MapDrainEndpoint();
+
+        return app;
+    }
+
+    /// <summary>
+    /// <c>/drain</c> — "may this pod stop without cutting anyone off?" Answers <b>200 drained</b>
+    /// when no Blazor circuit is live here, <b>503</b> with the count while sessions remain.
+    ///
+    /// <para>The container's <c>preStop</c> polls it, so a rollout stops SIGTERMing a pod that is
+    /// still serving people. Until now preStop was a flat <c>sleep 15</c> — enough to drain the
+    /// ingress upstream, nothing more — and fifteen seconds after the replacement went ready every
+    /// circuit on the old pod died mid-sentence, along with the grains they had activated
+    /// (<c>MessageHubGrain</c> is <c>[PreferLocalPlacement]</c>, so a circuit's hubs live on the pod
+    /// serving it). With a 6-hourly self-update poller, that arrived unannounced.</para>
+    ///
+    /// <para>It reports, it does not decide: the ceiling stays
+    /// <c>terminationGracePeriodSeconds</c>, so a pod with a forgotten open tab cannot block a
+    /// rollout forever. No session, no state, no auth — infrastructure, exactly like
+    /// <c>/health</c> and <c>/alive</c> beside it.</para>
+    /// </summary>
+    public static WebApplication MapDrainEndpoint(this WebApplication app)
+    {
+        app.MapGet("/drain", (IServiceProvider services) =>
+        {
+            // GetService, not GetRequired: a host without Blazor (a worker, a test host) has no
+            // tracker and is trivially drained — never a 500 that a preStop would read as "keep
+            // waiting" and then hard-kill at the grace ceiling anyway.
+            var tracker = services.GetService<ActiveCircuitTracker>();
+            var live = tracker?.Count ?? 0;
+            return live == 0
+                ? Results.Text("drained", "text/plain")
+                : Results.Text($"{live} circuit(s) still open", "text/plain",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+        }).AllowAnonymous();
 
         return app;
     }
