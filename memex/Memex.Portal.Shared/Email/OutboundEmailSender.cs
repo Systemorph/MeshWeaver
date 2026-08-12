@@ -31,17 +31,26 @@ public sealed class OutboundEmailSender(
     ILogger<OutboundEmailSender>? logger = null) : IHostedService, IDisposable
 {
     /// <summary>
-    /// The live watch query. 🚨 It must NOT filter <c>content.status:New</c>: <see cref="EmailStatus.New"/>
-    /// is the enum DEFAULT (0) and the serializer OMITS it from the stored JSON, so that filter never
-    /// matches a freshly queued email — the exact trap <see cref="InvitationEmailSender"/> documents for
-    /// <c>content.status:Pending</c>, and the reason the Store contact form's notification sat queued
-    /// forever on memex (2026-08-12: the query with the status clause returned 0 rows, without it 1).
-    /// Status is filtered IN CODE by <c>Send</c> (a read fills the omitted default back in), and the
-    /// New → Sending claim guards double-send. <c>content.direction:Outbound</c> IS safe: Outbound is
-    /// not the default, so it always serializes — see <c>OutboundEmailWatchQueryTest</c>.
+    /// The live watch query. 🚨 It must NOT match <c>content.status:New</c> POSITIVELY:
+    /// <see cref="EmailStatus.New"/> is the enum DEFAULT (0) and the serializer OMITS it from the
+    /// stored JSON, so that filter never matches a freshly queued email — the exact trap
+    /// <see cref="InvitationEmailSender"/> documents for <c>content.status:Pending</c>, and the
+    /// reason the Store contact form's notification sat queued forever on memex (2026-08-12: the
+    /// query with the positive status clause returned 0 rows, without it 1).
+    ///
+    /// <para>NEGATIONS are the shape that both avoids the trap and keeps the live set BOUNDED:
+    /// a negation on an omitted field never excludes (verified live — <c>-content.status:New</c>
+    /// still returned the status-omitted email), so New-queued mail always matches, while
+    /// explicitly stamped <c>Sending</c>/<c>Sent</c>/<c>Failed</c> mail drops out of the set as it
+    /// is processed instead of accumulating forever (the Copilot review's growth concern on the
+    /// unfiltered form). Status is additionally re-checked IN CODE by <c>Send</c>, and the
+    /// New → Sending claim guards double-send. <c>content.direction:Outbound</c> is a safe
+    /// positive match: Outbound is not the default, so it always serializes — see
+    /// <c>OutboundEmailWatchQueryTest</c>.</para>
     /// </summary>
     public const string WatchQuery =
-        $"nodeType:{EmailNodeType.NodeType} content.direction:Outbound";
+        $"nodeType:{EmailNodeType.NodeType} content.direction:Outbound "
+        + "-content.status:Sending -content.status:Sent -content.status:Failed";
 
     private readonly CompositeDisposable subscriptions = new();
     private IServiceScope? scope;
