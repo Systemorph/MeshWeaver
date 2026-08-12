@@ -60,4 +60,21 @@ public interface IEmailSender
     /// </summary>
     IObservable<bool> CanSendAsUser(string userObjectId)
         => System.Reactive.Linq.Observable.Return(false);
+
+    /// <summary>
+    /// Where a user connects their own mailbox on THIS deployment, as an app-relative path — or
+    /// <c>null</c> when the deployment offers no such flow, in which case the UI must show no
+    /// connect affordance at all rather than a link that goes nowhere.
+    ///
+    /// <para>The route belongs to the host that registers the endpoint, so the host is what names
+    /// it. Framework UI (e.g. the send-document dialog) asks here instead of hard-coding a path it
+    /// cannot verify: <c>MeshWeaver.Markdown.Export</c> has no way to know whether
+    /// <c>/auth/ea/connect</c> exists — on a non-memex host it does not — and a hard-coded copy is
+    /// exactly how a button starts 404-ing without anything failing to compile.</para>
+    ///
+    /// <para>🚨 This is a SERVER-side endpoint. In-app navigation to it must be a full browser load
+    /// (<c>ctx.NavigateTo(href, forceLoad: true)</c>); a client-side Blazor navigation is swallowed
+    /// by the router's catch-all and reported as an unresolvable mesh path.</para>
+    /// </summary>
+    string? ConnectAsUserHref => null;
 }
