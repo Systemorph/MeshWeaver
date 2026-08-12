@@ -40,7 +40,23 @@ CI builds **Release with warnings-as-errors**: `dotnet build --no-restore -c Rel
 
    Merging main into every branch before every push costs a full CI cycle per PR and, with several PRs in flight, most of the throughput — the first merge makes every other branch stale again. Merge to main, then let main's own build recompile. What you DO owe: no conflicts, and a green required check.
 
-   **Merge main only when it actually buys something**, which is exactly two cases:
+   🚨 **`strict` is PER-REPO — check the repo you are actually in.** This differs across the node repos, and getting it wrong wastes a cycle in one direction or blocks you in the other. As of 2026-08-12:
+
+   | repo | `strict` | behind-main merges? |
+   |---|---|---|
+   | MeshWeaver | false (ruleset) | yes |
+   | education | no branch protection | yes |
+   | MeshWeaver.Reinsurance | false | yes |
+   | MeshWeaver.SocialMedia | false | yes |
+   | **MeshWeaver.Plugins** | **true** | **NO — `mergeStateStatus: BEHIND`, must update the branch** |
+
+   One command answers it for any repo, and beats trusting this table:
+
+   ```bash
+   gh api repos/Systemorph/<repo>/branches/main/protection --jq '.required_status_checks.strict'   # 404 = unprotected
+   ```
+
+   **Merge main only when it actually buys something**, which — outside a `strict` repo — is exactly two cases:
    - **The PR is `DIRTY`** (real conflicts). Resolve it — and afterwards run the revert-check: `git diff origin/main...HEAD --stat` (THREE dots) must show only your intended files. A branch-favoured hunk silently undoing someone else's merged work is a real failure mode here, not a hypothetical.
    - **CI fails on something your diff does not touch.** Merge main *before* investigating: a stale branch re-samples flakes main has ALREADY fixed, and each one looks like a defect in your change. PR #794 burned five CI runs and most of a day that way — three different red tests, two already fixed on main, none caused by the branch.
 
