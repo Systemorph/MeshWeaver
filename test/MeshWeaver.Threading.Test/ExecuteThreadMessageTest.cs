@@ -501,7 +501,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         // 🚨 Reproduce the prod/Orleans grain: clear the persistent circuit fallback on the MESH's
         // AccessService so the submission watcher's continuation has NO ambient identity (Context AND
         // CircuitContext both null) — exactly a grain, which never had a circuit context.
-        meshAccess.SetCircuitContext(null);
+        meshAccess.SetHostIdentity(null);
         try
         {
             // Seed the pending user message under an EXPLICIT owner scope (on the CLIENT's AccessService,
@@ -528,7 +528,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         finally
         {
             // Restore the shared circuit identity for any subsequent test on a shared mesh.
-            meshAccess.SetCircuitContext(ownerCtx);
+            meshAccess.SetHostIdentity(ownerCtx);
         }
     }
 

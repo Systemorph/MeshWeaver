@@ -378,16 +378,20 @@ internal static class ThreadExecution
                 return;
             var accessService = hub.ServiceProvider.GetService<AccessService>();
             var owner = new AccessContext { ObjectId = createdBy, Name = createdBy };
-            // 🚨 OWNER-INJECTION: stamp the thread OWNER as BOTH the live Context AND the
-            // CircuitContext. CircuitContext is the one that CARRIES FORWARD across Rx hops
-            // (the deferred sync-write continuations where the AsyncLocal Context is wiped) —
-            // SetContext alone was lost on the hop, so the owner-side data-source sync write
-            // posted UpdateStreamRequest with a NULL AccessContext and the never-null guard
-            // failed it closed (the cold-start submit deadlock: pending never landed, the
+            // 🚨 OWNER-INJECTION: stamp the thread OWNER as the live Context AND as THIS HUB's
+            // standing identity. The standing identity is the one that CARRIES FORWARD across
+            // Rx hops (the deferred sync-write continuations where the AsyncLocal Context is
+            // wiped) — SetContext alone was lost on the hop, so the owner-side data-source sync
+            // write posted UpdateStreamRequest with a NULL AccessContext and the never-null
+            // guard failed it closed (the cold-start submit deadlock: pending never landed, the
             // watcher saw pending=0 forever, no round dispatched). The thread owner is the
             // standing identity for EVERY operation on this thread hub. See OwnerInjection.md.
+            //
+            // Keyed BY HUB, never process-wide: this used to call SetCircuitContext, which wrote
+            // a single shared field, so the owner of whichever thread activated last became the
+            // fallback identity for every other user (and every anonymous render) in the process.
             accessService?.SetContext(owner);
-            accessService?.SetCircuitContext(owner);
+            accessService?.SetStandingIdentity(hub, owner);
         });
     }
 

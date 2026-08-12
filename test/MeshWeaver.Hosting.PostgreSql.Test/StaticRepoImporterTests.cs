@@ -162,7 +162,7 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
         // import with no ambient identity.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetContext(null);
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
 
         // Reaching "Imported" already proves the _Activity/import-* lock CreateNode persisted under
         // System — a User import hub would have failed it closed (mis-reported AlreadyRunning / faulted).
@@ -507,7 +507,7 @@ public class StaticRepoImporterTests(PostgreSqlFixture fixture, ITestOutputHelpe
         // (Not "no identity": with no identity an escaped write fails closed and is loud; with a
         // user ambient it is silently refused — the shape that wedged the Store.)
         accessService.SetContext(null);
-        accessService.SetCircuitContext(new AccessContext { ObjectId = PlainUser, Name = PlainUser });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = PlainUser, Name = PlainUser });
 
         // Repo changed → new fingerprint → full re-import: the GitSync "update" entry point
         // (GitHubSyncService.FetchAndImport → StaticRepoImporter.ImportSource).

@@ -146,14 +146,14 @@ public class GatedNodeVersionReadTests(PostgreSqlFixture fixture, ITestOutputHel
     private async Task<string> RunAs(string userId, Func<Task<string>> tool)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+        access.SetHostIdentity(new AccessContext { ObjectId = userId, Name = userId });
         try
         {
             return await tool();
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 

@@ -220,7 +220,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         // 2. Set CircuitContext on the client hub — exactly what UserContextMiddleware does
         //    in Blazor after authentication. This is the persistent session identity.
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = "TestUser",
             Name = "Test User",
@@ -287,7 +287,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
 
         // Create the thread with a privileged context first (TestUser is Admin).
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = "TestUser",
             Name = "TestUser"
@@ -298,7 +298,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : OrleansSharedTe
         Output.WriteLine($"Thread created: {threadPath}");
 
         // Switch to unprivileged user (no Thread permission — no access assignment).
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = "ViewerUser",
             Name = "Viewer Only"

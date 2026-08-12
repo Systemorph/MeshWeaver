@@ -54,7 +54,7 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
 
     private void ImpersonateAsUser(string userId)
         => Mesh.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+            .SetHostIdentity(new AccessContext { ObjectId = userId, Name = userId });
 
     /// <summary>
     /// The service emits the partition-root MeshNode and persists exactly that one row

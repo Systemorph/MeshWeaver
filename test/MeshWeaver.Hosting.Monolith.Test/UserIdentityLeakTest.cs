@@ -70,7 +70,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Set circuit context to UserA
         var userA = new AccessContext { ObjectId = "UserA", Name = "User A" };
-        accessService.SetCircuitContext(userA);
+        accessService.SetHostIdentity(userA);
 
         // Context should NOT fall back to circuit context (AsyncLocal is null)
         accessService.Context.Should().BeNull(
@@ -98,7 +98,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
             "CircuitContext should remain unchanged after clearing AsyncLocal");
 
         // Cleanup
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
     }
 
     /// <summary>
@@ -110,7 +110,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         // Login as Bob (different from Alice, the node owner)
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "Bob", Name = "Bob" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "Bob", Name = "Bob" });
 
         var client = GetClient();
         var aliceAddress = new Address("User/Alice");
@@ -140,7 +140,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         // Login as Alice (the node owner)
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "Alice", Name = "Alice" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "Alice", Name = "Alice" });
 
         var client = GetClient();
         var aliceAddress = new Address("User/Alice");
@@ -169,7 +169,7 @@ public class UserIdentityLeakTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         // Login as Bob (visiting Alice's page)
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "Bob", Name = "Bob" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "Bob", Name = "Bob" });
 
         var client = GetClient();
         var aliceAddress = new Address("User/Alice");
