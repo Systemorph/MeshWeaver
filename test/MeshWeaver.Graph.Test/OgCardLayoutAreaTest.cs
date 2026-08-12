@@ -196,6 +196,40 @@ public class OgCardLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output
     }
 
     /// <summary>
+    /// 🚨 The LAST card of every <c>@@</c>-embedded grid rendered blank, and its link dead-ended on
+    /// "does not match any registered address pattern".
+    /// <para>An <c>@@</c> embed hides the embedded node's header by appending to the reference id
+    /// (<c>PathBasedLayoutArea.AppendParameter</c>, separator <c>s.Contains('?') ? "&amp;" : "?"</c>).
+    /// This area's id already IS a query — <c>ParseAreaAndId</c> keeps the leading '?' — so the
+    /// append lands as <c>?urls=A,B,C&amp;showHeader=false</c>. Every other area reads parameters
+    /// with query semantics and is fine; this one splits on COMMAS, so the trailing parameter was
+    /// swallowed into the final target as <c>https://host/Page&amp;showHeader=false</c> — one path
+    /// segment matching no route, answered 200 with the SPA shell and no og: tags. Two live grids
+    /// of eight cards each had exactly the eighth empty.</para>
+    /// </summary>
+    [Fact]
+    public void ParseTargets_DropsAppendedReferenceParameters_LastTargetSurvivesIntact()
+    {
+        const string a = "https://memex.meshweaver.cloud/RiskTransfer";
+        const string z = "https://memex.meshweaver.cloud/ThinkInStreams";
+
+        // The EXACT id the client builds for an @@ embed of a multi-target grid.
+        OgCardLayoutArea.ParseTargets($"?urls={a},{z}&showHeader=false")
+            .Should().Equal(a, z);
+
+        // …and without the leading '?', which AppendParameter would join with '?' instead.
+        OgCardLayoutArea.ParseTargets($"urls={a},{z}&showHeader=false")
+            .Should().Equal(a, z);
+
+        // The singular and bare-path forms take the same treatment.
+        OgCardLayoutArea.ParseTargets($"?url={z}&showHeader=false").Should().Equal(z);
+        OgCardLayoutArea.ParseTargets($"{a},{z}&showHeader=false").Should().Equal(a, z);
+
+        // A parameter-only id has no targets at all — it must not become a bogus one.
+        OgCardLayoutArea.ParseTargets("?urls=&showHeader=false").Should().BeEmpty();
+    }
+
+    /// <summary>
     /// 🚨 The reported defect: the bare PATH/areaId form did not split on commas AT ALL — it fell
     /// through to a single-target return, so four URLs became ONE card whose href was the four
     /// URLs concatenated. That fetch can never succeed, so the card degraded to the bare domain
