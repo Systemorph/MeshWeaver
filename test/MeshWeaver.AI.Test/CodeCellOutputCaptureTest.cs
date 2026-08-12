@@ -179,18 +179,20 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(activityPath), reference);
 
-        // The Progress root is a Stack: [0] the status indicator, [1] the message
-        // log — the control-based shape ActivityLayoutAreas.Progress renders since
-        // the hand-rolled messages HTML was replaced by controls (BuildLog /
-        // BuildProgressIndicator). The old assertion demanded an HtmlControl and
-        // burned its full 30 s wait on every run — one of the hidden AI.Test
-        // failures masked by the CI 6-minute kill.
+        // The Progress root is a Stack of NAMED areas — Result (when the script returned a
+        // control), Log, Status — the control-based shape ActivityLayoutAreas.Progress renders
+        // since the hand-rolled messages HTML was replaced by controls (BuildLog /
+        // BuildProgressIndicator). The old assertion demanded an HtmlControl and burned its full
+        // 30 s wait on every run — one of the hidden AI.Test failures masked by the CI 6-minute
+        // kill. Addressed by NAME, never by index: the order is a product decision that has moved
+        // once already (the status went from first to last) and index assertions turn that into
+        // unrelated red.
         var rootControl = (StackControl)(await stream.GetControlStream(reference.Area!)
             .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count >= 2))!;
 
         // Terminal indicator: a Succeeded activity renders a "✓ Done" status line,
         // never a spinner (pinned control-shape: ActivityProgressViewTest).
-        var indicatorArea = rootControl.Areas[0].Area!.ToString()!;
+        var indicatorArea = AreaNamed(rootControl, ActivityLayoutAreas.StatusArea);
         try
         {
             await stream.GetControlStream(indicatorArea)
@@ -240,7 +242,7 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
 
         // The captured output line renders as one of the log rows' message labels
         // (BuildLog: one horizontal [level-tag, message] row per LogMessage).
-        var logArea = rootControl.Areas[1].Area!.ToString()!;
+        var logArea = AreaNamed(rootControl, ActivityLayoutAreas.LogArea);
         var logStack = (StackControl)(await stream.GetControlStream(logArea)
             .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count >= 1))!;
         await logStack.Areas
@@ -352,11 +354,18 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(activityPath), reference);
 
-        // The result hangs off the Progress root under its OWN named area, after the status
-        // indicator and the log — a notebook cell's reading order.
+        // The result hangs off the Progress root under its OWN named area, and it comes FIRST —
+        // ahead of the log and the status footer. The reader pressed Run to see the control;
+        // "✓ Done" is metadata about how the run ended, which is why a pane that led with it read
+        // as "Done" with the answer buried ("output must show control and not Done").
         var root = (StackControl)(await stream.GetControlStream(reference.Area!)
             .Should().Within(60.Seconds()).Match(c => c is StackControl s
                 && s.Areas.Any(a => IsArea(a, ActivityLayoutAreas.ResultArea))))!;
+        var order = root.Areas.Select(a => a.Area?.ToString() ?? "").ToList();
+        order.FindIndex(a => a.EndsWith("/" + ActivityLayoutAreas.ResultArea, StringComparison.Ordinal))
+            .Should().Be(0, "the result leads the output pane");
+        order.FindIndex(a => a.EndsWith("/" + ActivityLayoutAreas.StatusArea, StringComparison.Ordinal))
+            .Should().Be(order.Count - 1, "the status is the pane's footer, never its headline");
         var resultArea = root.Areas.First(a => IsArea(a, ActivityLayoutAreas.ResultArea)).Area!.ToString()!;
 
         // …and it is the LIVE control tree: the returned Stack's child renders as the markdown
@@ -372,15 +381,26 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
 
         // The log says nothing: "This run produced no output." beside a rendered result would
         // contradict the very thing under it.
-        var logArea = root.Areas[1].Area!.ToString()!;
-        await stream.GetControlStream(logArea)
+        await stream.GetControlStream(AreaNamed(root, ActivityLayoutAreas.LogArea))
             .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count == 0);
+
+        // …and the status footer is small print, not the H4 headline it used to be.
+        await stream.GetControlStream(AreaNamed(root, ActivityLayoutAreas.StatusArea))
+            .Should().Within(30.Seconds()).Match(c => c is LabelControl l
+                && l.Typo is null
+                && (l.Style?.ToString() ?? "").Contains("0.8rem"));
     }
 
     /// <summary>Area ids are rendered PREFIXED with their parent's path ("Progress/Result").</summary>
     private static bool IsArea(NamedAreaControl area, string name) =>
         area.Area?.ToString() is { } a
         && (a == name || a.EndsWith("/" + name, StringComparison.Ordinal));
+
+    /// <summary>The rendered area id of the Progress root's <paramref name="name"/> slot.</summary>
+    private static string AreaNamed(StackControl root, string name) =>
+        root.Areas.FirstOrDefault(a => IsArea(a, name))?.Area!.ToString()
+        ?? throw new Xunit.Sdk.XunitException(
+            $"the Progress root has no '{name}' area — it rendered [{string.Join(", ", root.Areas.Select(a => a.Area))}]");
 
     // ── (iv) the SatelliteAccessRule defect, pinned at the rule ────────────
 
