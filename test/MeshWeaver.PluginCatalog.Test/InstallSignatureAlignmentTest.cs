@@ -195,6 +195,69 @@ public class InstallSignatureAlignmentTest(ITestOutputHelper output) : MonolithM
                 "a discriminator-less file with only materialized-default differences is unchanged");
     }
 
+    /// <summary>A content type deliberately NOT registered on any hub — so
+    /// <c>ObjectPolymorphicConverter.Write</c> serializes it with no <c>$type</c> at all, exactly as
+    /// it does for every runtime-compiled NodeType content record (those are never adopted into a
+    /// long-lived per-hub registry).</summary>
+    private record UnregisteredContent
+    {
+        public string Label { get; init; } = string.Empty;
+    }
+
+    /// <summary>
+    /// 🚨 The peer serializes WITHOUT a discriminator, and that must not read as "a different type".
+    /// The guard used to compare the element's <c>$type</c> against the peer's SERIALIZED <c>$type</c>
+    /// only — null for any runtime-compiled record — so alignment was skipped for exactly the
+    /// packages whose content types are dynamic, and the raw compare then found the one and only
+    /// difference: the <c>$type</c> member itself. That rewrote 40 <c>Underwriting/Rulebook/*</c>
+    /// nodes on every re-install (Systemorph/MeshWeaver#1299).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void PeerSerializedWithoutDiscriminator_StillAligns_AndReadsUnchanged()
+    {
+        var current = Node(Element("""{"$type":"UnregisteredContent","label":"x"}"""));
+        var incoming = Node(new UnregisteredContent { Label = "x" });
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeTrue(
+                "the element's $type names the peer's CLR type — a peer whose hub never registered " +
+                "it simply serializes without a discriminator, which is not a type difference");
+    }
+
+    /// <summary>The same, with the sides swapped — the guard runs on whichever side is the element.</summary>
+    [Fact(Timeout = 30000)]
+    public void TypedCurrentSerializedWithoutDiscriminator_VsElementIncoming_IsUnchanged()
+    {
+        var current = Node(new UnregisteredContent { Label = "x" });
+        var incoming = Node(Element("""{"$type":"UnregisteredContent","label":"x"}"""));
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeTrue();
+    }
+
+    /// <summary>A real value change is still detected once the discriminator no longer blocks alignment.</summary>
+    [Fact(Timeout = 30000)]
+    public void PeerWithoutDiscriminator_RealValueChange_IsStillDetected()
+    {
+        var current = Node(Element("""{"$type":"UnregisteredContent","label":"x"}"""));
+        var incoming = Node(new UnregisteredContent { Label = "y" });
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeFalse("label x → y is a real change the relaxed guard must not mask");
+    }
+
+    /// <summary>A DIFFERENT $type is still a type difference — the fallback names the peer's type,
+    /// it does not accept any discriminator.</summary>
+    [Fact(Timeout = 30000)]
+    public void PeerWithoutDiscriminator_DifferentContentType_IsStillDetected()
+    {
+        var current = Node(Element("""{"$type":"SomeOtherContent","label":"x"}"""));
+        var incoming = Node(new UnregisteredContent { Label = "x" });
+
+        PackageInstaller.IsUnchanged(current, incoming, Mesh.JsonSerializerOptions)
+            .Should().BeFalse("a differing $type IS a real change — alignment only applies same-type");
+    }
+
     /// <summary>
     /// A MALFORMED (non-string) discriminator skips alignment entirely: the raw compare shows the
     /// malformed value as a change instead of the alignment silently stripping and repairing it.
