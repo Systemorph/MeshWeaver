@@ -8,7 +8,7 @@
 @inherits BlazorView<NodeExportControl, NodeExportView>
 @inject AccessService Access
 
-<div class="node-export-view" style="max-width: 800px;">
+<div class="node-export-view@(ClassSuffix)" style="max-width: 800px;@StyleSuffix">
     <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
         Export <strong>@(NodeName ?? SourcePath)</strong> and its subtree as a ZIP archive
         with native file formats (.md, .cs, .json).

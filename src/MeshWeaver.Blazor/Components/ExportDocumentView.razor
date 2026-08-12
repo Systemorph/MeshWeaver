@@ -13,7 +13,7 @@
 @inherits BlazorView<ExportDocumentControl, ExportDocumentView>
 @inject AccessService Access
 
-<div class="export-document-view" style="max-width: 720px;">
+<div class="export-document-view@(ClassSuffix)" style="max-width: 720px;@StyleSuffix">
     <h2 style="margin-top: 0;">Export @(_title)</h2>
     <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
         Export <strong>@(NodeName ?? SourcePath)</strong> as a @_formatLabel document.

@@ -2,7 +2,7 @@
 @using MeshWeaver.Layout.Catalog
 @inherits BlazorView<CatalogControl, CatalogView>
 
-<div class="catalog-container" style="@ContainerStyle">
+<div class="catalog-container@(ClassSuffix)" style="@ContainerStyle">
     @foreach (var group in Groups)
     {
         var isExpanded = expandedGroups.GetValueOrDefault(group.Key, group.IsExpanded);

@@ -3,7 +3,7 @@
 @using MeshWeaver.Messaging
 @inject AccessService Access
 
-<div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant")" style="@Style">
+<div class="@BubbleClass" style="@Style">
     <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@AuthorName</div>
     @if (!IsUser && (!string.IsNullOrEmpty(ModelName) || Timestamp.HasValue))
     {

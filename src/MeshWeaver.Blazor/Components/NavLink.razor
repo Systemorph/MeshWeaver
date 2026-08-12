@@ -3,7 +3,7 @@
 
 @if (IsInMenuContext)
 {
-    <a href="@Href" class="menu-item-link@(IsActive ? " active" : "")" @onclick="OnClick">
+    <a href="@Href" class="@MenuLinkClass" style="@Style" @onclick="OnClick">
         @if (ResolvedFluentIcon is not null)
         {
             <FluentIcon Value="@ResolvedFluentIcon" Width="20px" Style="fill: var(--accent-fill-rest); flex-shrink: 0;" />
@@ -18,11 +18,33 @@
 else
 {
     <FluentNavLink Href="@Href" Icon="@ResolvedFluentIcon" OnClick="@OnClick"
-                   Class="@(IsActive ? "active" : null)">@RawIcon@Title</FluentNavLink>
+                   Class="@NavLinkClass" Style="@Style">@RawIcon@Title</FluentNavLink>
 }
 
 @code {
     private Microsoft.FluentUI.AspNetCore.Components.Icon? ResolvedFluentIcon => Icon?.ToFluentIcon();
+
+    /// <summary>
+    /// The menu-context link's own classes plus the author-declared <c>Class</c>. Composed here because
+    /// Razor cannot parse two adjacent explicit expressions in one attribute value.
+    /// </summary>
+    private string MenuLinkClass => $"menu-item-link{(IsActive ? " active" : "")}{ClassSuffix}";
+
+    /// <summary>
+    /// The nav-menu variant's class. The active-state token used to be the WHOLE value, so a declared
+    /// class was overwritten by it (and by the <c>null</c> in the inactive case). Both tokens are now
+    /// joined — and the result stays <c>null</c>, not <c>""</c>, when there is nothing to say, so an
+    /// inactive unstyled link emits no class attribute exactly as before.
+    /// </summary>
+    private string? NavLinkClass
+    {
+        get
+        {
+            var joined = string.Join(" ", new[] { IsActive ? "active" : null, Class }
+                .Where(token => !string.IsNullOrWhiteSpace(token)));
+            return string.IsNullOrEmpty(joined) ? null : joined;
+        }
+    }
 
     // A MeshNode.Icon travels as a raw string and Icon.Parse classifies it (see Domain.Icon):
     // Fluent names render through the FluentIcon slot above; the other forms render here with the

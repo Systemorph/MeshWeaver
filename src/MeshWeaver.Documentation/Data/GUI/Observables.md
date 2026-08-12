@@ -265,7 +265,14 @@ The most important rule: keep dynamic regions small. A large re-render is always
     return Task.CompletedTask;  // the handler itself is synchronous
 })
 // Note: the `.Take(1)` above is a one-shot FORM READ inside a click action —
-// fine. NEVER `.Take(1)` a stream that feeds a live-bound view: the binding
+// fine, BECAUSE the form id has definitely been written by the time the user
+// can click it. 🚨 On an id that was NEVER written, `GetDataStream(id)` emits
+// NOTHING (not null, not a default) and never completes, so `.Take(1)` never
+// fires: as a "run this once" guard it does not block a duplicate run, it
+// blocks the FIRST one — silently, with no exception to grep. Need a value for
+// an id that may be unset? `.StartWith(default)` or seed it with
+// `host.UpdateData(id, …)` first. Pinned by `GetDataStreamUnsetIdTest`.
+// And NEVER `.Take(1)` a stream that feeds a live-bound view: the binding
 // freezes on the first emission (see Data Binding).
 
 // ❌ Wrong — async handler deadlocks the pump under load

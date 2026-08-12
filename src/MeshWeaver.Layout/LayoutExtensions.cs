@@ -460,6 +460,15 @@ public static class LayoutExtensions
     /// in the Data collection, applying DistinctUntilChanged (with JSON-content comparison
     /// for JsonElement).
     /// </summary>
+    /// <remarks>
+    /// 🚨 An id that was <b>never written</b> emits <b>nothing at all</b> — a never-set
+    /// <c>bool</c> id yields no emission, NOT <c>false</c> — and the stream never completes. So
+    /// <c>GetDataStream&lt;T&gt;(id).Take(1)</c> is NOT a once-guard: on an unset id it does not
+    /// prevent a duplicate run, it prevents the <b>first</b> one, silently, and a view bound
+    /// straight to it stalls on "awaiting first data" forever. Default-then-react
+    /// (<c>.StartWith(default)</c>) or seed the id before subscribing. Pinned by
+    /// <c>GetDataStreamUnsetIdTest</c> (test/MeshWeaver.Layout.Test).
+    /// </remarks>
     /// <typeparam name="T">The type to convert each data value to.</typeparam>
     /// <param name="stream">The EntityStore synchronisation stream to read from.</param>
     /// <param name="id">The key in the Data collection to observe.</param>
