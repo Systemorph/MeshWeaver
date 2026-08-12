@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Data;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using Json.Patch;
+using MeshWeaver.Json;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;

@@ -30,6 +30,9 @@
         <PackageReference Include="Azure.AI.OpenAI" />
         <PackageReference Include="Azure.Core" />
         <PackageReference Include="HtmlAgilityPack" />
+        <!-- DateTime.Humanize() in ThreadMessageLayoutAreas. Declared explicitly: it used to ride
+             in as a transitive of JsonPointer.Net (removed in #1231). -->
+        <PackageReference Include="Humanizer.Core" />
         <!-- Glob matching for MeshNodeAgentFileStore.Search — the same Matcher semantics MAF's own
              AgentFileStore documents for its globPattern parameter. -->
         <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" />

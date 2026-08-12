@@ -35,7 +35,11 @@ namespace MeshWeaver.Hosting.Blazor.Test;
 ///
 /// <para><b>Coverage and its edges.</b> Rendered here: <c>ButtonView</c> (the reported control, both
 /// <c>WithStyle</c> overloads plus <c>WithClass</c>), <c>IconView</c> and <c>BadgeView</c> as
-/// representatives of the sibling views that shared the omission. The form-input views
+/// representatives of the sibling views that shared the omission, and <c>HtmlView</c>, which had the
+/// same hole in its NON-clickable branch only — with the twist that <c>HtmlControl</c> has no element of
+/// its own, so honouring Style means introducing one. It may therefore do so only when the author asked
+/// for it; the two "bare fragment" tests below are the guard on that and are as load-bearing as the
+/// positive ones. The form-input views
 /// (Checkbox/Switch/Combobox/Listbox/RadioGroup/Search) forward <c>ComputedStyle</c> — the
 /// <c>FormComponentBase</c> fold of Style+Width+Height — and are not rendered here because they need a
 /// live pointer stream. <c>SpacerView</c> is deliberately NOT fixed: <c>FluentSpacer</c> exposes no
@@ -168,6 +172,131 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
         // later appends further declarations to it.
         html.Should().NotContain("style=\"button",
             because: "Controls.Button must not seed the style slot with the class token \"button\" — #742");
+    }
+
+    /// <summary>
+    /// <c>HtmlControl</c> is the same omission in its non-clickable branch: the clickable branch wrapped
+    /// the fragment in a <c>&lt;div style class&gt;</c>, the non-clickable one emitted the bare fragment and
+    /// dropped both. So <c>Controls.Html(svg).WithStyle("width: 100%")</c> — the obvious fix for a raw
+    /// <c>&lt;svg&gt;</c> collapsing to its intrinsic size as a flex child — did nothing at all.
+    /// </summary>
+    [Fact]
+    public async Task HtmlControl_StyleAndClass_ReachTheDom()
+    {
+        var html = await RenderAsync<HtmlView>(
+            Controls.Html("<svg viewBox=\"0 0 10 10\"></svg>").WithStyle("width: 100%").WithClass(ClassValue));
+
+        html.Should().Contain("width: 100%",
+            because: "a styled HtmlControl must get an element that carries the style — it has none of its own");
+        html.Should().Contain(ClassValue,
+            because: "Class is dropped by the same markup omission as Style");
+        html.Should().Contain("<svg",
+            because: "wrapping must not swallow or escape the fragment itself");
+    }
+
+    /// <summary>Only <c>Class</c> set — the wrapper is not conditional on <c>Style</c> alone.</summary>
+    [Fact]
+    public async Task HtmlControl_ClassOnly_ReachesTheDom()
+    {
+        var html = await RenderAsync<HtmlView>(Controls.Html("<span>x</span>").WithClass(ClassValue));
+
+        html.Should().Contain(ClassValue,
+            because: "Class alone must also produce the element that carries it");
+    }
+
+    /// <summary>
+    /// 🚨 THE BACKWARDS-COMPATIBILITY GUARD. <c>HtmlControl</c> emits a RAW fragment — it has no element of
+    /// its own — and ~400 call sites depend on that. <c>BlazorViewRegistry.FallbackHtml</c> emits bare
+    /// encoded text for every unrecognised control; <c>Northwind.LayoutTemplates.GrowthPercentage</c> emits
+    /// an inline <c>&lt;span&gt;</c>; the settings tabs emit several top-level siblings meant to be separate
+    /// gapped children of their stack; <c>Todo/Source/TodoLayoutAreas</c> writes <c>flex: 1</c> onto the
+    /// fragment's own root precisely because that root is the direct flex child of the enclosing
+    /// <c>FluentStack</c>. Wrapping unconditionally would turn inline runs into block boxes, collapse gapped
+    /// siblings into one child, and make that <c>flex: 1</c> inert — and most of those call sites live in
+    /// mesh nodes that no build and no test renders, so it would surface only in a running portal.
+    ///
+    /// <para>Hence: an UNSTYLED HtmlControl must still emit the bare fragment and nothing else. If someone
+    /// later "simplifies" the view to always wrap, this test is what stops it.</para>
+    /// </summary>
+    [Fact]
+    public async Task HtmlControl_WithoutStyleOrClass_EmitsTheBareFragment()
+    {
+        const string fragment = "<span>inline</span>";
+
+        var html = await RenderAsync<HtmlView>(Controls.Html(fragment));
+
+        html.Should().Be(fragment,
+            because: "an unstyled HtmlControl is a raw fragment — no wrapper element may be introduced, or "
+                   + "inline content becomes a block and a fragment root's own flex rules stop applying");
+    }
+
+    /// <summary>
+    /// The multi-root case stated explicitly: several top-level siblings must stay several siblings of the
+    /// parent container, not be collapsed into one child (which would drop the container's gaps between
+    /// them).
+    /// </summary>
+    [Fact]
+    public async Task HtmlControl_MultiRootFragment_StaysMultiRoot()
+    {
+        const string fragment = "<div>label</div><div>value</div>";
+
+        var html = await RenderAsync<HtmlView>(Controls.Html(fragment));
+
+        html.Should().Be(fragment,
+            because: "the settings tabs pass sibling elements expecting them to be siblings in the stack");
+    }
+
+    /// <summary>
+    /// ⚠️ <c>Controls.Title(text, n)</c> is an <c>HtmlControl</c> — it emits <c>&lt;h{n}&gt;</c> markup
+    /// (<c>Controls.cs</c>: <c>Html($"&lt;h{headerSize}&gt;{text}&lt;/h{headerSize}&gt;")</c>) — so it went
+    /// through the same silent drop, and the two <c>VersionLayoutArea</c> title call sites are two of the
+    /// only three places in the tree affected by this change.
+    ///
+    /// <para><b>Do not confuse it with <c>Controls.H1</c>…<c>H6</c>.</b> Those are <c>LabelControl</c>
+    /// (<c>Label(data).WithTypo(Typography.Hn)</c>) and render through <c>Label.razor</c>, which already
+    /// applies <c>Style</c> — so the ~100 <c>Controls.H2(...).WithStyle("margin: 0")</c> call sites across
+    /// the portal never had this bug and are untouched here. The two factories look interchangeable and
+    /// are not; the sibling test below pins the <c>Title</c> half so the distinction stays visible.</para>
+    ///
+    /// <para>The style lands on the wrapper, not on the <c>&lt;h{n}&gt;</c>, so a declared <c>margin</c>
+    /// adds to the heading's own UA margin rather than replacing it. Strictly better than dropping it;
+    /// the author's literal intent needs <c>Title</c> to have its own control/view, which is the tracked
+    /// follow-up rather than this change.</para>
+    /// </summary>
+    [Fact]
+    public async Task TitleControl_IsAnHtmlControl_SoItsStyleNowReachesAWrapper()
+    {
+        var html = await RenderAsync<HtmlView>(Controls.Title("Section", 2).WithStyle("margin: 0 0 8px 0;"));
+
+        html.Should().Contain("margin: 0 0 8px 0",
+            because: "Controls.Title is an HtmlControl, so its style went through the same silent drop");
+        html.Should().Contain("<h2>Section</h2>",
+            because: "the heading element itself must survive the wrapper unchanged");
+    }
+
+    /// <summary>An unstyled title keeps the bare <c>&lt;h2&gt;</c> — no wrapper, exactly as today.</summary>
+    [Fact]
+    public async Task TitleControl_WithoutStyle_IsStillABareHeading()
+    {
+        var html = await RenderAsync<HtmlView>(Controls.Title("Section", 2));
+
+        html.Should().Be("<h2>Section</h2>",
+            because: "the great majority of titles set no style and must be untouched");
+    }
+
+    /// <summary>
+    /// The guard on the paragraph above: <c>Controls.H2</c> is a <c>LabelControl</c>, NOT an
+    /// <c>HtmlControl</c>, and its Style already worked. If someone ever re-implements <c>H1</c>…<c>H6</c>
+    /// on top of <c>Controls.Title</c>, this test fails and the ~100 heading call sites' blast radius has
+    /// to be re-reasoned rather than silently changing.
+    /// </summary>
+    [Fact]
+    public void HeadingFactories_AreLabelControls_NotHtmlControls()
+    {
+        Controls.H2("Section").Should().BeOfType<LabelControl>(
+            because: "Controls.H1..H6 are Label(data).WithTypo(...) and render through Label.razor");
+        Controls.Title("Section", 2).Should().BeOfType<HtmlControl>(
+            because: "Controls.Title emits raw <hN> markup and is the one heading factory this view sees");
     }
 
     private sealed class StaticHostLifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime
