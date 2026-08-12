@@ -88,6 +88,24 @@ Each layer is tested **with the other neutralised**, and each test demands a liv
 
 Images in slides resolve to `api/content/{collection}/{path}` — an **access-controlled portal route**, which a `file://` document cannot fetch. So the export collects every such reference, reads it through `IContentService` **under the exporting user's identity**, and rewrites it to a `data:` URI. The printed deck is self-contained and contains only what that user could already read. An asset that cannot be read is left as a link and logged: a missing picture prints broken, exactly as it would on screen — it never fails the export.
 
+### Embedded layout areas are resolved before printing — the browser cannot fill them
+
+A slide can embed a live view with `@@(…)`. The markdown pipeline emits an **empty** anchor
+(`<div class='layout-area' …></div>`) and leaves the filling to a live client — which works on
+screen and is exactly wrong here. This print document is loaded from `file://` under
+`default-src 'none'`, with the browser's resolver pointed at nothing and its proxy pointed at a
+dead port. The browser therefore *cannot* fill the anchor, and never could: an embedded view
+printed as a **silent blank page region**.
+
+So the export resolves every embed **server-side, before printing** — the same
+`LayoutAreaResolver` the markdown and email exports use — and it runs **before** asset inlining,
+so any content the resolved area itself references gets inlined too. This is deliberately the same
+isolation story as everything else here: the resolved markup is produced by MeshWeaver from streams
+the exporting user may read, never fetched by the browser.
+
+The DOM is only round-tripped when an anchor is actually present, so a deck with no embeds prints
+byte-identically to what the composer produced.
+
 ## Where the browser runs — and why it isn't in the image
 
 **MeshWeaver ships the capability; the operator supplies the binary.** Nothing about pixel fidelity is baked into the portal image: no NuGet package, no bundled browser download, no post-install step. `HeadlessChromiumPdfRenderer` drives an *already-installed* browser as a plain `Process`.

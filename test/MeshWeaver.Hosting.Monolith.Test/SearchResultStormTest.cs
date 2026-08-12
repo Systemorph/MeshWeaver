@@ -86,6 +86,19 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
 {
     private IMeshService Query => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
+    /// <summary>
+    /// Id of the marker node created after the catalog's real leaves. Its arrival is the ordered
+    /// change feed's proof that the initial load — including any trailing <c>Added</c> frames from
+    /// an index that lagged a create — has been fully applied and counted.
+    /// </summary>
+    private const string QuiesceId = "zz-quiesce";
+
+    /// <summary>
+    /// Id of the satellite node written under the catalog root by
+    /// <see cref="CatalogSubscription_SatelliteWriteUnderTheRoot_NeverEntersTheResultSet"/>.
+    /// </summary>
+    private const string SatelliteId = "leaked-satellite";
+
     private static Task WaitUntil(Func<bool> condition, TimeSpan timeout) =>
         Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Select(_ => condition())
@@ -100,6 +113,7 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
         var root = $"{TestPartition}/storm";
         var catalogQuery = $"path:{root} scope:descendants";
         var targetPath = $"{root}/a";
+        var quiescePath = $"{root}/{QuiesceId}";
 
         // A small live catalog: three leaves the search view would render as cards.
         await NodeFactory.CreateNode(
@@ -116,6 +130,8 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
         var accumulator = new SearchResultAccumulator();
         var rerenders = 0;
         var updatedForTarget = 0;
+        // -1 until the load is provably finished; latched inside the subscription. See the 🚨 below.
+        var rerendersAtQuiescence = -1;
 
         using var subscription = Query.Query<MeshNode>(MeshQueryRequest.FromQuery(catalogQuery))
             .Subscribe(change =>
@@ -126,11 +142,45 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
 
                 if (accumulator.Apply(change))
                     Interlocked.Increment(ref rerenders);
+
+                // Latched AFTER the increment, so the baseline can never miss the render that
+                // completed the load, and inside the callback, so no reader sees the pair
+                // half-updated.
+                if (rerendersAtQuiescence < 0
+                    && accumulator.Nodes.Any(n => string.Equals(n.Path, quiescePath, StringComparison.OrdinalIgnoreCase)))
+                    Volatile.Write(ref rerendersAtQuiescence, Volatile.Read(ref rerenders));
             });
 
-        // Let the initial set settle (Initial, plus any trailing Added if the index lagged a create).
-        await WaitUntil(() => accumulator.Nodes.Count >= 3, ReadNodeTimeout);
-        var rerendersAfterLoad = Volatile.Read(ref rerenders);
+        // 🚨 The baseline needs a POSITIVE signal that structural churn has finished, and a count
+        // threshold is not one. Waiting for `Nodes.Count >= 3` releases the moment the third node
+        // lands, but the load is not over then: the index can lag a create, so trailing `Added`
+        // frames for the first three keep arriving and each is a structural render. The old
+        // baseline was therefore whatever the count happened to be at an arbitrary point inside
+        // that churn, and the final exact-equality assertion blamed the storm for renders that had
+        // already happened — reproduced locally as "Expected 1, but found 3", and it reds
+        // unrelated PRs (seen on #1176, shard 1). It is a defect in the test, not in the code
+        // under test.
+        //
+        // A marker node created AFTER the first three turns ordering into that signal: the change
+        // feed is ordered, so once the marker has been applied, every structural frame for a/b/c
+        // is already applied AND already counted. No sleep, no tolerance, no weakened assertion —
+        // the storm must still add exactly zero.
+        //
+        // 🚨 The marker must be created only once the INITIAL frame has actually arrived. The
+        // subscription above does not establish itself synchronously — `IMeshService.Query<T>` runs
+        // its subscribe + initial snapshot through the IO pool — so creating the marker straight
+        // after `.Subscribe(...)` races that: the create can land BEFORE the snapshot is taken, in
+        // which case the marker arrives INSIDE the Initial payload rather than as an ordered
+        // post-snapshot change. The latch would then fire on the very first frame, baselining
+        // before the trailing `Added` frames it exists to wait for — and those later renders would
+        // be blamed on the storm, which is precisely the failure this test was written to stop.
+        // Waiting for the first structural render first makes the marker demonstrably post-Initial,
+        // which is the whole basis of the ordering argument above.
+        await WaitUntil(() => Volatile.Read(ref rerenders) >= 1, ReadNodeTimeout);
+        await NodeFactory.CreateNode(
+            new MeshNode(QuiesceId, root) { Name = "quiesce marker", NodeType = "Markdown" }).Should().Emit();
+        await WaitUntil(() => Volatile.Read(ref rerendersAtQuiescence) >= 0, ReadNodeTimeout);
+        var rerendersAfterLoad = Volatile.Read(ref rerendersAtQuiescence);
         rerendersAfterLoad.Should().BeGreaterThanOrEqualTo(1, "the first frame is a structural render");
 
         // Fire a storm of content updates to ONE node — exactly what a busy mesh does to a thread.
@@ -148,5 +198,93 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
             "content-only Updated emissions must add no re-renders to the catalog grid (the storm fix)");
         Volatile.Read(ref updatedForTarget).Should().BeGreaterThanOrEqualTo(updateCount,
             "the change feed delivered every content update — the storm is real; the fix is in the consumer");
+    }
+
+    /// <summary>
+    /// Pins the defect that made the storm test above a coin flip: the live catalog feed must apply
+    /// the SAME result-set exclusions its snapshot does.
+    ///
+    /// <para>A content query never returns satellite nodes — they live in their own storage tables
+    /// (<c>_Activity</c>→activities, <c>_Access</c>→access, …) and the initial snapshot filters them
+    /// out. The live path did not: its write-lag supplement admitted any notified entity that passed
+    /// <c>QueryEvaluator.Matches</c>, and for a bare <c>path:X scope:descendants</c> listing (no
+    /// filter, no free-text term) <c>Matches</c> is true for EVERYTHING. So a satellite write under
+    /// the root arrived as a structural <c>Added</c> and the next re-query took it straight back out
+    /// as <c>Removed</c> — a phantom row that flashes into a live search grid, and two re-renders of
+    /// the whole result list that nothing in the result set justifies.</para>
+    ///
+    /// <para>The storm test hit it because a <c>MonotonicWriteGuard</c> resolution writes a
+    /// <c>{path}/_Activity/write-conflict-{n}</c> satellite, and whether the 25-update storm produced
+    /// a conflict at all was timing. This test does not race anything: it WRITES the satellite
+    /// directly through storage — the exact change notification the live pipeline consumes — and uses
+    /// an ordinary node created afterwards as the ordered proof that the feed processed it.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task CatalogSubscription_SatelliteWriteUnderTheRoot_NeverEntersTheResultSet()
+    {
+        var root = $"{TestPartition}/leak";
+        var catalogQuery = $"path:{root} scope:descendants";
+        var mainPath = $"{root}/main";
+        var satellitePath = $"{mainPath}/_Activity/{SatelliteId}";
+        var markerPath = $"{root}/{QuiesceId}";
+
+        await NodeFactory.CreateNode(
+            new MeshNode("leak", TestPartition) { Name = "Leak", NodeType = "Group" }).Should().Emit();
+        await NodeFactory.CreateNode(
+            new MeshNode("main", root) { Name = "Main", NodeType = "Markdown" }).Should().Emit();
+
+        var accumulator = new SearchResultAccumulator();
+        var structuralFrames = 0;
+        var satelliteFrames = 0;
+        var markerApplied = 0;
+
+        using var subscription = Query.Query<MeshNode>(MeshQueryRequest.FromQuery(catalogQuery))
+            .Subscribe(change =>
+            {
+                // Counted on the RAW frame, not on the accumulator: an Added the accumulator folds in
+                // and a Removed it folds back out are both this defect, and both re-render the grid.
+                if (change.Items.Any(n => string.Equals(n.Path, satellitePath, StringComparison.OrdinalIgnoreCase)))
+                    Interlocked.Increment(ref satelliteFrames);
+
+                if (accumulator.Apply(change))
+                    Interlocked.Increment(ref structuralFrames);
+
+                if (accumulator.Nodes.Any(n => string.Equals(n.Path, markerPath, StringComparison.OrdinalIgnoreCase)))
+                    Volatile.Write(ref markerApplied, 1);
+            });
+
+        // Same ordering discipline as the storm test: act only once the Initial frame has provably
+        // arrived, so everything after it is an ordered post-snapshot change.
+        await WaitUntil(() => Volatile.Read(ref structuralFrames) >= 1, ReadNodeTimeout);
+
+        // The satellite write, straight through storage — the same notification a guard-written
+        // write-conflict log, a comment, or an access grant produces. CreateNodeRequest deliberately
+        // refuses satellite paths (they are per-node lifecycle), so storage is the honest way to
+        // deliver exactly the input the live query pipeline sees.
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        await storage.Write(
+            new MeshNode(SatelliteId, $"{mainPath}/_Activity")
+            {
+                Name = "satellite that must never be a search result",
+                NodeType = "ActivityLog",
+                MainNode = mainPath,
+                State = MeshNodeState.Active,
+                Version = 1,
+            },
+            Mesh.JsonSerializerOptions).Should().Emit();
+
+        // An ORDINARY node created after it. The change feed is ordered, so once the marker has been
+        // applied every frame the satellite write could have produced is already delivered and
+        // counted — no sleep, no tolerance.
+        await NodeFactory.CreateNode(
+            new MeshNode(QuiesceId, root) { Name = "quiesce marker", NodeType = "Markdown" }).Should().Emit();
+        await WaitUntil(() => Volatile.Read(ref markerApplied) == 1, ReadNodeTimeout);
+
+        Volatile.Read(ref satelliteFrames).Should().Be(0,
+            "a satellite node is not a content-query result — the snapshot excludes it, so the live "
+            + "feed must never emit it either, as an Added or as the Removed that takes it back out");
+        accumulator.Nodes.Should().NotContain(
+            n => string.Equals(n.Path, satellitePath, StringComparison.OrdinalIgnoreCase),
+            "the satellite must never reach the rendered result set");
     }
 }

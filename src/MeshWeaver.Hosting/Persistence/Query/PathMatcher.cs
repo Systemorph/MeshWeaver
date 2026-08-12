@@ -167,10 +167,10 @@ public static class PathMatcher
     }
 
     /// <summary>
-    /// True when <paramref name="ns"/> matches any of <paramref name="patterns"/>. A pattern may carry a
-    /// single <c>*</c> glob (<c>{owner}/*_Thread</c> → starts-with the pre-<c>*</c> part AND ends-with the
-    /// post-<c>*</c> part); a pattern without <c>*</c> matches when <paramref name="ns"/> equals it OR is a
-    /// sub-namespace under it (robust to whether the parser hands back the glob pattern or its base).
+    /// True when <paramref name="ns"/> matches any of <paramref name="patterns"/>. A pattern may carry
+    /// any number of <c>*</c> globs (<c>{owner}/*_Thread</c>, <c>*/Source/*</c>); a pattern without
+    /// <c>*</c> matches when <paramref name="ns"/> equals it OR is a sub-namespace under it (robust to
+    /// whether the parser hands back the glob pattern or its base).
     /// </summary>
     public static bool NamespaceInScope(string ns, IReadOnlyList<string>? patterns)
     {
@@ -187,19 +187,19 @@ public static class PathMatcher
     {
         if (string.IsNullOrEmpty(pattern))
             return false;
-        // The query parser emits a namespace wildcard as SQL-LIKE '%' (it rewrites the user's '*' →
-        // '%'); accept either. A single wildcard splits the pattern into a prefix + suffix (e.g.
-        // "{owner}/%_Thread" → "{owner}/" … "_Thread"); the surrounding literals (incl. the satellite
-        // "_" in "_Thread") are matched verbatim, which is what real satellite namespaces need.
-        var star = pattern.IndexOfAny(['*', '%']);
-        if (star >= 0)
-        {
-            var prefix = pattern[..star];
-            var suffix = pattern[(star + 1)..];
-            return value.Length >= prefix.Length + suffix.Length
-                   && value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-                   && value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
-        }
+        // The glob arm is the shared vocabulary (QueryWildcard): `*`, any number of them, literals
+        // in between matched verbatim — which is what real satellite namespaces need (the "_" in
+        // "{owner}/*_Thread" is literal).
+        //
+        // 🚨 Issue #1235. This used to split on the FIRST wildcard only, taking everything after it
+        // as a suffix. That silently broke the two-wildcard pattern #1232 added for a subtree
+        // widening: `*/Source/*` became EndsWith("/Source/*"), which nothing ends with, so the
+        // change-feed relevance gate never fired for a node nested below a Source folder. It also
+        // accepted `%` as a wildcard, to compensate for the parser rewriting `*`→`%`; the parser no
+        // longer does that, and accepting both spellings is what let the two vocabularies drift
+        // apart unnoticed, so `%` is now just a literal character here.
+        if (QueryWildcard.ContainsWildcard(pattern))
+            return QueryWildcard.IsMatch(value, pattern);
         // No glob: exact namespace, or a sub-namespace under it.
         return string.Equals(value, pattern, StringComparison.OrdinalIgnoreCase)
                || value.StartsWith(pattern + "/", StringComparison.OrdinalIgnoreCase);
