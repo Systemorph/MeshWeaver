@@ -38,13 +38,14 @@ name: Continuous Delivery (main)
 # storage between jobs, and `docker load` cannot even load a multi-arch OCI archive on the
 # runner's classic image store. Same guarantee, an order of magnitude more machinery.
 #
-# Cost, measured on runs 31324251944 / 31326034137 (job wall clocks: bake 15m21s / 14m29s — the
-# pole; plugin-test 13m27s; portal-ai 13m6s; migration 9m58s; portal-next 2m23s):
-#   * full set available: 15m30s → ~16m30s (+~1 min, the promote job's own runner acquisition
+# Cost, measured on runs 31324251944 / 31326034137 (job wall clocks: plugin-test 13m27s — the
+# pole since the nodetype-bake leg was retired in #1347; portal-ai 13m6s; migration 9m58s;
+# portal-next 2m23s):
+#   * full set available: ~13m30s → ~14m30s (+~1 min, the promote job's own runner acquisition
 #     and ~15 s of manifest PUTs). The CD critical path grows by that one job and nothing else.
-#   * memex-portal-ai's version tag specifically: 13m6s → ~16m30s (+~3.4 min) — the portal now
-#     waits for bake. That IS the policy: 4f0c35c shipped a portal increment the NodeType bake
-#     gate never certified (#1026), and 3 minutes is what not doing that costs.
+#   * memex-portal-ai's version tag specifically: it waits for the slowest leg rather than its
+#     own, which is what makes the set all-or-nothing — 4f0c35c shipped a portal increment with
+#     a leg missing (#1026), and ~1 minute is what not doing that costs.
 #   * registry traffic: unchanged (same layers, pushed once). Accumulating tags per run per .NET
 #     repo go DOWN, 6 → 5: today version+sha indexes plus four RID-suffixed variants; now the
 #     staging index + its two RID variants plus the version and sha indexes.
@@ -143,11 +144,12 @@ jobs:
   # log names a host. Read the ~30 s gap in the timestamps before the warning, not the error.
   # Root Directory.Build.props now fails the leg AT that point (error MW1026) with both
   # registries named, so a recurrence is one line to attribute — see issue #1026 for the
-  # full trace (CD run 31322066110, bake's linux-arm64 leg, 16:01:03.9 → 16:01:34.1).
+  # full trace (CD run 31322066110, the nodetype-bake leg's linux-arm64 publish,
+  # 16:01:03.9 → 16:01:34.1 — that leg is retired, the failure mode is not).
   #
   # 🚨 A leg that dies this way can no longer leave a PARTIAL release — that was 4f0c35cfc,
-  # which shipped memex-portal-ai:3.0.0-rc1.ci.2470 with no memex-bake (#1026), i.e. a portal
-  # version the NodeType bake gate never certified. Every leg now pushes only a STAGING tag and
+  # which shipped memex-portal-ai:3.0.0-rc1.ci.2470 with one leg missing (#1026), i.e. an
+  # incomplete set behind a green tick. Every leg now pushes only a STAGING tag and
   # the `promote` job applies the real tags after ALL of them succeed. Do NOT paper a failing leg
   # over by retrying the publish, dropping a RID or `continue-on-error`: a genuine build failure
   # must fail CD loudly and completely, and the reconciler will re-attempt HEAD on its own.
@@ -577,64 +579,6 @@ jobs:
           -p:ContainerRepository=memex-migration
           -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
 
-  # nodetype-bake — compiles every dynamic NodeType against THIS build into the shared assembly
-  # cache before the portal rolls onto it, and fails the release on a regression. It must be
-  # built from the SAME commit as the portal: the framework identity it bakes against is the
-  # Graph MVID of these binaries, so an image built from a different commit would warm a cache
-  # the portal cannot use. Same multi-arch publish; <RuntimeIdentifiers> is project-local.
-  #
-  # 🚨 Its OWN job, not a second step on migration-image. Built sequentially there, the two
-  # publishes made that leg the CD long pole: measured on run 31269491065, migration 420 s THEN
-  # bake 652 s — a 22-minute job while every other leg sat finished. They share no state (distinct
-  # projects, distinct repositories) and the $(Version) they compute is identical by construction,
-  # because GITHUB_RUN_NUMBER is per-RUN, not per-job. So the only thing the sequence bought was
-  # wall clock. Splitting drops the CD critical path by ~11 min.
-  bake-image:
-    name: "Build + push nodetype-bake image"
-    needs: gate
-    if: needs.gate.outputs.publish == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    outputs:
-      version: ${{ steps.vars.outputs.version }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.gate.outputs.sha }}
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 10.0.x
-      # Same $(Version) computation as every other leg — GITHUB_RUN_NUMBER is shared across the
-      # run, so the 3.0.0-ci.<n> tag matches the migration/portal images by construction.
-      - name: Compute image version
-        id: vars
-        run: |
-          set -euo pipefail
-          VERSION=$(dotnet msbuild memex/aspire/Memex.NodeType.Bake/Memex.NodeType.Bake.csproj \
-            -getProperty:Version -p:CIRun=true -nologo | tr -d '[:space:]')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Computed image version: $VERSION (run #$GITHUB_RUN_NUMBER)"
-      - name: Ensure Azure CLI
-        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: ACR login
-        run: az acr login --name meshweaver
-      - name: Build + push nodetype-bake (staging tag)
-        run: >
-          dotnet publish memex/aspire/Memex.NodeType.Bake/Memex.NodeType.Bake.csproj
-          -c Release --no-self-contained -t:PublishContainer -p:PublishProfile=
-          -p:ContainerRuntimeIdentifiers='"linux-x64;linux-arm64"'
-          -p:CIRun=true
-          -p:ContainerRegistry=${{ env.ACR }}
-          -p:ContainerRepository=memex-bake
-          -p:ContainerImageTags=${{ needs.gate.outputs.staging_tag }}
-
   # The MeshWeaver.Plugins PR gate image: `mw-plugin-test` (tools/MeshWeaver.PluginTester)
   # imports a node-repo checkout into a fresh in-process mesh, asserts every NodeType compiles,
   # renders, and its `Tests` layout area executes green. The plugins repo's ci.yml `test-repos`
@@ -844,7 +788,7 @@ jobs:
   # delete permission and a second failure mode to the one job that must not have either.
   promote:
     name: "Promote: tag the full set (all-or-nothing)"
-    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image]
+    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -853,7 +797,6 @@ jobs:
       SHA: ${{ needs.gate.outputs.short_sha }}
       V_PORTAL: ${{ needs.portal-image.outputs.version }}
       V_MIGRATION: ${{ needs.migration-image.outputs.version }}
-      V_BAKE: ${{ needs.bake-image.outputs.version }}
       V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
       V_NEXT: ${{ needs.portal-next-image.outputs.version }}
     steps:
@@ -885,7 +828,6 @@ jobs:
             echo "→ $repo: $*"
             docker buildx imagetools create "${args[@]}" "${{ env.ACR }}/$repo:$STAGING"
           }
-          promote memex-bake        "$V_BAKE"      "$SHA"
           promote memex-migration   "$V_MIGRATION" "$SHA"
           promote mw-plugin-test    "$V_PLUGIN"    "$SHA"
           promote memex-portal-next "$V_NEXT"      "$SHA"
@@ -894,7 +836,7 @@ jobs:
       - name: "Phase B — moving pointers (main, latest, GHCR mirror)"
         run: |
           set -euo pipefail
-          for repo in memex-bake memex-migration memex-portal-next memex-portal-ai; do
+          for repo in memex-migration memex-portal-next memex-portal-ai; do
             echo "→ $repo: main"
             docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"
           done
@@ -926,8 +868,8 @@ jobs:
           # 🚨 THE LAST WRITE IN CD. Until this single PUT lands, no install can see this commit:
           # SelfUpdateHostedService reads memex-portal-ai's tags and rolls the portal AND the
           # migration Deployment to the newest ^\d+\.\d+\.\d+ one. Everything it will need — the
-          # matching memex-migration:$V_MIGRATION, the bake image that certifies these NodeTypes —
-          # is already tagged by phase A. Do not move this step, and do not add anything after it.
+          # matching memex-migration:$V_MIGRATION — is already tagged by phase A. Do not move
+          # this step, and do not add anything after it.
           echo "→ memex-portal-ai: $V_PORTAL  (arming the self-updater)"
           docker buildx imagetools create \
             --tag "${{ env.ACR }}/memex-portal-ai:$V_PORTAL" \
@@ -936,20 +878,19 @@ jobs:
             echo "### Promoted \`$SHA\` → $V_PORTAL"
             echo "- memex-portal-ai \`$V_PORTAL\`, \`$SHA\`, \`main\`"
             echo "- memex-migration \`$V_MIGRATION\`, \`$SHA\`, \`main\`"
-            echo "- memex-bake \`$V_BAKE\`, \`$SHA\`, \`main\`"
             echo "- mw-plugin-test \`$V_PLUGIN\`, \`$SHA\`, \`main\`, \`latest\` (ACR + GHCR)"
             echo "- memex-portal-next \`$V_NEXT\`, \`$SHA\`, \`main\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
   # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
-  # IMAGES, never the green tick — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470 with no
-  # memex-bake (#1026) while every job it had reported success.
+  # IMAGES, never the green tick — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470 with a
+  # leg missing (#1026) while every job it had reported success.
   #
   # `if: always()` on purpose: this runs whether the legs passed, failed or were cancelled, so the
   # run's LAST word is a named list of what is missing from the registry rather than a stack trace
   # from whichever leg died. That is the difference between "CD is red, go read four job logs" and
-  # "memex-bake:<sha> is missing".
+  # "memex-migration:<sha> is missing".
   #
   # It also catches what a per-job red CANNOT: a leg that reports success while pushing nothing
   # (Microsoft.NET.Build.Containers swallows a cancelled push as a warning and returns true — see
@@ -960,7 +901,7 @@ jobs:
   # question to decide whether HEAD needs reconciling; the two must never disagree.
   verify-images:
     name: "Verify every image shipped"
-    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, promote]
+    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote]
     if: always() && needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1014,7 +955,7 @@ jobs:
   #   writes its attempt ledger to the same issue, so the whole story is in one place.
   alert-on-failure:
     name: "Alert: CD failed on main"
-    needs: [gate, portal-image, migration-image, bake-image, plugin-test-image, portal-next-image, promote, verify-images]
+    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5

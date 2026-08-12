@@ -105,7 +105,6 @@ These images are pushed to the shared ACR. Grant the AKS kubelet `AcrPull` on th
 | `<registry>/memex-portal-ai-base:latest` | `aspnet:10.0` + node20 + co-hosted CLIs (Claude Code + Copilot). The **one** hand-authored Dockerfile at `deploy/base-images/portal-ai`, built **multi-arch** (`linux/amd64` + `linux/arm64`) via buildx / `az acr build`. Each arch bakes its own Copilot binary (`@github/copilot-linux-x64` / `-linux-arm64`). |
 | `<registry>/memex-portal-ai:<tag>` | The portal app — an SDK container build on the base image. **Multi-arch: do NOT pass `-r linux-x64`** (see below). |
 | `<registry>/memex-migration:<tag>` | One-shot DB migration container — the chart runs it as a **Job**, created per `helm upgrade`. |
-| `<registry>/memex-bake:<tag>` | NodeType pre-compilation (bake) Job. `bake.enabled` is **false** by default; it only makes sense where `/data` is a shared persistent volume. |
 
 Build and push the portal (no Dockerfile — the SDK's `PublishContainer` pushes straight to the registry):
 

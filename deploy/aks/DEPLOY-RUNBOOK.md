@@ -300,14 +300,21 @@ the outage happens anyway.
 Both are rendered correctly by the chart — a `helm upgrade` restores them. A per-env `portal-patch.json`
 or a hand `kubectl patch` can still override them, which is how the drift happened.
 
-⛔ **The bake Job (`bake.enabled`) stays OFF on AKS until core asserts fingerprint-match.** On its
-first AKS run (memex-cloud, 2026-07-30) `memex-bake:3.0.0-ci.1565` computed a **different framework
-fingerprint** than the running `portal-ai:3.0.0-ci.1565` — same version, separately published — so
+🪦 **There is no pre-run bake Job any more, and there never can be one (#1347).** The separate
+`memex-bake` image was removed after two weeks of running in zero namespaces. On its only AKS run
+(memex-cloud, 2026-07-30) `memex-bake:3.0.0-ci.1565` computed a **different framework fingerprint**
+than the running `portal-ai:3.0.0-ci.1565` — same version, same commit, separately published — so
 its framework-stale kickoff started flipping CURRENT NodeType records to `Pending` and rebuilding
-them for a framework nothing serves. (Killed after ~6 min; the portal's CompileWatcher heals the
-flips; serving pods keep their loaded assemblies throughout.) Until the Job refuses to bake when its
-fingerprint differs from the image being rolled, the pod-side sweep is the ONE deploy-time compile
-mechanism — it runs in the serving process, so its fingerprint is right by construction.
+them for a framework nothing serves. That was not a bug to tune: `InformationalVersion` carries
+`+build.<UtcNow.Ticks>` under `CIRun` (`Directory.Build.props`, and the stamp is load-bearing ABI
+safety), so **every** `dotnet publish` mints a fresh `MeshWeaver.Graph` MVID and no second image can
+ever agree with the portal's framework identity.
+
+**The pod-side sweep is the bake.** It runs in the serving process, so its fingerprint is right by
+construction, and it is fast — 76 s for 280 types (memex-cloud, batch direct-compile). The "fail
+before prod" contract the Job was meant to give is given, and given better, by
+`PreWarm__GateReadiness` + `maxSurge:1` / `maxUnavailable:0`: the new pod refuses readiness until
+its OWN bake is green while the old image keeps serving.
 
 **Verify after every roll** — the bake completing is the deploy signal, not HTTP 200:
 
