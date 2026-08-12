@@ -50,6 +50,11 @@ public static class BlazorHostingExtensions
                 .AddScoped<IMenuItemsProvider, MenuItemsProvider>()
                 .AddScoped<CircuitAccessHandler>()
                 .AddScoped<CircuitHandler>(sp => sp.GetRequiredService<CircuitAccessHandler>())
+                // The pod's "is anyone still working here" signal — see ActiveCircuitTracker. The
+                // TRACKER is a singleton (the shutdown decision is process-wide); the HANDLER is
+                // scoped, because Blazor resolves circuit handlers per circuit.
+                .AddSingleton<ActiveCircuitTracker>()
+                .AddScoped<CircuitHandler, CircuitDrainHandler>()
                 .AddMeshMcp()
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));

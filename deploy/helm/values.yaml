@@ -144,6 +144,14 @@ ollama:
 # swaps whatever else on the machine is already running them at its next restart.
 portal:
   image: "ghcr.io/systemorph/memex-portal-ai:latest"
+  # How long a rolled-out pod may keep serving the sessions it already has. The container's preStop
+  # drains the ingress (15s) and then waits on /drain until its last Blazor circuit closes, so this
+  # is the ceiling on "how long may someone keep working on the OLD build after a roll" — not a
+  # delay: a pod with no circuits exits in seconds. It also bounds how long a second silo lives
+  # alongside the new one, which matters because both hold their own set of compiled NodeType
+  # assemblies. 30 minutes covers a working session; lower it where memory is tighter than
+  # continuity.
+  drainSeconds: 1800
 migration:
   image: "ghcr.io/systemorph/memex-migration:latest"
 
