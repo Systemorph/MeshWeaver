@@ -474,8 +474,52 @@ public static class NodeMenuItemsExtensions
                     if (slice != null)
                         foreach (var item in slice)
                             builder.Add(item);
-                return (IReadOnlyCollection<NodeMenuItemDefinition>)builder.ToImmutable();
+                return Normalize(builder.ToImmutable());
             });
+    }
+
+    /// <summary>
+    /// Recursively sorts every nested <see cref="NodeMenuItemDefinition.Children"/> list by the same
+    /// <see cref="MenuItemComparer"/> the top level uses, and drops grouping parents that have no
+    /// surviving children.
+    ///
+    /// <para><b>Why the server and not each renderer.</b> The top-level merge sorts through an
+    /// <see cref="ImmutableSortedSet{T}"/>, but that comparer never looks at <c>Children</c> — so before
+    /// this, a submenu came out in whatever order its provider happened to append, and each of the four
+    /// renderers would have had to re-sort it identically. Doing it once here means <c>Order</c> means the
+    /// same thing at every depth, on every client.</para>
+    ///
+    /// <para><b>Why empty groups are dropped.</b> Menu items are permission-filtered by the PROVIDER, not
+    /// by this renderer (see <see cref="INodeMenuProvider.GetItems"/>) — a provider that gates each child
+    /// individually can legitimately end up emitting a parent whose children all vanished for this viewer.
+    /// Rendering that would give a submenu that opens onto nothing. A parent with a real
+    /// <see cref="NodeMenuItemDefinition.Area"/> of its own survives (it still has somewhere to go); only a
+    /// pure <see cref="NodeMenuItemDefinition.GroupArea"/> parent is pruned. Pruning runs bottom-up, so a
+    /// group whose only child was itself an emptied group disappears too.</para>
+    /// </summary>
+    private static IReadOnlyCollection<NodeMenuItemDefinition> Normalize(
+        IReadOnlyCollection<NodeMenuItemDefinition> items)
+    {
+        var result = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
+        foreach (var item in items)
+        {
+            if (!item.HasChildren)
+            {
+                // A group that never had children (or lost them upstream) has nothing to open.
+                if (item.Area == NodeMenuItemDefinition.GroupArea)
+                    continue;
+                result.Add(item);
+                continue;
+            }
+
+            // OrderBy, not a sorted set: children are a LIST, and two children that compare equal are a
+            // provider's business to emit, not ours to silently collapse.
+            var children = Normalize([.. item.Children!.OrderBy(c => c, MenuItemComparer)]);
+            if (children.Count == 0 && item.Area == NodeMenuItemDefinition.GroupArea)
+                continue;
+            result.Add(item with { Children = [.. children] });
+        }
+        return result.ToImmutable();
     }
 
     /// <summary>

@@ -28,6 +28,38 @@ public record NodeMenuItemDefinition(
     string? Tooltip = null)
 {
     /// <summary>
+    /// Sentinel <see cref="Area"/> for a divider. Renderers draw a rule and never make it activatable.
+    /// </summary>
+    public const string SeparatorArea = "_separator";
+
+    /// <summary>
+    /// Sentinel <see cref="Area"/> for a pure GROUPING parent — an entry that exists only to hold
+    /// <see cref="Children"/> and has nowhere of its own to navigate to. Every renderer draws it as a
+    /// submenu and NEVER activates it, so a group can never be "clickable to nowhere".
+    ///
+    /// <para>Why a sentinel rather than an empty <see cref="Area"/>: it mirrors the long-standing
+    /// <see cref="SeparatorArea"/> convention, it is greppable, and it makes the wire self-describing —
+    /// a client that cannot nest can still tell "this is a group, not an action" instead of rendering a
+    /// dead entry that navigates to <c>/{path}/</c>.</para>
+    /// </summary>
+    public const string GroupArea = "_group";
+
+    /// <summary>True when this entry carries nested children.</summary>
+    public bool HasChildren => Children is { Count: > 0 };
+
+    /// <summary>
+    /// True when this entry is a submenu parent, and therefore NOT activatable.
+    ///
+    /// <para>Any entry carrying <see cref="Children"/> is a parent — its own <see cref="Area"/> /
+    /// <see cref="Href"/> is deliberately ignored for activation. Both component libraries behind the web
+    /// renderers (FAST's <c>fluent-menu-item</c> submenu slot and Fluent React v9's
+    /// <c>MenuTrigger</c>-wrapped item) toggle the submenu on click/Enter rather than invoking the parent,
+    /// so a "clickable parent that also opens a submenu" is not expressible in either. Making that
+    /// explicit here keeps the three renderers honest instead of each inventing its own rule.</para>
+    /// </summary>
+    public bool IsSubmenuParent => HasChildren || Area == GroupArea;
+
+    /// <summary>
     /// Optional localization key for <see cref="Label"/> (e.g. <c>menu.edit</c>). When set,
     /// <see cref="Localized"/> replaces the English <see cref="Label"/> with the viewer's
     /// translation; when null the English label is used as-is.

@@ -55,6 +55,22 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
             .AddLayoutClient()
             .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition));
 
+    /// <summary>
+    /// Every entry in the menu, parents AND their descendants, depth-first. The export entries live
+    /// under an "Export" parent now, so a test that only looked at the top level would see the group
+    /// and none of its contents.
+    /// </summary>
+    private static IEnumerable<NodeMenuItemDefinition> Flatten(IEnumerable<NodeMenuItemDefinition> items)
+    {
+        foreach (var item in items)
+        {
+            yield return item;
+            if (item.Children is { Count: > 0 } children)
+                foreach (var descendant in Flatten(children))
+                    yield return descendant;
+        }
+    }
+
     private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchNodeMenuItems(
         IMessageHub client, Address nodeAddress)
     {
@@ -74,7 +90,7 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
             .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
             .Should().Within(10.Seconds()).Match(
                 x => x is MenuControl m
-                     && m.Items.Any(i => i.Label == MarkdownExportMenuProvider.PdfLabel));
+                     && Flatten(m.Items).Any(i => i.Label == MarkdownExportMenuProvider.PdfLabel));
 
         return menuControl.Should().BeOfType<MenuControl>().Which.Items;
     }
@@ -86,23 +102,72 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var nodeAddress = new Address(MarkdownNodePath);
 
         var items = await FetchNodeMenuItems(client, nodeAddress);
+        var all = Flatten(items).ToArray();
 
-        Output.WriteLine($"Node menu items for Markdown node: {items.Count}");
-        foreach (var item in items)
-            Output.WriteLine($"  {item.Label} (Area={item.Area}, Order={item.Order})");
+        Output.WriteLine($"Node menu items for Markdown node: {items.Count} top-level, {all.Length} total");
+        foreach (var item in all)
+            Output.WriteLine($"  {item.Label} (Area={item.Area}, Order={item.Order}, Children={item.Children?.Count ?? 0})");
 
-        items.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.PdfLabel,
+        all.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.PdfLabel,
             "MarkdownExportMenuProvider should contribute 'Export to PDF' for nodes with NodeType=Markdown");
-        items.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.DocxLabel,
+        all.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.DocxLabel,
             "MarkdownExportMenuProvider should contribute 'Export to DOCX' for nodes with NodeType=Markdown");
 
-        var pdfItem = items.First(i => i.Label == MarkdownExportMenuProvider.PdfLabel);
+        var pdfItem = all.First(i => i.Label == MarkdownExportMenuProvider.PdfLabel);
         pdfItem.Area.Should().Be(ExportDocumentLayoutArea.PdfArea,
             "PDF item must navigate to the PDF export layout area");
 
-        var docxItem = items.First(i => i.Label == MarkdownExportMenuProvider.DocxLabel);
+        var docxItem = all.First(i => i.Label == MarkdownExportMenuProvider.DocxLabel);
         docxItem.Area.Should().Be(ExportDocumentLayoutArea.DocxArea,
             "DOCX item must navigate to the DOCX export layout area");
+    }
+
+    /// <summary>
+    /// The export/share entries are ONE collapsible "Export" parent, not three flat rows — the whole
+    /// point of the grouping. The parent must be a pure group (so no renderer lets it be activated),
+    /// and its children must come out in <c>Order</c>.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task MarkdownNode_ExportEntries_AreGroupedUnderOneParent()
+    {
+        var client = GetClient();
+        var items = await FetchNodeMenuItems(client, new Address(MarkdownNodePath));
+
+        // The three actions are NOT at the top level any more…
+        items.Select(i => i.Label).Should().NotContain(MarkdownExportMenuProvider.PdfLabel,
+            "the export entries moved into the 'Export' group — a flat PDF row means the grouping regressed");
+
+        // …they are the group's children.
+        var group = items.Should().ContainSingle(i => i.Label == MarkdownExportMenuProvider.ExportGroupLabel)
+            .Which;
+
+        group.Area.Should().Be(NodeMenuItemDefinition.GroupArea,
+            "a grouping parent carries the _group sentinel so no client can navigate to it");
+        group.IsSubmenuParent.Should().BeTrue();
+        group.Icon.Should().Be(MarkdownExportMenuProvider.ExportGroupIcon);
+        group.LabelKey.Should().Be("menu.exportGroup", "the parent label must translate like every other entry");
+
+        group.Children!.Select(c => c.Label).Should().Equal(
+            [MarkdownExportMenuProvider.PdfLabel, MarkdownExportMenuProvider.DocxLabel, SendDocumentLayoutArea.SendLabel],
+            "children are sorted by Order (27/28/29) — the block's reading order survives the move into the group");
+
+        group.Children!.Should().BeInAscendingOrder(c => c.Order);
+    }
+
+    /// <summary>
+    /// A Deck offers PDF + email but no DOCX — and still gets the SAME parent, so the two node types
+    /// present their export actions in the same place.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task DeckNode_ExportEntries_UseTheSameGroup()
+    {
+        var client = GetClient();
+        var items = await FetchNodeMenuItems(client, new Address(DeckNodePath));
+
+        var group = items.Should().ContainSingle(i => i.Label == MarkdownExportMenuProvider.ExportGroupLabel).Which;
+        group.Area.Should().Be(NodeMenuItemDefinition.GroupArea);
+        group.Children!.Select(c => c.Label).Should().Equal(
+            [MarkdownExportMenuProvider.PdfLabel, SendDocumentLayoutArea.SendLabel]);
     }
 
     [Fact(Timeout = 30000)]
@@ -112,19 +177,20 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var nodeAddress = new Address(DeckNodePath);
 
         var items = await FetchNodeMenuItems(client, nodeAddress);
+        var all = Flatten(items).ToArray();
 
-        Output.WriteLine($"Node menu items for Deck node: {items.Count}");
-        foreach (var item in items)
+        Output.WriteLine($"Node menu items for Deck node: {items.Count} top-level, {all.Length} total");
+        foreach (var item in all)
             Output.WriteLine($"  {item.Label} (Area={item.Area}, Order={item.Order})");
 
-        items.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.PdfLabel,
+        all.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.PdfLabel,
             "DeckExportMenuProvider should contribute 'Export to PDF' for nodes with NodeType=Deck");
         // A deck carries no markdown body of its own, so DOCX export (which renders the node's own
         // content) is deliberately NOT offered.
-        items.Select(i => i.Label).Should().NotContain(MarkdownExportMenuProvider.DocxLabel,
+        all.Select(i => i.Label).Should().NotContain(MarkdownExportMenuProvider.DocxLabel,
             "a Deck exposes PDF export only — DOCX would render the deck's (empty) own body");
 
-        var pdfItem = items.First(i => i.Label == MarkdownExportMenuProvider.PdfLabel);
+        var pdfItem = all.First(i => i.Label == MarkdownExportMenuProvider.PdfLabel);
         pdfItem.Area.Should().Be(ExportDocumentLayoutArea.PdfArea,
             "PDF item must navigate to the PDF export layout area");
     }
@@ -150,7 +216,9 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var items = await FetchNodeMenuItems(client, new Address(MarkdownNodePath));
 
         // Dividers are the one legitimately icon-less, label-less kind.
-        var actionable = items.Where(i => i.Area != "_separator").ToArray();
+        // Descends into Children: nested entries are just as visible to the user as top-level ones,
+        // and before sub-menus rendered at all this invariant silently skipped every one of them.
+        var actionable = Flatten(items).Where(i => i.Area != NodeMenuItemDefinition.SeparatorArea).ToArray();
 
         // Non-vacuity: the export/share entries this test exists for are actually in the slice.
         actionable.Select(i => i.Label).Should().Contain(
