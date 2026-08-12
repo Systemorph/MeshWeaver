@@ -30,6 +30,19 @@ public sealed class OutboundEmailSender(
     EmailOptions options,
     ILogger<OutboundEmailSender>? logger = null) : IHostedService, IDisposable
 {
+    /// <summary>
+    /// The live watch query. 🚨 It must NOT filter <c>content.status:New</c>: <see cref="EmailStatus.New"/>
+    /// is the enum DEFAULT (0) and the serializer OMITS it from the stored JSON, so that filter never
+    /// matches a freshly queued email — the exact trap <see cref="InvitationEmailSender"/> documents for
+    /// <c>content.status:Pending</c>, and the reason the Store contact form's notification sat queued
+    /// forever on memex (2026-08-12: the query with the status clause returned 0 rows, without it 1).
+    /// Status is filtered IN CODE by <c>Send</c> (a read fills the omitted default back in), and the
+    /// New → Sending claim guards double-send. <c>content.direction:Outbound</c> IS safe: Outbound is
+    /// not the default, so it always serializes — see <c>OutboundEmailWatchQueryTest</c>.
+    /// </summary>
+    public const string WatchQuery =
+        $"nodeType:{EmailNodeType.NodeType} content.direction:Outbound";
+
     private readonly CompositeDisposable subscriptions = new();
     private IServiceScope? scope;
 
@@ -65,10 +78,10 @@ public sealed class OutboundEmailSender(
             var emailSender = sp.GetRequiredService<IEmailSender>();
             var jsonOptions = hub.JsonSerializerOptions;
 
-            // Live query: any outbound mail awaiting send. Emits the current set on change.
+            // Live query: any outbound mail. Emits the current set on change; Send filters to
+            // New and claims (New → Sending) before dispatching, so already-sent nodes are no-ops.
             subscriptions.Add(query
-                .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"nodeType:{EmailNodeType.NodeType} content.direction:Outbound content.status:New"), jsonOptions)
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(WatchQuery), jsonOptions)
                 .Select(change => change.Items)
                 .Subscribe(
                     items =>
