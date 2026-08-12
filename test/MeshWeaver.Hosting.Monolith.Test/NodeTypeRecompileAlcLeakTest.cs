@@ -136,6 +136,22 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         FullyCollect();
         var live = LiveContexts();
         var managedGrowth = AfterCollectionBytes() - managedBaseline;
+
+        // WHERE the bytes went. The contexts unload (above), so the retained memory belongs to
+        // ordinary managed objects — and the leading suspect is per-compile BOOKKEEPING: every compile
+        // mints {typePath}/_Activity/compile-<timestamp> plus a compile-state node, and a mesh node
+        // means a per-node hub with its own DI container and sync streams. If these counts climb with
+        // the recompiles, that is the retainer; if they are flat, the bytes are Roslyn state and the
+        // hunt moves there. Diagnostic output, deliberately not asserted — it names the direction for
+        // issue #1324 rather than pinning a number nobody has justified yet.
+        var hubs = System.Text.RegularExpressions.Regex
+            .Matches(Mesh.GetDisposalDiagnostics(), @"deferred=\d+").Count;
+        var activities = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{TypePath}/_Activity"))
+            .Should().Within(30.Seconds()).Emit();
+        Output.WriteLine(
+            $"WHERE: live hubs = {hubs}, compile-activity nodes under {TypePath}/_Activity = "
+            + $"{activities?.Items?.Count ?? -1} after {Recompiles} recompiles");
         Output.WriteLine($"FINAL live contexts for {TypePath} after {Recompiles} recompiles: {live}");
         Output.WriteLine(
             $"FINAL managed growth over {Recompiles} recompiles: "
