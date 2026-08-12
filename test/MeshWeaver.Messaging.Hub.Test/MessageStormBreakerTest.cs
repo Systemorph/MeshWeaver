@@ -37,12 +37,21 @@ public class MessageStormBreakerTest
         => new MessageDelivery<object>(sender ?? Sender, target ?? Target, message, JsonOptions);
 
     // A plain message type with no [CanBeIgnored] / lifecycle exemption — the storm-prone
-    // path (stands in for SubscribeRequest / RawJson and friends).
+    // path (stands in for SubscribeRequest / RawJson and friends). It exposes NO payload
+    // identity, so it exercises the fail-closed fallback: keyed on the routing tuple alone.
     private record StormableMessage(int Seq = 0);
 
     // [CanBeIgnored] fire-and-forget control traffic — must be exempt from the breaker.
     [CanBeIgnored]
     private record IgnorableControlMessage(int Seq = 0);
+
+    // Stands in for the real wide-traffic shapes — DataChangedEvent (StreamId),
+    // CreateOrUpdateNodeRequest (node path): ONE sender, ONE target, ONE message type, but each
+    // message is ABOUT a different thing.
+    private record KeyedMessage(string About) : IDiagnosticKeyed
+    {
+        public string DiagnosticKey => About;
+    }
 
     [Fact]
     public void Trips_AndDrops_WhenOneKeyExceedsThresholdInWindow()
@@ -120,6 +129,157 @@ public class MessageStormBreakerTest
             breaker.ShouldDrop(Delivery(new StormableMessage(i))).Should().BeFalse();
 
         breaker.TripCount.Should().Be(1, "self-heal must not log a second trip");
+    }
+
+    /// <summary>
+    /// 🚨 The #1200 defect. A bulk import drives ONE sender → ONE target with ONE message type
+    /// over thousands of DISTINCT things (every mesh-node path it writes, every sync stream those
+    /// writes open). Keyed on the routing tuple alone that whole legitimate fan-out is one bucket,
+    /// crosses the per-key bar, and the breaker DISCARDS real writes at ingestion — imported
+    /// content silently missing, which is data loss, not mitigation.
+    ///
+    /// <para>RED before the payload-identity component (every message folds into one key and the
+    /// breaker trips); GREEN after (each thing is counted on its own key, all far under the bar).</para>
+    /// </summary>
+    [Fact]
+    public void WideFanOut_OneTuple_ManyDistinctPayloadKeys_NeverTrips()
+    {
+        var breaker = CreateBreaker();
+        var trips = new List<MessageStormBreaker.StormTrip>();
+        using var _ = breaker.Trips.Subscribe(trips.Add);
+
+        // 40x the per-key threshold in TOTAL volume through a SINGLE (sender, target, type)
+        // tuple — the cross-hub dispatcher shape — but every message is about a different path.
+        const int distinctPaths = Threshold * 40;
+        for (var i = 0; i < distinctPaths; i++)
+            breaker.ShouldDrop(Delivery(new KeyedMessage($"UWDeepfield/Content/node-{i}")))
+                .Should().BeFalse(
+                    "a write to a DISTINCT path is not a loop, however many of them one importer issues");
+
+        trips.Should().BeEmpty("a wide fan-out over one tuple must never be mistaken for a storm");
+        breaker.TripCount.Should().Be(0);
+    }
+
+    /// <summary>
+    /// The guard itself is unchanged: concentrate the SAME volume on ONE thing and it still trips —
+    /// and the trip now names WHICH thing, which is what turns "something between these two hubs
+    /// is looping" into a pointer at the offending stream/path.
+    /// </summary>
+    [Fact]
+    public void RepeatedSamePayloadKey_StillTrips_AndNamesTheThing()
+    {
+        var breaker = CreateBreaker();
+        var trips = new List<MessageStormBreaker.StormTrip>();
+        using var _ = breaker.Trips.Subscribe(trips.Add);
+
+        const string looping = "UWDeepfield/_Activity/import-f2bb979af363573d";
+        for (var i = 0; i < Threshold; i++)
+            breaker.ShouldDrop(Delivery(new KeyedMessage(looping))).Should().BeFalse();
+
+        breaker.ShouldDrop(Delivery(new KeyedMessage(looping))).Should().BeTrue(
+            "one thing repeated past the per-key bar IS the loop the breaker exists to stop");
+
+        trips.Should().ContainSingle();
+        trips[0].PayloadKey.Should().Be(looping, "the trip must name what the storm was about");
+        trips[0].TypeName.Should().Be(nameof(KeyedMessage));
+
+        // And the fan-out running ALONGSIDE the loop keeps flowing — the drop is scoped to the
+        // one storming thing, not to everything that shares its sender/target/type.
+        for (var i = 0; i < Threshold; i++)
+            breaker.ShouldDrop(Delivery(new KeyedMessage($"UWDeepfield/Content/other-{i}")))
+                .Should().BeFalse("healthy traffic on the same tuple is untouched by another key's trip");
+    }
+
+    /// <summary>
+    /// A cross-hub delivery reaches the receiving hub's ingestion gate UNDESERIALIZED — the
+    /// breaker sees <c>type=RawJson</c> and must not parse the payload on the hottest path in the
+    /// hub. <c>Package</c> stamps the identity onto the ENVELOPE right before it erases the type,
+    /// so discrimination survives the hop: the same fan-out that would fold into one key after
+    /// packaging still counts per thing.
+    /// </summary>
+    [Fact]
+    public void PackagedDelivery_KeepsPayloadIdentity_AcrossTheTypeErasure()
+    {
+        var breaker = CreateBreaker();
+        var trips = new List<MessageStormBreaker.StormTrip>();
+        using var _ = breaker.Trips.Subscribe(trips.Add);
+
+        // Post-Package the message really is RawJson — the state the cache hub saw in #1200.
+        var packagedSample = Delivery(new KeyedMessage("about/one")).Package();
+        packagedSample.Message.Should().BeOfType<RawJson>("Package erases the payload type");
+
+        const int distinctPaths = Threshold * 40;
+        for (var i = 0; i < distinctPaths; i++)
+            breaker.ShouldDrop(Delivery(new KeyedMessage($"UWDeepfield/Content/node-{i}")).Package())
+                .Should().BeFalse("the envelope carries the identity the erased payload no longer shows");
+
+        trips.Should().BeEmpty();
+
+        // ...while a packaged LOOP on one thing still trips, still named.
+        for (var i = 0; i <= Threshold; i++)
+            breaker.ShouldDrop(Delivery(new KeyedMessage("looping/stream")).Package());
+
+        trips.Should().ContainSingle();
+        trips[0].TypeName.Should().Be(nameof(RawJson), "after the hop the type really is RawJson");
+        trips[0].PayloadKey.Should().Be("looping/stream");
+    }
+
+    /// <summary>
+    /// The fallback is FAIL-CLOSED, never "allow". A message exposing no identity (and a packaged
+    /// delivery whose sender stamped none) keys on exactly the pre-#1200
+    /// <c>(sender, target, type)</c> tuple and trips exactly as it always did.
+    /// </summary>
+    [Fact]
+    public void NoPayloadIdentity_FallsBackToTheRoutingTuple_AndStillTrips()
+    {
+        var breaker = CreateBreaker();
+        var trips = new List<MessageStormBreaker.StormTrip>();
+        using var _ = breaker.Trips.Subscribe(trips.Add);
+
+        // Distinct CONTENT (Seq differs) but no IDiagnosticKeyed → one key, exactly as before.
+        for (var i = 0; i < Threshold; i++)
+            breaker.ShouldDrop(Delivery(new StormableMessage(i))).Should().BeFalse();
+        breaker.ShouldDrop(Delivery(new StormableMessage(Threshold))).Should().BeTrue(
+            "an unidentifiable payload must keep the old, stricter behaviour — never be waved through");
+
+        trips.Should().ContainSingle();
+        trips[0].PayloadKey.Should().BeNull("nothing identified this payload; the key degrades to the tuple");
+
+        // Same for a packaged one: Package stamps nothing when the message opts out.
+        var breaker2 = CreateBreaker();
+        for (var i = 0; i < Threshold; i++)
+            breaker2.ShouldDrop(Delivery(new StormableMessage(i)).Package()).Should().BeFalse();
+        breaker2.ShouldDrop(Delivery(new StormableMessage(Threshold)).Package()).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The payload component makes the key space unbounded in principle (one counter per thing the
+    /// hub ever saw), so the live set must track RECENT traffic, not all-time traffic. Crossing the
+    /// soft cap arms one inline sweep per window that drops counters idle beyond window+cooldown —
+    /// no timer, no background thread, no static state, and no effect on detection (an idle key is
+    /// by definition not storming).
+    /// </summary>
+    [Fact]
+    public void TrackedKeys_AreBounded_ByRecentTrafficNotAllTimeTraffic()
+    {
+        const int cap = 10;
+        var breaker = new MessageStormBreaker(NullLogger.Instance, new Address("host", "1"),
+            Threshold, Window, Cooldown, () => _now, TicksPerSecond, maxTrackedKeys: cap);
+
+        // A burst of one-shot keys — the shape that used to accumulate forever.
+        const int oneShotKeys = 500;
+        for (var i = 0; i < oneShotKeys; i++)
+            breaker.ShouldDrop(Delivery(new KeyedMessage($"burst/node-{i}"))).Should().BeFalse();
+
+        breaker.TrackedKeyCount.Should().Be(oneShotKeys, "each distinct thing is counted on its own key");
+
+        // They go quiet. Past window+cooldown the next message arms the sweep and they are gone.
+        _now += (long)((Window.TotalSeconds + Cooldown.TotalSeconds) * TicksPerSecond) + 1;
+        breaker.ShouldDrop(Delivery(new KeyedMessage("later/node"))).Should().BeFalse();
+
+        breaker.TrackedKeyCount.Should().Be(1,
+            "counters idle past window+cooldown are swept, so the live set follows recent traffic");
+        breaker.TripCount.Should().Be(0, "sweeping idle keys must not look like — or mask — a storm");
     }
 
     [Fact]
