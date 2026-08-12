@@ -106,6 +106,24 @@ public interface IMeshContentTypeRegistry
     /// <see cref="TryResolveByDiscriminator"/>) is one of the unresolvable cases.
     /// </summary>
     object? TryRecover(JsonElement content, JsonSerializerOptions options);
+
+    /// <summary>
+    /// 🚨 <b>The EXACT recovery, and the one to prefer wherever the node is in hand.</b> Resolves
+    /// the content type from <paramref name="nodeTypePath"/> — the node's own
+    /// <c>MeshNode.NodeType</c> — and deserialises <paramref name="content"/> to it.
+    ///
+    /// <para>This asks a question that always has one right answer, where
+    /// <see cref="TryRecover"/> asks one that often has none: a NodeType path is mesh-unique by
+    /// construction, so two packages that both ship a <c>Currency</c> get their own entry and their
+    /// own answer. A bare discriminator cannot distinguish them, which is why the name route has to
+    /// REFUSE a contested name — and a refusal leaves the caller reading a default-valued record
+    /// (11 content types in one customer repo are in exactly that state).</para>
+    ///
+    /// <para>Falls back to <see cref="TryRecover"/> when the path is absent or unregistered, so a
+    /// node with no NodeType (or one whose type has not activated yet) is no worse off than before.
+    /// Returns <c>null</c> when neither route resolves.</para>
+    /// </summary>
+    object? TryRecoverForNodeType(string? nodeTypePath, JsonElement content, JsonSerializerOptions options);
 }
 
 /// <summary>
@@ -240,6 +258,29 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
         if (discriminator is null || !TryResolveByDiscriminator(discriminator, out var contentType))
             return null;
 
+        return Materialize(content, contentType, options);
+    }
+
+    /// <inheritdoc />
+    public object? TryRecoverForNodeType(
+        string? nodeTypePath, JsonElement content, JsonSerializerOptions options)
+    {
+        if (content.ValueKind != JsonValueKind.Object)
+            return null;
+        // Exact first: keyed on the node's own NodeType, so a name two packages share is not a
+        // problem to be refused — each package's nodes resolve to their own type.
+        if (nodeTypePath is not null
+            && TryResolveByNodeType(nodeTypePath, out var exact)
+            && Materialize(content, exact, options) is { } recovered)
+            return recovered;
+        // Then the name route, for a node with no NodeType or a type not yet activated in this
+        // process. It still refuses a contested name — that refusal is what keeps a wrong answer
+        // from being silently lossy.
+        return TryRecover(content, options);
+    }
+
+    private static object? Materialize(JsonElement content, Type contentType, JsonSerializerOptions options)
+    {
         try
         {
             // Deserialise to the CONCRETE type explicitly: STJ maps the JSON to its properties and

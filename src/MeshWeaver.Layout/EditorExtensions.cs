@@ -885,6 +885,11 @@ public static class EditorExtensions
         // GetDataStream subscription gets no replay) and under cross-silo cache timing. Edit-state
         // is transient VIEW state: the view must DEFAULT and then react to toggles, never block on
         // the /data seed. Same default-then-react pattern as OverviewLayoutArea.BuildTitle.
+        //
+        // 🚨 The underlying rule is pinned by GetDataStreamUnsetIdTest (test/MeshWeaver.Layout.Test),
+        // not by this comment: a never-written id emits NOTHING (a never-set bool is not `false`)
+        // and never completes — so `GetDataStream(id).Take(1)` blocks the FIRST run, not a duplicate.
+        // Read the assertions there before removing this StartWith.
         var editStateStream = host.Stream.GetDataStream<bool>(editStateId)
             .StartWith(!isToggleable) // matches the seed at line above; read-only when toggleable
             .DistinctUntilChanged();
