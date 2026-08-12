@@ -640,4 +640,104 @@ public class NodeTypeBakeGateStateTest
         {
             CurrentSourceVersions = new Dictionary<string, long>()
         }).Should().Be(PreWarmStatus.CompileError);
+
+    // =============================================================================================
+    // A SWEEP THAT ERRORED IS NOT A SWEEP THAT PASSED (BakePhase.Faulted).
+    //
+    // The error handler used to call MarkComplete, so a pod whose enumeration threw reported
+    // Complete → Healthy and took traffic having verified nothing. The end-to-end proof — real
+    // sweep, real gate, real health check — is NodeTypeBakeGateFaultTest; these pin the state
+    // machine's own edges, which that test cannot reach individually.
+    // =============================================================================================
+
+    /// <summary>The core distinction: an errored sweep is neither Complete nor NotStarted.</summary>
+    [Fact]
+    public void MarkFaulted_IsNotComplete()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkFaulted("enumeration threw");
+
+        state.Phase.Should().Be(BakePhase.Faulted,
+            "the sweep verified nothing — Complete is a claim about a sweep that RAN");
+        state.Detail.Should().Contain("NOT PROVEN");
+        state.Regressions.Should().BeEmpty(
+            "a fault is not a verdict about any particular type");
+    }
+
+    /// <summary>
+    /// A standing regression outranks a later fault. Both refuse readiness, but "these named types
+    /// regressed" is the more actionable payload, and evidence the sweep DID gather must not be
+    /// erased by the way it ended.
+    /// </summary>
+    [Fact]
+    public void MarkFaulted_DoesNotEraseARegression()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(Failed("Store/Plugin", wasHealthy: true));
+        state.MarkFaulted("the stream faulted at type 200 of 240");
+
+        state.Phase.Should().Be(BakePhase.Regressed);
+        state.Regressions.Keys.Should().Contain("Store/Plugin");
+    }
+
+    /// <summary>
+    /// 🚨 Retracting the last regression after a FAULTED sweep returns to Faulted — never Complete.
+    ///
+    /// <para>Retraction is a better measurement of ONE type; it says nothing about the other 239 the
+    /// errored sweep never reached. Landing on Complete here would let a pod launder an unproven
+    /// bake into a passed one by way of a single type recovering — the original defect, rebuilt out
+    /// of the recovery machinery.</para>
+    /// </summary>
+    [Fact]
+    public void RetractingTheLastRegressionAfterAFaultedSweep_ReturnsToFaulted_NotComplete()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(Failed("Store/Plugin", wasHealthy: true));
+        state.MarkFaulted("the stream faulted");
+
+        state.RetractRegression("Store/Plugin", "rebuilt on this image").Should().BeTrue();
+
+        state.Phase.Should().Be(BakePhase.Faulted,
+            "one type recovering does not turn an errored sweep into a successful one");
+        state.Detail.Should().Contain("NOT PROVEN");
+    }
+
+    /// <summary>
+    /// The escape hatch is a VERDICT relaxation, not a state rewrite — the recorded phase is
+    /// identical with and without it. A flag that rewrote the state would recreate the original
+    /// defect one level up, where nothing could see it.
+    /// </summary>
+    [Fact]
+    public void AllowUnprovenBake_DoesNotChangeWhatIsRecorded()
+    {
+        var permissive = new NodeTypeBakeGateState { AllowUnprovenBake = true };
+        permissive.MarkRunning("go");
+        permissive.MarkFaulted("enumeration threw");
+
+        permissive.Phase.Should().Be(BakePhase.Faulted);
+        permissive.Detail.Should().Contain("NOT PROVEN");
+    }
+
+    /// <summary>
+    /// …and it can never launder a real regression: only the unproven-bake verdict is waivable.
+    /// </summary>
+    [Fact]
+    public void AllowUnprovenBake_StillGatesARealRegression()
+    {
+        var permissive = new NodeTypeBakeGateState { AllowUnprovenBake = true };
+        permissive.MarkRunning("go");
+        permissive.MarkOutcome(Failed("Store/Plugin", wasHealthy: true));
+        permissive.MarkFaulted("and then the stream faulted too");
+
+        permissive.Phase.Should().Be(BakePhase.Regressed,
+            "the override waives 'I could not find out', never 'this type broke'");
+    }
+
+    /// <summary>Defaults stay strict — an unproven bake refuses readiness unless asked otherwise.</summary>
+    [Fact]
+    public void AllowUnprovenBake_DefaultsToFalse() =>
+        new NodeTypeBakeGateState().AllowUnprovenBake.Should().BeFalse();
 }
