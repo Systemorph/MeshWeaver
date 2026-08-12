@@ -119,6 +119,23 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
              "mainNode":"PaidPlug/Doc","name":"Doc","nodeType":"Markdown","state":"Active",
              "content":"# Paid content"}
             """),
+        // CONTACT-SALES — no price at all, a sales contact instead. Must install EXACTLY as the
+        // priced one does. This is the shape that regressed: with the peek blind to contactEmail
+        // the manifest arrived priceless, the installer read "free", and a module sold with a
+        // person in the loop was published to the whole internet on its first install.
+        new("ContactPlug/index.json",
+            """
+            {"$type":"MeshNode","id":"ContactPlug","namespace":"","path":"ContactPlug",
+             "mainNode":"ContactPlug","name":"Contact Plug","nodeType":"Space","state":"Active",
+             "content":{"$type":"PluginManifest","description":"Talk to us first.",
+                        "contactEmail":"info@systemorph.com","publicSegments":[]}}
+            """),
+        new("ContactPlug/Doc.json",
+            """
+            {"$type":"MeshNode","id":"Doc","namespace":"ContactPlug","path":"ContactPlug/Doc",
+             "mainNode":"ContactPlug/Doc","name":"Doc","nodeType":"Markdown","state":"Active",
+             "content":"# Contact-sales content"}
+            """),
         // FREE, but the package SHIPS ITS OWN _Policy — the installer's step is create-only and
         // must leave the shipped shape completely alone.
         new("ShippedPolicy/index.json",
@@ -266,6 +283,39 @@ public class DeclaredAccessInstallTest(ITestOutputHelper output) : MonolithMeshT
                 .Should().Within(TimeSpan.FromSeconds(30))
                 .Match(p => p == Permission.None,
                     $"'{identity}' must be denied on a priced package's content");
+        }
+    }
+
+    /// <summary>
+    /// A CONTACT-SALES package (no price, a <c>contactEmail</c>) installs gated exactly as a priced
+    /// one does — the regression this fixture exists to forbid. A module sold with a person in the
+    /// loop declares no price, so on the old price-only test it read as FREE and the installer
+    /// published the whole partition: <c>_Policy · PublicRead = true</c>, cover and content readable
+    /// by anyone on the internet, until the Store's PluginGate happened to reconcile it dark again.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ContactSalesPackage_InstallsGated_ExactlyLikeAPricedOne()
+    {
+        var result = await Install("ContactPlug");
+        result.Written.Should().BeGreaterThan(0);
+
+        (await Read($"ContactPlug/{PackageInstaller.PartitionPolicyId}"))
+            .Should().BeNull("a contact-sales package must not get a public-read policy");
+        (await Read("ContactPlug/_Access/Public_Access"))
+            .Should().BeNull("a contact-sales package must not get a Public grant");
+        (await Read("ContactPlug/_Access/Anonymous_Access"))
+            .Should().BeNull("a contact-sales package must not get an Anonymous grant");
+
+        foreach (var identity in new[] { PlainUser, Anonymous })
+        {
+            await Mesh.GetEffectivePermissions("ContactPlug", identity)
+                .Should().Within(TimeSpan.FromSeconds(30))
+                .Match(p => p == Permission.None,
+                    $"'{identity}' must be denied on a contact-sales package's partition");
+            await Mesh.GetEffectivePermissions("ContactPlug/Doc", identity)
+                .Should().Within(TimeSpan.FromSeconds(30))
+                .Match(p => p == Permission.None,
+                    $"'{identity}' must be denied on a contact-sales package's content");
         }
     }
 
