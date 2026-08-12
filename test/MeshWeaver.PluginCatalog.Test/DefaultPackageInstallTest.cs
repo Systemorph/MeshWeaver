@@ -250,6 +250,65 @@ public class DefaultPackageInstallTest(ITestOutputHelper output) : MonolithMeshT
             "the ledger is bookkeeping and must never surface as an installed package");
     }
 
+    /// <summary>
+    /// 🚨 The ledger must actually be WRITABLE — its node type has to be registered, not merely its
+    /// content type.
+    ///
+    /// <para>Registering <c>DefaultInstallLedger</c> on the TypeRegistry (so the content
+    /// round-trips) is only half the job: <c>CreateNode</c> validates <c>node.NodeType</c> against
+    /// the registered NodeType MeshNodes. Without the node type the ledger write failed every boot
+    /// with <c>NodeType 'DefaultInstallLedger' is not registered</c> — and because
+    /// <c>RecordSeeded</c> deliberately swallows a ledger failure as a warning (a lost ledger must
+    /// never fail a boot), the failure was SILENT and the ledger stayed permanently empty.
+    /// Measured on memex 2026-08-10 at 07:16:45 and 11:46:24.</para>
+    ///
+    /// <para>What that cost: <c>SeedLedger()</c> then always answers "nothing has ever been
+    /// seeded", so every boot re-ran the FULL default install — upserting every plugin partition
+    /// root — instead of the repair-only pass the design describes, and "a failed package is
+    /// retried next boot" could never be told apart from "re-do work already done".</para>
+    ///
+    /// <para>The existing <see cref="TheLedgerIsNotAnInstalledPackage"/> could not catch this: it
+    /// asserts the ledger is ABSENT from the package query, which a never-written ledger satisfies
+    /// perfectly. This asserts presence — the write goes through the same
+    /// <c>CreateOrUpdateNode</c> call <c>RecordSeeded</c> makes.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task TheLedgerNodeTypeIsRegistered_SoTheSeedLedgerCanBeWritten()
+    {
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        var ledger = new MeshNode("_DefaultInstallLedger", PackageInstaller.InstalledPartition)
+        {
+            Name = "Default install ledger",
+            NodeType = InstanceAutoRegistrationService.LedgerNodeType,
+            State = MeshNodeState.Active,
+            Content = new DefaultInstallLedger
+            {
+                Seeded = ["Store"],
+                UpdatedAt = DateTimeOffset.UtcNow,
+            },
+        };
+
+        // Exactly RecordSeeded's write. Red-before this fix: OnError with
+        // "NodeType 'DefaultInstallLedger' is not registered".
+        await Observable.Using(() => access.ImpersonateAsSystem(), _ => mesh.CreateOrUpdateNode(ledger))
+            .Should().Within(60.Seconds()).Emit();
+
+        var written = await Observable.Using(
+                () => access.ImpersonateAsSystem(),
+                _ => Mesh.GetMeshNode(
+                    $"{PackageInstaller.InstalledPartition}/_DefaultInstallLedger",
+                    TimeSpan.FromSeconds(30)))
+            .Where(n => n is not null)
+            .Should().Emit();
+
+        written!.NodeType.Should().Be(InstanceAutoRegistrationService.LedgerNodeType);
+        written.ContentAs<DefaultInstallLedger>(Mesh.JsonSerializerOptions)!
+            .Seeded.Should().Contain("Store",
+                "a ledger that cannot record what was seeded makes every boot re-run the whole install");
+    }
+
     [Fact(Timeout = 180_000)]
     public async Task UnstampedCatalog_InstallsNothing_FailsClosed()
     {
