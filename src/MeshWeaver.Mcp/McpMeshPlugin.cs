@@ -113,9 +113,11 @@ Path shapes:
   • `@Node/Path/data/Type/id`  — one entity from the node's data collection
   • `@Node/Path/schema/`       — JSON Schema of the node's Content type. READ THIS BEFORE WRITING
                                  CONTENT: it names the required `$type` discriminator, the exact
-                                 (camelCase) property names, and the FOREIGN KEYS — the properties
-                                 that reference other nodes/entities and must hold a real path or
-                                 id. A NodeType answers the same question for every instance.
+                                 (camelCase) property names and their types, and each property's
+                                 description from its XML docs — which is where a property that
+                                 REFERENCES another node/entity says so, and such a property must
+                                 hold a real path or id, never an invented one. A NodeType answers
+                                 the same question for every instance.
   • `@Node/Path/schema/Type`   — schema for a specific type
   • `@Node/Path/model/`        — full data model with all registered types
   • `@Node/Path/layoutAreas/`  — list of layout areas on the node
@@ -339,7 +341,7 @@ Returns `{found, collectionPath, filePath, chunkIndex, text, prevIndex, nextInde
   • nodeType  — the type definition that gives the node shape and views (e.g. ""Markdown"", ""Code"", ""Organization""). Discover types with search 'nodeType:NodeType'.
 Recommended: 'icon' as an inline SVG starting with <svg, using currentColor.
 🚨 'content' MUST carry its '$type' discriminator, and must match the nodeType's schema. The mesh stores content POLYMORPHICALLY and every reader materialises it by '$type', so content written without one is stored intact and then reads as if the node were empty — the page renders ""No content yet"" over a full document, and nothing errors.
-ASK FOR THE SCHEMA, never guess the shape: get '@{path}/schema/' on the node itself, or on its NodeType — both return it. The schema gives you the exact '$type' const, the property names (camelCase on the wire; PascalCase is a different, unreadable document), and the FOREIGN KEYS — which properties reference other nodes/entities and therefore must hold a real path/id rather than an invented value.
+ASK FOR THE SCHEMA, never guess the shape: get '@Node/Path/schema/' on the node itself, or on its NodeType — both return it. The schema gives you the exact '$type' const, the property names (camelCase on the wire; PascalCase is a different, unreadable document), their types, and each property's description. Read those descriptions: a property that REFERENCES another node or entity must hold a real path/id, never an invented value.
 Writes go through the OWNING HUB, which serialises typed content correctly; hand-serialising content yourself with a stray JsonSerializer is how the discriminator gets lost.")]
     public Task<string> Create(
         [Description("JSON MeshNode object to create (e.g., {\"id\": \"NewOrg\", \"namespace\": \"ACME\", \"name\": \"New Org\", \"nodeType\": \"Organization\", \"content\": {}})")] string node)
@@ -353,7 +355,7 @@ Writes go through the OWNING HUB, which serialises typed content correctly; hand
     /// <returns>A JSON result describing the updated nodes, or an error string.</returns>
     [McpServerTool(Title = "Replace nodes (full update)", Destructive = true, Idempotent = true, OpenWorld = false)]
     [Description(@"Updates existing nodes in the mesh. Pass a JSON array of complete MeshNode objects. Always Get before Update — the entire node is replaced, not merged; a node missing 'nodeType' or 'content' is rejected with a descriptive error before anything is written. For small changes prefer Patch (field-level) or edit_content (text-level).
-🚨 Carry the content through as you read it, INCLUDING its '$type' discriminator and its camelCase property names. Rebuilding content by hand (or round-tripping it through your own serializer) drops the discriminator, and content without one is stored fine and then materialises as nothing — the node keeps its whole document and every page of it renders empty. When in doubt read the shape from 'get @{path}/schema/' (the node or its NodeType): it names the '$type', the properties, and the FOREIGN KEYS that must point at real nodes.")]
+🚨 Carry the content through as you read it, INCLUDING its '$type' discriminator and its camelCase property names. Rebuilding content by hand (or round-tripping it through your own serializer) drops the discriminator, and content without one is stored fine and then materialises as nothing — the node keeps its whole document and every page of it renders empty. When in doubt read the shape from 'get @Node/Path/schema/' (the node or its NodeType): it names the '$type', the properties and their types, and each property's description — which is where a reference to another node is called out, and those must point at real nodes.")]
     public Task<string> Update(
         [Description("JSON array of MeshNode objects with all fields (get existing node first, modify, then pass here)")] string nodes)
         => ops.Update(nodes).FirstAsync().ToTask();
