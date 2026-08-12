@@ -94,6 +94,39 @@ invisible to `VersionSelect`). When a symptom points at core behaviour, **check 
 first** — comparing the deployment's tag against the newest tag in the registry costs one command and
 forecloses a long, wrong hunt.
 
+## 🎯 The roll policy — serve fast, never disturb
+
+**The aim of every roll: the user never notices.** No slow first hit, no dropped circuit, no
+"transient hub error", no page that pays a compile because an image moved underneath it. The
+contract, in five rules — grain = an activated per-node hub; silo = a portal process of one image
+generation; bake = pre-compiling every dynamic NodeType for the NEW framework fingerprint:
+
+1. **An ACTIVE grain is never torn down.** As long as there is activity on a grain, it keeps
+   serving where it is. Deactivation is for idle grains only; a roll must not become a mass
+   eviction of pages people are looking at.
+2. **Bake FIRST, and until the bake is finished every new grain is allocated on an OLD silo.**
+   The new generation earns traffic by having every assembly warm; while it is still baking, the
+   old generation — whose assemblies are all warm by definition — keeps taking all placements.
+3. **A failed bake means NO switch.** The old silos keep serving indefinitely; a broken new
+   generation is a non-event for users, not an outage. (This is the readiness gate with teeth:
+   fail closed toward the OLD generation, never toward a cold or broken new one.)
+4. **Only a successful AND finished bake opens the new generation** — from that moment, new grain
+   allocations go to the new silos. Old silos drain naturally as their grains go idle (rule 1),
+   then retire.
+5. **A recycled grain re-hashes** — recycling is the explicit way to move a grain onto the new
+   generation early. Everything else transitions smoothly: activity-pinned on the old silo until
+   idle, re-placed on the new one on its next activation.
+
+**Where reality stands against this (2026-08-12):** the roll is a single-Deployment rolling update
+— the old pod is torn down grains-and-all (rule 1 violated: every active hub dies with its pod);
+the image bake contributes zero assemblies (`alreadyBaked=0` —
+[#1347](https://github.com/Systemorph/MeshWeaver/issues/1347)), so the new pod boots cold and the
+76-second prewarm sweep races the first visitors (rules 2–4 approximated only by the readiness
+gate, which is currently off); and the sweep warms the most user-visible types (the
+`Store/Coupon → Store/Order → Store/Plugin` cycle trio) LAST. The policy above is the target the
+bake, the readiness gate, and a two-generation silo topology are building toward — see
+[#1348](https://github.com/Systemorph/MeshWeaver/issues/1348).
+
 ## Update policy
 
 The policy is a **single boolean on each install record** — `Package.AutoUpdate` — not a three-state
