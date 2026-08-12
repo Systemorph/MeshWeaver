@@ -214,10 +214,16 @@ public static class ActivityLayoutAreas
                     return (UiControl?)Controls.Label(host.Localize("ui.noActivityYet"))
                         .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);");
 
-                var stack = Controls.Stack
-                    .WithStyle("gap: 8px;")
-                    .WithView(BuildProgressIndicator(log))
-                    .WithView(BuildLog(log, locale: host.ViewerLocale(), hasResult: result is not null));
+                var stack = Controls.Stack.WithStyle("gap: 8px;");
+                // The status line renders only while it carries information the pane doesn't
+                // already show: progress while running, the failure while failed, the explicit
+                // "done, no output" when there is nothing else. A successful run WITH a result
+                // shows the result alone — its presence IS the success, and the cell toolbar
+                // carries the idle/done state (2026-08-12 UX feedback: "✓ Done" as a heading
+                // above the rendered result read as chrome on top of the actual output).
+                if (ShowsStatusLine(log, hasResult: result is not null))
+                    stack = stack.WithView(BuildProgressIndicator(log, host.ViewerLocale()));
+                stack = stack.WithView(BuildLog(log, locale: host.ViewerLocale(), hasResult: result is not null));
                 if (result is not null)
                     stack = stack.WithView(result, ResultArea);
 
@@ -268,6 +274,20 @@ public static class ActivityLayoutAreas
     }
 
     /// <summary>
+    /// Whether the output pane renders a status line for this run. True while the line carries
+    /// information the pane does not otherwise show: any RUNNING activity (the live progress),
+    /// any non-success (the failure must stay loud, result or not), and a success WITHOUT a
+    /// rendered result (the explicit "done" is then the only feedback). False for the one case
+    /// the line was chrome: a SUCCEEDED run whose result renders right below — the result is the
+    /// success, and the cell toolbar carries the idle state (<c>CodeLayoutAreas.CellStatusChip</c>).
+    /// Pure — this is the contract, so it is pinned without a layout host.
+    /// </summary>
+    /// <param name="log">The activity log the pane renders.</param>
+    /// <param name="hasResult">Whether the run's rendered result is present beside this log.</param>
+    public static bool ShowsStatusLine(ActivityLog log, bool hasResult)
+        => log.Status != ActivityStatus.Succeeded || !hasResult;
+
+    /// <summary>
     /// The activity's progress indicator — the "progress" of the generic activity GUI.
     /// While <see cref="ActivityStatus.Running"/> it is an INDETERMINATE (animated)
     /// <see cref="ProgressControl"/> whose message is the latest log line (or
@@ -276,32 +296,43 @@ public static class ActivityLayoutAreas
     /// final message. Passing <c>null</c> as the progress value is what drives the
     /// indeterminate FluentProgress in <c>ProgressView.razor</c>.
     /// </summary>
-    public static UiControl BuildProgressIndicator(ActivityLog log)
+    /// <param name="log">The activity log to summarize.</param>
+    /// <param name="locale">Viewer locale for the status words; null falls back to English.</param>
+    public static UiControl BuildProgressIndicator(ActivityLog log, string? locale = null)
     {
         var latest = log.Messages.Count > 0 ? log.Messages[^1].Message : null;
 
         if (log.Status == ActivityStatus.Running)
         {
             // Indeterminate bar: progress == null → animated FluentProgress.
-            return Controls.Progress((object?)latest ?? "Running…", null!)
+            return Controls.Progress((object?)latest ?? LocalizationCatalog.Get("ui.running", locale), null!)
                 .WithWidth("100%")
                 .WithHideNumber(true)
                 .WithMessagePosition(MessagePosition.Top);
         }
 
-        var (glyph, label) = log.Status switch
-        {
-            ActivityStatus.Succeeded => ("✓", "Done"),
-            ActivityStatus.Failed    => ("✗", "Failed"),
-            ActivityStatus.Warning   => ("⚠", "Completed with warnings"),
-            ActivityStatus.Cancelled => ("⊘", "Cancelled"),
-            _                        => ("", log.Status.ToString()),
-        };
+        var (glyph, label) = StatusGlyph(log.Status, locale);
 
         var text = string.IsNullOrEmpty(latest) ? $"{glyph} {label}" : $"{latest}\n{glyph} {label}";
         return Controls.H4(text)
             .WithStyle($"color: {StatusColor(log.Status)}; white-space: pre-wrap; margin: 0;");
     }
+
+    /// <summary>
+    /// The glyph + localized word for a TERMINAL activity status — the one vocabulary every
+    /// surface (output pane, cell toolbar) uses, so "Done" cannot drift from "✓". Pure.
+    /// </summary>
+    /// <param name="status">The activity status to name.</param>
+    /// <param name="locale">Viewer locale; null falls back to English.</param>
+    public static (string Glyph, string Label) StatusGlyph(ActivityStatus status, string? locale = null)
+        => status switch
+        {
+            ActivityStatus.Succeeded => ("✓", LocalizationCatalog.Get("ui.statusDone", locale)),
+            ActivityStatus.Failed    => ("✗", LocalizationCatalog.Get("ui.statusFailed", locale)),
+            ActivityStatus.Warning   => ("⚠", LocalizationCatalog.Get("ui.statusWarnings", locale)),
+            ActivityStatus.Cancelled => ("⊘", LocalizationCatalog.Get("ui.statusCancelled", locale)),
+            _                        => ("", status.ToString()),
+        };
 
     /// <summary>
     /// The activity log — one row per <see cref="LogMessage"/>: a fixed-width
@@ -360,7 +391,9 @@ public static class ActivityLayoutAreas
                 log.Status == ActivityStatus.Running ? "ui.running" : "ui.activityNoOutput", locale))
             .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);");
 
-    private static string StatusColor(ActivityStatus status) => status switch
+    // Shared with the code cell's toolbar chip (CodeLayoutAreas.CellStatusChip) so the two
+    // surfaces cannot disagree on what a status looks like.
+    internal static string StatusColor(ActivityStatus status) => status switch
     {
         ActivityStatus.Failed    => "var(--error)",
         ActivityStatus.Warning   => "var(--warning)",
