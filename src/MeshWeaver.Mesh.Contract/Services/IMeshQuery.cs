@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -85,10 +86,83 @@ public record MeshQueryRequest
         Queries is { Count: > 0 } qs ? qs : new[] { Query };
 
     /// <summary>
-    /// User ID for access control filtering.
-    /// When set, results are filtered to only include nodes the user can access.
+    /// The viewer this read runs behind — results are filtered to the nodes that user can access.
+    ///
+    /// <para>🚨 <b>Leaving this null does NOT mean "unfiltered".</b> It means "work out who is
+    /// asking", and when nothing can be worked out the read is evaluated as
+    /// <see cref="Security.WellKnownUsers.Anonymous"/> — the narrowest viewer there is. For a read
+    /// scoped to somebody's own space that returns NOTHING, and an empty result set is
+    /// indistinguishable from "the record does not exist". That confusion is the single most
+    /// repeated defect on this surface; the doc comment here used to claim the opposite, which is
+    /// how it kept spreading.</para>
+    ///
+    /// <list type="bullet">
+    ///   <item>a real user id → that viewer;</item>
+    ///   <item><see cref="Security.WellKnownUsers.System"/> → infrastructure read, row-level
+    ///     security bypassed;</item>
+    ///   <item><c>""</c> (empty, not null) → explicitly the anonymous visitor;</item>
+    ///   <item><c>null</c> → resolve from the caller's ambient access context, then fall back per
+    ///     <see cref="IdentityFallback"/>.</item>
+    /// </list>
+    ///
+    /// <para>Prefer the named helpers — <see cref="ForViewer"/>, <see cref="AsPublicListing"/>,
+    /// <see cref="RequireViewer"/>, <see cref="AsSystem"/> — over setting this by hand.</para>
     /// </summary>
     public string? UserId { get; init; }
+
+    /// <summary>
+    /// What this read means when <see cref="UserId"/> is unset and no ambient identity can be
+    /// recovered. Defaults to <see cref="QueryIdentityFallback.Anonymous"/>, which preserves the
+    /// historical behaviour but no longer does it silently.
+    ///
+    /// <para>Say <see cref="QueryIdentityFallback.PublicListing"/> for a genuine mesh-wide public
+    /// catalog and <see cref="QueryIdentityFallback.Fail"/> for a read whose empty result would be
+    /// reported to a human as absence.</para>
+    /// </summary>
+    public QueryIdentityFallback IdentityFallback { get; init; } = QueryIdentityFallback.Anonymous;
+
+    /// <summary>
+    /// Runs this read as <paramref name="userId"/>. The explicit, always-correct form: it does not
+    /// depend on the caller's ambient context surviving whatever scheduler, pool or change-feed hop
+    /// lies between the call and the storage provider.
+    /// </summary>
+    /// <param name="userId">The viewer to evaluate access for.</param>
+    /// <returns>A copy of this request stamped with that viewer.</returns>
+    public MeshQueryRequest ForViewer(string userId) => this with { UserId = userId };
+
+    /// <summary>
+    /// Declares this read a mesh-wide PUBLIC listing: <see cref="Security.WellKnownUsers.Anonymous"/>
+    /// is the intended viewer, not a fallback. Silences the unresolved-viewer diagnostic because
+    /// there is nothing to diagnose.
+    ///
+    /// <para>🚨 Correct for a catalog of published content, where stamping the visitor would fold
+    /// their own private copies in as duplicates. Wrong — and the diagnostic exists to catch
+    /// exactly this — for anything that is supposed to show the caller THEIR content.</para>
+    /// </summary>
+    /// <returns>A copy of this request marked as a public listing.</returns>
+    public MeshQueryRequest AsPublicListing()
+        => this with { IdentityFallback = QueryIdentityFallback.PublicListing };
+
+    /// <summary>
+    /// Declares that this read is meaningless without a real viewer: if none can be resolved it
+    /// throws <see cref="QueryIdentityUnresolvedException"/> instead of quietly answering with the
+    /// Anonymous view.
+    ///
+    /// <para>Use it wherever an empty result would be shown to a human as "you have nothing here" —
+    /// a user's own copies, drafts, history, installed items. A thrown exception is diagnosable;
+    /// an empty list is not.</para>
+    /// </summary>
+    /// <returns>A copy of this request that fails closed on an unresolved viewer.</returns>
+    public MeshQueryRequest RequireViewer()
+        => this with { IdentityFallback = QueryIdentityFallback.Fail };
+
+    /// <summary>
+    /// Runs this read as the infrastructure identity, bypassing row-level security. For framework
+    /// plumbing that must not be filtered (security-element loads, seeds, compile activities) —
+    /// never for application code serving a user.
+    /// </summary>
+    /// <returns>A copy of this request stamped with the System identity.</returns>
+    public MeshQueryRequest AsSystem() => this with { UserId = WellKnownUsers.System };
 
     /// <summary>
     /// Default path to use when no path is specified in the query.

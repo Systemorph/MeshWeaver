@@ -2,9 +2,11 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting;
 
@@ -282,30 +284,8 @@ internal sealed class MeshService(
 
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
     {
-        // 🚨 Stamp the caller's identity from THIS scope's AccessService onto
-        // the request BEFORE handing to the singleton MeshQuery + providers.
-        // The providers are singletons and inject the ROOT AccessService which
-        // has no per-circuit context — so a Blazor circuit asking for its own
-        // items would get GetEffectiveUserId -> Anonymous and every query
-        // would filter to Anonymous-visible only ("items + threads empty"
-        // prod symptom 2026-05-22). MeshService IS scoped, so its hub's
-        // ServiceProvider does see the circuit's AccessService with the user
-        // identity middleware set.
-        //
-        // 🚨 ONLY stamp when UserId is genuinely UNSET (null). Empty string is
-        // the explicit-Anonymous marker — tests querying as anonymous user
-        // pass UserId="" deliberately, and downstream GetEffectiveUserId
-        // (StorageAdapterMeshQueryProvider) treats "" as Anonymous (per the
-        // contract in its own xmldoc). Stamping over "" with the captured
-        // admin context (the user the test class logged in via DevLogin)
-        // caused MeshQuery_AnonymousUser_FiltersRestrictedNodes to see
-        // admin's view instead of Anonymous's view (2026-05-22 trace).
-        if (request.UserId is null)
-        {
-            var captured = CaptureContext();
-            if (!string.IsNullOrEmpty(captured?.ObjectId))
-                request = request with { UserId = captured.ObjectId };
-        }
+        if (!TryStampViewer(ref request, out var unresolved))
+            return Observable.Throw<QueryResultChange<T>>(unresolved!);
         return _query.Query<T>(request);
     }
 
@@ -314,17 +294,78 @@ internal sealed class MeshService(
 
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
     {
-        // Same identity-stamp guard as Query — without it scoped DI
-        // consumers (Blazor circuits, MCP children) would hit the singleton
-        // providers as Anonymous and filter everything out.
-        if (request.UserId is null)
-        {
-            var captured = CaptureContext();
-            if (!string.IsNullOrEmpty(captured?.ObjectId))
-                request = request with { UserId = captured.ObjectId };
-        }
+        if (!TryStampViewer(ref request, out var unresolved))
+            return Observable.Throw<IReadOnlyCollection<QueryResult>>(unresolved!);
         return _query.Query(request);
     }
+
+    /// <summary>
+    /// 🚨 THE identity boundary for every secured read. Resolves the viewer ONCE, here, and stamps
+    /// it on the request so nothing downstream has to guess.
+    ///
+    /// <para><b>Why here and not in the providers.</b> The five storage providers used to each
+    /// resolve identity themselves, at SUBSCRIBE time, off the ROOT singleton
+    /// <see cref="AccessService"/>. By then the read has typically hopped a scheduler, an
+    /// <c>IIoPool</c> or a change feed, so whether the caller's ambient <c>AsyncLocal</c> was still
+    /// theirs depended on Rx plumbing rather than on anything the author wrote — the same code
+    /// returned the caller's rows in one context and the Anonymous view in another.
+    /// <see cref="MeshService"/> is the SCOPED service: its hub's provider sees the circuit's
+    /// <see cref="AccessService"/>, and this method runs synchronously on the caller's own thread,
+    /// which is the last moment the ambient context is reliably theirs. See
+    /// <c>Doc/Architecture/QueryIdentity</c>.</para>
+    ///
+    /// <para><b>Why an unresolved viewer is not silent.</b> Falling back to
+    /// <see cref="WellKnownUsers.Anonymous"/> never widens anything — but for a read aimed into a
+    /// named partition it returns NOTHING, and an empty result set is indistinguishable from "the
+    /// record does not exist". Every HTTP, circuit, SignalR and gRPC entry point in this codebase
+    /// stamps an explicit Anonymous context for a logged-out caller, so reaching this branch means
+    /// the read is running somewhere no entry point established identity at all — a hub action
+    /// block, an Rx continuation, a background service. That is worth a warning that names the
+    /// query.</para>
+    /// </summary>
+    /// <param name="request">The read; stamped in place with the resolved viewer.</param>
+    /// <param name="unresolved">
+    /// Set when the read declared <see cref="QueryIdentityFallback.Fail"/> and no viewer could be
+    /// resolved — the caller turns it into an <c>Observable.Throw</c> so the failure stays reactive.
+    /// </param>
+    /// <returns>False when the read must fail closed.</returns>
+    private bool TryStampViewer(ref MeshQueryRequest request, out QueryIdentityUnresolvedException? unresolved)
+    {
+        unresolved = null;
+
+        // 🚨 An explicitly-stamped UserId always wins — including the EMPTY string, which is the
+        // "evaluate as the anonymous visitor" marker tests and public surfaces pass deliberately.
+        // Stamping over it with the ambient (DevLogin admin) context made an anonymous-view
+        // assertion observe the admin's view instead (2026-05-22 trace).
+        var identity = QueryIdentityResolver.Resolve(request, CaptureContext()?.ObjectId);
+
+        if (identity.IsUnresolved)
+        {
+            if (request.IdentityFallback == QueryIdentityFallback.Fail)
+            {
+                unresolved = new QueryIdentityUnresolvedException(request.Query);
+                return false;
+            }
+
+            // Only a read aimed INTO a named partition is worth warning about. An unscoped read
+            // that evaluates as Anonymous returns the mesh's public subset — a sensible answer, and
+            // the shape a genuine mesh-wide catalog has (stamping the viewer THERE would fold each
+            // visitor's private copies into the public list). See TargetsNamedPartition.
+            if (QueryIdentityResolver.TargetsNamedPartition(request))
+                Logger?.LogWarning(
+                    "{Diagnostic}", QueryIdentityResolver.DescribeUnresolved(request.Query, forError: false));
+        }
+
+        // Stamp unconditionally: after this line UserId is never null, so no provider below has to
+        // re-derive it from an ambient context that no longer belongs to the caller.
+        request = request with { UserId = identity.UserId };
+        return true;
+    }
+
+    private ILogger? _logger;
+
+    private ILogger? Logger => _logger ??=
+        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshService>();
 
     public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath, string prefix,
