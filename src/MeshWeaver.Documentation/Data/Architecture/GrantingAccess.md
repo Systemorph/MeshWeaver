@@ -187,6 +187,10 @@ mcp create --node '{
 
 > **This is enforced at the write boundary.** `AccessAssignmentGuard.IsScopeInvalid` (`src/MeshWeaver.Mesh.Contract/Services/AccessAssignmentGuard.cs`) refuses any `AccessAssignment` whose `mainNode` disagrees with the scope its path encodes — so `Admin/_Access/{id}` with `mainNode: ""` is rejected with *"has an EMPTY MainNode … this grants ROOT (every partition), not 'Admin'"*. A deliberately consistent root grant (`_Access/{id}` **and** `mainNode: ""`) still passes, because the test harness uses that shape; the access-control UI never offers it (`AccessAssignmentGuard.CanGrantAt` returns false at root).
 
+> 🚨 **A SYSTEM-OWNED partition grants nobody write — and a grant COMMITTED TO A REPO can never be one.** A partition with a `{partition}/_GitSync` is rewritten from its repo on every sync, so the only identity that may write it is `system-security`. `AccessAssignmentGuard.IsForbiddenOnSystemOwned` refuses any `Admin`/`Editor`/unknown-role grant there (`Viewer`/`Commenter` entitlements and every `Denied` assignment stay legal), and `SystemOwnedAccessRetractionHandler` deletes such grants the moment the `_GitSync` is wired — so the shape is unsatisfiable, not merely inconvenient.
+>
+> The practical consequence for anyone editing a node repo: **a privileged `_Access/*.json` in a synced data tree is dead data that logs a `fail:` line on every sync.** That is exactly what shipped in `samples/Graph/Data` until #1245 — 75 refusals in 0.36 s per sync, and the import permanently `ImportedWithErrors`. `ShippedAccessGrantsTest` (`test/MeshWeaver.Graph.Test`) now fails the build if one is re-added. Platform admin belongs in `Auth:GlobalAdmins` (`GlobalAdminSeed` writes the `Admin/_Access` grant at startup); per-space write is granted on the live mesh.
+
 ---
 
 ## Recipe 3 — Grant another user access to your partition
@@ -240,6 +244,8 @@ After creating or updating an assignment, run through this checklist:
 | The write is refused with *"has an EMPTY MainNode … this grants ROOT"* | `AccessAssignmentGuard` doing its job — set `mainNode` to the scope the path encodes |
 | `Error: cannot patch … 'x' is not patchable` | Only `name`, `description`, `icon`, `category`, `order`, `content`, `preRenderedHtml`, `mainNode` are patchable; use `mcp update` with a full node for anything else |
 | Search finds the assignment but it has no effect | Namespace doesn't end in `/_Access` — node landed in the wrong table |
+| The write is refused with *"REFUSED privileged grant on system-owned partition"* | The partition has a `_GitSync` — it is owned by its repo. Grant `Viewer`/`Commenter` as an entitlement, or change the repo and sync it |
+| The grant exists but the user has no permissions at all | The role name is not one the mesh defines (`Admin`, `Editor`, `Viewer`, `Commenter`, `PlatformAdmin`) — an unknown role resolves to `Permission.None` while still counting as WRITE at the guard |
 | `Public→Admin` works but per-user denials fail in a test | Tests must use a per-user `accessObject`, not a Public assignment whose union bypasses negative-permission assertions |
 
 ---
@@ -251,5 +257,7 @@ After creating or updating an assignment, run through this checklist:
 | `src/MeshWeaver.Graph/Configuration/AccessAssignmentNodeType.cs` | NodeType definition and post-create handler that rebuilds permissions |
 | `src/MeshWeaver.Graph/Security/RlsNodeValidator.cs` | Read-side enforcer that surfaces `Access denied` |
 | `src/MeshWeaver.Mesh.Contract/Security/PermissionEvaluator.cs` | Synced query that aggregates AccessAssignments per user |
-| `src/MeshWeaver.Mesh.Contract/Services/AccessAssignmentGuard.cs` | Write-boundary guard: `mainNode` must equal the scope the path encodes |
+| `src/MeshWeaver.Mesh.Contract/Services/AccessAssignmentGuard.cs` | Write-boundary guard: `mainNode` must equal the scope the path encodes; no write-conferring grant on a system-owned (GitSynced) partition |
+| `src/MeshWeaver.GitSync/SystemOwnedAccessRetractionHandler.cs` | Same predicate, applied as a sweep when a `_GitSync` is wired — retracts privileged grants that predate the sync |
+| `test/MeshWeaver.Graph.Test/ShippedAccessGrantsTest.cs` | Structural guard: no `_Access` file committed to this repo may confer write, or name an undefined role |
 | `src/MeshWeaver.Hosting.PostgreSql/PostgreSqlSchemaInitializer.cs` | `access_changed` trigger that rebuilds `partition_access` and `user_effective_permissions` |
