@@ -2,7 +2,7 @@
 @inherits BlazorView<LayoutAreaControl, LayoutAreaView>
 @inject AccessService Access
 
-<div class="layout-area-container @(IsContentLoaded ? "content-loaded" : "content-loading") @((Top || Fill) ? "fill-area" : "")" style="@Style">
+<div class="@ContainerClass" style="@Style">
     @* Surface NodeType compile progress when the stream hasn't emitted yet so the
        user sees "Compiling <path> (Ns)…" instead of an indefinite spinner. *@
     @if (!IsContentLoaded)
@@ -77,6 +77,15 @@
 
 @code
 {
+    /// <summary>
+    /// The container's own state classes plus the author-declared <c>Class</c>. Composed here rather
+    /// than inline because Razor cannot parse two adjacent explicit expressions in one attribute value.
+    /// The literal parts and their spacing are exactly as before; <c>ClassSuffix</c> is empty when the
+    /// author declared no class, so an unstyled area's markup is unchanged.
+    /// </summary>
+    private string ContainerClass =>
+        $"layout-area-container {(IsContentLoaded ? "content-loaded" : "content-loading")} {((Top || Fill) ? "fill-area" : "")}{ClassSuffix}";
+
     [Parameter] public bool Top { get; set; }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -45,6 +46,16 @@ namespace MeshWeaver.Hosting.Blazor.Test;
 /// live pointer stream. <c>SpacerView</c> is deliberately NOT fixed: <c>FluentSpacer</c> exposes no
 /// Style/Class parameter at all, so honouring the contract there would mean wrapping it in an element
 /// and changing its flex behaviour.</para>
+///
+/// <para><b>#1297 — the <c>Class</c>-only drops.</b> The audit that came out of #1288 found eight further
+/// views that bind <c>Style</c> onto a real root element of their own and never wrote the class beside it.
+/// Five are rendered here (<c>MarkdownView</c>, <c>MeshNodeCollectionView</c>, <c>Label</c>,
+/// <c>EditorView</c>, <c>TabsView</c>); the other three are fixed the same way but are not renderable in
+/// this harness and are covered by the same reasoning rather than by a render: <c>NumberFieldView</c> is a
+/// form input needing a live pointer stream (as above), <c>LayoutAreaView</c> needs a real area stream and
+/// <c>ThreadMessageBubbleView</c> a live thread node. Each of the five positive tests was verified by
+/// falsification — reverting its view makes exactly that test fail — while the four
+/// backwards-compatibility guards pass with AND without the fix, which is what makes them guards.</para>
 /// </summary>
 public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -63,6 +74,10 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
                 // than dropping AddBlazor (which owns PortalApplication).
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostApplicationLifetime, StaticHostLifetime>()
                 .AddSingleton<IJSRuntime, NoopJsRuntime>()
+                // Views that re-dispatch through DispatchView (EditorView, TabsView) mount its
+                // per-control ErrorBoundary, whose [Inject] needs this. Blazor's hosting extensions
+                // register it; a bare test mesh does not.
+                .AddSingleton<IErrorBoundaryLogger, NoopErrorBoundaryLogger>()
                 .AddSingleton<NavigationManager>(new StaticNavigationManager())
                 .AddSingleton<INavigationInterception, NoopNavigationInterception>()
                 .AddSingleton<IScrollToLocationHash, NoopScrollToLocationHash>());
@@ -71,7 +86,7 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
     /// Renders <typeparamref name="TView"/> for <paramref name="control"/> through the real Blazor
     /// renderer and returns the emitted HTML.
     /// </summary>
-    private async Task<string> RenderAsync<TView>(UiControl control)
+    private async Task<string> RenderAsync<TView>(UiControl control, params (string Name, object? Value)[] extra)
         where TView : IComponent
     {
         using var scope = Mesh.ServiceProvider.CreateScope();
@@ -81,11 +96,14 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
         {
             return await renderer.Dispatcher.InvokeAsync(async () =>
             {
-                var parameters = ParameterView.FromDictionary(new Dictionary<string, object?>
+                var arguments = new Dictionary<string, object?>
                 {
                     ["ViewModel"] = control,
                     ["Area"] = "style-probe",
-                });
+                };
+                foreach (var (name, value) in extra)
+                    arguments[name] = value;
+                var parameters = ParameterView.FromDictionary(arguments);
                 var rendered = await renderer.RenderComponentAsync<TView>(parameters);
                 var html = rendered.ToHtmlString();
                 Output.WriteLine($"{typeof(TView).Name}: {html}");
@@ -299,12 +317,141 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
             because: "Controls.Title emits raw <hN> markup and is the one heading factory this view sees");
     }
 
+    // ─── #1297: the eight views that bound Style correctly and dropped Class ──────────────────────
+    //
+    // A separate bucket from the drops above, and a cheaper one. These views DO write Style="@Style"
+    // onto a real root element of their own — they simply never wrote the class beside it. So there is
+    // no "where should the box go" question and no wrapper to introduce: the element that already
+    // carries the author's Style is by definition the element that must carry the author's Class.
+    //
+    // Two mechanical shapes, and the reason both matter for backwards compatibility:
+    //   • root has NO class of its own  → class="@Class" (Blazor omits a null attribute entirely)
+    //   • root has a FIXED class list   → "fixed@(ClassSuffix)", where BlazorView.ClassSuffix is "" unless
+    //     a class was declared. Writing " @Class" instead would leave a TRAILING SPACE in every such
+    //     attribute on every page — hence the exact-attribute assertions below rather than Contain().
+    //
+    // Unlike HtmlView above, nothing here is conditional on the DECLARATION (ViewModel.Class): no element
+    // is created or removed, so a JsonPointerReference that lands a frame later just updates an attribute
+    // — it cannot restructure the DOM mid-flight.
+
+    /// <summary>
+    /// <c>MarkdownView</c>'s <c>&lt;article&gt;</c> carried <c>class="markdown-body"</c> and
+    /// <c>style="…; @Style"</c> — the author's Style landed, the author's Class did not.
+    /// </summary>
+    [Fact]
+    public async Task MarkdownControl_Class_JoinsTheFixedClassList()
+    {
+        var html = await RenderAsync<MarkdownView>(Controls.Markdown("# Title").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"markdown-body {ClassValue}\"",
+            because: "the declared class must join markdown-body on the article, not replace or miss it");
+    }
+
+    /// <summary>
+    /// 🚨 BACKWARDS COMPATIBILITY. The fixed class list of an unstyled control must be emitted exactly as
+    /// before — no trailing space, no empty token. <c>.markdown-body</c> is the hook for the whole
+    /// markdown stylesheet, so a mangled attribute here restyles every rendered document in the portal.
+    /// </summary>
+    [Fact]
+    public async Task MarkdownControl_WithoutClass_KeepsTheExactFixedClassList()
+    {
+        var html = await RenderAsync<MarkdownView>(Controls.Markdown("# Title"));
+
+        html.Should().Contain("class=\"markdown-body\"",
+            because: "ClassSuffix contributes nothing when no class was declared — the attribute is byte-identical");
+    }
+
+    /// <summary>Same shape on <c>MeshNodeCollectionView</c>'s container.</summary>
+    [Fact]
+    public async Task MeshNodeCollectionControl_Class_JoinsTheFixedClassList()
+    {
+        var html = await RenderAsync<MeshNodeCollectionView>(
+            new MeshNodeCollectionControl().WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"mesh-node-collection {ClassValue}\"",
+            because: "MeshNodeCollectionView bound Style onto its container and dropped Class");
+    }
+
+    /// <inheritdoc cref="MarkdownControl_WithoutClass_KeepsTheExactFixedClassList"/>
+    [Fact]
+    public async Task MeshNodeCollectionControl_WithoutClass_KeepsTheExactFixedClassList()
+    {
+        var html = await RenderAsync<MeshNodeCollectionView>(new MeshNodeCollectionControl());
+
+        html.Should().Contain("class=\"mesh-node-collection\"",
+            because: "an undeclared class must not widen the attribute the collection stylesheet matches on");
+    }
+
+    /// <summary>
+    /// <c>Label</c> forwards to <c>FluentLabel</c>, which accepts both parameters — the view passed only
+    /// <c>Style</c>. Covers the non-clickable branch; the clickable branch got the same parameter.
+    /// </summary>
+    [Fact]
+    public async Task LabelControl_Class_ReachesTheDom()
+    {
+        var html = await RenderAsync<Label>(Controls.Label("Text").WithClass(ClassValue));
+
+        html.Should().Contain(ClassValue,
+            because: "FluentLabel takes a Class parameter and the view simply never passed it");
+    }
+
+    /// <summary>An unstyled label must not gain a class attribute it never had.</summary>
+    [Fact]
+    public async Task LabelControl_WithoutClass_GainsNoClassAttribute()
+    {
+        var html = await RenderAsync<Label>(Controls.Label("Text"));
+
+        html.Should().NotContain(ClassValue);
+        html.Should().NotContain("class=\"\"",
+            because: "a null Class must leave the attribute out entirely, not emit an empty one");
+    }
+
+    /// <summary>
+    /// <c>EditorView</c>'s wrapper was <c>&lt;div style="@Style"&gt;</c> with no class attribute at all,
+    /// so the class had nowhere to land. It is a <c>SkinnedView</c>, hence the explicit skin parameter.
+    /// </summary>
+    [Fact]
+    public async Task EditorControl_Class_ReachesTheDom()
+    {
+        var html = await RenderAsync<EditorView>(
+            new EditorControl().WithClass(ClassValue), ("Skin", new EditorSkin()));
+
+        html.Should().Contain($"class=\"{ClassValue}\"",
+            because: "the editor wrapper honoured Style and had no slot at all for Class");
+    }
+
+    /// <inheritdoc cref="LabelControl_WithoutClass_GainsNoClassAttribute"/>
+    [Fact]
+    public async Task EditorControl_WithoutClass_GainsNoClassAttribute()
+    {
+        var html = await RenderAsync<EditorView>(new EditorControl(), ("Skin", new EditorSkin()));
+
+        html.Should().NotContain("class=\"\"",
+            because: "Blazor omits a null attribute — the unstyled wrapper stays <div> exactly as before");
+    }
+
+    /// <summary><c>FluentTabs</c> accepts <c>Class</c>; <c>TabsView</c> passed only <c>Style</c>.</summary>
+    [Fact]
+    public async Task TabsControl_Class_ReachesTheDom()
+    {
+        var html = await RenderAsync<TabsView>(
+            Controls.Tabs.WithClass(ClassValue), ("Skin", new TabsSkin()));
+
+        html.Should().Contain(ClassValue,
+            because: "TabsControl.WithClass must reach the fluent-tabs element");
+    }
+
     private sealed class StaticHostLifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime
     {
         public CancellationToken ApplicationStarted { get; } = new(canceled: true);
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
         public void StopApplication() { }
+    }
+
+    private sealed class NoopErrorBoundaryLogger : IErrorBoundaryLogger
+    {
+        public ValueTask LogErrorAsync(Exception exception) => ValueTask.CompletedTask;
     }
 
     private sealed class NoopJsRuntime : IJSRuntime

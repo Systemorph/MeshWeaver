@@ -5,7 +5,7 @@
 @inject MeshWeaver.Mesh.Services.IMeshService MeshQuery
 @inject AccessService Access
 
-<div class="mesh-node-collection" style="@Style">
+<div class="mesh-node-collection@(ClassSuffix)" style="@Style">
     @if (_isLoading)
     {
         <FluentProgressRing Style="margin: 8px;" />
