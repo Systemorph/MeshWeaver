@@ -83,8 +83,12 @@ RUN npx --yes playwright-core@${PLAYWRIGHT_VERSION} install --with-deps --only-s
     # and an amd64 leg with no browser. Match both — and if neither is present, print the tree
     # and fail, because a `find` that returns nothing otherwise degrades into a bare `ln` error
     # that names nothing useful.
-    && BROWSER="$(find /opt/ms-playwright -type f \
-         \( -name headless_shell -o -name chrome-headless-shell \) | head -n 1)" \
+    # `-executable -print -quit` rather than `| head -n 1`: stop at the first hit instead of
+    # walking the whole ~350 MB browser tree and throwing the rest away (it is emulated on one
+    # of the two legs), and require the match to actually BE a program so a same-named data
+    # file could never be symlinked in as the browser.
+    && BROWSER="$(find /opt/ms-playwright -type f -executable \
+         \( -name headless_shell -o -name chrome-headless-shell \) -print -quit)" \
     && { [ -n "$BROWSER" ] || { \
            echo "No headless-shell binary under /opt/ms-playwright for $(uname -m):"; \
            find /opt/ms-playwright -maxdepth 3; exit 1; }; } \
