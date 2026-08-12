@@ -36,6 +36,15 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     private bool toolCallsExpanded;
 
     private bool IsUser => Role.Equals("user", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The bubble's own role class plus the author-declared <c>Class</c>. Composed here rather than
+    /// inline because Razor cannot parse two adjacent explicit expressions in one attribute value.
+    /// <c>ClassSuffix</c> is empty when no class was declared, so the markup is otherwise unchanged.
+    /// </summary>
+    private string BubbleClass =>
+        $"thread-msg-bubble {(IsUser ? "thread-msg-user" : "thread-msg-assistant")}{ClassSuffix}";
+
     private bool CanEdit => !string.IsNullOrEmpty(ViewModel.ThreadPath) && !string.IsNullOrEmpty(ViewModel.MessageId);
     private bool HasToolCalls => toolCalls is { Count: > 0 };
 

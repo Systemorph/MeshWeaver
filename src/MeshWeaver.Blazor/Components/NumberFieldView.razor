@@ -5,7 +5,7 @@
 
 @* Single wrapping container so Label + input share the same width/height.
    Width/Height come from data binding (ViewModel.Width / ViewModel.Height). *@
-<div style="display: inline-flex; flex-direction: column; @ComputedStyle">
+<div class="@Class" style="display: inline-flex; flex-direction: column; @ComputedStyle">
 
 @if (!string.IsNullOrEmpty(Label))
 {

@@ -141,6 +141,22 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     /// <summary>CSS class string bound from <c>ViewModel.Class</c>; applied to the root element.</summary>
     protected string? Class { get; set; }
+
+    /// <summary>
+    /// <see cref="Class"/> rendered as a space-prefixed suffix, for views whose root element already
+    /// carries a FIXED class list of its own. 🚨 The Razor form is the PARENTHESISED one —
+    /// <c>class="markdown-body@(ClassSuffix)"</c>: written bare as <c>markdown-body@ClassSuffix</c> it
+    /// hits Razor's email-address heuristic (<c>word@word</c>) and is emitted as LITERAL TEXT, with no
+    /// error. Emits the empty
+    /// string when the author declared no class, so an unstyled control's markup stays byte-identical to
+    /// what it was before the class was honoured — appending <c> @Class</c> literally instead would leave
+    /// a trailing space in every such attribute.
+    /// </summary>
+    /// <remarks>
+    /// Views whose root has NO class of its own use <c>class="@Class"</c> directly (Blazor omits a null
+    /// attribute entirely), and views that forward to a Fluent component pass <c>Class="@Class"</c>.
+    /// </remarks>
+    protected string ClassSuffix => string.IsNullOrWhiteSpace(Class) ? string.Empty : " " + Class;
     /// <summary>HTML element id bound from <c>ViewModel.Id</c>.</summary>
     protected string? Id { get; set; }
 
