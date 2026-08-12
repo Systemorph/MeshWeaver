@@ -818,7 +818,11 @@ public class QueryParserTests
         var result = _parser.Parse("namespace:*/Source nodeType:Code");
 
         result.Path.Should().BeNull("a wildcard namespace spans partitions — there is no path to walk");
-        NamespaceLikePatterns(result.Filter).Should().Equal(new[] { "%/Source" });
+        NamespaceLikePatterns(result.Filter).Should().Equal(
+            new[] { "*/Source" },
+            "the AST speaks ONE wildcard vocabulary — `*`, the character the user typed (#1235). "
+            + "This used to be rewritten to SQL's `%` right here, which every SQL generator then "
+            + "re-derived anyway while the in-memory evaluators, which speak `*`, matched nothing");
     }
 
     /// <summary>
@@ -845,7 +849,7 @@ public class QueryParserTests
         var result = _parser.Parse(query);
 
         NamespaceLikePatterns(result.Filter).Should().Equal(
-            new[] { "%/Source", "%/Source/%" },
+            new[] { "*/Source", "*/Source/*" },
             "scope:subtree on a wildcard namespace has no path to walk, so the only way it can "
             + "reach a nested namespace is for the LIKE filter itself to cover self AND below");
     }
@@ -858,7 +862,7 @@ public class QueryParserTests
 
         var or = FindNode<QueryOr>(result.Filter);
         or.Should().NotBeNull("self-or-below is a disjunction; ANDing the two patterns is unsatisfiable");
-        NamespaceLikePatterns(or).Should().Equal(new[] { "%/Source", "%/Source/%" });
+        NamespaceLikePatterns(or).Should().Equal(new[] { "*/Source", "*/Source/*" });
     }
 
     private static T? FindNode<T>(QueryNode? node) where T : QueryNode => node switch

@@ -234,38 +234,25 @@ public class QueryEvaluator
     }
 
     /// <summary>
-    /// Compares a value against a wildcard pattern (* for any characters).
+    /// Compares a value against a <see cref="QueryOperator.Like"/> pattern, in the query language's
+    /// one wildcard vocabulary: <c>*</c> (see <see cref="QueryWildcard"/>).
+    ///
+    /// <para>🚨 <b>Issue #1235.</b> This used to hand-roll four cases — leading star, trailing star,
+    /// both, neither — off <c>pattern.Trim('*')</c>. That made it wrong twice over. It understood
+    /// only <c>*</c> while <see cref="QueryParser"/> emitted a wildcard NAMESPACE as SQL's <c>%</c>,
+    /// so <c>%/Source</c> hit neither star branch and fell through to an equality test against the
+    /// literal string — a wildcard-namespace filter matched NOTHING in memory, silently. And
+    /// <c>Trim</c> cannot see an INTERIOR wildcard, so the two-wildcard pattern #1232 introduced
+    /// (<c>*/Source/*</c>) was mangled as well. Both are now one call into the shared glob, which
+    /// handles any number of wildcards and is the same code <c>PathMatcher</c> runs — the fork
+    /// existed because there were two readers of one vocabulary.</para>
+    ///
+    /// <para>A pattern with NO wildcard is a CONTAINS test, matching what the SQL generators do
+    /// (they wrap a bare pattern as <c>%p%</c> before binding it to <c>ILIKE</c>), so the in-memory
+    /// and SQL paths give the same answer for the hand-built filters that use that shape.</para>
     /// </summary>
-    private static bool CompareWildcard(object? actual, string pattern)
-    {
-        if (actual == null)
-            return false;
-
-        var actualStr = actual.ToString() ?? "";
-
-        // Convert wildcard pattern to simple contains check
-        // *value* = contains, value* = starts with, *value = ends with
-        var trimmedPattern = pattern.Trim('*');
-        var startsWithStar = pattern.StartsWith('*');
-        var endsWithStar = pattern.EndsWith('*');
-
-        if (startsWithStar && endsWithStar)
-        {
-            return actualStr.Contains(trimmedPattern, StringComparison.OrdinalIgnoreCase);
-        }
-        else if (startsWithStar)
-        {
-            return actualStr.EndsWith(trimmedPattern, StringComparison.OrdinalIgnoreCase);
-        }
-        else if (endsWithStar)
-        {
-            return actualStr.StartsWith(trimmedPattern, StringComparison.OrdinalIgnoreCase);
-        }
-        else
-        {
-            return actualStr.Equals(trimmedPattern, StringComparison.OrdinalIgnoreCase);
-        }
-    }
+    private static bool CompareWildcard(object? actual, string pattern) =>
+        actual != null && QueryWildcard.IsLikeMatch(actual.ToString(), pattern);
 
     private static bool TryParseNumber(object? value, out double result)
     {

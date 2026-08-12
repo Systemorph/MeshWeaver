@@ -124,7 +124,20 @@ public enum ChangeType
 /// Base type for messages carried over a synchronization stream.
 /// </summary>
 /// <param name="StreamId">The identifier of the stream the message belongs to.</param>
-public abstract record StreamMessage(string StreamId);
+public abstract record StreamMessage(string StreamId) : IDiagnosticKeyed
+{
+    /// <summary>
+    /// The stream id — the thing this message is ABOUT.
+    ///
+    /// <para>🚨 Load-bearing, not cosmetic. One owner hub holds a SEPARATE sync stream per
+    /// subscriber/reference, and every one of them posts to the SAME subscriber address with the
+    /// SAME message type. Without this component the hub-ingestion <c>MessageStormBreaker</c>
+    /// folds all of them into one rate bucket, so a wide, legitimate change fan-out (a bulk import
+    /// driving many streams) is indistinguishable from ONE stream in a resubscribe/repost loop —
+    /// and the breaker DROPS the fan-out's frames at ingestion. See <see cref="IDiagnosticKeyed"/>.</para>
+    /// </summary>
+    string IDiagnosticKeyed.DiagnosticKey => StreamId;
+}
 /// <summary>
 /// Base type for stream messages that carry a versioned JSON change.
 /// </summary>

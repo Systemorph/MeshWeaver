@@ -84,7 +84,46 @@ public class QueryChangeRelevanceTest
     public void NamespaceOf_strips_the_last_segment()
         => Assert.Equal($"{Owner}/_Thread", PathMatcher.NamespaceOf(ThreadPath));
 
+    /// <summary>
+    /// 🚨 THE VOCABULARY CONTRACT (#1235), pinned as a ROUND TRIP rather than a hardcoded string:
+    /// whatever <see cref="QueryParser"/> emits for a wildcard namespace, this matcher must
+    /// understand. Asserting the pattern's spelling and the matcher's behaviour separately is what
+    /// let them diverge — this used to read
+    /// <c>NamespaceInScope("{Owner}/_Thread", ["{Owner}/%_Thread"])</c> with the comment "parser
+    /// rewrites * → SQL-LIKE %", so it kept passing on a `%` the parser no longer produces while
+    /// the real query path matched nothing.
+    /// </summary>
     [Fact]
-    public void Namespace_glob_matches_the_parser_emitted_like_pattern() // parser rewrites * → SQL-LIKE %
-        => Assert.True(PathMatcher.NamespaceInScope($"{Owner}/_Thread", new[] { $"{Owner}/%_Thread" }));
+    public void Namespace_glob_matches_whatever_the_parser_actually_emits()
+    {
+        var patterns = CatalogFilter().Namespaces;
+
+        Assert.Contains($"{Owner}/*_Thread", patterns); // `*` is the one vocabulary — never SQL's `%`
+        Assert.True(PathMatcher.NamespaceInScope($"{Owner}/_Thread", patterns));
+    }
+
+    /// <summary>
+    /// <c>%</c> is a LITERAL here, not a wildcard. The matcher used to accept both spellings to
+    /// compensate for the parser's rewrite; tolerating both is precisely what hid the fork, so a
+    /// re-introduced `%` must fail loudly instead of quietly working in memory only.
+    /// </summary>
+    [Fact]
+    public void Namespace_glob_does_not_treat_percent_as_a_wildcard()
+        => Assert.False(PathMatcher.NamespaceInScope($"{Owner}/_Thread", new[] { $"{Owner}/%_Thread" }));
+
+    /// <summary>
+    /// The multi-wildcard pattern <c>scope:subtree</c> produces (#1232) must reach a namespace
+    /// nested below the matched one — the arm that silently never fired while <c>GlobMatch</c>
+    /// split on the first wildcard only.
+    /// </summary>
+    [Fact]
+    public void Namespace_glob_subtree_pair_reaches_a_nested_namespace()
+    {
+        var patterns = Parser.Parse("namespace:*/Source scope:subtree nodeType:Code")
+            .ExtractNamespacePatterns();
+
+        Assert.True(PathMatcher.NamespaceInScope("acme/SampleData/Source", patterns));
+        Assert.True(PathMatcher.NamespaceInScope("acme/SampleData/Source/Fixtures", patterns));
+        Assert.False(PathMatcher.NamespaceInScope("acme/SampleData/Other", patterns));
+    }
 }
