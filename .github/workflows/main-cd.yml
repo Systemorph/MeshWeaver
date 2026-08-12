@@ -868,7 +868,8 @@ jobs:
           # 🚨 THE LAST WRITE IN CD. Until this single PUT lands, no install can see this commit:
           # SelfUpdateHostedService reads memex-portal-ai's tags and rolls the portal AND the
           # migration Deployment to the newest ^\d+\.\d+\.\d+ one. Everything it will need — the
-          # matching memex-migration:$V_MIGRATION — is already tagged by phase A. Do not move this step, and do not add anything after it.
+          # matching memex-migration:$V_MIGRATION — is already tagged by phase A. Do not move
+          # this step, and do not add anything after it.
           echo "→ memex-portal-ai: $V_PORTAL  (arming the self-updater)"
           docker buildx imagetools create \
             --tag "${{ env.ACR }}/memex-portal-ai:$V_PORTAL" \
