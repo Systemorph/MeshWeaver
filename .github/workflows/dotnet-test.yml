@@ -22,7 +22,7 @@
 #   2. exit markers — any per-project `[CI] <name> exit=N` with N != 0. This is
 #      what catches a test host that CRASHES after streaming green results
 #      (SIGABRT/FailFast → exit 134 with an all-green trx: the 2026-07 masked
-#      Persistence.Test memory-watchdog abort), a 6m wall-clock kill (124/137),
+#      Persistence.Test memory-watchdog abort), an 8m wall-clock kill (124/137),
 #      and xunit catastrophic failures ("There is no currently active test",
 #      teardown ObjectDisposedException) that leave no failed trx entry.
 #
@@ -604,11 +604,49 @@ jobs:
           ( cd "$dir" && timeout --signal=TERM --kill-after=30s 8m \
               dotnet "$name.dll" -trx "TestResults/$trxname.trx" "${classargs[@]}" )
           rc=$?
-          if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
-            marker="[CI] $label exit=$rc TIMEOUT (6m wall-clock cap hit — likely fixture/init hang)"
-          else
-            marker="[CI] $name exit=$rc"
+          # ── Classify the host's exit code ─────────────────────────────────
+          # 🚨 xUnit v3's native host returns THE COUNT OF FAILING TESTS as its
+          # exit code. So an ordinary "one assertion failed" run exits 1 — which
+          # the old two-branch classifier lumped in with genuine crashes and the
+          # downstream gates then announced as "a test host exited non-zero
+          # (failure, crash, or timeout kill)". #1242 was filed on exactly that
+          # phrasing: nine shard steps read as dying hosts when every one was a
+          # plain, single, named assertion failure from a host that ran to
+          # completion and printed its summary.
+          #
+          # The trx is the discriminator. Compare rc against the number of
+          # Failed results the host actually recorded:
+          #   rc == trx-failed-count  → plain test failures (the common case)
+          #   rc != trx-failed-count  → the host exited for a reason the trx
+          #                             cannot explain: it crashed AFTER
+          #                             streaming green results, or died before
+          #                             writing its results at all. THAT is the
+          #                             case the exit-marker gate exists for.
+          # Signal deaths and wall-clock kills are named outright, since their
+          # codes are fixed and can never be a failure count in practice.
+          trxfile="$dir/TestResults/$trxname.trx"
+          trxfails=0
+          if [ -f "$trxfile" ]; then
+            trxfails=$(grep -oE '<UnitTestResult[^>]*outcome="Failed"' "$trxfile" | wc -l | tr -d ' ')
           fi
+          case "$rc" in
+            0)
+              marker="[CI] $name exit=0" ;;
+            124|137)
+              marker="[CI] $label exit=$rc TIMEOUT (8m wall-clock cap hit — likely fixture/init hang)" ;;
+            132) marker="[CI] $label exit=$rc SIGNAL SIGILL (host died on a signal, not an assertion)" ;;
+            134) marker="[CI] $label exit=$rc SIGNAL SIGABRT (host died on a signal, not an assertion)" ;;
+            135) marker="[CI] $label exit=$rc SIGNAL SIGBUS (host died on a signal, not an assertion)" ;;
+            139) marker="[CI] $label exit=$rc SIGNAL SIGSEGV (host died on a signal, not an assertion)" ;;
+            *)
+              if [ "$rc" = "$trxfails" ]; then
+                marker="[CI] $name exit=$rc TESTFAIL ($trxfails failing test(s) recorded in trx — xunit v3 exits with the failure count; the host completed normally)"
+              elif [ ! -f "$trxfile" ]; then
+                marker="[CI] $label exit=$rc MASKED (no trx written — the host died before recording any result)"
+              else
+                marker="[CI] $label exit=$rc MASKED (trx records $trxfails failing test(s), which does not explain exit=$rc — host crashed after streaming results)"
+              fi ;;
+          esac
           echo "$marker"
           echo "$marker" >> test/test-results.log
           echo "::endgroup::"
@@ -728,15 +766,18 @@ jobs:
       # A test host that ABORTS mid-run (SIGABRT/FailFast → exit 134) streams
       # green results for every COMPLETED test and then dies: the trx shows zero
       # failures while in-flight + not-yet-run tests silently VANISH from the
-      # count. Same for a 6m wall-clock kill (124/137) and for xunit
+      # count. Same for an 8m wall-clock kill (124/137) and for xunit
       # catastrophic failures that exit 1 with an all-green trx. The
       # per-project exit markers are the only faithful record — gate on them.
+      # Each marker is already CLASSIFIED (TESTFAIL / TIMEOUT / SIGNAL / MASKED)
+      # by the run step, so the marker text says which of those actually
+      # happened — do not re-editorialise it here.
       # Last step so the artifact upload + per-shard publish above already ran.
       if: always()
       run: |
         bad=$(grep -E 'exit=[1-9]' test/test-results.log || true)
         if [ -n "$bad" ]; then
-          echo "::error::Shard ${{ matrix.shard }}: a test host exited non-zero (failure, crash, or timeout kill):"
+          echo "::error::Shard ${{ matrix.shard }}: a test host exited non-zero — see the classification on each marker below (TESTFAIL = ordinary failing tests, TIMEOUT/SIGNAL/MASKED = the host itself died):"
           echo "$bad"
           exit 1
         fi
@@ -1044,14 +1085,16 @@ jobs:
     - name: Fail on non-zero project exit (all shards)
       # Defense-in-depth re-check of every shard's exit markers (each shard
       # already gates its own). A host that crashed after streaming green
-      # results, or was killed at the 6m cap, appears ONLY here — the trx gate
+      # results, or was killed at the 8m cap, appears ONLY here — the trx gate
       # above cannot see it (completed tests all read Passed; the rest vanish).
+      # Markers carry their classification (TESTFAIL / TIMEOUT / SIGNAL /
+      # MASKED); only the non-TESTFAIL ones are hosts that actually died.
       if: always() && needs.precheck.outputs.skip != 'true'
       run: |
         bad=$(find all-results -name 'test-results.log' -exec cat {} \; \
               | grep -E 'exit=[1-9]' || true)
         if [ -n "$bad" ]; then
-          echo "::error::A test host exited non-zero despite the trx gate (crashed or killed mid-run — completed-only results were published):"
+          echo "::error::A test host exited non-zero — see the classification on each marker below (TESTFAIL = ordinary failing tests, TIMEOUT/SIGNAL/MASKED = the host died mid-run and only completed results were published):"
           echo "$bad"
           exit 1
         fi
