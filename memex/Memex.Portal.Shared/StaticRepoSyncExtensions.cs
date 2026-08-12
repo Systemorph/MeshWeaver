@@ -50,6 +50,12 @@ public static class StaticRepoSyncExtensions
             if (serveFromPartition.Overlaps(AiContentSources.ContentPartitions))
                 services.AddBuiltInAiContentSources();
 
+            // The boot signal the NodeType pre-warm sweep sequences on: without it the sweep's ONE
+            // enumeration snapshot can be taken while this import is still landing content, and
+            // every type it misses is left to compile on a user's first click. See
+            // StaticRepoImportSettled.
+            services.AddSingleton<StaticRepoImportSettled>();
+
             // Runs after the PG schema-provisioning hosted service (registered earlier by
             // AddPartitionedPostgreSqlPersistence) — hosted services start in registration order.
             // A factory (not AddHostedService<T>) so the deploy-time per-partition mode overrides
@@ -58,7 +64,8 @@ public static class StaticRepoSyncExtensions
                 sp.GetRequiredService<IMessageHub>(),
                 sp.GetServices<IStaticRepoSource>(),
                 syncModeOverrides,
-                sp.GetService<ILogger<StaticRepoImportHostedService>>()));
+                sp.GetService<ILogger<StaticRepoImportHostedService>>(),
+                sp.GetRequiredService<StaticRepoImportSettled>()));
             return services;
         });
         return builder;
@@ -76,14 +83,18 @@ internal sealed class StaticRepoImportHostedService(
     IMessageHub hub,
     IEnumerable<IStaticRepoSource> sources,
     IReadOnlyDictionary<string, PartitionSyncMode>? syncModeOverrides = null,
-    ILogger<StaticRepoImportHostedService>? logger = null) : IHostedService
+    ILogger<StaticRepoImportHostedService>? logger = null,
+    StaticRepoImportSettled? settled = null) : IHostedService
 {
     private IDisposable? _subscription;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         if (!sources.Any())
+        {
+            settled?.MarkSettled();
             return Task.CompletedTask;
+        }
 
         logger?.LogInformation(
             "[StaticRepoImport] starting sync-context init for {Count} source(s).", sources.Count());
@@ -105,7 +116,14 @@ internal sealed class StaticRepoImportHostedService(
                 r => logger?.LogInformation(
                     "[StaticRepoImport] {Partition}: {Outcome} ({Count} node(s)).",
                     r.Partition, r.Outcome, r.Count),
-                ex => logger?.LogWarning(ex, "[StaticRepoImport] sync-context init failed."));
+                ex =>
+                {
+                    logger?.LogWarning(ex, "[StaticRepoImport] sync-context init failed.");
+                    // Settle on failure TOO: a faulted import must never park the NodeType bake
+                    // forever. The sweep proceeds and bakes whatever did land.
+                    settled?.MarkSettled();
+                },
+                () => settled?.MarkSettled());
         return Task.CompletedTask;
     }
 

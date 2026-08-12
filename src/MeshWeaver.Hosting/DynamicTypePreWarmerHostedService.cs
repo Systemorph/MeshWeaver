@@ -1,5 +1,7 @@
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using MeshWeaver.Graph;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -201,9 +203,32 @@ public sealed class DynamicTypePreWarmerHostedService(
                     batchBake ? "gated (batch)" : "serving (activation-driven)");
         }
 
+        // 🚨 SEQUENCE THE SWEEP BEHIND THE STATIC REPO IMPORT — it is content this bake must see.
+        //
+        // The import is kicked fire-and-forget from its own StartAsync (it has to be: subscribing on
+        // the startup thread re-enters the hub schedulers and deadlocks), and ApplicationStarted —
+        // where this method runs — fires as soon as every StartAsync has RETURNED. So without this
+        // wait the sweep's ONE enumeration snapshot (Query(...).Take(1)) can be taken while the
+        // import is still landing content, and every NodeType missing from that snapshot is never
+        // baked: it compiles on the activation path when a user first opens it.
+        //
+        // Observed resolving BOTH ways on memex-cloud 2026-08-12 — the 23:02 pod enumerated 237
+        // types with the whole statically-served MeshWeaver/… tree absent, its 05:52 successor 279
+        // on the same content. Those 42 unbaked types are the "waiting for code" stall.
+        //
+        // Absent (no static import registered — every test host, non-portal hosts) this is
+        // immediate, so the shape is unchanged there. The signal also settles when the import FAILS,
+        // so a faulted import delays the bake rather than cancelling it.
+        var importSettled = services.GetService<StaticRepoImportSettled>();
+        if (importSettled is { IsSettled: false })
+            logger.LogInformation(
+                "DynamicTypePreWarmer: waiting for the static repo import to settle before "
+                + "enumerating — types it has not written yet would be missed by the bake");
+
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
-        _warmSubscription = DynamicTypePreWarmer
-            .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake)
+        _warmSubscription = (importSettled?.Settled ?? Observable.Return(Unit.Default))
+            .SelectMany(_ => DynamicTypePreWarmer
+                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake))
             .Subscribe(
                 outcome =>
                 {
