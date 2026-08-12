@@ -7,9 +7,10 @@
 @using MeshWeaver.Reactive
 @using System.Reactive.Linq
 @using System.Text.Json
+@inherits BlazorView<SearchBoxControl, SearchBoxView>
 @inject NavigationManager NavigationManager
 
-<div class="search-box-container" style="display: flex; gap: 8px; align-items: center; width: 100%;">
+<div class="search-box-container@(ClassSuffix)" style="display: flex; gap: 8px; align-items: center; width: 100%;@StyleSuffix">
     <div style="flex: 1;">
         <MonacoEditorView @ref="monacoEditor"
                           Value="@_currentValue"
@@ -41,18 +42,9 @@
         Items = []
     };
 
-    [Parameter]
-    public SearchBoxControl? ViewModel { get; set; }
-
-    [Parameter]
-    public ISynchronizationStream<JsonElement>? Stream { get; set; }
-
-    [Parameter]
-    public string? Area { get; set; }
-
-    [CascadingParameter(Name = "DataContext")]
-    public string? DataContext { get; set; }
-
+    // ViewModel / Stream / Area / DataContext are the base class's — declaring them here again is
+    // what made this view invisible to BlazorView.BindData, so Style and Class were never bound
+    // at all (#1333). The registry types it as a control view; the base is what makes that true.
     [Inject]
     public IMeshService? MeshQuery { get; set; }
 
