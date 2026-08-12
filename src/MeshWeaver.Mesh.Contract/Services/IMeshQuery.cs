@@ -185,8 +185,37 @@ public record MeshQueryRequest
 
     /// <summary>
     /// Maximum number of results to return (takes precedence over limit in query string).
+    ///
+    /// <para>🚨 <b>Leaving this unset does NOT mean "everything".</b> An UNPINNED query (no
+    /// <c>path:</c>, no <c>namespace:</c>) is served on Postgres by the cross-schema fan-out, which
+    /// answers a request that states no limit with a PAGE — the most recently modified rows, capped
+    /// at a default — and the caller cannot tell a page from the whole set. Say
+    /// <see cref="Complete"/> when the read is an ENUMERATION rather than a search.</para>
     /// </summary>
     public int? Limit { get; init; }
+
+    /// <summary>
+    /// The <see cref="Limit"/> value that means "no clip — return every match". Non-positive, which
+    /// is what the merge layer has always treated as unbounded; the storage providers translate it
+    /// to an unbounded SQL fetch rather than a literal <c>LIMIT -1</c>.
+    /// </summary>
+    public const int NoLimit = -1;
+
+    /// <summary>
+    /// Declares this read an ENUMERATION, not a page: every match must come back, because the
+    /// caller iterates the result as the complete set.
+    ///
+    /// <para>🚨 Use it wherever a MISSING row silently changes behaviour rather than merely
+    /// shortening a list — a fan-out over every configured sync source, a bake over every NodeType,
+    /// a reconciliation. Both production incidents in this family had the same shape: the query
+    /// stated no limit, the cross-schema fan-out substituted its default and ordered by
+    /// <c>last_modified DESC</c>, and the rows that fell off the end were exactly the ones that had
+    /// gone longest without being processed — so the omission was self-reinforcing and invisible.
+    /// #1216 baked 237 NodeTypes against 50 Code nodes; #1326 left 9 of 43 Spaces permanently stale
+    /// while the webhook reported success.</para>
+    /// </summary>
+    /// <returns>A copy of this request that must not be truncated.</returns>
+    public MeshQueryRequest Complete() => this with { Limit = NoLimit };
 
     /// <summary>
     /// Context for visibility filtering. When set, nodes with this context

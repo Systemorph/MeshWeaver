@@ -472,7 +472,10 @@ public static class DynamicTypePreWarmer
         if (!cyclic.IsEmpty)
             logger?.LogWarning(
                 "DynamicTypePreWarmer: {Count} NodeType(s) form a source dependency CYCLE and "
-                + "cannot be ordered — warmed last, in path order: {Cyclic}",
+                + "cannot be ordered RELATIVE TO EACH OTHER — warmed together, in path order, as "
+                + "soon as everything outside the cycle that they wait on is built (#1347: they "
+                + "used to be demoted to last, which put the whole store/paywall chain at the end "
+                + "of the sweep): {Cyclic}",
                 cyclic.Count, string.Join(", ", cyclic));
 
         // FAIL GRACEFULLY DOWNSTREAM. A type whose upstream did not reach a usable build

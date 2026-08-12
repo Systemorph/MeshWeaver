@@ -27,7 +27,7 @@ The only route that produces a new **image** and restarts pods.
 | Stage | Cost | |
 |---|---|---|
 | `MeshWeaver Build and Test` (build + 6 test shards) | **22m19s** | *(measured 2026-07-28)* |
-| `Continuous Delivery (main)` — multi-arch publish of portal (~2.2 GB), migration, **bake**, plugin-test | **28m38s** | *(measured 2026-07-28)* |
+| `Continuous Delivery (main)` — multi-arch publish of portal (~2.2 GB), migration, plugin-test | **28m38s** *(pre-#1347; the retired bake leg was 12m23s of it)* | *(measured 2026-07-28)* |
 | In-pod self-update: detect tag → pull → patch its own Deployment | pull-bound | estimate |
 | Rollout: `maxSurge 1` / `maxUnavailable 0` — the new pod must pass `/health` before the old drains | boot-bound | |
 | **NodeType bake** — only if the framework MVID changed (below) | see [bake](#the-bake-tax) | |
@@ -47,13 +47,17 @@ asks whether main's HEAD has the complete set in ACR and publishes only if it do
 the commit that failed — the version tag comes from the building run's number, so re-publishing
 older code would mint a higher `-ci.<n>` and roll installs backwards.
 
-> **CD publishes four images**, and the `memex-bake` leg alone took **12m23s** of that 28m38s
-> *(measured 2026-07-28)* — it is a full portal-sized dependency closure, because reference fidelity
-> requires it to reference `Memex.Portal.Shared` (a NodeType compiles against the assemblies loaded
-> in the process doing the compiling, so a leaner reference set could bake green and still fail in
-> the portal). That is a real, recurring cost on **every** core release, paid whether or not the bake
-> is enabled on any environment. If it ever needs cutting, the lever is publishing it on a schedule
-> or only on release tags — not trimming its references.
+> **The `memex-bake` leg is RETIRED (#1347).** It took **12m23s** of that 28m38s
+> *(measured 2026-07-28)* — a full portal-sized dependency closure, because reference fidelity
+> required it to reference `Memex.Portal.Shared` — and it could never have contributed a single
+> usable assembly. A separately-published image cannot share the portal image's framework identity:
+> `InformationalVersion` carries `+build.<UtcNow.Ticks>` under `CIRun`
+> (`Directory.Build.props`), stamped independently by **each** `dotnet publish`, so the bake
+> image's `MeshWeaver.Graph` and the portal image's differ in MVID even when built from the same
+> commit in the same CD run. The bake therefore wrote assemblies under a framework tag no portal
+> would ever look up — and, worse, its compile write-back flipped live NodeType records, which is
+> what stopped the one AKS attempt (memex-cloud, 2026-07-30). The pod-side sweep has the right
+> fingerprint *by construction* (it IS the serving process) and measures 76 s for 280 types.
 
 ### Every core release invalidates the compile cache — plan for the bake on all of them
 
