@@ -32,7 +32,6 @@
     <Project Path="memex/aspire/Memex.AppHost/Memex.AppHost.csproj" />
     <Project Path="memex/aspire/Memex.Aspire.Hosting/Memex.Aspire.Hosting.csproj" />
     <Project Path="memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" />
-    <Project Path="memex/aspire/Memex.NodeType.Bake/Memex.NodeType.Bake.csproj" />
     <Project Path="memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" />
     <Project Path="memex/aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj" />
   </Folder>

@@ -69,7 +69,7 @@ tests to run, so the runtime and the pipeline agree by construction rather than 
 
 ## (C) The platform image — built by CD, rolled by the install itself
 
-Continuous delivery **builds and pushes** the portal, migration, bake and plugin-tester images to
+Continuous delivery **builds and pushes** the portal, migration and plugin-tester images to
 ACR, tagged by version. It does **not** `kubectl set image` anything: the deployments pin an explicit
 tag rather than following a moving one, so a published image reaches an instance only when something
 sets that tag.
@@ -79,12 +79,56 @@ startup) and patches its **own** portal + migration Deployments per the `Admin/U
 `Continuous` (the platform default, newest build-numbered tag), `Stable` (newest clean release), or
 `None` (manual only). See [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy).
 
+On installs where the GitHub webhook is wired, the poll is only the fallback: the poller also
+watches the platform repo's `BuildCompletion` node (`Admin/_Build/Systemorph.MeshWeaver` — the same
+fact [plugin updates](/Doc/Architecture/PluginUpdateOnGreenBuild) react to) and runs one immediate
+check when a green build lands, so a roll follows CI by minutes instead of by up to a poll
+interval. `SelfUpdate:BuildTriggerRepository` names the repo (empty disables); an install without
+the webhook simply never sees the node and keeps polling. The watch may never gate or kill the
+poller — a fault re-establishes it silently, same discipline as the policy read.
+
 So the hop is automated *by policy*, and it still fails silently in two ways worth remembering: a
 `None`-policy install never moves, and a commit whose CD run never completed has no selectable
 version tag to move **to** (only the moving `main` pointer and the per-run staging tag, both
 invisible to `VersionSelect`). When a symptom points at core behaviour, **check the running image
 first** — comparing the deployment's tag against the newest tag in the registry costs one command and
 forecloses a long, wrong hunt.
+
+## 🎯 The roll policy — serve fast, never disturb
+
+**The aim of every roll: the user never notices.** No slow first hit, no dropped circuit, no
+"transient hub error", no page that pays a compile because an image moved underneath it. The
+contract, in five rules — grain = an activated per-node hub; silo = a portal process of one image
+generation; bake = pre-compiling every dynamic NodeType for the NEW framework fingerprint:
+
+1. **An ACTIVE grain is never torn down.** As long as there is activity on a grain, it keeps
+   serving where it is. Deactivation is for idle grains only; a roll must not become a mass
+   eviction of pages people are looking at.
+2. **Bake FIRST, and until the bake is finished every new grain is allocated on an OLD silo.**
+   The new generation earns traffic by having every assembly warm; while it is still baking, the
+   old generation — whose assemblies are all warm by definition — keeps taking all placements.
+3. **A failed bake means NO switch.** The old silos keep serving indefinitely; a broken new
+   generation is a non-event for users, not an outage. (This is the readiness gate with teeth:
+   fail closed toward the OLD generation, never toward a cold or broken new one.)
+4. **Only a successful AND finished bake opens the new generation** — from that moment, new grain
+   allocations go to the new silos. Old silos drain naturally as their grains go idle (rule 1),
+   then retire.
+5. **A recycled grain re-hashes** — recycling is the explicit way to move a grain onto the new
+   generation early. Everything else transitions smoothly: activity-pinned on the old silo until
+   idle, re-placed on the new one on its next activation.
+
+**Where reality stands against this (2026-08-12):** the roll is a single-Deployment rolling update
+— the old pod is torn down grains-and-all (rule 1 violated: every active hub dies with its pod);
+there is no pre-run image bake at all, and there structurally cannot be one
+([#1347](https://github.com/Systemorph/MeshWeaver/issues/1347) — every `dotnet publish` mints a
+fresh Graph MVID via the `+build.<ticks>` stamp, so a separately-published bake image can never
+share the portal's framework identity; the separate image has been retired), so the new pod boots
+cold and its own 76-second prewarm sweep races the first visitors (rules 2–4 approximated only by
+the readiness gate). The sweep no longer warms the most user-visible types last — the
+`Store/Coupon → Store/Order → Store/Plugin` cycle trio and the store chain behind it are now warmed
+FIRST (#1347) — but "warmed first" is still not "warmed before anyone can ask". The policy above is
+the target the pod-side bake, the readiness gate, and a two-generation silo topology are building
+toward — see [#1348](https://github.com/Systemorph/MeshWeaver/issues/1348).
 
 ## Update policy
 

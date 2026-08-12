@@ -133,7 +133,9 @@ public class NodeTypeDependencyGraphTest
         cyclic.Should().Equal(["X", "Y"]);
         order.OrderBy(p => p).Should().Equal(new[] { "X", "Y", "Z" });
         order.Should().HaveCount(3, "no duplicates");
-        order.IndexOf("Z").Should().Be(0, "the orderable types still go first");
+        order.Should().Equal(["X", "Y", "Z"],
+            "the cycle depends on nothing outside itself, so it is ready in the FIRST round and "
+            + "sorts by its smallest member — being a cycle is not a reason to warm last (#1347)");
     }
 
     [Fact]
@@ -459,7 +461,9 @@ public class NodeTypeDependencyGraphTest
             NodeTypeDependencyGraph.Build(types), out var cyclic);
 
         cyclic.Should().Equal(["A1", "A2", "B1", "B2"]);
-        order.IndexOf("Ok").Should().Be(0);
+        order.Should().Equal(["A1", "A2", "B1", "B2", "Ok"],
+            "all three components are ready in the first round, so they sort by their smallest "
+            + "member — neither cycle is demoted behind the acyclic type (#1347)");
         order.Should().HaveCount(5);
     }
 
@@ -536,5 +540,82 @@ public class NodeTypeDependencyGraphTest
 
         order.Should().BeEmpty();
         cyclic.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// 🚨 ISSUE #1347 — a source CYCLE must not be DEMOTED TO LAST.
+    ///
+    /// <para>This is the memex shape, reduced. <c>Store/Coupon ↔ Store/Order ↔ Store/Plugin</c> form
+    /// a genuine cycle (each declares <c>shared=</c> sources owned by the others) and depend on
+    /// nothing outside it, while <c>Store/Catalog</c>, <c>Store/Enrollment</c> and friends depend on
+    /// the cycle. The old peel released cycle members only when the sort STALLED — after every
+    /// acyclic type had already been emitted — so on the 2026-08-12 production sweep the whole store
+    /// chain landed at the very end of 85 types:</para>
+    ///
+    /// <code>
+    /// DynamicTypePreWarmer: 3 NodeType(s) form a source dependency CYCLE and cannot be ordered
+    ///     — warmed last, in path order: Store/Coupon, Store/Order, Store/Plugin
+    /// Building: … → UWDeepfield/UwAttention → Store/Coupon → Store/Order → Store/Plugin
+    ///     → Store/Catalog → Store/Enrollment → Store/Install → Store/Provision
+    /// </code>
+    ///
+    /// <para>Every store cover and the paywall redirect chain therefore became cheap LAST, which is
+    /// the "took forever with many redirects" report on /SST/Subscribe. A cycle says these three
+    /// cannot be ordered relative to EACH OTHER; it says nothing about when they should be built
+    /// relative to an unrelated type.</para>
+    /// </summary>
+    [Fact]
+    public void TopologicalOrder_ACycleThatDependsOnNothingIsNotDemotedBehindUnrelatedTypes()
+    {
+        var types = new Dictionary<string, NodeTypeDefinition?>
+        {
+            // The cycle — nothing outside it is referenced.
+            ["Store/Coupon"] = new NodeTypeDefinition { Sources = ["shared=@Store/Order/Source"] },
+            ["Store/Order"] = new NodeTypeDefinition { Sources = ["shared=@Store/Plugin/Source"] },
+            ["Store/Plugin"] = new NodeTypeDefinition { Sources = ["shared=@Store/Coupon/Source"] },
+            // Downstream of the cycle — must still order behind it.
+            ["Store/Catalog"] = new NodeTypeDefinition { Sources = ["shared=@Store/Plugin/Source"] },
+            // Unrelated independents, deliberately sorting AFTER "Store/…" in path order.
+            ["UWDeepfield/Layer"] = new NodeTypeDefinition(),
+            ["UWDeepfield/Slip"] = new NodeTypeDefinition(),
+        };
+
+        var order = NodeTypeDependencyGraph.TopologicalOrder(
+            NodeTypeDependencyGraph.Build(types), out var cyclic);
+
+        cyclic.Should().Equal(["Store/Coupon", "Store/Order", "Store/Plugin"],
+            "the three are still reported as unorderable relative to each other");
+        order.Should().Equal(
+            ["Store/Coupon", "Store/Order", "Store/Plugin", "Store/Catalog",
+             "UWDeepfield/Layer", "UWDeepfield/Slip"],
+            "the cycle's component depends on nothing, so it is ready immediately and sorts by its "
+            + "smallest member — and the priority peel then releases Store/Catalog straight after "
+            + "the component it waited on, keeping the whole store chain contiguous and FIRST");
+
+        order.IndexOf("Store/Catalog").Should().BeLessThan(order.IndexOf("UWDeepfield/Layer"),
+            "before #1347 every unrelated type was warmed ahead of the paywall chain");
+    }
+
+    /// <summary>
+    /// The companion to the test above: being early must not cost correctness. A cycle that DOES
+    /// wait on something outside itself still orders behind it.
+    /// </summary>
+    [Fact]
+    public void TopologicalOrder_ACycleWithAnExternalDependencyStillOrdersBehindIt()
+    {
+        var types = new Dictionary<string, NodeTypeDefinition?>
+        {
+            ["Zeta"] = new NodeTypeDefinition(),
+            // "Acyc*" sorts FIRST by path, so only a real edge can push the pair behind Zeta.
+            ["AcycA"] = new NodeTypeDefinition { Sources = ["shared=@AcycB/Source", "shared=@Zeta/Source"] },
+            ["AcycB"] = new NodeTypeDefinition { Sources = ["shared=@AcycA/Source"] },
+        };
+
+        var order = NodeTypeDependencyGraph.TopologicalOrder(
+            NodeTypeDependencyGraph.Build(types), out var cyclic);
+
+        cyclic.Should().Equal(["AcycA", "AcycB"]);
+        order.Should().Equal(["Zeta", "AcycA", "AcycB"],
+            "one member's external edge holds the WHOLE component back — the component is the unit");
     }
 }
