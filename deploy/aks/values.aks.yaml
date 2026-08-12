@@ -395,20 +395,7 @@ persistence:
     accessMode: "ReadWriteOnce"
     size: "128Gi"
 
-# --- NodeType bake: run-once Job on helm upgrade + startup-probe budget ------
-# ⛔ Job DISABLED until core asserts fingerprint-match: on the first AKS attempt
-# (memex-cloud 2026-07-30) memex-bake:3.0.0-ci.1565 computed a DIFFERENT
-# framework fingerprint than the running portal-ai:3.0.0-ci.1565 — same version,
-# separately published — and its framework-stale kickoff began flipping CURRENT
-# NodeType records to Pending and rebuilding them for a framework nothing
-# serves (killed after ~6 min; the portal's CompileWatcher heals the flips).
-# Until the bake Job refuses to run when its fingerprint differs from the
-# image being rolled, the POD-SIDE sweep above is the one deploy-time compile
-# mechanism — it runs in the serving process, so its fingerprint is right by
-# construction.
-bake:
-  enabled: false
-
+# --- Startup-probe budget (paired with the pod-side NodeType bake) ----------
 # ⚠️ PAIRED with PreWarm__GateReadiness above: the gate holds /health red while
 # the pod bakes, and a cold bake (fresh framework identity, empty cache for it)
 # is strictly sequential. The default budget (5 s × 60 = 5 min) kills the pod

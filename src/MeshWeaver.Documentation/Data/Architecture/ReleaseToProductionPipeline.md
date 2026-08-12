@@ -69,7 +69,7 @@ tests to run, so the runtime and the pipeline agree by construction rather than 
 
 ## (C) The platform image — built by CD, rolled by the install itself
 
-Continuous delivery **builds and pushes** the portal, migration, bake and plugin-tester images to
+Continuous delivery **builds and pushes** the portal, migration and plugin-tester images to
 ACR, tagged by version. It does **not** `kubectl set image` anything: the deployments pin an explicit
 tag rather than following a moving one, so a published image reaches an instance only when something
 sets that tag.
@@ -119,13 +119,16 @@ generation; bake = pre-compiling every dynamic NodeType for the NEW framework fi
 
 **Where reality stands against this (2026-08-12):** the roll is a single-Deployment rolling update
 — the old pod is torn down grains-and-all (rule 1 violated: every active hub dies with its pod);
-the image bake contributes zero assemblies (`alreadyBaked=0` —
-[#1347](https://github.com/Systemorph/MeshWeaver/issues/1347)), so the new pod boots cold and the
-76-second prewarm sweep races the first visitors (rules 2–4 approximated only by the readiness
-gate, which is currently off); and the sweep warms the most user-visible types (the
-`Store/Coupon → Store/Order → Store/Plugin` cycle trio) LAST. The policy above is the target the
-bake, the readiness gate, and a two-generation silo topology are building toward — see
-[#1348](https://github.com/Systemorph/MeshWeaver/issues/1348).
+there is no pre-run image bake at all, and there structurally cannot be one
+([#1347](https://github.com/Systemorph/MeshWeaver/issues/1347) — every `dotnet publish` mints a
+fresh Graph MVID via the `+build.<ticks>` stamp, so a separately-published bake image can never
+share the portal's framework identity; the separate image has been retired), so the new pod boots
+cold and its own 76-second prewarm sweep races the first visitors (rules 2–4 approximated only by
+the readiness gate). The sweep no longer warms the most user-visible types last — the
+`Store/Coupon → Store/Order → Store/Plugin` cycle trio and the store chain behind it are now warmed
+FIRST (#1347) — but "warmed first" is still not "warmed before anyone can ask". The policy above is
+the target the pod-side bake, the readiness gate, and a two-generation silo topology are building
+toward — see [#1348](https://github.com/Systemorph/MeshWeaver/issues/1348).
 
 ## Update policy
 
