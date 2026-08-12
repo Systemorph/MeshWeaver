@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import React from "react";
 import TestRenderer, { type ReactTestRendererJSON } from "react-test-renderer";
-import { LeftMenuView, isSubmenuParent, GROUP_AREA } from "./leftMenu";
+import { LeftMenuView, isSubmenuParent, GROUP_AREA_PREFIX } from "./leftMenu";
 import { ThemeProvider } from "./theme";
 import type { AreaTree } from "@meshweaver/react/core";
 
@@ -83,7 +83,7 @@ const press = (r: TestRenderer.ReactTestRenderer, needle: string) =>
 
 const exportGroup = {
   label: "Export",
-  area: GROUP_AREA,
+  area: `${GROUP_AREA_PREFIX}Export`,
   icon: "📦",
   order: 27,
   children: [
@@ -97,7 +97,7 @@ describe("isSubmenuParent (NodeMenuItemDefinition.IsSubmenuParent port)", () => 
   it("classifies leaves, children-carriers and the _group sentinel", () => {
     expect(isSubmenuParent({ label: "Edit", area: "Edit" })).toBe(false);
     expect(isSubmenuParent({ label: "P", area: "P", children: [{ label: "C", area: "C" }] })).toBe(true);
-    expect(isSubmenuParent({ label: "Export", area: GROUP_AREA })).toBe(true);
+    expect(isSubmenuParent({ label: "Export", area: `${GROUP_AREA_PREFIX}Export` })).toBe(true);
     expect(isSubmenuParent({ label: "P", area: "P", children: [] })).toBe(false);
   });
 });
@@ -182,9 +182,9 @@ describe("LeftMenuView — nested entries drill down", () => {
   it("supports nesting deeper than one level", () => {
     const deep = {
       label: "L1",
-      area: GROUP_AREA,
+      area: `${GROUP_AREA_PREFIX}L1`,
       order: 1,
-      children: [{ label: "L2", area: GROUP_AREA, order: 1, children: [{ label: "L3", area: "L3Area", order: 1 }] }],
+      children: [{ label: "L2", area: `${GROUP_AREA_PREFIX}L2`, order: 1, children: [{ label: "L3", area: "L3Area", order: 1 }] }],
     };
     const { r } = render(tree([deep]));
 

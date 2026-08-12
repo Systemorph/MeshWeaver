@@ -17,10 +17,10 @@ Menu entries can now nest. A parent opens a sub-menu instead of acting, so a gro
 actions takes one row rather than three or four.
 
 The first place you will see it is **📦 Export**, which now holds the three actions that all mean
-"take this document somewhere else" — 📄 Export to PDF, 📝 Export to DOCX and 📤 Share as email.
-They are in the same order as before, in the same part of the menu; they just no longer occupy three
-of its rows. A deck, which offers PDF and email but not DOCX, uses the same Export entry, so both
-kinds of document present their export actions in the same place.
+"take this document somewhere else" — 📄 PDF, 📤 Email and 📝 DOCX. They are in the same order as
+before, in the same part of the menu; they just no longer occupy three of its rows. A deck, which
+offers PDF and email but not DOCX, uses the same Export entry, so both kinds of document present
+their export actions in the same place.
 
 Sub-menus open by click or from the keyboard — never on hover alone — and carry the right roles for
 a screen reader. On the phone they are a drill-down rather than a flyout: tapping a parent replaces
@@ -35,3 +35,8 @@ belonged to. Each now sits under its own named entry.
 
 A parent that exists only to hold other entries can no longer be clicked to nowhere, and one whose
 contents you do not have permission to see disappears rather than opening onto an empty list.
+
+Grouping also works from the menu settings, without a release: an entry can be moved under another by
+editing the menu catalogue, and a group made that way behaves exactly like one built in — same
+ordering, and it disappears the same way when nothing is left inside it. Entries inside a group stay
+editable there too, so putting the export actions behind one parent did not put them out of reach.

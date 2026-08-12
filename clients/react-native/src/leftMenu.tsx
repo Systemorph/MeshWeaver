@@ -26,16 +26,26 @@ export interface MenuItem {
   children?: MenuItem[];
 }
 
-/** NodeMenuItemDefinition.SeparatorArea / GroupArea — the two non-activatable sentinels. */
+/** NodeMenuItemDefinition.SeparatorArea — a divider, never activatable. */
 export const SEPARATOR_AREA = "_separator";
-export const GROUP_AREA = "_group";
+
+/**
+ * NodeMenuItemDefinition.GroupAreaPrefix — a pure grouping parent. A prefix, not one shared sentinel,
+ * because `area` is also the key the MenuPresentation catalog matches on: each group needs its own key
+ * to stay addressable (`_group:Export`).
+ */
+export const GROUP_AREA_PREFIX = "_group:";
+
+/** True when `area` marks a pure grouping parent. */
+export const isGroupArea = (area: string | undefined): boolean =>
+  area != null && area.startsWith(GROUP_AREA_PREFIX);
 
 /**
  * A submenu parent. Any entry carrying children is one, and it is NEVER activatable — the same rule
  * the web clients apply (NodeMenuItemDefinition.IsSubmenuParent).
  */
 export function isSubmenuParent(it: MenuItem): boolean {
-  return (it.children != null && it.children.length > 0) || it.area === GROUP_AREA;
+  return (it.children != null && it.children.length > 0) || isGroupArea(it.area);
 }
 
 /** Ascending by `order` — the wire's sort key at every depth. */

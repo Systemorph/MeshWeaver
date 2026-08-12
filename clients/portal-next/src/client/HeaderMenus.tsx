@@ -55,10 +55,17 @@ export interface MenuItemDef {
 export const SEPARATOR_AREA = "_separator";
 
 /**
- * NodeMenuItemDefinition.GroupArea — a pure GROUPING parent: it exists only to hold `children` and
- * has nowhere of its own to go. Rendered as a submenu, never activated.
+ * NodeMenuItemDefinition.GroupAreaPrefix — a pure GROUPING parent: it exists only to hold `children`
+ * and has nowhere of its own to go. Rendered as a submenu, never activated.
+ *
+ * A prefix, not one shared sentinel, because `area` is also the key the MenuPresentation catalog
+ * matches on — each group needs its own key to stay addressable (`_group:Export`).
  */
-export const GROUP_AREA = "_group";
+export const GROUP_AREA_PREFIX = "_group:";
+
+/** True when `area` marks a pure grouping parent. */
+export const isGroupArea = (area: string | undefined): boolean =>
+  area != null && area.startsWith(GROUP_AREA_PREFIX);
 
 /**
  * A submenu parent. Any entry carrying children is one — its own area/href is deliberately ignored
@@ -66,7 +73,7 @@ export const GROUP_AREA = "_group";
  * item toggle its submenu rather than invoke. Mirrors NodeMenuItemDefinition.IsSubmenuParent.
  */
 export function isSubmenuParent(item: MenuItemDef): boolean {
-  return (item.children != null && item.children.length > 0) || item.area === GROUP_AREA;
+  return (item.children != null && item.children.length > 0) || isGroupArea(item.area);
 }
 
 /** Ascending by `order` — the wire's sort key at every depth. */

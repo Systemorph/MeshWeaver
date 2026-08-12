@@ -18,10 +18,17 @@ namespace MeshWeaver.Markdown.Export.Layout;
 /// </summary>
 public class MarkdownExportMenuProvider : INodeMenuProvider
 {
-    /// <summary>Menu item label for the PDF export.</summary>
-    public const string PdfLabel = "Export to PDF";
-    /// <summary>Menu item label for the DOCX export.</summary>
-    public const string DocxLabel = "Export to DOCX";
+    // Labels are bare format/action names — PDF, Email, DOCX — not sentences. The icon carries the
+    // glyph, the label carries the format, and the TOOLTIP carries the explanation the label no
+    // longer does. That is the AGENTS.md-preferred shape (language-neutral glyph + short label +
+    // translated tooltip) and it shrinks the translation surface to almost nothing: "PDF" and
+    // "DOCX" are format names and are deliberately NOT translated, in either catalog.
+
+    /// <summary>Menu item label for the PDF export. A format name — never translated.</summary>
+    public const string PdfLabel = "PDF";
+
+    /// <summary>Menu item label for the DOCX export. A format name — never translated.</summary>
+    public const string DocxLabel = "DOCX";
 
     // Icons are EMOJI, matching every other node-menu entry (✏️ 🔖 ➡️ 📋 🗑️ 📁 🧾 🕘 ♻️ ✉️ 🔄).
     // A Fluent icon NAME must never be used here: the renderer treats a non-emoji value as an image
@@ -44,9 +51,12 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
     /// <summary>English label of the parent that holds the export/share entries.</summary>
     public const string ExportGroupLabel = "Export";
 
+    /// <summary>Stable area key of the export group — its catalog key and parent-reference key.</summary>
+    public static readonly string ExportGroupArea = NodeMenuItemDefinition.GroupArea("Export");
+
     /// <summary>
     /// Icon for the export group — a package, the thing the three children between them produce.
-    /// Distinct at 16 px from all three of its own children (📄 📝 📤).
+    /// Distinct at 16 px from all three of its own children (📄 📤 📝).
     /// </summary>
     public const string ExportGroupIcon = "📦";
 
@@ -54,24 +64,28 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
     /// The export/share entries as ONE collapsible parent.
     ///
     /// <para>These three were the largest contiguous block in a node menu that had grown to ~15 flat
-    /// entries. They also share a single sentence — "take this document somewhere else" — which is
-    /// exactly what makes a submenu the right shape rather than another divider. The parent carries
+    /// entries, and they share a single sentence — "take this document somewhere else" — which is
+    /// what makes a sub-menu the right shape rather than another divider. The parent carries
     /// <see cref="NodeMenuItemDefinition.GroupArea"/>, so no renderer will ever let it be activated;
     /// it exists only to open.</para>
     ///
-    /// <para>Children keep their original <c>Order</c> values (27/28/29) — the aggregator sorts each
-    /// submenu by <c>Order</c> exactly as it sorts the top level, so the block's established reading
-    /// order survives the move into the group.</para>
+    /// <para>Children keep their own <c>Order</c> (27 PDF / 28 Email / 29 DOCX) — the aggregator sorts
+    /// each sub-menu by <c>Order</c> exactly as it sorts the top level, so the block's established
+    /// reading order survives the move into the group.</para>
+    ///
+    /// <para>The area is <c>_group:Export</c> — a group's own stable key, so the <c>MenuPresentation</c>
+    /// catalog can re-word, re-icon, re-order or hide THIS group like any other entry, and another entry
+    /// can name it as a <c>Parent</c>.</para>
     /// </summary>
     internal static NodeMenuItemDefinition ExportGroup(IReadOnlyList<NodeMenuItemDefinition> children)
         => new(
             Label: ExportGroupLabel,
-            Area: NodeMenuItemDefinition.GroupArea,
+            Area: ExportGroupArea,
             Icon: ExportGroupIcon,
             RequiredPermission: Permission.Read,
             Order: 27,
             Children: children)
-        { LabelKey = "menu.exportGroup", TooltipKey = "menu.exportGroupTooltip" };
+        { LabelKey = "menu.exportGroup", TooltipKey = "menu.exportGroup.tooltip" };
 
     /// <summary>The menu context this provider contributes to — the Node menu.</summary>
     public string Context => NodeMenuItemsExtensions.NodeMenuContext;
@@ -101,6 +115,9 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                 if (node is null || node.NodeType != "Markdown" || !perms.HasFlag(Permission.Read))
                     return (IReadOnlyCollection<NodeMenuItemDefinition>)[];
 
+                // Order is PDF, Email, DOCX — the sequence the user named them in, not
+                // alphabetical and not file-formats-then-actions. Email sits between the two file
+                // exports deliberately: it is the third way of getting this document to someone.
                 return
                 [
                     ExportGroup(
@@ -112,27 +129,23 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                         RequiredPermission: Permission.Read,
                         Order: 27,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea))
-                        { LabelKey = "menu.exportPdf" },
-                    new NodeMenuItemDefinition(
-                        Label: DocxLabel,
-                        Area: ExportDocumentLayoutArea.DocxArea,
-                        Icon: DocxIcon,
-                        RequiredPermission: Permission.Read,
-                        Order: 28,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea))
-                        { LabelKey = "menu.exportDocx" },
-                    // Sits with the export entries as the third member of the same block: the two
-                    // above produce a FILE, this one delivers the document itself. It is the
-                    // former "Send to contacts" grown up — same entry, same slot, now able to put
-                    // the rendered document in the email BODY rather than only attaching a PDF.
+                        { LabelKey = "menu.exportPdf", TooltipKey = "menu.exportPdf.tooltip" },
                     new NodeMenuItemDefinition(
                         Label: SendDocumentLayoutArea.SendLabel,
                         Area: SendDocumentLayoutArea.SendArea,
                         Icon: SendIcon,
                         RequiredPermission: Permission.Read,
-                        Order: 29,
+                        Order: 28,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
-                        { LabelKey = "menu.sendToContacts" },
+                        { LabelKey = "menu.sendToContacts", TooltipKey = "menu.sendToContacts.tooltip" },
+                    new NodeMenuItemDefinition(
+                        Label: DocxLabel,
+                        Area: ExportDocumentLayoutArea.DocxArea,
+                        Icon: DocxIcon,
+                        RequiredPermission: Permission.Read,
+                        Order: 29,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea))
+                        { LabelKey = "menu.exportDocx", TooltipKey = "menu.exportDocx.tooltip" },
                     ]),
                 ];
             });

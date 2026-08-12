@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { proximityBoost, relevanceScore } from "../src/client/SearchBar";
 import { splitRemainder } from "../src/server/snapshot";
-import { GROUP_AREA, isSubmenuParent, type MenuItemDef } from "../src/client/HeaderMenus";
+import { GROUP_AREA_PREFIX, isSubmenuParent, type MenuItemDef } from "../src/client/HeaderMenus";
 import { initialsOf } from "../src/client/UserProfileMenu";
 
 describe("relevanceScore (MeshSearch.ComputeRelevanceScore port)", () => {
@@ -102,7 +102,7 @@ describe("isSubmenuParent (NodeMenuItemDefinition.IsSubmenuParent port)", () => 
   });
 
   it("treats the _group sentinel as a parent even before children arrive", () => {
-    expect(isSubmenuParent({ label: "Export", area: GROUP_AREA })).toBe(true);
+    expect(isSubmenuParent({ label: "Export", area: `${GROUP_AREA_PREFIX}Export` })).toBe(true);
   });
 
   it("does not treat an empty children array as a parent", () => {

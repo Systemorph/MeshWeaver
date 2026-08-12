@@ -67,15 +67,17 @@ public class DeckExportMenuProvider : INodeMenuProvider
                         RequiredPermission: Permission.Read,
                         Order: 27,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea))
-                        { LabelKey = "menu.exportPdf" },
+                        { LabelKey = "menu.exportPdf", TooltipKey = "menu.exportPdf.tooltip" },
+                    // Order 28 — the same PDF, Email, DOCX sequence as a Markdown node, with the
+                    // DOCX slot simply absent rather than the Email entry shifting into it.
                     new NodeMenuItemDefinition(
                         Label: SendDocumentLayoutArea.SendLabel,
                         Area: SendDocumentLayoutArea.SendArea,
                         Icon: MarkdownExportMenuProvider.SendIcon,
                         RequiredPermission: Permission.Read,
-                        Order: 29,
+                        Order: 28,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
-                        { LabelKey = "menu.sendToContacts" },
+                        { LabelKey = "menu.sendToContacts", TooltipKey = "menu.sendToContacts.tooltip" },
                     ]),
                 ];
             });

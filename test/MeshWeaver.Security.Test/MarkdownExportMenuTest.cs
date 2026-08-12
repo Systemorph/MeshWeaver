@@ -141,15 +141,20 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var group = items.Should().ContainSingle(i => i.Label == MarkdownExportMenuProvider.ExportGroupLabel)
             .Which;
 
-        group.Area.Should().Be(NodeMenuItemDefinition.GroupArea,
-            "a grouping parent carries the _group sentinel so no client can navigate to it");
+        group.Area.Should().Be(MarkdownExportMenuProvider.ExportGroupArea,
+            "a grouping parent carries a _group:{name} area so no client can navigate to it — and so the "
+            + "MenuPresentation catalog can still address THIS group by a stable key");
+        group.IsGroup.Should().BeTrue();
         group.IsSubmenuParent.Should().BeTrue();
         group.Icon.Should().Be(MarkdownExportMenuProvider.ExportGroupIcon);
         group.LabelKey.Should().Be("menu.exportGroup", "the parent label must translate like every other entry");
+        group.TooltipKey.Should().Be("menu.exportGroup.tooltip",
+            "once the label is one word the tooltip is the only remaining explanation");
 
         group.Children!.Select(c => c.Label).Should().Equal(
-            [MarkdownExportMenuProvider.PdfLabel, MarkdownExportMenuProvider.DocxLabel, SendDocumentLayoutArea.SendLabel],
-            "children are sorted by Order (27/28/29) — the block's reading order survives the move into the group");
+            [MarkdownExportMenuProvider.PdfLabel, SendDocumentLayoutArea.SendLabel, MarkdownExportMenuProvider.DocxLabel],
+            "children are sorted by Order (27 PDF / 28 Email / 29 DOCX) — the block's reading order "
+            + "survives the move into the group");
 
         group.Children!.Should().BeInAscendingOrder(c => c.Order);
     }
@@ -165,7 +170,7 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var items = await FetchNodeMenuItems(client, new Address(DeckNodePath));
 
         var group = items.Should().ContainSingle(i => i.Label == MarkdownExportMenuProvider.ExportGroupLabel).Which;
-        group.Area.Should().Be(NodeMenuItemDefinition.GroupArea);
+        group.Area.Should().Be(MarkdownExportMenuProvider.ExportGroupArea);
         group.Children!.Select(c => c.Label).Should().Equal(
             [MarkdownExportMenuProvider.PdfLabel, SendDocumentLayoutArea.SendLabel]);
     }
@@ -193,6 +198,48 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var pdfItem = all.First(i => i.Label == MarkdownExportMenuProvider.PdfLabel);
         pdfItem.Area.Should().Be(ExportDocumentLayoutArea.PdfArea,
             "PDF item must navigate to the PDF export layout area");
+    }
+
+    /// <summary>
+    /// The export group reads <b>PDF, Email, DOCX</b> — bare format/action names, in that sequence,
+    /// each with a tooltip.
+    ///
+    /// <para>Order is asserted as a SEQUENCE rather than as three <c>Order</c> values, because the
+    /// number is an implementation detail and the sequence is the thing the user asked for; a
+    /// renumbering that preserves the reading order should not fail, and one that scrambles it
+    /// must.</para>
+    ///
+    /// <para>The tooltip assertion is the other half of the shape: once a label is shortened to
+    /// "PDF", the tooltip is the ONLY place left that says what the entry does, so an entry that
+    /// loses it becomes unexplainable rather than merely terse.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ExportGroup_ReadsPdfEmailDocx_InThatOrder_EachWithATooltip()
+    {
+        var client = GetClient();
+        var items = await FetchNodeMenuItems(client, new Address(MarkdownNodePath));
+
+        // Flatten: the three now live inside the 📦 Export sub-menu rather than at top level. What
+        // this test pins is unchanged by that — the reading order and the tooltips — so it looks
+        // through the tree rather than caring which level they sit on.
+        var group = Flatten(items)
+            .Where(i => i.Area is ExportDocumentLayoutArea.PdfArea
+                        or ExportDocumentLayoutArea.DocxArea
+                        or SendDocumentLayoutArea.SendArea)
+            .OrderBy(i => i.Order)
+            .ToArray();
+
+        foreach (var item in group)
+            Output.WriteLine($"  {item.Order}: {item.Icon} {item.Label} — \"{item.Tooltip}\"");
+
+        group.Select(i => i.Label).Should().Equal(
+            MarkdownExportMenuProvider.PdfLabel,      // "PDF"
+            SendDocumentLayoutArea.SendLabel,         // "Email"
+            MarkdownExportMenuProvider.DocxLabel);    // "DOCX"
+
+        group.Where(i => string.IsNullOrWhiteSpace(i.Tooltip)).Select(i => i.Label)
+            .Should().BeEmpty(
+                "a bare format name is only usable when the tooltip carries the explanation");
     }
 
     /// <summary>

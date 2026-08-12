@@ -32,7 +32,7 @@ public class NestedMenuTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     /// <summary>A group whose children arrive DELIBERATELY out of order — 30, 10, 20.</summary>
     private static readonly NodeMenuItemDefinition UnsortedGroup = new(
         Label: "Tools",
-        Area: NodeMenuItemDefinition.GroupArea,
+        Area: NodeMenuItemDefinition.GroupArea("Tools"),
         Icon: "🧰",
         Order: 60,
         Children:
@@ -48,7 +48,7 @@ public class NestedMenuTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     /// </summary>
     private static readonly NodeMenuItemDefinition EmptyGroup = new(
         Label: "NothingHere",
-        Area: NodeMenuItemDefinition.GroupArea,
+        Area: NodeMenuItemDefinition.GroupArea("NothingHere"),
         Icon: "🕳️",
         Order: 61,
         Children: []);
@@ -56,10 +56,13 @@ public class NestedMenuTest(ITestOutputHelper output) : MonolithMeshTestBase(out
     /// <summary>A group whose only child is itself an emptied group — pruning must run bottom-up.</summary>
     private static readonly NodeMenuItemDefinition NestedEmptyGroup = new(
         Label: "OuterEmpty",
-        Area: NodeMenuItemDefinition.GroupArea,
+        Area: NodeMenuItemDefinition.GroupArea("OuterEmpty"),
         Icon: "🫙",
         Order: 62,
-        Children: [new("InnerEmpty", NodeMenuItemDefinition.GroupArea, Icon: "🫗", Order: 1, Children: [])]);
+        Children:
+        [
+            new("InnerEmpty", NodeMenuItemDefinition.GroupArea("InnerEmpty"), Icon: "🫗", Order: 1, Children: [])
+        ]);
 
     /// <summary>
     /// A parent that carries children AND a real Area of its own. It keeps a place in the menu even

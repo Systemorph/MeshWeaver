@@ -16,7 +16,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { FluentProvider, Menu, MenuList, MenuPopover, MenuTrigger, webLightTheme, Button } from "@fluentui/react-components";
-import { MenuEntries, GROUP_AREA, type MenuItemDef } from "../src/client/HeaderMenus";
+import { MenuEntries, GROUP_AREA_PREFIX, type MenuItemDef } from "../src/client/HeaderMenus";
 
 afterEach(cleanup);
 
@@ -50,7 +50,7 @@ const click = async (el: Element) => {
 
 const exportGroup: MenuItemDef = {
   label: "Export",
-  area: GROUP_AREA,
+  area: `${GROUP_AREA_PREFIX}Export`,
   icon: "📦",
   tooltip: "Export or share this document",
   order: 27,
@@ -145,8 +145,8 @@ describe("MenuEntries — nested items render as sub-menus", () => {
   it("nests to arbitrary depth", async () => {
     const deep: MenuItemDef = {
       label: "L1",
-      area: GROUP_AREA,
-      children: [{ label: "L2", area: GROUP_AREA, children: [leaf("L3")] }],
+      area: `${GROUP_AREA_PREFIX}L1`,
+      children: [{ label: "L2", area: `${GROUP_AREA_PREFIX}L2`, children: [leaf("L3")] }],
     };
     render(<OpenMenu items={[deep]} />);
 

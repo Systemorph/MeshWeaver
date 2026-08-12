@@ -50,8 +50,11 @@ public static class SendDocumentLayoutArea
 
     /// <summary>
     /// Menu label for the email item — the English fallback for the <c>menu.sendToContacts</c> key.
+    /// A bare action name beside its 📤; the explanation lives in the entry's tooltip. German is
+    /// "E-Mail" (the correct spelling — hyphen, capital M), so unlike PDF/DOCX this one IS
+    /// translated.
     /// </summary>
-    public const string SendLabel = "Share ⇒ as email";
+    public const string SendLabel = "Email";
 
     /// <summary>Form value selecting <see cref="DocumentDelivery.EmailBody"/>.</summary>
     private const string DeliveryBody = "body";
