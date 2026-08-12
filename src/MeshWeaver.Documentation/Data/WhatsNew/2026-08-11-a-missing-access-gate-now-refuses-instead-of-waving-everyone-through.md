@@ -3,7 +3,7 @@ Name: A missing access gate now refuses instead of waving everyone through
 Category: Fix
 Description: A portal configured without access control used to serve every partition to every signed-in visitor, with nothing in the logs to say so. It now refuses to start unless the operator says the mesh is meant to be open.
 Icon: ShieldError
-Order: -20260811.1
+Order: -20260811
 ---
 
 # A missing access gate now refuses instead of waving everyone through
