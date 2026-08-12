@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The wire-compatibility oracle: json-everything's literal output, captured before its
+         removal. Embedded so the assertions cannot silently run against a missing file. -->
+    <EmbeddedResource Include="Fixtures\json-everything-golden.json" />
+  </ItemGroup>
+</Project>

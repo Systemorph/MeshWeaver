@@ -86,16 +86,6 @@ EXCEPTIONS = {
         "base-image decision on shipping Chromium -> this removal. Delete this entry "
         "with it; until then the exception is dated debt, not an approval."
     ),
-    "jsonpatch.net": (
-        "Open Source Maintenance Fee (OSMFEULA.txt); decision tracked by #1231. The "
-        "SOURCE is MIT and the EULA states the fee is not a licence fee and that the "
-        "OSI licence governs on conflict - so this is a fee expectation on the "
-        "published binary, not a licence breach. Core dependency: the RFC 7396 "
-        "merge-patch path behind every cross-hub stream.Update."
-    ),
-    "jsonpath.net": ("Open Source Maintenance Fee; see jsonpatch.net above and #1231."),
-    "json.more.net": ("Transitive under the json-everything family; see #1231."),
-    "jsonpointer.net": ("Transitive under the json-everything family; see #1231."),
     # --- Permissive upstream, metadata simply absent from the package. ---
     "uglytoad.pdfpig": (
         "Apache-2.0 upstream (github.com/UglyToad/PdfPig). The 1.7.0-custom-* "

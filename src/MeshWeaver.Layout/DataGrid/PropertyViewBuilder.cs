@@ -3,7 +3,7 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Reflection;
-using Json.More;
+using MeshWeaver.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Reflection;
 using MeshWeaver.Utils;
