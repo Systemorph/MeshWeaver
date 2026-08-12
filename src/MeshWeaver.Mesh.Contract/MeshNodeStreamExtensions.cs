@@ -1492,7 +1492,14 @@ public static class MeshNodeStreamExtensions
             // path emits null and the outer observer disposes, but the inner
             // Subscribe keeps the hub-level callback registered, surfacing as
             // a "pending callback at dispose" Quiescing-watchdog failure.
-            IDisposable? innerSubscription = null;
+            // One re-probe only: a ShuttingDown answered twice is surfaced, never collapsed to null.
+            var reProbed = 0;
+            // SerialDisposable, not a bare IDisposable: the ShuttingDown re-probe below REPLACES this
+            // subscription, and assigning into a SerialDisposable that has already been disposed
+            // disposes the newcomer immediately — so a teardown racing the re-probe cannot leak the
+            // second hub-level callback (which is the very "pending callback at dispose" failure the
+            // note above exists to prevent).
+            var innerSubscription = new SerialDisposable();
 
             void EmitOnce(MeshNode? node)
             {
@@ -1573,99 +1580,150 @@ public static class MeshNodeStreamExtensions
                     EmitError(new TimeoutException(message));
             });
 
-            try
+            // The read is issued through a local function so the ShuttingDown arm below can
+            // re-issue it ONCE against a fresh activation. Declared here rather than inlined so
+            // there is exactly one copy of the register-before-post ordering.
+            void Issue()
             {
-                // 🚨 Register the response subject BEFORE posting. Observe<TResponse> pre-registers the
-                // callback (WithMessageId) and only then posts — see MessageHub.Observe(object, options):
-                // "registering the subject BEFORE posting avoids the race where a synchronously-handled
-                // response arrives before the subscription is in place."
-                //
-                // The previous Post(request) + Observe(delivery) ordering registered the subject AFTER the
-                // post. The hub DROPS any response whose requestId has no registered subject yet ("No
-                // subject found for response ... treating as processed", HandleCallbacks). A WARM owning
-                // per-node hub answers in sub-millisecond time, so under thread-pool contention a
-                // preemption between Post and Observe let the reply land before the subject existed -> the
-                // reply was dropped and this read hung to its timeout. That was the intermittent bulk flake
-                // in WorkspaceCacheEvictionTest (ReadNode -> GetMeshNode), proven deterministically by
-                // GetMeshNode_WarmOwner_DropsResponse_WhenSubjectRegisteredAfterPost.
-                innerSubscription = issuingHub
-                    .Observe<GetDataResponse>(
-                        new GetDataRequest(new MeshNodeReference()),
-                        o => o.WithTarget(new Address(path)))
-                    .Subscribe(
-                        d =>
-                        {
-                            try
+                try
+                {
+                    // 🚨 Register the response subject BEFORE posting. Observe<TResponse> pre-registers the
+                    // callback (WithMessageId) and only then posts — see MessageHub.Observe(object, options):
+                    // "registering the subject BEFORE posting avoids the race where a synchronously-handled
+                    // response arrives before the subscription is in place."
+                    //
+                    // The previous Post(request) + Observe(delivery) ordering registered the subject AFTER the
+                    // post. The hub DROPS any response whose requestId has no registered subject yet ("No
+                    // subject found for response ... treating as processed", HandleCallbacks). A WARM owning
+                    // per-node hub answers in sub-millisecond time, so under thread-pool contention a
+                    // preemption between Post and Observe let the reply land before the subject existed -> the
+                    // reply was dropped and this read hung to its timeout. That was the intermittent bulk flake
+                    // in WorkspaceCacheEvictionTest (ReadNode -> GetMeshNode), proven deterministically by
+                    // GetMeshNode_WarmOwner_DropsResponse_WhenSubjectRegisteredAfterPost.
+                    innerSubscription.Disposable = issuingHub
+                        .Observe<GetDataResponse>(
+                            new GetDataRequest(new MeshNodeReference()),
+                            o => o.WithTarget(new Address(path)))
+                        .Subscribe(
+                            d =>
                             {
-                                if (d.Message is GetDataResponse resp)
+                                try
                                 {
-                                    // A null-Data response carrying an Error is an application-level
-                                    // read-validator verdict (INodeValidator → GetDataResponse{Error},
-                                    // e.g. NodeHidden / a policy filter — see
-                                    // MeshDataSource.AddReadValidatorPipeline). The documented contract is
-                                    // that such a filtered node is INVISIBLE to the reader → resolve to
-                                    // null (indistinguishable from "not found", which is the point of
-                                    // hiding). A *genuine* access denial is enforced at the delivery layer
-                                    // (AccessControlPipeline → DeliveryFailure{ErrorType.Unauthorized}) and
-                                    // surfaces via the OnError branch below — it never arrives as a
-                                    // GetDataResponse{Error}. Log the verdict so it isn't entirely silent.
-                                    if (resp.Data is null && !string.IsNullOrEmpty(resp.Error))
+                                    if (d.Message is GetDataResponse resp)
                                     {
-                                        hub.ServiceProvider.GetService<ILoggerFactory>()
-                                            ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode")
-                                            ?.LogDebug("GetMeshNode read-validator filtered {Path}: {Error}", path, resp.Error);
-                                        EmitOnce(null);
-                                        return;
+                                        // A null-Data response carrying an Error is an application-level
+                                        // read-validator verdict (INodeValidator → GetDataResponse{Error},
+                                        // e.g. NodeHidden / a policy filter — see
+                                        // MeshDataSource.AddReadValidatorPipeline). The documented contract is
+                                        // that such a filtered node is INVISIBLE to the reader → resolve to
+                                        // null (indistinguishable from "not found", which is the point of
+                                        // hiding). A *genuine* access denial is enforced at the delivery layer
+                                        // (AccessControlPipeline → DeliveryFailure{ErrorType.Unauthorized}) and
+                                        // surfaces via the OnError branch below — it never arrives as a
+                                        // GetDataResponse{Error}. Log the verdict so it isn't entirely silent.
+                                        if (resp.Data is null && !string.IsNullOrEmpty(resp.Error))
+                                        {
+                                            hub.ServiceProvider.GetService<ILoggerFactory>()
+                                                ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode")
+                                                ?.LogDebug("GetMeshNode read-validator filtered {Path}: {Error}", path, resp.Error);
+                                            EmitOnce(null);
+                                            return;
+                                        }
+                                        MeshNode? node = resp.Data as MeshNode;
+                                        if (node == null && resp.Data is JsonElement je)
+                                            node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
+                                        EmitOnce(node);
                                     }
-                                    MeshNode? node = resp.Data as MeshNode;
-                                    if (node == null && resp.Data is JsonElement je)
-                                        node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
-                                    EmitOnce(node);
+                                    else
+                                    {
+                                        // Unexpected response â€” node not found / no handler.
+                                        EmitOnce(null);
+                                    }
                                 }
-                                else
+                                catch (Exception ex)
                                 {
-                                    // Unexpected response â€” node not found / no handler.
+                                    var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                                        ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
+                                    logger?.LogDebug(ex, "GetMeshNode callback failed for {Path}", path);
                                     EmitOnce(null);
                                 }
-                            }
-                            catch (Exception ex)
+                            },
+                            ex =>
                             {
+                                // Access denial (ErrorType.Unauthorized) is a real error the
+                                // caller — and ultimately the user — must see: surface it.
+                                // Genuine not-found (routing NotFound) stays a null emission,
+                                // the documented contract. Without this, a denied read was
+                                // indistinguishable from a missing node and silently fell back.
+                                if (ex is DeliveryFailureException dfe
+                                    && dfe.Failure?.ErrorType == ErrorType.Unauthorized)
+                                {
+                                    EmitError(ex);
+                                    return;
+                                }
                                 var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
                                     ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
-                                logger?.LogDebug(ex, "GetMeshNode callback failed for {Path}", path);
+
+                                // 🚨 SHUTTING DOWN IS NOT ABSENCE. ErrorType.ShuttingDown's own contract
+                                // (Events.cs) is "retry-worthy, never terminal … the sender must read this as
+                                // 'ask again', not 'gone'", and routing mints it deliberately INSTEAD of
+                                // NotFound for a live-but-recycling address (MonolithRoutingService:
+                                // `isShuttingDown ? ErrorType.ShuttingDown : ErrorType.NotFound`). Collapsing
+                                // it into the same null a genuine not-found emits threw that distinction away
+                                // and told the caller the node does not exist while it was merely recycling.
+                                //
+                                // Field evidence: ThreadAgentIntegrationTest on CI — the ACME/ProductLaunch
+                                // instance hub self-recycled via the overlay self-heal watcher, its parked
+                                // GetDataRequest was NACKed ShuttingDown (9d8880c68), and the test failed with
+                                // "ACME/ProductLaunch node should exist" 6.4s into a 60s budget. Before that
+                                // NACK existed the same race HUNG for 60s; the symptom migrated from a stall
+                                // to a confident wrong answer.
+                                //
+                                // Re-issue ONCE inside the caller's remaining budget. This is not a
+                                // retry-to-paper-over: the re-probe lands on a FRESH activation (a
+                                // SubscribeRequest/GetDataRequest creates one on arrival) and terminates
+                                // authoritatively — if the node is genuinely gone, routing answers NotFound and
+                                // we emit null; if it is still shutting down, we surface the error rather than
+                                // lie. Exactly the reasoning MeshNodeStreamCache.IsTransientOwnerFailure already
+                                // applies on the live-stream path, where "is shutting down" is classified
+                                // transient for this same reason.
+                                if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
+                                {
+                                    if (Interlocked.Exchange(ref reProbed, 1) == 0
+                                        && !cts.IsCancellationRequested)
+                                    {
+                                        logger?.LogDebug(
+                                            "GetMeshNode: {Path} NACKed ShuttingDown — the address is recycling, "
+                                            + "not absent. Re-probing once within the remaining budget.", path);
+                                        Issue();
+                                        return;
+                                    }
+                                    EmitError(new InvalidOperationException(
+                                        $"GetMeshNode('{path}'): the owning hub answered ShuttingDown twice — "
+                                        + "the address is recycling, NOT absent. Surfacing rather than "
+                                        + "returning null, which the caller cannot tell apart from "
+                                        + "'node not found'. Retry the read.", ex));
+                                    return;
+                                }
+
+                                logger?.LogDebug(ex, "GetMeshNode delivery failed for {Path}", path);
                                 EmitOnce(null);
-                            }
-                        },
-                        ex =>
-                        {
-                            // Access denial (ErrorType.Unauthorized) is a real error the
-                            // caller — and ultimately the user — must see: surface it.
-                            // Genuine not-found (routing NotFound) stays a null emission,
-                            // the documented contract. Without this, a denied read was
-                            // indistinguishable from a missing node and silently fell back.
-                            if (ex is DeliveryFailureException dfe
-                                && dfe.Failure?.ErrorType == ErrorType.Unauthorized)
-                            {
-                                EmitError(ex);
-                                return;
-                            }
-                            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-                                ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
-                            logger?.LogDebug(ex, "GetMeshNode delivery failed for {Path}", path);
-                            EmitOnce(null);
-                        });
+                            });
+                }
+                catch (Exception ex)
+                {
+                    var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
+                    logger?.LogDebug(ex, "GetMeshNode post failed for {Path}", path);
+                    EmitOnce(null);
+                }
             }
-            catch (Exception ex)
-            {
-                var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
-                logger?.LogDebug(ex, "GetMeshNode post failed for {Path}", path);
-                EmitOnce(null);
-            }
+
+            Issue();
 
             return Disposable.Create(() =>
             {
-                innerSubscription?.Dispose();
+                innerSubscription.Dispose();
                 cts.Dispose();
             });
         });
