@@ -22,7 +22,7 @@
 #   2. exit markers — any per-project `[CI] <name> exit=N` with N != 0. This is
 #      what catches a test host that CRASHES after streaming green results
 #      (SIGABRT/FailFast → exit 134 with an all-green trx: the 2026-07 masked
-#      Persistence.Test memory-watchdog abort), a 6m wall-clock kill (124/137),
+#      Persistence.Test memory-watchdog abort), an 8m wall-clock kill (124/137),
 #      and xunit catastrophic failures ("There is no currently active test",
 #      teardown ObjectDisposedException) that leave no failed trx entry.
 #
@@ -604,11 +604,49 @@ jobs:
           ( cd "$dir" && timeout --signal=TERM --kill-after=30s 8m \
               dotnet "$name.dll" -trx "TestResults/$trxname.trx" "${classargs[@]}" )
           rc=$?
-          if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
-            marker="[CI] $label exit=$rc TIMEOUT (6m wall-clock cap hit — likely fixture/init hang)"
-          else
-            marker="[CI] $name exit=$rc"
+          # ── Classify the host's exit code ─────────────────────────────────
+          # 🚨 xUnit v3's native host returns THE COUNT OF FAILING TESTS as its
+          # exit code. So an ordinary "one assertion failed" run exits 1 — which
+          # the old two-branch classifier lumped in with genuine crashes and the
+          # downstream gates then announced as "a test host exited non-zero
+          # (failure, crash, or timeout kill)". #1242 was filed on exactly that
+          # phrasing: nine shard steps read as dying hosts when every one was a
+          # plain, single, named assertion failure from a host that ran to
+          # completion and printed its summary.
+          #
+          # The trx is the discriminator. Compare rc against the number of
+          # Failed results the host actually recorded:
+          #   rc == trx-failed-count  → plain test failures (the common case)
+          #   rc != trx-failed-count  → the host exited for a reason the trx
+          #                             cannot explain: it crashed AFTER
+          #                             streaming green results, or died before
+          #                             writing its results at all. THAT is the
+          #                             case the exit-marker gate exists for.
+          # Signal deaths and wall-clock kills are named outright, since their
+          # codes are fixed and can never be a failure count in practice.
+          trxfile="$dir/TestResults/$trxname.trx"
+          trxfails=0
+          if [ -f "$trxfile" ]; then
+            trxfails=$(grep -oE '<UnitTestResult[^>]*outcome="Failed"' "$trxfile" | wc -l | tr -d ' ')
           fi
+          case "$rc" in
+            0)
+              marker="[CI] $name exit=0" ;;
+            124|137)
+              marker="[CI] $label exit=$rc TIMEOUT (8m wall-clock cap hit — likely fixture/init hang)" ;;
+            132) marker="[CI] $label exit=$rc SIGNAL SIGILL (host died on a signal, not an assertion)" ;;
+            134) marker="[CI] $label exit=$rc SIGNAL SIGABRT (host died on a signal, not an assertion)" ;;
+            135) marker="[CI] $label exit=$rc SIGNAL SIGBUS (host died on a signal, not an assertion)" ;;
+            139) marker="[CI] $label exit=$rc SIGNAL SIGSEGV (host died on a signal, not an assertion)" ;;
+            *)
+              if [ "$rc" = "$trxfails" ]; then
+                marker="[CI] $name exit=$rc TESTFAIL ($trxfails failing test(s) recorded in trx — xunit v3 exits with the failure count; the host completed normally)"
+              elif [ ! -f "$trxfile" ]; then
+                marker="[CI] $label exit=$rc MASKED (no trx written — the host died before recording any result)"
+              else
+                marker="[CI] $label exit=$rc MASKED (trx records $trxfails failing test(s), which does not explain exit=$rc — host crashed after streaming results)"
+              fi ;;
+          esac
           echo "$marker"
           echo "$marker" >> test/test-results.log
           echo "::endgroup::"
@@ -728,15 +766,18 @@ jobs:
       # A test host that ABORTS mid-run (SIGABRT/FailFast → exit 134) streams
       # green results for every COMPLETED test and then dies: the trx shows zero
       # failures while in-flight + not-yet-run tests silently VANISH from the
-      # count. Same for a 6m wall-clock kill (124/137) and for xunit
+      # count. Same for an 8m wall-clock kill (124/137) and for xunit
       # catastrophic failures that exit 1 with an all-green trx. The
       # per-project exit markers are the only faithful record — gate on them.
+      # Each marker is already CLASSIFIED (TESTFAIL / TIMEOUT / SIGNAL / MASKED)
+      # by the run step, so the marker text says which of those actually
+      # happened — do not re-editorialise it here.
       # Last step so the artifact upload + per-shard publish above already ran.
       if: always()
       run: |
         bad=$(grep -E 'exit=[1-9]' test/test-results.log || true)
         if [ -n "$bad" ]; then
-          echo "::error::Shard ${{ matrix.shard }}: a test host exited non-zero (failure, crash, or timeout kill):"
+          echo "::error::Shard ${{ matrix.shard }}: a test host exited non-zero — see the classification on each marker below (TESTFAIL = ordinary failing tests, TIMEOUT/SIGNAL/MASKED = the host itself died):"
           echo "$bad"
           exit 1
         fi
@@ -907,13 +948,51 @@ jobs:
           exit "$status"
         fi
 
+  licence-gate:
+    name: "Dependency licences"
+    # MeshWeaver ships dual-licensed Apache-2.0 / MIT. A copyleft (AGPL/GPL/LGPL) or
+    # pay-to-use dependency is a licensing DEFECT — and it is invisible to every other
+    # check we run: one `<PackageVersion>` line adds it, the compiler is happy, and the
+    # tests are happy. #1230 (QuestPDF, pay-to-use above a revenue threshold) and a dead
+    # AGPL `itext7` declaration both sat in the tree unnoticed until a manual audit.
+    #
+    # 🚨 NO `continue-on-error`, and NO input-shaped `if:`. This gate reads only the repo
+    # and the public NuGet feed — it needs no secret, so it has no legitimate reason to be
+    # skipped and no fork exemption. It runs on every PR including forks.
+    needs: [precheck]
+    # Mirrors `build`: the ONLY thing that skips this is the already-green-tree
+    # optimisation, which means this exact tree already passed this exact gate.
+    if: ${{ !cancelled() && needs.precheck.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    # ⏱️ Depends only on `precheck`, so it runs CONCURRENTLY with the build and the test
+    # shards and costs the PR no wall-clock. It restores (not builds) the solution, which
+    # is what produces the project.assets.json graph it reads.
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v6
+      with: { fetch-depth: 1 }
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+    # The gate resolves licences from the RESTORED graph — direct and transitive — because a
+    # copyleft dependency that arrives transitively binds us exactly as hard as a declared one.
+    # No `continue-on-error`: if the restore fails, the gate has no evidence, and a gate that
+    # passes on absent evidence is worse than no gate (the script fails closed on this too).
+    # Same invocation as the `build` job's restore step, so the graph this gate reads is the
+    # same graph CI actually builds and ships.
+    - name: Restore (produces the dependency graph the gate reads)
+      run: dotnet restore
+    - name: Check dependency licences
+      run: python3 .github/scripts/check-licenses.py --report
+
   collect-results:
     name: "Consolidate test results"
     # plugin-gate is a NEEDS so this required check cannot go green while the plugins are
     # broken by this PR — that is the whole point of the gate (see its step below). preflight
     # is a NEEDS for the same reason one level up: this job is the repo's ONLY required status
-    # check, so anything that must block a merge has to be able to fail it.
-    needs: [precheck, preflight, build, test, plugin-gate]
+    # check, so anything that must block a merge has to be able to fail it. licence-gate is a
+    # NEEDS on the same principle: a licensing defect must be able to block a merge.
+    needs: [precheck, preflight, build, test, plugin-gate, licence-gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1006,14 +1085,16 @@ jobs:
     - name: Fail on non-zero project exit (all shards)
       # Defense-in-depth re-check of every shard's exit markers (each shard
       # already gates its own). A host that crashed after streaming green
-      # results, or was killed at the 6m cap, appears ONLY here — the trx gate
+      # results, or was killed at the 8m cap, appears ONLY here — the trx gate
       # above cannot see it (completed tests all read Passed; the rest vanish).
+      # Markers carry their classification (TESTFAIL / TIMEOUT / SIGNAL /
+      # MASKED); only the non-TESTFAIL ones are hosts that actually died.
       if: always() && needs.precheck.outputs.skip != 'true'
       run: |
         bad=$(find all-results -name 'test-results.log' -exec cat {} \; \
               | grep -E 'exit=[1-9]' || true)
         if [ -n "$bad" ]; then
-          echo "::error::A test host exited non-zero despite the trx gate (crashed or killed mid-run — completed-only results were published):"
+          echo "::error::A test host exited non-zero — see the classification on each marker below (TESTFAIL = ordinary failing tests, TIMEOUT/SIGNAL/MASKED = the host died mid-run and only completed results were published):"
           echo "$bad"
           exit 1
         fi
@@ -1107,6 +1188,17 @@ jobs:
             echo "::error::A failing 'compile' check means a public API change here broke plugin node source that is Roslyn-compiled at runtime from the plugins repo."
             ;;
         esac
+        exit 1
+
+    # ── …and a licensing defect decides it too ──────────────────────────────────────────────
+    # 🚨 `needs:` alone is NOT enough under `if: always()` — same lesson as the step above. A
+    # dependency licence that is incompatible with shipping under Apache-2.0 / MIT must be able
+    # to turn the repo's ONLY required status check RED, or the gate is decorative.
+    - name: Fail if the licence gate failed
+      if: needs.licence-gate.result == 'failure'
+      run: |
+        echo "::error::A dependency licence is incompatible with shipping MeshWeaver under Apache-2.0 / MIT — see the 'Dependency licences' job for the offending package(s) and their licence."
+        echo "::error::Fix it by removing the package or replacing it with a permissively-licensed one. Do NOT add it to EXCEPTIONS unless the upstream licence genuinely IS permissive and only the package metadata is missing."
         exit 1
 
     # ── …and a missing CI INPUT decides it too ──────────────────────────────────────────────

@@ -1,5 +1,5 @@
-node_modules/
+# No trailing slash — see clients/react/.gitignore.
+node_modules
 dist/
 *.tsbuildinfo
 .vite/
-package-lock.json

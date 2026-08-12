@@ -33,7 +33,7 @@ public class McpAccessDeniedSurfacingTest(ITestOutputHelper output) : MonolithMe
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var noAccess = new AccessContext { ObjectId = "no-access-user", Name = "No Access" };
         access.SetContext(noAccess);
-        access.SetCircuitContext(noAccess);
+        access.SetHostIdentity(noAccess);
         try
         {
             // Nested path (namespace "Restricted") so this isolates the RLS denial from the
@@ -54,7 +54,7 @@ public class McpAccessDeniedSurfacingTest(ITestOutputHelper output) : MonolithMe
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 }

@@ -85,7 +85,7 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
         // AccessAssignment nodes. The persistence layer checks INodeTypeAccessRule first.
         // Verify via IMeshService query which goes through the secure persistence layer.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "Bob", Name = "Bob" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "Bob", Name = "Bob" });
 
         // Query is the live change feed — match the first snapshot that
         // surfaces the node (fan-out + security filter baked in).

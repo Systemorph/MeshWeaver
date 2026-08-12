@@ -35,8 +35,13 @@ public class SkillNodeTypeTest
 
         var skills = nodes.Where(n => n.NodeType == SkillNodeType.NodeType).ToList();
         skills.Should().OnlyContain(n => n.Namespace == SkillNodeType.RootNamespace);
-        skills.Select(n => n.Id).OrderBy(x => x).Should().Equal(BuiltInSkillCatalog.ExpectedIds);
 
+        // 🚨 The MEMBERSHIP of the catalog is NOT asserted here. It is derived from
+        // content/ai/Skill/*.md, so a hardcoded list is both brittle (a legitimate new skill reds CI)
+        // and blind (a malformed file is silently skipped, leaving the list unchanged and green).
+        // BuiltInSkillCatalogTest owns that invariant — file set == shipped set, plus the no-skipped-file
+        // guard. What belongs HERE is the per-skill action CONTRACT below: the wiring that makes a
+        // specific skill behave the way the chat depends on.
         var def = (SkillDefinition)skills.Single(n => n.Id == "model").Content!;
         def.Action!.Kind.Should().Be(SkillActionKind.Pick);
         def.Action.Query.Should().Be("namespace:Provider nodeType:LanguageModel scope:descendants sort:order");

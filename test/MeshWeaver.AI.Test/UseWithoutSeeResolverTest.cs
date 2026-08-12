@@ -62,7 +62,7 @@ public class UseWithoutSeeResolverTest : AITestBase
         var providerPath = created.ProviderNode.Path!;   // acme/_Memex/Anthropic
 
         // userA HAS Read -> can USE the key (resolver reads it under system identity).
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "userA", Name = "User A" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "userA", Name = "User A" });
         resolver.WatchSharedProvider(providerPath, "userA");
         var allowed = await Observable.Interval(TimeSpan.FromMilliseconds(100))
             .Select(_ => resolver.Resolve(modelId))
@@ -72,7 +72,7 @@ public class UseWithoutSeeResolverTest : AITestBase
 
         // userB has NO grant -> fail-closed: never receives the key, even though
         // it's already ingested in the resolver's shared snapshot.
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "userB", Name = "User B" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "userB", Name = "User B" });
         resolver.WatchSharedProvider(providerPath, "userB");
         var denied = await Observable.Timer(TimeSpan.FromSeconds(2))
             .Select(_ => resolver.Resolve(modelId))

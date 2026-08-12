@@ -346,22 +346,59 @@ public static class AiSettingsNodeType
         IWorkspace workspace, IMessageHub hub, IServiceProvider services, string user)
     {
         var defaults = BuildDefaults(services);
-        EnsureExists(hub, services, user);
-        return workspace
+        var live = workspace
             .GetQuery($"{NodeType}|{user}", $"path:{PathFor(user)} nodeType:{NodeType} select:path,id,name,nodeType,content")
             .Select(nodes => Effective(
                 nodes.FirstOrDefault(n => string.Equals(n.NodeType, NodeType, StringComparison.OrdinalIgnoreCase)),
                 defaults, hub.JsonSerializerOptions))
             .StartWith(defaults)
             .DistinctUntilChanged();
+
+        // 🚨 The create-on-absent is MERGED INTO THIS STREAM, so its lifetime is the
+        // consumer's subscription — it starts on Subscribe (not at composition time) and is
+        // DISPOSED when the consumer unsubscribes.
+        //
+        // It used to be a bare `EnsureExists(hub, services, user);` statement: a void method
+        // that subscribed its own chain. Nobody owned that subscription, so the create could
+        // still be in flight — or start — after the last reader had gone away, and on a hub
+        // that was already tearing down it stranded a CreateNodeRequest that nothing would
+        // ever answer. That is what reddened
+        // MeshWeaver.AI.Test.SkillAutocompleteTest.Autocomplete_ListsBuiltInSkills_FromCatalog
+        // on CI: the test body passed, then teardown's quiesce guard reported two pending
+        // CreateNodeRequests for Roland/_Memex/AiSettings — the outer seed plus the partition
+        // bootstrap's nested root create, the latter deferred behind a DataContextInit gate
+        // that shutdown never reopens. Owned by the subscription, both go away with it.
+        //
+        // Errors stay contained exactly as before (log + swallow) so a failed seed can never
+        // break the settings read that consumers actually subscribe for.
+        var seed = EnsureExists(hub, services, user)
+            .Select(_ => defaults)
+            .IgnoreElements()
+            .Catch<AiSettings, Exception>(ex =>
+            {
+                services.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(AiSettingsNodeType))
+                    .LogWarning(ex, "EnsureExists: AiSettings create-on-absent failed for {Path}", PathFor(user));
+                return Observable.Empty<AiSettings>();
+            });
+
+        return live.Merge(seed);
     }
 
-    /// <summary>Create-on-absent (with defaults); existing node untouched.</summary>
-    public static void EnsureExists(IMessageHub hub, IServiceProvider services, string user)
+    /// <summary>
+    /// Create-on-absent (with defaults); existing node untouched.
+    ///
+    /// <para>COLD — the create runs on Subscribe and is cancelled on unsubscribe, so the
+    /// caller owns its lifetime. Never re-introduce a self-subscribing <c>void</c> variant:
+    /// an unowned write outlives its reader and can strand a request on a hub that is
+    /// already shutting down. Mirrors <c>NotificationSettingsNodeType.EnsureExists</c>.</para>
+    /// </summary>
+    public static IObservable<System.Reactive.Unit> EnsureExists(
+        IMessageHub hub, IServiceProvider services, string user)
     {
         var meshService = services.GetService<IMeshService>();
         if (meshService is null)
-            return;
+            return Observable.Empty<System.Reactive.Unit>();
         var path = PathFor(user);
         // 🚨 Create-on-absent must NEVER point-read/patch the node via
         // GetMeshNodeStream(path).Update. On an ABSENT node that opens a cross-hub
@@ -374,7 +411,7 @@ public static class AiSettingsNodeType
         // only when genuinely absent through the node-lifecycle CreateNode (create-only:
         // it does not clobber an existing customised node). See
         // feedback_optional_node_query_not_access / Doc/Architecture/AsynchronousCalls.md.
-        hub.GetWorkspace()
+        return hub.GetWorkspace()
             .GetQuery($"{NodeType}|{user}", $"path:{path} nodeType:{NodeType} select:path,id,name,nodeType,content")
             .Take(1)
             .Where(nodes => !nodes.Any(n =>
@@ -386,11 +423,7 @@ public static class AiSettingsNodeType
                     Name = "AI Settings",
                     Content = BuildDefaults(services)
                 }))
-            .Subscribe(
-                _ => { },
-                ex => services.GetService<ILoggerFactory>()
-                    ?.CreateLogger(typeof(AiSettingsNodeType))
-                    .LogWarning(ex, "EnsureExists: AiSettings create-on-absent failed for {Path}", path));
+            .Select(_ => System.Reactive.Unit.Default);
     }
 
     /// <summary>

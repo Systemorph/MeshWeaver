@@ -116,6 +116,11 @@ public static class MarkdownExportExtensions
         // grant, and either call alone must land it exactly once.
         builder.AddMeshNodesIfAbsent(ScriptTemplates.PublicExecuteGrant());
 
+        // The per-user compose draft that makes the share dialog survive a full page navigation
+        // (the Microsoft 365 consent round trip). See EmailDraftNodeType for why it is filed under
+        // the AUTHOR rather than under the document.
+        builder.AddEmailDraftType();
+
         // Menu items, layout views, and the export request handler must live on the
         // node hubs (one per Markdown node) — that's where layout rendering runs and where
         // the user's click navigates. Registering on the mesh hub via ConfigureHub would
@@ -141,6 +146,7 @@ public static class MarkdownExportExtensions
             .AddLayout(layout => layout
                 .WithView(ExportDocumentLayoutArea.PdfArea, ExportDocumentLayoutArea.RenderPdf)
                 .WithView(ExportDocumentLayoutArea.DocxArea, ExportDocumentLayoutArea.RenderDocx)
+                .WithView(ExportDocumentLayoutArea.HtmlArea, ExportDocumentLayoutArea.RenderHtml)
                 .WithView(SendDocumentLayoutArea.SendArea, SendDocumentLayoutArea.RenderSend)));
 
         return builder;

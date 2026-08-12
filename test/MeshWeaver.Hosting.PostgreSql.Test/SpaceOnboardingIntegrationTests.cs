@@ -518,7 +518,7 @@ public class SpaceOnboardingIntegrationTests(PostgreSqlFixture fixture, ITestOut
         var workspace = Mesh.GetWorkspace();
 
         // Act AS a regular (non-global-admin) user.
-        accessService.SetCircuitContext(new AccessContext { ObjectId = creator, Name = creator });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = creator, Name = creator });
 
         var created = await meshService.CreateNode(new MeshNode(spaceId)
         {

@@ -76,7 +76,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
                 return config.AddLayoutClient();
             });
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = TestUserId,
             Name = "Test User",

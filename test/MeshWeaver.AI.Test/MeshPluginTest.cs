@@ -76,18 +76,27 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateTools();
 
         tools.Should().NotBeNull();
-        // Read-only tools: Get, Search, NavigateTo, GetDiagnostics, RunTests
-        tools.Should().HaveCount(5);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
         toolNames.Should().Contain("Search");
         toolNames.Should().Contain("NavigateTo");
         toolNames.Should().Contain("GetDiagnostics");
-        toolNames.Should().Contain("RunTests");
         toolNames.Should().NotContain("Create");
         toolNames.Should().NotContain("Update");
         toolNames.Should().NotContain("Delete");
+
+        // 🚨 The real contract of CreateTools is an ALLOWLIST — it is the read-only surface, so nothing
+        // outside this set may appear. `HaveCount(5)` was a proxy for that, and a bad one twice over:
+        // it names nothing when it fails ("expected 5, found 6" — which tool leaked?), and it is
+        // ENVIRONMENT-DEPENDENT, because RunTests is registered only when the process runs inside a repo
+        // checkout (MeshPlugin.RunTestsAvailable). Running the suite from outside the tree failed this
+        // test for a reason unrelated to any code. A subset assertion is exact, self-naming, and stable.
+        toolNames.Should().OnlyHaveUniqueItems();
+        toolNames.Should().BeSubsetOf(
+            new[] { "Get", "Search", "NavigateTo", "GetDiagnostics", "RunTests" },
+            "CreateTools is the READ-ONLY tool surface — any tool beyond this allowlist is a capability "
+            + "handed to an agent that must not have it, and adding one must be a deliberate review");
     }
 
     [Fact]
@@ -117,9 +126,11 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().Contain("Recycle");
         toolNames.Should().Contain("RunTests");
 
-        // All tools: Get, Search, NavigateTo, Create, Update, Patch, EditContent, Delete, Move, Copy, GetDiagnostics, Recycle, RunTests
-        // (RunTests is present because tests run inside the repo — it is omitted in deployed containers.)
-        tools.Should().HaveCount(13);
+        // No count. It added nothing over the thirteen named assertions above — and RunTests is
+        // registered only when the process runs inside a repo checkout, so the count was
+        // environment-dependent and would red a run from outside the tree for no code reason.
+        toolNames.Should().OnlyHaveUniqueItems(
+            "a duplicate tool name shadows the earlier registration in the model's tool list");
     }
 
     #endregion
@@ -557,10 +568,11 @@ public class MeshPluginTest : MonolithMeshTestBase
         var createResult = await plugin.Create(createJson);
         createResult.Should().StartWith("Created:");
 
-        // 2. Get
-        var getResult = await plugin.Get($"@{path}");
-        getResult.Should().NotStartWith("Not found");
-        getResult.Should().Contain("CRUD Test Node");
+        // 2. Get — poll, don't snapshot. See GetUntil: a mutation's ack means ACCEPTED, not "every
+        // reader has caught up", so a single Get here races the create's propagation.
+        // (No trailing NotStartWith("Not found") — the predicate already guarantees it, and this PR is
+        // about not shipping assertions that cannot fail.)
+        await GetUntil(plugin, path, r => r.Contains("CRUD Test Node"), "showed the created node");
 
         // 3. Update (Get -> modify -> Update pattern)
         var updateJson = JsonSerializer.Serialize(new object[]
@@ -578,17 +590,43 @@ public class MeshPluginTest : MonolithMeshTestBase
         updateResult.Should().Contain("Updated:");
 
         // 4. Verify update
-        var getAfterUpdate = await plugin.Get($"@{path}");
-        getAfterUpdate.Should().Contain("Updated CRUD Test Node");
+        await GetUntil(plugin, path, r => r.Contains("Updated CRUD Test Node"),
+            "reflected the update");
 
         // 5. Delete
         var deleteResult = await plugin.Delete(JsonSerializer.Serialize(new[] { path }));
         deleteResult.Should().Contain("Deleted:");
 
-        // 6. Verify deletion
-        var getAfterDelete = await plugin.Get($"@{path}");
-        getAfterDelete.Should().StartWith("Not found");
+        // 6. Verify deletion — THE one that actually red CI (see GetUntil).
+        await GetUntil(plugin, path, r => r.StartsWith("Not found"), "reported the node gone");
     }
+
+    /// <summary>
+    /// Reads through <see cref="MeshPlugin.Get"/> until the response satisfies <paramref name="predicate"/>.
+    ///
+    /// <para>🚨 A SINGLE <c>Get</c> immediately after a mutation is a RACE, and it is what red this
+    /// PR's CI. A mutation's ack (<c>"Created:"</c>, <c>"Updated:"</c>, <c>"Deleted:"</c>) means the write
+    /// was ACCEPTED — not that every reader has caught up. <c>Get</c> reads through the per-node
+    /// <c>MeshNodeStreamCache</c> handle, which can still be serving the pre-mutation snapshot when the
+    /// ack returns: CI observed the DELETED node coming back intact at <c>version 2</c>, ~0.6 s after the
+    /// delete was acknowledged. "Still the old value" is a legitimate intermediate state, so asserting a
+    /// terminal one off a single read is asserting that a race resolved in your favour.</para>
+    ///
+    /// <para>The fix is to wait for the CONDITION — never a sleep, never a widened threshold, never a
+    /// re-run. This is the house pattern for a request/response source (AGENTS.md → "Never
+    /// <c>Task.Delay</c> to wait for propagation"; cf. <c>CrossPartitionMoveCopyAccessContextTest.WaitUntil</c>
+    /// and <c>InboxToolIntegrationTest</c>). The timeout carries a message naming what never happened,
+    /// so a real regression here reads as a diagnosis instead of a bare TimeoutException.</para>
+    /// </summary>
+    private static Task<string> GetUntil(
+        MeshPlugin plugin, string path, Func<string, bool> predicate, string what) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => plugin.Get($"@{path}")))
+            .Where(predicate)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(20), Observable.Throw<string>(
+                new TimeoutException($"Get(@{path}) never {what} within 20s")))
+            .ToTask();
 
     #endregion
 
@@ -805,7 +843,20 @@ public class MeshPluginTest : MonolithMeshTestBase
         }
         // Done in the test-only "force compile" preamble.
 
-        var diagnosticsJson = await plugin.GetDiagnostics($"@{nodeTypePath}");
+        // 🚨 Poll for a TERMINAL status; never assert on a single read. "Compiling" is a legitimate
+        // intermediate state — the compile runs off this thread and the Error status is written when
+        // Roslyn finishes, so a one-shot read is a race the test loses whenever the machine is
+        // loaded (CI saw "Compiling" after 10.7s, with the CS0246 arriving moments later). Waiting
+        // for the condition is the fix; a sleep or a widened timeout would only hide it. Polling —
+        // rather than a stream — because GetDiagnostics is request/response.
+        var diagnosticsJson = await Observable.Interval(TimeSpan.FromMilliseconds(50))
+            .StartWith(0L)
+            .SelectMany(_ => Observable.FromAsync(() => plugin.GetDiagnostics($"@{nodeTypePath}")))
+            .Where(json => !string.IsNullOrEmpty(json) && StatusOf(json) is not "Compiling")
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(40))
+            .ToTask(TestContext.Current.CancellationToken);
+
         diagnosticsJson.Should().NotBeNullOrEmpty();
 
         using var doc = JsonDocument.Parse(diagnosticsJson);
@@ -815,6 +866,23 @@ public class MeshPluginTest : MonolithMeshTestBase
         root.GetProperty("error").GetString()
             .Should().Contain("ThisTypeDoesNotExist",
                 "the cached error must include the unresolved type");
+
+        // Reads the diagnostics status defensively: a payload that is not the expected shape must
+        // keep the poll going rather than fault it, so a transient response cannot end the wait.
+        static string? StatusOf(string json)
+        {
+            try
+            {
+                using var probe = JsonDocument.Parse(json);
+                return probe.RootElement.TryGetProperty("status", out var status)
+                    ? status.GetString()
+                    : null;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
     }
 
     /// <summary>

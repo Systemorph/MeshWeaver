@@ -72,7 +72,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     private void ClearAdminContext()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
     }
 
     #region AccessAssignment CRUD Operations

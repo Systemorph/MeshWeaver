@@ -56,7 +56,7 @@ public class SqliteRawBootstrapTest
 
         // The client sets one device-user identity for every operation.
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(new AccessContext { ObjectId = "device-user", Name = "Device User" });
+        access.SetHostIdentity(new AccessContext { ObjectId = "device-user", Name = "Device User" });
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         await meshService

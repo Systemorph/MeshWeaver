@@ -29,10 +29,18 @@ public interface IPostCommitFlush
     /// to the <c>IMeshChangeFeed</c> — WITHOUT a durable write. The feed drives the
     /// Workspace's <c>_remoteStreamCache</c> eviction (so a fresh <c>GetRemoteStream</c> after
     /// the update sees the new snapshot, not a cached pre-update one) and refreshes synced-query
-    /// providers. Use this on a write path that already persists by another route (the MeshNode
-    /// cross-hub atomic apply persists off-turn via <c>DataSourceWithStorage.Synchronize</c>, so
-    /// <see cref="Flush"/> would double-write — but its feed publish must still happen). No-op for
+    /// providers. For a write path that persists by SOME OTHER route, where calling
+    /// <see cref="Flush"/> would double-write but the feed publish must still happen. No-op for
     /// entity types this hook does not own. Synchronous, non-blocking; never chained to the ack.
+    ///
+    /// <para>🚨 <b>Currently UNCALLED, and deliberately so.</b> The MeshNode cross-hub atomic apply
+    /// once persisted off-turn and used this; today it chains <see cref="Flush"/> and acks off the
+    /// durable write, which is what gives <c>stream.Update</c> read-after-write. That flush IS the
+    /// authoritative route for a patch — the duplicate that had to go was the per-node persistence
+    /// sampler's second write (#1249), suppressed at the sampler's save handler against the
+    /// <c>PostCommitFlushRegistry</c> high-water. So do NOT "fix" a future double-write by swapping
+    /// <see cref="Flush"/> for this: dropping the durable write from the ack path re-opens the
+    /// read-after-write race this hook's own summary describes.</para>
     /// </summary>
     void PublishUpdated(object committed);
 }

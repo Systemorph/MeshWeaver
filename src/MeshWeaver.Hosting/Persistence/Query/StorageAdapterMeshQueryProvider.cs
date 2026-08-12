@@ -207,48 +207,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
             {
                 var (matched, parsedQuery, _) = collected;
 
-                // Match PG's table separation: a NON-satellite content query must not return satellite
-                // nodes. On PG these live in separate per-prefix tables (the partition's configured
-                // satellite SEGMENTS: _Access→access, _Thread→threads, _Notification→notifications, …),
-                // so a mesh_nodes content query never sees them. The in-memory adapter keeps everything
-                // in one store, so we mirror PG's routing here (e.g. an auto-created AccessAssignment
-                // grant otherwise leaked into `scope:descendants`).
-                //
-                // 🚨 Satellite-ness = the node's STORAGE TABLE, which is CONFIGURATION (the configured
-                // satellite segments), NOT the raw '_' character and NOT the nodeType alone:
-                //   • '_'-but-content: {ns}/_Policy (PartitionAccessPolicy), {ns}/_Provider are NOT
-                //     configured segments → they live in mesh_nodes → regular content. The old "any
-                //     /_Upper" heuristic hid them (EffectivePermissionTest's PublicRead _Policy lookup
-                //     vanished).
-                //   • satellite-nodeType-but-content-PATH: a Notification at {ns}/acme/project/task (no
-                //     _Notification segment) is routed BY PATH to mesh_nodes, so it IS content —
-                //     classifying by nodeType wrongly hid it (QueryAsync_NamespaceWithDescendants).
-                // Storage follows the configured path segment, so the exclusion does too.
-                // SatelliteTableMapping.IsSatellitePath matches ONLY configured satellite segments.
-                IEnumerable<object> matchedNodes = matched;
-                if (!IsSatelliteTargetedQuery(parsedQuery))
-                    matchedNodes = matchedNodes.Where(n => n is not MeshNode mn || !SatelliteTableMapping.IsSatellitePath(mn.Path));
-
-                // Partition roots (the auto-provisioned Space node at namespace="") are STRUCTURAL
-                // containers, not content. abac5dec2 stamps them with a current LastModified, so a deep
-                // recursive content LISTING (scope:descendants, no search term) would surface them as
-                // recency/result noise — e.g. `is:main scope:descendants sort:LastModified-desc` ranking
-                // the just-provisioned namespace roots above real items (FanOut_SortByLastModified), or a
-                // `namespace:X scope:descendants` listing counting the X root itself
-                // (QueryAsync_NamespaceWithDescendants).
-                //
-                // 🚨 Excluded ONLY for the listing shape: scope:descendants with NO free-text term. A root
-                // is KEPT whenever the caller actually wants it:
-                //   • scope:subtree — "the subtree rooted HERE" explicitly includes the root (autocomplete
-                //     walks subtree; AcmeSearchTest.SubtreeSearch_FindsOrganizationRootNode);
-                //   • a free-text term — the root's name/path matched the search, so it IS a result
-                //     (`*ACME* scope:descendants` → AcmeSearchTest.DescendantsSearch_FindsOrganizationRootNode);
-                //   • scope:children (e.g. "list the spaces" surfaces the roots themselves), exact reads,
-                //     and explicit nodeType:Space.
-                if (parsedQuery.Scope == QueryScope.Descendants
-                    && string.IsNullOrEmpty(parsedQuery.TextSearch)
-                    && !QueryTargetsPartitionRoot(parsedQuery))
-                    matchedNodes = matchedNodes.Where(n => n is not MeshNode mn || !IsPartitionRoot(mn));
+                // Satellite paths and partition roots are not content-query results.
+                // 🚨 The rules live in IsExcludedFromResults — one predicate, documented there.
+                // This read is now the SOLE source of rows for both the Initial snapshot and every
+                // live delta (#1250 removed the live path's parallel admission of raw notification
+                // entities), so applying them here applies them everywhere.
+                IEnumerable<object> matchedNodes =
+                    matched.Where(n => !IsExcludedFromResults(n, parsedQuery));
 
                 IEnumerable<object> sorted = matchedNodes;
                 if (parsedQuery.OrderBy != null)
@@ -361,6 +326,81 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         if (SatelliteTableMapping.IsSatellitePath(parsed.Path)) return true;
         var nodeType = parsed.ExtractNodeType();
         return !string.IsNullOrEmpty(nodeType) && PartitionDefinition.IsSatelliteNodeType(nodeType);
+    }
+
+    /// <summary>
+    /// The result-set exclusions this provider applies to EVERY emission. They live in
+    /// <see cref="RunQueryNodes"/> — the single read behind the Initial snapshot AND every live
+    /// delta (<see cref="ProcessBatch{T}"/> only diffs that read's output).
+    ///
+    /// <para>🚨 <b>One predicate, one path (#1193, #1250).</b> The snapshot used to own these rules
+    /// inline while the live path ran a parallel admission of raw change-notification entities on
+    /// <c>_evaluator.Matches</c> alone — and <c>Matches</c> is <c>true</c> for EVERY node when the
+    /// query carries no filter and no free-text term (a bare <c>path:X scope:descendants</c>
+    /// catalog listing is exactly that shape). So a write to a node the snapshot deliberately
+    /// excludes was injected into the live result set as a structural <c>Added</c>, and the very
+    /// next re-query — which DOES apply the exclusions — emitted it straight back out as
+    /// <c>Removed</c>. A phantom row that flashes into a live search grid and vanishes, plus two
+    /// spurious re-renders of the whole result list. Reproduced by the
+    /// <c>{path}/_Activity/write-conflict-{n}</c> satellite a MonotonicWriteGuard resolution
+    /// writes: it landed inside a <c>path:{root} scope:descendants</c> subscription and turned
+    /// <c>SearchResultStormTest</c>'s exact re-render count into a coin flip. The add-then-remove
+    /// of an unchanged node is self-evidently wrong — nothing about it changed between the two
+    /// frames; only which code path judged it did. #1193 made that admission apply these
+    /// exclusions; #1250 deleted the admission outright, because the SAME shape also bypassed
+    /// row-level security (<c>Matches</c> performs no permission check) and covered no real
+    /// write lag.</para>
+    ///
+    /// <para><b>1. Satellite paths.</b> Match PG's table separation: a NON-satellite content query
+    /// must not return satellite nodes. On PG these live in separate per-prefix tables (the
+    /// partition's configured satellite SEGMENTS: <c>_Access</c>→access, <c>_Thread</c>→threads,
+    /// <c>_Activity</c>→activities, …), so a mesh_nodes content query never sees them. The
+    /// in-memory adapter keeps everything in one store, so we mirror PG's routing here (e.g. an
+    /// auto-created AccessAssignment grant otherwise leaked into <c>scope:descendants</c>).</para>
+    ///
+    /// <para>🚨 Satellite-ness = the node's STORAGE TABLE, which is CONFIGURATION (the configured
+    /// satellite segments), NOT the raw '_' character and NOT the nodeType alone:
+    /// <list type="bullet">
+    /// <item>'_'-but-content: <c>{ns}/_Policy</c> (PartitionAccessPolicy), <c>{ns}/_Provider</c> are
+    /// NOT configured segments → they live in mesh_nodes → regular content. The old "any /_Upper"
+    /// heuristic hid them (EffectivePermissionTest's PublicRead _Policy lookup vanished).</item>
+    /// <item>satellite-nodeType-but-content-PATH: a Notification at <c>{ns}/acme/project/task</c>
+    /// (no _Notification segment) is routed BY PATH to mesh_nodes, so it IS content — classifying
+    /// by nodeType wrongly hid it (QueryAsync_NamespaceWithDescendants).</item>
+    /// </list>
+    /// Storage follows the configured path segment, so the exclusion does too.
+    /// <see cref="SatelliteTableMapping.IsSatellitePath"/> matches ONLY configured satellite
+    /// segments.</para>
+    ///
+    /// <para><b>2. Partition roots.</b> The auto-provisioned Space node at <c>namespace=""</c> is a
+    /// STRUCTURAL container, not content. abac5dec2 stamps them with a current LastModified, so a
+    /// deep recursive content LISTING (scope:descendants, no search term) would surface them as
+    /// recency/result noise — e.g. <c>is:main scope:descendants sort:LastModified-desc</c> ranking
+    /// the just-provisioned namespace roots above real items (FanOut_SortByLastModified), or a
+    /// <c>namespace:X scope:descendants</c> listing counting the X root itself
+    /// (QueryAsync_NamespaceWithDescendants).</para>
+    ///
+    /// <para>🚨 Roots are excluded ONLY for the listing shape: scope:descendants with NO free-text
+    /// term. A root is KEPT whenever the caller actually wants it:
+    /// <list type="bullet">
+    /// <item><c>scope:subtree</c> — "the subtree rooted HERE" explicitly includes the root
+    /// (autocomplete walks subtree; AcmeSearchTest.SubtreeSearch_FindsOrganizationRootNode);</item>
+    /// <item>a free-text term — the root's name/path matched the search, so it IS a result
+    /// (<c>*ACME* scope:descendants</c> → AcmeSearchTest.DescendantsSearch_FindsOrganizationRootNode);</item>
+    /// <item><c>scope:children</c> (e.g. "list the spaces" surfaces the roots themselves), exact
+    /// reads, and explicit <c>nodeType:Space</c>.</item>
+    /// </list></para>
+    /// </summary>
+    private static bool IsExcludedFromResults(object item, ParsedQuery parsedQuery)
+    {
+        if (item is not MeshNode node)
+            return false;
+        if (!IsSatelliteTargetedQuery(parsedQuery) && SatelliteTableMapping.IsSatellitePath(node.Path))
+            return true;
+        return parsedQuery.Scope == QueryScope.Descendants
+            && string.IsNullOrEmpty(parsedQuery.TextSearch)
+            && !QueryTargetsPartitionRoot(parsedQuery)
+            && IsPartitionRoot(node);
     }
 
     /// <summary>The partition-root (Space) NodeType — matches <c>MeshExtensions.PartitionRootNodeTypeName</c>.</summary>
@@ -1288,13 +1328,46 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         // subscribers attaching during the debounce gap saw the
                         // pre-write Replay(1) snapshot. Trade throughput (one
                         // RunQuery per change vs batched) for correctness.
+                        //
+                        // 🚨🚨 THE NOTIFICATION IS A TRIGGER, NEVER A RESULT ROW (#1250).
+                        // The notification's raw `Entity` is deliberately discarded: RunQuery is
+                        // the ONLY source of rows, so every emission — Initial and every live
+                        // delta alike — carries exactly what the (RLS-filtered, when this is the
+                        // secured IMeshQueryProvider surface) read returned.
+                        //
+                        // This used to "supplement" the re-query with `change.Entity` whenever
+                        // `_evaluator.Matches` accepted it, to cover a supposed write lag. It
+                        // could never do that, and it was a row-level-security BYPASS:
+                        //  • Matches() consults ONLY the query's filter and free-text term
+                        //    (QueryEvaluator.Matches) — no permission check of any kind. A write
+                        //    under the subscription's base path to a node the subscriber cannot
+                        //    read was injected into their result set as an `Added` carrying the
+                        //    node AND its Content, and nothing downstream re-filtered it
+                        //    (MeshQuery.TryFilterDuplicateLiveChange forwards duplicate Addeds by
+                        //    design). The next re-query took it back out as `Removed` — a flicker
+                        //    of data the caller was never entitled to.
+                        //  • There was no write lag to cover. EVERY adapter that populates
+                        //    `Entity` commits to the store BEFORE publishing
+                        //    (InMemoryStorageAdapter.Write, SqliteStorageAdapter.Write,
+                        //    PostgreSqlStorageAdapter.Write/PublishChanges,
+                        //    SnowflakeStorageAdapter.Write; FileSystemChangeWatcher notifies with
+                        //    the node it just READ back). Conversely every source whose
+                        //    notification can outrun row visibility — PG's LISTEN/NOTIFY
+                        //    (PostgreSqlChangeListener), the Cosmos change feed, the Snowflake
+                        //    poller — passes `Entity = null`, so the supplement could not fire
+                        //    for them even in principle.
+                        //  • Whenever the supplement DID change the outcome, the re-query was the
+                        //    one that was right: the row it re-added was one the read had
+                        //    excluded by RLS, by satellite-table routing (#1193), by a path
+                        //    filter, or past the load cap. It also raced the per-schema PG
+                        //    delegate over the same write, which is the provider race #889
+                        //    documents in MeshQuery.TryFilterDuplicateLiveChange.
                         disposables.Add(
                             changeBuffer
-                                .Select(n => RunQuery()
-                                    .Select(newResults => (batch: (IList<DataChangeNotification>)new[] { n }, newResults)))
+                                .Select(_ => RunQuery())
                                 .Concat()
                                 .Subscribe(
-                                    t => ProcessBatch(t.batch, t.newResults, currentItems, parsedQuery, observer),
+                                    newResults => ProcessBatch(newResults, currentItems, parsedQuery, observer),
                                     ex => observer.OnError(ex)));
 
                         lock (earlyLock)
@@ -1336,8 +1409,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         });
     }
 
+    /// <summary>
+    /// Diffs one re-query snapshot against the live result set and emits the Added / Updated /
+    /// Removed deltas. <b>The re-query is the ONLY source of result rows</b> — see the note on the
+    /// live pipeline in <see cref="ObserveQueryInternal{T}"/> for why the change notification's raw
+    /// entity is deliberately not admitted here (#1250).
+    /// </summary>
     private void ProcessBatch<T>(
-        IList<DataChangeNotification> batch,
         List<(string? Path, T Item)> newResults,
         Dictionary<string, T> currentItems,
         ParsedQuery parsedQuery,
@@ -1347,23 +1425,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         foreach (var (path, item) in newResults)
             if (!string.IsNullOrEmpty(path))
                 newItems[path] = item;
-
-        var changesByPath = batch
-            .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
-
-        // Supplement re-query results with entities from notifications
-        // that haven't appeared in the store yet (write lag).
-        foreach (var (path, change) in changesByPath)
-        {
-            if (change.Entity is T directMatch && _evaluator.Matches(directMatch, parsedQuery))
-            {
-                if (change.Kind == DataChangeKind.Deleted)
-                    newItems.Remove(path);
-                else
-                    newItems[path] = directMatch;
-            }
-        }
 
         var addedItems = new List<T>();
         var updatedItems = new List<T>();

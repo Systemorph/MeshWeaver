@@ -50,18 +50,35 @@ public class DeckExportMenuProvider : INodeMenuProvider
 
                 return
                 [
+                    // Grouped under the SAME "Export" parent the Markdown provider uses — a Deck's
+                    // export entries are the identical actions, so they must sit in the identical
+                    // place. (The two providers are mutually exclusive by NodeType, so only one ever
+                    // contributes an Export group to a given node's menu.)
+                    MarkdownExportMenuProvider.ExportGroup(
+                    [
+                    // Same icons AND the same LabelKeys as the Markdown provider: a Deck's entries
+                    // are the identical actions, so they must read identically — including for a
+                    // German viewer. These two carried no LabelKey at all, so they rendered English
+                    // regardless of locale while the Markdown node's twins translated correctly.
                     new NodeMenuItemDefinition(
                         Label: MarkdownExportMenuProvider.PdfLabel,
                         Area: ExportDocumentLayoutArea.PdfArea,
+                        Icon: MarkdownExportMenuProvider.PdfIcon,
                         RequiredPermission: Permission.Read,
                         Order: 27,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea)),
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea))
+                        { LabelKey = "menu.exportPdf", TooltipKey = "menu.exportPdf.tooltip" },
+                    // Order 28 — the same PDF, Email, DOCX sequence as a Markdown node, with the
+                    // DOCX slot simply absent rather than the Email entry shifting into it.
                     new NodeMenuItemDefinition(
                         Label: SendDocumentLayoutArea.SendLabel,
                         Area: SendDocumentLayoutArea.SendArea,
+                        Icon: MarkdownExportMenuProvider.SendIcon,
                         RequiredPermission: Permission.Read,
-                        Order: 29,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea)),
+                        Order: 28,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
+                        { LabelKey = "menu.sendToContacts", TooltipKey = "menu.sendToContacts.tooltip" },
+                    ]),
                 ];
             });
     }

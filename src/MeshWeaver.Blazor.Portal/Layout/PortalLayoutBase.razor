@@ -66,31 +66,7 @@
                                 <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
                                 <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
                             }
-                            @foreach (var menuItem in FlattenMenuItems(GetNodeMenuItems()))
-                            {
-                                var item = menuItem;
-                                @if (item.Area == "_separator")
-                                {
-                                    <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
-                                }
-                                else
-                                {
-                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))" title="@(item.Tooltip ?? item.Label)">
-                                        @if (!string.IsNullOrEmpty(item.Icon))
-                                        {
-                                            if (IsEmoji(item.Icon))
-                                            {
-                                                <span style="margin-right: 8px;">@item.Icon</span>
-                                            }
-                                            else
-                                            {
-                                                <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
-                                            }
-                                        }
-                                        @item.Label
-                                    </FluentMenuItem>
-                                }
-                            }
+                            <NodeMenuItemList Items="@GetNodeMenuItems()" OnItemClick="@HandleMenuItemClick" />
                         </FluentMenu>
                         <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
                             Title="@Access.Localize("menu.node")" aria-label="@Access.Localize("menu.node")"
@@ -105,31 +81,7 @@
                                 <div style="padding: 6px 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;" title="@CurrentNodeName">@CurrentNodeName</div>
                                 <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
                             }
-                            @foreach (var menuItem in FlattenMenuItems(GetMeshMenuItems()))
-                            {
-                                var item = menuItem;
-                                @if (item.Area == "_separator")
-                                {
-                                    <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
-                                }
-                                else
-                                {
-                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))" title="@(item.Tooltip ?? item.Label)">
-                                        @if (!string.IsNullOrEmpty(item.Icon))
-                                        {
-                                            if (IsEmoji(item.Icon))
-                                            {
-                                                <span style="margin-right: 8px;">@item.Icon</span>
-                                            }
-                                            else
-                                            {
-                                                <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
-                                            }
-                                        }
-                                        @item.Label
-                                    </FluentMenuItem>
-                                }
-                            }
+                            <NodeMenuItemList Items="@GetMeshMenuItems()" OnItemClick="@HandleMenuItemClick" />
                         </FluentMenu>
                         <FluentButton Id="mesh-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
                             Title="@Access.Localize("menu.mesh")" aria-label="@Access.Localize("menu.mesh")"
@@ -139,31 +91,7 @@
 
                         @* AI menu — Threads / Models / Agents / Skills, each opens mesh search grouped by namespace *@
                         <FluentMenu Anchor="ai-menu-anchor" Open="@isAiMenuOpen" OpenChanged="@OnAiMenuOpenChanged">
-                            @foreach (var menuItem in FlattenMenuItems(GetAiMenuItems()))
-                            {
-                                var item = menuItem;
-                                @if (item.Area == "_separator")
-                                {
-                                    <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
-                                }
-                                else
-                                {
-                                    <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))" title="@(item.Tooltip ?? item.Label)">
-                                        @if (!string.IsNullOrEmpty(item.Icon))
-                                        {
-                                            if (IsEmoji(item.Icon))
-                                            {
-                                                <span style="margin-right: 8px;">@item.Icon</span>
-                                            }
-                                            else
-                                            {
-                                                <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
-                                            }
-                                        }
-                                        @item.Label
-                                    </FluentMenuItem>
-                                }
-                            }
+                            <NodeMenuItemList Items="@GetAiMenuItems()" OnItemClick="@HandleMenuItemClick" />
                         </FluentMenu>
                         <FluentButton Id="ai-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
                             Title="@Access.Localize("menu.ai")" aria-label="@Access.Localize("menu.ai")"
@@ -177,18 +105,7 @@
                         @if (GetGitHubMenuItems().Count > 0)
                         {
                             <FluentMenu Anchor="github-menu-anchor" Open="@isGitHubMenuOpen" OpenChanged="@OnGitHubMenuOpenChanged">
-                                @foreach (var menuItem in FlattenMenuItems(GetGitHubMenuItems()))
-                                {
-                                    var item = menuItem;
-                                    @if (item.Area == "_separator")
-                                    {
-                                        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
-                                    }
-                                    else
-                                    {
-                                        <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))" title="@(item.Tooltip ?? item.Label)">@item.Label</FluentMenuItem>
-                                    }
-                                }
+                                <NodeMenuItemList Items="@GetGitHubMenuItems()" OnItemClick="@HandleMenuItemClick" />
                             </FluentMenu>
                             <FluentButton Id="github-menu-anchor" Appearance="Appearance.Stealth" BackgroundColor="transparent"
                                 Title="@Access.Localize("menu.github")" aria-label="@Access.Localize("menu.github")"

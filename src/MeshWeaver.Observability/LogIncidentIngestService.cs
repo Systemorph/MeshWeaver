@@ -209,8 +209,15 @@ public sealed class LogIncidentIngestService(
         // New/Failed → (re)try triage. Triaging → leave the in-flight round alone; the control
         // plane reconciles it against the thread, the only authority on whether it is still running.
         { Status: LogIncidentStatus.New or LogIncidentStatus.Failed } => LogIncidentRequest.Triage,
-        // Filing with no link ⇒ the claim was taken and nothing came back. Re-ask.
-        { Status: LogIncidentStatus.Filing } => LogIncidentRequest.File,
+        // Filing with no link ⇒ the claim was taken and nothing came back. Re-ask — but ONLY when
+        // nothing is already being asked. The stranded case is by definition RequestedStatus.None
+        // (the claim consumes the request before it writes Filing, which is why nothing else can
+        // move it), so scoping the arm this way costs the repair nothing. Unscoped it would
+        // overwrite a request someone made deliberately — an admin's Suppress, or any future
+        // control-plane verb — on the very next report, and the incident would file itself anyway.
+        // An automated recovery must never outrank an explicit instruction.
+        { Status: LogIncidentStatus.Filing, RequestedStatus: LogIncidentRequest.None }
+            => LogIncidentRequest.File,
         _ => incident.RequestedStatus,
     };
 

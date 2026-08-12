@@ -304,4 +304,84 @@ public class PathMatcherTests
     }
 
     #endregion
+
+    #region Wildcard Namespace Relevance — the change-feed gate (#1235)
+
+    /// <summary>
+    /// <c>ShouldNotifyForQuery</c> is the live relevance gate for the Postgres / Snowflake / Cosmos
+    /// change feeds: it decides whether a CRUD event should refresh a synced query. For a
+    /// path-less wildcard query the namespace patterns are the ONLY thing it can judge on, so a
+    /// pattern that matches nothing means the query never refreshes — a node created below a
+    /// <c>Source</c> folder simply never appears.
+    ///
+    /// <para>🚨 The two-wildcard pattern <c>*/Source/*</c> — which <c>scope:subtree</c> produces
+    /// (#1232) — used to be the broken one: <c>GlobMatch</c> split on the FIRST wildcard and took
+    /// the whole remainder as a literal suffix, giving <c>EndsWith("/Source/*")</c>. Nothing ends
+    /// with that, so the nested case below silently never fired.</para>
+    /// </summary>
+    [Theory]
+    // Direct child of a Source folder — matched by the FIRST pattern.
+    [InlineData("acme/SampleData/Source/Spine", true)]
+    // Nested one level deeper — matched ONLY by the two-wildcard second pattern.
+    [InlineData("acme/SampleData/Source/Fixtures/MtplClaimFixtures", true)]
+    // Deeper still.
+    [InlineData("acme/SampleData/Source/A/B/C/Leaf", true)]
+    // No Source segment anywhere — must NOT wake the query up.
+    [InlineData("acme/SampleData/Other/Thing", false)]
+    // 'Sources' is a different segment: the literal after the wildcard is matched verbatim.
+    [InlineData("acme/Sources/Thing", false)]
+    public void ShouldNotifyForQuery_WildcardNamespaceSubtree_CoversNestedNamespaces(
+        string changedPath, bool expected)
+    {
+        // Exactly what QueryParser emits for `namespace:*/Source scope:subtree`.
+        var patterns = new[] { "*/Source", "*/Source/*" };
+
+        PathMatcher.ShouldNotifyForQuery(changedPath, queryBasePath: "", QueryScope.Exact, patterns)
+            .Should().Be(expected);
+    }
+
+    /// <summary>
+    /// A single-wildcard satellite pattern keeps working — the surrounding literals, including the
+    /// leading underscore of <c>_Thread</c>, are matched verbatim.
+    /// </summary>
+    [Theory]
+    [InlineData("rbuergi/_Thread/abc", true)]
+    [InlineData("rbuergi/_ThreadMessage/abc", false)]
+    [InlineData("other/_Thread/abc", false)]
+    public void NamespaceInScope_SingleWildcardSatellitePattern_StillMatchesVerbatimLiterals(
+        string changedPath, bool expected)
+    {
+        PathMatcher.NamespaceInScope(PathMatcher.NamespaceOf(changedPath), ["rbuergi/*_Thread"])
+            .Should().Be(expected);
+    }
+
+    /// <summary>
+    /// 🚨 <c>%</c> is NOT a wildcard here. This matcher used to accept it, to compensate for the
+    /// parser rewriting <c>*</c>→<c>%</c> for namespaces; the parser no longer does that, and
+    /// tolerating both spellings is precisely what let the two vocabularies drift apart without
+    /// anyone noticing. Keeping it literal makes a re-introduction fail loudly.
+    /// </summary>
+    [Fact]
+    public void NamespaceInScope_PercentIsALiteral_NotAWildcard()
+    {
+        PathMatcher.NamespaceInScope("acme/SampleData/Source", ["*/Source"])
+            .Should().BeTrue("`*` is the one wildcard vocabulary of the AST");
+        PathMatcher.NamespaceInScope("acme/SampleData/Source", ["%/Source"])
+            .Should().BeFalse("`%` is SQL dialect and never travels in a ParsedQuery");
+    }
+
+    /// <summary>
+    /// A pattern with NO wildcard keeps its "this namespace or anything under it" reading — the
+    /// glob change must not narrow the concrete case.
+    /// </summary>
+    [Theory]
+    [InlineData("acme/Docs", true)]
+    [InlineData("acme/Docs/Sub", true)]
+    [InlineData("acme/DocsOther", false)]
+    public void NamespaceInScope_ConcretePattern_MatchesSelfOrBelow(string ns, bool expected)
+    {
+        PathMatcher.NamespaceInScope(ns, ["acme/Docs"]).Should().Be(expected);
+    }
+
+    #endregion
 }

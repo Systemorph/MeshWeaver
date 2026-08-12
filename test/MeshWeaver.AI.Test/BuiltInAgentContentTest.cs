@@ -99,11 +99,16 @@ public class BuiltInAgentContentTest
     }
 
     /// <summary>
-    /// A file with malformed front matter must be <b>skipped</b>, not thrown on — one bad file
-    /// cannot be allowed to stop the host from starting.
+    /// A file with malformed front matter must be <b>skipped</b>, not thrown on — one bad file cannot be
+    /// allowed to stop the host from starting — and it must be <b>reported</b>.
+    ///
+    /// <para>🚨 Asserting only <c>Assert.Null(node)</c> is exactly the blind spot this whole area is
+    /// about: null is what a loudly-skipped file and a silently-vanished one both return, so the
+    /// assertion cannot tell them apart. Silent is the bad one — the catalog shrinks with nothing red
+    /// anywhere and the author sees only "my agent doesn't appear". Assert the diagnostic.</para>
     /// </summary>
     [Fact]
-    public void MalformedFrontMatter_IsSkipped_AndDoesNotThrow()
+    public void MalformedFrontMatter_IsSkipped_AndReported_AndDoesNotThrow()
     {
         const string malformed =
             "---\n" +
@@ -114,8 +119,11 @@ public class BuiltInAgentContentTest
             "Body.\n";
 
         // Must not throw. Before the guard this threw YamlException straight out of mesh startup.
-        var node = BuiltInAgentProvider.ParseEmbeddedNode(malformed, "Agent/broken.md");
+        var node = BuiltInAgentProvider.TryParseEmbeddedNode(malformed, "Agent/broken.md", out var error);
 
         Assert.Null(node);
+        Assert.False(string.IsNullOrWhiteSpace(error),
+            "a skipped file must say WHY — that reason is the only trace a dropped agent leaves");
+        Assert.Contains("YAML", error!, StringComparison.OrdinalIgnoreCase);
     }
 }
