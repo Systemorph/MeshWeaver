@@ -497,6 +497,43 @@ Never go through a query + merge in memory + a full-node write. The index read i
 
 ---
 
+## 🚨 Creating typed nodes — everything comes from the REGISTRY, nothing from your hand
+
+Creating a node is not assembling JSON. Three registries decide whether your write is even
+*meaningful*, and the write boundary enforces all three **fail-closed**:
+
+1. **The `NodeType` must name a registered NodeType.** A write whose `NodeType` resolves to
+   nothing is refused with *"NodeType 'X' is not registered"*. There is no "just a string" node
+   type: the name is a claim that a module owns and can activate this node. (The Store contact
+   form shipped writing `NodeType: "SalesInquiry"` — a name registered nowhere — and every
+   enquiry on every mesh was refused for a month before anything executed the write.)
+
+2. **The content's `$type` must resolve in the static registry.** Cross-hub, your typed CLR
+   content serializes to JSON carrying a `$type` discriminator, and
+   `ContentDiscriminatorValidator` refuses any discriminator the mesh root's `ITypeRegistry`
+   chain cannot resolve for a built-in NodeType — because accepting it would persist an untyped
+   blob that renders empty and cannot be edited. **Never hand-assemble a `$type` string.** Use
+   the framework's own content record (`new Email { … }`, `new MarkdownContent { … }`) and let
+   serialization write the registered name; when in doubt, read the declared shape at
+   `@{NodeType}/schema/`.
+
+3. **Every content type a built-in NodeType declares via `WithContentType<T>()` MUST be in
+   `WithGraphTypes`** (the static registry of functionality). The validator's strict branch
+   assumes exactly that — an omission is invisible for as long as only in-process writers exist
+   (typed content bypasses the guard) and then refuses the first cross-hub writer. That is how
+   `Email` broke the contact form's notification phase in production (2026-08-12): registered as
+   a NodeType, missing from the registry, undetectable until a compiled plugin queued one.
+
+**And the write itself goes through the owning hub, never around it** — the canonical verbs are
+the whole surface: `CreateNodeRequest` / `CreateOrUpdateNodeRequest` for new nodes,
+`GetMeshNodeStream(path).Update(...)` for edits. The owning hub autonames, stamps, types and
+validates on its single-threaded action block. This is the same pattern **thread creation**
+uses — the thread hub mints the node, names it, and types its content; the caller only says
+what it wants. If you find yourself constructing a `$type` by hand or writing a node whose type
+you invented, you are on the wrong side of the registry.
+
+---
+
 ## Upserts (`CreateOrUpdateNodeRequest`) — single verb, no delete-then-create
 
 When the caller has the **full target shape** and wants the node to land regardless of whether it already exists (copy / move / import / agentic write-back), use the single-verb upsert:
