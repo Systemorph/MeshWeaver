@@ -87,6 +87,32 @@ public static class AccessContextCaptureExtensions
     }
 
     /// <summary>
+    /// Overload for a caller that has ALREADY resolved the identity this pipeline runs under and
+    /// wants that exact value restored around every emission — no ambient snapshot taken here.
+    ///
+    /// <para>🚨 Use it wherever the identity is a value rather than an AsyncLocal: a builder given an
+    /// explicit <c>WithAccessContext</c>/<c>ImpersonateAsSystem</c>, or any primitive that captured
+    /// eagerly at its own call site and must not re-read the ambient (which, at the moment this
+    /// wrapper is applied, may already be a different thread's). Passing the same value the post was
+    /// stamped with keeps ONE identity across the whole operation — the delivery and the subscriber's
+    /// callback agree.</para>
+    ///
+    /// <para>A null <paramref name="captured"/> passes through unwrapped, exactly like a null ambient
+    /// capture in the default mode: nothing is invented, and a caller with no identity keeps failing
+    /// closed at the post.</para>
+    /// </summary>
+    /// <param name="source">Cold observable returned by a framework primitive.</param>
+    /// <param name="services">DI scope used to resolve <see cref="AccessService"/>.</param>
+    /// <param name="captured">The identity to restore around each emission; null passes through.</param>
+    public static IObservable<T> CarryAccessContext<T>(
+        this IObservable<T> source, IServiceProvider services, AccessContext? captured)
+    {
+        var access = services.GetService<AccessService>();
+        if (access is null || captured is null) return source;
+        return new CarryAccessContextObservable<T>(source, access, captured);
+    }
+
+    /// <summary>
     /// Overload that takes a pre-resolved <see cref="AccessService"/> — for
     /// callers that already hold a reference (e.g. inside an
     /// <see cref="IMessageHub"/> implementation) and want to avoid the DI

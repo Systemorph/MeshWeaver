@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Layout.Composition;
@@ -74,15 +75,29 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
 
         var hub = host.Hub;
         var courseSlug = CourseProgress.CourseSlug(root);
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+            return null;
+
+        // 🚨 Both reads go through IMeshService.Query — the UNIFIED query — never hub.GetQuery.
+        // A hub-scoped synced query is SUBTREE-LOCAL on a running (Orleans-hosted) mesh: asked from
+        // a lesson's hub for `path:{course} scope:subtree`, it answers from the lesson's own
+        // snapshot and returns (nearly) nothing, so the provider silently declined and every course
+        // page fell back to the one-branch child list — on live memex only, because the Monolith
+        // test host's synced queries see the whole store. The reader shell's rail
+        // (EducationLayoutAreas.CourseNavStream) uses this same unified read and demonstrably
+        // returns the full course from a lesson hub in production; same family as the live compile
+        // trace in MeshWeaver#1311 and the record-page fix in MeshWeaver.Plugins#430.
 
         // The learner's visit markers decorate the index (✓ on visited lessons). Starts empty so
         // a slow or absent record can never hold the menu back.
         var visitedStream = string.IsNullOrEmpty(viewer)
             ? Observable.Return(NoLessons)
-            : hub.GetQuery(
-                    $"course-progress:{viewer}:{courseSlug}",
-                    $"path:{CourseProgress.VisitedPath(viewer, courseSlug)} scope:descendants select:path,id")
-                .Select(markers => CourseProgress.VisitedSlugs(markers))
+            : meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"path:{CourseProgress.VisitedPath(viewer, courseSlug)} scope:descendants"))
+                .Scan(ImmutableDictionary<string, MeshNode>.Empty, EducationLayoutAreas.ApplyQueryChange)
+                .Select(markers => CourseProgress.VisitedSlugs(markers.Values))
                 .Catch((Exception _) => Observable.Return(NoLessons))
                 .StartWith(NoLessons);
 
@@ -93,7 +108,8 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
         // upsert of a self-describing marker, so there is no read-modify-write to race.
         var visitWrite = PrepareVisitWrite(host, viewer, root, courseSlug, currentPath);
 
-        // ONE subtree query per course, shared by every page of it (synced + RLS-wrapped).
+        // The course subtree, folded from the query's change feed (Initial/Reset carry the full
+        // result, Added/Updated/Removed only the delta — the same fold the reader shell uses).
         // Defer wraps a per-subscription flag: the first CLAIMED index this page renders arms the
         // visit write — once per page open, and only after CourseProgress.VisitDwell so a page the
         // reader merely paged through is never marked read. Leaving CANCELS the dwell: the
@@ -101,11 +117,11 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
         return Observable.Defer(() =>
         {
             var recorded = false;
-            return hub.GetQuery(
-                    $"edu-course-index:{root}",
-                    $"path:{root} scope:subtree is:main select:path,id,name,order,nodeType,icon")
+            return meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{root} scope:subtree is:main"))
+                .Scan(ImmutableDictionary<string, MeshNode>.Empty, EducationLayoutAreas.ApplyQueryChange)
                 .CombineLatest(visitedStream, (nodes, visited) =>
-                    DecorateVisited(BuildNavigation(root, nodes.ToList(), currentPath), visited))
+                    DecorateVisited(BuildNavigation(root, nodes.Values.ToList(), currentPath), visited))
                 .Do(navigation =>
                 {
                     if (navigation is null || recorded || visitWrite is null)
