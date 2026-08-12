@@ -181,6 +181,69 @@ public class ContentIndexingPipelineTest(ITestOutputHelper output) : MonolithMes
         }
     }
 
+    /// <summary>
+    /// 🚨 THE REGRESSION GUARD for the O(n²) activity-log shape (#1341 / #1172). The re-index
+    /// activity must cost a number of WRITES that does not grow with the number of files walked.
+    ///
+    /// <para>Every <c>stream.Update</c> on the activity node re-serialises that node's WHOLE content
+    /// to compute its patch, so appending one line per file over n files serialises 1 + 2 + … + n
+    /// copies of a growing document — O(n²) CPU and allocation. On memex-cloud that shape cost 719 MB
+    /// of serialisation on a single import activity and was the dominant term in the pod sitting at
+    /// 51% of CFS periods throttled.</para>
+    ///
+    /// <para>What is asserted is the WRITE COUNT — the activity node's own revision counter
+    /// (<see cref="MeshNode.Version"/>), never the log text — so the test cannot be satisfied by
+    /// rewording a message. RED before the batching (writes grew 1:1 with the file count), GREEN
+    /// after (identical for both sizes). Both sizes stay under <c>ProgressEvery</c>, so no heartbeat
+    /// line is involved either way.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ReindexActivityWrites_DoNotGrowWithTheNumberOfFiles()
+    {
+        const int smallWalk = 3;
+        const int largeWalk = 12;
+
+        var observer = Mesh.ServiceProvider.GetRequiredService<ContentIndexingObserver>();
+
+        for (var i = 0; i < smallWalk; i++)
+            await SaveFile($"scale/file-{i:D3}.txt", Encoding.UTF8.GetBytes($"# File {i}\n\nAlpha beta gamma {i}.\n"));
+        var smallWrites = await ReindexAndCountWrites(observer);
+
+        // Grow the collection, then walk it again — a strictly larger walk on the same pipeline.
+        for (var i = smallWalk; i < largeWalk; i++)
+            await SaveFile($"scale/file-{i:D3}.txt", Encoding.UTF8.GetBytes($"# File {i}\n\nAlpha beta gamma {i}.\n"));
+        var largeWrites = await ReindexAndCountWrites(observer);
+
+        Output.WriteLine($"activity writes: {smallWalk} files -> {smallWrites}; {largeWalk} files -> {largeWrites}");
+
+        largeWrites.Should().Be(smallWrites,
+            $"the walk must log its per-file detail in ONE write regardless of how many files it "
+            + $"handled — {largeWalk} files cost {largeWrites} writes vs {smallWrites} for {smallWalk}, "
+            + "i.e. the per-file ctx.Log is back and every one of those writes re-serialises the whole "
+            + "activity node (the O(n²) CPU shape behind #1172)");
+
+        // …and the absolute figure stays a small constant. Comparing the two sizes alone would still
+        // pass if BOTH grew with the file count.
+        largeWrites.Should().BeLessThan(largeWalk,
+            "the write count is per-collection, so it must stay well under the per-file count");
+    }
+
+    /// <summary>Runs one re-index-all to terminal Succeeded and returns how many times its activity
+    /// node was written (<see cref="MeshNode.Version"/> — the node's own "+1 per real modification").</summary>
+    private async Task<long> ReindexAndCountWrites(ContentIndexingObserver observer)
+    {
+        var activityPath = await observer.ReindexAll([Collection])
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await WaitForActivityStatus(activityPath, ActivityStatus.Succeeded);
+        // Terminal status is the LAST write the runner makes, so the node is settled here.
+        var node = await Mesh.GetWorkspace().GetMeshNodeStream(activityPath)
+            .Where(n => (n?.Content as ActivityLog)?.Status == ActivityStatus.Succeeded)
+            .FirstAsync()
+            .Timeout(30.Seconds())
+            .ToTask(TestContext.Current.CancellationToken);
+        return node.Version;
+    }
+
     private async Task<ActivityLog> WaitForActivityStatus(string activityPath, ActivityStatus status) =>
         await Mesh.GetWorkspace().GetMeshNodeStream(activityPath)
             .Select(n => n?.Content as ActivityLog)
