@@ -380,6 +380,130 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     }
 
     /// <summary>
+    /// 🚨 <b>THE typed write.</b> Applies <paramref name="update"/> to the node's content read as
+    /// <typeparamref name="TContent"/> — <b>the caller names the type</b>, so nothing has to guess
+    /// which CLR type a <c>$type</c> discriminator means.
+    ///
+    /// <para><b>Why this exists.</b> The untyped <see cref="Update(Func{MeshNode, MeshNode})"/> hands
+    /// the lambda a <see cref="MeshNode"/> and every writer then re-derives the content type itself,
+    /// overwhelmingly as <c>node.Content as TContent ?? new TContent()</c>. That idiom is a silent
+    /// data-loss bug: whenever the content arrives as JSON the cast yields <c>null</c>, the
+    /// <c>?? new()</c> materialises a DEFAULT record, and the write persists those defaults over
+    /// every field the caller never meant to touch (the CheckInbox / AppendUserInput
+    /// Status-reset class). Making the type a TYPE ARGUMENT removes the guess at the root:
+    /// <see cref="MeshNodeContentExtensions.ContentAs{T}"/> converts a typed instance, a degraded
+    /// <see cref="JsonElement"/>, an as-written <c>JsonNode</c>, or a same-named record from another
+    /// build — all into the <typeparamref name="TContent"/> the caller asked for, with no
+    /// name→Type lookup anywhere.</para>
+    ///
+    /// <para>🚨 <b>Unconvertible content FAILS THE WRITE — it never writes a default.</b>
+    /// <see cref="MeshNodeContentExtensions.ContentAs{T}"/> returns <c>null</c> for unconvertible
+    /// content because a READ must stay bad-data tolerant; a WRITE must not, or the caller's own
+    /// content is what gets destroyed. So a node whose Content is present but cannot be read as
+    /// <typeparamref name="TContent"/> faults the returned observable with a
+    /// <see cref="MeshNodeStreamException"/> (<see cref="MeshNodeErrorCode.Deserialization"/>)
+    /// carrying the node path, the actual runtime type and a JSON excerpt — the write does not
+    /// happen.</para>
+    ///
+    /// <para>Content that is simply ABSENT (<c>Content is null</c>) is not an error and not
+    /// representable here — use the
+    /// <see cref="Update{TContent}(Func{MeshNode, TContent, MeshNode})"/> overload, whose
+    /// <c>null</c> means exactly and only "no content yet".</para>
+    /// </summary>
+    /// <typeparam name="TContent">The content type the caller knows this node carries.</typeparam>
+    /// <param name="update">Receives the current content, returns the replacement.</param>
+    public IObservable<MeshNode> Update<TContent>(Func<TContent, TContent> update)
+        where TContent : class
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        return Update(node => node with { Content = update(RequireContent<TContent>(node)) });
+    }
+
+    /// <summary>
+    /// The typed write for a lambda that also needs the <see cref="MeshNode"/> itself (to set
+    /// Name/NodeType/… alongside Content, or to create the content when there is none yet).
+    /// Same contract as <see cref="Update{TContent}(Func{TContent, TContent})"/> with one
+    /// difference, and it is the important one:
+    ///
+    /// <para>🚨 <b><c>null</c> means ABSENT, never "could not be read".</b> A node with no content
+    /// yields <c>null</c> so the caller can initialise it; content that is PRESENT but not
+    /// convertible to <typeparamref name="TContent"/> faults the observable with
+    /// <see cref="MeshNodeStreamException"/> instead of quietly arriving as <c>null</c>. Conflating
+    /// the two is what turns "the content did not deserialise" into "the content was empty, write
+    /// a fresh one" — the write that destroys the real record.</para>
+    /// </summary>
+    /// <typeparam name="TContent">The content type the caller knows this node carries.</typeparam>
+    /// <param name="update">Receives the node and its content (<c>null</c> only when absent).</param>
+    public IObservable<MeshNode> Update<TContent>(Func<MeshNode, TContent?, MeshNode> update)
+        where TContent : class
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        return Update(node => update(node, ResolveContent<TContent>(node)));
+    }
+
+    /// <summary>
+    /// Content as <typeparamref name="TContent"/> for a WRITE: <c>null</c> only when Content is
+    /// absent; unconvertible content throws (see the overload docs).
+    /// </summary>
+    private TContent? ResolveContent<TContent>(MeshNode node) where TContent : class
+    {
+        if (node.Content is null)
+            return null;
+        // No logger: an unconvertible value here is about to become an exception carrying the same
+        // diagnosis, so ContentAs's LogError would only duplicate it at a level the caller cannot
+        // suppress. The failing read IS the thrown error.
+        var content = node.ContentAs<TContent>(_jsonOptions);
+        return content ?? throw new MeshNodeStreamException(
+            BuildTypedWriteError<TContent>(node,
+                $"content is {Describe(node.Content)} and could not be read as "
+                + $"'{typeof(TContent).Name}'"));
+    }
+
+    /// <summary>Content as <typeparamref name="TContent"/>, required to be present.</summary>
+    private TContent RequireContent<TContent>(MeshNode node) where TContent : class
+        => ResolveContent<TContent>(node)
+           ?? throw new MeshNodeStreamException(
+               BuildTypedWriteError<TContent>(node,
+                   $"the node has no content to update as '{typeof(TContent).Name}'"));
+
+    private MeshNodeError BuildTypedWriteError<TContent>(MeshNode node, string what) =>
+        new(MeshNodeErrorCode.Deserialization,
+            node.Path ?? _path ?? "<own>",
+            $"Update<{typeof(TContent).Name}> refused to write: {what}. The write was NOT applied — "
+            + "writing a default-valued record here would persist those defaults over every field "
+            + "the caller never touched.",
+            ContentExcerpt(node.Content));
+
+    // Assembly-qualified on purpose: a dynamic node assembly compiles without a namespace, so the
+    // bare type name is identical on both sides of a cross-assembly mismatch and only the assembly
+    // identity makes it diagnosable.
+    private static string Describe(object? content) =>
+        content is null
+            ? "absent"
+            : content is JsonElement or System.Text.Json.Nodes.JsonNode
+                ? $"untyped JSON ({content.GetType().Name})"
+                : $"a {content.GetType().FullName} ({content.GetType().Assembly.GetName().Name})";
+
+    private const int TypedWriteExcerptLimit = 400;
+
+    private static string? ContentExcerpt(object? content)
+    {
+        if (content is null)
+            return null;
+        var raw = content switch
+        {
+            JsonElement je => je.GetRawText(),
+            System.Text.Json.Nodes.JsonNode jn => jn.ToJsonString(),
+            _ => null,
+        };
+        return raw is null
+            ? null
+            : raw.Length <= TypedWriteExcerptLimit
+                ? raw
+                : raw[..TypedWriteExcerptLimit] + "…";
+    }
+
+    /// <summary>
     /// Applies <paramref name="update"/> to the targeted MeshNode and returns an
     /// <see cref="IObservable{MeshNode}"/> that emits the post-update node on the first
     /// emission past the pre-update snapshot. <b>Caller MUST Subscribe</b> â€” the cold
@@ -393,6 +517,9 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     ///     cached remote stream so the patch routes to the owning per-node hub via
     ///     the data sync protocol.</description></item>
     /// </list>
+    /// <para>🚨 Prefer the typed <see cref="Update{TContent}(Func{TContent, TContent})"/> whenever
+    /// the lambda reads Content: it names the type instead of re-deriving it, and it fails loudly
+    /// rather than letting a <c>Content as T ?? new T()</c> write defaults over real fields.</para>
     /// </summary>
     public IObservable<MeshNode> Update(Func<MeshNode, MeshNode> update)
     {
