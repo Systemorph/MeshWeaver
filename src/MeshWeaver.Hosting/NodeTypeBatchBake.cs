@@ -115,6 +115,19 @@ internal static class NodeTypeBatchBake
     ///
     /// <para>Overlap is free: the results fold into one path-keyed map, and the in-memory matcher
     /// then selects each type's set from it exactly as before.</para>
+    ///
+    /// <para>🚨 <b>The union's COMPLETENESS is what makes the in-memory match sound</b>, and it rests
+    /// on <c>scope:subtree</c> meaning the same thing for a WILDCARD namespace as for a concrete
+    /// one. It did not, and that was the residual half of #1216: the wildcard form cannot become a
+    /// <c>ParsedQuery.Path</c>, so it is emitted as a <c>namespace LIKE '%/Source'</c> filter and the
+    /// scope — which only ever drove a PATH walk — was silently dropped. The fetch then reached only
+    /// the Code nodes sitting DIRECTLY in a <c>…/Source</c> folder, and a type whose sources include
+    /// a cross-partition <c>shared=@Other/SampleData/Source/Fixtures</c> resolved a PARTIAL set: its
+    /// own sources present, that one absent, a convincing <c>CS0103</c> out of Roslyn, and the bake
+    /// gate refusing readiness on healthy content. A partial set is strictly worse than an empty
+    /// one — the emptiness invariant below cannot see it. <c>QueryParser</c> now widens the wildcard
+    /// namespace to self-or-below (<c>WidenWildcardNamespacesToSubtree</c>), which is what lets the
+    /// matcher keep serving these queries from the global map instead of re-running them.</para>
     /// </summary>
     private static IReadOnlyList<string> GlobalCodeQueries =>
     [
@@ -485,6 +498,15 @@ internal static class NodeTypeBatchBake
                 if (ok)
                     return new PreWarmOutcome(typePath, PreWarmStatus.Compiled);
 
+                // 🚨 The compile never RAN because its source set could not be established — an
+                // availability failure, not a verdict about the code (issue #1218). It reports
+                // TimedOut, which the gate files under "not evaluated"; the stamp above already
+                // recorded CompilationStatus.Unavailable for the same reason. The batch driver
+                // hands the compiler a pre-resolved snapshot, so this normally cannot arise here
+                // — but the status vocabulary must not depend on WHICH driver ran the compile.
+                if (error is SourceDiscoveryUnavailableException)
+                    return new PreWarmOutcome(typePath, PreWarmStatus.TimedOut, error.Message);
+
                 // Same classification the activation path applies (ClassifyCompileFailure): a
                 // type that DECLARES source queries whose resolution is EXPLICITLY empty is
                 // broken by CONTENT (its sources were deleted from the mesh) — NoSources, which
@@ -504,7 +526,14 @@ internal static class NodeTypeBatchBake
                     ? PreWarmStatus.NoSources
                     : PreWarmStatus.CompileError;
                 return new PreWarmOutcome(
-                    typePath, status, NodeTypeCompilationHelpers.SummarizeCompileError(result, error));
+                    typePath, status, NodeTypeCompilationHelpers.SummarizeCompileError(result, error))
+                {
+                    // Same torn-snapshot evidence the activation path carries (#1214): whether the
+                    // type's sources moved while this compile ran. Read off the type record, which
+                    // holds both the compile-start stamp and the live source snapshot.
+                    SourcesMovedDuringCompile =
+                        def is not null && DynamicTypePreWarmer.SourcesMovedDuringCompile(def)
+                };
             });
     }
 

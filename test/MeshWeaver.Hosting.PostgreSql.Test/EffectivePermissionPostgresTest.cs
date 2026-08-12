@@ -211,7 +211,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
             // RUNTIME AccessAssignment being created here is what the test
             // actually exercises further down via the `after` permission
             // check on `pg-runtime-assignee`.
-            accessService.SetCircuitContext(TestUsers.Admin);
+            accessService.SetHostIdentity(TestUsers.Admin);
 
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -252,7 +252,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         }
         finally
         {
-            accessService.SetCircuitContext(savedContext);
+            accessService.SetHostIdentity(savedContext);
         }
     }
 

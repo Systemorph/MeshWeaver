@@ -79,7 +79,7 @@ internal static class OrleansTestIdentity
     }
 
     private static void SeedHub(IMessageHub? mesh) =>
-        mesh?.ServiceProvider.GetService<AccessService>()?.SetCircuitContext(System);
+        mesh?.ServiceProvider.GetService<AccessService>()?.SetHostIdentity(System);
 
     private static IMessageHub? GetSiloMeshHub(SiloHandle silo)
     {

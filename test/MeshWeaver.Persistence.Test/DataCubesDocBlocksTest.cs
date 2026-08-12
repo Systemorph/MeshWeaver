@@ -76,10 +76,16 @@ public class DataCubesDocBlocksTest(ITestOutputHelper output) : MonolithMeshTest
     public void Page_HasTheExpectedExecutableBlocks()
     {
         var submissions = ExtractSubmissions();
-        submissions.Select(s => s.Id).Should().NotBeEmpty();
-        // The five demos the page promises to render live: scope evaluation,
-        // Edit form, pivot grid, stacked column chart, pie chart.
-        submissions.Should().HaveCount(5);
+        submissions.Should().NotBeEmpty(
+            "the DataCubes page ships live executable demos — extracting none means the page lost its "
+            + "blocks or the extractor stopped recognising them");
+        // No exact count. The blocks are DERIVED from a shipped documentation page, so pinning today's
+        // number turns a legitimate sixth demo into a red build for a purely editorial reason. What
+        // actually matters is asserted here (ids are unique, so none shadows another as a layout-area
+        // key) and in EveryExecutableBlock_RendersAControl below, which iterates whatever the page
+        // ships and therefore covers a new block automatically.
+        submissions.Select(s => s.Id).Should().OnlyHaveUniqueItems(
+            "each block's id is its layout-area key — a duplicate silently renders the same area twice");
     }
 
     [Fact(Timeout = DefaultTimeoutMs)]

@@ -105,7 +105,7 @@ public class MeshPluginAccessContextTest(ITestOutputHelper output) : MonolithMes
         // where AsyncLocal doesn't flow. The plugin must restore the user's identity
         // from chat.ExecutionContext.UserAccessContext before invoking the operation.
         accessService.SetContext(null);
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
 
         // Update should succeed with restored context. Use plugin.Update (full replacement)
         // rather than plugin.Patch — Patch carries an extra "version-stayed-the-same" silent-
