@@ -13,6 +13,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Markdown.Export.Email;
+using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Handlers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -205,14 +206,14 @@ public class EmailDocumentExportTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact(Timeout = 60000)]
     public void Absolutize_LeavesAbsoluteAndAnchorLinksAlone()
     {
-        EmailHtmlSanitizer.Absolutize("/Node/Path", BaseUrl).Should().Be($"{BaseUrl}/Node/Path");
-        EmailHtmlSanitizer.Absolutize("Node/Path", BaseUrl).Should().Be($"{BaseUrl}/Node/Path");
-        EmailHtmlSanitizer.Absolutize("https://other.example.com/x", BaseUrl)
+        HtmlDowngrade.Absolutize("/Node/Path", BaseUrl).Should().Be($"{BaseUrl}/Node/Path");
+        HtmlDowngrade.Absolutize("Node/Path", BaseUrl).Should().Be($"{BaseUrl}/Node/Path");
+        HtmlDowngrade.Absolutize("https://other.example.com/x", BaseUrl)
             .Should().Be("https://other.example.com/x");
-        EmailHtmlSanitizer.Absolutize("mailto:a@b.com", BaseUrl).Should().Be("mailto:a@b.com");
-        EmailHtmlSanitizer.Absolutize("#section", BaseUrl).Should().Be("#section",
+        HtmlDowngrade.Absolutize("mailto:a@b.com", BaseUrl).Should().Be("mailto:a@b.com");
+        HtmlDowngrade.Absolutize("#section", BaseUrl).Should().Be("#section",
             "a fragment points inside the mail body itself");
-        EmailHtmlSanitizer.Absolutize("//cdn.example.com/x.png", BaseUrl)
+        HtmlDowngrade.Absolutize("//cdn.example.com/x.png", BaseUrl)
             .Should().Be("https://cdn.example.com/x.png");
     }
 

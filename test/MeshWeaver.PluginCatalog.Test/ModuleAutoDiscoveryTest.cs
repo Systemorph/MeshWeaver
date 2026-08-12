@@ -132,7 +132,7 @@ public class ModuleAutoDiscoveryTest(ITestOutputHelper output) : MonolithMeshTes
         // A signed-in user is in scope for the whole scan — the shape a webhook-behind-a-session or
         // an admin-triggered rescan has. They must still end up with no grant on the new partition.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = TestUsers.Admin.ObjectId,
             Name = TestUsers.Admin.Name,
@@ -186,7 +186,7 @@ public class ModuleAutoDiscoveryTest(ITestOutputHelper output) : MonolithMeshTes
         }
         finally
         {
-            accessService.SetCircuitContext(null);
+            accessService.SetHostIdentity(null);
         }
     }
 

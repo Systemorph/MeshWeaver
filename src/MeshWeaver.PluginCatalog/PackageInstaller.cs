@@ -124,6 +124,9 @@ public static class PackageInstaller
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Package '{manifest.Id}' has no installable content files."));
 
+        if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
+            return shadowed;
+
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         return EnsurePartitionsProvisioned(hub, partition, InstalledPartition)
@@ -150,6 +153,66 @@ public static class PackageInstaller
                     .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
             });
+    }
+
+    /// <summary>
+    /// The reason this install must be REFUSED because one or more of its nodes would land at a
+    /// path a registered <see cref="IStaticNodeProvider"/> already SERVES on this host — or
+    /// <c>null</c> when there is no such collision (the overwhelmingly common case: zero I/O, one
+    /// in-memory sweep of the static providers).
+    ///
+    /// <para>🚨 Why REFUSING beats writing (#1209). A statically-served path is not persistence-
+    /// backed: the static claim wins every serve seam, so the per-node hub at that path is seeded
+    /// from a node that is by design never persisted and emits one Full snapshot at v0, forever.
+    /// An install into it therefore cannot succeed in any useful sense — the root's create is
+    /// answered "node already exists" by the static entry, the fallback UPDATE lands on the
+    /// static-served hub and is never reconciled or persisted, and the install's own post-write
+    /// confirmation (<c>RootRetypeReconciled</c>) waits out its 30 s and throws a bare
+    /// <see cref="TimeoutException"/> with nothing naming the cause. That is exactly how the
+    /// <c>Agent</c>/<c>Skill</c> plugin packages failed on a host calling bare <c>.AddAI()</c>
+    /// (2026-08-11): a deterministic 30 s hang per package, 0 nodes imported, no diagnostic.</para>
+    ///
+    /// <para>The check is deliberately EXACT-PATH, never prefix: a package writing <c>X/Child</c>
+    /// while only <c>X</c> is served statically is a different (and separately guarded) situation,
+    /// and a prefix rule would refuse legitimate installs. Static-only hosts — the ones that serve
+    /// <c>Doc</c>/<c>Agent</c>/<c>Harness</c>/<c>Skill</c> from memory and install NO durable
+    /// package there — see an empty collision set and are completely unaffected.</para>
+    /// </summary>
+    internal static string? StaticShadowedReason(
+        IMessageHub hub, PackageManifest manifest, IEnumerable<MeshNode> nodes)
+    {
+        var collisions = nodes
+            .Select(n => n.Path)
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            // Shortest path first so the package ROOT — the collision that matters and the one an
+            // operator recognises — leads the list and supplies the detailed explanation.
+            .OrderBy(p => p.Length).ThenBy(p => p, StringComparer.Ordinal)
+            .Select(p => (Path: p, Detail: hub.ServiceProvider.DescribeStaticServeCollision(p)))
+            .Where(c => c.Detail is not null)
+            .ToArray();
+        if (collisions.Length == 0)
+            return null;
+        return $"Install of '{manifest.Id}' REFUSED: {collisions.Length} of its node path(s) are "
+               + "already served by a static node provider on this host "
+               + $"[{string.Join(", ", collisions.Select(c => c.Path))}]. {collisions[0].Detail}";
+    }
+
+    /// <summary>
+    /// <see cref="StaticShadowedReason"/> as a terminal install outcome: the failing observable to
+    /// return, or <c>null</c> to proceed. Fails LOUDLY and IMMEDIATELY — before any write — instead
+    /// of writing into a shadowed path and timing out 30 s later somewhere downstream.
+    /// </summary>
+    private static IObservable<InstallResult>? RefuseIfStaticShadowed(
+        IMessageHub hub, PackageManifest manifest, IEnumerable<MeshNode> nodes, ILogger? logger)
+    {
+        var reason = StaticShadowedReason(hub, manifest, nodes);
+        if (reason is null)
+            return null;
+        logger?.LogError(
+            "Package {Id}: static/durable path collision — refusing the install. {Reason}",
+            manifest.Id, reason);
+        return Observable.Throw<InstallResult>(new InvalidOperationException(reason));
     }
 
     /// <summary>
@@ -268,7 +331,8 @@ public static class PackageInstaller
     ///     baseline, fully public: <c>PartitionAccessPolicy { PublicRead = true }</c> at
     ///     <c>{partition}/_Policy</c> (#902). Declared segments are irrelevant — everything is
     ///     readable.</item>
-    ///   <item><b>Free</b> (<see cref="PackageManifest.Price"/> 0 or absent) with no declared
+    ///   <item><b>Free</b> (<see cref="PackageManifest.Price"/> 0 or absent AND no
+    ///     <see cref="PackageManifest.ContactEmail"/>) with no declared
     ///     <see cref="PackageManifest.PublicSegments"/> — the same fully-public policy: a free
     ///     package that a catalog hands out must be readable by everyone, signed in or not.</item>
     ///   <item><b>Free with declared <see cref="PackageManifest.PublicSegments"/></b> — public read
@@ -278,10 +342,12 @@ public static class PackageInstaller
     ///     Store's <c>CatalogGate</c> seeds for <c>/Store</c> (#200/#204). Underscore satellites
     ///     and the well-known <c>Public</c> segment follow the <c>PluginGate</c> conventions so the
     ///     two mechanisms converge instead of fighting.</item>
-    ///   <item><b>Priced</b> (any non-zero <see cref="PackageManifest.Price"/> — positive =
-    ///     purchasable, negative = coupon-only) — the installer writes NOTHING: the partition lands
-    ///     gated, readable only via the entitlement machinery (PluginGate / purchase), which is
-    ///     exactly the point of a price.</item>
+    ///   <item><b>Commercial</b> (<see cref="PackageEntitlement.IsCommercial"/>: any non-zero
+    ///     <see cref="PackageManifest.Price"/> — positive = purchasable, negative = coupon-only —
+    ///     or a <see cref="PackageManifest.ContactEmail"/>, i.e. sold contact-sales) — the installer
+    ///     writes NOTHING: the partition lands gated, readable only via the entitlement machinery
+    ///     (PluginGate / purchase / an admin-issued grant), which is exactly the point of asking to
+    ///     be paid or to be called.</item>
     /// </list>
     ///
     /// <para><b>Why the installer owns it.</b> An installed package is written entirely under
@@ -315,13 +381,14 @@ public static class PackageInstaller
         if (string.IsNullOrWhiteSpace(partition))
             return Observable.Return(Unit.Default);
 
-        // A priced package (positive = purchasable, negative = coupon-only) installs GATED: no
-        // public read of any kind — entitlement (PluginGate / purchase / coupon) is the only way
-        // in. Pre-installed overrides a price: platform baseline is public by definition.
+        // A commercial package — priced (positive = purchasable, negative = coupon-only) or
+        // contact-sales — installs GATED: no public read of any kind, entitlement (PluginGate /
+        // purchase / coupon / a grant issued after the sales conversation) is the only way in.
+        // Pre-installed overrides both: platform baseline is public by definition.
         if (!manifest.PreInstalled && manifest.IsCommercial())
         {
             logger?.LogDebug(
-                "[PackageInstaller] {Id} is priced — {Partition} stays gated (entitlement only)",
+                "[PackageInstaller] {Id} is commercial — {Partition} stays gated (entitlement only)",
                 manifest.Id, partition);
             return Observable.Return(Unit.Default);
         }
@@ -1265,6 +1332,10 @@ public static class PackageInstaller
         };
 
         var all = new[] { nodeTypeNode }.Concat(sourceNodes).ToArray();
+
+        if (RefuseIfStaticShadowed(hub, manifest, all, logger) is { } shadowed)
+            return shadowed;
+
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
 
@@ -1539,6 +1610,9 @@ public static class PackageInstaller
         if (nodes.Length == 0)
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Node-repo plugin '{manifest.Id}' has no installable nodes."));
+
+        if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
+            return shadowed;
 
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
@@ -2031,6 +2105,9 @@ public static class PackageInstaller
             .Select(f => ParseCanonical(parsers, f, logger))
             .Where(n => n is not null).Select(n => n!)
             .ToArray();
+
+        if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
+            return shadowed;
 
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();

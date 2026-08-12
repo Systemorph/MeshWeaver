@@ -225,7 +225,7 @@ public class UserActivityTrackingTests(ITestOutputHelper output) : MonolithMeshT
         // owns their just-created partition. The activity posted afterwards is then
         // an own-scope write under {user}/_UserActivity, also allowed.
         Mesh.ServiceProvider.GetRequiredService<AccessService>()
-            .SetCircuitContext(new AccessContext { ObjectId = user, Name = user });
+            .SetHostIdentity(new AccessContext { ObjectId = user, Name = user });
 
         await NodeFactory.CreateNode(new MeshNode(user)
         {

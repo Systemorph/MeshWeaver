@@ -49,7 +49,7 @@ public class HubCredentialReadAccessTest(ITestOutputHelper output) : MonolithMes
         {
             // Mirror the owner-side RLS: the SubscribeRequest arrives stamped IsHub with the
             // sub-hub's address as ObjectId; the pipeline sets that as the active context.
-            access.SetCircuitContext(new AccessContext
+            access.SetHostIdentity(new AccessContext
             {
                 ObjectId = hubAddress,
                 Name = hubAddress,
@@ -64,7 +64,7 @@ public class HubCredentialReadAccessTest(ITestOutputHelper output) : MonolithMes
         }
         finally
         {
-            access.SetCircuitContext(saved);
+            access.SetHostIdentity(saved);
         }
     }
 
@@ -77,7 +77,7 @@ public class HubCredentialReadAccessTest(ITestOutputHelper output) : MonolithMes
         var saved = access.CircuitContext;
         try
         {
-            access.SetCircuitContext(new AccessContext
+            access.SetHostIdentity(new AccessContext
             {
                 ObjectId = "acme/space/child",
                 Name = "acme/space/child",
@@ -92,7 +92,7 @@ public class HubCredentialReadAccessTest(ITestOutputHelper output) : MonolithMes
         }
         finally
         {
-            access.SetCircuitContext(saved);
+            access.SetHostIdentity(saved);
         }
     }
 }

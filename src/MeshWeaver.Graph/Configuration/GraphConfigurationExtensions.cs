@@ -185,6 +185,14 @@ public static class GraphConfigurationExtensions
                 // IMessageHub, so the registry checked is the validating hub's own chain.
                 services.AddScoped<INodeValidator, Security.ContentDiscriminatorValidator>();
 
+                // Keeps the batch bake's "the union is every Code node" claim true BY
+                // CONSTRUCTION (issue #1235): a Code node named after a code-table routing
+                // segment (Source/Test) lands in the code table but has a namespace that
+                // carries no such segment, so no global source query can ever see it — while
+                // a `shared=@X/Source` reference still selects it, yielding a PARTIAL source
+                // set and a false CS0103. Stateless integrity rule, no hub dependency.
+                services.AddScoped<INodeValidator, CodeNodeSegmentNameValidator>();
+
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
 

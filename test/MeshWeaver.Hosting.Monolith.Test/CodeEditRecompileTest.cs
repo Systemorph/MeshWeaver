@@ -746,15 +746,16 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = "Code",
         };
         // The latched-empty cached query replays [] synchronously on subscribe …
-        var cachedFirst = Observable.Return<IEnumerable<MeshNode>>(Array.Empty<MeshNode>());
+        var cachedFirst = Observable.Return(SourceSnapshot.Established(Array.Empty<MeshNode>()));
         // … while the authoritative direct probe needs its chunk quiet window before it can answer.
         var probe = Observable.Timer(TimeSpan.FromMilliseconds(200))
-            .Select(_ => (IEnumerable<MeshNode>)new[] { source });
+            .Select(_ => SourceSnapshot.Established(new[] { source }));
 
         var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
-        snapshot.Should().NotBeEmpty(
+        snapshot.IsEstablished.Should().BeTrue();
+        snapshot.Sources.Should().NotBeEmpty(
             "a stale EMPTY cached answer must never beat the authoritative direct read — "
             + "compiling a NodeType against zero sources produces a deterministic CS0103, parks the "
             + "type, and wedges every subsequent release trigger (issue #612 sub-case b)");
@@ -772,13 +773,16 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var ct = TestContext.Current.CancellationToken;
         // Probe completes SILENT after its quiet window (found nothing → stays quiet by contract).
         var probe = Observable.Timer(TimeSpan.FromMilliseconds(100))
-            .SelectMany(_ => Observable.Empty<IEnumerable<MeshNode>>());
-        var cachedFirst = Observable.Return<IEnumerable<MeshNode>>(Array.Empty<MeshNode>());
+            .SelectMany(_ => Observable.Empty<SourceSnapshot>());
+        var cachedFirst = Observable.Return(SourceSnapshot.Established(Array.Empty<MeshNode>()));
 
         var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
-        snapshot.Should().BeEmpty(
+        snapshot.IsEstablished.Should().BeTrue(
+            "neither leg reported a FAILED query — the sources genuinely do not exist, which is a "
+            + "content fact the compile may act on (it is NOT the unestablished case)");
+        snapshot.Sources.Should().BeEmpty(
             "probe and cached query AGREE there are no sources — empty is the honest snapshot "
             + "and the compile of a configuration-only NodeType must proceed");
     }
@@ -796,13 +800,13 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             Name = "Code",
             NodeType = "Code",
         };
-        var probe = Observable.Never<IEnumerable<MeshNode>>();
-        var cachedFirst = Observable.Return<IEnumerable<MeshNode>>(new[] { source });
+        var probe = Observable.Never<SourceSnapshot>();
+        var cachedFirst = Observable.Return(SourceSnapshot.Established(new[] { source }));
 
         var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
 
-        snapshot.Should().ContainSingle(
+        snapshot.Sources.Should().ContainSingle(
             "a healthy cached query's non-empty first answer settles the snapshot immediately — "
             + "the probe's quiet-window latency must never land on the healthy compile path");
     }

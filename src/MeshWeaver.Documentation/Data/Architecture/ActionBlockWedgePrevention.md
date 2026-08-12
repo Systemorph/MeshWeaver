@@ -48,6 +48,18 @@ for any *future* defect: a per-hub **aggregate** backpressure breaker.
   saw was **many distinct keys** — each phantom path, each failed area is a different key — so
   no single key crossed the threshold while the *aggregate* saturated the thread. **Per-key is
   the gap.**
+
+  🚨 "Per-key" means `(sender, target, message-type, **payload identity**)`. The fourth component
+  is not optional decoration — without it the claim above is false, because the mesh funnels
+  traffic through dispatchers where one sender talks to one target with one message type about
+  **many different things** (every sync stream an owner holds to the shared node cache; every
+  `CreateOrUpdateNodeRequest` a bulk importer sends to the mesh hub). Keyed on the routing tuple
+  alone, a wide *legitimate* fan-out is arithmetically identical to one thing looping, and the
+  breaker drops it — real writes discarded at ingestion (#1200). The identity comes from
+  `IDiagnosticKeyed.DiagnosticKey` on the message (a stream id, a node path); once a hub hop has
+  erased the payload type to `RawJson`, it comes from the envelope property `MessageDelivery.Package`
+  stamped there, so the breaker never parses a payload on the ingestion path. A message exposing no
+  identity keys on the bare tuple — the fallback is the old, stricter behaviour, never "allow".
 - The fix: a per-action-block watermark on inbound depth/rate. When one block's queue exceeds
   the watermark, **shed `[CanBeIgnored]`/failure-class messages** (never user-facing or
   lifecycle messages) to keep it draining. The breaker is keyed on the **hub**, aggregated

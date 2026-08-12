@@ -128,6 +128,20 @@ public class ActivityProgressViewTest
     }
 
     [Fact]
+    public void Log_EmptyTerminal_WithRenderedResult_SaysNothing()
+    {
+        // The other half of #915: when the run's output IS the control rendered beside this log
+        // (ActivityLayoutAreas.ResultArea), the log is empty for a reason the reader can already
+        // see. "This run produced no output." above a rendered grid contradicts the grid.
+        var log = new ActivityLog("test") { Status = ActivityStatus.Succeeded, End = DateTime.UtcNow };
+
+        ActivityLayoutAreas.BuildLog(log, hasResult: true).Areas
+            .Should().BeEmpty("the result IS the output — the empty-log line would contradict it");
+        ActivityLayoutAreas.BuildLog(log, hasResult: false).Areas
+            .Should().HaveCount(1, "without a result the explicit no-output line stays");
+    }
+
+    [Fact]
     public void Header_RendersUserStatusAndTimestamps()
     {
         var log = Running(("hi", LogLevel.Information));
