@@ -14,7 +14,7 @@
 # missing that verify calls fine) or never heal a genuine hole. That is why the answer lives in
 # ONE file instead of being duplicated in two `run:` blocks — same reasoning as shard-assign.sh.
 #
-# 🚨 ADDING A SIXTH IMAGE touches THREE places, all in main-cd.yml plus this file:
+# 🚨 ADDING A FIFTH IMAGE touches THREE places, all in main-cd.yml plus this file:
 #   1. its own build job (push ONLY the staging tag),
 #   2. the `promote` job (identity tags in phase A, pointers in phase B),
 #   3. the list below — otherwise nothing ever asserts it shipped.
@@ -23,7 +23,7 @@
 #   az login && .github/scripts/check-image-set.sh 4f0c35c
 #
 # Why the short SHA and not the version tag: every leg pushes the commit's short SHA, so it is the
-# one identity all five images share. The version tag (3.0.0-rc1.ci.<n>) is per-RUN, and
+# one identity all four images share. The version tag (3.0.0-rc1.ci.<n>) is per-RUN, and
 # memex-portal-next computes a DIFFERENT one (3.0.0-ci.<n>, no -rc1 — pre-existing drift), so it
 # is not a cross-image identity.
 set -uo pipefail
@@ -42,12 +42,13 @@ ok()      { echo "$1";          summary "- ✅ $1"; }
 
 summary "### Images for main \`$SHA\`"
 
-# The four .NET legs publish an OCI/Docker image INDEX over both linux architectures. Asserting the
-# architectures — not just the tag — is what makes this more than a restatement of the job status:
+# The three multi-arch .NET legs publish an OCI/Docker image INDEX over both linux architectures.
+# Asserting the architectures — not just the tag — is what makes this more than a restatement of
+# the job status:
 # an index that lost a leg still resolves for one arch, and a swallowed cancellation in
 # Microsoft.NET.Build.Containers is exactly how a leg goes missing while reporting success
 # (issue #1026; the MW1026 guard in the root Directory.Build.props is the other half of that).
-for repo in memex-portal-ai memex-migration memex-bake mw-plugin-test; do
+for repo in memex-portal-ai memex-migration mw-plugin-test; do
   if ! m=$(az acr manifest show --registry "$REGISTRY" --name "$repo:$SHA" -o json 2>/dev/null); then
     report "$repo:$SHA is MISSING from ACR — main $SHA has an INCOMPLETE image set"
     continue
@@ -71,4 +72,4 @@ if [ "$fail" -ne 0 ]; then
   echo "::error::main $SHA does NOT have a complete image set. Every self-updating install stays on the previous image until a CD run publishes all of them."
   exit 1
 fi
-echo "All five images exist in ACR for $SHA."
+echo "All four images exist in ACR for $SHA."

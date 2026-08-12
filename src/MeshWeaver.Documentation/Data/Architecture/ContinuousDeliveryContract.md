@@ -17,7 +17,6 @@ two properties that make a partial or missing release impossible rather than mer
 |---|---|---|
 | `memex-portal-ai` | linux/amd64 + arm64 | **the self-updater** — the only repository it lists |
 | `memex-migration` | linux/amd64 + arm64 | rolled to the same version as the portal, applies schema |
-| `memex-bake` | linux/amd64 + arm64 | the NodeType bake gate — certifies the node repos compile |
 | `mw-plugin-test` | linux/amd64 + arm64 | the plugins repo's CI (ACR **and** a GHCR mirror) |
 | `memex-portal-next` | linux/amd64 (by design) | pinned explicitly by deployments |
 
