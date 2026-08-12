@@ -348,6 +348,48 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
+    /// 🚨 EVERY compile-path node read runs under the well-known System identity — the same rule
+    /// (and the same <see cref="Observable.Using{TResult,TResource}(Func{TResource},Func{TResource,IObservable{TResult}})"/>
+    /// shape) as <see cref="GetSourceCollection"/>. A compile reading the source it was asked to
+    /// compile is framework infrastructure, NOT a user-scoped read, and the identity it would
+    /// otherwise inherit is gone by the time the read is issued: every one of these reads is
+    /// subscribed from a CONTINUATION of the source-snapshot chain, and the ambient
+    /// <c>AccessService</c> context is an <c>AsyncLocal</c> that does not survive the hop onto
+    /// whichever thread the upstream emitted on.
+    ///
+    /// <para>Without the scope the post is null-<c>AccessContext</c>, and the
+    /// never-null PostPipeline guard REFUSES it (<c>d.Failed(reason)</c>, and
+    /// <c>GetDataRequest</c> is not exempt). The single-argument <c>Failed</c> records no
+    /// <c>ErrorType</c>, so <c>MeshNodeStreamExtensions.GetMeshNode</c> takes its
+    /// non-<c>Unauthorized</c> branch and emits <b>null</b> — indistinguishable from "the node
+    /// does not exist". For an <c>@@</c> include that means the directive is left VERBATIM in the
+    /// source, Roslyn parses the <c>@@</c> line itself, and the NodeType parks at
+    /// <c>CompileError</c> — which refuses portal readiness and holds every instance hub for the
+    /// full 60s activation budget. Issue #1253 (memex-cloud 2026-08-12: 22 refused reads in one
+    /// millisecond, the five <c>@@</c> targets of <c>FutuRe/LocalAnalysis/Source/ExternalDependencies</c>
+    /// in file order).</para>
+    ///
+    /// <para>The scope must be established at SUBSCRIBE time, not at composition time — hence
+    /// <c>Observable.Using</c>, whose resource factory runs inside the subscribe call that posts
+    /// the <c>GetDataRequest</c>. Wrapping each read individually (rather than the whole chain)
+    /// is deliberate: a chained read — the include fallback below — is subscribed from the FIRST
+    /// read's emission, i.e. on another thread again, so an outer scope would not cover it.</para>
+    ///
+    /// <para>This is the explicit infrastructure opt-in AGENTS.md sanctions
+    /// (<c>ImpersonateAsSystem</c>), NOT the "silently stamp hub-self as principal" fallback that
+    /// was deleted 2026-05-21: the identity is chosen at a named callsite for a named reason, and
+    /// the PostPipeline still fails closed for everything that does not opt in.</para>
+    /// </summary>
+    private IObservable<MeshNode?> ReadCompileSourceNode(
+        string path, ReadTimeoutBehavior onTimeout)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using(
+            () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
+            _ => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), onTimeout));
+    }
+
+    /// <summary>
     /// Reads one include target — <paramref name="path"/> first, then
     /// <paramref name="fallbackPath"/> when it differs and the first read found the node genuinely
     /// ABSENT — and reports which path actually produced the node so nested includes anchor there.
@@ -365,11 +407,11 @@ internal class MeshNodeCompilationService(
     /// </summary>
     private IObservable<(MeshNode? Node, string Path)> ReadIncludeNode(
         string path, string? fallbackPath)
-        => hub.GetMeshNode(path, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.Throw)
+        => ReadCompileSourceNode(path, ReadTimeoutBehavior.Throw)
             .SelectMany(node => node is not null || fallbackPath is null
                 ? Observable.Return<(MeshNode? Node, string Path)>((node, path))
                 // Genuinely absent (no timeout) — the authored path is the other legal reading.
-                : hub.GetMeshNode(fallbackPath, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
+                : ReadCompileSourceNode(fallbackPath, ReadTimeoutBehavior.EmitNull)
                     .Select<MeshNode?, (MeshNode? Node, string Path)>(
                         fallback => (fallback, fallbackPath)))
             .Catch<(MeshNode? Node, string Path), TimeoutException>(ex =>
@@ -468,7 +510,7 @@ internal class MeshNodeCompilationService(
             // (the UWDeepfield outage class), which needs its own retry/park semantics and its
             // own tests. Held at today's behaviour on purpose; the stall is no longer silent
             // (the read logs it at Warning with hub diagnostics). See the report.
-            resolveDef = hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
+            resolveDef = ReadCompileSourceNode(node.NodeType, ReadTimeoutBehavior.EmitNull)
                 .Select(typeNode => typeNode.ContentAs<NodeTypeDefinition>(JsonOptions));
             selfPath = node.NodeType;
         }
@@ -862,7 +904,23 @@ internal class MeshNodeCompilationService(
         if (mesh is null)
             return Observable.Empty<SourceSnapshot>();
 
-        return Observable
+        // 🚨 Run the probe under System, exactly as the CACHED leg already does
+        // (GetSourceCollection). The two legs of RaceSourceSnapshot must observe the SAME source
+        // set — a race whose competitors read under different identities is not a race, it is a
+        // coin-flip between two different answers. This leg was the one still reading under
+        // whatever ambient identity happened to survive: MeshService.Query stamps
+        // request.UserId from AccessService at CALL time, and the call happens inside the Defer
+        // below, i.e. at SUBSCRIBE — which DelaySubscription has already moved onto a ThreadPool
+        // tick where the AsyncLocal is gone. The query then runs as Anonymous, and RLS answers
+        // with the subset Anonymous may see. An empty answer is harmless (filtered by the
+        // .Where below, so the cached leg decides), but a PARTIAL one — a cross-partition
+        // `shared=` source the user can read and Anonymous cannot — is ESTABLISHED and NON-EMPTY,
+        // so it WINS the race and Roslyn is handed a short set: the phantom
+        // `CS0246: type or namespace 'X' could not be found` about code that is fine (issue
+        // #1218). Reading as System makes the probe see what the cached leg sees.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+
+        var probe = Observable
             .Defer(() => Observable
                 .CombineLatest(queries.Select(q =>
                     // ACCUMULATE, never Take(1) on the raw stream: a query's Initial arrives in
@@ -929,7 +987,16 @@ internal class MeshNodeCompilationService(
                 // strictly worse than the stall this exists to dodge. An UNESTABLISHED report is
                 // NOT filtered: RaceSourceSnapshot holds it back until both legs have answered,
                 // so it never pre-empts a healthy set but is never lost either.
-                .Where(s => !s.IsEstablished || s.Sources.Count > 0))
+                .Where(s => !s.IsEstablished || s.Sources.Count > 0));
+
+        return Observable
+            // Observable.Using INSIDE DelaySubscription, never around it: the resource factory
+            // then runs on the delayed subscribe — the very tick that calls mesh.Query and reads
+            // the ambient identity — instead of on the composing thread whose AsyncLocal the hop
+            // discards. Same ordering as GetSourceCollection.
+            .Using(
+                () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
+                _ => probe)
             // A fault ESCAPING the per-leg catches (the whole CombineLatest, not one query) is
             // still unestablishment — the probe found out nothing.
             .Catch((Exception ex) => Observable.Return(SourceSnapshot.Unavailable(
@@ -1500,7 +1567,7 @@ internal class MeshNodeCompilationService(
         IObservable<NodeTypeDefinition?> resolveDef = selfDef != null
             ? Observable.Return<NodeTypeDefinition?>(selfDef)
             // EmitNull — same deliberate hold as GetCompilationInputs above (activation path).
-            : hub.GetMeshNode(node.NodeType, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
+            : ReadCompileSourceNode(node.NodeType, ReadTimeoutBehavior.EmitNull)
                 .Select(typeNode => typeNode.ContentAs<NodeTypeDefinition>(JsonOptions));
         string selfPath = selfDef != null ? node.Path : node.NodeType;
 
