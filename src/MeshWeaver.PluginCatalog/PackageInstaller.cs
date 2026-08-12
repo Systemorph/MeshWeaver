@@ -124,6 +124,9 @@ public static class PackageInstaller
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Package '{manifest.Id}' has no installable content files."));
 
+        if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
+            return shadowed;
+
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         return EnsurePartitionsProvisioned(hub, partition, InstalledPartition)
@@ -150,6 +153,66 @@ public static class PackageInstaller
                     .SelectMany(_ => RunInstallHooks(hub, partition!, logger))
                     .Select(_ => result);
             });
+    }
+
+    /// <summary>
+    /// The reason this install must be REFUSED because one or more of its nodes would land at a
+    /// path a registered <see cref="IStaticNodeProvider"/> already SERVES on this host — or
+    /// <c>null</c> when there is no such collision (the overwhelmingly common case: zero I/O, one
+    /// in-memory sweep of the static providers).
+    ///
+    /// <para>🚨 Why REFUSING beats writing (#1209). A statically-served path is not persistence-
+    /// backed: the static claim wins every serve seam, so the per-node hub at that path is seeded
+    /// from a node that is by design never persisted and emits one Full snapshot at v0, forever.
+    /// An install into it therefore cannot succeed in any useful sense — the root's create is
+    /// answered "node already exists" by the static entry, the fallback UPDATE lands on the
+    /// static-served hub and is never reconciled or persisted, and the install's own post-write
+    /// confirmation (<c>RootRetypeReconciled</c>) waits out its 30 s and throws a bare
+    /// <see cref="TimeoutException"/> with nothing naming the cause. That is exactly how the
+    /// <c>Agent</c>/<c>Skill</c> plugin packages failed on a host calling bare <c>.AddAI()</c>
+    /// (2026-08-11): a deterministic 30 s hang per package, 0 nodes imported, no diagnostic.</para>
+    ///
+    /// <para>The check is deliberately EXACT-PATH, never prefix: a package writing <c>X/Child</c>
+    /// while only <c>X</c> is served statically is a different (and separately guarded) situation,
+    /// and a prefix rule would refuse legitimate installs. Static-only hosts — the ones that serve
+    /// <c>Doc</c>/<c>Agent</c>/<c>Harness</c>/<c>Skill</c> from memory and install NO durable
+    /// package there — see an empty collision set and are completely unaffected.</para>
+    /// </summary>
+    internal static string? StaticShadowedReason(
+        IMessageHub hub, PackageManifest manifest, IEnumerable<MeshNode> nodes)
+    {
+        var collisions = nodes
+            .Select(n => n.Path)
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            // Shortest path first so the package ROOT — the collision that matters and the one an
+            // operator recognises — leads the list and supplies the detailed explanation.
+            .OrderBy(p => p.Length).ThenBy(p => p, StringComparer.Ordinal)
+            .Select(p => (Path: p, Detail: hub.ServiceProvider.DescribeStaticServeCollision(p)))
+            .Where(c => c.Detail is not null)
+            .ToArray();
+        if (collisions.Length == 0)
+            return null;
+        return $"Install of '{manifest.Id}' REFUSED: {collisions.Length} of its node path(s) are "
+               + "already served by a static node provider on this host "
+               + $"[{string.Join(", ", collisions.Select(c => c.Path))}]. {collisions[0].Detail}";
+    }
+
+    /// <summary>
+    /// <see cref="StaticShadowedReason"/> as a terminal install outcome: the failing observable to
+    /// return, or <c>null</c> to proceed. Fails LOUDLY and IMMEDIATELY — before any write — instead
+    /// of writing into a shadowed path and timing out 30 s later somewhere downstream.
+    /// </summary>
+    private static IObservable<InstallResult>? RefuseIfStaticShadowed(
+        IMessageHub hub, PackageManifest manifest, IEnumerable<MeshNode> nodes, ILogger? logger)
+    {
+        var reason = StaticShadowedReason(hub, manifest, nodes);
+        if (reason is null)
+            return null;
+        logger?.LogError(
+            "Package {Id}: static/durable path collision — refusing the install. {Reason}",
+            manifest.Id, reason);
+        return Observable.Throw<InstallResult>(new InvalidOperationException(reason));
     }
 
     /// <summary>
@@ -1265,6 +1328,10 @@ public static class PackageInstaller
         };
 
         var all = new[] { nodeTypeNode }.Concat(sourceNodes).ToArray();
+
+        if (RefuseIfStaticShadowed(hub, manifest, all, logger) is { } shadowed)
+            return shadowed;
+
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
 
@@ -1393,55 +1460,71 @@ public static class PackageInstaller
             return string.Equals(curDef.Configuration, inDef.Configuration, StringComparison.Ordinal)
                 && (curDef.Sources ?? []).SequenceEqual(inDef.Sources ?? [], StringComparer.Ordinal);
         // Otherwise compare the full content, applying the incoming over current so an omitted field
-        // does not read as a change — with the incoming ALIGNED to the current content's TYPE first
-        // (see AlignedIncoming): the persisted side is often typed and materializes C# property
-        // defaults the repo file legitimately omits.
-        return ContentSignature(AlignedIncoming(current.Content, incoming.Content, options) ?? current.Content, options)
-            == ContentSignature(current.Content, options);
+        // does not read as a change — with WHICHEVER side is a raw JsonElement ALIGNED to the other
+        // side's TYPE first (see AlignToPeer). Both mirror cases are live:
+        //   • current typed / incoming element — the persisted side materialized C# defaults the
+        //     repo file legitimately omits (the diagnosed PluginContent.Currency = "CHF" churn).
+        //   • current element / incoming typed — the reading hub had not resolved the module's own
+        //     type when the persisted side was read, while the incoming file deserialized typed and
+        //     materializes defaults the persisted element omits (FractalStars/Stars, 2026-08-11:
+        //     cur(JsonElement) {preset} vs inc(FractalContent) {children, deflection, generations,
+        //     preset, stepFactor} — the idempotence flap that SURVIVED the one-sided alignment; its
+        //     nondeterminism was exactly which side of the module's type-registration race the
+        //     persisted read landed on).
+        var effectiveIncoming = incoming.Content ?? current.Content;
+        return ContentSignature(AlignToPeer(effectiveIncoming, current.Content, options), options)
+            == ContentSignature(AlignToPeer(current.Content, effectiveIncoming, options), options);
     }
 
     /// <summary>
-    /// Materialized-default alignment for the content compare. The persisted side is often TYPED —
-    /// the owning hub re-serialized it, materializing C# property defaults (the diagnosed case:
-    /// <c>PluginContent.Currency = "CHF"</c>) — while the incoming side is the repo file's raw
-    /// <c>JsonElement</c>, which legitimately OMITS defaulted properties. Signing them as-is reads
-    /// every materialized default as a change: the NONDETERMINISTIC "re-install of the unchanged
-    /// snapshot wrote 1 node(s)" root churn behind the plugins gate's flapping idempotence check
-    /// (~14 packages allow-listed) — nondeterministic because it fires only once the hub happens to
-    /// have re-serialized the node before the re-install's read. Deserializing the incoming element
-    /// to the CURRENT content's type makes both sides materialize the same defaults.
+    /// Materialized-default alignment for the content compare: when ONE side is a raw
+    /// <c>JsonElement</c> and its peer is TYPED, deserialize the element to the peer's type so both
+    /// sides materialize the same C# property defaults. Signing a raw element against a typed peer
+    /// reads every materialized default as a change: the NONDETERMINISTIC "re-install of the
+    /// unchanged snapshot wrote 1 node(s)" root churn behind the plugins gate's flapping
+    /// idempotence check. The asymmetry runs BOTH ways — which is why the compare calls this once
+    /// per side: typed-current/element-incoming (the hub re-serialized the persisted node,
+    /// <c>PluginContent.Currency = "CHF"</c>) and element-current/typed-incoming (the persisted
+    /// read landed before the module's type registration while the repo file deserialized typed —
+    /// FractalStars/Stars, the flap that survived one-sided alignment).
     ///
-    /// <para>Guards: alignment happens only when the element's <c>$type</c> matches the current
+    /// <para>Guards: alignment happens only when the element's <c>$type</c> matches the peer
     /// content's serialized discriminator (a differing <c>$type</c> IS a real change and must never
     /// be masked by coercing into the wrong type), and a failed deserialize falls back to the raw
     /// element — worst case an idempotent rewrite, never a missed change.</para>
     /// </summary>
-    private static object? AlignedIncoming(object? current, object? incoming, JsonSerializerOptions options)
+    private static object? AlignToPeer(object? candidate, object? peer, JsonSerializerOptions options)
     {
-        if (incoming is not JsonElement { ValueKind: JsonValueKind.Object } el
-            || current is null or JsonElement)
-            return incoming;
+        if (candidate is not JsonElement { ValueKind: JsonValueKind.Object } el
+            || peer is null or JsonElement)
+            return candidate;
         try
         {
             // A differing $type IS a real change — never mask it by coercing into the wrong type.
-            // Both discriminators read defensively: a non-string $type on either side skips
-            // alignment (raw compare → change detected).
-            var incomingType = el.TryGetProperty("$type", out var it) && it.ValueKind == JsonValueKind.String
-                ? it.GetString()
+            // Three discriminator cases on the element side, each deliberate:
+            //   • absent      → align. Repo content files legitimately omit the discriminator (the
+            //                   node's nodeType implies the content type); skipping here would
+            //                   re-open the default-churn for every discriminator-less file.
+            //   • string      → align only when it MATCHES the peer's discriminator.
+            //   • non-string  → malformed; skip alignment entirely (raw compare → the malformed
+            //                   value shows as a change instead of being silently repaired).
+            var hasDiscriminator = el.TryGetProperty("$type", out var it);
+            if (hasDiscriminator && it.ValueKind != JsonValueKind.String)
+                return candidate;
+            var candidateType = hasDiscriminator ? it.GetString() : null;
+            var peerType = JsonSerializer.SerializeToNode(peer, options)
+                    is System.Text.Json.Nodes.JsonObject peerNode
+                && peerNode.TryGetPropertyValue("$type", out var pt)
+                && pt is System.Text.Json.Nodes.JsonValue pv
+                && pv.TryGetValue<string>(out var pts)
+                ? pts
                 : null;
-            var currentType = JsonSerializer.SerializeToNode(current, options)
-                    is System.Text.Json.Nodes.JsonObject curNode
-                && curNode.TryGetPropertyValue("$type", out var ct)
-                && ct is System.Text.Json.Nodes.JsonValue cv
-                && cv.TryGetValue<string>(out var cts)
-                ? cts
-                : null;
-            if (incomingType is not null
-                && !string.Equals(incomingType, currentType, StringComparison.Ordinal))
-                return incoming;
+            if (candidateType is not null
+                && !string.Equals(candidateType, peerType, StringComparison.Ordinal))
+                return candidate;
 
             // Deserialize WITHOUT tolerating unknown members: with the ambient Skip handling, a
-            // property the file ADDS but the current type lacks would be silently dropped and a
+            // property the element carries but the peer type lacks would be silently dropped and a
             // real change read as unchanged. Disallow makes that case throw → the catch below →
             // raw compare → change detected (worst case an idempotent rewrite, never a miss).
             // The $type discriminator is stripped first — deserializing to the CONCRETE type
@@ -1452,11 +1535,11 @@ public static class PackageInstaller
             };
             var withoutDiscriminator = System.Text.Json.Nodes.JsonObject.Create(el)!;
             withoutDiscriminator.Remove("$type");
-            return withoutDiscriminator.Deserialize(current.GetType(), strict) ?? incoming;
+            return withoutDiscriminator.Deserialize(peer.GetType(), strict) ?? candidate;
         }
         catch (JsonException)
         {
-            return incoming;                        // schema drift / unknown member — raw compare
+            return candidate;                       // schema drift / unknown member — raw compare
         }
     }
 
@@ -1523,6 +1606,9 @@ public static class PackageInstaller
         if (nodes.Length == 0)
             return Observable.Throw<InstallResult>(new InvalidOperationException(
                 $"Node-repo plugin '{manifest.Id}' has no installable nodes."));
+
+        if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
+            return shadowed;
 
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
@@ -2015,6 +2101,9 @@ public static class PackageInstaller
             .Select(f => ParseCanonical(parsers, f, logger))
             .Where(n => n is not null).Select(n => n!)
             .ToArray();
+
+        if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
+            return shadowed;
 
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();

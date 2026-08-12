@@ -1,3 +1,4 @@
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -135,6 +136,266 @@ public class NodeTypeBakeGateStateTest
         state.Detail.Should().Contain("Store/Plugin");
     }
 
+    // =============================================================================================
+    // RETRACTION (issue #1214). "Completion is not absolution" is about the SWEEP finishing and
+    // stays true above. What DOES absolve one type is that type building on THIS image afterwards
+    // — a later, better measurement of the same thing, not an amnesty.
+    //
+    // The incident: memex-cloud 2026-08-11, a bake compiled `Store/*` against a half-applied plugin
+    // update (the reverted `Localizer` had landed, its callers had not), recorded four regressions
+    // with CS0117 diagnostics, and refused readiness. The content converged 2 minutes later and the
+    // platform recompiled every one of those types green — but the gate never re-read them, so the
+    // pod stayed out of rotation and the rollout hung until a human restarted it.
+    // =============================================================================================
+
+    /// <summary>
+    /// The headline: a regression retracted after the sweep completed lands on the COMPLETE verdict
+    /// <see cref="NodeTypeBakeGateState.MarkComplete"/> would have produced. Anything else (staying
+    /// Regressed, or falling back to Running) leaves the pod out of rotation forever, which is the
+    /// bug — the rollout hung on content that had already repaired itself.
+    /// </summary>
+    [Fact]
+    public void RetractingTheLastRegressionAfterTheSweep_ReturnsTheGateToComplete()
+    {
+        var state = new NodeTypeBakeGateState { GatesReadiness = true };
+        state.MarkRunning("go");
+        state.MarkOutcome(Failed("Store/Catalog", wasHealthy: true));
+        state.MarkComplete("baked in 00:19:00");
+        state.Phase.Should().Be(BakePhase.Regressed);
+
+        state.RetractRegression("Store/Catalog", "rebuilt on this image")
+            .Should().BeTrue("the gate was holding a regression for exactly this type");
+
+        state.Phase.Should().Be(BakePhase.Complete,
+            "a type that builds on this image is not evidence that this image broke it — the pod "
+            + "must be allowed to take traffic without a human noticing");
+        state.Regressions.Should().BeEmpty();
+        state.Retracted.Keys.Should().Contain("Store/Catalog");
+        state.Detail.Should().Contain("baked in 00:19:00").And.Contain("retracted",
+            "a regression that healed still HAPPENED — hiding it would make a real, recurring "
+            + "content race invisible");
+    }
+
+    /// <summary>
+    /// A retraction while the sweep is still running goes back to RUNNING, never to Complete: the
+    /// sweep has not finished measuring, and reporting Complete early would let a pod go Ready
+    /// before the types after this one were even attempted.
+    /// </summary>
+    [Fact]
+    public void RetractingTheLastRegressionMidSweep_ReturnsToRunning_NotComplete()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(Failed("Store/Catalog", wasHealthy: true));
+
+        state.RetractRegression("Store/Catalog", "rebuilt on this image").Should().BeTrue();
+
+        state.Phase.Should().Be(BakePhase.Running,
+            "the sweep is still measuring — only MarkComplete may declare the bake done");
+    }
+
+    /// <summary>One retraction among several regressions keeps the gate red — it is not a reset.</summary>
+    [Fact]
+    public void RetractingOneOfSeveralRegressions_StillGates()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(Failed("Store/Catalog", wasHealthy: true));
+        state.MarkOutcome(Failed("Store/Order", wasHealthy: true));
+        state.MarkComplete("done");
+
+        state.RetractRegression("Store/Catalog", "rebuilt").Should().BeTrue();
+
+        state.Phase.Should().Be(BakePhase.Regressed);
+        state.Regressions.Keys.Should().Equal("Store/Order");
+        // The still-red payload names BOTH: what is holding the pod out of rotation, and what
+        // failed-then-rebuilt. The second half is the signal that says "you are looking at a
+        // content race, not a bad image" — and it is needed most while the gate is still red.
+        state.Detail.Should().Contain("Store/Order")
+            .And.Contain("Store/Catalog").And.Contain("retracted");
+    }
+
+    /// <summary>
+    /// 🚨 The retraction may NOT be used to launder a type nobody condemned, and it may not
+    /// resurrect a cleared one. Retracting an unheld type is a no-op that reports itself as such —
+    /// otherwise a caller could quietly move the gate to Complete on a type the sweep never failed.
+    /// </summary>
+    [Fact]
+    public void RetractingATypeThatNeverRegressed_ChangesNothing()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(Failed("Store/Order", wasHealthy: true));
+        state.MarkComplete("done");
+
+        state.RetractRegression("Never/Failed", "rebuilt").Should().BeFalse();
+
+        state.Phase.Should().Be(BakePhase.Regressed);
+        state.Regressions.Keys.Should().Equal("Store/Order");
+        state.Retracted.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// A type that breaks AGAIN after recovering gates again, and the health payload says
+    /// "regressed" rather than "recovered" — the newest measurement always wins.
+    /// </summary>
+    [Fact]
+    public void ATypeThatFailsAgainAfterRetraction_RegressesAgain()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(Failed("Flaky/Type", wasHealthy: true));
+        state.MarkComplete("done");
+        state.RetractRegression("Flaky/Type", "rebuilt").Should().BeTrue();
+        state.Phase.Should().Be(BakePhase.Complete);
+
+        state.MarkOutcome(Failed("Flaky/Type", wasHealthy: true)).Should().BeTrue();
+
+        state.Phase.Should().Be(BakePhase.Regressed);
+        state.Regressions.Keys.Should().Equal("Flaky/Type");
+        state.Retracted.Should().BeEmpty("a fresh verdict supersedes the earlier retraction");
+    }
+
+    /// <summary>
+    /// <see cref="NodeTypeBakeGateState.MarkOutcome"/> reports whether it RECORDED a regression —
+    /// that boolean is what tells the pre-warmer which types to watch for recovery. A non-gating
+    /// outcome must never start a watch (and never claim one was needed).
+    /// </summary>
+    [Fact]
+    public void MarkOutcome_ReportsOnlyGatingOutcomes()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+
+        state.MarkOutcome(new PreWarmOutcome("Ok/Type", PreWarmStatus.Compiled)).Should().BeFalse();
+        state.MarkOutcome(Failed("Abandoned/Type", wasHealthy: false)).Should().BeFalse(
+            "a type that was already broken is not a regression");
+        state.MarkOutcome(new PreWarmOutcome("Slow/Type", PreWarmStatus.TimedOut)
+            { WasHealthyBeforeBake = true }).Should().BeFalse("a timeout is not a verdict");
+        state.MarkOutcome(new PreWarmOutcome("Gone/Type", PreWarmStatus.NoSources)
+            { WasHealthyBeforeBake = true }).Should().BeFalse("content-broken is not an image verdict");
+        state.MarkOutcome(Failed("Real/Regression", wasHealthy: true)).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 A DERIVED regression is retracted WITH its blocker, and is never watched on its own.
+    ///
+    /// <para>A dependent skipped as <see cref="PreWarmStatus.UpstreamFailed"/> was never compiled —
+    /// the sweep skips it precisely so it does not have to activate its hub. Its regression's whole
+    /// evidence is "my upstream failed", so when the upstream's verdict is withdrawn this one has
+    /// nothing holding it up. Watching each dependent for its own recovery instead would activate
+    /// every skipped dependent of one broken upstream and hold them for the pod's lifetime, undoing
+    /// the saving the skip exists for.</para>
+    /// </summary>
+    [Fact]
+    public void RetractingABlocker_AlsoRetractsTheRegressionsDerivedFromIt()
+    {
+        var state = new NodeTypeBakeGateState { GatesReadiness = true };
+        state.MarkRunning("go");
+
+        state.MarkOutcome(Failed("Store/Plugin", wasHealthy: true))
+            .Should().BeTrue("a directly-measured verdict is the one worth watching");
+        state.MarkOutcome(new PreWarmOutcome(
+                "Store/Catalog", PreWarmStatus.UpstreamFailed, "blocked by Store/Plugin")
+            { WasHealthyBeforeBake = true, BlockedBy = "Store/Plugin" })
+            .Should().BeFalse("a derived regression must not start a watch — that is what would "
+                + "activate the whole fan-out of one broken upstream");
+        // Transitive: a dependent of the dependent.
+        state.MarkOutcome(new PreWarmOutcome(
+                "Store/Order", PreWarmStatus.UpstreamFailed, "blocked by Store/Catalog")
+            { WasHealthyBeforeBake = true, BlockedBy = "Store/Catalog" })
+            .Should().BeFalse();
+        state.MarkComplete("baked");
+
+        state.Phase.Should().Be(BakePhase.Regressed,
+            "all three gate — a derived regression still stalls the rollout");
+        state.Regressions.Keys.OrderBy(k => k, StringComparer.Ordinal).Should().Equal(
+            "Store/Catalog", "Store/Order", "Store/Plugin");
+
+        // The blocker rebuilds. Its dependents' verdicts had no other basis.
+        state.RetractRegression("Store/Plugin", "rebuilt on this image").Should().BeTrue();
+
+        state.Phase.Should().Be(BakePhase.Complete,
+            "with the only measured failure withdrawn, nothing that was derived from it may keep "
+            + "the pod out of rotation");
+        state.Regressions.Should().BeEmpty();
+        state.Retracted.Keys.OrderBy(k => k, StringComparer.Ordinal).Should().Equal(
+            "Store/Catalog", "Store/Order", "Store/Plugin");
+    }
+
+    /// <summary>
+    /// The cascade is keyed on the ACTUAL blocker — an unrelated regression is not swept up with
+    /// it. Otherwise retracting one type would quietly release the gate on everything.
+    /// </summary>
+    [Fact]
+    public void RetractingABlocker_LeavesUnrelatedRegressionsStanding()
+    {
+        var state = new NodeTypeBakeGateState { GatesReadiness = true };
+        state.MarkRunning("go");
+        state.MarkOutcome(Failed("Store/Plugin", wasHealthy: true));
+        state.MarkOutcome(new PreWarmOutcome(
+                "Store/Catalog", PreWarmStatus.UpstreamFailed, "blocked by Store/Plugin")
+            { WasHealthyBeforeBake = true, BlockedBy = "Store/Plugin" });
+        state.MarkOutcome(Failed("Unrelated/Type", wasHealthy: true));
+        state.MarkComplete("baked");
+
+        state.RetractRegression("Store/Plugin", "rebuilt on this image").Should().BeTrue();
+
+        state.Phase.Should().Be(BakePhase.Regressed);
+        state.Regressions.Keys.Should().Equal("Unrelated/Type");
+    }
+
+    /// <summary>
+    /// The torn-snapshot EVIDENCE (issue #1214, proposal 3): a source whose <c>LastModified</c> is
+    /// at or after the compile's start stamp proves the compile sampled a source set the mesh was
+    /// mid-way through replacing. It is diagnostic only — it names the suspicion in the log and
+    /// never downgrades the verdict, because a torn compile of genuinely broken code must still gate.
+    /// </summary>
+    [Fact]
+    public void SourcesMovedDuringCompile_IsTrue_WhenASourceWasWrittenAfterTheCompileStarted()
+    {
+        var started = new DateTimeOffset(2026, 8, 11, 11, 4, 30, TimeSpan.Zero);
+        DynamicTypePreWarmer.SourcesMovedDuringCompile(new NodeTypeDefinition
+        {
+            Sources = ["namespace:Source scope:subtree"],
+            LastCompileStartedAt = started,
+            CurrentSourceVersions = new Dictionary<string, long>
+            {
+                ["Store/Plugin/Source/Localizer"] = started.AddSeconds(29).UtcTicks
+            }
+        }).Should().BeTrue("the source moved WHILE the compile was running — a torn snapshot");
+    }
+
+    /// <summary>A source set that has not moved since the compile started is STABLE — no suspicion
+    /// to name, and Roslyn's verdict is about the code.</summary>
+    [Fact]
+    public void SourcesMovedDuringCompile_IsFalse_OnAStableSourceSet()
+    {
+        var started = new DateTimeOffset(2026, 8, 11, 11, 4, 30, TimeSpan.Zero);
+        DynamicTypePreWarmer.SourcesMovedDuringCompile(new NodeTypeDefinition
+        {
+            Sources = ["namespace:Source scope:subtree"],
+            LastCompileStartedAt = started,
+            CurrentSourceVersions = new Dictionary<string, long>
+            {
+                ["Store/Plugin/Source/Localizer"] = started.AddMinutes(-10).UtcTicks
+            }
+        }).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// No start stamp ⇒ no evidence. The predicate must never guess: an absent
+    /// <see cref="NodeTypeDefinition.LastCompileStartedAt"/> means we cannot say when the compile
+    /// ran, and "I cannot tell" is not "the snapshot was torn".
+    /// </summary>
+    [Fact]
+    public void SourcesMovedDuringCompile_IsFalse_WithoutACompileStartStamp() =>
+        DynamicTypePreWarmer.SourcesMovedDuringCompile(new NodeTypeDefinition
+        {
+            Sources = ["namespace:Source scope:subtree"],
+            CurrentSourceVersions = new Dictionary<string, long> { ["P/Source/A"] = 42 }
+        }).Should().BeFalse();
+
     /// <summary>A regression among successes still gates — one bad type is enough.</summary>
     [Fact]
     public void OneRegressionAmongSuccesses_StillGates()
@@ -257,4 +518,126 @@ public class NodeTypeBakeGateStateTest
     [Fact]
     public void OutcomeWasHealthyBeforeBake_DefaultsToTrue() =>
         new PreWarmOutcome("A", PreWarmStatus.Compiled).WasHealthyBeforeBake.Should().BeTrue();
+
+    /// <summary>
+    /// 🚨 A CONTENT verdict is not an IMAGE verdict. A type whose declared source queries match
+    /// nothing any more — its sources deleted out from under it — fails on EVERY image, so gating
+    /// on it freezes the fleet exactly like the abandoned-Error case the WasHealthyBeforeBake rule
+    /// exists for. Lived through on 2026-08-10: four KmuBasics/* types (their course re-installed
+    /// under a new id, the type nodes left behind) stalled memex-cloud's self-update across two
+    /// successive images, while the stuck-but-baking pod wedged the cluster's routing.
+    /// </summary>
+    [Fact]
+    public void NoSourcesOnAPreviouslyHealthyType_DoesNotGate()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome(
+            "KmuBasics/Buchungsjournal", PreWarmStatus.NoSources, "0 source nodes matched")
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkComplete("done");
+
+        state.Phase.Should().Be(BakePhase.Complete);
+        state.Regressions.Should().BeEmpty();
+        state.ContentBroken.Keys.Should().Contain("KmuBasics/Buchungsjournal");
+    }
+
+    /// <summary>
+    /// The depth-1 rule, content edition: leniency on the direct NoSources verdict is worth
+    /// nothing if the identical condition gates through the dependents as UpstreamFailed.
+    /// </summary>
+    [Fact]
+    public void UpstreamContentBrokenOnAPreviouslyHealthyType_DoesNotGate()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome(
+            "Dependent", PreWarmStatus.UpstreamContentBroken, "blocked by KmuBasics/Buchungsjournal")
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkComplete("done");
+
+        state.Phase.Should().Be(BakePhase.Complete);
+        state.Regressions.Should().BeEmpty();
+        state.ContentBroken.Keys.Should().Contain("Dependent");
+    }
+
+    /// <summary>Non-blocking must not mean invisible — the health payload names what content broke.</summary>
+    [Fact]
+    public void ContentBrokenTypes_AreNamedInTheHealthDetail()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome("Gone/Type", PreWarmStatus.NoSources)
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkComplete("all good");
+
+        state.Detail.Should().Contain("Gone/Type").And.Contain("content-broken");
+    }
+
+    /// <summary>A content-broken type must not dilute a REAL regression happening beside it.</summary>
+    [Fact]
+    public void CompileErrorStillGates_EvenAlongsideAContentBrokenType()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome("Gone/Type", PreWarmStatus.NoSources)
+        {
+            WasHealthyBeforeBake = true
+        });
+        state.MarkOutcome(Failed("Broken/Type", wasHealthy: true));
+        state.MarkComplete("done");
+
+        state.Phase.Should().Be(BakePhase.Regressed);
+        state.Regressions.Keys.Should().Equal("Broken/Type");
+    }
+
+    /// <summary>
+    /// The classifier that feeds the buckets above: declared source queries + an EXPLICITLY empty
+    /// live snapshot = the sources are gone = <see cref="PreWarmStatus.NoSources"/>.
+    /// </summary>
+    [Fact]
+    public void ClassifyCompileFailure_DeclaredSourcesWithEmptySnapshot_IsNoSources() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            Sources = ["namespace:Source scope:subtree"],
+            CurrentSourceVersions = new Dictionary<string, long>()
+        }).Should().Be(PreWarmStatus.NoSources);
+
+    /// <summary>
+    /// 🚨 A NULL snapshot is "the watcher never seeded", NOT "the sources are gone" — the sweep
+    /// does not actually know, so the failure keeps gating. A real regression must not hide
+    /// behind an unseeded snapshot.
+    /// </summary>
+    [Fact]
+    public void ClassifyCompileFailure_NullSnapshot_StaysCompileError() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            Sources = ["namespace:Source scope:subtree"]
+        }).Should().Be(PreWarmStatus.CompileError);
+
+    /// <summary>Sources still matching = the failure is about the CODE on this image. It gates.</summary>
+    [Fact]
+    public void ClassifyCompileFailure_MatchedSources_StaysCompileError() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            Sources = ["namespace:Source scope:subtree"],
+            CurrentSourceVersions = new Dictionary<string, long> { ["P/Source/A"] = 42 }
+        }).Should().Be(PreWarmStatus.CompileError);
+
+    /// <summary>
+    /// A type that declares NO source queries compiles from its Configuration alone — an empty
+    /// snapshot is its normal state, so a failure is a verdict about this image and gates.
+    /// </summary>
+    [Fact]
+    public void ClassifyCompileFailure_NoDeclaredSources_StaysCompileError() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            CurrentSourceVersions = new Dictionary<string, long>()
+        }).Should().Be(PreWarmStatus.CompileError);
 }

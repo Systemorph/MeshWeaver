@@ -3,6 +3,23 @@ name: Clients
 # CI for the foreign-language client packages under clients/. The .NET solution CI does not cover
 # these, so typecheck + test them here on any PR that touches them.
 #
+# 🚨 EVERY npm step is `npm ci`, never `npm install`, and every client package commits its
+# package-lock.json. `npm install` re-resolves the declared RANGES, so a caret dependency could
+# pull a release published minutes ago and turn this workflow red repo-wide with nobody having
+# changed a line — the build was simply not reproducible.
+#
+# That is not hypothetical. On 2026-08-11 at 17:19Z Microsoft published
+# @fluentui/react-components 9.74.6, which rewrote its exports map and DROPPED the "node" condition
+# that had been steering Node to the CommonJS build. Node/vitest then resolved the ESM build, which
+# pulls @fluentui/react-icons' lib/index.js — whose relative specifiers are EXTENSIONLESS
+# (`export * from './icons/chunk-0'`), invalid under Node ESM. Within 20 minutes every branch and
+# main were failing with `Cannot find module '@fluentui/react-icons/lib/icons/chunk-0'` in 23 of 34
+# suites. The ONE job that stayed green was portal-next — the only client that already had a
+# committed lockfile and already ran `npm ci`. That is the whole argument for this rule.
+#
+# Consequence to respect: a package.json dependency edit MUST come with its regenerated lockfile,
+# or `npm ci` fails the job (by design — that is the drift guard, not an inconvenience).
+#
 # 🚨 The trigger must list every INPUT these jobs read, not just the tree they live in.
 # Several jobs deliberately reach ACROSS into src/ — the server is the single place a string, a
 # control mapping or a wire contract is authored, and the client copies are checked against it:
@@ -61,7 +78,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test # vitest: renderer core, control gallery, ThreadChat (live thread-node stream), Blazor-parity ratchet
       - run: npm run build # the publishable lib (tsconfig.lib.json) must stay green, not just the test graph
@@ -92,7 +109,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
 
   grpc-web:
@@ -106,7 +123,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck # runs buf generate (from the canonical mesh.proto) then tsc
       - run: npm test # vitest: envelope round-trip, in-memory Connect/Deliver correlation & demux, thread ops (startThread/submitMessage wire shapes)
 
@@ -124,22 +141,22 @@ jobs:
       # The aliased renderer source (../react/src) needs its own deps (react) resolvable.
       - name: Install renderer deps
         working-directory: clients/react
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       # The live path source-aliases @meshweaver/client-web (../grpc-web/src) — install its deps and
       # generate src/gen so RN's tsc can follow the alias.
       - name: Install + generate grpc-web client
         working-directory: clients/grpc-web
-        run: npm install --no-audit --no-fund && npm run gen
-      # Plain install — every package the typecheck and the render test need (react-native, react,
+        run: npm ci --no-audit --no-fund && npm run gen
+      # Every package the typecheck and the render test need (react-native, react,
       # react-test-renderer, @types/*, expo-av, vitest, typescript) is ALREADY declared in
       # package.json, so the old `--no-save <explicit list>` form pinned nothing extra and installed
       # the same 979-package tree anyway.
       # 🚨 It also CRASHED npm: `package.json` grew an `overrides` block in 457ad8dd3 (the Dependabot
       # sweep), and npm 10 — what Node 20 ships, i.e. this runner — dies resolving overrides during a
       # `--no-save` install with "Cannot read properties of null (reading 'edgesOut')". npm 11 does
-      # not, which is why it reproduced only in CI. This job is path-filtered on clients/**, so the
-      # breakage sat latent from that commit until the next PR to touch this tree.
-      - run: npm install --no-audit --no-fund
+      # not, which is why it reproduced only in CI. `npm ci` does no resolution at all — it replays
+      # the committed lock — so that failure mode is gone for good.
+      - run: npm ci --no-audit --no-fund
       - run: npx tsc --noEmit
       # Headless render of the sample area + the speech pipeline (transcription client, push-to-talk→submit).
       - run: npx vitest run
@@ -158,13 +175,13 @@ jobs:
       # The aliased renderer source (../react/src) needs its own deps (react, @fluentui) resolvable.
       - name: Install renderer deps
         working-directory: clients/react
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       # The live mode source-aliases @meshweaver/client-web (../grpc-web/src) — install its deps and
       # generate src/gen so the portal's tsc + vite can follow the alias.
       - name: Install + generate grpc-web client
         working-directory: clients/grpc-web
-        run: npm install --no-audit --no-fund && npm run gen
-      - run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund && npm run gen
+      - run: npm ci --no-audit --no-fund
       - run: npx tsc --noEmit # vite build transpiles without type-checking — check types explicitly
       - run: npm run build
 
@@ -183,16 +200,15 @@ jobs:
       # vitest.config.ts source-aliases the renderer (../react/src); its own deps must resolve.
       - name: Install renderer deps
         working-directory: clients/react
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       # next.config.mjs + vitest.config.ts alias @meshweaver/client-web to ../grpc-web/src, whose
       # src/gen is GENERATED (gitignored) from the canonical mesh.proto — without it the build fails
       # with "Can't resolve './gen/mesh_pb'".
       - name: Install + generate grpc-web client
         working-directory: clients/grpc-web
-        run: npm install --no-audit --no-fund && npm run gen
-      # `npm ci` (not install) — this is the only client with a committed lockfile, and it is what
-      # the Dockerfile runs; drift between package.json and the lock fails here rather than in the
-      # image build.
+        run: npm ci --no-audit --no-fund && npm run gen
+      # `npm ci` (not install) — it is what the Dockerfile runs; drift between package.json and the
+      # lock fails here rather than in the image build.
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck # next build skips type-checking by design (see next.config.mjs)
       - run: npm test # vitest: server snapshot, SSR shell, token mint, redirect decision, mesh paths
@@ -212,12 +228,12 @@ jobs:
       # The source-linked renderer core (../react/src) needs its own deps resolvable during the web export.
       - name: Install renderer deps
         working-directory: clients/react
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       # metro.config.js aliases @meshweaver/client-web to ../grpc-web/src — install its deps and
       # generate src/gen so the web export can bundle the live client.
       - name: Install + generate grpc-web client
         working-directory: clients/grpc-web
-        run: npm install --no-audit --no-fund && npm run gen
-      - run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund && npm run gen
+      - run: npm ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e # expo export --platform web → serve dist/ → drive headless Chromium

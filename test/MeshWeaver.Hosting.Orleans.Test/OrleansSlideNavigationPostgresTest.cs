@@ -102,7 +102,7 @@ public class OrleansSlideNavigationPostgresTest(ITestOutputHelper output) : Test
             new Address("client", $"slidenav-pg-{name}-{Guid.NewGuid():N}"),
             config => config.AddLayoutClient());
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = userPartition,
             Name = userPartition,

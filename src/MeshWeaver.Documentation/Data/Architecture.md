@@ -79,6 +79,7 @@ The catalog below lists every page; these are the load-bearing reads per theme.
 | **Testing & debugging** | [Writing Tests](WritingTests) | [Negative Controls](NegativeControls) — a pin is only a pin if it fails against the defect · [Reactive Test Assertions](ReactiveTestAssertions) · [Test State Isolation](TestStateIsolation) · [Disposable-mesh e2e](DisposableMeshE2E) · [Debugging Message Flow](DebuggingMessageFlow) · [Debugging Disposal & Leaks](DebuggingDisposalAndLeaks) |
 | **Deployment & ops** | [Deployment](Deployment) (the router) | [AKS](DeploymentAKS) · [Container Apps](DeploymentContainerApps) · [Local Dev Workflow](LocalDevWorkflow) · [Onboarding a New Environment](OnboardingNewEnvironment) · [Release & Self-Update Strategy](ReleaseStrategy) · [The Continuous Delivery Contract](ContinuousDeliveryContract) — all-or-nothing publication; verify the image, never the tick · [Release Process](ReleaseProcess) · [Red-Log Watching & Ticketing](LogWatchTriage) — every `fail:`/`crit:` becomes exactly one triaged issue |
 | **Contributing docs** | [Authoring Documentation](AuthoringDocumentation) | [Specifying Software](SpecifyingSoftware) · [Glossary](/Doc/Glossary) |
+| **Licensing** | [Dependency Licensing](DependencyLicensing) — Apache-2.0/MIT compatible only; the CI gate that enforces it | |
 
 ## Getting started
 

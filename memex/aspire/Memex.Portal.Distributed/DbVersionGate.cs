@@ -82,6 +82,14 @@ public sealed class DbVersionGate(
                 "Refusing to start the portal.");
             lifetime.StopApplication();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Host startup was aborted (shutdown raced startup) — not a migration
+            // problem. Honor the IHostedService cancellation contract and let the host
+            // finish tearing down; logging this Critical + StopApplication would
+            // misreport an ordinary shutdown as "DB version check failed unexpectedly".
+            throw;
+        }
         catch (Exception ex)
         {
             // Any other connection / auth error — also fail closed. Better to
@@ -103,6 +111,11 @@ public sealed class DbVersionGate(
 /// </summary>
 public sealed class DbVersionHealthCheck(NpgsqlDataSource dataSource) : IHealthCheck
 {
+    /// <summary>
+    /// Runs the db_version probe. Returns <c>Unhealthy</c> for anything the DATABASE says, and
+    /// propagates a cancellation the CALLER raised — those are different events and only one of
+    /// them is a verdict about the database.
+    /// </summary>
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
@@ -119,8 +132,30 @@ public sealed class DbVersionHealthCheck(NpgsqlDataSource dataSource) : IHealthC
                 : HealthCheckResult.Unhealthy(
                     $"db_version={version} < expected {DbVersionGate.ExpectedDbVersion}");
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // 🚨 The CALLER gave up — the /health request was aborted, or the host is stopping.
+            // Nothing was learned about the database, so there is no verdict to report: on
+            // 2026-08-10 this check was cancelled 3.46 s into `PoolingDataSource.RentAsync`, i.e.
+            // still waiting to RENT a connector, before a connection was even open. Reporting that
+            // as Unhealthy claims a database failure that was never observed.
+            //
+            // Swallowing it into `Unhealthy(exception)` is also what put it on the board (#1183).
+            // DefaultHealthCheckService logs an Unhealthy entry at ERROR with the attached stack
+            // (HealthCheckEnd, event 103) — and its own catch filter is
+            // `catch (Exception ex) when (ex as OperationCanceledException == null)`, commented
+            // "Allow cancellation to propagate if it's not a timeout". Catching first denies the
+            // framework that classification, turning an aborted probe into a production incident
+            // for a pod that was 19 s past "Application started" and served for three more hours.
+            // Rethrow, and an aborted check unwinds silently the way the framework intends; a
+            // registration TIMEOUT (a linked token, caller not cancelled) still lands on the
+            // framework's timeout branch and is still reported.
+            throw;
+        }
         catch (Exception ex)
         {
+            // Everything the DATABASE says — refused, unauthenticated, missing table, timed out —
+            // is a genuine verdict and stays Unhealthy.
             return HealthCheckResult.Unhealthy("db_version check threw", ex);
         }
     }
