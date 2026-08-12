@@ -159,6 +159,18 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
         // feed is ordered, so once the marker has been applied, every structural frame for a/b/c
         // is already applied AND already counted. No sleep, no tolerance, no weakened assertion —
         // the storm must still add exactly zero.
+        //
+        // 🚨 The marker must be created only once the INITIAL frame has actually arrived. The
+        // subscription above does not establish itself synchronously — `IMeshService.Query<T>` runs
+        // its subscribe + initial snapshot through the IO pool — so creating the marker straight
+        // after `.Subscribe(...)` races that: the create can land BEFORE the snapshot is taken, in
+        // which case the marker arrives INSIDE the Initial payload rather than as an ordered
+        // post-snapshot change. The latch would then fire on the very first frame, baselining
+        // before the trailing `Added` frames it exists to wait for — and those later renders would
+        // be blamed on the storm, which is precisely the failure this test was written to stop.
+        // Waiting for the first structural render first makes the marker demonstrably post-Initial,
+        // which is the whole basis of the ordering argument above.
+        await WaitUntil(() => Volatile.Read(ref rerenders) >= 1, ReadNodeTimeout);
         await NodeFactory.CreateNode(
             new MeshNode(QuiesceId, root) { Name = "quiesce marker", NodeType = "Markdown" }).Should().Emit();
         await WaitUntil(() => Volatile.Read(ref rerendersAtQuiescence) >= 0, ReadNodeTimeout);
