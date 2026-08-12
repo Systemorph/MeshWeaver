@@ -6,6 +6,15 @@
         @Html
     </div>
 }
+else if (HasStyling)
+{
+    @* The author set Style and/or Class, so they asked for a box to hang it on. HtmlControl has no
+       element of its own — the fragment IS the output — so the only way to honour the request is to
+       wrap. See HasStyling for why this is conditional rather than unconditional. *@
+    <div style="@Style" class="@Class">
+        @Html
+    </div>
+}
 else
 {
     @Html
@@ -14,6 +23,50 @@ else
 @code
 {
     private MarkupString? Html { get; set; }
+
+    /// <summary>
+    /// Whether the author declared <c>Style</c> or <c>Class</c> on this control — and therefore whether
+    /// the fragment gets a wrapper element to carry them.
+    ///
+    /// <para>Read from <c>ViewModel</c> (the DECLARATION) rather than from the bound <c>Style</c>/<c>Class</c>
+    /// fields (the RESOLVED values) on purpose: either may be a <c>JsonPointerReference</c> that resolves a
+    /// frame or more after the first render, and gating on the resolved value would render the fragment
+    /// bare, then restructure the DOM around it when the pointer lands. The declaration is known at bind
+    /// time and never changes for a given view-model, so the box is stable from the first frame. Gating on
+    /// the declaration also loses nothing: <c>BindData</c> feeds these fields from exactly these two
+    /// properties, so a resolved value can only be non-null when the declaration was.</para>
+    ///
+    /// <para>🚨 Why not wrap unconditionally. <c>HtmlControl</c> renders its data as a raw fragment with no
+    /// element of its own, and ~400 call sites across <c>src/</c>, <c>samples/</c> and the in-mesh node
+    /// trees rely on that: <c>BlazorViewRegistry.FallbackHtml</c> emits bare encoded TEXT for every
+    /// unrecognised control, <c>Northwind.LayoutTemplates.GrowthPercentage</c> emits an inline
+    /// <c>&lt;span&gt;</c>, several settings tabs emit multiple top-level siblings that are meant to be
+    /// separate gapped children of their stack, and <c>Todo/Source/TodoLayoutAreas</c> writes
+    /// <c>flex: 1</c> onto the fragment's OWN root because that root is the direct flex child of the
+    /// surrounding <c>FluentStack</c>. A wrapper interposed on all of those turns inline runs into block
+    /// boxes, collapses gapped siblings into one child, and makes <c>flex: 1</c> inert. Most of that code
+    /// lives in mesh nodes that no build and no test ever renders, so the breakage would surface only in a
+    /// running portal. A balanced-paren scan of <c>src/</c>, <c>samples/</c>, <c>content/</c>, <c>memex/</c>
+    /// for <c>Controls.Html</c> / <c>Controls.Title</c> / <c>new HtmlControl</c> followed by a
+    /// <c>.WithStyle</c>/<c>.WithClass</c> chain finds just THREE — a textarea in the Todo sample and the
+    /// two version-page titles in <c>VersionLayoutArea</c>. All three were asking for a style that was
+    /// being dropped, and all three now get it. Every other call site is untouched, while the next author
+    /// who writes <c>Controls.Html(svg).WithStyle("width:100%")</c> gets an element that carries it.</para>
+    ///
+    /// <para>⚠️ Do not confuse <c>Controls.Title(text, n)</c> with <c>Controls.H1</c>…<c>H6</c> when
+    /// reasoning about that blast radius. Only <c>Title</c> is an <c>HtmlControl</c> (it emits
+    /// <c>&lt;h{n}&gt;</c> markup); <c>H1</c>…<c>H6</c> are <c>LabelControl</c>
+    /// (<c>Label(data).WithTypo(Typography.Hn)</c>) and render through <c>Label.razor</c>, which already
+    /// applies <c>Style</c>. The ~100 <c>Controls.H2(...).WithStyle("margin: 0")</c> call sites across the
+    /// portal therefore have nothing to do with this view and are completely unaffected.</para>
+    ///
+    /// <para>For the two <c>Controls.Title</c> sites the wrapper carries the style, so a declared
+    /// <c>margin</c> applies to the wrapper while the <c>&lt;h{n}&gt;</c> keeps its own UA margin inside
+    /// it. That is strictly better than dropping the style, but the author's literal intent would need the
+    /// style ON the heading — which means giving <c>Title</c> its own control/view rather than borrowing
+    /// <c>HtmlControl</c>. Left as a follow-up: it changes a public factory's return type.</para>
+    /// </summary>
+    private bool HasStyling => ViewModel.Style is not null || ViewModel.Class is not null;
 
     protected override void BindData()
     {
