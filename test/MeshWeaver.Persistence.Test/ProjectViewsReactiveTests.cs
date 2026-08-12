@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Persistence.Test.TestHelpers;
 using Xunit;
 
 namespace MeshWeaver.Persistence.Test;
@@ -30,7 +31,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     /// await-free per the reactive assertion model.
     /// </summary>
     private static async Task WaitForChanges<T>(
-        List<T> changes,
+        IReadOnlyCollection<T> changes,
         int expectedMinCount,
         int timeoutMs = 30_000)
         => await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
@@ -52,7 +53,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = Query
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
@@ -99,7 +100,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = Query
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
@@ -145,7 +146,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
 
-        var receivedChanges = new List<QueryResultChange<MeshNode>>();
+        var receivedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var subscription = Query
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Active scope:subtree"))
@@ -190,7 +191,7 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
 
-        var deletedChanges = new List<QueryResultChange<MeshNode>>();
+        var deletedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
         var deletedSubscription = Query
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"path:{basePath} nodeType:Markdown state:Deleted scope:subtree"))
@@ -244,8 +245,8 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
         }).Should().Within(30.Seconds()).Emit();
 
-        var activeChanges = new List<QueryResultChange<MeshNode>>();
-        var deletedChanges = new List<QueryResultChange<MeshNode>>();
+        var activeChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
+        var deletedChanges = new ChangeAccumulator<QueryResultChange<MeshNode>>();
 
         var activeSubscription = Query
             .Query<MeshNode>(MeshQueryRequest.FromQuery(

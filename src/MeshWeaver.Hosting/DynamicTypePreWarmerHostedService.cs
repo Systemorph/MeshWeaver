@@ -1,7 +1,11 @@
+using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using MeshWeaver.Graph;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -35,8 +39,55 @@ public sealed class DynamicTypePreWarmerHostedService(
     /// <summary>Config key that opts a deployment into the startup warm-up (default: off).</summary>
     public const string EnabledConfigKey = "PreWarm:DynamicTypes";
 
+    /// <summary>
+    /// Config key overriding the per-type warm budget, as a <see cref="TimeSpan"/> string
+    /// (e.g. <c>"00:00:30"</c>). Default: <see cref="DynamicTypePreWarmer.DefaultPerTypeBudget"/>.
+    /// The budget only bites on types that never settle — a healthy compile is seconds — so this
+    /// knob bounds how long a WEDGED type can hold the sweep, per type, without a code change:
+    /// on 2026-08-11 (memex-cloud) every remaining compile timed out cross-silo at the full
+    /// default 5 minutes and 67 pending types priced the sweep at ~5.5 hours, with no way to
+    /// shorten it from the outside.
+    /// </summary>
+    public const string PerTypeBudgetConfigKey = "PreWarm:PerTypeBudget";
+
+    /// <summary>
+    /// Config key overriding the pause between types, as a <see cref="TimeSpan"/> string. When the
+    /// key is absent the pacing DIFFERENTIATES by what the pod is doing (the initial-bake vs
+    /// usual-compile distinction): a pod whose bake GATES readiness serves nobody while it bakes,
+    /// so it sweeps at full speed (<see cref="TimeSpan.Zero"/>); an ungated pod is warming in the
+    /// background of live traffic, so it keeps the trickle
+    /// (<see cref="DynamicTypePreWarmer.BetweenTypes"/>). Measured 2026-08-11: the 2s trickle was
+    /// ~5.4 of a 7-minute sweep whose compiles summed to 51s — on a gated pod that pacing was pure
+    /// added rollout time.
+    /// </summary>
+    public const string BetweenTypesConfigKey = "PreWarm:BetweenTypes";
+
+    /// <summary>
+    /// Config key overriding whether the sweep runs as ONE LINKED BATCH BUILD (issue #1207):
+    /// batched source discovery + direct compiler drive, no per-type hub activations, no
+    /// compile-watcher settles, no cross-silo hops.
+    ///
+    /// <para>Absent, the mode follows the same initial-bake discriminator as
+    /// <see cref="BetweenTypesConfigKey"/>: a pod whose bake GATES readiness batches; an ungated
+    /// background warm keeps the activation-driven path. This is the ESCAPE HATCH — set
+    /// <c>false</c> to force the activation sweep on a gated pod (measured 18m55s for a 237-type
+    /// fleet where the batch takes ~60s), or <c>true</c> to batch an ungated warm-up. See the note
+    /// in <c>KickWarmup</c> for why the default was walked back once and what had to be proven
+    /// before restoring it.</para>
+    /// </summary>
+    public const string BatchBakeConfigKey = "PreWarm:BatchBake";
+
     private IDisposable? _warmSubscription;
     private IDisposable? _startedRegistration;
+
+    /// <summary>
+    /// One recovery watch per RECORDED REGRESSION (#1214) — each observes its type until it
+    /// reaches a usable build on this image and then retracts the regression. They outlive the
+    /// sweep by design (the content that tore the compile converges after it), so they are owned
+    /// here and disposed with the service; a discarded subscription would root the hub.
+    /// Empty on a healthy bake, which is the overwhelmingly common case.
+    /// </summary>
+    private readonly CompositeDisposable _recoveryWatches = new();
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -50,6 +101,11 @@ public sealed class DynamicTypePreWarmerHostedService(
 
     private void KickWarmup()
     {
+        // The bake barrier consumers sequence on (#1114) — settled at EVERY terminal of this
+        // method, including the early no-bake returns, so a waiter never waits on a bake that is
+        // not coming. Resolved (not required) for resilience; AddDynamicTypePreWarming registers it.
+        var bake = services.GetService<PreWarmCompletion>();
+
         // Config-gated, DEFAULT OFF — see the class doc. Read as a raw string (no Binder
         // dependency); anything but an explicit true stays lazy.
         var enabled = services.GetService<IConfiguration>()?[EnabledConfigKey];
@@ -58,6 +114,7 @@ public sealed class DynamicTypePreWarmerHostedService(
             logger.LogInformation(
                 "DynamicTypePreWarmer: disabled ({Key} != true) — dynamic NodeTypes compile lazily on first access",
                 EnabledConfigKey);
+            bake?.MarkSettled();
             return;
         }
 
@@ -65,7 +122,25 @@ public sealed class DynamicTypePreWarmerHostedService(
         if (mesh is null)
         {
             logger.LogDebug("DynamicTypePreWarmer: no mesh hub resolved — skipping startup warm-up");
+            bake?.MarkSettled();
             return;
+        }
+
+        // Optional per-type budget override — raw string + TryParse like EnabledConfigKey, so a
+        // malformed value degrades to the default rather than faulting the warm-up. Zero/negative
+        // is refused for the same reason: a budget that can never elapse into a verdict would turn
+        // one wedged type into an eternal sweep.
+        TimeSpan? perTypeBudget = null;
+        var budgetRaw = services.GetService<IConfiguration>()?[PerTypeBudgetConfigKey];
+        if (!string.IsNullOrWhiteSpace(budgetRaw))
+        {
+            if (TimeSpan.TryParse(budgetRaw, out var parsed) && parsed > TimeSpan.Zero)
+                perTypeBudget = parsed;
+            else
+                logger.LogWarning(
+                    "DynamicTypePreWarmer: ignoring invalid {Key}='{Value}' — using the default "
+                    + "per-type budget {Default}",
+                    PerTypeBudgetConfigKey, budgetRaw, DynamicTypePreWarmer.DefaultPerTypeBudget);
         }
 
         var startedAt = DateTimeOffset.UtcNow;
@@ -75,6 +150,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         var timedOut = 0;
         var skipped = 0;
         var faulted = 0;
+        var contentBroken = 0;
 
         // The readiness gate reads this. Resolved (not required) so a host that never called
         // AddNodeTypeBakeGate simply warms without gating — the warmer stays a latency optimisation
@@ -82,13 +158,119 @@ public sealed class DynamicTypePreWarmerHostedService(
         var gate = services.GetService<NodeTypeBakeGateState>();
         gate?.MarkRunning("enumerating dynamic NodeTypes");
 
+        // Pacing: explicit config wins; otherwise a readiness-GATED pod sweeps at full speed (it
+        // serves nobody while it bakes — the initial-bake case) and an ungated pod keeps the
+        // serving-friendly trickle. See BetweenTypesConfigKey for the measurement behind this.
+        TimeSpan? betweenTypes = gate is { GatesReadiness: true } ? TimeSpan.Zero : null;
+        var pacingRaw = services.GetService<IConfiguration>()?[BetweenTypesConfigKey];
+        if (!string.IsNullOrWhiteSpace(pacingRaw))
+        {
+            if (TimeSpan.TryParse(pacingRaw, out var parsedPacing) && parsedPacing >= TimeSpan.Zero)
+                betweenTypes = parsedPacing;
+            else
+                logger.LogWarning(
+                    "DynamicTypePreWarmer: ignoring invalid {Key}='{Value}' — using the "
+                    + "{Mode} pacing default",
+                    BetweenTypesConfigKey, pacingRaw,
+                    gate is { GatesReadiness: true } ? "gated (zero)" : "serving (trickle)");
+        }
+
+        // Batch mode (issue #1207) follows the SAME initial-bake discriminator as the pacing above:
+        // a pod whose bake GATES readiness serves nobody while it bakes, so it runs the sweep as one
+        // linked batch build (no per-type hub activations); an ungated pod warming in the background
+        // of live traffic keeps the activation-driven path.
+        //
+        // History, because this default was walked back once and the reason it is safe to restore
+        // matters more than the default itself. It first shipped ON and was WRONG AT PRODUCTION
+        // SCALE (memex-cloud, ci.2947): 19s sweep, `compiled=4 compileErrors=59 contentBroken=169`
+        // of 237, because batched discovery resolved no sources for most types. Two real defects,
+        // both now fixed and both pinned by tests: a default query limit truncated the global fetch
+        // and `nodeType:Code` could not see Postgres-stored Code nodes at all (#1216/#1220), and
+        // `scope:subtree` was silently dropped for a WILDCARD namespace so nested sources were
+        // missed (#1232). Discovery also now REFUSES to answer rather than guess — a type that
+        // declares sources but resolves none fails the whole batch to the activation path, so a
+        // discovery bug can no longer masquerade as the non-gating NoSources content verdict.
+        //
+        // Verified in production on all three portals (2026-08-11, ci.2982/ci.2990):
+        //   memex-cloud  237/237 in 62s (the same fleet took 18m55s on the activation path)
+        //   memex        83 already baked + 1 pending in 6.9s
+        //   atioz        39/39 in 38s; the follower pod finished in 1.1s off the shared store
+        // all with compileErrors=0, timedOut=0, contentBroken=0.
+        //
+        // The default is what every deployment gets, so it must be the verified path — carrying it
+        // as three live `kubectl set env` patches meant a helm upgrade, a new namespace or a fresh
+        // deployment silently fell back to the slow path. `PreWarm:BatchBake` returns to being the
+        // ESCAPE HATCH (set it false to force the activation sweep), not the enabler.
+        var batchBake = gate is { GatesReadiness: true };
+        var batchRaw = services.GetService<IConfiguration>()?[BatchBakeConfigKey];
+        if (!string.IsNullOrWhiteSpace(batchRaw))
+        {
+            if (bool.TryParse(batchRaw, out var parsedBatch))
+                batchBake = parsedBatch;
+            else
+                logger.LogWarning(
+                    "DynamicTypePreWarmer: ignoring invalid {Key}='{Value}' — using the "
+                    + "{Mode} default",
+                    BatchBakeConfigKey, batchRaw,
+                    batchBake ? "gated (batch)" : "serving (activation-driven)");
+        }
+
+        // 🚨 SEQUENCE THE SWEEP BEHIND THE STATIC REPO IMPORT — it is content this bake must see.
+        //
+        // The import is kicked fire-and-forget from its own StartAsync (it has to be: subscribing on
+        // the startup thread re-enters the hub schedulers and deadlocks), and ApplicationStarted —
+        // where this method runs — fires as soon as every StartAsync has RETURNED. So without this
+        // wait the sweep's ONE enumeration snapshot (Query(...).Take(1)) can be taken while the
+        // import is still landing content, and every NodeType missing from that snapshot is never
+        // baked: it compiles on the activation path when a user first opens it.
+        //
+        // Observed resolving BOTH ways on memex-cloud 2026-08-12 — the 23:02 pod enumerated 237
+        // types with the whole statically-served MeshWeaver/… tree absent, its 05:52 successor 279
+        // on the same content. Those 42 unbaked types are the "waiting for code" stall.
+        //
+        // Absent (no static import registered — every test host, non-portal hosts) this is
+        // immediate, so the shape is unchanged there. The signal also settles when the import FAILS,
+        // so a faulted import delays the bake rather than cancelling it.
+        var importSettled = services.GetService<StaticRepoImportSettled>();
+        if (importSettled is { IsSettled: false })
+            logger.LogInformation(
+                "DynamicTypePreWarmer: waiting for the static repo import to settle before "
+                + "enumerating — types it has not written yet would be missed by the bake");
+
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
-        _warmSubscription = DynamicTypePreWarmer
-            .WarmDynamicTypes(mesh, logger)
+        _warmSubscription = (importSettled?.Settled ?? Observable.Return(Unit.Default))
+            .SelectMany(_ => DynamicTypePreWarmer
+                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake))
             .Subscribe(
                 outcome =>
                 {
-                    gate?.MarkOutcome(outcome);
+                    // A recorded regression stalls the rollout — so from this moment the gate
+                    // WATCHES the type it just condemned. The platform recompiles a failed type by
+                    // itself once its sources change (the park registry's source-change auto-retry),
+                    // and a type that then builds on this image is no longer evidence against the
+                    // image: the regression is retracted and the pod may go Ready without a human.
+                    // #1214: a bake that compiled a half-applied plugin update recorded four false
+                    // regressions and hung the rollout although the content converged seconds later.
+                    //
+                    // MarkOutcome returns true only for a DIRECTLY-MEASURED regression. A derived
+                    // one (a dependent skipped because its upstream failed) is recorded and still
+                    // gates, but is deliberately NOT watched: the sweep skipped it to avoid
+                    // activating its hub at all, and one broken upstream would otherwise activate
+                    // its whole fan-out and hold it for the pod's lifetime. Those are retracted
+                    // through their blocker instead (NodeTypeBakeGateState.RetractRegression).
+                    if (gate?.MarkOutcome(outcome) == true)
+                    {
+                        if (outcome.SourcesMovedDuringCompile)
+                            logger.LogWarning(
+                                "DynamicTypePreWarmer: {TypePath} regressed, but its SOURCES MOVED "
+                                + "at or after the compile started — this verdict may describe a "
+                                + "half-applied content update (a plugin auto-update or git sync "
+                                + "landing mid-bake), not this image. It STANDS until the type is "
+                                + "seen to build here, and is retracted automatically when it does.",
+                                outcome.TypePath);
+                        _recoveryWatches.Add(
+                            DynamicTypePreWarmer.WatchForRecovery(mesh, gate, outcome.TypePath, logger));
+                    }
                     switch (outcome.Status)
                     {
                         case PreWarmStatus.Compiled: Interlocked.Increment(ref compiled); break;
@@ -103,6 +285,10 @@ public sealed class DynamicTypePreWarmerHostedService(
                         // it in the health payload, while UpstreamFailed gates.)
                         case PreWarmStatus.UpstreamFailed:
                         case PreWarmStatus.UpstreamUnevaluated: Interlocked.Increment(ref skipped); break;
+                        // Broken by deleted CONTENT, not by this image — the gate files these
+                        // under ContentBroken (never gating); the count keeps them visible here.
+                        case PreWarmStatus.NoSources:
+                        case PreWarmStatus.UpstreamContentBroken: Interlocked.Increment(ref contentBroken); break;
                         default: Interlocked.Increment(ref faulted); break;
                     }
                 },
@@ -114,16 +300,20 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // an un-provable bake must not become an outage. A genuine broken type is caught
                     // by MarkOutcome above, which is what the gate is actually for.
                     gate?.MarkComplete("warm-up stream faulted — gate released, lazy compile applies");
+                    // A fault is a terminal too: the sweep is over, the compile queue is no longer
+                    // saturated, and whoever sequenced on the bake may proceed (#1114).
+                    bake?.MarkSettled();
                 },
                 () =>
                 {
                     var elapsed = DateTimeOffset.UtcNow - startedAt;
                     logger.LogInformation(
                         "DynamicTypePreWarmer: warm-up complete in {Elapsed} — compiled={Compiled} alreadyBaked={AlreadyBaked} "
-                        + "compileErrors={Errored} timedOut={TimedOut} skipped={Skipped} faulted={Faulted}",
+                        + "compileErrors={Errored} timedOut={TimedOut} skipped={Skipped} contentBroken={ContentBroken} faulted={Faulted}",
                         elapsed,
                         Volatile.Read(ref compiled), Volatile.Read(ref alreadyBaked), Volatile.Read(ref errored),
-                        Volatile.Read(ref timedOut), Volatile.Read(ref skipped), Volatile.Read(ref faulted));
+                        Volatile.Read(ref timedOut), Volatile.Read(ref skipped), Volatile.Read(ref contentBroken),
+                        Volatile.Read(ref faulted));
 
                     // MarkComplete keeps a recorded regression red — completion is not absolution.
                     gate?.MarkComplete(
@@ -140,7 +330,11 @@ public sealed class DynamicTypePreWarmerHostedService(
                         if (gate.GatesReadiness)
                             logger.LogCritical(
                                 "DynamicTypePreWarmer: REFUSING READINESS — {Detail}. The rollout will stall "
-                                + "with the previous image still serving. Regressions: {Regressions}",
+                                + "with the previous image still serving. Each of these types is now being "
+                                + "WATCHED: if it reaches a usable build on this image (the platform "
+                                + "recompiles a failed type once its sources change), its regression is "
+                                + "retracted and readiness follows — so a verdict formed against a "
+                                + "half-applied content update clears itself. Regressions: {Regressions}",
                                 gate.Detail, regressions);
                         else
                             logger.LogCritical(
@@ -152,6 +346,13 @@ public sealed class DynamicTypePreWarmerHostedService(
                                 gate.Regressions.Count, NodeTypeBakeGateExtensions.EnabledConfigKey,
                                 gate.Detail, regressions);
                     }
+
+                    // The sweep ran to its end — regressed or not, the compile queue has drained
+                    // and per-node hub activations no longer park behind it. Release the boot
+                    // flows sequenced on the bake (#1114). On a Regressed+armed pod readiness
+                    // stays refused regardless; the default install proceeding is deliberate —
+                    // installs repair content, and the broken type is already terminal.
+                    bake?.MarkSettled();
                 });
     }
 
@@ -169,6 +370,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         _startedRegistration = null;
         _warmSubscription?.Dispose();
         _warmSubscription = null;
+        _recoveryWatches.Dispose();
     }
 }
 
@@ -185,6 +387,12 @@ public static class PreWarmServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddDynamicTypePreWarming(this IServiceCollection services)
     {
+        // The bake barrier (#1114): boot flows that write through per-node hubs — the plugin
+        // default install foremost — resolve this and sequence themselves after the sweep, so
+        // they never race a post-roll recompile storm. Registered HERE, with the pre-warmer,
+        // because its absence is itself the signal: a host without the pre-warm has no bake to
+        // wait for, and consumers proceed immediately.
+        services.TryAddSingleton<PreWarmCompletion>();
         services.AddHostedService<DynamicTypePreWarmerHostedService>();
         return services;
     }

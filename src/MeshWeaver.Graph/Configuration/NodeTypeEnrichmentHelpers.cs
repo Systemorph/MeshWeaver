@@ -57,6 +57,19 @@ internal static class NodeTypeEnrichmentHelpers
     // via this same stream.Where(settled) — not from a longer timeout.
     private static readonly TimeSpan SlowPathTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// How long an activation may sit behind an IN-FLIGHT compile before it stops waiting
+    /// silently and settles onto the compilation-in-progress overlay
+    /// (<see cref="WithCompilationInProgressOverlay"/>) instead. Not a compile bound: the
+    /// compile keeps running and the overlay self-heals onto the real hub when it lands
+    /// (<see cref="WithOverlaySelfHeal"/>). A short compile finishes inside the grace and
+    /// activates the real hub directly — no overlay churn, no visible flicker; anything
+    /// longer (a framework-bump sweep queues EVERY dynamic type) gets a live progress page
+    /// instead of a parked activation that only ends at the caller's 60 s request timeout
+    /// as a blank "Area unavailable".
+    /// </summary>
+    internal static readonly TimeSpan InFlightOverlayGrace = TimeSpan.FromSeconds(5);
+
     public static IObservable<MeshNode> EnrichWithNodeType(
         IMessageHub meshHub,
         MeshConfiguration meshConfiguration,
@@ -453,10 +466,16 @@ internal static class NodeTypeEnrichmentHelpers
                     $"NodeType '{nodeType}' has no compile in flight and did not settle " +
                     $"within {SlowPathTimeout.TotalSeconds:0}s."),
                 scheduler: null, options: meshHub.JsonSerializerOptions,
+                inFlightGrace: InFlightOverlayGrace,
                 parkedFault: ParkedFaultProbe(meshHub, nodeType))
             .Finally(healSub.Dispose)
-            .SelectMany(typeNode => ApplyStreamResult(
-                typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger));
+            // An in-flight emission is the grace path, never a settle (every settle
+            // predicate rejects Pending/Compiling): activate the progress overlay now
+            // and let its self-heal recycle the instance when the compile lands.
+            .SelectMany(typeNode => IsCompileInFlight(typeNode, meshHub.JsonSerializerOptions)
+                ? WithCompilationInProgressOverlay(node, nodeType, typeNode, meshConfiguration, meshHub, logger)
+                : ApplyStreamResult(
+                    typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger));
     }
 
     /// <summary>
@@ -619,6 +638,7 @@ internal static class NodeTypeEnrichmentHelpers
         Func<Exception> onNoProgress,
         System.Reactive.Concurrency.IScheduler? scheduler = null,
         System.Text.Json.JsonSerializerOptions? options = null,
+        TimeSpan? inFlightGrace = null,
         Func<Exception?>? parkedFault = null)
     {
         var clock = scheduler ?? System.Reactive.Concurrency.Scheduler.Default;
@@ -630,13 +650,13 @@ internal static class NodeTypeEnrichmentHelpers
         // (JsonElement / JsonNode) mirror snapshot is the normal shape off a sync stream, and a
         // CLR test blinds this to an in-flight compile — see IsCompileSettled's remarks.
         var opts = options ?? System.Text.Json.JsonSerializerOptions.Default;
-        var noProgressDeadline = typeStream
-            .Select(t => t.ContentAs<NodeTypeDefinition>(opts) is { } d
-                && d.CompilationStatus is CompilationStatus.Pending
-                                       or CompilationStatus.Compiling)
-            .StartWith(false)                       // armed from subscribe (Phase A)
-            .DistinctUntilChanged()                 // only transitions restart/cancel the budget
-            .Select(inFlight => inFlight
+        var inFlightLevel = typeStream
+            .Select(t => (Node: t, InFlight: IsCompileInFlight(t, opts)))
+            .StartWith((Node: (MeshNode)null!, InFlight: false)) // armed from subscribe (Phase A)
+            .DistinctUntilChanged(x => x.InFlight); // only transitions restart/cancel the budget
+
+        var noProgressDeadline = inFlightLevel
+            .Select(x => x.InFlight
                 ? Observable.Never<Exception>()     // disarmed while a compile runs
                 // 🚨 Phase A is a WAIT only while the answer is still unknown. Deferred so the
                 // park is re-read on every re-arm: a compile that fails WHILE we wait parks the
@@ -648,10 +668,26 @@ internal static class NodeTypeEnrichmentHelpers
             .Switch()
             .SelectMany(Observable.Throw<MeshNode>);
 
-        // The timer never emits OnNext (only OnError), so the only value flowing through
-        // Merge is the settled node. Take(1) then unsubscribes the still-armed timer on the
-        // happy path.
-        return settled.Merge(noProgressDeadline).Take(1);
+        // Phase-B visibility bound: when a compile has been CONTINUOUSLY in flight for
+        // inFlightGrace, emit the (unsettled — CompilationStatus Pending/Compiling, the
+        // caller's discriminator) node observed at the in-flight transition so the caller
+        // can settle the activation onto the compilation-in-progress overlay instead of
+        // waiting silently for however long the compile queue runs. Same level/Switch
+        // shape as the budget above: leaving Pending/Compiling before the grace elapses
+        // cancels the timer, and `settled` racing first wins via Take(1). Off (never
+        // emits) when no grace is passed — existing waits are byte-for-byte unchanged.
+        var inFlightOverlay = inFlightGrace is not { } grace
+            ? Observable.Never<MeshNode>()
+            : inFlightLevel
+                .Select(x => x.InFlight
+                    ? Observable.Timer(grace, clock).Select(_ => x.Node)
+                    : Observable.Never<MeshNode>())
+                .Switch();
+
+        // The deadline timer never emits OnNext (only OnError), so the values flowing through
+        // Merge are the settled node and the grace-elapsed in-flight node. Take(1) then
+        // unsubscribes the still-armed timers on the happy path.
+        return settled.Merge(noProgressDeadline).Merge(inFlightOverlay).Take(1);
     }
 
     /// <summary>
@@ -675,6 +711,19 @@ internal static class NodeTypeEnrichmentHelpers
             ? new NodeTypeParkedException(nodeType, parkRegistry.GetParkedError(nodeType))
             : null;
     }
+
+    /// <summary>
+    /// True when the NodeType node carries an in-flight compile (<see cref="CompilationStatus.Pending"/>
+    /// or <see cref="CompilationStatus.Compiling"/>). Read through <c>ContentAs</c> — a cross-hub
+    /// mirror snapshot is routinely un-materialized JSON, and a CLR type test would blind the
+    /// caller to the in-flight state (see <see cref="IsCompileSettled"/>'s remarks). This is also
+    /// the discriminator callers use to tell a grace-elapsed emission from
+    /// <see cref="WaitForCompileSettled"/> apart from a settled one: every settle predicate
+    /// rejects Pending/Compiling, so an in-flight node can only have come from the grace path.
+    /// </summary>
+    internal static bool IsCompileInFlight(MeshNode? typeNode, System.Text.Json.JsonSerializerOptions options)
+        => typeNode?.ContentAs<NodeTypeDefinition>(options) is { } d
+            && d.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling;
 
     /// <summary>
     /// Bounded recursion on the per-NodeType compile self-heal loop. The hot
@@ -1152,15 +1201,21 @@ internal static class NodeTypeEnrichmentHelpers
                     $"NodeType '{nodeType}' recompile did not settle and no compile is " +
                     $"in flight (within {SlowPathTimeout.TotalSeconds:0}s)."),
                 scheduler: null, options: meshHub.JsonSerializerOptions,
+                inFlightGrace: InFlightOverlayGrace,
                 // 🚨 THE memex 2026-08-10 PATH. A parked source error that still carries the
                 // assembly coordinates of an EARLIER good build routes here (ApplyStreamResult
                 // reads it as "ABI-stale, recompile"), and IsRecompileSettled then accepts only a
                 // genuinely usable build — which a parked type can never produce. Without the
                 // probe this wait is a guaranteed 60 s, longer than the 30 s any writer allows.
                 parkedFault: ParkedFaultProbe(meshHub, nodeType))
-                .SelectMany(newTypeNode => ApplyStreamResult(
-                    newTypeNode, node, nodeType, meshConfiguration,
-                    compilationService, meshHub, logger, recompileAttempts + 1));
+                // Grace path (still Pending/Compiling — the framework-bump sweep queues
+                // every dynamic type): stop holding the activation and serve the live
+                // progress overlay; its self-heal recycles the instance when the build lands.
+                .SelectMany(newTypeNode => IsCompileInFlight(newTypeNode, meshHub.JsonSerializerOptions)
+                    ? WithCompilationInProgressOverlay(node, nodeType, newTypeNode, meshConfiguration, meshHub, logger)
+                    : ApplyStreamResult(
+                        newTypeNode, node, nodeType, meshConfiguration,
+                        compilationService, meshHub, logger, recompileAttempts + 1));
             });
     }
 
@@ -1582,6 +1637,62 @@ internal static class NodeTypeEnrichmentHelpers
             : (config => overlay(config).Set(nack));
         return node with { HubConfiguration = composed };
     }
+
+    /// <summary>
+    /// The compilation-IN-PROGRESS overlay: activates the instance hub immediately (instead of
+    /// parking every delivery behind an in-flight compile until the caller's own timeout) with
+    /// <list type="bullet">
+    ///   <item>an Overview that renders the NodeType's LIVE progress page
+    ///     (<see cref="NodeTypeLayoutAreas.CompileProgressView"/> — status, activity log,
+    ///     compile-sweep queue) and redirects back to THIS instance once the type is Ok;</item>
+    ///   <item>an <see cref="UnhandledMessageNack"/> with
+    ///     <see cref="ErrorType.CompilationInProgress"/> + the NodeType path, so typed requests
+    ///     fail fast with the cause (and area clients without the embed — see
+    ///     <c>AreaErrorClassifier.TryGetCompilationInProgressNodeType</c> — swap to the type's
+    ///     Progress area themselves);</item>
+    ///   <item>the standard <see cref="WithOverlaySelfHeal"/> watcher, version-gated at the
+    ///     in-flight type node: the compile's terminal write advances the version, the watcher
+    ///     recycles this instance, and the next access enriches against the settled type.</item>
+    /// </list>
+    /// </summary>
+    internal static IObservable<MeshNode> WithCompilationInProgressOverlay(
+        MeshNode node,
+        string nodeType,
+        MeshNode typeNode,
+        MeshConfiguration meshConfiguration,
+        IMessageHub meshHub,
+        ILogger? logger)
+    {
+        logger?.LogInformation(
+            "EnrichWithNodeType: compile for '{NodeType}' still in flight after {Grace:0}s — "
+            + "activating compilation-in-progress overlay for '{InstancePath}' (type version {Version})",
+            nodeType, InFlightOverlayGrace.TotalSeconds, node.Path, typeNode.Version);
+
+        var overlay = CreateCompilationInProgressConfiguration(nodeType, node.Path);
+        var nack = new UnhandledMessageNack(
+            $"NodeType '{nodeType}' is compiling — '{node.Path}' activates when the build settles.",
+            ErrorType.CompilationInProgress,
+            nodeType);
+        var baseConfig = meshConfiguration.DefaultNodeHubConfiguration;
+        Func<MessageHubConfiguration, MessageHubConfiguration> composed = baseConfig != null
+            ? (config => overlay(baseConfig(config)).Set(nack))
+            : (config => overlay(config).Set(nack));
+        return Observable.Return(WithOverlaySelfHeal(
+            node with { HubConfiguration = composed },
+            meshHub, nodeType, typeVersionAtOverlay: typeNode.Version, logger));
+    }
+
+    private static Func<MessageHubConfiguration, MessageHubConfiguration>
+        CreateCompilationInProgressConfiguration(string nodeType, string instancePath)
+        => config => config.AddLayout(layout =>
+            layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, _) =>
+                NodeTypeLayoutAreas.CompileProgressView(
+                    host,
+                    // Cross-hub: the instance overlay observes the TYPE's node through the
+                    // shared IMeshNodeStreamCache handle — same stream the enrichment waited on.
+                    host.Hub.GetMeshNodeStream(nodeType),
+                    nodeTypePath: nodeType,
+                    redirectOnOk: $"/{instancePath}")));
 
     // Default guidance for a genuine Roslyn failure (Status=Error with captured
     // diagnostics). Other overlay callers (e.g. the framework-stale recompile

@@ -1,8 +1,8 @@
-node_modules/
+# No trailing slash — see clients/react/.gitignore.
+node_modules
 .expo/
 dist/
 *.tsbuildinfo
-package-lock.json
 ios/
 android/
 test-results/

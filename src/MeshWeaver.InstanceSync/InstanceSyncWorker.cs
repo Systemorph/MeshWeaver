@@ -463,9 +463,12 @@ public sealed class InstanceSyncWorker : IDisposable
     private IObservable<MeshNode> ApplyLocal(MeshNode payload)
     {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        // Off-router issuing: this worker holds the DI root mesh hub — a target-less
+        // CreateOrUpdateNodeRequest posted there runs on the router (ROUTER_TRAFFIC).
         return Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
-                _ => hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(payload)).FirstAsync())
+                _ => hub.NodeOperationIssuingHub()
+                    .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(payload)).FirstAsync())
             .SelectMany(d => d.Message.Success
                 ? Observable.Return(d.Message.Node!)
                 : Observable.Throw<MeshNode>(new InvalidOperationException(

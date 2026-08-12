@@ -34,6 +34,16 @@ public sealed class StaleStreamStateException : InvalidOperationException
 /// </summary>
 public static class JsonSynchronizationStream
 {
+    /// <summary>
+    /// How many times one stream re-arms after the owner rejected its SubscribeRequest for being
+    /// mid-recycle. A recycle answers within milliseconds and the re-ask activates the fresh hub,
+    /// so the healthy case needs one; the bound exists purely so an owner stuck in a recycle LOOP
+    /// degrades to the pre-existing orphaned-stream behaviour rather than becoming a resubscribe
+    /// storm. It is not a budget to widen — if a stream needs more than this, the owner is
+    /// recycling pathologically and THAT is the bug.
+    /// </summary>
+    private const int MaxRecycleReArms = 3;
+
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal
     // recognized by AccessService.ImpersonateAsSystem and PostgreSqlMeshQuery's
@@ -79,6 +89,47 @@ public static class JsonSynchronizationStream
         || objectId.StartsWith("node/", StringComparison.OrdinalIgnoreCase)
         || objectId.StartsWith("activity/", StringComparison.OrdinalIgnoreCase)
         || objectId.StartsWith("portal/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The identity a remote subscribe runs under, resolved from the ambient
+    /// <see cref="AccessService"/> context. <see cref="Id"/> is the value stamped on
+    /// <c>SubscribeRequest.Identity</c>; <see cref="RealUser"/> is the captured context to
+    /// re-apply around the post (null ⇒ the subscribe runs as System).
+    /// </summary>
+    internal readonly record struct RemoteSubscribeIdentity(string Id, AccessContext? RealUser)
+    {
+        /// <summary>True when a genuine end-user identity was resolved (not the System fallback).</summary>
+        public bool IsRealUser => RealUser is not null;
+    }
+
+    /// <summary>
+    /// Resolves the identity that <see cref="CreateExternalClient{TReduced,TReference}"/> will
+    /// stamp on its <c>SubscribeRequest</c>.
+    ///
+    /// <para>🚨 This is ALSO the identity component of <c>Workspace._remoteStreamCache</c>'s key.
+    /// The owner applies its RLS gate ONCE, at subscribe time, for exactly this identity — so the
+    /// resulting stream carries that identity's permission view for its whole life. Cache key and
+    /// subscribe identity must therefore be computed from the SAME function: if they ever drift,
+    /// one identity's stream is served to another, which is a cross-user information disclosure
+    /// (and, in the other ordering, a refused stream handed to a permitted reader whose view then
+    /// renders empty). Both directions are pinned by
+    /// <c>MeshWeaver.Security.Test/RemoteStreamCacheIdentityTest</c>.</para>
+    ///
+    /// <para>Prefer the REAL user when the ambient AccessContext identifies one (the typical
+    /// Blazor-circuit / API-token path). Fall back to System ONLY when AsyncLocal carries no user
+    /// — empty, or a hub-shaped principal (<c>sync/</c>, <c>mesh/</c>, <c>node/</c>, …) that leaked
+    /// from a workspace emission scheduler.</para>
+    /// </summary>
+    internal static RemoteSubscribeIdentity ResolveSubscribeIdentity(AccessService? accessService)
+    {
+        var ambient = accessService?.Context ?? accessService?.CircuitContext;
+        var isRealUser = ambient is not null
+            && !string.IsNullOrEmpty(ambient.ObjectId)
+            && !LooksLikeHubPrincipal(ambient.ObjectId);
+        return isRealUser
+            ? new RemoteSubscribeIdentity(ambient!.ObjectId!, ambient)
+            : new RemoteSubscribeIdentity(SystemUserId, null);
+    }
 
     private static ILogger GetLogger(IServiceProvider serviceProvider)
     {
@@ -301,11 +352,12 @@ public static class JsonSynchronizationStream
         // for the page owner. Per-user identity must flow into the SubscribeRequest
         // so the owner's RLS can enforce per-user reads; System fallback exists
         // only for the bare-infrastructure paths where no user identity exists.
-        var ambient = accessService?.Context ?? accessService?.CircuitContext;
-        var isRealUser = ambient is not null
-            && !string.IsNullOrEmpty(ambient.ObjectId)
-            && !LooksLikeHubPrincipal(ambient.ObjectId);
-        var identityForSubscribe = isRealUser ? ambient!.ObjectId : SystemUserId;
+        // 🚨 Resolved through the SHARED helper so this identity is bit-for-bit the one
+        // Workspace._remoteStreamCache keyed this stream under — see ResolveSubscribeIdentity.
+        var subscribeIdentity = ResolveSubscribeIdentity(accessService);
+        var ambient = subscribeIdentity.RealUser;
+        var isRealUser = subscribeIdentity.IsRealUser;
+        var identityForSubscribe = subscribeIdentity.Id;
 
         // Keep-alive machinery (the 45s heartbeat + the change-feed resubscribe) for a
         // REMOTE owner is collected here so a TERMINAL failure of the initial
@@ -334,6 +386,16 @@ public static class JsonSynchronizationStream
         // by RouteStreamMessage); a DeliveryFailure / NotFound — the owner ADDRESS DOES NOT EXIST —
         // surfaces as OnError, so we fault subscribers and dispose the keep-alive so nothing
         // heartbeats/resubscribes a non-existent owner. Reactive end-to-end: no await.
+        //
+        // 🚨 Carries the "the owner rejected us because it is recycling" signal from the subscribe
+        // arm below to the re-arm wired further down (where Resubscribe is in scope).
+        //
+        // REPLAY, not a bare Subject. The rejection normally arrives long after both ends are
+        // wired, but a same-process owner can NACK inside the subscribe call itself — before this
+        // method reaches the re-arm — and a bare Subject drops an emission that has no subscriber
+        // yet. That would resurrect the orphaned stream in exactly the fast local case this fix
+        // exists for, and only sometimes: the classic invisible race.
+        var rejectedByRecycle = new System.Reactive.Subjects.ReplaySubject<string>(1);
         var observeSubscription = Observable
             .Using(
                 // Apply an explicit identity SCOPE for the post — do NOT rely on the ambient AsyncLocal
@@ -376,8 +438,18 @@ public static class JsonSynchronizationStream
                     {
                         logger.LogDebug(
                             "SubscribeRequest for stream {StreamId} rejected — owner {Owner} is shutting down "
-                            + "(recycle/restart in flight); keeping the stream alive for the resubscribe latch",
+                            + "(recycle/restart in flight); keeping the stream alive and re-arming",
                             reduced.StreamId, owner);
+                        // 🚨 …and RE-ARM, because the latch alone cannot recover this. The latch's
+                        // only trigger is a mesh change-feed event on the owner's path, and a pure
+                        // RECYCLE writes nothing — so a subscriber the recycle rejected waits for
+                        // an announce that never comes. That hole was invisible while this
+                        // rejection was silently swallowed (the sender just timed out and the
+                        // consumer tore down); once the owner started answering honestly, the
+                        // orphaned stream became the visible symptom — a freshly installed root
+                        // whose area never renders (StaleStampRootBindingTest, 120 s with the
+                        // client sitting idle after the NACK landed).
+                        rejectedByRecycle.OnNext("rejected our SubscribeRequest while shutting down");
                         return;
                     }
 
@@ -476,9 +548,47 @@ public static class JsonSynchronizationStream
                                     "Stream {StreamId}: resubscribe failed.",
                                     reduced.StreamId);
                                 Interlocked.Exchange(ref resubscribing, 0);
+                                // A re-ask that itself raced the SAME recycle window gets the same
+                                // transient ShuttingDown verdict — push it back through the re-arm
+                                // carrier so the next bounded attempt fires (shared MaxRecycleReArms
+                                // budget; measured in StaleStampRootBindingTest, where the first
+                                // re-ask can land while the teardown is still draining).
+                                if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
+                                    rejectedByRecycle.OnNext(
+                                        "re-ask was itself rejected while the owner was still shutting down");
                             });
                 }
             }
+
+            // 🚨 THE UN-ANNOUNCED RECYCLE. The change-feed latch below is the recycled-owner
+            // detector, but it can only fire on a mesh change event for the owner's path — and a
+            // recycle IS NOT A WRITE. Recycle the owner while a SubscribeRequest is in flight and
+            // that subscriber is orphaned until something unrelated happens to write the node:
+            // no announce, no event, no recovery. The heartbeat cannot rescue it either — it is
+            // fire-and-forget and deliberately does not resubscribe.
+            //
+            // So the rejection itself is the event. The owner told us, in the same breath, both
+            // that it is going and that it is coming back ("the address may reactivate; retry to
+            // get the authoritative answer"), and by the time that verdict is produced the hub is
+            // already at RunLevel Dead — so the re-ask lands on a FRESH activation, which a
+            // SubscribeRequest creates on arrival.
+            //
+            // This is not the forbidden watchdog: nothing polls, nothing runs on a timer, and it
+            // fires only in response to an explicit typed rejection. It reuses Resubscribe, so it
+            // inherits the in-flight guard, ExpectResubscribeFull (the mirror must accept a
+            // re-snapshot stamped below its cached frame version) and the System impersonation.
+            // The re-ask asks for the CURRENT snapshot — it never re-asserts a cached frame, which
+            // is the #945 shape and the opposite of what this does. Bounded so that an owner stuck
+            // in a recycle LOOP degrades to the pre-existing "orphaned" behaviour instead of
+            // trading a stalled stream for a storm.
+            var recycleReArms = 0;
+            var recycleReArm = rejectedByRecycle
+                .Where(_ => Interlocked.Increment(ref recycleReArms) <= MaxRecycleReArms)
+                .Subscribe(
+                    reason => Resubscribe(reason),
+                    ex => logger.LogDebug(ex,
+                        "Stream {StreamId}: recycle re-arm stream faulted", reduced.StreamId));
+            reduced.RegisterForDisposal(recycleReArm);
 
             // 🚨 THE LOST INITIAL — and why the first heartbeat comes EARLY.
             //
@@ -848,8 +958,19 @@ public static class JsonSynchronizationStream
         return reduced;
     }
     private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
-        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange : JsonChange =>
-        stream
+        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange : JsonChange
+    {
+        // Loss-detection chain (issue #1081): every emitted frame carries the Version of the frame
+        // emitted immediately BEFORE it on this same forwarding subscription (-1 for the first).
+        // The receive side (SynchronizationStream.UpdateStream) compares a Patch's BasedOnVersion
+        // against the version it last applied: a mismatch proves a frame was lost in transport
+        // (at-most-once memory streams) and triggers a fresh-snapshot resync instead of tracking
+        // the owner forever at a silent deficit. Serial by construction — the Synchronize() below
+        // makes Select single-threaded, so the closure variable needs no interlocking. Frames that
+        // are SKIPPED here (value-equal, no updates) never enter the chain, so legitimate version
+        // gaps from skipped frames do not false-trigger a resync.
+        var lastSentVersion = -1L;
+        return stream
             .Synchronize()
             .Where(predicate)
             .Select(x =>
@@ -878,13 +999,16 @@ public static class JsonSynchronizationStream
                     }
                     stream.Set(currentJson);
                     logger.LogDebug("Generated full DataChangedEvent for stream {StreamId}", stream.ClientId);
-                    return (TChange?)Activator.CreateInstance(
+                    var fullEvent = (TChange?)Activator.CreateInstance(
                         typeof(TChange),
                         stream.ClientId,
                         x.Version,
                         new RawJson(currentJson.ToString() ?? string.Empty),
                         ChangeType.Full,
-                        x.ChangedBy ?? string.Empty);
+                        x.ChangedBy ?? string.Empty,
+                        lastSentVersion);
+                    lastSentVersion = x.Version;
+                    return fullEvent;
                 }
                 else
                 {
@@ -915,28 +1039,35 @@ public static class JsonSynchronizationStream
                             x.Value, x.Value?.GetType() ?? typeof(object),
                             stream.Host.JsonSerializerOptions);
                         stream.Set(currentJson);
-                        return (TChange?)Activator.CreateInstance(
+                        var resyncFull = (TChange?)Activator.CreateInstance(
                             typeof(TChange),
                             stream.ClientId,
                             x.Version,
                             new RawJson(currentJson.Value.ToString() ?? string.Empty),
                             ChangeType.Full,
-                            x.ChangedBy ?? string.Empty);
+                            x.ChangedBy ?? string.Empty,
+                            lastSentVersion);
+                        lastSentVersion = x.Version;
+                        return resyncFull;
                     }
                     stream.Set(currentJson);
-                    return (TChange?)Activator.CreateInstance
+                    var patchEvent = (TChange?)Activator.CreateInstance
                     (
                         typeof(TChange),
                         stream.ClientId,
                         x.Version,
                         new RawJson(patchJson),
                         x.ChangeType,
-                        x.ChangedBy ?? string.Empty
+                        x.ChangedBy ?? string.Empty,
+                        lastSentVersion
                     );
+                    lastSentVersion = x.Version;
+                    return patchEvent;
                 }
 
 
             });
+    }
 
 
 

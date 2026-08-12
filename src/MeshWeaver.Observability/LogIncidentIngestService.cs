@@ -105,7 +105,12 @@ public sealed class LogIncidentIngestService(
             "Red log first sighting {Fingerprint} in {Category} ({Occurrences} line(s)) — opening incident",
             report.Fingerprint, report.Category, report.Occurrences);
 
-        return hub.Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
+        // 🚨 Issued off the router: this service holds the DI root mesh hub, and a target-less
+        // CreateOrUpdateNodeRequest posted there EXECUTES on the router's action block and stamps
+        // mesh/{id} on both ends of the exchange (ROUTER_TRAFFIC — the very detector whose reports
+        // this service ingests). NodeOperationIssuingHub is the shared off-router seam.
+        return hub.NodeOperationIssuingHub()
+            .Observe<CreateOrUpdateNodeResponse>(new CreateOrUpdateNodeRequest(node))
             .FirstAsync()
             .Select(d => d.Message)
             .SelectMany(response => response.Success
@@ -181,6 +186,17 @@ public sealed class LogIncidentIngestService(
     /// and the agent's fresh draft then asked to <c>File</c> again. That chain is how
     /// <c>ROUTER_TRAFFIC</c> was filed EIGHT times in seven minutes on the watcher's first live run.
     /// Once an issue exists, a recurrence belongs on it, never in a new one.</para>
+    ///
+    /// <para>🚨 <b><c>Filing</c> without an issue is the one in-flight status that is re-asked.</b>
+    /// The claim writes <c>Filing</c> BEFORE the GitHub round-trip, so a portal that dies in that
+    /// window — or a write-back that fails — leaves the incident at <c>Filing</c> with no link.
+    /// Nothing else can move it: the claim keys on <c>RequestedStatus</c>, which is already
+    /// <c>None</c>; the stranded-triage reconcile only ever touches <c>Triaging</c>; and every rule
+    /// above needs either an issue or a different status. That is precisely the dead end
+    /// <c>Triaging</c> used to be — nineteen incidents accumulated there, invisible and un-ticketed —
+    /// only now in a status the repair does not cover. Asking again is safe BECAUSE of the claim:
+    /// a File request on an incident that has since been ticketed is redirected to the
+    /// rate-limited comment, never to a second issue.</para>
     /// </summary>
     private static LogIncidentRequest NextRequest(
         LogIncident incident, LogWatchOptions options, DateTimeOffset now) => incident switch
@@ -190,8 +206,18 @@ public sealed class LogIncidentIngestService(
             ? LogIncidentRequest.Comment
             : LogIncidentRequest.None,
         { Status: LogIncidentStatus.Filed } => LogIncidentRequest.None,
-        // New/Failed → (re)try triage. Triaging/Filing → leave the in-flight request alone.
+        // New/Failed → (re)try triage. Triaging → leave the in-flight round alone; the control
+        // plane reconciles it against the thread, the only authority on whether it is still running.
         { Status: LogIncidentStatus.New or LogIncidentStatus.Failed } => LogIncidentRequest.Triage,
+        // Filing with no link ⇒ the claim was taken and nothing came back. Re-ask — but ONLY when
+        // nothing is already being asked. The stranded case is by definition RequestedStatus.None
+        // (the claim consumes the request before it writes Filing, which is why nothing else can
+        // move it), so scoping the arm this way costs the repair nothing. Unscoped it would
+        // overwrite a request someone made deliberately — an admin's Suppress, or any future
+        // control-plane verb — on the very next report, and the incident would file itself anyway.
+        // An automated recovery must never outrank an explicit instruction.
+        { Status: LogIncidentStatus.Filing, RequestedStatus: LogIncidentRequest.None }
+            => LogIncidentRequest.File,
         _ => incident.RequestedStatus,
     };
 

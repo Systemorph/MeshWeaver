@@ -874,6 +874,24 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         if (!string.IsNullOrEmpty(queryForSql.Path) && queryForSql.Path.Contains('*'))
             queryForSql = queryForSql with { Path = null, Scope = QueryScope.Exact };
 
+        // 🚨 Carry the REQUEST-level limit into the parsed query — the same propagation the
+        // per-schema delegate does (PostgreSqlMeshQuery: `if (request.Limit.HasValue) parsedQuery =
+        // parsedQuery with { Limit = request.Limit }`). Without it, `request.Limit` was silently
+        // DROPPED on the unpinned path: QueryAcrossSchemasAsync reads only ParsedQuery.Limit and
+        // substitutes a hard default of 50, so a caller asking for 500 across partitions got 50 and
+        // had no way to tell (issue #1216 — the batch bake's global `nodeType:Code` fetch is exactly
+        // this shape and resolved 50 Code nodes out of thousands). A request that states no limit at
+        // all still gets the fan-out's default: an unanchored UNION over every partition schema
+        // needs SOME bound, and changing that default is a separate decision.
+        // 🚨 POSITIVE limits only. `Limit <= 0` means "do not clip" upstream —
+        // MeshQuery.ClipMergedInitial applies a limit only `if (effectiveLimit is int limit &&
+        // limit > 0)` — but propagated into SQL a zero becomes a literal `LIMIT 0`, i.e. ZERO ROWS
+        // returned for a caller that asked for everything. That is the same silent-empty-result
+        // failure this very PR exists to fix (#1216: discovery that cannot see rows reports the
+        // content as missing), so it must not be re-introduced one layer down.
+        if (request.Limit is > 0)
+            queryForSql = queryForSql with { Limit = request.Limit };
+
         var userId = GetEffectiveUserId(request);
         // activityUserId is only meaningful for source:accessed today (joins
         // user_activities); source:activity reads the activity satellite,
@@ -931,16 +949,18 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
         }
 
         // Wildcard namespace mapping — `namespace:*/_Thread` is parsed as a
-        // `namespace LIKE '%/_Thread'` filter (NOT as a Path), so the
+        // `namespace LIKE '*/_Thread'` filter (NOT as a Path), so the
         // path-based check above doesn't see it. Walk the parsed filter for
         // a namespace LIKE node and inspect its value for a satellite segment.
         var nsLikeValue = ExtractNamespaceLikeValue(parsed.Filter);
         if (!string.IsNullOrEmpty(nsLikeValue))
         {
-            // Strip SQL wildcards so PathContainsSegment can do its
-            // boundary check ("partition/%/_Thread" → "partition//_Thread"
-            // → still has '_Thread' bounded by '/').
-            var sanitized = nsLikeValue.Replace("%", "");
+            // Strip the wildcards so PathContainsSegment can do its boundary
+            // check ("partition/*/_Thread" → "partition//_Thread" → still has
+            // '_Thread' bounded by '/'). Both spellings are removed: this is a
+            // sanitiser, not a matcher, and a hand-built ParsedQuery may still
+            // carry a SQL-shaped pattern the parser would never produce.
+            var sanitized = QueryWildcard.StripWildcards(nsLikeValue);
             foreach (var (suffix, table) in segmentTables.OrderByDescending(kv => kv.Key.Length))
             {
                 if (PathContainsSegment(sanitized, suffix))
@@ -966,7 +986,7 @@ public sealed class PostgreSqlPartitionedMeshQuery : IMeshQueryProvider
     /// <see cref="QueryParser"/> emits exactly this shape for
     /// <c>namespace:VALUE_WITH_*</c> (e.g. <c>namespace:*/_Thread</c>) —
     /// stashing the matched pattern as the LIKE argument. Returns the raw
-    /// pattern (with <c>%</c> still in place) for the caller to sanitise.
+    /// pattern (wildcards still in place) for the caller to sanitise.
     /// <see langword="null"/> if no matching node.
     /// </summary>
     private static string? ExtractNamespaceLikeValue(QueryNode? node)

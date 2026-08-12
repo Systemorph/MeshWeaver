@@ -16,7 +16,7 @@
 # (src/MeshWeaver.Hosting.Grpc/Protos, OUTSIDE this clients/ context). buf ships glibc binaries,
 # so codegen runs on the HOST, not in this musl Alpine image. Generate it FIRST, then build:
 #
-#   npm --prefix grpc-web install && npm --prefix grpc-web run gen   # → grpc-web/src/gen/mesh_pb.ts
+#   npm --prefix grpc-web ci && npm --prefix grpc-web run gen   # → grpc-web/src/gen/mesh_pb.ts
 #
 # (memex-local's portal_next_build_local does this automatically.) Without it the build fails with
 # "Module not found: Can't resolve './gen/mesh_pb'".

@@ -50,7 +50,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
     {
         var client = GetClient();
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = userId, Name = userId });
         return client;
     }
 
@@ -161,7 +161,7 @@ public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTe
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         // Clear claim-based roles
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
 
         var permissions = await Mesh.GetEffectivePermissions("Space", TestUsers.Admin.ObjectId)
             .Should().Match(p => p.HasFlag(Permission.Read));
@@ -217,7 +217,7 @@ public class UserHubAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(
     public async Task AuthenticatedUser_CanReadUserHub()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "unprivileged@example.com", Name = "Unprivileged User" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "unprivileged@example.com", Name = "Unprivileged User" });
 
         var response = await Mesh
             .Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("User")))
@@ -231,7 +231,7 @@ public class UserHubAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(
     public async Task AnonymousUser_CannotReadUserHub()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "", Name = "" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "", Name = "" });
 
         Func<Task> act = () =>
             Mesh.Observe(new GetDataRequest(new UnifiedReference("data:")), o => o.WithTarget(new Address("User")))

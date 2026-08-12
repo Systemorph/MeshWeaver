@@ -31,7 +31,7 @@ public class McpGitHubSyncToolTest(ITestOutputHelper output) : GitHubSyncTestBas
     private void SignInAsAdmin()
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
+        access.SetHostIdentity(new AccessContext { ObjectId = UserId, Name = TestUsers.Admin.Name });
     }
 
     // ── Argument validation (pure — no Space, no config, no GitHub) ─────────────────────────────
@@ -57,7 +57,7 @@ public class McpGitHubSyncToolTest(ITestOutputHelper output) : GitHubSyncTestBas
     {
         // No SignInAsAdmin() — the circuit context is null, so the tool cannot resolve a caller.
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(null);
+        access.SetHostIdentity(null);
         var result = await CreatePlugin().GitHubSync(space: "ACME", op: "commit");
         Assert.StartsWith("Error:", result);
         Assert.Contains("sign-in required", result);

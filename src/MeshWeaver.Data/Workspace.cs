@@ -39,6 +39,13 @@ public class Workspace : IWorkspace
     private readonly ILogger<Workspace> _logger;
     private readonly IDisposable? _changeFeedSubscription;
 
+    // Resolved once: GetExternalClientSynchronizationStream reads the ambient identity on every
+    // call — including every cache HIT (a Blazor re-render re-binding an area) — so this must not
+    // be a per-call service-provider lookup. The AccessService itself is a singleton whose
+    // Context/CircuitContext are AsyncLocal, so holding the instance still reads the CURRENT
+    // caller's identity; it is the resolution that is cached, never the identity.
+    private readonly AccessService? _accessService;
+
     /// <summary>Creates the workspace, builds and initializes its data context, and subscribes to the mesh change feed for remote-stream cache eviction.</summary>
     /// <param name="hub">The message hub that owns this workspace.</param>
     /// <param name="logger">Logger for workspace lifecycle and stream-cache diagnostics.</param>
@@ -46,6 +53,7 @@ public class Workspace : IWorkspace
     {
         Hub = hub;
         _logger = logger;
+        _accessService = hub.ServiceProvider.GetService<AccessService>();
         logger.LogDebug("Creating data context of address {address}", Id);
         DataContext = this.CreateDataContext();
         logger.LogDebug("Started initialization of data context of address {address}", Id);
@@ -129,7 +137,8 @@ public class Workspace : IWorkspace
         // against the (re-)activated owner.
         foreach (var key in _remoteStreamCache.Keys)
         {
-            if (string.Equals(key.Item1.ToString(), path, StringComparison.OrdinalIgnoreCase)
+            // Owner-address match only — every identity's stream for that owner is evicted.
+            if (string.Equals(key.Owner.ToString(), path, StringComparison.OrdinalIgnoreCase)
                 && _remoteStreamCache.TryRemove(key, out var removed))
             {
                 // Keep ownership of the evicted stream so Dispose still tears
@@ -140,7 +149,7 @@ public class Workspace : IWorkspace
                     _evictedRemoteStreams[removed.Value] = 0;
                 _logger.LogDebug(
                     "Evicted remote stream cache for {Address} after change event.",
-                    key.Item1);
+                    key.Owner);
             }
         }
     }
@@ -192,8 +201,15 @@ public class Workspace : IWorkspace
     /// <inheritdoc />
     public IObservable<T[]?>? GetStream<T>()
     {
-        var collection = DataContext.GetTypeSource(typeof(T));
-        if (collection == null)
+        // 🚨 EXACT type source, never the base-walking DataContext.GetTypeSource(Type).
+        // That walk is a WRITE-path affordance — WorkspaceOperations.ClassifyForRouting stores a
+        // derived instance into its base's collection, and ImportManager falls back to the base
+        // explicitly. Used as the READ guard it admitted a type that owns NO collection of its
+        // own, and the very next line resolves the collection name through TypeRegistry, which
+        // does NOT walk: the mismatch threw "Type X is unknown." straight out of the caller's
+        // layout-area render ("Rendering failed for area X") instead of returning the documented
+        // null that every caller already handles with `?? Observable.Return(...)`.
+        if (DataContext.GetCollectionName(typeof(T)) == null)
             return null;
         // Hub already past Started → SynchronizationStream..ctor would throw
         // ObjectDisposedException synchronously and the exception would
@@ -282,7 +298,23 @@ public class Workspace : IWorkspace
     // Symptom this fixes: streaming-text test sequence
     // `[0, 19, 22, 19, 22, 46]` — every patch delivered twice via the
     // orphaned stream.
-    private readonly ConcurrentDictionary<(Address, WorkspaceReference), Lazy<ISynchronizationStream>> _remoteStreamCache = new();
+    //
+    // 🚨 IDENTITY IS PART OF THE KEY, and must stay that way.
+    // A remote stream is NOT identity-neutral: CreateExternalClient stamps the subscribing
+    // user onto the SubscribeRequest and the OWNER evaluates its RLS gate ONCE, at subscribe
+    // time, for exactly that user. The stream therefore carries that user's permission view
+    // for its entire life. Keyed on (owner, reference) alone — as it was until this comment —
+    // the FIRST reader on a workspace fixed the permission view every later reader inherited,
+    // in both directions: a permitted reader's stream disclosed content to a denied reader,
+    // and a denied reader's refused stream made a permitted reader's view render empty. That
+    // is a cross-user information disclosure wherever one workspace serves two identities
+    // (the shared `portal/anonymous` hub, MCP/REST session hubs with an `anon` fallback).
+    // Regression: MeshWeaver.Security.Test/RemoteStreamCacheIdentityTest.
+    //
+    // The identity component MUST come from JsonSynchronizationStream.ResolveSubscribeIdentity
+    // — the same function that stamps SubscribeRequest.Identity — so key and subscribe can
+    // never drift apart.
+    private readonly ConcurrentDictionary<(Address Owner, WorkspaceReference Reference, string Identity), Lazy<ISynchronizationStream>> _remoteStreamCache = new();
 
     // Streams that EvictForPath removed from the cache but did NOT dispose (their
     // live subscribers keep them attached). The workspace still OWNS their lifetime —
@@ -333,8 +365,16 @@ public class Workspace : IWorkspace
         Address owner, WorkspaceReference reference)
     {
         var detached = new List<ISynchronizationStream>();
-        if (_remoteStreamCache.TryRemove((owner, reference), out var cached))
+        // 🚨 Scan, don't index: the cache is keyed (owner, reference, IDENTITY), so one
+        // (owner, reference) pair can hold one stream PER identity. Detaching only a single
+        // identity's entry would leave the others attached and defeat the caller's
+        // "no consumer remains" proof (the shared mesh-node cache's idle release).
+        foreach (var key in _remoteStreamCache.Keys)
         {
+            if (!key.Owner.Equals(owner) || !Equals(key.Reference, reference))
+                continue;
+            if (!_remoteStreamCache.TryRemove(key, out var cached))
+                continue;
             // A cached Lazy is materialised immediately by its creator
             // (GetExternalClientSynchronizationStream calls .Value right after
             // GetOrAdd); taking .Value here at worst briefly waits for that
@@ -381,7 +421,11 @@ public class Workspace : IWorkspace
     >(Address address, TReference reference)
         where TReference : WorkspaceReference
     {
-        var key = (address, (WorkspaceReference)reference);
+        // 🚨 The subscribing identity is part of the key — see the _remoteStreamCache field note.
+        // Resolved from the SAME helper that stamps SubscribeRequest.Identity so a stream can
+        // only ever be served back to the identity it was subscribed for.
+        var key = (address, (WorkspaceReference)reference,
+            JsonSynchronizationStream.ResolveSubscribeIdentity(_accessService).Id);
 
         while (true)
         {
@@ -409,8 +453,8 @@ public class Workspace : IWorkspace
             // Dead — remove (if still ours) and retry. The TryRemove guards
             // against the case where another thread already replaced the
             // entry: only the original Lazy is removed.
-            ((ICollection<KeyValuePair<(Address, WorkspaceReference), Lazy<ISynchronizationStream>>>)_remoteStreamCache)
-                .Remove(new KeyValuePair<(Address, WorkspaceReference), Lazy<ISynchronizationStream>>(key, lazy));
+            ((ICollection<KeyValuePair<(Address Owner, WorkspaceReference Reference, string Identity), Lazy<ISynchronizationStream>>>)_remoteStreamCache)
+                .Remove(new KeyValuePair<(Address Owner, WorkspaceReference Reference, string Identity), Lazy<ISynchronizationStream>>(key, lazy));
         }
     }
 

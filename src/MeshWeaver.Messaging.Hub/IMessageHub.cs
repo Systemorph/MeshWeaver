@@ -209,6 +209,18 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     bool IsDisposing { get; }
 
     /// <summary>
+    /// True when this hub is part of a shutdown: its own <see cref="IsDisposing"/> has flipped,
+    /// OR an ANCESTOR's disposal has frozen hosted-hub creation across the subtree (the freeze
+    /// cascades at the first instant of the ancestor's <c>Dispose()</c>, strictly BEFORE this
+    /// hub's own <see cref="IsDisposing"/> — its <c>DisposeRequest</c> only arrives in the
+    /// ancestor's DisposeHostedHubs phase). Use this — not <see cref="IsDisposing"/> — to
+    /// classify whether an operation was terminated by teardown: a frozen subtree means this
+    /// hub's disposal is already in progress or imminent, so such a termination is a recognized
+    /// shutdown outcome, never a fault.
+    /// </summary>
+    bool IsShuttingDown { get; }
+
+    /// <summary>
     /// Observable completion of disposal — fires <see cref="Unit"/> once, then completes, when
     /// the hub has finished disposing (or OnError on a disposal fault). Hubs dispose
     /// SYNCHRONOUSLY (only the mesh-level IO pools drain async), so disposal completion is

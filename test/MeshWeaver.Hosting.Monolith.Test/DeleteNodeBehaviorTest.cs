@@ -210,7 +210,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         // the access context flows with the outbound message as Sender identity.
         var restrictedClient = GetClient();
         var clientAccess = restrictedClient.ServiceProvider.GetRequiredService<AccessService>();
-        clientAccess.SetCircuitContext(new AccessContext
+        clientAccess.SetHostIdentity(new AccessContext
         {
             ObjectId = "nodelete-user",
             Name = "No Delete",
@@ -249,7 +249,7 @@ public class DeleteNodeBehaviorTest(ITestOutputHelper output) : MonolithMeshTest
         // Restore admin context so the existence check can actually see the node â€”
         // the shared AccessService singleton was flipped to nodelete-user above and
         // MeshQuery applies RLS.
-        clientAccess.SetCircuitContext(TestUsers.Admin);
+        clientAccess.SetHostIdentity(TestUsers.Admin);
 
         (await NodeExists(path)).Should().BeTrue(
             "node must not be deleted when caller lacks Delete permission");

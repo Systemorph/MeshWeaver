@@ -1,7 +1,7 @@
 {
   "name": "@meshweaver/react",
   "version": "0.1.0",
-  "description": "React + Fluent UI renderer for MeshWeaver layout areas \u2014 the web/Electron/React-Native-capable counterpart of the MAUI MauiViewPack.",
+  "description": "React + Fluent UI renderer for MeshWeaver layout areas — the web/Electron/React-Native-capable counterpart of the MAUI MauiViewPack.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -65,6 +65,16 @@
     "vite": "^7.3.6",
     "vitest": "^4.1.9"
   },
+  "_fluentui_note": [
+    "package-lock.json holds @fluentui/react-components at 9.74.5 ON PURPOSE, and CI installs with",
+    "`npm ci`. 9.74.6 (2026-08-11) rewrote its exports map and DROPPED the \"node\" condition that",
+    "used to steer Node to the CommonJS build. Node/vitest now resolve the ESM build, which pulls",
+    "@fluentui/react-icons' lib/index.js — whose specifiers are EXTENSIONLESS (`export * from",
+    "'./icons/chunk-0'`), invalid under Node ESM. Result: `Cannot find module",
+    "'@fluentui/react-icons/lib/icons/chunk-0'` in 23 of 34 test suites. The caret stays as-is so",
+    "consumers of the published package resolve their own tree; the LOCK is what pins this repo.",
+    "Before regenerating the lock, verify upstream ships extensions in react-icons' lib/ ESM build."
+  ],
   "_overrides_note": [
     "dompurify: monaco-editor (via @monaco-editor/react) pins 3.2.7 exactly, and even its latest",
     "0.56.0 pins 3.4.8 — both below the patched 3.4.12. Forced here so this repo's installs are",

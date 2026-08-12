@@ -29,6 +29,18 @@ public record DocumentExportOptions
     /// </summary>
     public string? BrandNodePath { get; init; }
 
+    /// <summary>
+    /// Absolute portal origin (e.g. <c>https://memex.meshweaver.cloud</c>) that every relative
+    /// link and image in an <see cref="ExportFormat.Html"/> export is rewritten against. Empty
+    /// falls back to configuration (<c>Portal:BaseUrl</c> → <c>PublicBaseUrl</c> →
+    /// <c>Email:WebhookBaseUrl</c>) — the same order the invitation mailer uses, so the two never
+    /// disagree about the portal's address.
+    ///
+    /// <para>This matters only for HTML: a mail client has no page origin, so a relative
+    /// <c>/Some/Node</c> href is dead when clicked from an inbox.</para>
+    /// </summary>
+    public string? BaseUrl { get; init; }
+
     // 🚨 [JsonIgnore(Never)] on every `= true` flag. The mesh serializer runs
     // DefaultIgnoreCondition = WhenWritingDefault, so a bool set to FALSE equals default(bool)
     // and is dropped from the payload — the receiver then falls back to this initializer and

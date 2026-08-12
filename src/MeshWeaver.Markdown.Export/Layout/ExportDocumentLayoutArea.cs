@@ -26,6 +26,8 @@ public static class ExportDocumentLayoutArea
     public const string PdfArea = "ExportPdf";
     /// <summary>Area name for the DOCX export dialog.</summary>
     public const string DocxArea = "ExportDocx";
+    /// <summary>Area name for the email-safe HTML export dialog.</summary>
+    public const string HtmlArea = "ExportHtml";
 
     /// <summary>
     /// Renders the export dialog with PDF selected as the default format.
@@ -46,6 +48,17 @@ public static class ExportDocumentLayoutArea
     [Browsable(false)]
     public static IObservable<UiControl?> RenderDocx(LayoutAreaHost host, RenderingContext _) =>
         RenderExport(host, defaultFormat: "docx");
+
+    /// <summary>
+    /// Renders the export dialog with email-safe HTML selected as the default format — the one
+    /// format that resolves embedded layout areas to static markup.
+    /// </summary>
+    /// <param name="host">The layout area host providing hub and workspace access.</param>
+    /// <param name="_">The rendering context (unused).</param>
+    /// <returns>An observable stream of the export dialog control.</returns>
+    [Browsable(false)]
+    public static IObservable<UiControl?> RenderHtml(LayoutAreaHost host, RenderingContext _) =>
+        RenderExport(host, defaultFormat: "html");
 
     private static IObservable<UiControl?> RenderExport(LayoutAreaHost host, string defaultFormat)
     {

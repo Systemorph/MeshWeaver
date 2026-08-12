@@ -1,0 +1,30 @@
+@using MeshWeaver.Graph
+@using MeshWeaver.Mesh
+@* The icon + label pair shared by every node-menu entry, at every nesting depth.
+
+   Extracted because the four header menus each open-coded it and one of them — the GitHub menu, the
+   only context that actually had nested items — silently dropped the icon branch entirely, so 🐙 / ⬆️
+   / ⬇️ / 🔍 never rendered there. One component, one behaviour.
+
+   An icon is treated as an emoji when it looks like one and as an image URL otherwise; a Fluent icon
+   NAME would therefore render as a broken <img src="DocumentPdf">, which is why the menu tests assert
+   every icon is an emoji. *@
+
+@if (!string.IsNullOrEmpty(Item.Icon))
+{
+    @if (MeshNodeImageHelper.IsEmoji(Item.Icon))
+    {
+        <span style="margin-right: 8px;">@Item.Icon</span>
+    }
+    else
+    {
+        <img src="@Item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+    }
+}
+@Item.Label
+
+@code {
+    /// <summary>The menu entry whose icon and label are rendered.</summary>
+    [Parameter, EditorRequired]
+    public NodeMenuItemDefinition Item { get; set; } = default!;
+}

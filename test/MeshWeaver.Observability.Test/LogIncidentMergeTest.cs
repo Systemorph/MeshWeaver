@@ -159,15 +159,70 @@ public class LogIncidentMergeTest
             .RequestedStatus.Should().Be(LogIncidentRequest.None,
                 "suppression is the operator's decision and outranks every other rule");
 
-    [Theory]
-    [InlineData(LogIncidentStatus.Triaging)]
-    [InlineData(LogIncidentStatus.Filing)]
-    public void Merge_LeavesInFlightWorkAlone(LogIncidentStatus status)
+    [Fact]
+    public void Merge_LeavesAnInFlightTriageAlone()
     {
-        var existing = Existing(status) with { RequestedStatus = LogIncidentRequest.None };
+        var existing = Existing(LogIncidentStatus.Triaging) with { RequestedStatus = LogIncidentRequest.None };
 
-        // Re-requesting mid-flight would start a second triage thread / file a second issue.
+        // Re-requesting mid-round would start a second triage thread. A round that DIED is not
+        // recovered here but by the control plane's reconcile against the thread node — the only
+        // authority on whether it is still running.
         LogIncidentIngestService.Merge(existing, Repeat(), Options)
             .RequestedStatus.Should().Be(LogIncidentRequest.None);
+    }
+
+    [Fact]
+    public void Merge_ReAsksForAFilingIncidentThatNeverGotAnIssue()
+    {
+        var existing = Existing(LogIncidentStatus.Filing) with { RequestedStatus = LogIncidentRequest.None };
+
+        // 🚨 Filing is written by the CLAIM, before the GitHub round-trip. A portal that dies in
+        // that window leaves the incident here with no link — and nothing else can move it: the
+        // claim keys on RequestedStatus (already None), and the stranded-triage reconcile only
+        // touches Triaging. Left alone, this is the same permanent dead end Triaging used to be:
+        // occurrences keep counting and no ticket is ever opened.
+        LogIncidentIngestService.Merge(existing, Repeat(), Options)
+            .RequestedStatus.Should().Be(LogIncidentRequest.File,
+                "a claim that never produced a ticket must be re-asked, not stranded");
+    }
+
+    [Fact]
+    public void Merge_DoesNotReAskOnceTheFilingProducedItsIssue()
+    {
+        // The same status with the link present is a file that COMPLETED (the write-back lands the
+        // link before the status settles). Re-asking would be the duplicate this whole rule exists
+        // to prevent — the issue link outranks the status here too.
+        var ticketed = Existing(LogIncidentStatus.Filing) with
+        {
+            RequestedStatus = LogIncidentRequest.None,
+            IssueNumber = 1113,
+            Repository = "Systemorph/MeshWeaver",
+            LastCommentedAt = T0.AddMinutes(4),
+        };
+        var options = Options with { CommentInterval = TimeSpan.FromHours(6) };
+
+        LogIncidentIngestService.Merge(ticketed, Repeat(at: T0.AddMinutes(5)), options)
+            .RequestedStatus.Should().Be(LogIncidentRequest.None);
+    }
+
+    [Fact]
+    public void Merge_LeavesAnExplicitRequestAloneWhileFiling()
+    {
+        // 🚨 The re-ask above is a RECOVERY, and a recovery must never outrank an instruction.
+        // The stranded case is by definition RequestedStatus.None — the claim consumes the request
+        // before writing Filing — so an incident sitting at Filing WITH a request pending is not
+        // stranded at all: somebody asked for something. Unscoped, the re-ask rule overwrote it on
+        // the very next occurrence report, and since reports repeat, the instruction could never
+        // survive long enough to be acted on: the incident would file itself regardless of what
+        // was asked.
+        var suppressing = Existing(LogIncidentStatus.Filing) with
+        {
+            RequestedStatus = LogIncidentRequest.Suppress,
+        };
+
+        LogIncidentIngestService.Merge(suppressing, Repeat(), Options)
+            .RequestedStatus.Should().Be(LogIncidentRequest.Suppress,
+                "a pending request outranks the stranded-Filing recovery — the recovery exists for "
+                + "incidents nobody is steering, not to overrule the ones somebody is");
     }
 }

@@ -92,7 +92,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         // Explicitly clear the AsyncLocal to simulate the "lost across async
         // boundary" case (Task.Run / Subscribe-callback / Throttle-tick).
         accessService.SetContext(null);
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
 
         var collectionName = workspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
         var stream = workspace.GetStream(new CollectionsReference(collectionName))!;
@@ -149,7 +149,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         // Infra continuation write loses identity → fail-closed (the ds/Activity sync write that
         // faulted on prod: "hub=sync/… message=UpdateStreamRequest … no AccessContext").
         accessService.SetContext(null);
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
         stream.Update(_ => (ChangeItem<EntityStore>?)null, _ => { });
 
         await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
@@ -203,7 +203,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         // Now simulate the deferred/continuation Update: the live AsyncLocal is wiped (the
         // render emission / watcher / streaming-hop runs on a scheduler thread).
         accessService.SetContext(null);
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
 
         var seen = new System.Reactive.Subjects.ReplaySubject<string?>();
         stream.Update(_ =>
@@ -251,7 +251,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
 
         // Continuation with a null live context — there is no real user to restore.
         accessService.SetContext(null);
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
 
         var delegateRan = false;
         stream.Update(_ =>
@@ -302,7 +302,7 @@ public class StreamUpdateIdentityTest(ITestOutputHelper output) : HubTestBase(ou
         // no real-user creation context, and no IStreamOwnerResolver is registered here (MyData isn't a
         // MeshNode), so every prior fallback yields null and only the infrastructure fallback remains.
         accessService.SetContext(null);
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
 
         // Capture the identity the update delegate runs UNDER — proves System was stamped and the
         // post was accepted (without the fix the post fails closed and this never emits).

@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reflection;
 using System.Runtime.Loader;
 using MeshWeaver.ServiceProvider;
@@ -144,6 +145,22 @@ internal interface ICompilationCacheService
     void UnloadNodeContexts(string nodeName);
 
     /// <summary>
+    /// 🚨 Takes a LIFETIME lease on every context currently holding <paramref name="nodeName"/>'s
+    /// compiled assembly, for a hub that runs its types. A NodeType's ALC is shared by every
+    /// INSTANCE hub of that type, so <see cref="UnloadNodeContexts"/> (the NodeType hub disposing —
+    /// idle eviction, recycle, the restart after a recompile) and the per-recompile superseded-context
+    /// eviction both target an assembly other hubs are still executing. Unloading it then reclaims
+    /// nothing — <c>Unload</c> is cooperative — but raises <c>Unloading</c>, which evicts those types
+    /// from <c>TypeRegistry</c> and leaves every live instance hub throwing
+    /// <c>"Type T is unknown."</c> from <c>Workspace.GetStream&lt;T&gt;()</c>. Holding a lease for the
+    /// hub's lifetime defers the unload to the moment the last such hub goes away — which is when the
+    /// runtime could have collected the context anyway.
+    /// </summary>
+    /// <param name="nodeName">Sanitized name of the NODE TYPE whose assembly the hub runs.</param>
+    /// <returns>A handle to dispose on hub teardown; never null, no-op when nothing is loaded.</returns>
+    IDisposable LeaseNodeContexts(string nodeName);
+
+    /// <summary>
     /// Gets the release folder path for a node and release key.
     /// Release folders are immutable once created.
     /// </summary>
@@ -195,11 +212,51 @@ internal interface ICompilationCacheService
     NodeAssemblyLoadContext GetOrCreateLoadContextForPath(string nodeName, string dllPath);
 
     /// <summary>
+    /// Resolves a LIVE context for a scan and returns it already pinned — the atomic form of
+    /// "GetOrCreateLoadContext… then <see cref="NodeAssemblyLoadContext.Pin"/>".
+    /// <para>🚨 Resolve-then-Pin as two steps is a RACE, and losing it silently mis-binds a hub
+    /// for its whole lifetime. A concurrent recompile evicts the superseded context
+    /// (<c>EvictSupersededContexts</c> → <c>UnloadContext</c>) between the caller's resolve and
+    /// its pin, so the pin throws <see cref="ObjectDisposedException"/> on a reference that was
+    /// live one instruction earlier. <see cref="NodeAssemblyLoadContext.Pin"/> documents the
+    /// answer — "the caller must then re-resolve against the current context rather than scan a
+    /// doomed assembly" — but no caller implemented it, and the swallow downstream turned a
+    /// transient supersession into an authoritative EMPTY configuration list (issue #1151:
+    /// the freshly installed root hub bound the mesh defaults and served "Area not found" for
+    /// good, because a hub resolves its configuration exactly once, at activation).</para>
+    /// <para>Only this service can close that window: it owns the dictionary, so it is the only
+    /// component that can re-resolve. The loop terminates because the evictor removes the key
+    /// BEFORE disposing, so the next resolve constructs a fresh context.</para>
+    /// </summary>
+    PinnedScanContext PinForScan(string nodeName, string? dllPath);
+
+    /// <summary>
+    /// <see cref="PinForScan(string, string?)"/> for a release-keyed context.
+    /// </summary>
+    PinnedScanContext PinForScanOfRelease(NodeTypeRelease release, string releaseFolder);
+
+    /// <summary>
     /// Registers NuGet probing directories for a node. The node's AssemblyLoadContext
     /// consults these directories during Resolving events so transitive dependencies
     /// of resolved NuGet packages can be loaded at runtime.
     /// </summary>
     void RegisterProbingDirectories(string nodeName, System.Collections.Generic.IReadOnlyList<string> directories);
+}
+
+/// <summary>
+/// A load context together with the scan pin held on it: guaranteed live at the moment it was
+/// handed out, and kept un-unloadable until this handle is disposed. ALWAYS use in a
+/// <c>using</c> — the pin is what makes <c>Dispose</c>/<c>Unload</c> wait rather than tear the
+/// collectible LoaderAllocator out mid-metadata-resolution.
+/// </summary>
+internal readonly struct PinnedScanContext(NodeAssemblyLoadContext context, IDisposable pin)
+    : IDisposable
+{
+    /// <summary>The live, pinned context.</summary>
+    public NodeAssemblyLoadContext Context { get; } = context;
+
+    /// <summary>Releases the scan pin.</summary>
+    public void Dispose() => pin.Dispose();
 }
 
 /// <summary>
@@ -294,6 +351,73 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
             if (Interlocked.Exchange(ref _released, 1) == 0)
                 Interlocked.Decrement(ref ctx._pins);
         }
+    }
+
+    // LIFETIME leases (distinct from the millisecond scan _pins above): one per live hub whose
+    // compiled code comes from this context. Dispose() defers the Unload while any is held; the
+    // last release performs it. See Lease().
+    private int _leases;
+    private bool _unloadRequested;
+
+    /// <summary>
+    /// Takes a LIFETIME lease on this context for a hub that runs its compiled types. While any
+    /// lease is held, <see cref="Dispose"/> records the request and returns WITHOUT calling
+    /// <see cref="System.Runtime.Loader.AssemblyLoadContext.Unload"/>; releasing the last lease
+    /// performs the deferred unload.
+    ///
+    /// <para>🚨 Why deferring is not a leak — and why unloading early is a BUG. A NodeType's
+    /// assembly is shared by every INSTANCE hub of that type, and <c>Unload()</c> is COOPERATIVE:
+    /// it never rips out loaded types, so the collectible LoaderAllocator is freed only once the
+    /// last managed reference — i.e. the last live hub — is gone. Calling <c>Unload()</c> while
+    /// those hubs still run therefore reclaims NOTHING; all it does early is raise
+    /// <c>Unloading</c>, and the caches that listen tear themselves down under hubs that still
+    /// need them. <c>TypeRegistry.EvictLoadContext</c> is the one that bites: it drops every entry
+    /// belonging to this context, so a live instance hub keeps a <c>DataContext</c> whose type
+    /// sources still resolve (they hold the <see cref="Type"/> handles) against a registry that has
+    /// forgotten the names — and its next <c>Workspace.GetStream&lt;T&gt;()</c> throws
+    /// <c>"Type T is unknown."</c> for the rest of that hub's life. That is the /Store page outage;
+    /// <c>NodeTypeAlcSharedWithInstancesTest</c> is the repro.</para>
+    ///
+    /// <para>Leases are still granted while an unload is pending (a hub may activate on the current
+    /// assembly after the NodeType hub went away) but never after it has actually run — then the
+    /// caller must re-resolve against the current context.</para>
+    /// </summary>
+    /// <returns>A handle whose disposal releases the lease; disposing it twice is a no-op.</returns>
+    public IDisposable Lease()
+    {
+        lock (_loadLock)
+        {
+            if (_disposed)
+                return NullLease.Instance;
+            _leases++;
+            return new LeaseScope(this);
+        }
+    }
+
+    private void ReleaseLease()
+    {
+        bool unloadNow;
+        lock (_loadLock)
+            unloadNow = --_leases == 0 && _unloadRequested && !_disposed;
+
+        if (unloadNow)
+            Dispose();
+    }
+
+    private sealed class LeaseScope(NodeAssemblyLoadContext ctx) : IDisposable
+    {
+        private int _released;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                ctx.ReleaseLease();
+        }
+    }
+
+    private sealed class NullLease : IDisposable
+    {
+        public static readonly NullLease Instance = new();
+        public void Dispose() { }
     }
 
     public NodeAssemblyLoadContext(string nodeName, string? dllPath, ILogger? logger = null)
@@ -459,6 +583,18 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         {
             if (_disposed)
                 return;
+
+            // A hub is still executing this assembly (see Lease()). Unloading now would reclaim
+            // nothing — Unload is cooperative — while raising Unloading under the caches those hubs
+            // depend on. Record the request; the last lease release re-enters here and unloads.
+            if (_leases > 0)
+            {
+                _unloadRequested = true;
+                _logger?.LogDebug(
+                    "Deferring unload of AssemblyLoadContext {ContextName}: {Leases} live hub(s) still run its types",
+                    Name, _leases);
+                return;
+            }
 
             _disposed = true;
             _loadedAssembly = null;
@@ -904,6 +1040,58 @@ internal class CompilationCacheService(
     }
 
     /// <summary>
+    /// How many times <see cref="PinForScan"/> re-resolves before giving up. One re-resolve is
+    /// enough for a single eviction; the extra attempts cover a burst of recompiles landing back
+    /// to back. Exhaustion rethrows, so a genuinely dying cache still surfaces rather than spins.
+    /// </summary>
+    private const int ScanPinReResolveAttempts = 3;
+
+    /// <inheritdoc />
+    public PinnedScanContext PinForScan(string nodeName, string? dllPath)
+        => PinResolved(
+            cacheKey: string.IsNullOrEmpty(dllPath) ? nodeName : dllPath!,
+            resolve: () => string.IsNullOrEmpty(dllPath)
+                ? GetOrCreateLoadContext(nodeName)
+                : GetOrCreateLoadContextForPath(nodeName, dllPath!));
+
+    /// <inheritdoc />
+    public PinnedScanContext PinForScanOfRelease(NodeTypeRelease release, string releaseFolder)
+        => PinResolved(
+            // Same key GetOrCreateLoadContextForRelease adds under.
+            cacheKey: release.Path,
+            resolve: () => GetOrCreateLoadContextForRelease(release, releaseFolder));
+
+    /// <summary>
+    /// Resolve → Pin as ONE operation, re-resolving when the context we resolved is already
+    /// unloading. See <see cref="ICompilationCacheService.PinForScan"/> for why two steps is a
+    /// race and why losing it is not survivable downstream.
+    /// </summary>
+    private PinnedScanContext PinResolved(string cacheKey, Func<NodeAssemblyLoadContext> resolve)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var context = resolve();
+            try
+            {
+                return new PinnedScanContext(context, context.Pin());
+            }
+            catch (ObjectDisposedException) when (attempt < ScanPinReResolveAttempts)
+            {
+                // Drop THIS instance if it is still the dictionary's value. The evictor removes
+                // before it disposes, so normally the key is already gone and the next resolve
+                // builds a fresh context — but the remove-less order must not be able to hand the
+                // same doomed context back, or this loop would spin instead of terminate.
+                _loadContexts.TryRemove(
+                    new KeyValuePair<string, NodeAssemblyLoadContext>(cacheKey, context));
+                logger.LogDebug(
+                    "Scan pin lost the race with an eviction of {CacheKey} (attempt {Attempt}) — "
+                    + "re-resolving against the current context",
+                    cacheKey, attempt);
+            }
+        }
+    }
+
+    /// <summary>
     /// Unloads every load context for <paramref name="nodeName"/> whose dictionary key is not
     /// <paramref name="keepKey"/> — the assemblies a just-loaded recompile/release superseded —
     /// bounding <see cref="_loadContexts"/> to the current context per NodeType instead of one per
@@ -989,6 +1177,28 @@ internal class CompilationCacheService(
         if (keysToUnload.Count > 0)
             logger.LogDebug("Unloaded {Count} AssemblyLoadContext(s) for disposed node {NodeName}",
                 keysToUnload.Count, nodeName);
+    }
+
+    /// <inheritdoc />
+    public IDisposable LeaseNodeContexts(string nodeName)
+    {
+        if (_disposed || string.IsNullOrEmpty(nodeName))
+            return Disposable.Empty;
+
+        // Same match as UnloadNodeContexts/InvalidateCache: the dictionary key may be the sanitized
+        // name, a full DLL path or a release path, while NodeName always carries the owning NodeType.
+        var leases = _loadContexts
+            .Where(kvp => string.Equals(kvp.Key, nodeName, StringComparison.Ordinal)
+                       || string.Equals(kvp.Value.NodeName, nodeName, StringComparison.Ordinal))
+            .Select(kvp => kvp.Value.Lease())
+            .ToArray();
+
+        if (leases.Length == 0)
+            return Disposable.Empty;
+
+        logger.LogDebug("Leased {Count} AssemblyLoadContext(s) of {NodeName} for a hub that runs its types",
+            leases.Length, nodeName);
+        return new CompositeDisposable(leases);
     }
 
     /// <inheritdoc />

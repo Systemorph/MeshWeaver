@@ -163,6 +163,19 @@ public static class AccessAssignmentGuard
     }
 
     /// <summary>
+    /// The assignment currently grants the non-denied <c>Admin</c> role — the predicate the
+    /// last-admin invariant counts (<c>SpaceAdminInvariantValidator</c>: "a space must always
+    /// have at least one admin") and that the system-owned sweep
+    /// (<c>SystemOwnedAccessRetractionHandler</c>) must therefore respect. One rule, two
+    /// enforcement points, so the sweep never attempts a delete the invariant is guaranteed
+    /// to refuse (#1120).
+    /// </summary>
+    public static bool GrantsAdmin(AccessAssignment? assignment)
+        => assignment?.Roles is { } roles
+           && roles.Any(r => !r.Denied
+               && string.Equals(r.Role, Role.Admin.Id, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// 🚨 A SYSTEM-OWNED space grants nobody write access. A partition with a <c>_GitSync</c> is
     /// rewritten from its repo on every sync, so the ONLY identity that may write it is the one the
     /// importer runs as (<see cref="WellKnownUsers.System"/>). Any other Admin/Editor grant is an

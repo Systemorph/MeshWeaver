@@ -44,11 +44,25 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         get
         {
             var ret = typeByName.Select(x => new KeyValuePair<string, ITypeDefinition>(x.Key, x.Value));
+            // Demoted (weak-shadow) entries whose assembly is still ALIVE participate too:
+            // a hub still running on a superseded assembly needs its $type discriminators
+            // (dropping them is the silent-skin-drop class the polymorphic resolver warns
+            // about). A dead weak reference is skipped — its metadata is gone, which is the
+            // SIGSEGV this shadow exists to prevent — and pruned on the next eviction sweep.
+            ret = ret.Concat(LiveDemotedDefinitions());
             if (parent is not null)
-                ret = ret.Concat(parent.Types)
-                    .DistinctBy(x => x.Key);
-            return ret;
+                ret = ret.Concat(parent.Types);
+            return ret.DistinctBy(x => x.Key);
         }
+    }
+
+    /// <summary>The still-alive entries of the weak shadow, as name→definition pairs.</summary>
+    private IEnumerable<KeyValuePair<string, ITypeDefinition>> LiveDemotedDefinitions()
+    {
+        foreach (var (name, weak) in demotedTypeByName)
+            if (weak.TryGetTarget(out var type)
+                && demotedDefinitions.TryGetValue(type, out var definition))
+                yield return new KeyValuePair<string, ITypeDefinition>(name, definition);
     }
 
     private readonly ConcurrentDictionary<string, TypeDefinition> typeByName =
@@ -62,6 +76,37 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     // and STJ's discriminator emission breaks ("must specify a type discriminator"). One canonical
     // (short) name per type for OUTPUT; the full name is an INPUT-side alias only.
     private readonly ConcurrentDictionary<string, TypeDefinition> aliasByName = new();
+
+    // ── The weak shadow ─────────────────────────────────────────────────────────────────────
+    // Entries DEMOTED from the strong maps when their collectible AssemblyLoadContext BEGAN
+    // unloading. AssemblyLoadContext.Unload() is COOPERATIVE: the Unloading event fires at
+    // INITIATION, while every hub whose configuration lives in that assembly is still running
+    // on it (a NodeType recompile evicts the superseded context the moment the new build
+    // loads — see CompilationCacheService.EvictSupersededContexts). Removing the entries
+    // outright (issue #1169) stripped those live hubs of their own registrations mid-flight:
+    // the Store hub's Catalog render threw "Type StorePackage is unknown" because the
+    // DataContext still knew the type source while this registry no longer resolved the type.
+    //
+    // The shadow keeps serving a demoted type for EXACTLY as long as anything else keeps its
+    // assembly alive, without rooting it:
+    //  - demotedDefinitions is a ConditionalWeakTable keyed by the Type — the definition
+    //    (which strongly references the Type) lives precisely as long as the Type does, and
+    //    the table itself holds no strong root (DependentHandle semantics).
+    //  - demotedTypeByName / demotedAliasByName map names to WeakReference<Type>. A lookup
+    //    that resurrects a live target is safe (the temporary strong reference pins the
+    //    LoaderAllocator for the duration of use); a dead target is skipped and pruned.
+    // Once the last real user (the live hub) is disposed, nothing roots the context, it is
+    // collected, the weak entries die, and lookups fall through exactly as full eviction —
+    // the leak AND the freed-metadata walk stay fixed (dfac3366d), while a live hub keeps
+    // working through its supersession window.
+    private readonly ConditionalWeakTable<Type, TypeDefinition> demotedDefinitions = new();
+    private readonly ConcurrentDictionary<string, WeakReference<Type>> demotedTypeByName = new();
+    private readonly ConcurrentDictionary<string, WeakReference<Type>> demotedAliasByName = new();
+    // Contexts whose Unloading has already fired. A LATE registration from such a context
+    // (a serializer touching a superseded type) must go straight to the weak shadow: the
+    // Unloading event will never fire again, so a strong entry would be an un-evictable
+    // permanent root — the exact leak the eviction exists to close.
+    private readonly ConditionalWeakTable<AssemblyLoadContext, object> unloadingContexts = new();
 
     private readonly KeyFunctionBuilder keyFunctionBuilder = new();
 
@@ -88,6 +133,17 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     {
         typeName ??= type.FullName!;
         var typeDefinition = new TypeDefinition(type, typeName, keyFunctionBuilder);
+        // A type whose context has already BEGUN unloading registers into the weak shadow:
+        // its Unloading event will never fire again, so a strong entry could never be
+        // evicted — a permanent root on a superseded assembly.
+        if (IsUnloadingContext(type))
+        {
+            Demote(typeName, typeDefinition, alias: false);
+            var fullName = (type.FullName ?? type.Name).Replace('+', '.');
+            if (fullName != typeName)
+                Demote(fullName, typeDefinition, alias: true);
+            return this;
+        }
         typeByName[typeName] = typeDefinition;
         nameByType[type] = typeName;
         IndexFullNameAlias(type, typeDefinition, typeName);
@@ -95,6 +151,40 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
 
         return this;
     }
+
+    /// <summary>Whether the type's collectible load context has already begun unloading.</summary>
+    private bool IsUnloadingContext(Type type)
+        => type.Assembly.IsCollectible
+           && AssemblyLoadContext.GetLoadContext(type.Assembly) is { } context
+           && unloadingContexts.TryGetValue(context, out _);
+
+    /// <summary>Places one entry into the weak shadow (see the field docs).</summary>
+    private void Demote(string name, TypeDefinition definition, bool alias)
+    {
+        demotedDefinitions.AddOrUpdate(definition.Type, definition);
+        (alias ? demotedAliasByName : demotedTypeByName)[name] = new WeakReference<Type>(definition.Type);
+    }
+
+    /// <summary>
+    /// Weak-shadow lookup by name. Skips (and prunes) dead entries — a dead weak reference
+    /// means the assembly's metadata is gone, and serving it would be the freed-metadata
+    /// dereference the shadow exists to prevent.
+    /// </summary>
+    private TypeDefinition? GetDemoted(string name, bool alias = false)
+    {
+        var map = alias ? demotedAliasByName : demotedTypeByName;
+        if (!map.TryGetValue(name, out var weak))
+            return null;
+        if (weak.TryGetTarget(out var type)
+            && demotedDefinitions.TryGetValue(type, out var definition))
+            return definition;
+        map.TryRemove(new KeyValuePair<string, WeakReference<Type>>(name, weak));
+        return null;
+    }
+
+    /// <summary>Weak-shadow lookup by type (alive by construction — the caller holds the Type).</summary>
+    private TypeDefinition? GetDemoted(Type type)
+        => demotedDefinitions.TryGetValue(type, out var definition) ? definition : null;
 
     // Collectible load contexts this registry currently holds types from, so it subscribes to each
     // one's Unloading exactly once. ConditionalWeakTable and NOT a dictionary: an ALC used as a
@@ -115,9 +205,11 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     /// while FutuRe's node types sat at recompile v5/v8/v15 (exit=139, no failing test).</item>
     /// </list>
     /// So the registry cleans up after itself: it subscribes to the context's <c>Unloading</c> the
-    /// first time it takes a type from it. The event holds a delegate to THIS registry, never the
-    /// reverse — the only reference to the context is the weak key below, so nothing here defeats
-    /// the collection it enables.
+    /// first time it takes a type from it, and the handler DEMOTES that context's entries into the
+    /// weak shadow (see <see cref="EvictLoadContext"/> — outright removal broke live hubs still
+    /// running on a superseded assembly, issue #1169). The event holds a delegate to THIS registry,
+    /// never the reverse — the only reference to the context is the weak key below, so nothing here
+    /// defeats the collection it enables.
     /// </summary>
     private void TrackCollectible(Type type)
     {
@@ -137,21 +229,44 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     private static readonly object Sentinel = new();
 
     /// <summary>
-    /// Drops every entry whose type came from <paramref name="context"/>. Runs from the context's
-    /// <c>Unloading</c> event — i.e. BEFORE the metadata is freed, while <c>type.Assembly</c> is
-    /// still safe to read.
+    /// DEMOTES every entry whose type came from <paramref name="context"/> from the strong maps
+    /// into the weak shadow. Runs from the context's <c>Unloading</c> event — i.e. at unload
+    /// INITIATION, before the metadata is freed, while <c>type.Assembly</c> is still safe to read.
+    ///
+    /// <para>🚨 Demote, never remove (issue #1169): <c>Unload()</c> is cooperative, and a NodeType
+    /// recompile unloads the SUPERSEDED context while live hubs are still running on it
+    /// (<c>CompilationCacheService.EvictSupersededContexts</c> documents exactly that contract —
+    /// "a context still referenced by a live hub stays fully mapped and usable"). Removing the
+    /// entries broke that promise one layer up: the live Store hub's own <c>StorePackage</c>
+    /// registration vanished mid-render ("Type StorePackage is unknown",
+    /// <c>Workspace.GetStream</c>). The weak shadow keeps such a hub fully working until it is
+    /// recycled onto the new build, while still guaranteeing what the eviction was added for
+    /// (dfac3366d): this registry no longer ROOTS the context (the leak), and nothing here can
+    /// dereference freed metadata after the context is actually collected (the SIGSEGV) — dead
+    /// weak entries are skipped and pruned.</para>
     /// </summary>
     public void EvictLoadContext(AssemblyLoadContext context)
     {
+        // Mark FIRST so a registration racing this sweep routes to the weak shadow instead of
+        // re-adding a strong, never-again-evictable entry.
+        unloadingContexts.TryAdd(context, Sentinel);
         foreach (var (name, definition) in typeByName)
-            if (BelongsTo(definition.Type, context))
-                typeByName.TryRemove(name, out _);
+            if (BelongsTo(definition.Type, context) && typeByName.TryRemove(name, out var removed))
+                Demote(name, removed, alias: false);
         foreach (var (name, definition) in aliasByName)
-            if (BelongsTo(definition.Type, context))
-                aliasByName.TryRemove(name, out _);
+            if (BelongsTo(definition.Type, context) && aliasByName.TryRemove(name, out var removedAlias))
+                Demote(name, removedAlias, alias: true);
         foreach (var (type, _) in nameByType)
             if (BelongsTo(type, context))
                 nameByType.TryRemove(type, out _);
+        // Opportunistically prune weak entries whose assemblies have since been collected —
+        // keeps the shadow's name maps bounded by LIVE demoted types, not by history.
+        foreach (var (name, weak) in demotedTypeByName)
+            if (!weak.TryGetTarget(out _))
+                demotedTypeByName.TryRemove(new KeyValuePair<string, WeakReference<Type>>(name, weak));
+        foreach (var (name, weak) in demotedAliasByName)
+            if (!weak.TryGetTarget(out _))
+                demotedAliasByName.TryRemove(new KeyValuePair<string, WeakReference<Type>>(name, weak));
         trackedContexts.Remove(context);
         context.Unloading -= EvictLoadContext;
     }
@@ -169,12 +284,31 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     private void IndexFullNameAlias(Type type, TypeDefinition definition, string canonicalName)
     {
         var fullName = (type.FullName ?? type.Name).Replace('+', '.');
-        if (fullName != canonicalName)
+        if (fullName == canonicalName)
+            return;
+
+        // 🚨 …EXCEPT for a COLLECTIBLE type, where "full names are unique" is false. Every recompile
+        // of a dynamic node mints a NEW assembly whose types carry the SAME full name, so TryAdd
+        // hands the alias to the FIRST build and never lets go: a full-name $type discriminator
+        // then keeps resolving a SUPERSEDED assembly's type long after a newer build replaced it.
+        // Content deserialised into it fails every `Content is X` downstream — the bound view
+        // renders empty or its reactive wait never emits (the foreign-assembly content class).
+        //
+        // This used to be masked: the superseded context unloaded almost immediately and its
+        // entries were swept. Neither is true now — the entries are DEMOTED to the weak shadow
+        // rather than dropped, and a context LEASED by a live hub (NodeAssemblyLoadContext.Lease)
+        // does not begin unloading at all, so nothing clears the way for the newer registration.
+        //
+        // Newest-wins is the correct rule for a rebuild and changes nothing for ordinary
+        // assemblies, whose full names genuinely are unique.
+        if (type.Assembly.IsCollectible)
+            aliasByName[fullName] = definition;
+        else
             aliasByName.TryAdd(fullName, definition);
     }
 
     public KeyFunction? GetKeyFunction(string collection) =>
-        typeByName.GetValueOrDefault(collection)?.Key.Value;
+        (typeByName.GetValueOrDefault(collection) ?? GetDemoted(collection))?.Key.Value;
 
     public KeyFunction? GetKeyFunction(Type type)
     {
@@ -186,8 +320,12 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
 
     public bool TryGetType(string name, out ITypeDefinition? typeDefinition)
     {
-        // Canonical (short) name first, then the full-name resolution alias (input side only).
-        typeDefinition = typeByName.GetValueOrDefault(name) ?? aliasByName.GetValueOrDefault(name);
+        // Canonical (short) name first, then the full-name resolution alias (input side only),
+        // then the weak shadow (still-alive types of an unloading context — see EvictLoadContext).
+        typeDefinition = typeByName.GetValueOrDefault(name)
+            ?? aliasByName.GetValueOrDefault(name)
+            ?? (ITypeDefinition?)GetDemoted(name)
+            ?? GetDemoted(name, alias: true);
         if (typeDefinition != null)
             return true;
         // Handle nullable syntax (e.g., "Int32?" -> Nullable<Int32>)
@@ -270,6 +408,15 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         if (nameByType.TryGetValue(type, out typeName))
             return true;
 
+        // The weak shadow: a type demoted at unload INITIATION still resolves while its assembly
+        // is alive (a live hub running on a superseded build — issue #1169). The caller holds the
+        // Type, so the entry is alive by construction.
+        if (GetDemoted(type) is { } demoted)
+        {
+            typeName = demoted.CollectionName;
+            return true;
+        }
+
         if (type.IsGenericType)
         {
             var genericTypeDefinition = type.GetGenericTypeDefinition();
@@ -307,14 +454,25 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         if (nameByType.TryGetValue(type, out var typeName))
             return typeName;
 
+        if (GetDemoted(type) is { } demoted)
+            return demoted.CollectionName;
+
         // Check parent registry for already registered type name
         if (parent?.TryGetCollectionName(type, out var parentTypeName) == true && parentTypeName != null)
             return parentTypeName;
 
         typeName = defaultName ?? FormatType(type);
         var definition = new TypeDefinition(type, typeName, keyFunctionBuilder);
+        // A late registration from an already-unloading context goes to the weak shadow —
+        // a strong entry could never be evicted again (see WithType).
+        if (IsUnloadingContext(type))
+        {
+            Demote(typeName, definition, alias: false);
+            return typeName;
+        }
         typeByName[typeName] = definition;
         IndexFullNameAlias(type, definition, typeName);
+        TrackCollectible(type);
         return nameByType[type] = typeName;
     }
 
@@ -329,6 +487,8 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     {
         if (nameByType.TryGetValue(type, out var name))
             return typeByName.GetValueOrDefault(name);
+        if (GetDemoted(type) is { } demoted)
+            return demoted;
         var ret = parent?.GetTypeDefinition(type, false);
         if (ret != null)
             return ret;
@@ -336,17 +496,29 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         if (create)
         {
             typeName ??= FormatType(type);
-            ret = new TypeDefinition(type, typeName, keyFunctionBuilder);
+            var created = new TypeDefinition(type, typeName, keyFunctionBuilder);
+            // A late registration from an already-unloading context goes to the weak shadow —
+            // a strong entry could never be evicted again (see WithType).
+            if (IsUnloadingContext(type))
+            {
+                Demote(created.CollectionName, created, alias: false);
+                return created;
+            }
+            ret = created;
             typeByName[ret.CollectionName] = (TypeDefinition)ret;
             nameByType[type] = ret.CollectionName;
             IndexFullNameAlias(type, (TypeDefinition)ret, ret.CollectionName);
+            TrackCollectible(type);
         }
         return ret;
     }
 
     public ITypeDefinition? GetTypeDefinition(string typeName)
     {
-        var ret = typeByName.GetValueOrDefault(typeName) ?? aliasByName.GetValueOrDefault(typeName);
+        var ret = typeByName.GetValueOrDefault(typeName)
+            ?? aliasByName.GetValueOrDefault(typeName)
+            ?? GetDemoted(typeName)
+            ?? GetDemoted(typeName, alias: true);
         if (ret != null)
             return ret;
         return parent?.GetTypeDefinition(typeName);

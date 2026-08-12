@@ -176,6 +176,7 @@ public class ObservableAssertions<T>
         var seen = new LastSeen();
         var tapped = _subject.Do(v => seen.Record(v));
         var source = predicate is null ? tapped : tapped.Where(predicate);
+        IList<T> matched;
         try
         {
             // 🚨 The assertion's OWN timeout throws the private sentinel below, so it is
@@ -185,10 +186,23 @@ public class ObservableAssertions<T>
             // and reported "did not emit within 90s" for a source that ERRORED at 60s —
             // masking the diagnostic that names the timed-out request and target hub
             // (FrameworkStaleInstanceRenderTest CI triage, run 29749071939).
-            return await source.SubscribeOn(TaskPoolScheduler.Default)
+            //
+            // 🚨 .ToList() (not bare Take(1).ToTask()) is the same discipline for the
+            // empty-completion case. Take(1).ToTask() reports an empty source by THROWING
+            // InvalidOperationException("Sequence contains no elements") — the same exception
+            // type a SOURCE fault can carry, e.g. the classic test-accumulator race
+            // List<T> throws from a predicate ("Collection was modified; enumeration operation
+            // may not execute"). A type-based catch folded both into "completed without one",
+            // reporting a hard OnError as a quiet empty completion and hiding the only
+            // diagnostic that names the real bug (FileSystemObservableQueryTests CI triage,
+            // run 31407254207: an Interval-based poll "completed" — Interval never completes).
+            // ToList reports empty completion as DATA (an empty list), so the only exceptions
+            // left in flight are the sentinel and genuine source errors.
+            matched = await source.SubscribeOn(TaskPoolScheduler.Default)
                 .Take(1)
+                .ToList()
                 .Timeout(_timeout, Observable.Defer(() =>
-                    Observable.Throw<T>(new AssertionWaitTimeoutException())))
+                    Observable.Throw<IList<T>>(new AssertionWaitTimeoutException())))
                 .ToTask();
         }
         catch (AssertionWaitTimeoutException)
@@ -196,18 +210,15 @@ public class ObservableAssertions<T>
             throw new ObservableAssertionException(
                 $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it did not. {seen.Describe(predicate is not null)}");
         }
-        catch (InvalidOperationException)
-        {
-            // Source completed without producing a (matching) value — Take(1).ToTask() throws
-            // InvalidOperationException("Sequence contains no elements"). Same "did not" outcome.
-            throw new ObservableAssertionException(
-                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it completed without one. {seen.Describe(predicate is not null)}");
-        }
         catch (Exception ex)
         {
             throw new ObservableAssertionException(
                 $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it errored: {ex.Message}.");
         }
+        if (matched.Count == 0)
+            throw new ObservableAssertionException(
+                $"Expected the observable to {expectation} within {Describe(_timeout)}{Reason(because)}, but it completed without one. {seen.Describe(predicate is not null)}");
+        return matched[0];
     }
 
     /// <summary>
