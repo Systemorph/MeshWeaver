@@ -1420,6 +1420,13 @@ public static class MeshDataSourceExtensions
         if (node is null || cache.IsDeleted || ReferenceEquals(node, cache.PersistedSnapshot))
             return Observable.Return(System.Reactive.Unit.Default);
 
+        // 🚨 Normalise BEFORE the high-water gate below, exactly as HandleSaveMeshNode does: this is
+        // the version that would actually be persisted, so it must also be the one the suppression
+        // predicate compares. Comparing the raw 0 against an absent mark (also 0) would read
+        // "already flushed" and silently drop the dispose flush of a never-versioned node.
+        if (node.Version == 0)
+            node = node with { Version = 1 };
+
         // Same route-collapse gate as HandleSaveMeshNode: a patch-driven state is already durable
         // (the post-commit flush wrote it and the caller's ack chained off that write), so flushing
         // it again at teardown is the duplicate #1249 is about. A pending own write that never went
@@ -1437,9 +1444,6 @@ public static class MeshDataSourceExtensions
         var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
         if (recentlyDeleted?.IsRecentlyDeleted(node.Path) == true)
             return Observable.Return(System.Reactive.Unit.Default);
-
-        if (node.Version == 0)
-            node = node with { Version = 1 };
 
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler");
