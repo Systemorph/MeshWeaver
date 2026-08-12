@@ -42,7 +42,8 @@ correct code, and the bug class regenerated every time someone wrote a query.
 
 ## Say which one you mean
 
-Three named intents on `MeshQueryRequest`. All additive; the default is unchanged behaviour.
+Four named intents on `MeshQueryRequest` — three for application reads, one for framework plumbing.
+All additive; the default is unchanged behaviour.
 
 ```csharp
 // 1. A read about a specific user — the always-correct form. Does not depend on the caller's
