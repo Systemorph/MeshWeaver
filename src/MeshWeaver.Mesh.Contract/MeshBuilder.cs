@@ -206,6 +206,12 @@ public record MeshBuilder
             // dying hub: "the node was DELETED" is an authoritative NotFound, everything else
             // stays the transient ShuttingDown. See IAddressTombstones for why (#1029).
             .AddSingleton<IAddressTombstones>(sp => sp.GetRequiredService<Services.RecentlyDeletedRegistry>())
+            // Mesh-ROOT durable-version high-water for the post-commit flush, registered at the
+            // root for the SAME reason as the tombstone registry above: the flush is a mesh-level
+            // singleton while its reader — the per-node persistence sampler's save handler — runs
+            // on the owner hub, and a hub-level registration would give each side its own instance.
+            // Collapses the two durable-write routes a cross-hub patch used to take (#1249).
+            .AddSingleton<Services.PostCommitFlushRegistry>()
             // Controlled I/O pools — mesh-scoped governor over the shared
             // ThreadPool for genuinely-async / sync-blocking leaves (file system,
             // blob, …). Resolved by leaf adapters via IoPoolRegistry; dies with
