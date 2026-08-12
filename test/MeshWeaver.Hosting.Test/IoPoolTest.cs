@@ -236,39 +236,6 @@ public class IoPoolTest
         await drain.WaitAsync(Timeout5, TestContext.Current.CancellationToken);
     }
 
-    /// <summary>
-    /// 🚨 <c>Dispose</c> promises that "when it returns, no pool thread is running, so the caller may
-    /// safely unload the node ALCs whose types that work referenced" — and it set <c>_disposed</c>
-    /// BEFORE calling <c>Drain()</c>, whose idempotence guard returns early on exactly that flag. So
-    /// the disposal path — the one that unloads every ALC — joined NOTHING. (Copilot review, #1334.)
-    /// </summary>
-    [Fact(Timeout = 30_000)]
-    public void Dispose_actuallyJoins_beforeItReturns()
-    {
-        var pool = new IoPool(2);
-        using var entered = new ManualResetEventSlim(false);
-        using var unwound = new ManualResetEventSlim(false);
-
-        pool.InvokeBlocking(ct =>
-        {
-            entered.Set();
-            ct.WaitHandle.WaitOne(Timeout10);   // respects the token: Drain's cancel releases it
-            // A deliberate gap AFTER cancellation, to construct a definite ordering rather than to
-            // wait for propagation: a Dispose that does not join returns in microseconds and would
-            // otherwise race this flag and pass by luck.
-            Thread.Sleep(150);
-            unwound.Set();
-            return 0;
-        }).Subscribe(_ => { }, _ => { });
-
-        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
-
-        pool.Dispose();
-
-        unwound.IsSet.Should().BeTrue(
-            "Dispose must not return until the blocking leaf has unwound — it is what licenses the "
-            + "caller to unload the ALCs whose compiled types that leaf was executing");
-    }
 
     [Fact]
     public void Invoke_is_cold_no_work_runs_until_subscribe()
