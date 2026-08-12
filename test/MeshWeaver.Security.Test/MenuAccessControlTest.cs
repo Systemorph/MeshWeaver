@@ -70,7 +70,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     {
         var client = GetClient();
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = userId, Name = userId });
         return client;
     }
 

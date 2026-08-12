@@ -174,7 +174,7 @@ public class LocalizationTest
     public void AccessServiceExtension_FallsBackToCircuitContext()
     {
         var access = new AccessService();
-        access.SetCircuitContext(new AccessContext { ObjectId = "u", Locale = "de" });
+        access.SetHostIdentity(new AccessContext { ObjectId = "u", Locale = "de" });
         try
         {
             // No request-scoped context set → resolves from the circuit context.
@@ -182,7 +182,7 @@ public class LocalizationTest
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 

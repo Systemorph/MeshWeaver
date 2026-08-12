@@ -201,7 +201,7 @@ produce exactly one terminal status — an *empty* completion is caught by a tot
 
 | Stage | Option (default) | On expiry |
 |---|---|---|
-| Source snapshot — the one-shot read of the source set | `SourceSnapshotTimeout` (30 s) | `Error`, naming the source query that never emitted |
+| Source snapshot — the one-shot read of the source set | `SourceSnapshotTimeout` (30 s) | `Unavailable`, naming the source query that never emitted — **not** `Error`; see below |
 | `roslyn-compile` — NuGet restore, source generators, `Emit`, disk write | `RoslynCompileTimeout` (5 min) | `Error` naming the leg; the stage is **cancelled**, so an unreachable package feed stops instead of pinning a compile thread |
 | `assembly-load` — assembly load, `GetTypes`, provider reflection, config instantiation | `AssemblyLoadTimeout` (2 min) | `Error` naming the leg (a running type initializer cannot be interrupted, so the stage is abandoned, not cancelled) |
 | `assembly-store-upload` — publishing the bytes to the `IAssemblyStore` | `AssemblyStoreUploadTimeout` (2 min) | **Not** an error: an upload failure has never failed a compile, so the compile settles `Ok` with a warning naming the leg on its ActivityLog — the assembly is usable locally but cross-silo activation will not find it |
@@ -209,6 +209,41 @@ produce exactly one terminal status — an *empty* completion is caught by a tot
 A tripped bound is never something to raise: it means a stage genuinely stopped answering, and
 the message names which one. Fix that stage, then retry with **Create Release** / the Compile
 button — the terminal status is settled, so the next trigger dispatches normally.
+
+### 🚨 A compile NEVER runs against an unestablished source set
+
+The source snapshot is the one stage whose failure is **not** a compile verdict, and it is the
+only one that settles `Unavailable` instead of `Error`.
+
+Discovery races two legs — a direct `IMeshService` read and the cached synced query — and each
+leg issues one query per declared `Sources`/`Tests` entry. Those queries can fail
+*independently*: a `shared=@Other/Partition/Source` entry crossing into a busy peer silo
+answers with a `SubscribeRequest` timeout while the type's own `Source` query answers fine. The
+snapshot therefore carries an **establishment verdict** (`SourceSnapshot.IsEstablished`), not
+just a list:
+
+| Snapshot | Meaning | What the compile does |
+|---|---|---|
+| Established, non-empty | every query answered, here are the sources | compile |
+| Established, **empty** | every query answered and matched nothing (sources deleted, or a configuration-only type) | compile — a failure then classifies `NoSources`, which does not gate a rollout |
+| **Unestablished** | at least one query errored or never answered | **refuse**: throw `SourceDiscoveryUnavailableException`, stamp `CompilationStatus.Unavailable` |
+
+A failed leg used to be swallowed (`.Catch(_ => empty)`), so the surviving legs' **partial** set
+won the race and reached Roslyn — which then emitted a completely genuine-looking
+`CS0246: The type or namespace name 'ScopeLibrary' could not be found` about code that was
+fine. The bake readiness gate cannot tell that from a real image regression, so a rollout
+stalled on healthy content (issue #1218; memex-cloud 2026-08-11, 14 of 56 sampled types).
+
+An unestablished report never *wins* the race either — it is held until both legs have
+answered, so one dead query cannot veto a healthy cached set. It only settles the snapshot when
+nothing else could.
+
+Downstream, the `Unavailable` stamp already means the right thing everywhere: the instance
+overlay drops "please correct the code" for the retry copy (#641),
+`EnsureCompileDispatched` treats it as "never determined" and re-dispatches on the next
+**request** (never a timer), and `DynamicTypePreWarmer.WarmOne` reports `PreWarmStatus.TimedOut`
+— which `NodeTypeBakeGateState` files under *not evaluated* rather than as a regression. A real
+Roslyn error on an established set is untouched: `Error` → `CompileError` → it still gates.
 
 ---
 

@@ -568,12 +568,39 @@ internal class MeshNodeCompilationService(
     /// </summary>
     private IObservable<IEnumerable<MeshNode>> SnapshotSources(
         NodeTypeDefinition? ntDef, string selfPath, IReadOnlyList<MeshNode>? sourcesOverride)
+        => SnapshotSourcesCore(ntDef, selfPath, sourcesOverride)
+            .SelectMany(snapshot => snapshot.IsEstablished
+                ? Observable.Return<IEnumerable<MeshNode>>(snapshot.Sources)
+                // 🚨 NEVER COMPILE AGAINST AN UNESTABLISHED SOURCE SET. Handing Roslyn a set
+                // that is short because a discovery query errored produces a completely
+                // genuine-looking CS0246/CS0103 about the author's code — which the bake
+                // readiness gate then cannot tell from a real image regression (issue #1218:
+                // 14 of 56 sampled types on memex-cloud, all of which had compiled in ~1s the
+                // same day on the same content). Fail with a DISTINGUISHABLE exception instead;
+                // the terminal write-back records CompilationStatus.Unavailable, not Error.
+                : Observable.Throw<IEnumerable<MeshNode>>(
+                    new SourceDiscoveryUnavailableException(
+                        $"Source discovery for '{selfPath}' could not be ESTABLISHED, so the compile "
+                        + $"was not attempted: {snapshot.UnestablishedReason}. This is an availability "
+                        + "failure, NOT a compile error — nothing is known to be wrong with the code, "
+                        + "and compiling against the partial set would produce phantom diagnostics. "
+                        + "Retry via the Compile button / a fresh RequestedReleaseAt once the mesh "
+                        + "answers.")));
+
+    /// <summary>
+    /// The snapshot itself, WITH its establishment verdict. Split from
+    /// <see cref="SnapshotSources"/> so the "empty because nothing matched" ⇄ "empty because the
+    /// query never answered" distinction exists as data rather than being flattened into an
+    /// indistinguishable empty list — see <see cref="SourceSnapshot"/>.
+    /// </summary>
+    private IObservable<SourceSnapshot> SnapshotSourcesCore(
+        NodeTypeDefinition? ntDef, string selfPath, IReadOnlyList<MeshNode>? sourcesOverride)
     {
         var bound = _cacheOptions.SourceSnapshotTimeout;
 
         // A caller-supplied override is already an authoritative point-in-time snapshot.
         if (sourcesOverride is not null)
-            return Observable.Return<IEnumerable<MeshNode>>(sourcesOverride);
+            return Observable.Return(SourceSnapshot.Established(sourcesOverride));
 
         // 🚨 DIRECT READ FIRST — measured, not assumed.
         //
@@ -623,15 +650,26 @@ internal class MeshNodeCompilationService(
         // filter is also the likeliest reason #682's probe "never fired" — not the delay alone.
         return RaceSourceSnapshot(
                 DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero),
-                Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1)))
+                // 🚨 The cached leg's FAULT is unestablishment, not emptiness. A synced query
+                // that errors used to propagate straight out of the snapshot as a raw exception
+                // → terminal CompilationStatus.Error → a gating "regression" for a mesh read
+                // that never happened. It now reports itself as unestablished, exactly like a
+                // failed probe leg, and the race decides.
+                Observable.Defer(() => ResolveSources(ntDef, selfPath, null).Take(1))
+                    .Select(SourceSnapshot.Established)
+                    .Catch((Exception ex) => Observable.Return(SourceSnapshot.Unavailable(
+                        $"the synced source query '{NodeSources.CacheId(selfPath)}' faulted "
+                        + $"({ex.GetType().Name}: {ex.Message})"))))
             .Timeout(bound)
-            .Catch<IEnumerable<MeshNode>, TimeoutException>(ex =>
-                Observable.Throw<IEnumerable<MeshNode>>(new TimeoutException(
-                    $"Source snapshot for '{selfPath}' did not emit within {bound.TotalSeconds:0}s — "
-                    + "neither the direct mesh read nor the synced source query "
-                    + $"('{NodeSources.CacheId(selfPath)}') produced a source set. The compile fails "
-                    + "terminally instead of parking at Compiling forever; retry via the Compile "
-                    + "button / a fresh RequestedReleaseAt.", ex)));
+            // A snapshot that never emits is the SAME condition as one whose queries errored:
+            // the source set was not established. It reports as such (Unavailable, retryable)
+            // rather than as a compile verdict — but it still SETTLES, so the NodeType can never
+            // park at CompilationStatus=Compiling forever.
+            .Catch<SourceSnapshot, TimeoutException>(_ => Observable.Return(
+                SourceSnapshot.Unavailable(
+                    $"no source set was produced within {bound.TotalSeconds:0}s — neither the direct "
+                    + "mesh read nor the synced source query "
+                    + $"('{NodeSources.CacheId(selfPath)}') answered")));
     }
 
     /// <summary>
@@ -652,22 +690,37 @@ internal class MeshNodeCompilationService(
     /// refuses to emit empty for exactly this reason ("compiling the type against NOTHING [is]
     /// strictly worse than the stall"); this applies the same rule to the cached leg.</para>
     ///
-    /// <para>Semantics: the first NON-EMPTY answer from either side wins immediately (a healthy
-    /// cached query still settles the snapshot with zero probe latency — the #690 regression
+    /// <para>Semantics: the first ESTABLISHED NON-EMPTY answer from either side wins immediately (a
+    /// healthy cached query still settles the snapshot with zero probe latency — the #690 regression
     /// guard). EMPTY settles only by CONSENSUS: both legs completed without producing a source —
     /// then a source-less, configuration-only NodeType still compiles. A cached leg that never
     /// emits at all leaves the race to the probe / the caller's outer <c>Timeout</c>, unchanged.</para>
+    ///
+    /// <para>🚨 An UNESTABLISHED report (a leg whose queries errored — issue #1218) never WINS the
+    /// race, and never loses it silently either. It is held back until the merged stream completes,
+    /// so a probe with one dead query cannot veto a perfectly healthy cached answer; but if no leg
+    /// ever produces a real source set, the unestablished report is what settles the race — and the
+    /// caller then refuses to compile rather than handing Roslyn a set it knows to be short. The
+    /// old shape simply dropped the failed leg's contribution (<c>.Catch(_ =&gt; empty)</c>) and let
+    /// the PARTIAL remainder win, which is precisely how a starved cross-silo read became a
+    /// phantom <c>CS0246</c> on 14 of 56 types during a memex-cloud rollout.</para>
     /// </summary>
-    internal static IObservable<IEnumerable<MeshNode>> RaceSourceSnapshot(
-        IObservable<IEnumerable<MeshNode>> directProbe,
-        IObservable<IEnumerable<MeshNode>> cachedFirst)
+    internal static IObservable<SourceSnapshot> RaceSourceSnapshot(
+        IObservable<SourceSnapshot> directProbe,
+        IObservable<SourceSnapshot> cachedFirst)
         => directProbe
-            .Merge(cachedFirst
-                .Select(static s => (IReadOnlyCollection<MeshNode>)(s as IReadOnlyCollection<MeshNode> ?? s.ToList()))
-                .Where(static s => s.Count > 0)
-                .Select(static s => (IEnumerable<MeshNode>)s))
+            .Merge(cachedFirst)
+            .Publish(shared => Observable.Merge(
+                // A real set — wins the instant it arrives, from either leg.
+                shared.Where(static s => s.IsEstablished && s.Sources.Count > 0),
+                // "I could not read the sources" — consulted only once BOTH legs have had
+                // their say (TakeLast emits on completion), so it can never pre-empt a
+                // healthy answer that is merely slower.
+                shared.Where(static s => !s.IsEstablished).TakeLast(1)))
             .Take(1)
-            .DefaultIfEmpty(Enumerable.Empty<MeshNode>());
+            // Both legs completed, neither found anything, neither reported a failure: the
+            // sources genuinely do not exist. That is a CONTENT fact and the compile proceeds.
+            .DefaultIfEmpty(SourceSnapshot.Empty);
 
     /// <summary>
     /// How long the cached synced source query gets before the uncached probe is even subscribed.
@@ -701,14 +754,27 @@ internal class MeshNodeCompilationService(
         return acc;
     }
 
+    /// <summary>One expanded source query's result — the nodes it matched, or the reason it did
+    /// not answer. A failed leg is no longer interchangeable with an empty one (issue #1218).</summary>
+    private readonly record struct SourceProbeLeg(
+        string Query, IReadOnlyCollection<MeshNode> Nodes, string? Failure);
+
     /// <summary>
     /// The uncached escape hatch behind <see cref="SnapshotSources"/>: the SAME expanded source
     /// queries issued straight at <see cref="IMeshService"/>, bypassing the synced-query cache whose
     /// missed Initial is what idles until the 45s heartbeat. Subscription-delayed, so a healthy
-    /// compile never issues it. Failures complete EMPTY rather than erroring — this is a fallback
-    /// racing a primary, and it must never be the thing that fails a compile.
+    /// compile never issues it.
+    ///
+    /// <para>🚨 A FAILED leg no longer degrades to an empty one. It used to
+    /// (<c>.Catch(_ =&gt; Return([]))</c>), which made the probe's answer silently PARTIAL whenever
+    /// one of several queries errored — and the partial set then won the race and compiled, so a
+    /// starved cross-partition read for a <c>shared=</c> source came out of Roslyn as
+    /// <c>CS0246: The type or namespace name 'ScopeLibrary' could not be found</c>: a completely
+    /// genuine-looking verdict about code that was fine (issue #1218, memex-cloud 2026-08-11). The
+    /// leg now REPORTS its failure and the whole probe reports UNESTABLISHED, so the cached query
+    /// still gets to answer — and if it cannot either, nothing is compiled.</para>
     /// </summary>
-    private IObservable<IEnumerable<MeshNode>> DirectSourceProbe(
+    private IObservable<SourceSnapshot> DirectSourceProbe(
         NodeTypeDefinition? ntDef, string selfPath, TimeSpan? subscriptionDelay = null)
     {
         var queries = CodeQueryResolver
@@ -716,11 +782,11 @@ internal class MeshNodeCompilationService(
             .Concat(CodeQueryResolver.ExpandAll(ntDef?.Tests, CodeQueryResolver.DefaultTests, selfPath))
             .ToArray();
         if (queries.Length == 0)
-            return Observable.Empty<IEnumerable<MeshNode>>();
+            return Observable.Empty<SourceSnapshot>();
 
         var mesh = hub.ServiceProvider.GetService<IMeshService>();
         if (mesh is null)
-            return Observable.Empty<IEnumerable<MeshNode>>();
+            return Observable.Empty<SourceSnapshot>();
 
         return Observable
             .Defer(() => Observable
@@ -742,33 +808,58 @@ internal class MeshNodeCompilationService(
                     // — the CI "exit=2 with an all-green trx" shard failures (first seen when #690
                     // made this probe run on every compile). Defer's FACTORY exceptions, by
                     // contrast, ARE forwarded to OnError — so the throw lands in this leg's .Catch
-                    // below and the leg degrades to empty, exactly like any other faulted leg.
+                    // below and the leg reports itself FAILED, exactly like any other faulted leg.
                     Observable.Defer(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(q)))
                         .Scan(ImmutableDictionary<string, MeshNode>.Empty, ApplyQueryChange)
                         .Throttle(SourceProbeQuietWindow)
                         .Take(1)
-                        .Select(map => (IReadOnlyCollection<MeshNode>)map.Values.ToList())
-                        .Catch((Exception _) => Observable.Return<IReadOnlyCollection<MeshNode>>([]))))
-                .Select(results => results
-                    .SelectMany(r => r ?? [])
-                    .Where(n => !string.IsNullOrEmpty(n.Path))
-                    .GroupBy(n => n.Path)
-                    .Select(g => g.First())
-                    .ToList())
-                // 🚨 NEVER win the race with an EMPTY set. Every per-query leg degrades to empty on
-                // error, so a probe that hit a cold partition or a permission wall would otherwise
-                // emit "no sources", beat the cached query, and compile the type against NOTHING —
-                // strictly worse than the stall it exists to dodge. No sources found ⇒ stay silent
-                // and let the cached query (and the outer Timeout) decide.
-                .Where(merged => merged.Count > 0)
-                .Select(merged =>
+                        .Select(map => new SourceProbeLeg(
+                            q, (IReadOnlyCollection<MeshNode>)map.Values.ToList(), null))
+                        // 🚨 NAME the failure instead of erasing it. `.Catch(_ => empty)` made a
+                        // dead query indistinguishable from an empty one, which is the whole
+                        // defect: the surviving legs then produced a PARTIAL set that compiled.
+                        .Catch((Exception ex) => Observable.Return(new SourceProbeLeg(
+                            q, [], $"{ex.GetType().Name}: {ex.Message}")))))
+                .Select(legs =>
                 {
+                    var failed = legs.Where(l => l.Failure is not null).ToList();
+                    var merged = legs
+                        .SelectMany(l => l.Nodes)
+                        .Where(n => !string.IsNullOrEmpty(n.Path))
+                        .GroupBy(n => n.Path)
+                        .Select(g => g.First())
+                        .ToList();
+
+                    if (failed.Count > 0)
+                    {
+                        var reason = string.Join("; ", failed.Select(l => $"query '{l.Query}' → {l.Failure}"));
+                        // Warning, not Debug: this is now a load-bearing diagnosis. It is the
+                        // difference between "this NodeType is broken" and "this pod could not
+                        // read the mesh", and an operator staring at a stalled rollout needs it.
+                        logger.LogWarning(
+                            "Source discovery for '{SelfPath}': {Failed} of {Total} source quer(ies) "
+                            + "did NOT answer, so the source set is UNESTABLISHED and the compile will "
+                            + "not run against the {Partial} node(s) the surviving queries returned. {Reason}",
+                            selfPath, failed.Count, legs.Count, merged.Count, reason);
+                        return SourceSnapshot.Unavailable(reason, merged);
+                    }
+
                     logger.LogDebug(
                         "Source discovery for '{SelfPath}': direct mesh read returned {Count} source node(s).",
                         selfPath, merged.Count);
-                    return (IEnumerable<MeshNode>)merged;
-                }))
-            .Catch((Exception _) => Observable.Empty<IEnumerable<MeshNode>>())
+                    return SourceSnapshot.Established(merged);
+                })
+                // 🚨 NEVER win the race with an ESTABLISHED EMPTY set. A probe that legitimately
+                // matched nothing must stay silent and let the cached query (and the outer
+                // Timeout) decide — compiling against no sources when the cache holds them is
+                // strictly worse than the stall this exists to dodge. An UNESTABLISHED report is
+                // NOT filtered: RaceSourceSnapshot holds it back until both legs have answered,
+                // so it never pre-empts a healthy set but is never lost either.
+                .Where(s => !s.IsEstablished || s.Sources.Count > 0))
+            // A fault ESCAPING the per-leg catches (the whole CombineLatest, not one query) is
+            // still unestablishment — the probe found out nothing.
+            .Catch((Exception ex) => Observable.Return(SourceSnapshot.Unavailable(
+                $"the direct source probe for '{selfPath}' faulted ({ex.GetType().Name}: {ex.Message})")))
             .DelaySubscription(subscriptionDelay ?? SourceStallProbeDelay);
     }
 
