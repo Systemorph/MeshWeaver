@@ -12,6 +12,9 @@ merge to main ─▶ "Build and Test" (green) ─▶ images job builds+pushes  m
    memex install                       prod install                      external install
    SelfUpdateHostedService polls ACR (its OWN workload identity) every 6h, per its OWN Admin/UpdatePolicy,
    and PATCHes its OWN portal+migration Deployments via its OWN in-cluster ServiceAccount token.
+   Where the GitHub webhook is wired, a green build of SelfUpdate:BuildTriggerRepository (default
+   Systemorph/MeshWeaver) additionally triggers ONE immediate check via the BuildCompletion node —
+   the poll stays as the fallback for installs without the webhook.
 ```
 
 **Why** — prod must not know about the (potentially many) installs, and a central CI service principal
