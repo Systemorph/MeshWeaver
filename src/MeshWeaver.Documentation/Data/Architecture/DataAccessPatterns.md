@@ -196,12 +196,12 @@ using (accessService.ImpersonateAsHub(hub))
 
 The `FutuRe/Analysis` group hub needs to read data from two business-unit sub-hubs: `FutuRe/AsiaRe/Analysis` and `FutuRe/EuropeRe/Analysis`. Each sub-hub has its own RLS scope, so the parent hub must be granted explicit read access via `AccessAssignment` nodes, then query using its own identity.
 
-**Step 1 — grant read access in each sub-hub** (see `samples/Graph/Data/FutuRe/AsiaRe/Analysis/FutuRe_Analysis_Access.json`):
+**Step 1 — grant read access in each sub-hub** (see `samples/Graph/Data/FutuRe/AsiaRe/Analysis/_Access/FutuRe_Analysis_Access.json`):
 
 ```json
 {
   "id": "FutuRe_Analysis_Access",
-  "namespace": "FutuRe/AsiaRe/Analysis",
+  "namespace": "FutuRe/AsiaRe/Analysis/_Access",
   "name": "FutuRe/Analysis Node Access",
   "nodeType": "AccessAssignment",
   "content": {
@@ -209,13 +209,19 @@ The `FutuRe/Analysis` group hub needs to read data from two business-unit sub-hu
     "accessObject": "FutuRe/Analysis",
     "displayName": "Group Analysis Hub",
     "roles": [
-      { "role": "Reader" }
+      { "role": "Viewer" }
     ]
   }
 }
 ```
 
-Apply the same pattern to `FutuRe/EuropeRe/Analysis/FutuRe_Analysis_Access.json`.
+Apply the same pattern to `FutuRe/EuropeRe/Analysis/_Access/FutuRe_Analysis_Access.json`.
+
+> 🚨 **`Viewer`, and only a role the mesh actually defines.** This snippet used to read `"Reader"` — a
+> role that exists nowhere (`Role.cs` defines `Admin`, `Editor`, `Viewer`, `Commenter`,
+> `PlatformAdmin`), so it resolved to *no permissions at all* while `AccessAssignmentGuard`'s
+> fail-closed allowlist counted it as WRITE and refused the grant on every GitSynced partition.
+> Read-only means `Viewer` or `Commenter`; anything else is an ownership claim.
 
 **Step 2 — query with the hub's identity:**
 

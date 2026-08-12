@@ -75,6 +75,14 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
             .ServiceProvider
             .GetRequiredService<IMeshService>();
 
+    /// <summary>
+    /// The silo's mesh hub — whose WORKSPACE is the view an instance activation reads the NodeType
+    /// through. Tests must wait on this view before activating an instance; see the wait below.
+    /// </summary>
+    private IMessageHub SiloMeshHub =>
+        ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
+            .GetRequiredService<IMessageHub>();
+
     [Fact(Timeout = 60000)]
     public async Task ColdStart_CompileViaGetCompilationPathRequest_Succeeds()
     {
@@ -200,7 +208,15 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
     /// MeshNode from persistence, loads the dynamic assembly, and answers from
     /// the per-instance hub.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    // Budget note: 180s, NOT 60s. The fix for this test's flake is the pre-activation wait below —
+    // this number is only about DIAGNOSABILITY. At 60s the Fact timeout exactly equalled
+    // NodeTypeEnrichmentHelpers.SlowPathTimeout and MessageHubConfiguration.RequestTimeout, so it
+    // preempted the framework's own graceful sink (the compile-in-progress overlay / a NACK) by ~1.7s
+    // and every failure of this class reported a bare "Test execution timed out" with nothing to go on
+    // — five sessions theorised from that silence. The test's own CancellationToken is already 80s, so
+    // it now fires first and produces a real message. Raising this alone would MASK the wedge; it ships
+    // with the wait, never instead of it.
+    [Fact(Timeout = 180_000)]
     public async Task Instance_OfDynamicNodeType_ActivatesAndAnswers()
     {
         var ct = new CancellationTokenSource(80.Seconds()).Token;
@@ -238,6 +254,22 @@ public class OrleansDynamicCompilationTest(ITestOutputHelper output)
             }
         };
         await SiloMeshService.CreateNode(codeNode).FirstAsync().ToTask(ct);
+
+        // 🚨 THE DOCUMENTED PRE-ACTIVATION WAIT. NodeTypeEnrichmentHelpers.cs:294-302 states the
+        // contract this test used to violate: "A test that writes to the per-NodeType hub and then
+        // activates a new instance MUST wait for the mesh hub's workspace to see the post-write state
+        // before creating the instance." Without it the activation raced the type's very FIRST compile:
+        // EnrichWithNodeType took its slow path and then sat on the 60s Phase-A no-progress budget
+        // (SlowPathTimeout) waiting for a Pending/Compiling this workspace had not yet mirrored —
+        // locally that mirror lands in ~150ms, so the flake only ever showed in CI, as a bare
+        // "Test execution timed out after 60000 milliseconds" with 58s of silence and no diagnosis.
+        // Canonical shape: CodeEditRecompileTest.WaitForMeshHubView. Subscribing here also ACTIVATES
+        // the per-NodeType hub, which is what installs the compile watcher and drives that first build
+        // — so this waits on the real condition rather than sleeping past a race.
+        await SiloMeshHub.GetWorkspace().GetMeshNodeStream(typePath)
+            .Should().Within(TimeSpan.FromSeconds(60))
+            .Match(n => n?.Content is NodeTypeDefinition def
+                        && def.CompilationStatus == CompilationStatus.Ok);
 
         // Create an INSTANCE of the dynamic type. NodeType=<typePath> means the
         // EnrichWithNodeType slow path fires — the static lookup misses, the
