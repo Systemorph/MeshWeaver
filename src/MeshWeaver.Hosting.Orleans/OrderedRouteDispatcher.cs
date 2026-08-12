@@ -74,8 +74,9 @@ internal sealed class OrderedRouteDispatcher(IIoPool pool, ILogger logger)
     /// subscribe. So N destinations holding one executing leg each, and ONE wedged destination with
     /// N-1 legs stacked behind its head, produce the IDENTICAL in-flight count. Those are opposite
     /// situations: the first is breadth (nothing waits on anything), the second is head-of-line
-    /// blocking on a channel that cannot overtake itself. <c>Deepest</c> is what separates them —
-    /// above 1 it means legs are waiting on a leg, not merely on the CPU.</para>
+    /// blocking on a channel that cannot overtake itself. <c>Deepest</c> is what separates them — it
+    /// counts legs QUEUED BEHIND a destination's executing leg, so any value &gt;= 1 already means a
+    /// leg is waiting on a leg rather than merely on the CPU; only 0 is pure breadth.</para>
     /// </summary>
     /// <returns>
     /// <c>Destinations</c>: how many addresses currently hold a queue.

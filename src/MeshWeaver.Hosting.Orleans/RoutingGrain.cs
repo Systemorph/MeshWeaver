@@ -219,11 +219,12 @@ internal class RoutingGrain(
     /// "thread pool delay" (#1284). A silo that has lost the CPU raises BOTH without any leg being
     /// stuck.</para>
     ///
-    /// <para><b>So report the discriminators, never a cause.</b> <c>Deepest &gt; 1</c> means legs
-    /// are genuinely waiting on a leg (head-of-line blocking on one stream destination);
-    /// <c>Deepest = 0</c> with many destinations, or a backlog that clears in milliseconds, is
-    /// load. <see cref="ReportDrained"/> prints how long the episode lasted, which separates a
-    /// throughput burst from a real stall without anyone having to profile a pod.</para>
+    /// <para><b>So report the discriminators, never a cause.</b> <c>Deepest</c> counts legs QUEUED
+    /// BEHIND the one executing leg of a destination, so <c>Deepest &gt;= 1</c> already means a leg
+    /// is waiting on a leg — head-of-line blocking on one stream destination. <c>Deepest = 0</c>
+    /// with many destinations, or a backlog that clears in milliseconds, is load.
+    /// <see cref="ReportDrained"/> prints how long the episode lasted, which separates a throughput
+    /// burst from a real stall without anyone having to profile a pod.</para>
     /// </summary>
     private void ReportSaturation(int inFlight, string addressPath)
     {
@@ -237,8 +238,9 @@ internal class RoutingGrain(
             + "Latest dispatch target {Address} — the address that happened to cross the threshold, NOT a diagnosis. "
             + "A slot is held from dispatch until the leg terminates, INCLUDING the unbounded wait for a ThreadPool "
             + "thread before the leg's own timeouts start, so a CPU-starved silo raises this with nothing stuck. "
-            + "Deepest > 1 means legs are blocked behind a leg (head-of-line on one destination); otherwise read this "
-            + "as load, and check the 'cleared after' line for how long it really lasted.",
+            + "A deepest queue of 1 or more means legs are blocked behind a leg (head-of-line on one destination); "
+            + "0 means nothing is waiting on anything, so read it as load and check the 'cleared after' line "
+            + "for how long it really lasted.",
             inFlight, SaturationThreshold, destinations, deepest, routingPool.CurrentInFlight, addressPath);
     }
 
