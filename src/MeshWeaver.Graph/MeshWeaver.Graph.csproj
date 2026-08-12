@@ -23,6 +23,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- DateTime.Humanize() in CodeLayoutAreas. Declared explicitly: it used to ride in as a
+         transitive of JsonPointer.Net (removed in #1231). -->
+    <PackageReference Include="Humanizer.Core" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Features" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />

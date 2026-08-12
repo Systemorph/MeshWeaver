@@ -5,7 +5,7 @@ using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
-using Json.Patch;
+using MeshWeaver.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;

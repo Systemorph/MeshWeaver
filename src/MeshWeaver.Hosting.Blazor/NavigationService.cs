@@ -78,6 +78,18 @@ internal class NavigationService : INavigationService
     private readonly BehaviorSubject<CreatableTypesSnapshot> _creatableTypes = new(CreatableTypesSnapshot.Empty);
     private readonly BehaviorSubject<NavigationStatus> _status = new(NavigationStatus.Idle());
     private string? _lastLoadedNodePath;
+
+    /// <summary>
+    /// The notice owed to the viewer for a redirect this service just issued, held across the one
+    /// <c>NavigateTo</c> that carries them to the new URL. Circuit-scoped INSTANCE state (this
+    /// service is <c>AddScoped</c>) — never static, and never a query parameter: a
+    /// <c>?redirectedFrom=…</c> on a single-segment target would be read as a Blazor PAGE route by
+    /// the guard in <see cref="ProcessLocationChange"/> and the navigation would be dropped.
+    /// Consumed (and cleared) by the first navigation that lands on <c>To</c>; a viewer who navigates
+    /// somewhere else in between simply never sees it, which is the right outcome.
+    /// </summary>
+    private (string From, string To, NavigationRedirectKind Kind)? _pendingRedirectNotice;
+
     private CancellationTokenSource? _loadingCts;
     private bool _isInitialized;
     private bool _disposed;
@@ -555,6 +567,28 @@ internal class NavigationService : INavigationService
     {
         var (area, id) = ParseRemainder(resolution.Remainder);
 
+        // 🚨 A DECLARED redirect (a Redirect node left at a retired path) resolved this navigation
+        // somewhere else. Send the browser to the canonical URL instead of rendering the target's
+        // content under the old address: a page rendered at a foreign URL resolves its own RELATIVE
+        // links against that foreign path (every "../Sibling" in the moved subtree would break), and
+        // the stale bookmark would never heal. replace:true so Back does not bounce off the redirect.
+        //
+        // The chain was already collapsed by the resolver (cycle-checked, hop-capped), so the target
+        // is never itself a followable redirect — this is one hop, and it cannot loop. Nothing about
+        // access is decided here: the target page re-enters this method and runs the anonymous gate
+        // and RLS on the FINAL path, for THIS user, exactly as if the URL had been typed.
+        if (resolution.RedirectedFrom is { } declaredFrom)
+        {
+            var canonical = CanonicalPath(resolution);
+            if (canonical.Length > 0 && !PathsEqual(canonical, route))
+            {
+                _logger?.LogInformation(
+                    "Redirect: '{From}' → '{To}' (declared by a Redirect node).", declaredFrom, canonical);
+                RedirectTo(canonical, declaredFrom, NavigationRedirectKind.Declared);
+                return;
+            }
+        }
+
         // Anonymous gate: a logged-OUT visitor sees application content ONLY when the resolved
         // node carries an explicit positive Anonymous grant (a public course cover / catalog /
         // landing). Everything else lands on the partition's declared MARKETING page when one
@@ -730,6 +764,14 @@ internal class NavigationService : INavigationService
 
             IsResolving = false;
 
+            // Redeem the notice owed for a redirect that landed HERE (and only here — a viewer who
+            // navigated elsewhere in between is not told about a page they never asked for).
+            var notice = _pendingRedirectNotice is { } pending && PathsEqual(pending.To, route)
+                ? pending
+                : ((string From, string To, NavigationRedirectKind Kind)?)null;
+            if (notice is not null)
+                _pendingRedirectNotice = null;
+
             var context = new NavigationContext
             {
                 Path = route,
@@ -737,7 +779,9 @@ internal class NavigationService : INavigationService
                 Resolution = resolution,
                 Area = area,
                 Id = id,
-                Node = node
+                Node = node,
+                RedirectedFrom = notice?.From,
+                RedirectKind = notice?.Kind
             };
 
             Context = context;
@@ -763,6 +807,30 @@ internal class NavigationService : INavigationService
             // a hub that doesn't treat the navigation message turns into the existing NotFound UI.
             var targetIgnored = ex is DeliveryFailureException dfe
                 && dfe.Failure.ErrorType is ErrorType.Ignored or ErrorType.NotFound;
+            // 🚨 ANCESTOR FALLBACK. A URL naming something that is not there ("…/Menu/Default" when
+            // only "Admin" exists) is better answered by the nearest place that DOES exist than by a
+            // dead end — the resolver already computed it: resolution.Prefix IS the closest existing
+            // ancestor and resolution.Remainder is what did not match (the same computation behind
+            // the routing diagnostic "Closest ancestor is 'X' (remainder='Y')").
+            //
+            // The decision itself lives in AncestorFallbackRule so the limits that keep it from
+            // becoming a mask are unit-asserted rather than asserted in a comment: TYPED absence
+            // only (never a denial / fault / availability failure / timeout), a non-empty remainder
+            // only, and one hop to a different path only. This is also why the fallback is NOT
+            // hooked onto the `node is null` branch above — that branch still cannot tell a refusal
+            // from an absence (#1253/#1279), and a fallback there would mask denials.
+            //
+            // The diagnostic is NOT swallowed: the real failure is logged at Warning, naming the path
+            // that was missing, before the viewer is moved.
+            if (AncestorFallbackRule.ShouldFallBack(ex, resolution.Prefix, resolution.Remainder, route))
+            {
+                _logger?.LogWarning(ex,
+                    "Navigation load failed for '{Route}' (nothing at that path; closest existing ancestor is "
+                    + "'{Ancestor}', remainder='{Remainder}') — falling back to the ancestor.",
+                    route, resolution.Prefix, resolution.Remainder);
+                RedirectTo(resolution.Prefix, route, NavigationRedirectKind.ParentFallback);
+                return;
+            }
             _logger?.LogDebug(ex,
                 "Navigation load failed for {Route} (targetIgnored={Ignored}) — showing page-not-found", route, targetIgnored);
             IsResolving = false;
@@ -792,6 +860,33 @@ internal class NavigationService : INavigationService
     /// object) because the set is universal — every node type that registers these
     /// areas registers them with main-node semantics.
     /// </summary>
+    /// <summary>
+    /// The full path a resolution stands for — <c>Prefix</c> with the unmatched <c>Remainder</c>
+    /// re-attached. This is the URL a followed redirect should land on: the target subtree's own
+    /// path, not just the node that matched.
+    /// </summary>
+    private static string CanonicalPath(AddressResolution resolution) =>
+        string.IsNullOrEmpty(resolution.Remainder)
+            ? resolution.Prefix.Trim('/')
+            : $"{resolution.Prefix.Trim('/')}/{resolution.Remainder.Trim('/')}";
+
+    /// <summary>Ordinal path comparison ignoring a leading/trailing '/'. Mesh paths are case-sensitive.</summary>
+    private static bool PathsEqual(string? a, string? b) =>
+        string.Equals((a ?? string.Empty).Trim('/'), (b ?? string.Empty).Trim('/'), StringComparison.Ordinal);
+
+    /// <summary>
+    /// Sends the viewer to <paramref name="target"/> and remembers that they are owed a notice
+    /// saying where they came from. <c>replace: true</c> so Back leaves the redirect behind instead
+    /// of bouncing off it, and in-circuit (no <c>forceLoad</c>) so the target re-enters this
+    /// resolver normally — including its anonymous gate and its RLS.
+    /// </summary>
+    private void RedirectTo(string target, string from, NavigationRedirectKind kind)
+    {
+        _pendingRedirectNotice = (from.Trim('/'), target.Trim('/'), kind);
+        IsResolving = false;
+        _navigationManager.NavigateTo("/" + target.TrimStart('/'), forceLoad: false, replace: true);
+    }
+
     private static bool IsMainNodeOnlyArea(string? area) =>
         area is "Settings"
             or "Threads"

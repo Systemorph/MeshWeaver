@@ -304,6 +304,70 @@ public class StaticContentUnmountedTest(ITestOutputHelper output) : MonolithMesh
         body.Should().Be(SecretBody);
     }
 
+    /// <summary>
+    /// 🚨 THE ASSERTION THAT WAS MISSING. Every other <c>/api/content</c> test in this file passes
+    /// <c>asAdmin: true</c>, so the whole suite would stay green if the route stopped denying
+    /// anonymous callers entirely — the one regression that re-opens issue #587, just one route
+    /// over. <c>/static</c> is pinned against the unauthenticated caller; the route the content
+    /// MOVED to was not.
+    ///
+    /// <para>It pins TWO independent properties, and the second is the one with no other home:</para>
+    /// <list type="number">
+    /// <item>the bytes are not served — the shared property with
+    /// <c>ContentFileAnonymousAccessTest</c>, which drives the same refusal on a real User
+    /// partition; and</item>
+    /// <item><b>the refusal does not describe itself.</b> A denial reaches the endpoint only as a
+    /// <c>DeliveryFailureException</c> carrying the refusing hub's own diagnostic message —
+    /// <c>"Access denied: user 'Anonymous' lacks Read permission on 'PrivateSpace'"</c> — which is
+    /// the permission model, the principal and proof the node exists, handed to an unauthenticated
+    /// caller. Nothing else in the suite asserts on the refusal BODY, so an echo could reappear
+    /// (it previously shipped) while every byte-level test stayed green.</item>
+    /// </list>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ContentRoute_RefusesAnAnonymousCaller()
+    {
+        var response = await GetAsync(
+            $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/{PrivateSpace}/{SecretFile}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "an unauthenticated caller holds no Read on the owning node, so the read must be " +
+            "refused — this is the #587 hole re-checked on the route content moved to");
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        body.Should().NotContain(SecretBody);
+        body.Should().NotContain("Access denied",
+            "the denial reason is server-side diagnostics — echoing it hands an anonymous caller " +
+            "the permission model, the principal and proof the node exists");
+        body.Should().NotContain("Permission",
+            "no phrasing of the permission verdict belongs in a body an anonymous prober reads");
+        body.Should().NotContain(PrivateSpace,
+            "naming the owning node confirms it exists to a caller who may not see it");
+    }
+
+    /// <summary>
+    /// 🚨 THE ENUMERATION ORACLE. A refused read and a missing one must answer with the same STATUS.
+    /// While the denial surfaced as <c>500</c> and a genuine miss as <c>404</c>, the status code
+    /// alone told an unauthenticated prober which partitions exist and are private — map the whole
+    /// mesh with no credential and one request per guess. That is the enumeration half of #587, and
+    /// no assertion covered it because every other content test is an admin.
+    ///
+    /// <para>Status, not bytes: the two 404 bodies are allowed to differ (a miss says why it found
+    /// no node; a refusal says nothing at all), because neither tells the caller anything it did not
+    /// already supply in the URL. What must never differ is the SIGNAL — and the status is the
+    /// signal a prober can read at scale. The body of the refusal is pinned separately, above.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ContentRoute_DeniedAndMissing_AreIndistinguishable()
+    {
+        var denied = await GetAsync(
+            $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/{PrivateSpace}/{SecretFile}");
+        var missing = await GetAsync(
+            $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/NoSuchNodeAtAll/{SecretFile}");
+
+        denied.StatusCode.Should().Be(missing.StatusCode,
+            "a node the caller may not read must answer exactly like a node that does not exist");
+    }
+
     /// <summary>Gated content is never shared-cacheable: a CDN or proxy that saw one authorized
     /// fetch would otherwise keep replaying it to callers the owning hub denies.</summary>
     [Fact(Timeout = 30000)]

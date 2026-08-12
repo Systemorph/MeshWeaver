@@ -65,9 +65,14 @@
     <PackageVersion Include="Grpc.Net.Client" Version="2.80.0" />
     <PackageVersion Include="Grpc.Tools" Version="2.71.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
+    <!-- Humanizer.Core (MIT) backs the `DateTime.Humanize()` calls in MeshWeaver.Graph and
+         MeshWeaver.AI. It used to arrive ONLY as an accidental transitive of JsonPointer.Net,
+         which is the single reason those `using Humanizer;` lines compiled; Roslyn's own
+         Humanizer.Core 2.14.1 tops out at net6.0 and contributes NO compile assets on net10.0.
+         Removing json-everything (#1231) exposed that, so the dependency is now declared where
+         it is used. -->
+    <PackageVersion Include="Humanizer.Core" Version="3.0.10" />
     <PackageVersion Include="JetBrains.Annotations" Version="2025.2.4" />
-    <PackageVersion Include="JsonPatch.Net" Version="5.0.3" />
-    <PackageVersion Include="JsonPath.Net" Version="3.0.2" />
     <PackageVersion Include="Markdig" Version="1.3.2" />
     <PackageVersion Include="Microsoft.AspNetCore.CookiePolicy" Version="2.3.0" />
     <PackageVersion Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.5.3" />
