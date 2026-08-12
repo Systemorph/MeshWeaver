@@ -324,7 +324,7 @@ public class AgentPickerQueriesTest
     public void SkillAutocomplete_BuildQueries_IncludesUserHomeFromIdentity()
     {
         var access = new AccessService();
-        access.SetCircuitContext(new AccessContext { ObjectId = "rbuergi", Name = "rbuergi" });
+        access.SetHostIdentity(new AccessContext { ObjectId = "rbuergi", Name = "rbuergi" });
 
         // The chatting user's own /Skill namespace MUST be present — passing null userPath (the bug)
         // hid every user-defined skill from autocomplete.
@@ -339,7 +339,7 @@ public class AgentPickerQueriesTest
     public void SkillAutocomplete_BuildQueries_ReservedContextPartition_IsSkipped_UserKept()
     {
         var access = new AccessService();
-        access.SetCircuitContext(new AccessContext { ObjectId = "rbuergi", Name = "rbuergi" });
+        access.SetHostIdentity(new AccessContext { ObjectId = "rbuergi", Name = "rbuergi" });
 
         // On the bare /login route the context partition is reserved — it must be dropped while the
         // user's own /Skill namespace is still unioned.
@@ -353,7 +353,7 @@ public class AgentPickerQueriesTest
         // A leaked system-security / hub principal is NOT a user partition — it must be filtered, so the
         // union falls back to space + platform only (never namespace:system-security/Skill).
         var access = new AccessService();
-        access.SetCircuitContext(new AccessContext { ObjectId = "system-security", Name = "system-security" });
+        access.SetHostIdentity(new AccessContext { ObjectId = "system-security", Name = "system-security" });
 
         SkillAutocompleteProvider.BuildQueries(access, "AgenticPension")
             .Should().Equal(

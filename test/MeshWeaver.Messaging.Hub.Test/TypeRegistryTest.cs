@@ -358,6 +358,44 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
             (Type?)definition.GetType().GetProperty("Type")?.GetValue(definition);
     }
 
+    /// <summary>
+    /// 🚨 A RECOMPILE must win the full-name alias. Every recompile of a dynamic node mints a new
+    /// collectible assembly whose types carry the SAME full name as the previous build's, and the
+    /// alias index is what resolves a full-name <c>$type</c> discriminator on the way in.
+    ///
+    /// <para><c>IndexFullNameAlias</c> used <c>TryAdd</c> for everything, on the reasoning that full
+    /// names are unique — true for an ordinary assembly, false for a rebuilt node. So the FIRST
+    /// build owned the alias forever. That was masked while a superseded context unloaded promptly
+    /// and its entries were swept; it is not masked now, because those entries are DEMOTED to the
+    /// weak shadow rather than dropped, and a context leased by a live hub does not begin unloading
+    /// at all. Resolving a live payload to a superseded assembly's type is the foreign-content
+    /// class: <c>Content is X</c> goes false and the bound view renders empty or never emits.</para>
+    /// </summary>
+    [Fact]
+    public void RecompiledCollectibleType_ReplacesTheFullNameAlias_RatherThanKeepingTheFirst()
+    {
+        var typeRegistry = GetHost().ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+        // Two builds of "the same" node type: same full name, different collectible assemblies —
+        // exactly what a recompile produces.
+        var v1 = EmitCollectibleType("RecompiledEntry", "Position");
+        var v2 = EmitCollectibleType("RecompiledEntry", "Position");
+        v1.Should().NotBeSameAs(v2, "the fixture must reproduce two distinct builds");
+        v1.FullName.Should().Be(v2.FullName, "a recompile keeps the type's full name");
+
+        // Registered under DISTINCT canonical names, so ONLY the full-name alias is under test —
+        // typeByName's last-write-wins cannot mask the defect.
+        typeRegistry.WithType(v1, "RecompiledEntry_v1");
+        typeRegistry.WithType(v2, "RecompiledEntry_v2");
+
+        typeRegistry.TryGetType(v2.FullName!, out var resolved).Should().BeTrue(
+            "the full name must still resolve after the recompile");
+        resolved!.Type.Should().BeSameAs(v2,
+            "the alias must resolve the CURRENT build; keeping the first one pins a superseded "
+            + "assembly's type, and content deserialised into it fails every 'Content is X' check "
+            + "downstream — the view then renders empty or waits forever");
+    }
+
     private sealed class CapturingLogger(ConcurrentQueue<string> sink) : ILogger
     {
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;

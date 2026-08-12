@@ -55,7 +55,18 @@
                there is no document model to hang a cover page, a table of contents, page-break
                rules or a running header on. Hide those rather than leave controls on screen that
                would silently do nothing. *@
-            @if (_fidelity != ExportFidelity.Pixel)
+            @* Email-safe HTML has no pages, so every page-model option below (cover, table of
+               contents, page breaks, running header/footer) would silently do nothing. Hide them
+               rather than show controls that cannot take effect — same reasoning as the pixel
+               branch above. Including child nodes DOES still apply and stays visible. *@
+            @if (_format == ExportFormat.Html)
+            {
+                <small style="color: var(--neutral-foreground-hint);">
+                    @Access.Localize("export.emailHint")
+                </small>
+            }
+
+            @if (_isPaged)
             {
                 <div>
                     <label><strong>@Access.Localize("export.corporateIdentity")</strong></label>
@@ -71,21 +82,24 @@
                 <FluentCheckbox Value="_toc" ValueChanged="@((bool v) => _toc = v)" Label="@Access.Localize("export.tableOfContents")" />
                 <FluentCheckbox Value="_pbH1" ValueChanged="@((bool v) => _pbH1 = v)" Label="@Access.Localize("export.pageBreakSection")" />
                 <FluentCheckbox Value="_pbH2" ValueChanged="@((bool v) => _pbH2 = v)" Label="@Access.Localize("export.pageBreakSubsection")" />
+            }
 
-                @if (HasDescendants)
+            @if (_fidelity != ExportFidelity.Pixel && HasDescendants)
+            {
+                <FluentCheckbox Value="_includeChildren"
+                                ValueChanged="@((bool v) => _includeChildren = v)"
+                                Label="@Access.Localize("export.includeChildren")" />
+                @if (_includeChildren && _isPaged)
                 {
-                    <FluentCheckbox Value="_includeChildren"
-                                    ValueChanged="@((bool v) => _includeChildren = v)"
-                                    Label="@Access.Localize("export.includeChildren")" />
-                    @if (_includeChildren)
-                    {
-                        <FluentCheckbox Value="_pbChildren"
-                                        ValueChanged="@((bool v) => _pbChildren = v)"
-                                        Label="@Access.Localize("export.pageBreakChildren")"
-                                        Style="margin-left: 24px;" />
-                    }
+                    <FluentCheckbox Value="_pbChildren"
+                                    ValueChanged="@((bool v) => _pbChildren = v)"
+                                    Label="@Access.Localize("export.pageBreakChildren")"
+                                    Style="margin-left: 24px;" />
                 }
+            }
 
+            @if (_isPaged)
+            {
                 <div>
                     <label><strong>@Access.Localize("export.headerText")</strong></label>
                     <FluentTextField @bind-Value="_header" Style="width: 100%;" />
@@ -101,7 +115,7 @@
                 <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
                               IconStart="@(new Icons.Regular.Size16.ArrowExport())"
                               OnClick="@ExportAsync">
-                    Export &amp; Download
+                    @Access.Localize("export.exportAndDownload")
                 </FluentButton>
             </div>
         </div>
@@ -163,6 +177,12 @@
     private string? _error;
 
     private ExportFormat _format = ExportFormat.Pdf;
+
+    /// <summary>
+    /// Whether the chosen output has PAGES. Only a paged format can honour a cover page, a table
+    /// of contents, page-break rules or a running header/footer.
+    /// </summary>
+    private bool _isPaged => _fidelity != ExportFidelity.Pixel && _format != ExportFormat.Html;
     private string _formatLabel = "PDF";
 
     private bool _initialized;
@@ -184,9 +204,20 @@
         if (!_initialized)
         {
             _title = NodeName ?? SourcePath ?? "Document";
-            _format = string.Equals(ViewModel?.DefaultFormat, "docx", StringComparison.OrdinalIgnoreCase)
-                ? ExportFormat.Docx : ExportFormat.Pdf;
-            _formatLabel = _format == ExportFormat.Pdf ? "PDF" : "DOCX";
+            _format = ViewModel?.DefaultFormat?.ToLowerInvariant() switch
+            {
+                "docx" => ExportFormat.Docx,
+                "html" => ExportFormat.Html,
+                _ => ExportFormat.Pdf
+            };
+            _formatLabel = _format switch
+            {
+                ExportFormat.Docx => "DOCX",
+                // Named for what it is FOR, not its extension — the point of this format is that
+                // it can be pasted or sent as an email with its embedded views already rendered.
+                ExportFormat.Html => "HTML",
+                _ => "PDF"
+            };
             _initialized = true;
         }
     }

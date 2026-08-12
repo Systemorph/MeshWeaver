@@ -63,7 +63,7 @@ public class CrossPartitionMoveCopyAccessContextTest(ITestOutputHelper output) :
     /// </summary>
     private async Task<string> RunAsUser(AccessContext user, IObservable<string> op)
     {
-        Access.ClearPersistentCircuitContext();
+        Access.ClearHostIdentity();
         try
         {
             using (Access.SwitchAccessContext(user))

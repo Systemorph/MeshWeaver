@@ -94,7 +94,7 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
                 return config.AddLayoutClient();
             });
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = "TestUser", Name = "TestUser", Email = "testuser@meshweaver.io"
         });

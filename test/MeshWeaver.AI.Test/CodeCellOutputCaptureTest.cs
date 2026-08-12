@@ -278,14 +278,14 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         // A DIFFERENT, role-less user (public-read only via the partition
         // policy) renders the Progress area: output lines, not a spinner.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = PublicViewer, Name = PublicViewer });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = PublicViewer, Name = PublicViewer });
         try
         {
             await AssertProgressShowsOutput(activityPath, "out-line-public");
         }
         finally
         {
-            accessService.SetCircuitContext(null);
+            accessService.SetHostIdentity(null);
         }
     }
 
@@ -308,7 +308,7 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         // VUser — IsVirtual, ObjectId = Anonymous. PublicRead must admit it on
         // the activity satellite exactly as it does on the Code node itself.
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = WellKnownUsers.Anonymous,
             Name = "Guest",
@@ -320,7 +320,7 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         }
         finally
         {
-            accessService.SetCircuitContext(null);
+            accessService.SetHostIdentity(null);
         }
     }
 

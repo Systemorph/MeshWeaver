@@ -139,7 +139,7 @@ public class TypedErrorPropagationTest : MonolithMeshTestBase
             Email = "canary@meshweaver.io",
             Roles = ["Admin"]
         };
-        accessService.SetCircuitContext(sentinel);
+        accessService.SetHostIdentity(sentinel);
 
         // Create a target node owned by ACME partition.
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();

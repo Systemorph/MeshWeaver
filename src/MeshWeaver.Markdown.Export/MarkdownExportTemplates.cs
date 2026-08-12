@@ -29,6 +29,8 @@ public static class MarkdownExportTemplates
     public const string ExportPdfId = "Pdf";
     /// <summary>Node id of the DOCX export Code template.</summary>
     public const string ExportDocxId = "Docx";
+    /// <summary>Node id of the email-safe HTML export Code template.</summary>
+    public const string ExportHtmlId = "Html";
 
     /// <summary>
     /// Returns the seeded Code MeshNodes for the PDF and DOCX export templates.
@@ -43,9 +45,16 @@ public static class MarkdownExportTemplates
     {
         var pdfCode = ReadEmbeddedResource("Templates.ExportPdf.csx");
         var docxCode = ReadEmbeddedResource("Templates.ExportDocx.csx");
+        var htmlCode = ReadEmbeddedResource("Templates.ExportHtml.csx");
 
         return
         [
+            BuildCodeNode(
+                ExportHtmlId,
+                "Export to email-safe HTML",
+                "Renders a markdown node to self-contained HTML for email — layout areas resolved to "
+                + "static markup, inline CSS, absolute URLs. Triggered by ExecuteScriptRequest with Inputs.sourcePath.",
+                htmlCode),
             BuildCodeNode(
                 ExportPdfId,
                 "Export to PDF",

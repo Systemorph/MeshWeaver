@@ -1068,6 +1068,13 @@ Examples:
     // restore write run with the caller's identity/permissions — the same actor
     // every other MCP tool routes through. VersionPlugin wraps IVersionQuery,
     // whose reader was restored in the version-history fix (V44/V45).
+    //
+    // 🚨 AsCaller on every version tool: the version tables are a SECOND read
+    // surface for a node's full content, and VersionPlugin's per-user read gate
+    // captures AccessService.Context at call time — the same identity
+    // re-establishment Get/Search need (see AsCaller). Without it the capture
+    // can come back empty and the gate would fall back to Anonymous, denying
+    // entitled signed-in callers.
 
     /// <summary>Lists all versions of a node, newest first.</summary>
     /// <param name="path">Path to the node.</param>
@@ -1076,7 +1083,7 @@ Examples:
     [Description("Lists all available versions of a node, newest first \u2014 version number, date, who changed it, name and node type. Call this first to pick a version for GetVersion / RestoreVersion.")]
     public Task<string> GetVersions(
         [Description("Path to the node (e.g., 'OrgA/my-doc')")] string path)
-        => new VersionPlugin(sessionHub).GetVersions(path);
+        => AsCaller(() => new VersionPlugin(sessionHub).GetVersions(path));
 
     /// <summary>Retrieves the full node content at a specific version number.</summary>
     /// <param name="path">Path to the node.</param>
@@ -1087,7 +1094,7 @@ Examples:
     public Task<string> GetVersion(
         [Description("Path to the node")] string path,
         [Description("Version number to retrieve")] long version)
-        => new VersionPlugin(sessionHub).GetVersion(path, version);
+        => AsCaller(() => new VersionPlugin(sessionHub).GetVersion(path, version));
 
     /// <summary>Restores a node to a specific version (written back as a new latest version).</summary>
     /// <param name="path">Path to the node.</param>
@@ -1098,7 +1105,7 @@ Examples:
     public Task<string> RestoreVersion(
         [Description("Path to the node")] string path,
         [Description("Version number to restore to")] long version)
-        => new VersionPlugin(sessionHub).RestoreVersion(path, version);
+        => AsCaller(() => new VersionPlugin(sessionHub).RestoreVersion(path, version));
 
     /// <summary>Restores a node to its state at a point in time.</summary>
     /// <param name="path">Path to the node.</param>
@@ -1109,7 +1116,7 @@ Examples:
     public Task<string> RestoreFromPointInTime(
         [Description("Path to the node")] string path,
         [Description("ISO 8601 timestamp to restore to (e.g., '2026-03-25T14:30:00Z')")] string timestamp)
-        => new VersionPlugin(sessionHub).RestoreFromPointInTime(path, timestamp);
+        => AsCaller(() => new VersionPlugin(sessionHub).RestoreFromPointInTime(path, timestamp));
 
     private static CallToolResult ErrorResult(string message) => new()
     {

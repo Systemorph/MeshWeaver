@@ -99,7 +99,7 @@ public class GatedNodeExactPathReadTests(PostgreSqlFixture fixture, ITestOutputH
     private async Task<string> GetAs(string userId, string path)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+        access.SetHostIdentity(new AccessContext { ObjectId = userId, Name = userId });
         try
         {
             return await new MeshOperations(Mesh).Get(path)
@@ -107,7 +107,7 @@ public class GatedNodeExactPathReadTests(PostgreSqlFixture fixture, ITestOutputH
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 

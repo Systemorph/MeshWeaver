@@ -2,9 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Text;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Markdown.Export.Configuration;
+using MeshWeaver.Markdown.Export.Email;
+using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -44,7 +47,16 @@ public static class SendDocumentDispatch
     /// <param name="recipientUserPaths">User node paths whose email should be resolved and mailed.</param>
     /// <param name="rawEmails">Raw email addresses to mail directly (fallback / additional recipients).</param>
     /// <param name="subject">Email subject.</param>
-    /// <param name="htmlBody">Email HTML body.</param>
+    /// <param name="htmlBody">
+    /// The sender's covering note as HTML. With <see cref="DocumentDelivery.Attachment"/> this is
+    /// the whole body; with <see cref="DocumentDelivery.EmailBody"/> it becomes the intro above
+    /// the rendered document.
+    /// </param>
+    /// <param name="delivery">
+    /// Whether the document travels as an attachment or AS the email body. Body delivery requires
+    /// an HTML export (<see cref="ExportFormat.Html"/>) — it is the only format that is
+    /// email-safe and that resolves embedded layout areas.
+    /// </param>
     /// <param name="timeout">Upper bound on the export + each node read. Defaults to 2 minutes.</param>
     /// <param name="logger">Optional logger for diagnostics.</param>
     /// <returns>A cold observable emitting one <see cref="SendDocumentResult"/> then completing.</returns>
@@ -57,6 +69,8 @@ public static class SendDocumentDispatch
         IReadOnlyCollection<string> rawEmails,
         string subject,
         string htmlBody,
+        DocumentDelivery delivery = DocumentDelivery.Attachment,
+        EmailDelivery? identity = null,
         TimeSpan? timeout = null,
         ILogger? logger = null)
     {
@@ -72,7 +86,9 @@ public static class SendDocumentDispatch
                         "No valid recipient email addresses could be resolved."));
 
                 // 2. Run the export through the standard pipeline → RenderedDocument bytes, then send.
-                return ExportThenSend(hub, workspace, sourcePath, options, emails, subject, htmlBody, readTimeout, logger);
+                return ExportThenSend(
+                    hub, workspace, sourcePath, options, emails, subject, htmlBody, delivery,
+                    identity ?? EmailDelivery.AsSharedMailbox, readTimeout, logger);
             });
     }
 
@@ -84,6 +100,8 @@ public static class SendDocumentDispatch
         IReadOnlyList<string> emails,
         string subject,
         string htmlBody,
+        DocumentDelivery delivery,
+        EmailDelivery identity,
         TimeSpan readTimeout,
         ILogger? logger)
         => hub.Observe<ExportDocumentResponse>(
@@ -124,8 +142,33 @@ public static class SendDocumentDispatch
                             return Observable.Return(new SendDocumentResult(
                                 false, activityPath, Array.Empty<string>(), "Export produced empty content."));
 
-                        var attachment = new EmailAttachment(rendered.FileName, rendered.MimeType, rendered.Content);
-                        return SendToAll(hub, emails, subject, htmlBody, attachment, activityPath, logger);
+                        // Body delivery: the rendered document IS the message. The covering note
+                        // is prepended INTO the document so it is not lost, and the only parts
+                        // attached are the pictures the body references by cid — that is the
+                        // whole point of "send it as the email".
+                        if (delivery == DocumentDelivery.EmailBody)
+                        {
+                            var documentHtml = DocumentHtmlComposer.PrependIntro(
+                                Encoding.UTF8.GetString(rendered.Content), htmlBody);
+
+                            return EmailImageInliner.Inline(documentHtml, hub)
+                                .SelectMany(inlined =>
+                                {
+                                    foreach (var url in inlined.Remote)
+                                        logger?.LogInformation(
+                                            "SendDocument: {Url} stays a remote image; most mail clients "
+                                            + "hide it until the reader allows picture downloads", url);
+
+                                    return SendToAll(
+                                        hub, emails, subject, inlined.Html,
+                                        inlined.Attachments, identity, activityPath, logger);
+                                });
+                        }
+
+                        return SendToAll(
+                            hub, emails, subject, htmlBody,
+                            [new EmailAttachment(rendered.FileName, rendered.MimeType, rendered.Content)],
+                            identity, activityPath, logger);
                     });
             });
 
@@ -178,13 +221,13 @@ public static class SendDocumentDispatch
         IReadOnlyList<string> emails,
         string subject,
         string htmlBody,
-        EmailAttachment attachment,
+        IReadOnlyCollection<EmailAttachment> attachments,
+        EmailDelivery identity,
         string activityPath,
         ILogger? logger)
     {
-        var attachments = new[] { attachment };
         return emails.ToObservable()
-            .SelectMany(to => hub.SendEmail(to, subject, htmlBody, attachments)
+            .SelectMany(to => hub.SendEmail(to, subject, htmlBody, attachments, identity)
                 .Select(ok => (to, ok))
                 .Catch((Exception ex) =>
                 {
