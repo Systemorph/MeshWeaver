@@ -176,7 +176,7 @@ so never relax it. Two consequences that trip people up, both SILENT:
 
 **Neither is terminal any more.** CD carries a **reconciler**: a 3-hourly `schedule` (plus its own
 `workflow_dispatch`) resolves main's tip through the API, asks ACR whether that commit has the
-complete five-image set, and publishes only when it does not — bounded at 3 attempts per commit,
+complete four-image set, and publishes only when it does not — bounded at 3 attempts per commit,
 with every attempt and the final give-up written to the `ci-failure` issue. So:
 
 - **To kick CD by hand: `gh workflow run main-cd.yml --ref main`** (it heals HEAD; it can never

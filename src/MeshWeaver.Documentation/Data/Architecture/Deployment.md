@@ -117,8 +117,7 @@ memex/aspire/
 ├── Memex.Aspire.Hosting/           # Shared Aspire hosting extensions
 ├── Memex.Portal.Distributed/       # Portal with co-hosted Orleans silo
 ├── Memex.Portal.ServiceDefaults/   # Shared service defaults (health, telemetry)
-├── Memex.Database.Migration/       # Database migration project (runs MigrationRegistry.All)
-└── Memex.NodeType.Bake/            # NodeType pre-compilation (bake) job
+└── Memex.Database.Migration/       # Database migration project (runs MigrationRegistry.All)
 ```
 
 Outside `aspire/`, `memex/` also holds `Memex.Portal.Monolith` (the standalone dev portal), `Memex.Portal.Shared` (shared portal code, including the self-update poller), `Memex.Client`, and `Memex.LocalMesh`.
