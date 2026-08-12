@@ -102,6 +102,7 @@ WEIGHTS=$(cat <<'EOF'
 3 MeshWeaver.Hosting.Blazor.Test
 3 MeshWeaver.ContentCollections.Test
 3 MeshWeaver.Documentation.Test
+6 MeshWeaver.Json.Test
 2 MeshWeaver.Serialization.Test
 2 MeshWeaver.Markdown.Export.Test
 1 MeshWeaver.TestDomain

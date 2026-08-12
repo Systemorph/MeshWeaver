@@ -4,12 +4,13 @@
     <RootNamespace>MeshWeaver.Data</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="JsonPatch.Net" />
     <PackageReference Include="System.Reactive" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Messaging.Contract\MeshWeaver.Messaging.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.ShortGuid\MeshWeaver.ShortGuid.csproj" />
+    <!-- MeshWeaver.Json (RFC 6901 pointer + RFC 6902 patch) lives here — see #1231. -->
+    <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
   </ItemGroup>
 </Project>
