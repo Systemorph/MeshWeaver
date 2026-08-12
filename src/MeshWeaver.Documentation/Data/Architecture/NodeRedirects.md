@@ -75,7 +75,9 @@ A chain that stops short **fails loudly and lands somewhere useful**. The resolv
 |---|---|
 | `Loop` | The chain revisited a path it had already been through. |
 | `DepthExceeded` | Still redirecting after `MaxHops` hops — collapse the chain by pointing the first declaration at the final target. |
-| `TargetMissing` | The declaration names no destination at all. |
+| `TargetMissing` | The chain had nowhere to go — the declaration carries no `targetPath` (or a blank one), **or** it names one that resolves to nothing at all. |
+
+`TargetMissing` deliberately does **not** cover a target that resolves to an ancestor with an unmatched remainder: that is followed, because a destination may legitimately name a layout *area* rather than a node (`Underwriting/Overview`) and the resolver cannot tell that apart from a dead deep path. The fallback below handles the dead case at the point where the answer is actually known.
 
 Because the failure is a **value** on `AddressResolution`, the GUI reads it and the tests assert on it — nobody has to grep a log to find out what happened. The viewer lands on the redirect node's own page, which names the intended destination and links to it: a dead end with a signpost beats a dead end.
 
