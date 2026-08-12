@@ -741,12 +741,12 @@ jobs:
       - name: Generate gRPC-web client (buf)
         run: |
           set -euo pipefail
-          # npm INSTALL, not `npm ci`: clients/grpc-web/package-lock.json is deliberately
-          # GITIGNORED (clients/grpc-web/.gitignore), and `npm ci` hard-fails without a lockfile
-          # ("can only install with an existing package-lock.json"). Every leg in clients.yml uses
-          # `npm install` for exactly this reason. This is why the first portal-next CD run failed
-          # while the other three image legs went green.
-          npm --prefix clients/grpc-web install --no-audit --no-fund
+          # `npm ci` — clients/grpc-web now COMMITS its package-lock.json. It used to be gitignored,
+          # which forced `npm install` here (and everywhere in clients.yml) and left this image leg
+          # floating: a caret dependency could resolve differently on any given run, so the shipped
+          # bundle was not reproducible. That is exactly how @fluentui/react-components 9.74.6 turned
+          # the Clients workflow red repo-wide on 2026-08-11 with no commit behind it.
+          npm --prefix clients/grpc-web ci --no-audit --no-fund
           npm --prefix clients/grpc-web run gen
           test -f clients/grpc-web/src/gen/mesh_pb.ts
       # ⚠️ PRE-EXISTING DRIFT, deliberately left alone here: this hand-writes `3.0.0-ci.<n>` while
