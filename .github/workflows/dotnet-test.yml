@@ -494,6 +494,85 @@ jobs:
           fi
         done
         exit $rc
+    # ── Acquire the headless browser BEFORE the tests, as infrastructure ──────
+    # 🚨 Since #1230 the PDF export IS a headless browser: the document model was replaced
+    # by CSS Paged Media printed by Chromium, so every PDF test — the renderer's own, and the
+    # export-script round trips in the Monolith / Orleans / Security suites — needs one. This
+    # step provisions the EXACT build the portal image ships (same Playwright version, same
+    # `--only-shell` Chromium), so CI cannot pass on a browser production does not have, nor
+    # fail on one it does.
+    #
+    # Same reasoning as the Testcontainers pre-pull above: making the dependency explicit
+    # means a CDN blip fails HERE with an unambiguous infra error instead of surfacing as a
+    # pile of plausible-looking PDF test failures. NO `continue-on-error` and no
+    # input-shaped `if:` — a browser this step failed to install must redden the shard, not
+    # silently leave the tests asserting the "no browser here" branch and calling it green.
+    #
+    # Keep PLAYWRIGHT_VERSION in step with deploy/base-images/portal-ai/Dockerfile.
+    - name: "Provision the headless browser (infra, not a test)"
+      env:
+        PLAYWRIGHT_VERSION: 1.62.1
+        PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
+      run: |
+        set -euo pipefail
+        sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+        sudo chown "$(id -u):$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
+        ok=0
+        for attempt in 1 2 3; do
+          if npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium; then
+            ok=1; break
+          fi
+          delay=$((10 * attempt))
+          echo "browser install attempt $attempt failed; retrying in ${delay}s" >&2
+          sleep $delay
+        done
+        if [ $ok -eq 0 ]; then
+          echo "::error::could not install the headless browser after 3 attempts — this is an INFRA failure, not a test failure."
+          exit 1
+        fi
+        # The binary is named differently per platform (see the Dockerfile); match both so this
+        # keeps working if the runner architecture ever changes.
+        BROWSER="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f \
+          \( -name headless_shell -o -name chrome-headless-shell \) | head -n 1)"
+        if [ -z "$BROWSER" ]; then
+          echo "::error::the browser installed but no headless-shell binary was found under $PLAYWRIGHT_BROWSERS_PATH"
+          find "$PLAYWRIGHT_BROWSERS_PATH" -maxdepth 3
+          exit 1
+        fi
+        "$BROWSER" --version
+        # 🚨 Give the browser back its SANDBOX. Ubuntu 23.10+ (this runner is 24.04) restricts
+        # unprivileged user namespaces through AppArmor — and an unprivileged user namespace is
+        # exactly what Chromium's namespace sandbox is built from. Without this the browser
+        # aborts with "No usable sandbox!" and every PDF test fails with a rendering error that
+        # looks like a defect in the export. Note the direction: this ENABLES a security
+        # mechanism. The alternative — passing --no-sandbox in CI — would have CI exercise a
+        # weaker configuration than a properly configured host runs, which is precisely the
+        # divergence this step exists to remove. The knob is checked for existence because a
+        # kernel without it has no such restriction to lift.
+        if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+        # Prove it can actually PRINT here, not merely that it installed. This is the property
+        # every PDF test depends on, and asserting it in the infra step turns an environment
+        # problem into one unambiguous failure instead of a scattering of plausible-looking
+        # test failures across four shards (which is exactly how this was found).
+        # `timeout` is mandatory, not belt-and-braces: --print-to-pdf contracts to WRITE the PDF,
+        # not to exit afterwards (the renderer waits on the file, not on the process, for exactly
+        # this reason). An unbounded smoke print would hang the shard instead of failing it.
+        printf '<!doctype html><title>smoke</title><p>smoke</p>' > /tmp/mw-smoke.html
+        timeout 60 "$BROWSER" --headless=new --disable-gpu --disable-dev-shm-usage \
+          --no-pdf-header-footer --user-data-dir=/tmp/mw-smoke-profile \
+          --print-to-pdf=/tmp/mw-smoke.pdf file:///tmp/mw-smoke.html 2>/tmp/mw-smoke.err || true
+        if [ ! -s /tmp/mw-smoke.pdf ]; then
+          echo "::error::the headless browser installed but cannot print a PDF on this runner — this is an INFRA failure, not a test failure."
+          cat /tmp/mw-smoke.err >&2 || true
+          exit 1
+        fi
+        echo "browser smoke print OK ($(wc -c < /tmp/mw-smoke.pdf) bytes)"
+        # First entry in PixelRenderingOptions.EnvironmentVariables, so the renderer's probe
+        # resolves this exact binary rather than whatever browser the runner image happens to
+        # carry.
+        echo "MESHWEAVER_CHROMIUM_PATH=$BROWSER" >> "$GITHUB_ENV"
     - name: Run Tests
       env:
         # The runner VM is destroyed after the job, so Testcontainers' resource

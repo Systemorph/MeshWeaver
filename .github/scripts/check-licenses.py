@@ -75,17 +75,9 @@ ALLOWED_COMPOUND = {
 # ---------------------------------------------------------------------------
 EXCEPTIONS = {
     # --- Known-incompatible, removal in flight. These are DEBT, not approvals. ---
-    "questpdf": (
-        "VIOLATION, added 2026-08-11, removal tracked by #1230 and BLOCKED on it. "
-        "Dual-licensed: the Community tier is free only below a revenue threshold, "
-        "above which a paid commercial licence is required. It is not deletable today "
-        "for a hard reason: the intended replacement is the headless-Chromium renderer, "
-        "and Chromium is deliberately NOT in the deployed base image "
-        "(deploy/base-images/portal-ai/Dockerfile), so removing QuestPDF now would "
-        "leave the portal with NO PDF renderer at all. Sequence: #1222 -> #1234 -> a "
-        "base-image decision on shipping Chromium -> this removal. Delete this entry "
-        "with it; until then the exception is dated debt, not an approval."
-    ),
+    # (questpdf lived here from 2026-08-11 until #1230 removed the package: the portal base
+    #  image now ships a headless Chromium and the PDF renderer prints CSS Paged Media with
+    #  it, so there is nothing left to except. Deleted with the dependency, as it said.)
     # --- Permissive upstream, metadata simply absent from the package. ---
     "uglytoad.pdfpig": (
         "Apache-2.0 upstream (github.com/UglyToad/PdfPig). The 1.7.0-custom-* "
