@@ -1,4 +1,5 @@
 ﻿using System.Linq.Expressions;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -173,8 +174,20 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     /// <summary>HTML element id bound from <c>ViewModel.Id</c>.</summary>
     protected string? Id { get; set; }
 
-    /// <summary>Component-lifetime disposables released in <c>DisposeAsync</c>, in addition to data-binding subscriptions.</summary>
-    protected List<IDisposable> Disposables { get; } = new();
+    /// <summary>
+    /// Component-lifetime disposables released in <c>DisposeAsync</c>, in addition to data-binding
+    /// subscriptions.
+    ///
+    /// <para>🚨 A <see cref="CompositeDisposable"/>, not a <c>List&lt;IDisposable&gt;</c>, and both
+    /// halves of that matter (issue #1308). Its <c>Add</c> is thread-safe, so a subscription
+    /// registered from a query-change callback — which arrives on a hub/pool thread, NOT the
+    /// renderer — can no longer race the enumeration in <see cref="DisposeAsync"/> that runs on the
+    /// renderer's disposal queue ("Collection was modified; enumeration operation may not
+    /// execute", which failed the whole Blazor circuit). And an <c>Add</c> that lands AFTER
+    /// disposal disposes its argument immediately instead of parking it in a list nobody will ever
+    /// drain again — the unowned-work-outliving-its-owner leak that the same race hides.</para>
+    /// </summary>
+    protected CompositeDisposable Disposables { get; } = new();
 
     private bool _viewDisposed;
 
@@ -194,9 +207,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         _viewDisposed = true;
         Logger.LogDebug("Disposing area {Area}", Area);
         DisposeBindings();
-        foreach (var d in Disposables)
-            d.Dispose();
-        Disposables.Clear();
+        // Dispose (not Clear) BOTH composites: this is component teardown, not a re-bind, so the
+        // accumulators must become terminal. A late Add then disposes its argument on the spot.
+        bindings.Dispose();
+        Disposables.Dispose();
         return default;
     }
 
@@ -524,15 +538,18 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         DataBind(ViewModel.Class, x => x.Class);
         DataBind(ViewModel.Style, x => x.Style);
     }
-    private readonly List<IDisposable> bindings = new();
+    // CompositeDisposable for the same reason as Disposables above: DataBind subscribes streams
+    // whose emissions land off the renderer, and a re-bind (BindDataAfterParameterReset) can run
+    // concurrently with one of those callbacks registering a binding.
+    private readonly CompositeDisposable bindings = new();
 
-    /// <summary>Disposes all active data-binding subscriptions registered via <c>AddBinding</c> and <c>DataBind</c>.</summary>
-    protected virtual void DisposeBindings()
-    {
-        foreach (var d in bindings)
-            d.Dispose();
-        bindings.Clear();
-    }
+    /// <summary>
+    /// Disposes all active data-binding subscriptions registered via <c>AddBinding</c> and
+    /// <c>DataBind</c>. <c>Clear</c>, not <c>Dispose</c>: this also runs on a parameter-driven
+    /// RE-BIND, after which the accumulator must still accept the new bindings. Component teardown
+    /// makes it terminal — see <see cref="DisposeAsync"/>.
+    /// </summary>
+    protected virtual void DisposeBindings() => bindings.Clear();
 
     /// <summary>
     /// Posts a <c>ClickedEvent</c> for the current area to the stream owner, stamping the circuit

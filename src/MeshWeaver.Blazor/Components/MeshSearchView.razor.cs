@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
@@ -73,7 +74,14 @@ public partial class MeshSearchView
     // releases its entry so the next result batch can re-ask; see RecordDeleteOutcome.
     private readonly HashSet<string> _permissionRequested =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<IDisposable> _affordanceSubscriptions = new();
+    // 🚨 CompositeDisposable, not List<IDisposable> — issue #1308. ResolveDeletePermissions runs
+    // straight off the result stream's emission (ApplyResults is called from the query
+    // subscription's OnNext, on a hub/pool thread — NOT inside InvokeAsync), so it registers
+    // probes concurrently with Dispose() enumerating them on the renderer's disposal queue. That
+    // threw "Collection was modified; enumeration operation may not execute" out of Dispose and
+    // failed the whole Blazor circuit. Add is thread-safe here, and an Add that lands after
+    // disposal disposes the probe immediately rather than leaking it.
+    private readonly CompositeDisposable _affordanceSubscriptions = new();
     // The card whose trash is armed for confirmation (two-step delete; null = none armed).
     private string? _pendingDeletePath;
     // The keyboard-highlighted result path (Arrow Up/Down). Distinct from the SelectedPath param.
@@ -1126,7 +1134,14 @@ public partial class MeshSearchView
         ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
     private ImmutableDictionary<string, IDisposable> _treeLevelSubscriptions =
         ImmutableDictionary<string, IDisposable>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
-    private ImmutableList<IDisposable> _treeProbeSubscriptions = ImmutableList<IDisposable>.Empty;
+    // 🚨 CompositeDisposable for the same reason as _affordanceSubscriptions: ProbeTreeChildCounts
+    // is called from the tree-level query subscription's OnNext (off the renderer), so the plain
+    // read-modify-write this replaces raced DisposeTreeSubscriptions on the renderer thread. That
+    // one never threw — an ImmutableList cannot — it silently LOST the probe, which is the same
+    // defect wearing the quieter of its two faces: an unowned subscription outliving its reader.
+    // (_treeLevelSubscriptions and _treeSearchSubscription below stay as they are: both are
+    // written only from InitializeTree / the folder-click and search handlers, all on the renderer.)
+    private readonly CompositeDisposable _treeProbeSubscriptions = new();
     private IDisposable? _treeSearchSubscription;
     private ImmutableList<NamespaceTreeItem>? _treeSearchItems;
     private bool _treeSearchLoading;
@@ -1188,14 +1203,17 @@ public partial class MeshSearchView
         InitializeTree();
     }
 
+    /// <summary>
+    /// Tears down the tree's live subscriptions. Also runs on <see cref="ResetTree"/>, so the probe
+    /// accumulator is CLEARED (disposes its contents, stays usable) rather than disposed; only
+    /// <see cref="Dispose"/> makes it terminal.
+    /// </summary>
     private void DisposeTreeSubscriptions()
     {
         foreach (var subscription in _treeLevelSubscriptions.Values)
             subscription.Dispose();
         _treeLevelSubscriptions = _treeLevelSubscriptions.Clear();
-        foreach (var probe in _treeProbeSubscriptions)
-            probe.Dispose();
-        _treeProbeSubscriptions = ImmutableList<IDisposable>.Empty;
+        _treeProbeSubscriptions.Clear();
         _treeSearchSubscription?.Dispose();
         _treeSearchSubscription = null;
     }
@@ -1309,7 +1327,7 @@ public partial class MeshSearchView
                     ns, new TreeLevel(false, NamespaceTreeBuilder.BuildLevel(ns, nodes, countMap)));
                 StateHasChanged();
             }));
-        _treeProbeSubscriptions = _treeProbeSubscriptions.Add(probeSubscription);
+        _treeProbeSubscriptions.Add(probeSubscription);
     }
 
     private void OnTreeFolderHeaderClick(string folderPath, bool lazy)
@@ -1871,8 +1889,10 @@ public partial class MeshSearchView
     }
 
     /// <summary>
-    /// Disposes all reactive subscriptions (search results, navigation, tree, affordance) held by this
-    /// view, then the base's data bindings.
+    /// Disposes all reactive subscriptions (search results, navigation, tree, affordance) held by
+    /// this view, then the base's data bindings. Every step is idempotent and none of them
+    /// enumerates a collection another thread can be writing — which is what makes this safe
+    /// against the live result stream still emitting while the circuit tears down (issue #1308).
     /// </summary>
     /// <remarks>
     /// 🚨 This MUST be the async override, not a plain <c>Dispose()</c>. <c>BlazorView</c> implements
@@ -1886,9 +1906,11 @@ public partial class MeshSearchView
         _reactiveSubscription?.Dispose();
         DisposeTreeSubscriptions();
         _navSubscription?.Dispose();
-        foreach (var sub in _affordanceSubscriptions)
-            sub.Dispose();
-        _affordanceSubscriptions.Clear();
+        // Dispose, not Clear: teardown is terminal here, so a probe registered by an in-flight
+        // ApplyResults or ProbeTreeChildCounts after this point is disposed on arrival instead of
+        // being retained forever.
+        _treeProbeSubscriptions.Dispose();
+        _affordanceSubscriptions.Dispose();
         return base.DisposeAsync();
     }
 }
