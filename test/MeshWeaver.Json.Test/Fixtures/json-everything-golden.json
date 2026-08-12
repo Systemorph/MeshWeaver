@@ -1,0 +1,6827 @@
+{
+  "$provenance": "Captured verbatim from json-everything (JsonPatch.Net 5.0.3, JsonPointer.Net 7.0.1, Json.More.Net 3.0.1) before its removal in #1231. Every value here is that library's literal output — the wire shape the React / gRPC-web / Python clients are pinned to. Regenerate ONLY by re-running the capture against those exact package versions; never by pasting MeshWeaver.Json's own output.",
+  "pointerParse": [
+    {
+      "input": "",
+      "text": "",
+      "segmentCount": 0,
+      "segments": []
+    },
+    {
+      "input": "/",
+      "text": "/",
+      "segmentCount": 1,
+      "segments": [
+        ""
+      ]
+    },
+    {
+      "input": "/a",
+      "text": "/a",
+      "segmentCount": 1,
+      "segments": [
+        "a"
+      ]
+    },
+    {
+      "input": "/a/b",
+      "text": "/a/b",
+      "segmentCount": 2,
+      "segments": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "input": "/a/b/c",
+      "text": "/a/b/c",
+      "segmentCount": 3,
+      "segments": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "input": "/0",
+      "text": "/0",
+      "segmentCount": 1,
+      "segments": [
+        "0"
+      ]
+    },
+    {
+      "input": "/a/0",
+      "text": "/a/0",
+      "segmentCount": 2,
+      "segments": [
+        "a",
+        "0"
+      ]
+    },
+    {
+      "input": "/a/0/b",
+      "text": "/a/0/b",
+      "segmentCount": 3,
+      "segments": [
+        "a",
+        "0",
+        "b"
+      ]
+    },
+    {
+      "input": "/-",
+      "text": "/-",
+      "segmentCount": 1,
+      "segments": [
+        "-"
+      ]
+    },
+    {
+      "input": "/a/-",
+      "text": "/a/-",
+      "segmentCount": 2,
+      "segments": [
+        "a",
+        "-"
+      ]
+    },
+    {
+      "input": "/a~1b",
+      "text": "/a~1b",
+      "segmentCount": 1,
+      "segments": [
+        "a~1b"
+      ]
+    },
+    {
+      "input": "/a~0b",
+      "text": "/a~0b",
+      "segmentCount": 1,
+      "segments": [
+        "a~0b"
+      ]
+    },
+    {
+      "input": "/a~01b",
+      "text": "/a~01b",
+      "segmentCount": 1,
+      "segments": [
+        "a~01b"
+      ]
+    },
+    {
+      "input": "/a~00b",
+      "text": "/a~00b",
+      "segmentCount": 1,
+      "segments": [
+        "a~00b"
+      ]
+    },
+    {
+      "input": "/~1",
+      "text": "/~1",
+      "segmentCount": 1,
+      "segments": [
+        "~1"
+      ]
+    },
+    {
+      "input": "/~0",
+      "text": "/~0",
+      "segmentCount": 1,
+      "segments": [
+        "~0"
+      ]
+    },
+    {
+      "input": "/~0~1",
+      "text": "/~0~1",
+      "segmentCount": 1,
+      "segments": [
+        "~0~1"
+      ]
+    },
+    {
+      "input": "/~1~0",
+      "text": "/~1~0",
+      "segmentCount": 1,
+      "segments": [
+        "~1~0"
+      ]
+    },
+    {
+      "input": "//",
+      "text": "//",
+      "segmentCount": 2,
+      "segments": [
+        "",
+        ""
+      ]
+    },
+    {
+      "input": "/a//b",
+      "text": "/a//b",
+      "segmentCount": 3,
+      "segments": [
+        "a",
+        "",
+        "b"
+      ]
+    },
+    {
+      "input": "/ ",
+      "text": "/ ",
+      "segmentCount": 1,
+      "segments": [
+        " "
+      ]
+    },
+    {
+      "input": "/a b",
+      "text": "/a b",
+      "segmentCount": 1,
+      "segments": [
+        "a b"
+      ]
+    },
+    {
+      "input": "/äöü",
+      "text": "/äöü",
+      "segmentCount": 1,
+      "segments": [
+        "äöü"
+      ]
+    },
+    {
+      "input": "/k\uD83D\uDE00",
+      "text": "/k\uD83D\uDE00",
+      "segmentCount": 1,
+      "segments": [
+        "k\uD83D\uDE00"
+      ]
+    },
+    {
+      "input": "/\"quoted\"",
+      "text": "/\"quoted\"",
+      "segmentCount": 1,
+      "segments": [
+        "\"quoted\""
+      ]
+    },
+    {
+      "input": "/a\\b",
+      "text": "/a\\b",
+      "segmentCount": 1,
+      "segments": [
+        "a\\b"
+      ]
+    },
+    {
+      "input": "/00",
+      "text": "/00",
+      "segmentCount": 1,
+      "segments": [
+        "00"
+      ]
+    },
+    {
+      "input": "/01",
+      "text": "/01",
+      "segmentCount": 1,
+      "segments": [
+        "01"
+      ]
+    },
+    {
+      "input": "/-1",
+      "text": "/-1",
+      "segmentCount": 1,
+      "segments": [
+        "-1"
+      ]
+    },
+    {
+      "input": "/1e3",
+      "text": "/1e3",
+      "segmentCount": 1,
+      "segments": [
+        "1e3"
+      ]
+    },
+    {
+      "input": "/x/y/z/0/-/~0/~1",
+      "text": "/x/y/z/0/-/~0/~1",
+      "segmentCount": 7,
+      "segments": [
+        "x",
+        "y",
+        "z",
+        "0",
+        "-",
+        "~0",
+        "~1"
+      ]
+    }
+  ],
+  "pointerInvalid": [
+    "a",
+    "a/b",
+    "~",
+    "/~",
+    "/~2",
+    "/~x",
+    "abc",
+    "x/",
+    "/a~"
+  ],
+  "pointerCreate": [
+    {
+      "segments": [],
+      "text": ""
+    },
+    {
+      "segments": [
+        "a"
+      ],
+      "text": "/a"
+    },
+    {
+      "segments": [
+        "a",
+        "b"
+      ],
+      "text": "/a/b"
+    },
+    {
+      "segments": [
+        "a/b"
+      ],
+      "text": "/a~1b"
+    },
+    {
+      "segments": [
+        "a~b"
+      ],
+      "text": "/a~0b"
+    },
+    {
+      "segments": [
+        "a~1b"
+      ],
+      "text": "/a~01b"
+    },
+    {
+      "segments": [
+        "~"
+      ],
+      "text": "/~0"
+    },
+    {
+      "segments": [
+        "/"
+      ],
+      "text": "/~1"
+    },
+    {
+      "segments": [
+        ""
+      ],
+      "text": "/"
+    },
+    {
+      "segments": [
+        "",
+        ""
+      ],
+      "text": "//"
+    },
+    {
+      "segments": [
+        "0"
+      ],
+      "text": "/0"
+    },
+    {
+      "segments": [
+        "-"
+      ],
+      "text": "/-"
+    },
+    {
+      "segments": [
+        "äöü"
+      ],
+      "text": "/äöü"
+    },
+    {
+      "segments": [
+        "k\uD83D\uDE00"
+      ],
+      "text": "/k\uD83D\uDE00"
+    },
+    {
+      "segments": [
+        "\"quoted\""
+      ],
+      "text": "/\"quoted\""
+    },
+    {
+      "segments": [
+        "a\\b"
+      ],
+      "text": "/a\\b"
+    },
+    {
+      "segments": [
+        "MeshWeaver.Mesh.Contract.MeshNode",
+        "\"my/id~x\""
+      ],
+      "text": "/MeshWeaver.Mesh.Contract.MeshNode/\"my~1id~0x\""
+    }
+  ],
+  "pointerEvaluate": [
+    {
+      "pointer": "",
+      "found": true,
+      "rawValue": "{\n  \"a\": { \"b\": { \"c\": 42 }, \"0\": \"numeric-key\", \"\": \"empty-key\" },\n  \"0\": \"root-numeric\",\n  \"\": { \"\": \"double-empty\" },\n  \"-\": \"dash-key\",\n  \"arr\": [10, 20, 30],\n  \"a/b\": \"slash-key\",\n  \"a~b\": \"tilde-key\",\n  \"a~1b\": \"tilde-one-key\",\n  \"/\": \"solidus-key\",\n  \"~\": \"tilde-only-key\",\n  \"äöü\": \"umlaut\",\n  \"k\uD83D\uDE00\": \"emoji\",\n  \"\\\"quoted\\\"\": \"quoted\",\n  \"a\\\\b\": \"backslash\",\n  \" \": \"space\",\n  \"nested\": { \"arr\": [ { \"x\": 1 }, { \"x\": 2 } ] }\n}"
+    },
+    {
+      "pointer": "/a",
+      "found": true,
+      "rawValue": "{ \"b\": { \"c\": 42 }, \"0\": \"numeric-key\", \"\": \"empty-key\" }"
+    },
+    {
+      "pointer": "/a/b",
+      "found": true,
+      "rawValue": "{ \"c\": 42 }"
+    },
+    {
+      "pointer": "/a/b/c",
+      "found": true,
+      "rawValue": "42"
+    },
+    {
+      "pointer": "/a/0",
+      "found": true,
+      "rawValue": "\"numeric-key\""
+    },
+    {
+      "pointer": "/a/",
+      "found": true,
+      "rawValue": "\"empty-key\""
+    },
+    {
+      "pointer": "/0",
+      "found": true,
+      "rawValue": "\"root-numeric\""
+    },
+    {
+      "pointer": "/",
+      "found": true,
+      "rawValue": "{ \"\": \"double-empty\" }"
+    },
+    {
+      "pointer": "//",
+      "found": true,
+      "rawValue": "\"double-empty\""
+    },
+    {
+      "pointer": "/-",
+      "found": true,
+      "rawValue": "\"dash-key\""
+    },
+    {
+      "pointer": "/arr",
+      "found": true,
+      "rawValue": "[10, 20, 30]"
+    },
+    {
+      "pointer": "/arr/0",
+      "found": true,
+      "rawValue": "10"
+    },
+    {
+      "pointer": "/arr/1",
+      "found": true,
+      "rawValue": "20"
+    },
+    {
+      "pointer": "/arr/2",
+      "found": true,
+      "rawValue": "30"
+    },
+    {
+      "pointer": "/arr/3",
+      "found": false,
+      "rawValue": null
+    },
+    {
+      "pointer": "/arr/-",
+      "found": true,
+      "rawValue": "30"
+    },
+    {
+      "pointer": "/arr/01",
+      "found": false,
+      "rawValue": null
+    },
+    {
+      "pointer": "/arr/-1",
+      "found": false,
+      "rawValue": null
+    },
+    {
+      "pointer": "/arr/x",
+      "found": false,
+      "rawValue": null
+    },
+    {
+      "pointer": "/a~1b",
+      "found": true,
+      "rawValue": "\"slash-key\""
+    },
+    {
+      "pointer": "/a~0b",
+      "found": true,
+      "rawValue": "\"tilde-key\""
+    },
+    {
+      "pointer": "/a~01b",
+      "found": true,
+      "rawValue": "\"tilde-one-key\""
+    },
+    {
+      "pointer": "/~1",
+      "found": true,
+      "rawValue": "\"solidus-key\""
+    },
+    {
+      "pointer": "/~0",
+      "found": true,
+      "rawValue": "\"tilde-only-key\""
+    },
+    {
+      "pointer": "/äöü",
+      "found": true,
+      "rawValue": "\"umlaut\""
+    },
+    {
+      "pointer": "/k\uD83D\uDE00",
+      "found": true,
+      "rawValue": "\"emoji\""
+    },
+    {
+      "pointer": "/\"quoted\"",
+      "found": true,
+      "rawValue": "\"quoted\""
+    },
+    {
+      "pointer": "/a\\b",
+      "found": true,
+      "rawValue": "\"backslash\""
+    },
+    {
+      "pointer": "/ ",
+      "found": true,
+      "rawValue": "\"space\""
+    },
+    {
+      "pointer": "/nested/arr/0/x",
+      "found": true,
+      "rawValue": "1"
+    },
+    {
+      "pointer": "/nested/arr/1/x",
+      "found": true,
+      "rawValue": "2"
+    },
+    {
+      "pointer": "/nested/arr/2/x",
+      "found": false,
+      "rawValue": null
+    },
+    {
+      "pointer": "/missing",
+      "found": false,
+      "rawValue": null
+    },
+    {
+      "pointer": "/a/b/c/d",
+      "found": false,
+      "rawValue": null
+    },
+    {
+      "pointer": "/arr/0/x",
+      "found": false,
+      "rawValue": null
+    }
+  ],
+  "pointerCombine": [
+    {
+      "a": "",
+      "b": "",
+      "text": "",
+      "segmentCount": 0
+    },
+    {
+      "a": "",
+      "b": "/",
+      "text": "/",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/a",
+      "text": "/a",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/a/b",
+      "text": "/a/b",
+      "segmentCount": 2
+    },
+    {
+      "a": "",
+      "b": "/a/b/c",
+      "text": "/a/b/c",
+      "segmentCount": 3
+    },
+    {
+      "a": "",
+      "b": "/0",
+      "text": "/0",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/a/0",
+      "text": "/a/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "",
+      "b": "/a/0/b",
+      "text": "/a/0/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "",
+      "b": "/-",
+      "text": "/-",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/a/-",
+      "text": "/a/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "",
+      "b": "/a~1b",
+      "text": "/a~1b",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/a~0b",
+      "text": "/a~0b",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/a~01b",
+      "text": "/a~01b",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/a~00b",
+      "text": "/a~00b",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/~1",
+      "text": "/~1",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/~0",
+      "text": "/~0",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/~0~1",
+      "text": "/~0~1",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/~1~0",
+      "text": "/~1~0",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "//",
+      "text": "//",
+      "segmentCount": 2
+    },
+    {
+      "a": "",
+      "b": "/a//b",
+      "text": "/a//b",
+      "segmentCount": 3
+    },
+    {
+      "a": "",
+      "b": "/ ",
+      "text": "/ ",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/a b",
+      "text": "/a b",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/äöü",
+      "text": "/äöü",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/k\uD83D\uDE00",
+      "text": "/k\uD83D\uDE00",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/\"quoted\"",
+      "text": "/\"quoted\"",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/a\\b",
+      "text": "/a\\b",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/00",
+      "text": "/00",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/01",
+      "text": "/01",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/-1",
+      "text": "/-1",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/1e3",
+      "text": "/1e3",
+      "segmentCount": 1
+    },
+    {
+      "a": "",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/x/y/z/0/-/~0/~1",
+      "segmentCount": 7
+    },
+    {
+      "a": "/",
+      "b": "",
+      "text": "/",
+      "segmentCount": 1
+    },
+    {
+      "a": "/",
+      "b": "/",
+      "text": "//",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/a",
+      "text": "//a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/a/b",
+      "text": "//a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/",
+      "b": "/a/b/c",
+      "text": "//a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/",
+      "b": "/0",
+      "text": "//0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/a/0",
+      "text": "//a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/",
+      "b": "/a/0/b",
+      "text": "//a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/",
+      "b": "/-",
+      "text": "//-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/a/-",
+      "text": "//a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/",
+      "b": "/a~1b",
+      "text": "//a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/a~0b",
+      "text": "//a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/a~01b",
+      "text": "//a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/a~00b",
+      "text": "//a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/~1",
+      "text": "//~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/~0",
+      "text": "//~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/~0~1",
+      "text": "//~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/~1~0",
+      "text": "//~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "//",
+      "text": "///",
+      "segmentCount": 3
+    },
+    {
+      "a": "/",
+      "b": "/a//b",
+      "text": "//a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/",
+      "b": "/ ",
+      "text": "// ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/a b",
+      "text": "//a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/äöü",
+      "text": "//äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/k\uD83D\uDE00",
+      "text": "//k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/\"quoted\"",
+      "text": "//\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/a\\b",
+      "text": "//a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/00",
+      "text": "//00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/01",
+      "text": "//01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/-1",
+      "text": "//-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/1e3",
+      "text": "//1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "//x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/a",
+      "b": "",
+      "text": "/a",
+      "segmentCount": 1
+    },
+    {
+      "a": "/a",
+      "b": "/",
+      "text": "/a/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/a",
+      "text": "/a/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/a/b",
+      "text": "/a/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a",
+      "b": "/a/b/c",
+      "text": "/a/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a",
+      "b": "/0",
+      "text": "/a/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/a/0",
+      "text": "/a/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a",
+      "b": "/a/0/b",
+      "text": "/a/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a",
+      "b": "/-",
+      "text": "/a/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/a/-",
+      "text": "/a/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a",
+      "b": "/a~1b",
+      "text": "/a/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/a~0b",
+      "text": "/a/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/a~01b",
+      "text": "/a/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/a~00b",
+      "text": "/a/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/~1",
+      "text": "/a/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/~0",
+      "text": "/a/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/~0~1",
+      "text": "/a/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/~1~0",
+      "text": "/a/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "//",
+      "text": "/a//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a",
+      "b": "/a//b",
+      "text": "/a/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a",
+      "b": "/ ",
+      "text": "/a/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/a b",
+      "text": "/a/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/äöü",
+      "text": "/a/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/\"quoted\"",
+      "text": "/a/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/a\\b",
+      "text": "/a/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/00",
+      "text": "/a/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/01",
+      "text": "/a/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/-1",
+      "text": "/a/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/1e3",
+      "text": "/a/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/a/b",
+      "b": "",
+      "text": "/a/b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a/b",
+      "b": "/",
+      "text": "/a/b/",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/a",
+      "text": "/a/b/a",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/a/b",
+      "text": "/a/b/a/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b",
+      "b": "/a/b/c",
+      "text": "/a/b/a/b/c",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/b",
+      "b": "/0",
+      "text": "/a/b/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/a/0",
+      "text": "/a/b/a/0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b",
+      "b": "/a/0/b",
+      "text": "/a/b/a/0/b",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/b",
+      "b": "/-",
+      "text": "/a/b/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/a/-",
+      "text": "/a/b/a/-",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b",
+      "b": "/a~1b",
+      "text": "/a/b/a~1b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/a~0b",
+      "text": "/a/b/a~0b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/a~01b",
+      "text": "/a/b/a~01b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/a~00b",
+      "text": "/a/b/a~00b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/~1",
+      "text": "/a/b/~1",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/~0",
+      "text": "/a/b/~0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/~0~1",
+      "text": "/a/b/~0~1",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/~1~0",
+      "text": "/a/b/~1~0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "//",
+      "text": "/a/b//",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b",
+      "b": "/a//b",
+      "text": "/a/b/a//b",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/b",
+      "b": "/ ",
+      "text": "/a/b/ ",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/a b",
+      "text": "/a/b/a b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/äöü",
+      "text": "/a/b/äöü",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a/b/k\uD83D\uDE00",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/\"quoted\"",
+      "text": "/a/b/\"quoted\"",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/a\\b",
+      "text": "/a/b/a\\b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/00",
+      "text": "/a/b/00",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/01",
+      "text": "/a/b/01",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/-1",
+      "text": "/a/b/-1",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/1e3",
+      "text": "/a/b/1e3",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a/b/x/y/z/0/-/~0/~1",
+      "segmentCount": 9
+    },
+    {
+      "a": "/a/b/c",
+      "b": "",
+      "text": "/a/b/c",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/",
+      "text": "/a/b/c/",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a",
+      "text": "/a/b/c/a",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a/b",
+      "text": "/a/b/c/a/b",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a/b/c",
+      "text": "/a/b/c/a/b/c",
+      "segmentCount": 6
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/0",
+      "text": "/a/b/c/0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a/0",
+      "text": "/a/b/c/a/0",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a/0/b",
+      "text": "/a/b/c/a/0/b",
+      "segmentCount": 6
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/-",
+      "text": "/a/b/c/-",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a/-",
+      "text": "/a/b/c/a/-",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a~1b",
+      "text": "/a/b/c/a~1b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a~0b",
+      "text": "/a/b/c/a~0b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a~01b",
+      "text": "/a/b/c/a~01b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a~00b",
+      "text": "/a/b/c/a~00b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/~1",
+      "text": "/a/b/c/~1",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/~0",
+      "text": "/a/b/c/~0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/~0~1",
+      "text": "/a/b/c/~0~1",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/~1~0",
+      "text": "/a/b/c/~1~0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "//",
+      "text": "/a/b/c//",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a//b",
+      "text": "/a/b/c/a//b",
+      "segmentCount": 6
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/ ",
+      "text": "/a/b/c/ ",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a b",
+      "text": "/a/b/c/a b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/äöü",
+      "text": "/a/b/c/äöü",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a/b/c/k\uD83D\uDE00",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/\"quoted\"",
+      "text": "/a/b/c/\"quoted\"",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/a\\b",
+      "text": "/a/b/c/a\\b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/00",
+      "text": "/a/b/c/00",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/01",
+      "text": "/a/b/c/01",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/-1",
+      "text": "/a/b/c/-1",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/1e3",
+      "text": "/a/b/c/1e3",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/b/c",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a/b/c/x/y/z/0/-/~0/~1",
+      "segmentCount": 10
+    },
+    {
+      "a": "/0",
+      "b": "",
+      "text": "/0",
+      "segmentCount": 1
+    },
+    {
+      "a": "/0",
+      "b": "/",
+      "text": "/0/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/a",
+      "text": "/0/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/a/b",
+      "text": "/0/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/0",
+      "b": "/a/b/c",
+      "text": "/0/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/0",
+      "b": "/0",
+      "text": "/0/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/a/0",
+      "text": "/0/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/0",
+      "b": "/a/0/b",
+      "text": "/0/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/0",
+      "b": "/-",
+      "text": "/0/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/a/-",
+      "text": "/0/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/0",
+      "b": "/a~1b",
+      "text": "/0/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/a~0b",
+      "text": "/0/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/a~01b",
+      "text": "/0/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/a~00b",
+      "text": "/0/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/~1",
+      "text": "/0/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/~0",
+      "text": "/0/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/~0~1",
+      "text": "/0/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/~1~0",
+      "text": "/0/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "//",
+      "text": "/0//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/0",
+      "b": "/a//b",
+      "text": "/0/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/0",
+      "b": "/ ",
+      "text": "/0/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/a b",
+      "text": "/0/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/äöü",
+      "text": "/0/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/k\uD83D\uDE00",
+      "text": "/0/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/\"quoted\"",
+      "text": "/0/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/a\\b",
+      "text": "/0/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/00",
+      "text": "/0/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/01",
+      "text": "/0/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/-1",
+      "text": "/0/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/1e3",
+      "text": "/0/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/0",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/0/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/a/0",
+      "b": "",
+      "text": "/a/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a/0",
+      "b": "/",
+      "text": "/a/0/",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/a",
+      "text": "/a/0/a",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/a/b",
+      "text": "/a/0/a/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0",
+      "b": "/a/b/c",
+      "text": "/a/0/a/b/c",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/0",
+      "b": "/0",
+      "text": "/a/0/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/a/0",
+      "text": "/a/0/a/0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0",
+      "b": "/a/0/b",
+      "text": "/a/0/a/0/b",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/0",
+      "b": "/-",
+      "text": "/a/0/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/a/-",
+      "text": "/a/0/a/-",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0",
+      "b": "/a~1b",
+      "text": "/a/0/a~1b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/a~0b",
+      "text": "/a/0/a~0b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/a~01b",
+      "text": "/a/0/a~01b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/a~00b",
+      "text": "/a/0/a~00b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/~1",
+      "text": "/a/0/~1",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/~0",
+      "text": "/a/0/~0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/~0~1",
+      "text": "/a/0/~0~1",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/~1~0",
+      "text": "/a/0/~1~0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "//",
+      "text": "/a/0//",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0",
+      "b": "/a//b",
+      "text": "/a/0/a//b",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/0",
+      "b": "/ ",
+      "text": "/a/0/ ",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/a b",
+      "text": "/a/0/a b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/äöü",
+      "text": "/a/0/äöü",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a/0/k\uD83D\uDE00",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/\"quoted\"",
+      "text": "/a/0/\"quoted\"",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/a\\b",
+      "text": "/a/0/a\\b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/00",
+      "text": "/a/0/00",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/01",
+      "text": "/a/0/01",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/-1",
+      "text": "/a/0/-1",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/1e3",
+      "text": "/a/0/1e3",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a/0/x/y/z/0/-/~0/~1",
+      "segmentCount": 9
+    },
+    {
+      "a": "/a/0/b",
+      "b": "",
+      "text": "/a/0/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/",
+      "text": "/a/0/b/",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a",
+      "text": "/a/0/b/a",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a/b",
+      "text": "/a/0/b/a/b",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a/b/c",
+      "text": "/a/0/b/a/b/c",
+      "segmentCount": 6
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/0",
+      "text": "/a/0/b/0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a/0",
+      "text": "/a/0/b/a/0",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a/0/b",
+      "text": "/a/0/b/a/0/b",
+      "segmentCount": 6
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/-",
+      "text": "/a/0/b/-",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a/-",
+      "text": "/a/0/b/a/-",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a~1b",
+      "text": "/a/0/b/a~1b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a~0b",
+      "text": "/a/0/b/a~0b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a~01b",
+      "text": "/a/0/b/a~01b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a~00b",
+      "text": "/a/0/b/a~00b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/~1",
+      "text": "/a/0/b/~1",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/~0",
+      "text": "/a/0/b/~0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/~0~1",
+      "text": "/a/0/b/~0~1",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/~1~0",
+      "text": "/a/0/b/~1~0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "//",
+      "text": "/a/0/b//",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a//b",
+      "text": "/a/0/b/a//b",
+      "segmentCount": 6
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/ ",
+      "text": "/a/0/b/ ",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a b",
+      "text": "/a/0/b/a b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/äöü",
+      "text": "/a/0/b/äöü",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a/0/b/k\uD83D\uDE00",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/\"quoted\"",
+      "text": "/a/0/b/\"quoted\"",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/a\\b",
+      "text": "/a/0/b/a\\b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/00",
+      "text": "/a/0/b/00",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/01",
+      "text": "/a/0/b/01",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/-1",
+      "text": "/a/0/b/-1",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/1e3",
+      "text": "/a/0/b/1e3",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/0/b",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a/0/b/x/y/z/0/-/~0/~1",
+      "segmentCount": 10
+    },
+    {
+      "a": "/-",
+      "b": "",
+      "text": "/-",
+      "segmentCount": 1
+    },
+    {
+      "a": "/-",
+      "b": "/",
+      "text": "/-/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/a",
+      "text": "/-/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/a/b",
+      "text": "/-/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/-",
+      "b": "/a/b/c",
+      "text": "/-/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/-",
+      "b": "/0",
+      "text": "/-/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/a/0",
+      "text": "/-/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/-",
+      "b": "/a/0/b",
+      "text": "/-/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/-",
+      "b": "/-",
+      "text": "/-/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/a/-",
+      "text": "/-/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/-",
+      "b": "/a~1b",
+      "text": "/-/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/a~0b",
+      "text": "/-/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/a~01b",
+      "text": "/-/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/a~00b",
+      "text": "/-/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/~1",
+      "text": "/-/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/~0",
+      "text": "/-/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/~0~1",
+      "text": "/-/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/~1~0",
+      "text": "/-/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "//",
+      "text": "/-//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/-",
+      "b": "/a//b",
+      "text": "/-/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/-",
+      "b": "/ ",
+      "text": "/-/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/a b",
+      "text": "/-/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/äöü",
+      "text": "/-/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/k\uD83D\uDE00",
+      "text": "/-/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/\"quoted\"",
+      "text": "/-/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/a\\b",
+      "text": "/-/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/00",
+      "text": "/-/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/01",
+      "text": "/-/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/-1",
+      "text": "/-/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/1e3",
+      "text": "/-/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/-/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/a/-",
+      "b": "",
+      "text": "/a/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a/-",
+      "b": "/",
+      "text": "/a/-/",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/a",
+      "text": "/a/-/a",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/a/b",
+      "text": "/a/-/a/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/-",
+      "b": "/a/b/c",
+      "text": "/a/-/a/b/c",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/-",
+      "b": "/0",
+      "text": "/a/-/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/a/0",
+      "text": "/a/-/a/0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/-",
+      "b": "/a/0/b",
+      "text": "/a/-/a/0/b",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/-",
+      "b": "/-",
+      "text": "/a/-/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/a/-",
+      "text": "/a/-/a/-",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/-",
+      "b": "/a~1b",
+      "text": "/a/-/a~1b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/a~0b",
+      "text": "/a/-/a~0b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/a~01b",
+      "text": "/a/-/a~01b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/a~00b",
+      "text": "/a/-/a~00b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/~1",
+      "text": "/a/-/~1",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/~0",
+      "text": "/a/-/~0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/~0~1",
+      "text": "/a/-/~0~1",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/~1~0",
+      "text": "/a/-/~1~0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "//",
+      "text": "/a/-//",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a/-",
+      "b": "/a//b",
+      "text": "/a/-/a//b",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a/-",
+      "b": "/ ",
+      "text": "/a/-/ ",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/a b",
+      "text": "/a/-/a b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/äöü",
+      "text": "/a/-/äöü",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a/-/k\uD83D\uDE00",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/\"quoted\"",
+      "text": "/a/-/\"quoted\"",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/a\\b",
+      "text": "/a/-/a\\b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/00",
+      "text": "/a/-/00",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/01",
+      "text": "/a/-/01",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/-1",
+      "text": "/a/-/-1",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/1e3",
+      "text": "/a/-/1e3",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a/-",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a/-/x/y/z/0/-/~0/~1",
+      "segmentCount": 9
+    },
+    {
+      "a": "/a~1b",
+      "b": "",
+      "text": "/a~1b",
+      "segmentCount": 1
+    },
+    {
+      "a": "/a~1b",
+      "b": "/",
+      "text": "/a~1b/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a",
+      "text": "/a~1b/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a/b",
+      "text": "/a~1b/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a/b/c",
+      "text": "/a~1b/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~1b",
+      "b": "/0",
+      "text": "/a~1b/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a/0",
+      "text": "/a~1b/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a/0/b",
+      "text": "/a~1b/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~1b",
+      "b": "/-",
+      "text": "/a~1b/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a/-",
+      "text": "/a~1b/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a~1b",
+      "text": "/a~1b/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a~0b",
+      "text": "/a~1b/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a~01b",
+      "text": "/a~1b/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a~00b",
+      "text": "/a~1b/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/~1",
+      "text": "/a~1b/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/~0",
+      "text": "/a~1b/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/~0~1",
+      "text": "/a~1b/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/~1~0",
+      "text": "/a~1b/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "//",
+      "text": "/a~1b//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a//b",
+      "text": "/a~1b/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~1b",
+      "b": "/ ",
+      "text": "/a~1b/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a b",
+      "text": "/a~1b/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/äöü",
+      "text": "/a~1b/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a~1b/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/\"quoted\"",
+      "text": "/a~1b/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/a\\b",
+      "text": "/a~1b/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/00",
+      "text": "/a~1b/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/01",
+      "text": "/a~1b/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/-1",
+      "text": "/a~1b/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/1e3",
+      "text": "/a~1b/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~1b",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a~1b/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/a~0b",
+      "b": "",
+      "text": "/a~0b",
+      "segmentCount": 1
+    },
+    {
+      "a": "/a~0b",
+      "b": "/",
+      "text": "/a~0b/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a",
+      "text": "/a~0b/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a/b",
+      "text": "/a~0b/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a/b/c",
+      "text": "/a~0b/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~0b",
+      "b": "/0",
+      "text": "/a~0b/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a/0",
+      "text": "/a~0b/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a/0/b",
+      "text": "/a~0b/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~0b",
+      "b": "/-",
+      "text": "/a~0b/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a/-",
+      "text": "/a~0b/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a~1b",
+      "text": "/a~0b/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a~0b",
+      "text": "/a~0b/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a~01b",
+      "text": "/a~0b/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a~00b",
+      "text": "/a~0b/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/~1",
+      "text": "/a~0b/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/~0",
+      "text": "/a~0b/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/~0~1",
+      "text": "/a~0b/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/~1~0",
+      "text": "/a~0b/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "//",
+      "text": "/a~0b//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a//b",
+      "text": "/a~0b/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~0b",
+      "b": "/ ",
+      "text": "/a~0b/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a b",
+      "text": "/a~0b/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/äöü",
+      "text": "/a~0b/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a~0b/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/\"quoted\"",
+      "text": "/a~0b/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/a\\b",
+      "text": "/a~0b/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/00",
+      "text": "/a~0b/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/01",
+      "text": "/a~0b/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/-1",
+      "text": "/a~0b/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/1e3",
+      "text": "/a~0b/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~0b",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a~0b/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/a~01b",
+      "b": "",
+      "text": "/a~01b",
+      "segmentCount": 1
+    },
+    {
+      "a": "/a~01b",
+      "b": "/",
+      "text": "/a~01b/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a",
+      "text": "/a~01b/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a/b",
+      "text": "/a~01b/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a/b/c",
+      "text": "/a~01b/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~01b",
+      "b": "/0",
+      "text": "/a~01b/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a/0",
+      "text": "/a~01b/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a/0/b",
+      "text": "/a~01b/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~01b",
+      "b": "/-",
+      "text": "/a~01b/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a/-",
+      "text": "/a~01b/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a~1b",
+      "text": "/a~01b/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a~0b",
+      "text": "/a~01b/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a~01b",
+      "text": "/a~01b/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a~00b",
+      "text": "/a~01b/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/~1",
+      "text": "/a~01b/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/~0",
+      "text": "/a~01b/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/~0~1",
+      "text": "/a~01b/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/~1~0",
+      "text": "/a~01b/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "//",
+      "text": "/a~01b//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a//b",
+      "text": "/a~01b/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~01b",
+      "b": "/ ",
+      "text": "/a~01b/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a b",
+      "text": "/a~01b/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/äöü",
+      "text": "/a~01b/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a~01b/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/\"quoted\"",
+      "text": "/a~01b/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/a\\b",
+      "text": "/a~01b/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/00",
+      "text": "/a~01b/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/01",
+      "text": "/a~01b/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/-1",
+      "text": "/a~01b/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/1e3",
+      "text": "/a~01b/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~01b",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a~01b/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/a~00b",
+      "b": "",
+      "text": "/a~00b",
+      "segmentCount": 1
+    },
+    {
+      "a": "/a~00b",
+      "b": "/",
+      "text": "/a~00b/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a",
+      "text": "/a~00b/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a/b",
+      "text": "/a~00b/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a/b/c",
+      "text": "/a~00b/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~00b",
+      "b": "/0",
+      "text": "/a~00b/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a/0",
+      "text": "/a~00b/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a/0/b",
+      "text": "/a~00b/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~00b",
+      "b": "/-",
+      "text": "/a~00b/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a/-",
+      "text": "/a~00b/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a~1b",
+      "text": "/a~00b/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a~0b",
+      "text": "/a~00b/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a~01b",
+      "text": "/a~00b/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a~00b",
+      "text": "/a~00b/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/~1",
+      "text": "/a~00b/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/~0",
+      "text": "/a~00b/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/~0~1",
+      "text": "/a~00b/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/~1~0",
+      "text": "/a~00b/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "//",
+      "text": "/a~00b//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a//b",
+      "text": "/a~00b/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a~00b",
+      "b": "/ ",
+      "text": "/a~00b/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a b",
+      "text": "/a~00b/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/äöü",
+      "text": "/a~00b/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a~00b/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/\"quoted\"",
+      "text": "/a~00b/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/a\\b",
+      "text": "/a~00b/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/00",
+      "text": "/a~00b/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/01",
+      "text": "/a~00b/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/-1",
+      "text": "/a~00b/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/1e3",
+      "text": "/a~00b/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a~00b",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a~00b/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/~1",
+      "b": "",
+      "text": "/~1",
+      "segmentCount": 1
+    },
+    {
+      "a": "/~1",
+      "b": "/",
+      "text": "/~1/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/a",
+      "text": "/~1/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/a/b",
+      "text": "/~1/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~1",
+      "b": "/a/b/c",
+      "text": "/~1/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~1",
+      "b": "/0",
+      "text": "/~1/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/a/0",
+      "text": "/~1/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~1",
+      "b": "/a/0/b",
+      "text": "/~1/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~1",
+      "b": "/-",
+      "text": "/~1/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/a/-",
+      "text": "/~1/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~1",
+      "b": "/a~1b",
+      "text": "/~1/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/a~0b",
+      "text": "/~1/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/a~01b",
+      "text": "/~1/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/a~00b",
+      "text": "/~1/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/~1",
+      "text": "/~1/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/~0",
+      "text": "/~1/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/~0~1",
+      "text": "/~1/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/~1~0",
+      "text": "/~1/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "//",
+      "text": "/~1//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~1",
+      "b": "/a//b",
+      "text": "/~1/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~1",
+      "b": "/ ",
+      "text": "/~1/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/a b",
+      "text": "/~1/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/äöü",
+      "text": "/~1/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/k\uD83D\uDE00",
+      "text": "/~1/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/\"quoted\"",
+      "text": "/~1/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/a\\b",
+      "text": "/~1/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/00",
+      "text": "/~1/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/01",
+      "text": "/~1/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/-1",
+      "text": "/~1/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/1e3",
+      "text": "/~1/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/~1/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/~0",
+      "b": "",
+      "text": "/~0",
+      "segmentCount": 1
+    },
+    {
+      "a": "/~0",
+      "b": "/",
+      "text": "/~0/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/a",
+      "text": "/~0/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/a/b",
+      "text": "/~0/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~0",
+      "b": "/a/b/c",
+      "text": "/~0/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~0",
+      "b": "/0",
+      "text": "/~0/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/a/0",
+      "text": "/~0/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~0",
+      "b": "/a/0/b",
+      "text": "/~0/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~0",
+      "b": "/-",
+      "text": "/~0/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/a/-",
+      "text": "/~0/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~0",
+      "b": "/a~1b",
+      "text": "/~0/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/a~0b",
+      "text": "/~0/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/a~01b",
+      "text": "/~0/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/a~00b",
+      "text": "/~0/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/~1",
+      "text": "/~0/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/~0",
+      "text": "/~0/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/~0~1",
+      "text": "/~0/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/~1~0",
+      "text": "/~0/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "//",
+      "text": "/~0//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~0",
+      "b": "/a//b",
+      "text": "/~0/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~0",
+      "b": "/ ",
+      "text": "/~0/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/a b",
+      "text": "/~0/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/äöü",
+      "text": "/~0/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/k\uD83D\uDE00",
+      "text": "/~0/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/\"quoted\"",
+      "text": "/~0/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/a\\b",
+      "text": "/~0/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/00",
+      "text": "/~0/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/01",
+      "text": "/~0/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/-1",
+      "text": "/~0/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/1e3",
+      "text": "/~0/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/~0/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/~0~1",
+      "b": "",
+      "text": "/~0~1",
+      "segmentCount": 1
+    },
+    {
+      "a": "/~0~1",
+      "b": "/",
+      "text": "/~0~1/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a",
+      "text": "/~0~1/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a/b",
+      "text": "/~0~1/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a/b/c",
+      "text": "/~0~1/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~0~1",
+      "b": "/0",
+      "text": "/~0~1/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a/0",
+      "text": "/~0~1/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a/0/b",
+      "text": "/~0~1/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~0~1",
+      "b": "/-",
+      "text": "/~0~1/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a/-",
+      "text": "/~0~1/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a~1b",
+      "text": "/~0~1/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a~0b",
+      "text": "/~0~1/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a~01b",
+      "text": "/~0~1/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a~00b",
+      "text": "/~0~1/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/~1",
+      "text": "/~0~1/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/~0",
+      "text": "/~0~1/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/~0~1",
+      "text": "/~0~1/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/~1~0",
+      "text": "/~0~1/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "//",
+      "text": "/~0~1//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a//b",
+      "text": "/~0~1/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~0~1",
+      "b": "/ ",
+      "text": "/~0~1/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a b",
+      "text": "/~0~1/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/äöü",
+      "text": "/~0~1/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/k\uD83D\uDE00",
+      "text": "/~0~1/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/\"quoted\"",
+      "text": "/~0~1/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/a\\b",
+      "text": "/~0~1/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/00",
+      "text": "/~0~1/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/01",
+      "text": "/~0~1/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/-1",
+      "text": "/~0~1/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/1e3",
+      "text": "/~0~1/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~0~1",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/~0~1/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/~1~0",
+      "b": "",
+      "text": "/~1~0",
+      "segmentCount": 1
+    },
+    {
+      "a": "/~1~0",
+      "b": "/",
+      "text": "/~1~0/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a",
+      "text": "/~1~0/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a/b",
+      "text": "/~1~0/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a/b/c",
+      "text": "/~1~0/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~1~0",
+      "b": "/0",
+      "text": "/~1~0/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a/0",
+      "text": "/~1~0/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a/0/b",
+      "text": "/~1~0/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~1~0",
+      "b": "/-",
+      "text": "/~1~0/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a/-",
+      "text": "/~1~0/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a~1b",
+      "text": "/~1~0/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a~0b",
+      "text": "/~1~0/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a~01b",
+      "text": "/~1~0/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a~00b",
+      "text": "/~1~0/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/~1",
+      "text": "/~1~0/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/~0",
+      "text": "/~1~0/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/~0~1",
+      "text": "/~1~0/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/~1~0",
+      "text": "/~1~0/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "//",
+      "text": "/~1~0//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a//b",
+      "text": "/~1~0/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/~1~0",
+      "b": "/ ",
+      "text": "/~1~0/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a b",
+      "text": "/~1~0/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/äöü",
+      "text": "/~1~0/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/k\uD83D\uDE00",
+      "text": "/~1~0/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/\"quoted\"",
+      "text": "/~1~0/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/a\\b",
+      "text": "/~1~0/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/00",
+      "text": "/~1~0/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/01",
+      "text": "/~1~0/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/-1",
+      "text": "/~1~0/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/1e3",
+      "text": "/~1~0/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/~1~0",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/~1~0/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "//",
+      "b": "",
+      "text": "//",
+      "segmentCount": 2
+    },
+    {
+      "a": "//",
+      "b": "/",
+      "text": "///",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/a",
+      "text": "///a",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/a/b",
+      "text": "///a/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "//",
+      "b": "/a/b/c",
+      "text": "///a/b/c",
+      "segmentCount": 5
+    },
+    {
+      "a": "//",
+      "b": "/0",
+      "text": "///0",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/a/0",
+      "text": "///a/0",
+      "segmentCount": 4
+    },
+    {
+      "a": "//",
+      "b": "/a/0/b",
+      "text": "///a/0/b",
+      "segmentCount": 5
+    },
+    {
+      "a": "//",
+      "b": "/-",
+      "text": "///-",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/a/-",
+      "text": "///a/-",
+      "segmentCount": 4
+    },
+    {
+      "a": "//",
+      "b": "/a~1b",
+      "text": "///a~1b",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/a~0b",
+      "text": "///a~0b",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/a~01b",
+      "text": "///a~01b",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/a~00b",
+      "text": "///a~00b",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/~1",
+      "text": "///~1",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/~0",
+      "text": "///~0",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/~0~1",
+      "text": "///~0~1",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/~1~0",
+      "text": "///~1~0",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "//",
+      "text": "////",
+      "segmentCount": 4
+    },
+    {
+      "a": "//",
+      "b": "/a//b",
+      "text": "///a//b",
+      "segmentCount": 5
+    },
+    {
+      "a": "//",
+      "b": "/ ",
+      "text": "/// ",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/a b",
+      "text": "///a b",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/äöü",
+      "text": "///äöü",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/k\uD83D\uDE00",
+      "text": "///k\uD83D\uDE00",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/\"quoted\"",
+      "text": "///\"quoted\"",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/a\\b",
+      "text": "///a\\b",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/00",
+      "text": "///00",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/01",
+      "text": "///01",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/-1",
+      "text": "///-1",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/1e3",
+      "text": "///1e3",
+      "segmentCount": 3
+    },
+    {
+      "a": "//",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "///x/y/z/0/-/~0/~1",
+      "segmentCount": 9
+    },
+    {
+      "a": "/a//b",
+      "b": "",
+      "text": "/a//b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a//b",
+      "b": "/",
+      "text": "/a//b/",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/a",
+      "text": "/a//b/a",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/a/b",
+      "text": "/a//b/a/b",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a//b",
+      "b": "/a/b/c",
+      "text": "/a//b/a/b/c",
+      "segmentCount": 6
+    },
+    {
+      "a": "/a//b",
+      "b": "/0",
+      "text": "/a//b/0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/a/0",
+      "text": "/a//b/a/0",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a//b",
+      "b": "/a/0/b",
+      "text": "/a//b/a/0/b",
+      "segmentCount": 6
+    },
+    {
+      "a": "/a//b",
+      "b": "/-",
+      "text": "/a//b/-",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/a/-",
+      "text": "/a//b/a/-",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a//b",
+      "b": "/a~1b",
+      "text": "/a//b/a~1b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/a~0b",
+      "text": "/a//b/a~0b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/a~01b",
+      "text": "/a//b/a~01b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/a~00b",
+      "text": "/a//b/a~00b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/~1",
+      "text": "/a//b/~1",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/~0",
+      "text": "/a//b/~0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/~0~1",
+      "text": "/a//b/~0~1",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/~1~0",
+      "text": "/a//b/~1~0",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "//",
+      "text": "/a//b//",
+      "segmentCount": 5
+    },
+    {
+      "a": "/a//b",
+      "b": "/a//b",
+      "text": "/a//b/a//b",
+      "segmentCount": 6
+    },
+    {
+      "a": "/a//b",
+      "b": "/ ",
+      "text": "/a//b/ ",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/a b",
+      "text": "/a//b/a b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/äöü",
+      "text": "/a//b/äöü",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a//b/k\uD83D\uDE00",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/\"quoted\"",
+      "text": "/a//b/\"quoted\"",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/a\\b",
+      "text": "/a//b/a\\b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/00",
+      "text": "/a//b/00",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/01",
+      "text": "/a//b/01",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/-1",
+      "text": "/a//b/-1",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/1e3",
+      "text": "/a//b/1e3",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a//b",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a//b/x/y/z/0/-/~0/~1",
+      "segmentCount": 10
+    },
+    {
+      "a": "/ ",
+      "b": "",
+      "text": "/ ",
+      "segmentCount": 1
+    },
+    {
+      "a": "/ ",
+      "b": "/",
+      "text": "/ /",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/a",
+      "text": "/ /a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/a/b",
+      "text": "/ /a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/ ",
+      "b": "/a/b/c",
+      "text": "/ /a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/ ",
+      "b": "/0",
+      "text": "/ /0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/a/0",
+      "text": "/ /a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/ ",
+      "b": "/a/0/b",
+      "text": "/ /a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/ ",
+      "b": "/-",
+      "text": "/ /-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/a/-",
+      "text": "/ /a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/ ",
+      "b": "/a~1b",
+      "text": "/ /a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/a~0b",
+      "text": "/ /a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/a~01b",
+      "text": "/ /a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/a~00b",
+      "text": "/ /a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/~1",
+      "text": "/ /~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/~0",
+      "text": "/ /~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/~0~1",
+      "text": "/ /~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/~1~0",
+      "text": "/ /~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "//",
+      "text": "/ //",
+      "segmentCount": 3
+    },
+    {
+      "a": "/ ",
+      "b": "/a//b",
+      "text": "/ /a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/ ",
+      "b": "/ ",
+      "text": "/ / ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/a b",
+      "text": "/ /a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/äöü",
+      "text": "/ /äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/k\uD83D\uDE00",
+      "text": "/ /k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/\"quoted\"",
+      "text": "/ /\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/a\\b",
+      "text": "/ /a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/00",
+      "text": "/ /00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/01",
+      "text": "/ /01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/-1",
+      "text": "/ /-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/1e3",
+      "text": "/ /1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/ ",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/ /x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/a b",
+      "b": "",
+      "text": "/a b",
+      "segmentCount": 1
+    },
+    {
+      "a": "/a b",
+      "b": "/",
+      "text": "/a b/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/a",
+      "text": "/a b/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/a/b",
+      "text": "/a b/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a b",
+      "b": "/a/b/c",
+      "text": "/a b/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a b",
+      "b": "/0",
+      "text": "/a b/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/a/0",
+      "text": "/a b/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a b",
+      "b": "/a/0/b",
+      "text": "/a b/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a b",
+      "b": "/-",
+      "text": "/a b/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/a/-",
+      "text": "/a b/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a b",
+      "b": "/a~1b",
+      "text": "/a b/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/a~0b",
+      "text": "/a b/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/a~01b",
+      "text": "/a b/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/a~00b",
+      "text": "/a b/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/~1",
+      "text": "/a b/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/~0",
+      "text": "/a b/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/~0~1",
+      "text": "/a b/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/~1~0",
+      "text": "/a b/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "//",
+      "text": "/a b//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a b",
+      "b": "/a//b",
+      "text": "/a b/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a b",
+      "b": "/ ",
+      "text": "/a b/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/a b",
+      "text": "/a b/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/äöü",
+      "text": "/a b/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a b/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/\"quoted\"",
+      "text": "/a b/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/a\\b",
+      "text": "/a b/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/00",
+      "text": "/a b/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/01",
+      "text": "/a b/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/-1",
+      "text": "/a b/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/1e3",
+      "text": "/a b/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a b",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a b/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/äöü",
+      "b": "",
+      "text": "/äöü",
+      "segmentCount": 1
+    },
+    {
+      "a": "/äöü",
+      "b": "/",
+      "text": "/äöü/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/a",
+      "text": "/äöü/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/a/b",
+      "text": "/äöü/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/äöü",
+      "b": "/a/b/c",
+      "text": "/äöü/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/äöü",
+      "b": "/0",
+      "text": "/äöü/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/a/0",
+      "text": "/äöü/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/äöü",
+      "b": "/a/0/b",
+      "text": "/äöü/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/äöü",
+      "b": "/-",
+      "text": "/äöü/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/a/-",
+      "text": "/äöü/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/äöü",
+      "b": "/a~1b",
+      "text": "/äöü/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/a~0b",
+      "text": "/äöü/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/a~01b",
+      "text": "/äöü/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/a~00b",
+      "text": "/äöü/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/~1",
+      "text": "/äöü/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/~0",
+      "text": "/äöü/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/~0~1",
+      "text": "/äöü/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/~1~0",
+      "text": "/äöü/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "//",
+      "text": "/äöü//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/äöü",
+      "b": "/a//b",
+      "text": "/äöü/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/äöü",
+      "b": "/ ",
+      "text": "/äöü/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/a b",
+      "text": "/äöü/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/äöü",
+      "text": "/äöü/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/k\uD83D\uDE00",
+      "text": "/äöü/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/\"quoted\"",
+      "text": "/äöü/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/a\\b",
+      "text": "/äöü/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/00",
+      "text": "/äöü/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/01",
+      "text": "/äöü/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/-1",
+      "text": "/äöü/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/1e3",
+      "text": "/äöü/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/äöü",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/äöü/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "",
+      "text": "/k\uD83D\uDE00",
+      "segmentCount": 1
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/",
+      "text": "/k\uD83D\uDE00/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a",
+      "text": "/k\uD83D\uDE00/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a/b",
+      "text": "/k\uD83D\uDE00/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a/b/c",
+      "text": "/k\uD83D\uDE00/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/0",
+      "text": "/k\uD83D\uDE00/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a/0",
+      "text": "/k\uD83D\uDE00/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a/0/b",
+      "text": "/k\uD83D\uDE00/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/-",
+      "text": "/k\uD83D\uDE00/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a/-",
+      "text": "/k\uD83D\uDE00/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a~1b",
+      "text": "/k\uD83D\uDE00/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a~0b",
+      "text": "/k\uD83D\uDE00/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a~01b",
+      "text": "/k\uD83D\uDE00/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a~00b",
+      "text": "/k\uD83D\uDE00/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/~1",
+      "text": "/k\uD83D\uDE00/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/~0",
+      "text": "/k\uD83D\uDE00/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/~0~1",
+      "text": "/k\uD83D\uDE00/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/~1~0",
+      "text": "/k\uD83D\uDE00/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "//",
+      "text": "/k\uD83D\uDE00//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a//b",
+      "text": "/k\uD83D\uDE00/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/ ",
+      "text": "/k\uD83D\uDE00/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a b",
+      "text": "/k\uD83D\uDE00/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/äöü",
+      "text": "/k\uD83D\uDE00/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/k\uD83D\uDE00",
+      "text": "/k\uD83D\uDE00/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/\"quoted\"",
+      "text": "/k\uD83D\uDE00/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/a\\b",
+      "text": "/k\uD83D\uDE00/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/00",
+      "text": "/k\uD83D\uDE00/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/01",
+      "text": "/k\uD83D\uDE00/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/-1",
+      "text": "/k\uD83D\uDE00/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/1e3",
+      "text": "/k\uD83D\uDE00/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/k\uD83D\uDE00",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/k\uD83D\uDE00/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "",
+      "text": "/\"quoted\"",
+      "segmentCount": 1
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/",
+      "text": "/\"quoted\"/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a",
+      "text": "/\"quoted\"/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a/b",
+      "text": "/\"quoted\"/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a/b/c",
+      "text": "/\"quoted\"/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/0",
+      "text": "/\"quoted\"/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a/0",
+      "text": "/\"quoted\"/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a/0/b",
+      "text": "/\"quoted\"/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/-",
+      "text": "/\"quoted\"/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a/-",
+      "text": "/\"quoted\"/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a~1b",
+      "text": "/\"quoted\"/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a~0b",
+      "text": "/\"quoted\"/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a~01b",
+      "text": "/\"quoted\"/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a~00b",
+      "text": "/\"quoted\"/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/~1",
+      "text": "/\"quoted\"/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/~0",
+      "text": "/\"quoted\"/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/~0~1",
+      "text": "/\"quoted\"/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/~1~0",
+      "text": "/\"quoted\"/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "//",
+      "text": "/\"quoted\"//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a//b",
+      "text": "/\"quoted\"/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/ ",
+      "text": "/\"quoted\"/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a b",
+      "text": "/\"quoted\"/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/äöü",
+      "text": "/\"quoted\"/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/k\uD83D\uDE00",
+      "text": "/\"quoted\"/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/\"quoted\"",
+      "text": "/\"quoted\"/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/a\\b",
+      "text": "/\"quoted\"/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/00",
+      "text": "/\"quoted\"/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/01",
+      "text": "/\"quoted\"/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/-1",
+      "text": "/\"quoted\"/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/1e3",
+      "text": "/\"quoted\"/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/\"quoted\"",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/\"quoted\"/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/a\\b",
+      "b": "",
+      "text": "/a\\b",
+      "segmentCount": 1
+    },
+    {
+      "a": "/a\\b",
+      "b": "/",
+      "text": "/a\\b/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a",
+      "text": "/a\\b/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a/b",
+      "text": "/a\\b/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a/b/c",
+      "text": "/a\\b/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a\\b",
+      "b": "/0",
+      "text": "/a\\b/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a/0",
+      "text": "/a\\b/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a/0/b",
+      "text": "/a\\b/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a\\b",
+      "b": "/-",
+      "text": "/a\\b/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a/-",
+      "text": "/a\\b/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a~1b",
+      "text": "/a\\b/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a~0b",
+      "text": "/a\\b/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a~01b",
+      "text": "/a\\b/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a~00b",
+      "text": "/a\\b/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/~1",
+      "text": "/a\\b/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/~0",
+      "text": "/a\\b/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/~0~1",
+      "text": "/a\\b/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/~1~0",
+      "text": "/a\\b/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "//",
+      "text": "/a\\b//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a//b",
+      "text": "/a\\b/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/a\\b",
+      "b": "/ ",
+      "text": "/a\\b/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a b",
+      "text": "/a\\b/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/äöü",
+      "text": "/a\\b/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/k\uD83D\uDE00",
+      "text": "/a\\b/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/\"quoted\"",
+      "text": "/a\\b/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/a\\b",
+      "text": "/a\\b/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/00",
+      "text": "/a\\b/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/01",
+      "text": "/a\\b/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/-1",
+      "text": "/a\\b/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/1e3",
+      "text": "/a\\b/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/a\\b",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/a\\b/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/00",
+      "b": "",
+      "text": "/00",
+      "segmentCount": 1
+    },
+    {
+      "a": "/00",
+      "b": "/",
+      "text": "/00/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/a",
+      "text": "/00/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/a/b",
+      "text": "/00/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/00",
+      "b": "/a/b/c",
+      "text": "/00/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/00",
+      "b": "/0",
+      "text": "/00/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/a/0",
+      "text": "/00/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/00",
+      "b": "/a/0/b",
+      "text": "/00/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/00",
+      "b": "/-",
+      "text": "/00/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/a/-",
+      "text": "/00/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/00",
+      "b": "/a~1b",
+      "text": "/00/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/a~0b",
+      "text": "/00/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/a~01b",
+      "text": "/00/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/a~00b",
+      "text": "/00/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/~1",
+      "text": "/00/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/~0",
+      "text": "/00/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/~0~1",
+      "text": "/00/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/~1~0",
+      "text": "/00/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "//",
+      "text": "/00//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/00",
+      "b": "/a//b",
+      "text": "/00/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/00",
+      "b": "/ ",
+      "text": "/00/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/a b",
+      "text": "/00/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/äöü",
+      "text": "/00/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/k\uD83D\uDE00",
+      "text": "/00/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/\"quoted\"",
+      "text": "/00/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/a\\b",
+      "text": "/00/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/00",
+      "text": "/00/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/01",
+      "text": "/00/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/-1",
+      "text": "/00/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/1e3",
+      "text": "/00/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/00",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/00/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/01",
+      "b": "",
+      "text": "/01",
+      "segmentCount": 1
+    },
+    {
+      "a": "/01",
+      "b": "/",
+      "text": "/01/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/a",
+      "text": "/01/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/a/b",
+      "text": "/01/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/01",
+      "b": "/a/b/c",
+      "text": "/01/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/01",
+      "b": "/0",
+      "text": "/01/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/a/0",
+      "text": "/01/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/01",
+      "b": "/a/0/b",
+      "text": "/01/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/01",
+      "b": "/-",
+      "text": "/01/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/a/-",
+      "text": "/01/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/01",
+      "b": "/a~1b",
+      "text": "/01/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/a~0b",
+      "text": "/01/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/a~01b",
+      "text": "/01/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/a~00b",
+      "text": "/01/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/~1",
+      "text": "/01/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/~0",
+      "text": "/01/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/~0~1",
+      "text": "/01/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/~1~0",
+      "text": "/01/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "//",
+      "text": "/01//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/01",
+      "b": "/a//b",
+      "text": "/01/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/01",
+      "b": "/ ",
+      "text": "/01/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/a b",
+      "text": "/01/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/äöü",
+      "text": "/01/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/k\uD83D\uDE00",
+      "text": "/01/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/\"quoted\"",
+      "text": "/01/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/a\\b",
+      "text": "/01/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/00",
+      "text": "/01/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/01",
+      "text": "/01/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/-1",
+      "text": "/01/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/1e3",
+      "text": "/01/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/01",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/01/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/-1",
+      "b": "",
+      "text": "/-1",
+      "segmentCount": 1
+    },
+    {
+      "a": "/-1",
+      "b": "/",
+      "text": "/-1/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/a",
+      "text": "/-1/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/a/b",
+      "text": "/-1/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/-1",
+      "b": "/a/b/c",
+      "text": "/-1/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/-1",
+      "b": "/0",
+      "text": "/-1/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/a/0",
+      "text": "/-1/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/-1",
+      "b": "/a/0/b",
+      "text": "/-1/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/-1",
+      "b": "/-",
+      "text": "/-1/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/a/-",
+      "text": "/-1/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/-1",
+      "b": "/a~1b",
+      "text": "/-1/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/a~0b",
+      "text": "/-1/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/a~01b",
+      "text": "/-1/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/a~00b",
+      "text": "/-1/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/~1",
+      "text": "/-1/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/~0",
+      "text": "/-1/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/~0~1",
+      "text": "/-1/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/~1~0",
+      "text": "/-1/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "//",
+      "text": "/-1//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/-1",
+      "b": "/a//b",
+      "text": "/-1/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/-1",
+      "b": "/ ",
+      "text": "/-1/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/a b",
+      "text": "/-1/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/äöü",
+      "text": "/-1/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/k\uD83D\uDE00",
+      "text": "/-1/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/\"quoted\"",
+      "text": "/-1/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/a\\b",
+      "text": "/-1/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/00",
+      "text": "/-1/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/01",
+      "text": "/-1/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/-1",
+      "text": "/-1/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/1e3",
+      "text": "/-1/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/-1",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/-1/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/1e3",
+      "b": "",
+      "text": "/1e3",
+      "segmentCount": 1
+    },
+    {
+      "a": "/1e3",
+      "b": "/",
+      "text": "/1e3/",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/a",
+      "text": "/1e3/a",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/a/b",
+      "text": "/1e3/a/b",
+      "segmentCount": 3
+    },
+    {
+      "a": "/1e3",
+      "b": "/a/b/c",
+      "text": "/1e3/a/b/c",
+      "segmentCount": 4
+    },
+    {
+      "a": "/1e3",
+      "b": "/0",
+      "text": "/1e3/0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/a/0",
+      "text": "/1e3/a/0",
+      "segmentCount": 3
+    },
+    {
+      "a": "/1e3",
+      "b": "/a/0/b",
+      "text": "/1e3/a/0/b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/1e3",
+      "b": "/-",
+      "text": "/1e3/-",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/a/-",
+      "text": "/1e3/a/-",
+      "segmentCount": 3
+    },
+    {
+      "a": "/1e3",
+      "b": "/a~1b",
+      "text": "/1e3/a~1b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/a~0b",
+      "text": "/1e3/a~0b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/a~01b",
+      "text": "/1e3/a~01b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/a~00b",
+      "text": "/1e3/a~00b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/~1",
+      "text": "/1e3/~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/~0",
+      "text": "/1e3/~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/~0~1",
+      "text": "/1e3/~0~1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/~1~0",
+      "text": "/1e3/~1~0",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "//",
+      "text": "/1e3//",
+      "segmentCount": 3
+    },
+    {
+      "a": "/1e3",
+      "b": "/a//b",
+      "text": "/1e3/a//b",
+      "segmentCount": 4
+    },
+    {
+      "a": "/1e3",
+      "b": "/ ",
+      "text": "/1e3/ ",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/a b",
+      "text": "/1e3/a b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/äöü",
+      "text": "/1e3/äöü",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/k\uD83D\uDE00",
+      "text": "/1e3/k\uD83D\uDE00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/\"quoted\"",
+      "text": "/1e3/\"quoted\"",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/a\\b",
+      "text": "/1e3/a\\b",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/00",
+      "text": "/1e3/00",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/01",
+      "text": "/1e3/01",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/-1",
+      "text": "/1e3/-1",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/1e3",
+      "text": "/1e3/1e3",
+      "segmentCount": 2
+    },
+    {
+      "a": "/1e3",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/1e3/x/y/z/0/-/~0/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "",
+      "text": "/x/y/z/0/-/~0/~1",
+      "segmentCount": 7
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/",
+      "text": "/x/y/z/0/-/~0/~1/",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a",
+      "text": "/x/y/z/0/-/~0/~1/a",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a/b",
+      "text": "/x/y/z/0/-/~0/~1/a/b",
+      "segmentCount": 9
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a/b/c",
+      "text": "/x/y/z/0/-/~0/~1/a/b/c",
+      "segmentCount": 10
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/0",
+      "text": "/x/y/z/0/-/~0/~1/0",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a/0",
+      "text": "/x/y/z/0/-/~0/~1/a/0",
+      "segmentCount": 9
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a/0/b",
+      "text": "/x/y/z/0/-/~0/~1/a/0/b",
+      "segmentCount": 10
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/-",
+      "text": "/x/y/z/0/-/~0/~1/-",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a/-",
+      "text": "/x/y/z/0/-/~0/~1/a/-",
+      "segmentCount": 9
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a~1b",
+      "text": "/x/y/z/0/-/~0/~1/a~1b",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a~0b",
+      "text": "/x/y/z/0/-/~0/~1/a~0b",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a~01b",
+      "text": "/x/y/z/0/-/~0/~1/a~01b",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a~00b",
+      "text": "/x/y/z/0/-/~0/~1/a~00b",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/~1",
+      "text": "/x/y/z/0/-/~0/~1/~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/~0",
+      "text": "/x/y/z/0/-/~0/~1/~0",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/~0~1",
+      "text": "/x/y/z/0/-/~0/~1/~0~1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/~1~0",
+      "text": "/x/y/z/0/-/~0/~1/~1~0",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "//",
+      "text": "/x/y/z/0/-/~0/~1//",
+      "segmentCount": 9
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a//b",
+      "text": "/x/y/z/0/-/~0/~1/a//b",
+      "segmentCount": 10
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/ ",
+      "text": "/x/y/z/0/-/~0/~1/ ",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a b",
+      "text": "/x/y/z/0/-/~0/~1/a b",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/äöü",
+      "text": "/x/y/z/0/-/~0/~1/äöü",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/k\uD83D\uDE00",
+      "text": "/x/y/z/0/-/~0/~1/k\uD83D\uDE00",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/\"quoted\"",
+      "text": "/x/y/z/0/-/~0/~1/\"quoted\"",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/a\\b",
+      "text": "/x/y/z/0/-/~0/~1/a\\b",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/00",
+      "text": "/x/y/z/0/-/~0/~1/00",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/01",
+      "text": "/x/y/z/0/-/~0/~1/01",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/-1",
+      "text": "/x/y/z/0/-/~0/~1/-1",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/1e3",
+      "text": "/x/y/z/0/-/~0/~1/1e3",
+      "segmentCount": 8
+    },
+    {
+      "a": "/x/y/z/0/-/~0/~1",
+      "b": "/x/y/z/0/-/~0/~1",
+      "text": "/x/y/z/0/-/~0/~1/x/y/z/0/-/~0/~1",
+      "segmentCount": 14
+    }
+  ],
+  "operationSerialization": [
+    {
+      "name": "add-scalar",
+      "json": "[{\"op\":\"add\",\"path\":\"/a\",\"value\":1}]"
+    },
+    {
+      "name": "add-null",
+      "json": "[{\"op\":\"add\",\"path\":\"/a\",\"value\":null}]"
+    },
+    {
+      "name": "add-root",
+      "json": "[{\"op\":\"add\",\"path\":\"\",\"value\":{\"x\":1}}]"
+    },
+    {
+      "name": "add-escaped",
+      "json": "[{\"op\":\"add\",\"path\":\"/a~1b/c~0d\",\"value\":\"v\"}]"
+    },
+    {
+      "name": "add-object",
+      "json": "[{\"op\":\"add\",\"path\":\"/a\",\"value\":{\"x\":[1,null,true],\"\\u00FC\":\"\\u003Cb\\u003E\"}}]"
+    },
+    {
+      "name": "replace-scalar",
+      "json": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":\"s\"}]"
+    },
+    {
+      "name": "replace-null",
+      "json": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":null}]"
+    },
+    {
+      "name": "remove",
+      "json": "[{\"op\":\"remove\",\"path\":\"/a/0\"}]"
+    },
+    {
+      "name": "remove-root",
+      "json": "[{\"op\":\"remove\",\"path\":\"\"}]"
+    },
+    {
+      "name": "test",
+      "json": "[{\"op\":\"test\",\"path\":\"/a\",\"value\":true}]"
+    },
+    {
+      "name": "move",
+      "json": "[{\"op\":\"move\",\"path\":\"/to\",\"from\":\"/from\"}]"
+    },
+    {
+      "name": "copy",
+      "json": "[{\"op\":\"copy\",\"path\":\"/to\",\"from\":\"/from\"}]"
+    },
+    {
+      "name": "multi",
+      "json": "[{\"op\":\"add\",\"path\":\"/a\",\"value\":1},{\"op\":\"remove\",\"path\":\"/b\"},{\"op\":\"replace\",\"path\":\"/c\",\"value\":\"z\"}]"
+    },
+    {
+      "name": "empty",
+      "json": "[]"
+    }
+  ],
+  "diff": [
+    {
+      "name": "identity-object",
+      "a": "{\"a\":1}",
+      "b": "{\"a\":1}",
+      "patch": "[]"
+    },
+    {
+      "name": "identity-empty",
+      "a": "{}",
+      "b": "{}",
+      "patch": "[]"
+    },
+    {
+      "name": "scalar-replace-int",
+      "a": "{\"a\":1}",
+      "b": "{\"a\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":2}]"
+    },
+    {
+      "name": "scalar-replace-str",
+      "a": "{\"a\":\"x\"}",
+      "b": "{\"a\":\"y\"}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":\"y\"}]"
+    },
+    {
+      "name": "scalar-replace-bool",
+      "a": "{\"a\":true}",
+      "b": "{\"a\":false}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":false}]"
+    },
+    {
+      "name": "scalar-replace-num-type",
+      "a": "{\"a\":1}",
+      "b": "{\"a\":1.0}",
+      "patch": "[]"
+    },
+    {
+      "name": "scalar-replace-int-to-str",
+      "a": "{\"a\":1}",
+      "b": "{\"a\":\"1\"}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":\"1\"}]"
+    },
+    {
+      "name": "root-scalar-replace",
+      "a": "1",
+      "b": "2",
+      "patch": "[{\"op\":\"replace\",\"path\":\"\",\"value\":2}]"
+    },
+    {
+      "name": "root-str-replace",
+      "a": "\"a\"",
+      "b": "\"b\"",
+      "patch": "[{\"op\":\"replace\",\"path\":\"\",\"value\":\"b\"}]"
+    },
+    {
+      "name": "root-null-to-obj",
+      "a": "null",
+      "b": "{\"a\":1}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"\",\"value\":{\"a\":1}}]"
+    },
+    {
+      "name": "root-obj-to-null",
+      "a": "{\"a\":1}",
+      "b": "null",
+      "patch": "[{\"op\":\"replace\",\"path\":\"\",\"value\":null}]"
+    },
+    {
+      "name": "null-to-value",
+      "a": "{\"a\":null}",
+      "b": "{\"a\":1}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":1}]"
+    },
+    {
+      "name": "value-to-null",
+      "a": "{\"a\":1}",
+      "b": "{\"a\":null}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":null}]"
+    },
+    {
+      "name": "missing-to-null",
+      "a": "{}",
+      "b": "{\"a\":null}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/a\",\"value\":null}]"
+    },
+    {
+      "name": "null-to-missing",
+      "a": "{\"a\":null}",
+      "b": "{}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/a\"}]"
+    },
+    {
+      "name": "null-identity",
+      "a": "{\"a\":null}",
+      "b": "{\"a\":null}",
+      "patch": "[]"
+    },
+    {
+      "name": "add-prop",
+      "a": "{\"a\":1}",
+      "b": "{\"a\":1,\"b\":2}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/b\",\"value\":2}]"
+    },
+    {
+      "name": "remove-prop",
+      "a": "{\"a\":1,\"b\":2}",
+      "b": "{\"a\":1}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/b\"}]"
+    },
+    {
+      "name": "add-and-remove",
+      "a": "{\"a\":1,\"b\":2}",
+      "b": "{\"a\":1,\"c\":3}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/b\"},{\"op\":\"add\",\"path\":\"/c\",\"value\":3}]"
+    },
+    {
+      "name": "empty-to-full",
+      "a": "{}",
+      "b": "{\"a\":1,\"b\":[1,2],\"c\":{\"d\":true}}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/a\",\"value\":1},{\"op\":\"add\",\"path\":\"/b\",\"value\":[1,2]},{\"op\":\"add\",\"path\":\"/c\",\"value\":{\"d\":true}}]"
+    },
+    {
+      "name": "full-to-empty",
+      "a": "{\"a\":1,\"b\":[1,2],\"c\":{\"d\":true}}",
+      "b": "{}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/a\"},{\"op\":\"remove\",\"path\":\"/b\"},{\"op\":\"remove\",\"path\":\"/c\"}]"
+    },
+    {
+      "name": "nested-replace",
+      "a": "{\"a\":{\"b\":{\"c\":1}}}",
+      "b": "{\"a\":{\"b\":{\"c\":2}}}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a/b/c\",\"value\":2}]"
+    },
+    {
+      "name": "nested-add",
+      "a": "{\"a\":{\"b\":{}}}",
+      "b": "{\"a\":{\"b\":{\"c\":2}}}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/a/b/c\",\"value\":2}]"
+    },
+    {
+      "name": "nested-remove",
+      "a": "{\"a\":{\"b\":{\"c\":2}}}",
+      "b": "{\"a\":{\"b\":{}}}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/a/b/c\"}]"
+    },
+    {
+      "name": "nested-type-change",
+      "a": "{\"a\":{\"b\":1}}",
+      "b": "{\"a\":[1]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":[1]}]"
+    },
+    {
+      "name": "deep",
+      "a": "{\"a\":{\"b\":{\"c\":{\"d\":{\"e\":1}}}}}",
+      "b": "{\"a\":{\"b\":{\"c\":{\"d\":{\"e\":2}}}}}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a/b/c/d/e\",\"value\":2}]"
+    },
+    {
+      "name": "array-identity",
+      "a": "{\"a\":[1,2,3]}",
+      "b": "{\"a\":[1,2,3]}",
+      "patch": "[]"
+    },
+    {
+      "name": "array-append",
+      "a": "{\"a\":[1,2]}",
+      "b": "{\"a\":[1,2,3]}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/a/2\",\"value\":3}]"
+    },
+    {
+      "name": "array-prepend",
+      "a": "{\"a\":[2,3]}",
+      "b": "{\"a\":[1,2,3]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a/0\",\"value\":1},{\"op\":\"replace\",\"path\":\"/a/1\",\"value\":2},{\"op\":\"add\",\"path\":\"/a/2\",\"value\":3}]"
+    },
+    {
+      "name": "array-truncate",
+      "a": "{\"a\":[1,2,3]}",
+      "b": "{\"a\":[1,2]}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/a/2\"}]"
+    },
+    {
+      "name": "array-truncate-front",
+      "a": "{\"a\":[1,2,3]}",
+      "b": "{\"a\":[2,3]}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/a/2\"},{\"op\":\"replace\",\"path\":\"/a/1\",\"value\":3},{\"op\":\"replace\",\"path\":\"/a/0\",\"value\":2}]"
+    },
+    {
+      "name": "array-replace-mid",
+      "a": "{\"a\":[1,2,3]}",
+      "b": "{\"a\":[1,9,3]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a/1\",\"value\":9}]"
+    },
+    {
+      "name": "array-reorder",
+      "a": "{\"a\":[1,2,3]}",
+      "b": "{\"a\":[3,2,1]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a/0\",\"value\":3},{\"op\":\"replace\",\"path\":\"/a/2\",\"value\":1}]"
+    },
+    {
+      "name": "array-swap",
+      "a": "{\"a\":[1,2]}",
+      "b": "{\"a\":[2,1]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a/0\",\"value\":2},{\"op\":\"replace\",\"path\":\"/a/1\",\"value\":1}]"
+    },
+    {
+      "name": "array-empty-to-full",
+      "a": "{\"a\":[]}",
+      "b": "{\"a\":[1,2,3]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":[1,2,3]}]"
+    },
+    {
+      "name": "array-full-to-empty",
+      "a": "{\"a\":[1,2,3]}",
+      "b": "{\"a\":[]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":[]}]"
+    },
+    {
+      "name": "array-of-objects",
+      "a": "{\"a\":[{\"x\":1},{\"x\":2}]}",
+      "b": "{\"a\":[{\"x\":1},{\"x\":3}]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a/1/x\",\"value\":3}]"
+    },
+    {
+      "name": "array-of-objects-grow",
+      "a": "{\"a\":[{\"x\":1}]}",
+      "b": "{\"a\":[{\"x\":1},{\"x\":2}]}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/a/1\",\"value\":{\"x\":2}}]"
+    },
+    {
+      "name": "array-of-objects-shrink",
+      "a": "{\"a\":[{\"x\":1},{\"x\":2}]}",
+      "b": "{\"a\":[{\"x\":1}]}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/a/1\"}]"
+    },
+    {
+      "name": "array-nested",
+      "a": "{\"a\":[[1,2],[3]]}",
+      "b": "{\"a\":[[1,2],[3,4]]}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/a/1/1\",\"value\":4}]"
+    },
+    {
+      "name": "array-null-elems",
+      "a": "{\"a\":[null,1]}",
+      "b": "{\"a\":[1,null]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a/0\",\"value\":1},{\"op\":\"replace\",\"path\":\"/a/1\",\"value\":null}]"
+    },
+    {
+      "name": "root-array",
+      "a": "[1,2,3]",
+      "b": "[1,2,4]",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/2\",\"value\":4}]"
+    },
+    {
+      "name": "root-array-grow",
+      "a": "[1]",
+      "b": "[1,2]",
+      "patch": "[{\"op\":\"add\",\"path\":\"/1\",\"value\":2}]"
+    },
+    {
+      "name": "root-array-shrink",
+      "a": "[1,2]",
+      "b": "[1]",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/1\"}]"
+    },
+    {
+      "name": "array-duplicate-elems",
+      "a": "{\"a\":[1,1,1]}",
+      "b": "{\"a\":[1,1]}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/a/2\"}]"
+    },
+    {
+      "name": "array-to-scalar",
+      "a": "{\"a\":[1,2]}",
+      "b": "{\"a\":5}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":5}]"
+    },
+    {
+      "name": "scalar-to-array",
+      "a": "{\"a\":5}",
+      "b": "{\"a\":[1,2]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":[1,2]}]"
+    },
+    {
+      "name": "array-mixed-types",
+      "a": "{\"a\":[1,\"x\",null,true,{\"k\":1},[2]]}",
+      "b": "{\"a\":[1,\"y\",null,false,{\"k\":2},[3]]}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a/1\",\"value\":\"y\"},{\"op\":\"replace\",\"path\":\"/a/3\",\"value\":false},{\"op\":\"replace\",\"path\":\"/a/4/k\",\"value\":2},{\"op\":\"replace\",\"path\":\"/a/5/0\",\"value\":3}]"
+    },
+    {
+      "name": "key-with-slash",
+      "a": "{\"a/b\":1}",
+      "b": "{\"a/b\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a~1b\",\"value\":2}]"
+    },
+    {
+      "name": "key-with-tilde",
+      "a": "{\"a~b\":1}",
+      "b": "{\"a~b\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a~0b\",\"value\":2}]"
+    },
+    {
+      "name": "key-with-tilde-zero",
+      "a": "{\"a~0b\":1}",
+      "b": "{\"a~0b\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a~00b\",\"value\":2}]"
+    },
+    {
+      "name": "key-with-tilde-one",
+      "a": "{\"a~1b\":1}",
+      "b": "{\"a~1b\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a~01b\",\"value\":2}]"
+    },
+    {
+      "name": "key-empty",
+      "a": "{\"\":1}",
+      "b": "{\"\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/\",\"value\":2}]"
+    },
+    {
+      "name": "key-slash-only",
+      "a": "{\"/\":1}",
+      "b": "{\"/\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/~1\",\"value\":2}]"
+    },
+    {
+      "name": "key-nested-slash",
+      "a": "{\"a/b\":{\"c/d\":1}}",
+      "b": "{\"a/b\":{\"c/d\":2}}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a~1b/c~1d\",\"value\":2}]"
+    },
+    {
+      "name": "key-unicode",
+      "a": "{\"äöü\":1}",
+      "b": "{\"äöü\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/\\u00E4\\u00F6\\u00FC\",\"value\":2}]"
+    },
+    {
+      "name": "key-emoji",
+      "a": "{\"k\uD83D\uDE00\":1}",
+      "b": "{\"k\uD83D\uDE00\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/k\\uD83D\\uDE00\",\"value\":2}]"
+    },
+    {
+      "name": "key-numeric-string",
+      "a": "{\"0\":1,\"1\":2}",
+      "b": "{\"0\":9,\"1\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/0\",\"value\":9}]"
+    },
+    {
+      "name": "key-dash",
+      "a": "{\"-\":1}",
+      "b": "{\"-\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/-\",\"value\":2}]"
+    },
+    {
+      "name": "key-quoted-json",
+      "a": "{\"\\\"quoted\\\"\":1}",
+      "b": "{\"\\\"quoted\\\"\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/\\u0022quoted\\u0022\",\"value\":2}]"
+    },
+    {
+      "name": "key-backslash",
+      "a": "{\"a\\\\b\":1}",
+      "b": "{\"a\\\\b\":2}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\\\\b\",\"value\":2}]"
+    },
+    {
+      "name": "key-add-with-slash",
+      "a": "{}",
+      "b": "{\"a/b\":1}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/a~1b\",\"value\":1}]"
+    },
+    {
+      "name": "key-remove-with-slash",
+      "a": "{\"a/b\":1}",
+      "b": "{}",
+      "patch": "[{\"op\":\"remove\",\"path\":\"/a~1b\"}]"
+    },
+    {
+      "name": "value-unicode",
+      "a": "{\"a\":\"x\"}",
+      "b": "{\"a\":\"äöü \uD83D\uDE00\"}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":\"\\u00E4\\u00F6\\u00FC \\uD83D\\uDE00\"}]"
+    },
+    {
+      "name": "value-long-string",
+      "a": "{\"a\":\"x\"}",
+      "b": "{\"a\":\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"}]"
+    },
+    {
+      "name": "value-number-precision",
+      "a": "{\"a\":1}",
+      "b": "{\"a\":1234567890123456789}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":1234567890123456789}]"
+    },
+    {
+      "name": "value-negative-zero",
+      "a": "{\"a\":0}",
+      "b": "{\"a\":-0.0}",
+      "patch": "[]"
+    },
+    {
+      "name": "value-exp",
+      "a": "{\"a\":1}",
+      "b": "{\"a\":1e10}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/a\",\"value\":1e10}]"
+    },
+    {
+      "name": "value-nested-empty-obj",
+      "a": "{\"a\":{}}",
+      "b": "{\"a\":{\"b\":{}}}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/a/b\",\"value\":{}}]"
+    },
+    {
+      "name": "meshnode-content-edit",
+      "a": "{\n  \"$type\": \"MeshWeaver.Mesh.Contract.MeshNode\",\n  \"id\": \"Overview\",\n  \"path\": \"acme/Docs/Overview\",\n  \"namespace\": \"acme/Docs\",\n  \"name\": \"Overview\",\n  \"nodeType\": \"Markdown\",\n  \"state\": 2,\n  \"version\": 17,\n  \"createdAt\": \"2026-01-04T10:11:12.1234567Z\",\n  \"modifiedAt\": \"2026-02-04T10:11:12.1234567Z\",\n  \"createdBy\": \"rbuergi@systemorph.com\",\n  \"tags\": [\"docs\", \"public\"],\n  \"content\": {\n    \"$type\": \"MeshWeaver.Markdown.MarkdownContent\",\n    \"text\": \"# Overview\\n\\nThe quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\\n\\n## Details\\n\\n- one\\n- two\\n- three\\n\",\n    \"frontMatter\": { \"title\": \"Overview\", \"order\": 1 },\n    \"wordCount\": 42\n  },\n  \"children\": [\n    { \"id\": \"a\", \"order\": 1, \"label\": \"Alpha\" },\n    { \"id\": \"b\", \"order\": 2, \"label\": \"Beta\" },\n    { \"id\": \"c\", \"order\": 3, \"label\": \"Gamma\" }\n  ]\n}",
+      "b": "{\n  \"$type\": \"MeshWeaver.Mesh.Contract.MeshNode\",\n  \"id\": \"Overview\",\n  \"path\": \"acme/Docs/Overview\",\n  \"namespace\": \"acme/Docs\",\n  \"name\": \"Overview\",\n  \"nodeType\": \"Markdown\",\n  \"state\": 2,\n  \"version\": 18,\n  \"createdAt\": \"2026-01-04T10:11:12.1234567Z\",\n  \"modifiedAt\": \"2026-03-09T08:00:00.0000000Z\",\n  \"createdBy\": \"rbuergi@systemorph.com\",\n  \"tags\": [\"docs\", \"public\", \"reviewed\"],\n  \"content\": {\n    \"$type\": \"MeshWeaver.Markdown.MarkdownContent\",\n    \"text\": \"# Overview\\n\\nThe quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\\n\\n## Details\\n\\n- one\\n- two\\n- three\\n- four\\n\",\n    \"frontMatter\": { \"title\": \"Overview\", \"order\": 2 },\n    \"wordCount\": 43\n  },\n  \"children\": [\n    { \"id\": \"a\", \"order\": 1, \"label\": \"Alpha\" },\n    { \"id\": \"b\", \"order\": 2, \"label\": \"Beta (edited)\" },\n    { \"id\": \"c\", \"order\": 3, \"label\": \"Gamma\" }\n  ]\n}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/version\",\"value\":18},{\"op\":\"replace\",\"path\":\"/modifiedAt\",\"value\":\"2026-03-09T08:00:00.0000000Z\"},{\"op\":\"add\",\"path\":\"/tags/2\",\"value\":\"reviewed\"},{\"op\":\"replace\",\"path\":\"/content/text\",\"value\":\"# Overview\\n\\nThe quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\\n\\n## Details\\n\\n- one\\n- two\\n- three\\n- four\\n\"},{\"op\":\"replace\",\"path\":\"/content/frontMatter/order\",\"value\":2},{\"op\":\"replace\",\"path\":\"/content/wordCount\",\"value\":43},{\"op\":\"replace\",\"path\":\"/children/1/label\",\"value\":\"Beta (edited)\"}]"
+    },
+    {
+      "name": "meshnode-add-field",
+      "a": "{\n  \"$type\": \"MeshWeaver.Mesh.Contract.MeshNode\",\n  \"id\": \"Overview\",\n  \"path\": \"acme/Docs/Overview\",\n  \"namespace\": \"acme/Docs\",\n  \"name\": \"Overview\",\n  \"nodeType\": \"Markdown\",\n  \"state\": 2,\n  \"version\": 17,\n  \"createdAt\": \"2026-01-04T10:11:12.1234567Z\",\n  \"modifiedAt\": \"2026-02-04T10:11:12.1234567Z\",\n  \"createdBy\": \"rbuergi@systemorph.com\",\n  \"tags\": [\"docs\", \"public\"],\n  \"content\": {\n    \"$type\": \"MeshWeaver.Markdown.MarkdownContent\",\n    \"text\": \"# Overview\\n\\nThe quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\\n\\n## Details\\n\\n- one\\n- two\\n- three\\n\",\n    \"frontMatter\": { \"title\": \"Overview\", \"order\": 1 },\n    \"wordCount\": 42\n  },\n  \"children\": [\n    { \"id\": \"a\", \"order\": 1, \"label\": \"Alpha\" },\n    { \"id\": \"b\", \"order\": 2, \"label\": \"Beta\" },\n    { \"id\": \"c\", \"order\": 3, \"label\": \"Gamma\" }\n  ]\n}",
+      "b": "{\n  \"$type\": \"MeshWeaver.Mesh.Contract.MeshNode\",\n  \"id\": \"Overview\",\n  \"path\": \"acme/Docs/Overview\",\n  \"namespace\": \"acme/Docs\",\n  \"name\": \"Overview\",\n  \"nodeType\": \"Markdown\",\n  \"state\": 2,\n  \"version\": 17,\n  \"createdAt\": \"2026-01-04T10:11:12.1234567Z\",\n  \"modifiedAt\": \"2026-02-04T10:11:12.1234567Z\",\n  \"createdBy\": \"rbuergi@systemorph.com\",\n  \"modifiedBy\": \"someone@else.com\",\n  \"tags\": [\"docs\", \"public\"],\n  \"description\": \"A new field appeared.\",\n  \"content\": {\n    \"$type\": \"MeshWeaver.Markdown.MarkdownContent\",\n    \"text\": \"# Overview\\n\\nThe quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\\n\\n## Details\\n\\n- one\\n- two\\n- three\\n\",\n    \"frontMatter\": { \"title\": \"Overview\", \"order\": 1 },\n    \"wordCount\": 42\n  },\n  \"children\": [\n    { \"id\": \"a\", \"order\": 1, \"label\": \"Alpha\" },\n    { \"id\": \"b\", \"order\": 2, \"label\": \"Beta\" },\n    { \"id\": \"c\", \"order\": 3, \"label\": \"Gamma\" }\n  ]\n}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/modifiedBy\",\"value\":\"someone@else.com\"},{\"op\":\"add\",\"path\":\"/description\",\"value\":\"A new field appeared.\"}]"
+    },
+    {
+      "name": "layoutarea-snapshot",
+      "a": "{\n  \"areas\": {\n    \"\\\"/\\\"\": { \"$type\": \"LayoutStackControl\", \"areas\": [\"\\\"/Toolbar\\\"\", \"\\\"/Grid\\\"\"], \"orientation\": \"Vertical\" },\n    \"\\\"/Toolbar\\\"\": { \"$type\": \"ToolbarControl\", \"items\": [ {\"$type\":\"MenuItemControl\",\"title\":\"New\"}, {\"$type\":\"MenuItemControl\",\"title\":\"Open\"} ] },\n    \"\\\"/Grid\\\"\": { \"$type\": \"DataGridControl\", \"data\": {\"$type\":\"JsonPointerReference\",\"pointer\":\"/data/rows\"}, \"columns\": [\n        {\"$type\":\"PropertyColumnControl\",\"property\":\"name\",\"title\":\"Name\"},\n        {\"$type\":\"PropertyColumnControl\",\"property\":\"amount\",\"title\":\"Amount\",\"format\":\"N0\"}\n    ] }\n  },\n  \"data\": {\n    \"rows\": [\n      {\"name\":\"Alpha\",\"amount\":1000,\"active\":true},\n      {\"name\":\"Beta\",\"amount\":2500,\"active\":false},\n      {\"name\":\"Gamma\",\"amount\":300,\"active\":true}\n    ]\n  }\n}",
+      "b": "{\n  \"areas\": {\n    \"\\\"/\\\"\": { \"$type\": \"LayoutStackControl\", \"areas\": [\"\\\"/Toolbar\\\"\", \"\\\"/Grid\\\"\", \"\\\"/Footer\\\"\"], \"orientation\": \"Vertical\" },\n    \"\\\"/Toolbar\\\"\": { \"$type\": \"ToolbarControl\", \"items\": [ {\"$type\":\"MenuItemControl\",\"title\":\"New\"}, {\"$type\":\"MenuItemControl\",\"title\":\"Save\"} ] },\n    \"\\\"/Grid\\\"\": { \"$type\": \"DataGridControl\", \"data\": {\"$type\":\"JsonPointerReference\",\"pointer\":\"/data/rows\"}, \"columns\": [\n        {\"$type\":\"PropertyColumnControl\",\"property\":\"name\",\"title\":\"Name\"},\n        {\"$type\":\"PropertyColumnControl\",\"property\":\"amount\",\"title\":\"Amount\",\"format\":\"N2\"}\n    ] },\n    \"\\\"/Footer\\\"\": { \"$type\": \"HtmlControl\", \"data\": \"<i>3 rows</i>\" }\n  },\n  \"data\": {\n    \"rows\": [\n      {\"name\":\"Alpha\",\"amount\":1100,\"active\":true},\n      {\"name\":\"Beta\",\"amount\":2500,\"active\":false},\n      {\"name\":\"Gamma\",\"amount\":300,\"active\":false}\n    ]\n  }\n}",
+      "patch": "[{\"op\":\"add\",\"path\":\"/areas/\\u0022~1\\u0022/areas/2\",\"value\":\"\\u0022/Footer\\u0022\"},{\"op\":\"replace\",\"path\":\"/areas/\\u0022~1Toolbar\\u0022/items/1/title\",\"value\":\"Save\"},{\"op\":\"replace\",\"path\":\"/areas/\\u0022~1Grid\\u0022/columns/1/format\",\"value\":\"N2\"},{\"op\":\"add\",\"path\":\"/areas/\\u0022~1Footer\\u0022\",\"value\":{\"$type\":\"HtmlControl\",\"data\":\"\\u003Ci\\u003E3 rows\\u003C/i\\u003E\"}},{\"op\":\"replace\",\"path\":\"/data/rows/0/amount\",\"value\":1100},{\"op\":\"replace\",\"path\":\"/data/rows/2/active\",\"value\":false}]"
+    },
+    {
+      "name": "entitystore-collection",
+      "a": "{\n  \"MeshWeaver.Mesh.Contract.MeshNode\": {\n    \"\\\"acme/Docs/One\\\"\":   { \"id\": \"One\", \"version\": 1, \"name\": \"One\" },\n    \"\\\"acme/Docs/Two\\\"\":   { \"id\": \"Two\", \"version\": 4, \"name\": \"Two\" },\n    \"\\\"acme/Docs/Three\\\"\": { \"id\": \"Three\", \"version\": 2, \"name\": \"Three\" }\n  },\n  \"MeshWeaver.Data.EntityUpdate\": {\n    \"\\\"u1\\\"\": { \"collection\": \"c\", \"id\": \"u1\", \"value\": { \"n\": 1 } }\n  }\n}",
+      "b": "{\n  \"MeshWeaver.Mesh.Contract.MeshNode\": {\n    \"\\\"acme/Docs/One\\\"\":   { \"id\": \"One\", \"version\": 2, \"name\": \"One (renamed)\" },\n    \"\\\"acme/Docs/Three\\\"\": { \"id\": \"Three\", \"version\": 2, \"name\": \"Three\" },\n    \"\\\"acme/Docs/Four\\\"\":  { \"id\": \"Four\", \"version\": 1, \"name\": \"Four\" }\n  },\n  \"MeshWeaver.Data.EntityUpdate\": {\n    \"\\\"u1\\\"\": { \"collection\": \"c\", \"id\": \"u1\", \"value\": { \"n\": 2 } }\n  }\n}",
+      "patch": "[{\"op\":\"replace\",\"path\":\"/MeshWeaver.Mesh.Contract.MeshNode/\\u0022acme~1Docs~1One\\u0022/version\",\"value\":2},{\"op\":\"replace\",\"path\":\"/MeshWeaver.Mesh.Contract.MeshNode/\\u0022acme~1Docs~1One\\u0022/name\",\"value\":\"One (renamed)\"},{\"op\":\"remove\",\"path\":\"/MeshWeaver.Mesh.Contract.MeshNode/\\u0022acme~1Docs~1Two\\u0022\"},{\"op\":\"add\",\"path\":\"/MeshWeaver.Mesh.Contract.MeshNode/\\u0022acme~1Docs~1Four\\u0022\",\"value\":{\"id\":\"Four\",\"version\":1,\"name\":\"Four\"}},{\"op\":\"replace\",\"path\":\"/MeshWeaver.Data.EntityUpdate/\\u0022u1\\u0022/value/n\",\"value\":2}]"
+    }
+  ],
+  "evalDocument": "{\n  \"a\": { \"b\": { \"c\": 42 }, \"0\": \"numeric-key\", \"\": \"empty-key\" },\n  \"0\": \"root-numeric\",\n  \"\": { \"\": \"double-empty\" },\n  \"-\": \"dash-key\",\n  \"arr\": [10, 20, 30],\n  \"a/b\": \"slash-key\",\n  \"a~b\": \"tilde-key\",\n  \"a~1b\": \"tilde-one-key\",\n  \"/\": \"solidus-key\",\n  \"~\": \"tilde-only-key\",\n  \"äöü\": \"umlaut\",\n  \"k\uD83D\uDE00\": \"emoji\",\n  \"\\\"quoted\\\"\": \"quoted\",\n  \"a\\\\b\": \"backslash\",\n  \" \": \"space\",\n  \"nested\": { \"arr\": [ { \"x\": 1 }, { \"x\": 2 } ] }\n}"
+}

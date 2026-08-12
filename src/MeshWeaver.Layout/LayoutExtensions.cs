@@ -2,8 +2,7 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Json.Patch;
-using Json.Pointer;
+using MeshWeaver.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Data.Serialization;
