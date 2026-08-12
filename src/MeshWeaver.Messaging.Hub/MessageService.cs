@@ -261,6 +261,10 @@ public class MessageService : IMessageService
         {
             if (gates.TryRemove(name, out _))
             {
+                // A gate that is opened after all is no longer dead — drop any failure marker so
+                // the deferral path stops answering-instead-of-parking (Dispose opens every gate,
+                // including one FailGate marked, and this keeps the two states consistent).
+                failedGates.TryRemove(name, out _);
                 logger.LogDebug("Opening initialization gate '{Name}' for hub {Address}. Closed gates {Gates}", name,
                     Address, gates.Keys);
 
@@ -299,6 +303,78 @@ public class MessageService : IMessageService
         logger.LogDebug("Initialization gate '{Name}' not found in hub {Address} (may have already been opened)", name,
             Address);
         return false;
+    }
+
+    /// <summary>
+    /// Gates that can never open, by name → why. A gate here stays in <see cref="gates"/> (so
+    /// nothing that would have been deferred is instead let through to handlers that were never
+    /// initialized) but the deferral path ANSWERS those deliveries instead of parking them.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> failedGates = new();
+
+    /// <summary>
+    /// Declares <paramref name="name"/> DEAD — see <see cref="IMessageHub.FailGate"/>. Answers the
+    /// entire deferred backlog now, and marks the gate so every later deferral is answered too.
+    ///
+    /// <para>🚨 The WHOLE backlog is answered, not just the part "belonging" to this gate: a
+    /// delivery is held until EVERY gate opens, so one dead gate strands all of them equally.</para>
+    /// </summary>
+    public bool FailGate(string name, string reason)
+    {
+        lock (gateStateLock)
+        {
+            if (!gates.ContainsKey(name))
+            {
+                logger.LogDebug(
+                    "Initialization gate '{Name}' not found in hub {Address} — nothing to fail "
+                    + "(it was already opened)", name, Address);
+                return false;
+            }
+
+            failedGates[name] = reason;
+        }
+
+        logger.LogDebug(
+            "Initialization gate '{Name}' in hub {Address} can NEVER open ({Reason}) — failing "
+            + "{Count} deferred delivery/deliveries instead of parking them",
+            name, Address, reason, deferredDeliveries.Count);
+
+        FailDeferredBacklog(reason);
+        return true;
+    }
+
+    /// <summary>
+    /// Answers every delivery currently parked behind the gates with a <see cref="DeliveryFailure"/>
+    /// and drops the parked turns — the same "never a silent abandonment" treatment
+    /// <see cref="NotifyStartupFailure"/> and <see cref="Dispose"/> apply, reached here from a
+    /// KNOWN-terminal gate rather than from a timeout.
+    /// </summary>
+    private void FailDeferredBacklog(string reason)
+    {
+        foreach (var (_, tracker) in deferredDeliveries)
+        {
+            tracker.TimeoutCts.Cancel();
+            tracker.TimeoutCts.Dispose();
+            AnswerUnreleasableDelivery(tracker.Delivery, reason);
+        }
+        deferredDeliveries.Clear();
+        // The parked turns are the same deliveries, already answered — running them later
+        // (a subsequent OpenGate, the disposal drain) would answer them a second time.
+        lock (turnGate)
+            deferredQueue.Clear();
+    }
+
+    /// <summary>
+    /// Gives a delivery that can never be released a TERMINAL answer: through the parent when the
+    /// sender is elsewhere (<see cref="NackThroughParent"/> also picks transient-vs-authoritative),
+    /// otherwise through this hub's own <see cref="ReportFailure"/> — which still works here
+    /// because a failed gate is reached long before <c>RunLevel &gt;= DisposeHostedHubs</c>.
+    /// </summary>
+    private void AnswerUnreleasableDelivery(IMessageDelivery delivery, string reason)
+    {
+        if (!NackThroughParent(delivery, reason))
+            ReportFailure(delivery.WithProperty("Error", reason),
+                hub.IsShuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
     }
 
 
@@ -977,6 +1053,29 @@ public class MessageService : IMessageService
                                     break;
                                 }
                             }
+                        }
+
+                        // 🚨 A gate that can NEVER open must FAIL what it would hold, never park
+                        // it. Parking behind a dead gate is a silent hang: nothing will ever
+                        // release the queue, so the sender hears nothing until an unrelated
+                        // deadline (the 30s deferral timeout, or whenever teardown finally reaches
+                        // messageService.Dispose) expires. Answer it here instead — the gate stays
+                        // in `gates` deliberately, so the message is never handed to handlers on a
+                        // hub whose initialization did not complete. See issue #1270 and
+                        // IMessageHub.FailGate.
+                        if (shouldDefer && !failedGates.IsEmpty)
+                        {
+                            var deadReason = string.Join("; ",
+                                failedGates.Select(g => $"[{g.Key}] {g.Value}"));
+                            MessageTrace.Write(
+                                $"hub={Address} msg={name} id={delivery.Id} GATE_FAILED gates=[{string.Join(",", failedGates.Keys)}]");
+                            fate?.Add($"GATE_FAILED gates=[{string.Join(",", failedGates.Keys)}]", Address);
+                            logger.LogDebug(
+                                "Failing {MessageType} (ID: {MessageId}) in {Address} — it would have been "
+                                + "deferred behind gate(s) that can never open: {Reason}",
+                                delivery.Message.GetType().Name, delivery.Id, Address, deadReason);
+                            AnswerUnreleasableDelivery(delivery, deadReason);
+                            return Observable.Return(delivery.Failed(deadReason));
                         }
 
                         // If we still need to defer, post to deferred buffer and return

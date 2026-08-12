@@ -17,8 +17,9 @@ namespace MeshWeaver.Hosting;
 internal sealed class HubNodePersistence(
     IMessageHub hub)
 {
-    private TimeSpan OpTimeout =>
-        (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
+    // 🗑️ The same dead `OpTimeout` MeshService carried, deleted for the same reason (#1270):
+    // declared, never read. Each leg below is a hub.Observe(...) already bounded by the hub's
+    // RequestTimeout; see MeshService's remarks for why a client-side ceiling is not the repair.
 
     private PostOptions ConfigurePost(PostOptions o)
         => o.WithTarget(hub.Address);
