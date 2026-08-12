@@ -246,6 +246,59 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
             because: "the settings tabs pass sibling elements expecting them to be siblings in the stack");
     }
 
+    /// <summary>
+    /// ⚠️ <c>Controls.Title(text, n)</c> is an <c>HtmlControl</c> — it emits <c>&lt;h{n}&gt;</c> markup
+    /// (<c>Controls.cs</c>: <c>Html($"&lt;h{headerSize}&gt;{text}&lt;/h{headerSize}&gt;")</c>) — so it went
+    /// through the same silent drop, and the two <c>VersionLayoutArea</c> title call sites are two of the
+    /// only three places in the tree affected by this change.
+    ///
+    /// <para><b>Do not confuse it with <c>Controls.H1</c>…<c>H6</c>.</b> Those are <c>LabelControl</c>
+    /// (<c>Label(data).WithTypo(Typography.Hn)</c>) and render through <c>Label.razor</c>, which already
+    /// applies <c>Style</c> — so the ~100 <c>Controls.H2(...).WithStyle("margin: 0")</c> call sites across
+    /// the portal never had this bug and are untouched here. The two factories look interchangeable and
+    /// are not; the sibling test below pins the <c>Title</c> half so the distinction stays visible.</para>
+    ///
+    /// <para>The style lands on the wrapper, not on the <c>&lt;h{n}&gt;</c>, so a declared <c>margin</c>
+    /// adds to the heading's own UA margin rather than replacing it. Strictly better than dropping it;
+    /// the author's literal intent needs <c>Title</c> to have its own control/view, which is the tracked
+    /// follow-up rather than this change.</para>
+    /// </summary>
+    [Fact]
+    public async Task TitleControl_IsAnHtmlControl_SoItsStyleNowReachesAWrapper()
+    {
+        var html = await RenderAsync<HtmlView>(Controls.Title("Section", 2).WithStyle("margin: 0 0 8px 0;"));
+
+        html.Should().Contain("margin: 0 0 8px 0",
+            because: "Controls.Title is an HtmlControl, so its style went through the same silent drop");
+        html.Should().Contain("<h2>Section</h2>",
+            because: "the heading element itself must survive the wrapper unchanged");
+    }
+
+    /// <summary>An unstyled title keeps the bare <c>&lt;h2&gt;</c> — no wrapper, exactly as today.</summary>
+    [Fact]
+    public async Task TitleControl_WithoutStyle_IsStillABareHeading()
+    {
+        var html = await RenderAsync<HtmlView>(Controls.Title("Section", 2));
+
+        html.Should().Be("<h2>Section</h2>",
+            because: "the great majority of titles set no style and must be untouched");
+    }
+
+    /// <summary>
+    /// The guard on the paragraph above: <c>Controls.H2</c> is a <c>LabelControl</c>, NOT an
+    /// <c>HtmlControl</c>, and its Style already worked. If someone ever re-implements <c>H1</c>…<c>H6</c>
+    /// on top of <c>Controls.Title</c>, this test fails and the ~100 heading call sites' blast radius has
+    /// to be re-reasoned rather than silently changing.
+    /// </summary>
+    [Fact]
+    public void HeadingFactories_AreLabelControls_NotHtmlControls()
+    {
+        Controls.H2("Section").Should().BeOfType<LabelControl>(
+            because: "Controls.H1..H6 are Label(data).WithTypo(...) and render through Label.razor");
+        Controls.Title("Section", 2).Should().BeOfType<HtmlControl>(
+            because: "Controls.Title emits raw <hN> markup and is the one heading factory this view sees");
+    }
+
     private sealed class StaticHostLifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime
     {
         public CancellationToken ApplicationStarted { get; } = new(canceled: true);
