@@ -165,24 +165,105 @@ public class IoPoolTest
         pool.InvokeBlocking(_ =>
         {
             entered.Set();
-            release.Wait(Timeout10);   // deliberately ignores the token — the reportable case
+            release.Wait(Timeout10);   // deliberately ignores the token
             return 0;
         }).Subscribe(_ => { }, _ => { });
 
         entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
         pool.CurrentInFlight.Should().Be(1, "a running blocking leaf must be visible as in-flight");
 
-        var leaked = pool.Drain();
-
-        // Either the drain JOINED (in-flight back to 0) or it must REPORT the survivor. Reporting
-        // 0 while a leaf still runs is the lie teardown acts on.
-        if (leaked == 0)
-            pool.CurrentInFlight.Should().Be(0,
-                "Drain returned 0 — 'the join is REAL' — so no pool thread may still be running. " +
-                "A blocking leaf survives the drain unseen because InvokeBlocking takes no gate " +
-                "permit, so re-acquiring the gate joins nothing.");
+        // Drain on ANOTHER thread and assert it does NOT return while the leaf runs. That is the
+        // contract — "0 means no pool thread is still running" — and it makes the repro fast: the
+        // earlier shape let Drain sit out the leaf's full 10s hold to observe the same thing.
+        // (Copilot review, #1334.)
+        var drain = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
+        drain.Wait(TimeSpan.FromMilliseconds(300)).Should().BeFalse(
+            "Drain must block while a blocking leaf is still executing — a blocking leaf holds no "
+            + "gate permit, so re-acquiring the gate joins nothing and Drain used to return 0 here");
 
         release.Set();
+
+        drain.Wait(Timeout5).Should().BeTrue("the leaf unwound, so the join must complete");
+        drain.Result.Should().Be(0, "the leaf unwound within the budget — nothing to report");
+        pool.CurrentInFlight.Should().Be(0);
+    }
+
+    /// <summary>
+    /// 🚨 The blocking-idle signal must be driven by a DEDICATED counter. <c>_inFlight</c> is shared
+    /// with <c>Invoke</c>/<c>InvokeStream</c>/<c>SubscribeThroughPool</c>, so 0↔1 transitions on it do
+    /// not correspond to blocking work starting or stopping: a blocking leaf starting while an async
+    /// leaf ran incremented the shared counter to 2, the Reset never fired, and Drain saw "idle" —
+    /// re-introducing the very bug the join was added to fix. (Copilot review, #1334.)
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public void Drain_joinsABlockingLeaf_evenWhileAnAsyncLeafIsRunning()
+    {
+        using var pool = new IoPool(4);
+        using var asyncEntered = new ManualResetEventSlim(false);
+        using var blockingEntered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var asyncGate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // An ASYNC leaf, in flight for the whole test — it holds the shared counter above zero.
+        pool.Invoke(_ =>
+        {
+            asyncEntered.Set();
+            return asyncGate.Task;
+        }).Subscribe(_ => { }, _ => { });
+        asyncEntered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+
+        // …and now a BLOCKING leaf on top of it.
+        pool.InvokeBlocking(_ =>
+        {
+            blockingEntered.Set();
+            release.Wait(Timeout10);
+            return 0;
+        }).Subscribe(_ => { }, _ => { });
+        blockingEntered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+
+        var drain = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
+        drain.Wait(TimeSpan.FromMilliseconds(300)).Should().BeFalse(
+            "the blocking leaf is still running, and a concurrently-running ASYNC leaf must not make "
+            + "the blocking join believe the pool is idle");
+
+        release.Set();
+        asyncGate.TrySetResult(0);
+
+        drain.Wait(Timeout5).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 <c>Dispose</c> promises that "when it returns, no pool thread is running, so the caller may
+    /// safely unload the node ALCs whose types that work referenced" — and it set <c>_disposed</c>
+    /// BEFORE calling <c>Drain()</c>, whose idempotence guard returns early on exactly that flag. So
+    /// the disposal path — the one that unloads every ALC — joined NOTHING. (Copilot review, #1334.)
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public void Dispose_actuallyJoins_beforeItReturns()
+    {
+        var pool = new IoPool(2);
+        using var entered = new ManualResetEventSlim(false);
+        using var unwound = new ManualResetEventSlim(false);
+
+        pool.InvokeBlocking(ct =>
+        {
+            entered.Set();
+            ct.WaitHandle.WaitOne(Timeout10);   // respects the token: Drain's cancel releases it
+            // A deliberate gap AFTER cancellation, to construct a definite ordering rather than to
+            // wait for propagation: a Dispose that does not join returns in microseconds and would
+            // otherwise race this flag and pass by luck.
+            Thread.Sleep(150);
+            unwound.Set();
+            return 0;
+        }).Subscribe(_ => { }, _ => { });
+
+        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+
+        pool.Dispose();
+
+        unwound.IsSet.Should().BeTrue(
+            "Dispose must not return until the blocking leaf has unwound — it is what licenses the "
+            + "caller to unload the ALCs whose compiled types that leaf was executing");
     }
 
     [Fact]
