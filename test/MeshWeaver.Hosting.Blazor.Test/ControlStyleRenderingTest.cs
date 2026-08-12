@@ -677,7 +677,11 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
         html.Should().Contain($"mesh-node-card {ClassValue}");
         html.Should().Contain("box-sizing: border-box; margin: 12px",
             because: "the author's declaration goes last so it wins over the card's own");
-        html.Should().NotContain($"color: inherit; display: block; width: 100%; box-sizing: border-box;margin: 12px",
+        // Anchored on "color: inherit", which appears ONLY in the anchor's style — the card's own
+        // literal also ends in "box-sizing: border-box;", so a shorter needle would match the card and
+        // the guard could never fail. Verified by temporarily appending StyleSuffix to the anchor:
+        // this assertion fails, the two above still pass.
+        html.Should().NotContain("color: inherit; display: block; width: 100%; box-sizing: border-box; margin: 12px",
             because: "the navigation anchor must NOT also carry it — that would apply the margin twice");
     }
 
