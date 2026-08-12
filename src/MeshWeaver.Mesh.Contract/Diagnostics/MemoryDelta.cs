@@ -48,9 +48,13 @@ public readonly record struct MemoryDelta(long ManagedAtStart, long WorkingSetAt
     /// not leave the process.
     /// </summary>
     public override string ToString() =>
+        // 🚨 Convert to MB FIRST, then let the format supply the sign. Deriving the sign from BYTES
+        // while truncating the magnitude after division rendered "-0 MB" for any negative delta under
+        // 1 MB — a sign on a zero reads as a measurement, not as rounding. The "+#;-#;0" pattern gives
+        // "+412", "-3" and a bare "0". (Copilot review, #1321.)
         string.Format(
             CultureInfo.InvariantCulture,
-            "managed {0}{1} MB, working set {2}{3} MB",
-            ManagedGrowth < 0 ? "-" : "+", Math.Abs(ManagedGrowth) / (1024 * 1024),
-            WorkingSetGrowth < 0 ? "-" : "+", Math.Abs(WorkingSetGrowth) / (1024 * 1024));
+            "managed {0:+#;-#;0} MB, working set {1:+#;-#;0} MB",
+            ManagedGrowth / (1024 * 1024),
+            WorkingSetGrowth / (1024 * 1024));
 }

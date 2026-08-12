@@ -125,7 +125,7 @@ internal sealed class StaticRepoImportHostedService(
                 r => logger?.LogInformation(
                     "[StaticRepoImport] {Partition}: {Outcome} ({Count} node(s)) — {Memory} "
                     + "(cumulative since import start).",
-                    r.Partition, r.Outcome, r.Count, importMemory.ToString()),
+                    r.Partition, r.Outcome, r.Count, importMemory),
                 ex =>
                 {
                     logger?.LogWarning(ex, "[StaticRepoImport] sync-context init failed.");
