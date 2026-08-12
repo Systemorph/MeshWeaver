@@ -2045,6 +2045,56 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// <see cref="Exception.Data"/> key naming the delete STAGE a <see cref="TimeoutException"/>
+    /// came out of. Issue #1198: the delete pipeline bounds SIX independent stages with the same
+    /// <see cref="MeshOperationOptions.Timeout"/>, and a bare <c>.Timeout(t)</c> throws
+    /// <c>"The operation has timed out."</c> with no context — so every one of them logged as the
+    /// same indistinguishable <c>[DeleteNode] timeout</c> and the next occurrence was unreadable.
+    /// </summary>
+    private const string DeleteStageDataKey = "DeleteStage";
+
+    /// <summary>
+    /// <see cref="Exception.Data"/> key carrying the descendant paths that never answered the
+    /// pre-flight <see cref="ValidateDeleteRequest"/> fan-out. That fan-out waits for EVERY
+    /// descendant under ONE budget, so a single unresponsive per-node hub times out the whole
+    /// delete — and until now it did so anonymously.
+    /// </summary>
+    private const string DeleteUnansweredDataKey = "DeleteUnansweredPaths";
+
+    /// <summary><see cref="Exception.Data"/> key carrying the paths already removed from storage
+    /// when the operation failed.</summary>
+    private const string DeletedPathsDataKey = "DeletedPaths";
+
+    /// <summary>
+    /// A stage-naming <c>Timeout</c>. The factory runs ONLY when the timeout fires, so it can
+    /// report state accumulated up to that moment (which descendants went silent, which paths were
+    /// already deleted) — the whole point being that the single error log can say WHERE the delete
+    /// ran out of time instead of only THAT it did (issue #1198).
+    /// </summary>
+    private static IObservable<T> TimeoutAtStage<T>(
+        this IObservable<T> source, TimeSpan timeout, Func<TimeoutException> onTimeout)
+        => source.Timeout(timeout, Observable.Defer(() => Observable.Throw<T>(onTimeout())));
+
+    /// <summary>Builds the stage-tagged <see cref="TimeoutException"/> the delete pipeline throws.</summary>
+    private static TimeoutException DeleteStageTimeout(string stage, string detail)
+    {
+        var ex = new TimeoutException($"[DeleteNode:{stage}] {detail}");
+        ex.Data[DeleteStageDataKey] = stage;
+        return ex;
+    }
+
+    /// <summary>Stage names — one per bounded stage of <see cref="HandleDeleteNodeRequest"/>.</summary>
+    private static class DeleteStage
+    {
+        public const string ReadRoot = "read-root";
+        public const string CheckPermission = "check-permission";
+        public const string ValidateRoot = "validate-root";
+        public const string CollectPaths = "collect-paths";
+        public const string PreValidateDescendants = "pre-validate-descendants";
+        public const string Commit = "commit";
+    }
+
+    /// <summary>
     /// 100% reactive delete handler — no <c>await</c>, no <c>Observable.FromAsync</c> wrapping
     /// blocking <c>IMeshStorage</c> calls. Because <see cref="IMeshService.DeleteNode"/> now
     /// targets the node's own hub (via <c>new Address(path)</c>), this handler always runs on
@@ -2153,6 +2203,18 @@ public static class MeshExtensions
         // top-level activity log on success.
         var collectedMessages = ImmutableList.CreateBuilder<LogMessage>();
 
+        // Accumulates every path this operation actually removed from storage, as it happens.
+        // 🚨 The commit's `.Timeout(...)` UNSUBSCRIBES from the fan-out, which throws away the
+        // deleted-path list HierarchicalPathDeletion attaches to its OWN error — so before this,
+        // a timed-out delete ALWAYS reported `partial-deleted=0` no matter how much of the
+        // subtree was already gone. That zero was read as "the operation made zero progress" and
+        // sent issue #1198's triage looking exclusively at the pre-commit stages.
+        var deletedProgress = ImmutableList.CreateBuilder<string>();
+        IReadOnlyList<string> SnapshotProgress()
+        {
+            lock (deletedProgress) return deletedProgress.ToImmutable();
+        }
+
         // 1. Load the root MeshNode directly from persistence — avoids
         //    activating the per-node hub at `path` (which workspace.GetMeshNodeStream
         //    would trigger via SubscribeRequest). Per-node hub cold-start
@@ -2163,6 +2225,9 @@ public static class MeshExtensions
         //    need the live per-node hub state.
         persistence.Read(path, hub.JsonSerializerOptions)
             .DefaultIfEmpty(null!)
+            .TimeoutAtStage(opts.Timeout, () => DeleteStageTimeout(
+                DeleteStage.ReadRoot,
+                $"storage did not return the node at '{path}' within {opts.Timeout.TotalSeconds:0}s"))
             .SelectMany(rootNode =>
             {
                 if (rootNode is null)
@@ -2180,6 +2245,10 @@ public static class MeshExtensions
                 //    hub when fan-out fires a non-recursive DeleteNodeRequest at
                 //    each leaf's address — never load all descendant nodes upfront.
                 return CheckDeletePermissionForNode(hub, senderUserId, rootNode, logger)
+                    .TimeoutAtStage(opts.Timeout, () => DeleteStageTimeout(
+                        DeleteStage.CheckPermission,
+                        $"the effective-permission fold for '{path}' did not settle within "
+                        + $"{opts.Timeout.TotalSeconds:0}s (user '{senderUserId}')"))
                     .SelectMany(denied =>
                     {
                         if (denied)
@@ -2194,6 +2263,10 @@ public static class MeshExtensions
                         }
 
                         return RunDeletionValidatorsWithWarningsObs(hub, rootNode, capturedRequest, request.AccessContext)
+                            .TimeoutAtStage(opts.Timeout, () => DeleteStageTimeout(
+                                DeleteStage.ValidateRoot,
+                                $"the INodeValidator chain for '{path}' did not complete within "
+                                + $"{opts.Timeout.TotalSeconds:0}s"))
                             .SelectMany(vresult =>
                             {
                                 if (vresult.Error is { Length: > 0 } err)
@@ -2341,8 +2414,23 @@ public static class MeshExtensions
                                         return DeleteSubtreeUntilDrained(
                                                 meshHub, storage, path, collected.ToDelete,
                                                 capturedRequest, executionContext,
-                                                recentlyDeleted, logger, collectedMessages)
-                                            .Timeout(opts.Timeout)
+                                                recentlyDeleted, logger, collectedMessages,
+                                                deletedProgress)
+                                            .TimeoutAtStage(opts.Timeout, () =>
+                                            {
+                                                var done = SnapshotProgress();
+                                                var ex = DeleteStageTimeout(
+                                                    DeleteStage.Commit,
+                                                    $"the bottom-up delete of '{path}' did not drain within "
+                                                    + $"{opts.Timeout.TotalSeconds:0}s — {done.Count} of "
+                                                    + $"{collected.ToDelete.Count} planned path(s) were already "
+                                                    + "removed from storage");
+                                                // Carry the REAL progress: the timeout discards the fan-out's
+                                                // own bookkeeping, and reporting 0 here is what made #1198 look
+                                                // like a pre-commit failure.
+                                                ex.Data[DeletedPathsDataKey] = done;
+                                                return ex;
+                                            })
                                             // 5. Post-deletion side effects for the ROOT node — e.g.
                                             //    dropping the backing partition store when a
                                             //    partition-owning Space root is deleted. The subtree
@@ -2447,7 +2535,13 @@ public static class MeshExtensions
                 ex =>
                 {
                     var isTimeout = ex is TimeoutException;
-                    var partial = ex.Data["DeletedPaths"] as IReadOnlyList<string>
+                    var partial = ex.Data[DeletedPathsDataKey] as IReadOnlyList<string>
+                        ?? Array.Empty<string>();
+                    // Which of the pipeline's six bounded stages ran out of time. Unset means the
+                    // exception came from somewhere that is not one of them (a nested Timeout — e.g.
+                    // a leaf's own ValidateDeleteRequest read — surfacing through this handler).
+                    var stage = ex.Data[DeleteStageDataKey] as string ?? "unattributed";
+                    var unanswered = ex.Data[DeleteUnansweredDataKey] as IReadOnlyList<string>
                         ?? Array.Empty<string>();
                     // "Node not found" pulled from the inner DeliveryFailureException —
                     // when the subscribe call hits a non-existent owner address the
@@ -2484,16 +2578,34 @@ public static class MeshExtensions
                     else if (isUnauthorized)
                         logger.LogWarning(
                             "[DeleteNode] permission-denied path={Path}: {Reason}", path, ex.Message);
+                    else if (isTimeout)
+                        // 🚨 stage= is the whole point of issue #1198: six stages share one budget,
+                        // and only two of them can leave the subtree untouched. unanswered= names the
+                        // descendant hubs that went silent when it was the pre-flight fan-out — that
+                        // stage waits for EVERY descendant under a single timeout, so one wedged
+                        // per-node hub stops the whole delete and used to do it anonymously.
+                        logger.LogError(ex,
+                            "[DeleteNode] timeout path={Path} stage={Stage} partial-deleted={Partial} "
+                            + "unanswered={Unanswered}",
+                            path, stage, partial.Count,
+                            unanswered.Count == 0
+                                ? "-"
+                                : string.Join(", ", unanswered.Take(20))
+                                  + (unanswered.Count > 20 ? $" (+{unanswered.Count - 20} more)" : ""));
                     else
                         logger.LogError(ex, "[DeleteNode] {Kind} path={Path} partial-deleted={Partial}",
-                            isTimeout ? "timeout" : (isNotFound ? "not-found" : "unexpected"), path, partial.Count);
+                            isNotFound ? "not-found" : "unexpected", path, partial.Count);
                     var failMsgs = collectedMessages.ToImmutable()
                         .Add(new LogMessage(
                             isNotFound ? $"Node not found at path '{path}'" : ex.Message,
                             LogLevel.Error));
                     PostFailed(
                         isTimeout
-                            ? $"Delete of '{path}' exceeded {opts.Timeout.TotalSeconds:0}s timeout"
+                            // The stage detail rides along so the CALLER sees it too — the response
+                            // is what a user, an agent or a test reads, and "exceeded 30s" alone is
+                            // exactly as unreadable there as it was in the log.
+                            ? $"Delete of '{path}' exceeded {opts.Timeout.TotalSeconds:0}s timeout "
+                              + $"in stage '{stage}': {ex.Message}"
                             : (isNotFound
                                 ? $"Node not found at path '{path}'"
                                 : (isUnauthorized
@@ -2563,7 +2675,10 @@ public static class MeshExtensions
                     RootExists: true,
                     empty.Add(path),
                     descendants.Any(d => IsDirectChildOf(d, path))))
-                .Timeout(timeout);
+                .TimeoutAtStage(timeout, () => DeleteStageTimeout(
+                    DeleteStage.CollectPaths,
+                    $"the storage enumeration of children under '{path}' did not answer within "
+                    + $"{timeout.TotalSeconds:0}s"));
         }
 
         return storage.ListDescendantPaths(path)
@@ -2576,7 +2691,10 @@ public static class MeshExtensions
                 logger.LogDebug("[DeleteNode] collected path={Path} total={Count}", path, set.Count);
                 return (RootExists: true, set, false);
             })
-            .Timeout(timeout);
+            .TimeoutAtStage(timeout, () => DeleteStageTimeout(
+                DeleteStage.CollectPaths,
+                $"the storage enumeration of the subtree under '{path}' did not answer within "
+                + $"{timeout.TotalSeconds:0}s"));
     }
 
     /// <summary>
@@ -2617,10 +2735,11 @@ public static class MeshExtensions
         AccessContext? callerAccessContext,
         RecentlyDeletedRegistry? recentlyDeleted,
         ILogger logger,
-        ImmutableList<LogMessage>.Builder collectedMessages)
+        ImmutableList<LogMessage>.Builder collectedMessages,
+        ImmutableList<string>.Builder deletedProgress)
         => RunDeletePass(
             meshHub, storage, rootPath, plannedPaths, baseRequest, callerAccessContext,
-            recentlyDeleted, logger, collectedMessages,
+            recentlyDeleted, logger, collectedMessages, deletedProgress,
             pass: 1, deletedSoFar: ImmutableList<string>.Empty);
 
     private static IObservable<IReadOnlyList<string>> RunDeletePass(
@@ -2633,6 +2752,7 @@ public static class MeshExtensions
         RecentlyDeletedRegistry? recentlyDeleted,
         ILogger logger,
         ImmutableList<LogMessage>.Builder collectedMessages,
+        ImmutableList<string>.Builder deletedProgress,
         int pass,
         ImmutableList<string> deletedSoFar)
     {
@@ -2650,14 +2770,14 @@ public static class MeshExtensions
 
         return FanOutDeleteSubtree(
                 meshHub, storage, rootPath, toDelete, baseRequest, callerAccessContext,
-                logger, collectedMessages, rootAlreadyDeleted: pass > 1)
+                logger, collectedMessages, deletedProgress, rootAlreadyDeleted: pass > 1)
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
                 // Fold this pass's partial deletions into the accumulated total so
                 // the caller's failure response reports every path actually removed.
-                var passDeleted = ex.Data["DeletedPaths"] as IReadOnlyList<string>
+                var passDeleted = ex.Data[DeletedPathsDataKey] as IReadOnlyList<string>
                     ?? Array.Empty<string>();
-                ex.Data["DeletedPaths"] = (IReadOnlyList<string>)deletedSoFar.AddRange(passDeleted);
+                ex.Data[DeletedPathsDataKey] = (IReadOnlyList<string>)deletedSoFar.AddRange(passDeleted);
                 return Observable.Throw<IReadOnlyList<string>>(ex);
             })
             .SelectMany(deletedPaths =>
@@ -2696,7 +2816,7 @@ public static class MeshExtensions
                         return RunDeletePass(
                             meshHub, storage, rootPath, survivorSet, baseRequest,
                             callerAccessContext, recentlyDeleted, logger, collectedMessages,
-                            pass + 1, acc);
+                            deletedProgress, pass + 1, acc);
                     });
             });
     }
@@ -2732,8 +2852,19 @@ public static class MeshExtensions
         AccessContext? callerAccessContext,
         ILogger logger,
         ImmutableList<LogMessage>.Builder collectedMessages,
+        ImmutableList<string>.Builder deletedProgress,
         bool rootAlreadyDeleted = false)
     {
+        // 🚨 Record each commit AS IT LANDS, not at the end. The caller bounds this whole fan-out
+        // with one Timeout, and a timeout UNSUBSCRIBES — discarding the deleted-path list
+        // HierarchicalPathDeletion only attaches to its own OnError. Without this sink a timed-out
+        // delete reports partial-deleted=0 however much of the subtree it removed, which is
+        // exactly the false "zero progress" reading in issue #1198.
+        void RecordDeleted(string deleted)
+        {
+            lock (deletedProgress) deletedProgress.Add(deleted);
+        }
+
         return HierarchicalPathDeletion.DeleteSubtree(
             rootPath,
             descendantPaths.Remove(rootPath),
@@ -2763,7 +2894,8 @@ public static class MeshExtensions
                                 if (removed)
                                     changeFeed?.Publish(MeshChangeEvent.Deleted(path));
                             })
-                            .Select(_ => path);
+                            .Select(_ => path)
+                            .Do(RecordDeleted);
 
                     return storage.DeleteAndPublish(path, changeFeed)
                         .Do(_ =>
@@ -2798,7 +2930,8 @@ public static class MeshExtensions
                                 logger.LogDebug(ex,
                                     "[DeleteNode] best-effort hub disposal failed for {Path}", path);
                             }
-                        });
+                        })
+                        .Do(RecordDeleted);
                 }
 
                 // Descendant: fan-out via per-node hub. The leaf hub re-enters
@@ -2830,7 +2963,8 @@ public static class MeshExtensions
                         var reason = failResp?.Error ?? "Unknown error";
                         return Observable.Throw<string>(new InvalidOperationException(
                             $"Delete failed for '{path}': {reason}"));
-                    });
+                    })
+                    .Do(RecordDeleted);
             });
     }
 
@@ -2866,6 +3000,16 @@ public static class MeshExtensions
             .ToArray();
         if (descendants.Length == 0)
             return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(null);
+
+        // 🚨 Who has NOT answered yet. This fan-out waits for EVERY descendant under ONE
+        // timeout, so a single unresponsive per-node hub times out the whole delete with the
+        // subtree untouched — and the operator's only evidence used to be an anonymous
+        // "[DeleteNode] timeout … partial-deleted=0" (issue #1198). Read exclusively from the
+        // timeout factory below, so a healthy fan-out pays one dictionary removal per leaf.
+        // Method-local (never static), and concurrent because Merge answers on many threads.
+        var unanswered = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(
+            descendants.Select(p => new KeyValuePair<string, byte>(p, 0)),
+            StringComparer.OrdinalIgnoreCase);
 
         var perPath = descendants.Select(p => meshHub
             // 🚨 Stamp the caller's AccessContext on every ValidateDeleteRequest.
@@ -2906,7 +3050,10 @@ public static class MeshExtensions
                     "[DeleteNode] pre-validate descendant failed {Path}", p);
                 return Observable.Return<(string, string, NodeDeletionRejectionReason)?>(
                     (p, ex.Message, NodeDeletionRejectionReason.ValidationFailed));
-            }));
+            })
+            // Answered — pass or fail, the leaf spoke. Whatever is LEFT in the map when the
+            // stage times out is the set of hubs that did not.
+            .Do(answer => unanswered.TryRemove(p, out _)));
 
         // Collect every descendant's outcome; emit the first non-null failure
         // (or null when all pass). Merge — not Concat — so independent
@@ -2916,7 +3063,23 @@ public static class MeshExtensions
             .Where(r => r.HasValue)
             .Take(1)
             .DefaultIfEmpty(null)
-            .Timeout(timeout);
+            .TimeoutAtStage(timeout, () =>
+            {
+                var pending = unanswered.Keys
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                var ex = DeleteStageTimeout(
+                    DeleteStage.PreValidateDescendants,
+                    $"{pending.Length} of {descendants.Length} descendant(s) of '{rootPath}' did not "
+                    + $"answer ValidateDeleteRequest within {timeout.TotalSeconds:0}s, so the delete "
+                    + "was refused with the subtree untouched"
+                    + (pending.Length == 0
+                        ? string.Empty
+                        : $": {string.Join(", ", pending.Take(10))}"
+                          + (pending.Length > 10 ? $" (+{pending.Length - 10} more)" : string.Empty)));
+                ex.Data[DeleteUnansweredDataKey] = (IReadOnlyList<string>)pending;
+                return ex;
+            });
     }
 
     /// <summary>
