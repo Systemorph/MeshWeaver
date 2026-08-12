@@ -785,8 +785,9 @@ public sealed class InstanceAutoRegistrationService(
         if (priced.Count > 0)
             logger?.LogWarning(
                 "[DefaultInstall] {Count} required package(s) are COMMERCIAL and were not installed: "
-                + "[{Priced}]. A paid dependency has to be acquired deliberately — install it from "
-                + "the catalog as a global admin.", priced.Count, string.Join(", ", priced));
+                + "[{Priced}]. A paid or contact-sales dependency has to be acquired deliberately — "
+                + "install it from the catalog as a global admin.",
+                priced.Count, string.Join(", ", priced));
 
         if (missing.Count > 0)
             logger?.LogWarning(

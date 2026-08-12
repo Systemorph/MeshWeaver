@@ -116,6 +116,34 @@ services.AddSingleton<IStaticNodeProvider, MyBuiltInsProvider>();
 
 Use option B whenever the nodes depend on configuration, embedded resources, or constructor parameters. Option A is fine for stateless, one-off registrations from a `NodeType.Add…Type()` extension method.
 
+## 🚨 A static node and a durable row must never claim the same path
+
+A static node is **not persistence-backed**. When one is served at a path, `MeshDataSource.WithMeshNodes` seeds that path's per-node hub from the static node via `WithInitialData` and skips persistence entirely — and the persistence sampler is gated off for the same hub, deliberately (a type-def path routes to a schema that is by design never provisioned). So if durable content ever lands at that same path, it is unreachable: the hub emits one Full snapshot at v0 and never again.
+
+That state is total and silent. The path becomes simultaneously
+
+- **unreadable** — the static-node query provider excludes it, so `get @X` 404s,
+- **un-creatable** — the create path answers `NodeAlreadyExists` from the static entry, and
+- **un-writable** — every upsert lands on the static-served hub, whose save is suppressed.
+
+Nothing in that chain says "collision"; downstream it surfaces only as a timeout on whatever waited for the node's stream to carry the durable state. That is exactly how the `Agent`/`Skill` plugin packages failed on a host calling bare `.AddAI()`: a deterministic 30 s `TimeoutException` per package, 0 nodes imported, no diagnostic (#1209).
+
+**The cure is per-host configuration.** Pass the partition in `serveFromPartition` (`AddAI(serveFromPartition: […])`, driven by `Features:StaticRepoSync:Partitions`). That marks the in-memory type definition `IsDefinitionOnly` — it still supplies its `HubConfiguration` *by name*, but it is no longer the runtime node at its path, so the durable row owns it. See [NodeType Catalogs](/Doc/Architecture/NodeTypeCatalogs).
+
+**One predicate answers "who serves this path".** Every serve seam reads the same helper, which skips definition-only entries:
+
+```csharp
+// The static node genuinely SERVED at a path — null when persistence owns it
+var served = serviceProvider.FindServedStaticNode("Agent");
+
+// The canonical operator-facing diagnostic (null when there is no collision)
+var detail = serviceProvider.DescribeStaticServeCollision("Agent");
+```
+
+`FindServedStaticNode` — not `FindStaticNode` — is what `WithMeshNodes`, the persistence-sampler gate, the create path's already-exists check and the plugin installer's pre-flight all consult, so "served static" ⇔ "not persistence-backed" cannot drift apart.
+
+**The collision is refused, not written.** `PackageInstaller` sweeps a package's node paths against that predicate *before* the first write (zero I/O) and fails the install immediately, naming the contested path, the claiming provider, and the `serveFromPartition` setting. The `CreateNodeRequest` handler distinguishes the two ways a create can be refused for the same reason code: a durable duplicate still reads `Node already exists at path: X`, while a static claim over empty persistence gets the collision message and a `Warning`. Regression guard: `test/MeshWeaver.PluginCatalog.Test/StaticShadowedInstallTest.cs`, which also pins that static-**only** serving — the legitimate arrangement on every host that serves `Doc`/`Agent`/`Harness`/`Skill` from memory and installs no durable package there — is unaffected.
+
 ## What happens when a node type is missing
 
 When a `MeshNode` references `nodeType = "X"` and no provider returns a node at path `X`, `EnrichWithNodeType` runs a 3-second existence probe (`path:X` against `IMeshQueryCore`). If the probe returns empty, activation fails fast with a clear error overlay:
@@ -132,6 +160,6 @@ See `test/MeshWeaver.Persistence.Test/UnregisteredNodeTypeTest.cs` for the regre
 | Symbol | Location |
 |---|---|
 | `IStaticNodeProvider` | namespace `MeshWeaver.Mesh.Services` (assembly **`MeshWeaver.Mesh.Contract`**) |
-| `StaticNodeProviderExtensions` | same namespace/assembly — `FindStaticNode` / `EnumerateStaticNodes` helpers |
+| `StaticNodeProviderExtensions` | same namespace/assembly — `FindStaticNode` / `EnumerateStaticNodes` / `FindServedStaticNode` / `DescribeStaticServeCollision` helpers |
 | `StaticMeshNodeListProvider` | same namespace/assembly — wrapper bridging `AddMeshNodes` to the provider model, registered in `MeshBuilder.Build` |
 | `NodeTypeEnrichmentHelpers` | `MeshWeaver.Graph.Configuration` — existence probe and slow path |

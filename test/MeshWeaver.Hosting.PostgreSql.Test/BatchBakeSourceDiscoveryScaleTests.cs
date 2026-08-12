@@ -9,6 +9,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -397,5 +398,146 @@ public class BatchBakeSourceDiscoveryScaleTests(PostgreSqlFixture fixture, ITest
             "the batch must resolve exactly what the activation path resolves — a PARTIAL set is "
             + "the failure mode this test exists for: it compiles, and the CS0103 it produces reads "
             + "as broken content rather than as broken discovery");
+    }
+
+    /// <summary>
+    /// 🚨 THE CROSS-PATH CONTRACT FOR #1235: ONE query string, TWO evaluation paths, IDENTICAL
+    /// answers. The same <c>namespace:*/Source scope:subtree nodeType:Code</c> is run through
+    /// parser → POSTGRES and through parser → the IN-MEMORY <see cref="QueryEvaluator"/>, and the
+    /// two result sets are compared node-for-node.
+    ///
+    /// <para><b>Why this shape, and not a unit test of either evaluator.</b> The defect was never
+    /// inside one evaluator — it was a DISAGREEMENT between the producer and one of its consumers.
+    /// <c>QueryParser</c> emitted a wildcard namespace as SQL's <c>%</c> (the only <c>Like</c>
+    /// filter in the language that did), which the SQL generators re-derived anyway from <c>*</c>,
+    /// while <c>QueryEvaluator.CompareWildcard</c> understood only <c>*</c> and therefore fell
+    /// through to an equality test against the literal <c>"%/Source"</c>. Postgres answered
+    /// correctly; memory answered EMPTY. A unit test of either side alone passes with the bug
+    /// present — Postgres because it is right, the evaluator because a hand-written test would
+    /// naturally have used the <c>*</c> spelling the parser does not produce. Only running the
+    /// same string down both paths can see the fork.</para>
+    ///
+    /// <para><b>What depends on the in-memory answer.</b> The Postgres fan-out's live relevance
+    /// gate (<c>PostgreSqlPartitionedMeshQuery</c> evaluates a change notification's payload
+    /// in-memory to decide whether a NEW row could enter the query), the storage-adapter and
+    /// static-node providers, and the SQLite vector query. All of them served EMPTY for a wildcard
+    /// namespace.</para>
+    ///
+    /// <para>The equality is asserted against an explicit expected set as well, so a future
+    /// regression that breaks BOTH paths the same way cannot pass as "they agree".</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task WildcardNamespaceSubtree_AnswersIdentically_ThroughPostgresAndInMemory()
+    {
+        const string Query = "namespace:*/Source scope:subtree nodeType:Code";
+
+        var ns = $"bbw{Guid.NewGuid():N}"[..12].ToLowerInvariant();
+        await ProvisionPartition(ns).Should().Within(60.Seconds()).Emit();
+
+        // (namespace, id) — chosen so every arm of the widened filter is exercised, plus decoys
+        // that both paths must reject. `*/Source` covers the first; only the two-wildcard
+        // `*/Source/*` covers the nested pair; the decoys have no `Source` SEGMENT at all.
+        var seed = new (string Namespace, string Id, bool Expected)[]
+        {
+            ($"{ns}/Model/Source", "Direct", true),
+            ($"{ns}/Model/Source/Fixtures", "Nested", true),
+            ($"{ns}/Model/Source/Fixtures/Deep", "Deeper", true),
+            ($"{ns}/Model/Other", "Decoy", false),
+            // 'Sources' is a different segment — the literal after the wildcard matches verbatim.
+            ($"{ns}/Model/Sources", "SourcesDecoy", false),
+        };
+
+        var nodes = seed
+            .Select(s => new MeshNode(s.Id, s.Namespace)
+            {
+                Name = s.Id,
+                NodeType = CodeNodeType.NodeType,
+                State = MeshNodeState.Active,
+                Content = new CodeConfiguration { Code = $"public static class {s.Id} {{ }}" }
+            })
+            .ToList();
+        foreach (var node in nodes)
+            await MeshService.CreateNode(node).Should().Within(30.Seconds()).Emit();
+
+        var expected = seed.Where(s => s.Expected)
+            .Select(s => $"{s.Namespace}/{s.Id}")
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
+
+        // ── Path 1: parser → Postgres. Retried until the seeded rows are visible; that is a
+        // propagation barrier for the WRITES, not for the defect (Postgres always answered this
+        // query correctly — it is the in-memory side that returned nothing).
+        var fromPostgres = await Observable.Using(
+                () => AccessContextScope.AsSystem(Mesh.ServiceProvider.GetService<AccessService>()),
+                _ => Observable.Interval(TimeSpan.FromMilliseconds(500))
+                    .StartWith(0L)
+                    .SelectMany(_ => Observable
+                        .Defer(() => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery(Query)))
+                        .Scan(
+                            ImmutableDictionary<string, MeshNode>.Empty
+                                .WithComparers(StringComparer.OrdinalIgnoreCase),
+                            ApplyChange)
+                        .Throttle(TimeSpan.FromSeconds(1))
+                        .Take(1))
+                    .Select(map => (IReadOnlyList<string>)map.Keys
+                        .Where(p => p.StartsWith($"{ns}/", StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(p => p, StringComparer.Ordinal)
+                        .ToList())
+                    .Do(set => Output.WriteLine($"postgres: {set.Count} [{string.Join(", ", set)}]"))
+                    .Where(set => set.Count >= expected.Count)
+                    .FirstAsync())
+            .Should().Within(90.Seconds()).Emit();
+
+        // ── Path 2: parser → in-memory. The SAME string, no Postgres involved. Deterministic and
+        // synchronous — a wildcard namespace produces no ParsedQuery.Path, so the whole query IS
+        // the filter and QueryEvaluator.Matches is the complete in-memory semantics for it.
+        var parsed = new QueryParser().Parse(Query);
+        var evaluator = new QueryEvaluator();
+        var fromMemory = nodes
+            .Where(n => evaluator.Matches(n, parsed))
+            .Select(n => n.Path)
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .ToList();
+        Output.WriteLine($"in-memory: {fromMemory.Count} [{string.Join(", ", fromMemory)}]");
+
+        fromMemory.Should().Equal(expected,
+            "the in-memory evaluator must answer the wildcard-namespace subtree query itself — "
+            + "before the fix it returned NOTHING, because the parser handed it a `%`-spelled "
+            + "pattern it could only compare for literal equality (#1235)");
+        fromPostgres.Should().Equal(expected,
+            "Postgres was always the correct side; if this drifts, the widening (#1232) regressed");
+        fromMemory.Should().Equal(fromPostgres,
+            "ONE query string must mean ONE thing. The parser, the SQL generators and the in-memory "
+            + "evaluators share a single wildcard vocabulary (`*`); the moment any of them spells it "
+            + "differently, a query silently answers two different questions depending on which "
+            + "backend happens to serve it");
+    }
+
+    /// <summary>
+    /// The batch bake's THIRD in-memory matcher is <see cref="CodeQueryResolver.Matches"/>, and it
+    /// is not a query evaluator at all — it compares locations with a literal
+    /// <c>path.StartsWith(ns + "/")</c> and has no glob whatsoever. So a per-type source query
+    /// carrying a WILDCARD location must never be classified as servable from the global map:
+    /// the matcher would answer "no match" for every node and the type would compile against a
+    /// silently partial (or empty) source set — #1216's failure shape once more.
+    ///
+    /// <para>This is the invariant that keeps #1238 (batch bake default-on) safe. Today no declared
+    /// source query contains a <c>*</c> — <c>CodeQueryResolver.Expand</c> only ever produces
+    /// concrete locations, from <c>$self</c> rebasing or a <c>shared=@Concrete/Path</c> — so the
+    /// hazard is latent rather than live. <c>IsInMemoryMatchable</c> is the gate whose whole purpose
+    /// is to admit only "shapes it provably mirrors", so the wildcard belongs on the exotic side of
+    /// it, where the query runs against the mesh and the wildcard is genuinely understood.</para>
+    /// </summary>
+    [Theory]
+    // Concrete locations — the shapes Expand actually produces — stay matchable.
+    [InlineData("namespace:Acme/Model/Source scope:subtree nodeType:Code", true)]
+    [InlineData("path:Acme/Model/Source/Spine nodeType:Code", true)]
+    // Wildcards must fall through to an individual mesh query.
+    [InlineData("namespace:*/Source scope:subtree nodeType:Code", false)]
+    [InlineData("path:Acme/*/Source nodeType:Code", false)]
+    public void IsInMemoryMatchable_RejectsWildcardLocations_BecauseTheMatcherHasNoGlob(
+        string query, bool expected)
+    {
+        NodeTypeBatchBake.IsInMemoryMatchable(query).Should().Be(expected);
     }
 }

@@ -74,7 +74,7 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
     private async Task EditAs(string path, string author, string from, string to)
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(new AccessContext { ObjectId = author, Name = author });
+        access.SetHostIdentity(new AccessContext { ObjectId = author, Name = author });
         try
         {
             await Mesh.GetWorkspace().GetMeshNodeStream(path)
@@ -89,7 +89,7 @@ public class TrackedChangeProjectionTest(ITestOutputHelper output) : MonolithMes
         }
         finally
         {
-            access.SetCircuitContext(null);
+            access.SetHostIdentity(null);
         }
     }
 

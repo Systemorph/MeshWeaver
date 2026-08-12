@@ -124,7 +124,20 @@ public enum ChangeType
 /// Base type for messages carried over a synchronization stream.
 /// </summary>
 /// <param name="StreamId">The identifier of the stream the message belongs to.</param>
-public abstract record StreamMessage(string StreamId);
+public abstract record StreamMessage(string StreamId) : IDiagnosticKeyed
+{
+    /// <summary>
+    /// The stream id — the thing this message is ABOUT.
+    ///
+    /// <para>🚨 Load-bearing, not cosmetic. One owner hub holds a SEPARATE sync stream per
+    /// subscriber/reference, and every one of them posts to the SAME subscriber address with the
+    /// SAME message type. Without this component the hub-ingestion <c>MessageStormBreaker</c>
+    /// folds all of them into one rate bucket, so a wide, legitimate change fan-out (a bulk import
+    /// driving many streams) is indistinguishable from ONE stream in a resubscribe/repost loop —
+    /// and the breaker DROPS the fan-out's frames at ingestion. See <see cref="IDiagnosticKeyed"/>.</para>
+    /// </summary>
+    string IDiagnosticKeyed.DiagnosticKey => StreamId;
+}
 /// <summary>
 /// Base type for stream messages that carry a versioned JSON change.
 /// </summary>
@@ -194,8 +207,17 @@ public record PatchDataChangeRequest(
 /// <param name="StreamId">The identifier to use for the subscription stream.</param>
 /// <param name="Reference">The workspace reference describing the data to subscribe to.</param>
 [RequiresPermission(Permission.Read)]
-public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<SubscribeAck>
+public record SubscribeRequest(string StreamId, WorkspaceReference Reference)
+    : IRequest<SubscribeAck>, IDiagnosticKeyed
 {
+    /// <summary>
+    /// The stream id — so the pending-callback diagnostic can tell N unanswered subscribes for N
+    /// DIFFERENT streams (a fan-out) from one stream re-asking (a resubscribe loop). See
+    /// <see cref="IDiagnosticKeyed"/>; the 167-pending pile on memex-cloud 2026-08-12 was
+    /// indistinguishable between the two.
+    /// </summary>
+    string IDiagnosticKeyed.DiagnosticKey => StreamId;
+
     /// <summary>The address of the subscriber that will receive change events.</summary>
     public Address Subscriber { get; init; } = null!;
 

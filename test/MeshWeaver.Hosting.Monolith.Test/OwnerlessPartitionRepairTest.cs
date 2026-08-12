@@ -144,7 +144,7 @@ public class OwnerlessPartitionRepairTest(ITestOutputHelper output) : MonolithMe
     {
         var ctx = new AccessContext { ObjectId = userId, Name = userId };
         Access.SetContext(ctx);
-        Access.SetCircuitContext(ctx);
+        Access.SetHostIdentity(ctx);
         try
         {
             return await action();

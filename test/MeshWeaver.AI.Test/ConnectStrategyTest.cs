@@ -347,7 +347,7 @@ public class ConnectStrategyTest : AITestBase
         string? error = null;
         MeshNode? stored;
         // Write AS the owner (non-admin), exactly like the circuit does for a logged-in user.
-        accessService.SetCircuitContext(new AccessContext { ObjectId = owner, Name = owner });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = owner, Name = owner });
         try
         {
             stored = await meshService.CreateOrUpdateNode(node)
@@ -357,7 +357,7 @@ public class ConnectStrategyTest : AITestBase
         }
         finally
         {
-            accessService.SetCircuitContext(null);
+            accessService.SetHostIdentity(null);
         }
         Output.WriteLine($"[diag] NON-ADMIN: stored null={stored is null} error={error ?? "(none)"}");
         error.Should().BeNull("a signed-in user must be able to store their own harness credential");

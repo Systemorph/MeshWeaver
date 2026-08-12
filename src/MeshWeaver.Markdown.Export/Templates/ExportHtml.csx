@@ -5,7 +5,7 @@
 // templates feed the node's raw markdown into a bare Markdig pipeline that has never heard of the
 // `@@(...)` embed syntax, so an embed lands in the output as literal source text. Here the
 // framework's own pipeline renders the markdown (emitting the same layout-area anchors the portal
-// emits) and EmailDocumentComposer then reads each area's live control tree off its
+// emits) and DocumentHtmlComposer then reads each area's live control tree off its
 // synchronization stream and serializes it to static, table-based markup.
 //
 // Triggered via ExecuteScriptRequest with Inputs:
@@ -32,6 +32,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Export;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Markdown.Export.Email;
+using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -92,22 +93,17 @@ if (isDeck)
     else if (!string.IsNullOrWhiteSpace(query))
     {
         var deckQueryService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var matched = new List<MeshNode>();
-        var slideEnumerator = deckQueryService.QueryAsync<MeshNode>(query).GetAsyncEnumerator(Ct);
-        try
-        {
-            while (await slideEnumerator.MoveNextAsync())
-            {
-                var n = slideEnumerator.Current;
-                if (string.Equals(n.Path, sourcePath, StringComparison.Ordinal)) continue;
-                if (n.Segments.Skip(1).Any(s => s.StartsWith('_'))) continue;
-                matched.Add(n);
-            }
-        }
-        finally
-        {
-            await slideEnumerator.DisposeAsync();
-        }
+        // One-shot snapshot off the LIVE query surface: filter on the emission SHAPE
+        // (Initial), never on a count — a change feed can race the initial-snapshot path.
+        var slideMatches = await deckQueryService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Select(c => c.Items)
+            .FirstAsync()
+            .ToTask(Ct);
+        var matched = slideMatches
+            .Where(n => !string.Equals(n.Path, sourcePath, StringComparison.Ordinal))
+            .Where(n => !n.Segments.Skip(1).Any(s => s.StartsWith('_')));
         slides = matched
             .OrderBy(n => n.Order ?? int.MaxValue)
             .ThenBy(n => n.Path, StringComparer.Ordinal)
@@ -128,29 +124,24 @@ else if (options.IncludeChildren)
     Log.LogInformation("Collecting descendants");
     var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     var rootDepth = sourcePath.Count(c => c == '/');
-    var enumerator = meshService
-        .QueryAsync<MeshNode>("path:" + sourcePath + " scope:descendants")
-        .GetAsyncEnumerator(Ct);
-    try
+    var descendants = await meshService
+        .Query<MeshNode>(MeshQueryRequest.FromQuery("path:" + sourcePath + " scope:descendants"))
+        .Where(c => c.ChangeType == QueryChangeType.Initial)
+        .Select(c => c.Items)
+        .FirstAsync()
+        .ToTask(Ct);
+    foreach (var desc in descendants)
     {
-        while (await enumerator.MoveNextAsync())
+        if (options.MaxDepth > 0)
         {
-            var desc = enumerator.Current;
-            if (options.MaxDepth > 0)
-            {
-                var depth = desc.Path.Count(c => c == '/') - rootDepth;
-                if (depth > options.MaxDepth) continue;
-            }
-            var body = ExtractMarkdown(desc);
-            if (string.IsNullOrWhiteSpace(body)) continue;
-            markdown.AppendLine().AppendLine();
-            markdown.Append("## ").AppendLine(desc.Name ?? desc.Id);
-            markdown.AppendLine().Append(body);
+            var depth = desc.Path.Count(c => c == '/') - rootDepth;
+            if (depth > options.MaxDepth) continue;
         }
-    }
-    finally
-    {
-        await enumerator.DisposeAsync();
+        var body = ExtractMarkdown(desc);
+        if (string.IsNullOrWhiteSpace(body)) continue;
+        markdown.AppendLine().AppendLine();
+        markdown.Append("## ").AppendLine(desc.Name ?? desc.Id);
+        markdown.AppendLine().Append(body);
     }
 }
 
@@ -169,10 +160,10 @@ if (string.IsNullOrWhiteSpace(baseUrl))
         "No portal base URL configured (Portal:BaseUrl / PublicBaseUrl / Email:WebhookBaseUrl). "
         + "Relative links and images will stay relative and will NOT resolve from a mail client.");
 
-var emailOptions = new EmailHtmlOptions(baseUrl);
+var emailOptions = new DocumentHtmlOptions(baseUrl);
 
 Log.LogInformation("Composing email HTML for {Path} (baseUrl={BaseUrl})", sourcePath, baseUrl);
-var html = await EmailDocumentComposer
+var html = await DocumentHtmlComposer
     .Compose(Mesh, title, markdown.ToString(), sourcePath, emailOptions, Log)
     .FirstAsync()
     .ToTask(Ct);

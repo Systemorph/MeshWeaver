@@ -137,7 +137,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         try
         {
             // Use globaladmin to authorize the create + delete of a runtime AccessAssignment.
-            accessService.SetCircuitContext(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
+            accessService.SetHostIdentity(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
 
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
@@ -169,7 +169,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         }
         finally
         {
-            accessService.SetCircuitContext(savedContext);
+            accessService.SetHostIdentity(savedContext);
         }
     }
 
@@ -208,7 +208,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             // Switch to globaladmin (statically seeded with Admin at root) to
             // create the new AccessAssignment. The IMeshService captures the
             // identity at call time, so this only authorizes the create itself.
-            accessService.SetCircuitContext(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
+            accessService.SetHostIdentity(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
 
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
             var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
@@ -223,7 +223,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         }
         finally
         {
-            accessService.SetCircuitContext(savedContext);
+            accessService.SetHostIdentity(savedContext);
         }
     }
 
@@ -284,7 +284,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         const string userId = "claim-only-admin";
 
         // Sanity: this user has NO static AccessAssignment in ConfigureMesh.
-        accessService.SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = userId, Name = userId });
         await sec.GetEffectivePermissions("any/scope", userId)
             .Should().Be(Permission.None,
                 "without claim-based roles, the user has no permissions");
@@ -295,7 +295,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         // asserted Permission.All "immediately, even with no assignment" — the
         // exact mechanism by which a portal-admin's API token read gated paid
         // course content on memex, 2026-08-05.)
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = userId,
             Name = userId,
@@ -328,7 +328,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             (await Mesh.CheckPermission(scope, userId, Permission.Read).Should().Emit())
                 .Should().BeFalse();
 
-            accessService.SetCircuitContext(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
+            accessService.SetHostIdentity(new AccessContext { ObjectId = "globaladmin", Name = "globaladmin" });
 
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
             var assignment = AssignmentNodeFactory.UserRole(userId, "Admin", scope);
@@ -344,7 +344,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         }
         finally
         {
-            accessService.SetCircuitContext(savedContext);
+            accessService.SetHostIdentity(savedContext);
         }
     }
 
@@ -603,7 +603,7 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         accessService.SetContext(new AccessContext { ObjectId = "random-user", Name = "Random" });
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "random-user", Name = "Random" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "random-user", Name = "Random" });
 
         try
         {

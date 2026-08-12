@@ -1,7 +1,8 @@
-node_modules/
+# No trailing slash: "node_modules/" matches only DIRECTORIES, so a node_modules SYMLINK slips
+# past it — which is how absolute-path symlinks into one developer's checkout got committed.
+node_modules
 dist/
 dist-demo/
 *.tsbuildinfo
 .vite/
-package-lock.json
 *.tgz

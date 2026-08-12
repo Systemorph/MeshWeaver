@@ -242,6 +242,15 @@
     color: var(--neutral-foreground-hint, #666);
 }
 
+/* The address beside a contact's name — "First Last <a@b.com>". Subordinate to the name (lighter,
+   regular weight) so the row still scans by name, but present so two similarly-named people can be
+   told apart and the sender can see exactly where the mail is going. */
+.mesh-node-picker-email {
+    font-weight: 400;
+    color: var(--neutral-foreground-hint, #666);
+    margin-left: 4px;
+}
+
 /* Open-upward dropdown — for bottom-anchored fields (e.g. the chat composer). Bound the height to
    the space available ABOVE the field so it doesn't grow up over the panel header (the chat-composer
    overlap). Whichever is smaller wins: the 300px cap or ~half the viewport. */

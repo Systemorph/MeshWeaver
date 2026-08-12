@@ -83,6 +83,16 @@ public sealed class GraphEmailSender : IEmailSender, IDisposable
     /// <see cref="EaGraphAuth.Scopes"/>, which already includes delegated <c>Mail.Send</c> — so
     /// "connected" and "can send as themselves" are the same condition, with no extra consent step.
     /// </summary>
+    /// <summary>
+    /// This deployment DOES have a connect flow — the Executive Assistant's consent endpoint — but
+    /// only when the delegated-Graph integration is actually configured. Reporting null otherwise is
+    /// what keeps the UI from offering a button that would answer "not configured".
+    /// </summary>
+    public string? ConnectAsUserHref =>
+        _services.GetService<IEaGraphAuth>() is { IsConfigured: true }
+            ? EaConsentController.ConnectPath
+            : null;
+
     public IObservable<bool> CanSendAsUser(string userObjectId) =>
         string.IsNullOrEmpty(userObjectId)
             ? Observable.Return(false)

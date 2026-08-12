@@ -146,7 +146,7 @@ public class SubscribeRequestIdentityRoutingTest(ITestOutputHelper output) : Mon
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         accessService.SetContext(null);
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
 
         var workspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
 

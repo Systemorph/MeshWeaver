@@ -54,7 +54,7 @@ public class HomeChatComposerTest(ITestOutputHelper output) : MonolithMeshTestBa
         // The viewer is the owner — DevLogin already set this on the mesh AccessService; assert it so
         // the test's intent is explicit.
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(TestUsers.Admin);
+        access.SetHostIdentity(TestUsers.Admin);
 
         var client = GetClient();
         await client.Observe(new PingRequest(), o => o.WithTarget(UserNodeAddress)).Should().Within(30.Seconds()).Emit();
@@ -81,7 +81,7 @@ public class HomeChatComposerTest(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task Activity_RendersOwnerDashboard_AndCreatesNoChatNode()
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(TestUsers.Admin);
+        access.SetHostIdentity(TestUsers.Admin);
 
         var client = GetClient();
         await client.Observe(new PingRequest(), o => o.WithTarget(UserNodeAddress)).Should().Within(30.Seconds()).Emit();
