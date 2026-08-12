@@ -11,7 +11,7 @@ namespace MeshWeaver.Markdown.Export.Test;
 /// <para>This is the piece that decides whether an embedded card grid ARRIVES as a grid on paper
 /// or as a paragraph of run-together text. It is asserted here rather than only through a rendered
 /// PDF because the shape is what matters and a byte-level assertion cannot express it: a real
-/// <see cref="TableElement"/> is what makes QuestPDF draw columns and Word emit <c>w:tbl</c>, which
+/// <see cref="TableElement"/> is what makes the PDF print a real table and Word emit <c>w:tbl</c>, which
 /// in turn is what survives the reader repaginating or editing the file.</para>
 /// </summary>
 public class MarkupToDocumentTests
@@ -151,7 +151,7 @@ public class MarkupToDocumentTests
     /// <summary>
     /// A short final row keeps its padding cell, so every row has the SAME number of columns.
     ///
-    /// <para>This matters to the renderers, not just to tidiness: QuestPDF and Word derive the
+    /// <para>This matters to the renderers, not just to tidiness: the PDF composer and Word derive the
     /// column layout from the row's cell count, so a final row with fewer cells makes its one card
     /// stretch the full width and the grid visibly loses alignment on the last row.</para>
     /// </summary>

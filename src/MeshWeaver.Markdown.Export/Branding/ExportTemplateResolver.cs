@@ -57,9 +57,9 @@ public class ExportTemplateResolver(IMessageHub hub, ILogger<ExportTemplateResol
 
     private static LogoImage? ExtractLogo(ZipArchive zip)
     {
-        // Prefer PNG/JPEG over SVG for broad downstream compatibility (QuestPDF renders both,
-        // but DOCX header media inside the template already ships the image — we only surface
-        // it here for the PDF header badge).
+        // Prefer PNG/JPEG over SVG for broad downstream compatibility (the browser renders
+        // both, but DOCX header media inside the template already ships the image — we only
+        // surface it here for the PDF header badge).
         var preferred = new[] { ".png", ".jpg", ".jpeg" };
         foreach (var ext in preferred)
         {

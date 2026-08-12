@@ -29,7 +29,7 @@ public class SlidePrintComposerTests
         var html = SlidePrintComposer.Compose("Deck", [new PrintSlide(GradientSlide)]);
 
         // The exact CSS value the author wrote, on the slide's own section — this is the thing the
-        // QuestPDF document model cannot express at all.
+        // document model cannot express at all.
         html.Should().Contain("linear-gradient(135deg, #667eea 0%, #764ba2 100%)");
     }
 

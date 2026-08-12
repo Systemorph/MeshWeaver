@@ -12,14 +12,14 @@ namespace MeshWeaver.Markdown.Export.Html;
 /// <para>This exists so there is exactly ONE walk of a live control tree. <see cref="AreaMarkupRenderer"/>
 /// reads the area off its synchronization stream and produces a markup tree; that tree is then
 /// either serialized to HTML (email / browser print) or mapped here to the document model
-/// (QuestPDF / OpenXml). Adding a control means teaching the control renderer about it once, and
+/// (the PDF print composer / OpenXml). Adding a control means teaching the control renderer once, and
 /// every export format follows. The alternative — a second control walk that emitted
 /// <c>DocumentElement</c> directly — is precisely the duplication that let the PDF and pixel paths
 /// drift apart in the first place.</para>
 ///
 /// <para><b>Nested tables are flattened deliberately.</b> A card grid is a table of cards and each
 /// card is itself a table, but <see cref="TableElement"/> models a cell as inline content, not as
-/// arbitrary blocks — and neither QuestPDF's nor OpenXml's simple table path here renders a table
+/// arbitrary blocks — and neither the print composer's nor OpenXml's simple table path renders a table
 /// inside a cell. So a cell's whole subtree is flattened to inlines with line breaks at block
 /// boundaries: the grid stays a grid, and each cell reads as the card's title, description and
 /// link on separate lines. That is what a card grid looks like on paper.</para>
