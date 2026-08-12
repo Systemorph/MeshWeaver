@@ -3,9 +3,10 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Mesh
 @using Microsoft.FluentUI.AspNetCore.Components
+@inherits BlazorView<MeshSearchControl, MeshSearchView>
 @inject AccessService Access
 
-<div class="mesh-search-container">
+<div class="mesh-search-container@(ClassSuffix)" style="@Style">
     @if (BoundShowSearchBox || !string.IsNullOrEmpty(BoundTitle) || ShowCreateButton)
     {
         <div class="mesh-search-box">
