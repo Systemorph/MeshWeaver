@@ -60,6 +60,11 @@ readonly PORTAL_BASE_REF="${PORTAL_BASE_REGISTRY}/memex-portal-ai-base:local"
 readonly PORTAL_BASE_REGISTRY_CONTAINER="memex-registry"
 # ACR source (Option A — §3). Override the tag with `update --acr --tag <tag>`.
 readonly ACR="meshweaver.azurecr.io"
+# 🚨 The registry has never published a `latest` tag — CD writes `main`, `3.0.0-rc1.ci.<n>` and the
+# git sha. Defaulting to `latest` made `update --from-acr` fail with a bare
+# "meshweaver.azurecr.io/memex-portal-ai:latest: not found" that reads like broken credentials.
+# `main` is the moving tag CD advances on every merge, which is what "update from ACR" means.
+readonly ACR_DEFAULT_TAG="main"
 # Verbose logging for this local install (deployment-config override; never edits
 # committed appsettings*.json). Trace for maximum; Debug is the default.
 readonly LOG_LEVEL="${MEMEX_LOG_LEVEL:-Debug}"
@@ -286,6 +291,9 @@ image_build_local() {                                  # §3 Option B
     -maxcpucount:"${MEMEX_BUILD_CPUS:-6}"   # WEDGE FIX: cap parallelism (see portal publish above)
   docker tag memex-migration-local:latest "$MIGRATION_IMAGE"
   ok "Images tagged $PORTAL_IMAGE / $MIGRATION_IMAGE (visible to k3s via IfNotPresent)"
+  # …and PROVE that last claim rather than asserting it (see verify_image_resolvable).
+  verify_image_resolvable "$PORTAL_IMAGE"
+  verify_image_resolvable "$MIGRATION_IMAGE"
 }
 
 # Build the Next.js React GUI image (clients/portal-next) into Colima's Docker store so k3s loads
@@ -316,8 +324,38 @@ portal_next_build_local() {
   ok "portal-next image built: $PORTAL_NEXT_IMAGE (visible to k3s via IfNotPresent; helm enables /next)"
 }
 
+# 🚨 Verify the RUNTIME can resolve a tag before we roll onto it.
+#
+# Tagging in Docker and rolling with IfNotPresent is the whole local-image mechanism, and it is
+# silent when it does not hold: the deployment names an image, the kubelet cannot find it, and the
+# pod sits in ImagePullBackOff while `update` has already printed "ok". Worse, a pod already RUNNING
+# on a tag keeps running after that tag disappears (its container pins the layers), so the break
+# only surfaces at the NEXT restart — long after the build that caused it.
+#
+# Ask the thing that actually pulls. k3s here runs on the docker/moby runtime (colima
+# `docker+k3s`: containerd shows only `moby` namespaces and `k3s crictl images` mirrors
+# `docker images`), so `crictl` is the runtime's own view — the same lookup the kubelet does.
+# Fall back to the docker store only when crictl is unavailable, and say which was used.
+verify_image_resolvable() {
+  local image="$1" where="crictl"
+  if colima ssh -- sudo k3s crictl images 2>/dev/null \
+       | awk '{print $1":"$2}' | grep -qxF "$image"; then
+    ok "Runtime can resolve $image (via $where)"
+    return 0
+  fi
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    where="docker"
+    ok "Runtime can resolve $image (via $where)"
+    return 0
+  fi
+  die "Image '$image' is NOT resolvable by the runtime — rolling onto it would leave the pod in \
+ImagePullBackOff while this command reported success. The build/tag step above claimed to write it, \
+so the tag was lost between then and now (a prune, a competing build, or a tag overwritten by \
+another flow). Re-run the image step; do NOT roll."
+}
+
 image_pull_acr() {                                     # §3 Option A
-  local tag="${1:-latest}"
+  local tag="${1:-$ACR_DEFAULT_TAG}"
   need docker docker
   step "Pulling multi-arch images from ACR ($ACR, tag=$tag) (§3 Option A)"
   warn "ACR pull needs creds — run 'az acr login -n meshweaver' first if this fails"
@@ -329,6 +367,8 @@ image_pull_acr() {                                     # §3 Option A
   docker pull "$ACR/memex-migration:$tag"
   docker tag  "$ACR/memex-migration:$tag" "$MIGRATION_IMAGE"
   ok "Retagged ACR images onto $PORTAL_IMAGE / $MIGRATION_IMAGE"
+  verify_image_resolvable "$PORTAL_IMAGE"
+  verify_image_resolvable "$MIGRATION_IMAGE"
 }
 
 # ---------------------------------------------------------------------------
@@ -1253,7 +1293,7 @@ cmd_e2e() {
 # Subcommands
 # ===========================================================================
 cmd_up() {
-  local image_source="build" acr_tag="latest" with_obs="no"
+  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" with_obs="no"
   while [ $# -gt 0 ]; do
     case "$1" in
       --from-acr) image_source="acr" ;;
@@ -1373,7 +1413,7 @@ cmd_logs() {
 }
 
 cmd_update() {
-  local image_source="build" acr_tag="latest"
+  local image_source="build" acr_tag="$ACR_DEFAULT_TAG"
   while [ $# -gt 0 ]; do
     case "$1" in
       --from-acr|--acr) image_source="acr" ;;
