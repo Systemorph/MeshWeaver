@@ -86,6 +86,24 @@ public sealed class WatcherState(
         }
     }
 
+    /// <summary>
+    /// True when this namespace's next window comes from OUR OWN CONTINUOUS WATCHING — a persisted
+    /// cursor that has not been dragged forward by <see cref="LogWatcherOptions.MaxCatchUp"/>.
+    ///
+    /// <para>🚨 This is what makes "a long empty window means the store lost it" sound. Two other
+    /// paths in <see cref="CursorFor"/> also produce long windows, and for both of them emptiness
+    /// proves nothing: a COLD START synthesises one <see cref="LogWatcherOptions.ColdStartLookback"/>
+    /// wide (15 min by default — already past the alarm threshold, so a fresh watcher pointed at a
+    /// quiet namespace would file a bogus incident on its first tick), and a cursor older than the
+    /// catch-up cap is floored, which is exactly the case where we KNOW we were not watching. Only a
+    /// window we were present for licenses the conclusion.</para>
+    /// </summary>
+    public bool IsContinuousCursor(string ns, DateTimeOffset now)
+    {
+        lock (gate)
+            return cursors.TryGetValue(ns, out var cursor) && cursor >= now - options.MaxCatchUp;
+    }
+
     /// <summary>Advances a namespace's cursor and persists it.</summary>
     public IObservable<Unit> Advance(string ns, DateTimeOffset to)
     {

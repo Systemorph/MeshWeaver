@@ -89,17 +89,21 @@ public static class AccessControlPipeline
                 // classified chain. A disposing hub is an availability condition, so it gets the
                 // same honest answer the fold legs give: refuse the delivery, report Unavailable.
                 bool rlsDisabled;
+                bool unsecuredDeclared;
                 string? userId = null;
                 var hubPath = string.Empty;
                 var pendingChecks = ImmutableList<(string Path, Permission Permission)>.Empty;
                 try
                 {
                     rlsDisabled = hub.Configuration.Get<EffectivePermissionsDelegate>() is null;
+                    // Resolved unconditionally now: the missing-evaluator branch below has to be
+                    // able to REPORT itself, so the logger can no longer hang off the RLS-on path.
+                    unsecuredDeclared = hub.Configuration.Get<UnsecuredMeshDeclaration>() is not null;
+                    logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.AccessContext");
                     if (!rlsDisabled)
                     {
                         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-                        logger ??= hub.ServiceProvider.GetService<ILoggerFactory>()
-                            ?.CreateLogger("MeshWeaver.AccessContext");
 
                         userId = ResolveIdentity(delivery, accessService);
 
@@ -155,6 +159,41 @@ public static class AccessControlPipeline
                                 $"Permission check unavailable on '{hub.Address}' — the access gate could not run, "
                                 + $"so no verdict was reached. This is NOT a statement about this user's rights. "
                                 + $"Retry shortly. Cause: {ex.GetType().Name}: {ex.Message}"
+                        },
+                        o => o.ResponseFor(delivery));
+                    return Observable.Return(delivery.Forwarded());
+                }
+
+                // 🚨 THE GATE DOES NOT SKIP ITSELF. This pipeline exists only to enforce
+                // [RequiresPermission]; reaching it with no EffectivePermissionsDelegate means the
+                // gate was installed without the evaluator it needs, and the old behaviour —
+                // `rlsDisabled ⇒ next.Invoke` — let EVERY permission check through while looking
+                // exactly like a mesh where every check passed. That is the "a gate never tests its
+                // own inputs" rule (AGENTS.md) in runtime form: an input-shaped condition that
+                // silently converts "could not run" into "allowed".
+                //
+                // In THIS tree the state is unreachable by construction — AddAccessControlPipeline
+                // has exactly one caller and it sits in the same expression as AddRowLevelSecurity,
+                // so pipeline-installed ⟺ delegate-installed. The branch is for the embedder who
+                // wires the pipeline by hand, and for the day that single call site is split.
+                //
+                // Reported as Unavailable, not Unauthorized, for the reason issue #974 established:
+                // no verdict was reached, so claiming the user lacks a permission would be a false
+                // and actionable-looking statement. Fail closed, and say honestly why.
+                if (rlsDisabled && !unsecuredDeclared)
+                {
+                    var message =
+                        $"Permission check unavailable on '{hub.Address}' — the access control pipeline is "
+                        + $"installed but no EffectivePermissionsDelegate is registered, so no verdict can be "
+                        + $"reached for {delivery.Message.GetType().Name}. Register one with "
+                        + $"AddRowLevelSecurity(), or declare the mesh ungated on purpose with "
+                        + $"AllowUnsecuredMesh(reason).";
+                    logger?.LogError("AccessControlPipeline: {Message}", message);
+                    hub.Post(
+                        new DeliveryFailure(delivery)
+                        {
+                            ErrorType = ErrorType.Unavailable,
+                            Message = message
                         },
                         o => o.ResponseFor(delivery));
                     return Observable.Return(delivery.Forwarded());
