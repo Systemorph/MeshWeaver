@@ -171,11 +171,30 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         // still references them. On memex-cloud the process grew 130–340 MB/min while contexts stayed
         // bounded, which is exactly the gap this assertion closes.
         //
-        // 32 MB/recompile is a ceiling, not a target: a trivial `config => config` type compiles to a
+        // The ceiling is a ceiling, not a target: a trivial `config => config` type compiles to a
         // few KB of IL, so anything approaching this bound means per-compile state is being retained.
         // Measured after three aggressive blocking collections, so transient allocation is excluded.
+        //
+        // 🚨 WHERE THE BYTES WENT (#1324, answered by heap dumps around this exact loop): NOT Roslyn.
+        // The retained objects were message hubs — 63 of them per recompile, +189 over three, each
+        // with its own Autofac lifetime scope, TypeRegistry and JsonSerializerOptions. Almost all
+        // were `sync/{id}` sub-hubs, one per SynchronizationStream, because
+        // `Workspace.GetStream(reference)` reduced the data-source stream AGAIN on every call and
+        // registered the result on the PARENT stream — so a hub per call, released only when the
+        // owning hub died. The PatchDataRequest handler does that on every cross-hub write and
+        // MeshNodeStreamHandle on every own-node read/write, which is why a compile (which writes
+        // its NodeType, its `_Activity/compile-state` and a fresh `_Activity/compile-<ts>`) cost 20 MB.
+        // Caching local reduced streams the way remote ones were always cached took it to ~9 MB
+        // and 22 hubs, and took the mesh's steady-state hub count from 187 to 48.
+        //
+        // 16 MB, not single digits, is deliberate: the REMAINING ~9 MB is a second, named retainer —
+        // `Workspace.EvictForPath` parks the evicted remote stream in `_evictedRemoteStreams`
+        // WITHOUT disposing it, so every change event on a subscribed path mints a fresh
+        // client/owner `sync/` pair (6 + 8 hubs per compile here). Tighten this bound to single
+        // digits in the change that fixes THAT — a bound nothing can currently pass is a red test,
+        // not a guard.
         var perRecompile = managedGrowth / Recompiles;
-        perRecompile.Should().BeLessThan(32 * 1024 * 1024,
+        perRecompile.Should().BeLessThan(16 * 1024 * 1024,
             $"a recompile of a trivial type must return its memory; {perRecompile / (1024 * 1024)} MB "
             + $"retained per recompile ({managedGrowth / (1024 * 1024)} MB over {Recompiles}) means "
             + "compile state survives the context that owned it");

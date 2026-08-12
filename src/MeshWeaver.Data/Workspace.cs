@@ -483,18 +483,79 @@ public class Workspace : IWorkspace
             new DataChangeRequest { Deletions = instances.ToImmutableList(), ChangedBy = null }
         );
 
+    // 🚨 LOCAL reduced streams are cached exactly like the REMOTE ones above — because a reduce
+    // is NOT free and NOT garbage-collectable.
+    //
+    // Every ReduceManager.ReduceStream constructs a SynchronizationStream, and a
+    // SynchronizationStream constructs a hosted `sync/{id}` sub-hub (its own Autofac lifetime
+    // scope, TypeRegistry and JsonSerializerOptions — ~140 KB apiece), then registers itself for
+    // disposal ON ITS PARENT (WorkspaceStreams.CreateReducedStream). The parent is the data
+    // source's primary stream, which lives as long as the hub. So an UNCACHED GetStream leaks a
+    // hub per CALL, released only when the whole hub dies.
+    //
+    // Nothing about a plain reduce is caller-specific, and the callers are hot: the
+    // PatchDataRequest handler resolves the target stream this way on EVERY cross-hub write, and
+    // MeshNodeStreamHandle does it on every own-node read and every own-node Update. One NodeType
+    // recompile made ~60 of these; a portal morning of GitSync re-imports made enough to drive
+    // memex-cloud from 2.5 GB to 24.5 GB at 130–340 MB/min (Systemorph/MeshWeaver#1324).
+    //
+    // A caller-supplied `configuration` DOES make the stream caller-specific (client id,
+    // subscriber, initialization callback, property bag), so those stay uncached — the same
+    // split the remote cache draws by keying on the subscribing identity.
+    private readonly ConcurrentDictionary<WorkspaceReference, Lazy<ISynchronizationStream>> _localStreamCache = new();
+
     /// <inheritdoc />
     public ISynchronizationStream<TReduced> GetStream<TReduced>(
         WorkspaceReference<TReduced> reference,
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration
         )
     {
-        return (ISynchronizationStream<TReduced>?)ReduceManager.ReduceStream(
-            this,
-            reference,
-            configuration
-        ) ?? throw new InvalidOperationException("Failed to create stream");
+        if (configuration is not null)
+            return ReduceLocalStream(reference, configuration);
+
+        while (true)
+        {
+            var lazy = _localStreamCache.GetOrAdd(reference,
+                _ => new Lazy<ISynchronizationStream>(
+                    () => ReduceLocalStream(reference, null),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            ISynchronizationStream stream;
+            try
+            {
+                stream = lazy.Value;
+            }
+            catch
+            {
+                // A Lazy in ExecutionAndPublication mode CACHES the exception, so a transient
+                // failure (e.g. HubDisposingException from a hub that is winding down) would
+                // otherwise poison this reference for the workspace's life. Drop the faulted
+                // entry — only if it is still ours — and let the caller see the original fault.
+                ((ICollection<KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>>)_localStreamCache)
+                    .Remove(new KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>(reference, lazy));
+                throw;
+            }
+
+            // Same liveness contract as GetExternalClientSynchronizationStream: a cached stream
+            // whose sub-hub is gone (its parent was torn down, or a consumer disposed it) is
+            // replaced rather than handed out dead.
+            if (stream.Hub?.RunLevel <= MessageHubRunLevel.Started
+                && stream.Hub is not MessageHub { IsDisposing: true })
+                return (ISynchronizationStream<TReduced>)stream;
+
+            ((ICollection<KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>>)_localStreamCache)
+                .Remove(new KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>(reference, lazy));
+        }
     }
+
+    private ISynchronizationStream<TReduced> ReduceLocalStream<TReduced>(
+        WorkspaceReference<TReduced> reference,
+        Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? configuration)
+        => (ISynchronizationStream<TReduced>?)ReduceManager.ReduceStream(
+               this,
+               reference,
+               configuration
+           ) ?? throw new InvalidOperationException("Failed to create stream");
 
     /// <inheritdoc />
     public ISynchronizationStream<EntityStore> GetStream(params Type[] types)
@@ -613,6 +674,11 @@ public class Workspace : IWorkspace
                 _logger.LogDebug(ex, "Workspace {WorkspaceId} error disposing evicted remote stream", Id);
             }
         }
+
+        // Local reduced streams are OWNED by their parent (CreateReducedStream registers each on
+        // the data-source stream that produced it), so DataContext.Dispose below tears them down.
+        // Drop the index so the workspace stops referencing them from here on.
+        _localStreamCache.Clear();
 
         _logger.LogDebug("Workspace {WorkspaceId} disposing DataContext", Id);
         try
