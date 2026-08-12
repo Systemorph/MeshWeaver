@@ -156,13 +156,20 @@ public static class SyncedQueryDataSourceExtensions
         => hub.GetWorkspace().GetQuery(id, queries);
 
     /// <summary>
-    /// Get-or-create overload: returns the cached observable for
-    /// <paramref name="id"/> if one is already registered; otherwise spins up
-    /// a new <see cref="SyncedQueryMeshNodes"/> on the workspace using the
+    /// Get-or-create overload: returns the cached observable registered for
+    /// <paramref name="id"/> <em>with this exact query set</em> if there is one; otherwise spins
+    /// up a new <see cref="SyncedQueryMeshNodes"/> on the workspace using the
     /// supplied <paramref name="queries"/> (one or more — the synced
     /// collection is the <em>union</em> of every query's result set),
     /// caches its observable in the registry under <paramref name="id"/>,
     /// and returns it.
+    ///
+    /// <para>🚨 <b>The query set is part of the key</b> (issue #1311). Re-calling with the same
+    /// id and a CHANGED query set gets a stream for the set you asked for, not the one that
+    /// happened to materialise first — which is what let a NodeType's newly declared
+    /// <c>shared=@Other/Type/Source</c> be silently ignored until the portal restarted. Ids are
+    /// still meant to be stable: each distinct set keeps its own subscription for the process's
+    /// life, so never compose an id per call.</para>
     ///
     /// <para>The returned observable shares its upstream
     /// <see cref="IMeshQueryProvider.Query"/> subscriptions (one per

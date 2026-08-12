@@ -409,12 +409,18 @@ namespace:Course/Intro scope:children nodeType:Module select:path,name
 `Content`, `content` must be in the list. When you cannot prove the whole consumer chain is
 content-free, leave the query unprojected — the full node is the conservative default.
 
-> **🚨 The projection travels with the cache ID, and the ID wins.** The synced-query cache is keyed
-> by **id alone**: `GetQuery(id, queries)` returns the already-registered stream and *ignores* the
-> queries on a cache hit. Two call sites that share an id but differ in their `select:` therefore
-> resolve to whichever subscribed first — so a metadata-only reader can starve a content reader of
-> its content, intermittently, depending on render order. Keep the query strings byte-identical
-> wherever an id is shared, and scope ids per module so unrelated readers never collide.
+> **🚨 The projection is part of the cache key — so keep it stable per id.** The synced-query cache
+> is keyed by **(id, query set)**: `GetQuery(id, queries)` answers the set you asked for, and two
+> call sites that share an id but differ in their `select:` each get their own collection. It was
+> keyed by id alone until issue #1311, and the discarded queries made a metadata-only reader starve
+> a content reader of its content, intermittently, depending on render order — the same discard
+> that froze a NodeType's source set on whichever declaration materialised first, so a newly added
+> `shared=@Other/Type/Source` was ignored until the portal restarted.
+>
+> A drift is therefore no longer a wrong answer, but it is still waste: every distinct query set
+> opens its own subscription and stays resident for the life of the process. Keep the query strings
+> byte-identical wherever an id is shared, and scope ids per module so unrelated readers never
+> collide.
 
 ---
 

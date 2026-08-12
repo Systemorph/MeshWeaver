@@ -1912,16 +1912,15 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         };
     }
 
-    /// <summary>
-    /// Process-wide synced-query cache. Replaces the legacy
-    /// <c>ConditionalWeakTable&lt;IWorkspace, SyncedQueryRegistry&gt;</c> in
-    /// <c>SyncedQueryDataSourceExtensions</c> — one registry, one set of
-    /// upstream subscriptions, regardless of how many workspaces ask. The
-    /// SyncedQueryMeshNodes runs on the cache hub's workspace so its
-    /// SubscribeRequests carry <c>MeshNodeCacheIdentity</c>; the secured
-    /// query surface short-circuits to raw upstream and no per-hub
-    /// AsyncLocal AccessContext leaks in.
-    /// </summary>
+    // Process-wide synced-query cache. Replaces the legacy
+    // ConditionalWeakTable<IWorkspace, SyncedQueryRegistry> in
+    // SyncedQueryDataSourceExtensions — one registry, one set of
+    // upstream subscriptions, regardless of how many workspaces ask. The
+    // SyncedQueryMeshNodes runs on the cache hub's workspace so its
+    // SubscribeRequests carry MeshNodeCacheIdentity; the secured
+    // query surface short-circuits to raw upstream and no per-hub
+    // AsyncLocal AccessContext leaks in.
+    //
     // Thread-safety contract for GetQuery():
     //
     //   1. CREATION is lock-free atomic-swap over an ImmutableDictionary.
@@ -1952,10 +1951,52 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     //      Change-feed events flow into Replay(1) in real time, so new
     //      subscribers attaching at any later point see the current
     //      snapshot, not a stale Initial.
-    private System.Collections.Immutable.ImmutableDictionary<object, IObservable<IEnumerable<MeshNode>>> _queries =
-        System.Collections.Immutable.ImmutableDictionary<object, IObservable<IEnumerable<MeshNode>>>.Empty;
+    /// <summary>
+    /// Every synced query registered under ONE cache id, indexed by the QUERY SET it was built
+    /// from, plus the most recently registered of them for the lookup-only overload.
+    ///
+    /// <para>🚨 <b>The id alone is not the cache key — assuming it was is issue #1311.</b>
+    /// <see cref="GetQuery(object, JsonSerializerOptions, string[])"/> is a get-or-create, and on
+    /// a hit the old code returned the existing entry and DISCARDED the <c>queries</c> argument:
+    /// it answered a question nobody had asked, silently. That is only sound if every caller's id
+    /// fully determines its query set, and the compiler's does not —
+    /// <c>NodeSources.CacheId</c> is <c>nodetype-sources:{nodeTypePath}</c> while the queries are
+    /// expanded from the NodeType's author-editable <c>Sources</c>/<c>Tests</c>. Adding a
+    /// <c>shared=@Other/Type/Source</c> on a RUNNING portal therefore could not take effect: the
+    /// entry materialised before the edit kept serving the OLD queries, so the compile's source
+    /// snapshot came back established, authorised and TOO NARROW. Being non-empty it won
+    /// <c>RaceSourceSnapshot</c> instantly (0 ms, measured on memex), the direct probe's correct
+    /// wider answer was discarded, and Roslyn — shown a short set — emitted a completely
+    /// genuine-looking <c>CS0103</c> about code that was fine. <c>InstallSourcesWatcher</c>'s
+    /// <c>DistinctUntilChanged</c> on (Sources, Tests), whose entire purpose is to re-resolve when
+    /// the declaration changes, was a no-op against the frozen entry.</para>
+    ///
+    /// <para><b>Why index instead of replace.</b> Each distinct query set is created at most once
+    /// and keeps its own stable shared subscription, so a caller still holding the previous
+    /// declaration and a caller holding the new one each get a correct, shared stream. Evicting
+    /// on mismatch would let those two callers thrash — re-opening the upstream
+    /// <c>SyncedQueryMeshNodes</c> on every alternating call, which is the subscription-storm
+    /// shape this cache exists to prevent. The superseded entry stays connected (as it always
+    /// has: <c>AutoConnect(1)</c> never disconnects), so the cost of a sources edit is one extra
+    /// resident synced query for the life of the process — bounded by the number of distinct
+    /// declarations authored, not by traffic.</para>
+    /// </summary>
+    private sealed record QueryCacheEntry(
+        System.Collections.Immutable.ImmutableDictionary<string, IObservable<IEnumerable<MeshNode>>> BySignature,
+        IObservable<IEnumerable<MeshNode>> Latest);
 
-    // Memoised options-wrapped observables, keyed by (id, options). The
+    private System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry> _queries =
+        System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry>.Empty;
+
+    /// <summary>
+    /// The identity of a query SET. Order- and duplicate-insensitive, because the synced
+    /// collection is the UNION of its queries — two callers that ask for the same set written in
+    /// a different order must share one subscription rather than open two.
+    /// </summary>
+    private static string QuerySetSignature(IReadOnlyList<string> queries) =>
+        string.Join('\u001f', queries.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+
+    // Memoised options-wrapped observables, keyed by (id, query-set signature, options). The
     // options overload wraps the raw cached stream in a content-deserialising
     // Select; without memoisation every call returns a FRESH Select instance,
     // so two infrastructure callers wrapped in ImpersonateAsSystem (which
@@ -1963,22 +2004,29 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // distinct references instead of the shared system-security cache entry.
     // Keyed on the caller's stable hub JsonSerializerOptions (one instance per
     // hub) so repeated GetQuery(id, options, …) calls reuse the same wrapper.
-    private readonly ConcurrentDictionary<(object Id, JsonSerializerOptions Options), IObservable<IEnumerable<MeshNode>>> _optionsWrappedQueries = new();
+    // The SIGNATURE is part of the key for the same reason it is part of the raw key: without it
+    // a widened query set would be handed the wrapper memoised over the narrower stream, and the
+    // #1311 fix below would be undone one layer up.
+    private readonly ConcurrentDictionary<(object Id, string Signature, JsonSerializerOptions Options), IObservable<IEnumerable<MeshNode>>> _optionsWrappedQueries = new();
 
     // Raw builder — PRIVATE. The public surface (hub/workspace.GetQuery → the
     // internal options overload below) always injects the caller hub's
     // JsonSerializerOptions, so no caller can build a synced query whose Content
     // stays an untyped JsonElement. See IMeshNodeStreamCache.GetQuery doc.
-    private IObservable<IEnumerable<MeshNode>> GetQueryRaw(object id, params string[] queries)
+    // Returns the signature alongside the stream so the options wrapper can key on it too.
+    private (IObservable<IEnumerable<MeshNode>> Stream, string Signature) GetQueryRaw(
+        object id, params string[] queries)
     {
         if (queries is null || queries.Length == 0)
             throw new ArgumentException("At least one query string is required.", nameof(queries));
 
+        var signature = QuerySetSignature(queries);
         while (true)
         {
             var current = _queries;
-            if (current.TryGetValue(id, out var existing))
-                return existing;
+            var hasEntry = current.TryGetValue(id, out var entry);
+            if (hasEntry && entry!.BySignature.TryGetValue(signature, out var existing))
+                return (existing, signature);
 
             // Deferred + thread-pool subscribe-on + Replay(1).RefCount: a
             // shared cached observable. The lambda inside Defer runs on the
@@ -2046,19 +2094,31 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // gate lock, contending with concurrent subscribers under
                 // load.
 
-            var updated = current.Add(id, stream);
+            // Index the new stream under its SIGNATURE and make it the id's Latest. Existing
+            // signatures are preserved, so a caller still holding the previous declaration keeps
+            // its own shared subscription instead of being evicted (see QueryCacheEntry).
+            var bySignature = hasEntry
+                ? entry!.BySignature
+                : System.Collections.Immutable.ImmutableDictionary<string, IObservable<IEnumerable<MeshNode>>>.Empty;
+            var updated = current.SetItem(id, new QueryCacheEntry(bySignature.SetItem(signature, stream), stream));
             if (Interlocked.CompareExchange(ref _queries, updated, current) == current)
-                return stream;
+                return (stream, signature);
             // CAS lost — another thread won concurrently; retry the read.
         }
     }
 
+    /// <summary>
+    /// Lookup-only: the most recently REGISTERED query set for this id. Normally there is exactly
+    /// one; there is more than one only after a caller's declared query set changed (a NodeType's
+    /// Sources edit — see <see cref="QueryCacheEntry"/>), and then the newest declaration is what
+    /// a by-id lookup means.
+    /// </summary>
     public IObservable<IEnumerable<MeshNode>>? GetQuery(object id)
-        => _queries.TryGetValue(id, out var stream) ? stream : null;
+        => _queries.TryGetValue(id, out var entry) ? entry.Latest : null;
 
     public IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries)
     {
-        var raw = GetQueryRaw(id, queries);
+        var (raw, signature) = GetQueryRaw(id, queries);
         if (options is null) return raw;
         // Round-trip each emitted MeshNode's Content through the caller's
         // JsonSerializerOptions so consumers see typed domain instances
@@ -2073,7 +2133,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // watchers). GetOrAdd's factory may run more than once under a race,
         // but each candidate wraps the same cached raw stream — losers are
         // inert (no Subscribe), so there's no upstream leak.
-        return _optionsWrappedQueries.GetOrAdd((id, options), static (_, state) =>
+        return _optionsWrappedQueries.GetOrAdd((id, signature, options), static (_, state) =>
             System.Reactive.Linq.Observable.Select(state.raw, items =>
                 (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, state.options, state.logger, state.registry)).ToArray()),
             (raw, options, logger, registry: contentTypeRegistry));
