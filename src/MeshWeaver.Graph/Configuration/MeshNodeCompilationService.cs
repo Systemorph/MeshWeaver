@@ -941,7 +941,17 @@ internal class MeshNodeCompilationService(
                     // made this probe run on every compile). Defer's FACTORY exceptions, by
                     // contrast, ARE forwarded to OnError — so the throw lands in this leg's .Catch
                     // below and the leg reports itself FAILED, exactly like any other faulted leg.
-                    Observable.Defer(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(q)))
+                    // 🚨 .AsSystem() — source-set discovery is framework infrastructure, not a
+                    // user-scoped read (same reasoning as the cached SnapshotSources path, which
+                    // wraps its GetQuery in ImpersonateAsSystem). The declaration has to ride on the
+                    // REQUEST here rather than on an ambient scope, because the note above says this
+                    // lambda runs inside a SCHEDULED subscription (DelaySubscription → a ThreadPool
+                    // tick): an ambient impersonation scope established by the caller is long gone by
+                    // then, so the read would resolve as Anonymous and return a silently PARTIAL
+                    // source set — which is precisely the "compiles WRONG" failure this method warns
+                    // about two comments up, and how a starved read surfaced as a completely
+                    // genuine-looking CS0246 (#1218). See Doc/Architecture/QueryIdentity.
+                    Observable.Defer(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(q).AsSystem()))
                         .Scan(ImmutableDictionary<string, MeshNode>.Empty, ApplyQueryChange)
                         .Throttle(SourceProbeQuietWindow)
                         .Take(1)
