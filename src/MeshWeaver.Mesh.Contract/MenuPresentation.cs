@@ -108,11 +108,17 @@ public record MenuPresentation(string Context = "Node", IReadOnlyList<MenuEntryP
 /// already entitled to see; it can never reveal one, so a catalog edit cannot widen access.
 /// </param>
 /// <param name="Parent">
-/// <see cref="Area"/> of the entry this one nests under, rendered as a hover sub-menu via
+/// <see cref="Area"/> of the entry this one nests under, rendered as a sub-menu via
 /// <see cref="NodeMenuItemDefinition.Children"/>. This is how a flat, messy menu is grouped without
-/// touching a provider. A parent that no provider emits is created as a container from this
-/// entry's own presentation; a cyclic or unresolvable parent is reported and the child stays
-/// top-level rather than vanishing.
+/// touching a provider.
+///
+/// <para>The parent must be an entry some provider already emits at top level — the overlay is
+/// override-only and never CONJURES a container, for the same reason it never introduces an entry:
+/// nothing on this menu filters on <see cref="NodeMenuItemDefinition.RequiredPermission"/>, so a
+/// data-added item would carry no gate. A cyclic, self-referencing or unresolvable parent is reported
+/// and the child stays top-level rather than vanishing. To ship a NEW group, a provider emits it with
+/// a <c>NodeMenuItemDefinition.GroupArea(name)</c> area — that group is then addressable from here
+/// like any other entry.</para>
 /// </param>
 public record MenuEntryPresentation(
     string Area = "",

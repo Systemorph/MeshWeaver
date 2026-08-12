@@ -21,6 +21,7 @@ import { type NavTarget } from "./nav";
 import { CLIENT_MENUS, ClientScreen, type ClientDestination } from "./screens";
 import { loadInstances, currentInstance, setCurrentInstance, instanceIdentity, type InstanceIdentity } from "./connection";
 import { useStyles, useTheme, type Palette } from "./theme";
+import { LeftMenuView } from "./leftMenu";
 
 const useSheet = () => useStyles(makeStyles);
 
@@ -37,12 +38,6 @@ const MESH_CONTEXTS: { key: string; label: string; glyph: string }[] = [
   { key: "$Menu:AI", label: "AI", glyph: "✨" },
 ];
 
-interface MenuItem {
-  label?: string;
-  href?: string;
-  area?: string;
-  order?: number;
-}
 
 function useTree(source: AreaSource): AreaTree {
   return useSyncExternalStore(source.subscribe, source.getState, source.getState);
@@ -53,11 +48,6 @@ function useTree(source: AreaSource): AreaTree {
 function useAreaError(source: AreaSource): string | null {
   const read = () => source.error ?? null;
   return useSyncExternalStore(source.subscribe, read, read);
-}
-
-function menuItems(tree: AreaTree, key: string): MenuItem[] {
-  const items = (tree.areas?.[key] as { items?: MenuItem[] } | undefined)?.items ?? [];
-  return [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 }
 
 export function Shell({
@@ -274,7 +264,9 @@ function Breadcrumb({
   );
 }
 
-// ── left menus (from providers) ─────────────────────────────────────────────────
+// ── left menus (from providers) ───────────────────────────────
+// Lives in ./leftMenu (with the nested-entry drill-down); this wrapper only supplies the pieces that
+// would drag the Expo-bound ./connection into a unit test — the client destinations and HOME.
 function LeftMenu({
   tree,
   nav,
@@ -288,54 +280,17 @@ function LeftMenu({
   onNavigate: (t: NavTarget) => void;
   onClientScreen: (d: ClientDestination | null) => void;
 }): ReactNode {
-  const styles = useSheet();
   return (
-    <View style={styles.left}>
-      <ScrollView contentContainerStyle={{ paddingVertical: 10 }}>
-        <NavRow label="⌂  Home" active={!clientScreen && nav.address === HOME.address} onPress={() => onNavigate(HOME)} />
-
-        {MESH_CONTEXTS.map((ctx) => {
-          const items = menuItems(tree, ctx.key);
-          if (items.length === 0) return null;
-          return (
-            <View key={ctx.key}>
-              <Text style={styles.sectionLabel}>{ctx.glyph}  {ctx.label}</Text>
-              {items.map((it, i) => (
-                <NavRow
-                  key={i}
-                  label={it.label ?? it.area ?? ""}
-                  active={!clientScreen && nav.area === it.area}
-                  onPress={() => it.area && onNavigate({ address: nav.address, area: it.area })}
-                />
-              ))}
-            </View>
-          );
-        })}
-
-        {CLIENT_MENUS.map((ctx) => (
-          <View key={ctx.context}>
-            <Text style={styles.sectionLabel}>{ctx.glyph}  {ctx.context}</Text>
-            {ctx.items.map((it) => (
-              <NavRow
-                key={it.destination}
-                label={it.label}
-                active={clientScreen === it.destination}
-                onPress={() => onClientScreen(it.destination)}
-              />
-            ))}
-          </View>
-        ))}
-      </ScrollView>
-    </View>
-  );
-}
-
-function NavRow({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }): ReactNode {
-  const styles = useSheet();
-  return (
-    <Pressable style={({ hovered }: any) => [styles.navItem, hovered && styles.navItemHover, active && styles.navItemActive]} onPress={onPress}>
-      <Text style={[styles.navItemText, active && styles.navItemTextActive]} numberOfLines={1}>{label}</Text>
-    </Pressable>
+    <LeftMenuView
+      tree={tree}
+      nav={nav}
+      home={HOME}
+      contexts={MESH_CONTEXTS}
+      clientMenus={CLIENT_MENUS}
+      clientScreen={clientScreen}
+      onNavigate={onNavigate}
+      onClientScreen={onClientScreen}
+    />
   );
 }
 
@@ -496,13 +451,10 @@ const makeStyles = (p: Palette) => StyleSheet.create({
   crumbTextLast: { color: p.text, fontWeight: "600" },
 
   body: { flex: 1, flexDirection: "row", minHeight: 0 },
-  left: { width: 236, flexGrow: 0, flexShrink: 0, backgroundColor: p.sidebarBg, borderRightWidth: 1, borderRightColor: p.border },
   sectionLabel: { fontSize: 11, fontWeight: "700", color: p.textMuted, letterSpacing: 0.5, textTransform: "uppercase", paddingHorizontal: 16, marginTop: 14, marginBottom: 6 },
-  navItem: { paddingHorizontal: 16, paddingVertical: 7, marginHorizontal: 8, borderRadius: 6 },
+  // minHeight 44 = the platform minimum touch target; row is flex so the label and the drill-in
+  // chevron sit on one line and the WHOLE row stays tappable.
   navItemHover: { backgroundColor: p.navHover },
-  navItemActive: { backgroundColor: p.navActiveBg },
-  navItemText: { fontSize: 13.5, color: p.text },
-  navItemTextActive: { color: p.navActiveText, fontWeight: "600" },
 
   content: { flex: 1, minWidth: 0, backgroundColor: p.appBg },
   contentScroll: { flex: 1 },
