@@ -106,6 +106,16 @@ Full guidance: [WritingTests.md](src/MeshWeaver.Documentation/Data/Architecture/
 
 ## GitHub PR Operations
 
+🚨 **Finishing a change set means MERGED — merge it yourself on green, don't ask for permission.**
+A PR left open with a link handed back is unfinished work: it rots against a moving `main` and the
+human has to return to press a button whose only precondition is the one the flow already proves.
+Asking is not extra safety. The safety IS the gate — green CI plus the automatic Copilot review,
+both of which you wait for anyway (and, for anything a portal runs, the image check below). Stop
+only when CI is red for a reason you cannot fix, when the review asks for a decision that changes
+what the change set IS, or when the work turns out to need a scope call the user has not made —
+one line, then stop. A change set spanning repos (education, MeshWeaver.Plugins) is finished when
+every part is merged in dependency order: platform first, then what depends on it.
+
 `gh` CLI has **read + push** only — cannot merge, resolve threads, or request reviewers.
 
 ```bash
