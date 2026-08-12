@@ -389,10 +389,19 @@ public class CrossHubPatchAtomicityTest(ITestOutputHelper output) : AITestBase(o
 
 Always run tests in the background — they take minutes.
 
+🚨 **Build the project first, and confirm a fresh `.trx`.** `--no-build` / `--no-restore` against a
+project the current worktree has never built exits **0 with no output and no `.trx`** — it runs
+nothing and looks exactly like a clean pass. A fresh worktree has no `bin/`, so this is its default
+state, and two "passing" runs were banked on it before anyone noticed.
+
 ```bash
-dotnet test test/MeshWeaver.NodeOperations.Test --no-build --no-restore
-dotnet test test/MeshWeaver.Acme.Test --no-build --no-restore --filter "FullyQualifiedName~TodoDataChangeWorkflowTest"
+dotnet build test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj
+dotnet test test/MeshWeaver.NodeOperations.Test --no-build
+dotnet test test/MeshWeaver.Acme.Test --no-build --filter "FullyQualifiedName~TodoDataChangeWorkflowTest"
 ```
+
+There is no `timeout` (or `gtimeout`) on the macOS dev host, so `timeout 20m dotnet test …` runs
+nothing at all — cap a local run by backgrounding it and polling `date -u` instead.
 
 Use `FullyQualifiedName~` — it is the only `--filter` property this repo uses (`.github/workflows/flake-repro.yml`), and it matches both a class name and a `Class.Method` pair. `ClassName~` appears nowhere in the build; prefer `FullyQualifiedName~` rather than assuming the adapter honours it. Never use `--verbosity minimal` when a failure is possible — it hides stack traces.
 
