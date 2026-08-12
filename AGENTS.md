@@ -367,6 +367,10 @@ Two shapes, pick by whether the text hangs off a declaration:
 - **On a declaration** (property label, node-type name, enum member) → add `[Translation("de", "…")]` next to the existing `[Description]`. Nothing else to wire.
 - **Everywhere else** (Blazor markup, inline `Controls.*`, toasts) → add a key to **both** `src/MeshWeaver.Messaging.Hub/Localization/strings.{en,de}.json` and read it via `Access.Localize("key")` (Blazor, `@inject AccessService Access`) or `host.Localize("key")` (layout areas).
 
+🚨 **A new key has a SECOND home: mirror it into `clients/react/src/i18n/`.** The React package bundles a byte-identical copy of the server catalog so it can resolve synchronously, and `clients/react/src/i18n/localize.test.ts` is a **drift guard** asserting sorted-key equality *and* a per-key value comparison against the server files. Add a key server-side only and the `Clients` workflow goes red with an off-by-your-delta key count (899 vs 905), while a JS client would render the raw key to users.
+
+This bit two separate PRs on 2026-08-12 because nothing said it: `LocalizationTest` passes — it only checks the server catalog for a missing *language* — so the server-side gate gives you a green that means nothing about the clients. `clients/react` is currently the only mirror; there is no third copy.
+
 `LocalizationTest` fails if a language is missing any English key, so a half-translated string cannot merge.
 
 🚨 **Never resolve from `CultureInfo.CurrentUICulture`** — a layout-area render hops the hub scheduler and an ambient AsyncLocal culture does not survive it, so one user's UI would pick up another user's language. Resolution is always explicit off `AccessContext.Locale`.
