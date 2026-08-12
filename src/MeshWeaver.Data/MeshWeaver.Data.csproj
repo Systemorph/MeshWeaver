@@ -4,7 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="JsonPatch.Net" />
-    <PackageReference Include="JsonPath.Net" />
     <PackageReference Include="Namotion.Reflection" />
   </ItemGroup>
 

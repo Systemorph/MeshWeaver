@@ -90,10 +90,13 @@ EXCEPTIONS = {
         "Open Source Maintenance Fee (OSMFEULA.txt); decision tracked by #1231. The "
         "SOURCE is MIT and the EULA states the fee is not a licence fee and that the "
         "OSI licence governs on conflict - so this is a fee expectation on the "
-        "published binary, not a licence breach. Core dependency: the RFC 7396 "
-        "merge-patch path behind every cross-hub stream.Update."
+        "published binary, not a licence breach. What it actually provides is RFC 6902 "
+        "(patch) + RFC 6901 (pointer), concentrated in Serialization/"
+        "JsonSynchronizationStream.cs and StandardReducers.cs. It is NOT on the RFC 7396 "
+        "merge-patch path behind cross-hub stream.Update - that is hand-written in-tree "
+        "on System.Text.Json.Nodes (DataExtensions.MergePatchRecursive, "
+        "Serialization/MeshNodePatchMerge.cs) and imports nothing from this family."
     ),
-    "jsonpath.net": ("Open Source Maintenance Fee; see jsonpatch.net above and #1231."),
     "json.more.net": ("Transitive under the json-everything family; see #1231."),
     "jsonpointer.net": ("Transitive under the json-everything family; see #1231."),
     # --- Permissive upstream, metadata simply absent from the package. ---
