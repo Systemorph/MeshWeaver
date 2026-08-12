@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -50,18 +51,59 @@ public static class ActivityLayoutAreas
     public const string ProgressArea = "Progress";
 
     /// <summary>
+    /// Area id of the script RESULT inside <see cref="Progress"/> / <see cref="Overview"/> —
+    /// the control a script returned, rendered live. Named (not auto-numbered) so the
+    /// indicator and log keep their positions and so tests address it by name.
+    /// </summary>
+    public const string ResultArea = "Result";
+
+    /// <summary>
+    /// The control a script RETURNED, as a live stream — the missing half of #915.
+    /// <para>A script's return value reaches the reader by exactly one route: the kernel
+    /// publishes it into the hub's area dictionary (<c>KernelExecutor.UpdateView</c>, keyed by
+    /// the submission id = this activity node's id) and a layout host renders it from there.
+    /// It CANNOT be recovered from <see cref="ActivityLog.ReturnValue"/>: a container control
+    /// serializes as bare <c>NamedAreaControl</c> references — its children live in the
+    /// non-serialized <c>Views</c>/<c>Renderers</c> — so the stored JSON is hollow.</para>
+    /// <para>Only an <see cref="IUiControl"/> is rendered. Everything else the kernel already
+    /// logs as a text line (<c>1 + 1</c> ⇒ "2"), and rendering it here as well would print
+    /// every scalar result twice.</para>
+    /// <para>Emits <c>null</c> first and whenever the dictionary has nothing for this activity —
+    /// the hub is re-activated empty after its idle disconnect, so an OLD run degrades to the
+    /// status line + log it renders today, never to a pane that waits forever.</para>
+    /// </summary>
+    private static IObservable<UiControl?> RenderedResult(LayoutAreaHost host)
+    {
+        // The kernel's area dictionary is a hub-scoped service registered by KernelContainer.
+        // Absent ⇒ this activity's hub hosts no kernel (a compile, an import, a sync) ⇒ no result.
+        var areas = host.Hub.ServiceProvider
+            .GetService<ISynchronizationStream<ImmutableDictionary<string, object>>>();
+        if (areas is null) return Observable.Return<UiControl?>(null);
+
+        // The submission id IS the activity node's id (CodeNodeType.HandleExecuteScript stamps
+        // `activityId = submissionId`), and the hub's address is that node's path.
+        var submissionId = host.Hub.Address.Segments[^1];
+        var controls = host.Hub.ServiceProvider.GetRequiredService<IUiControlService>();
+        return areas
+            .Select(change => change.Value?.GetValueOrDefault(submissionId))
+            .Select(value => value is IUiControl ? controls.Convert(value!) : null)
+            .StartWith((UiControl?)null);
+    }
+
+    /// <summary>
     /// Overview for an Activity node. Header (user / category / status / timestamps),
     /// followed by the live progress indicator (indeterminate bar while running, a
-    /// status line once terminal) and the structured message log (per-message rows
-    /// with log-level colour coding), plus a Cancel button (while running) and a
-    /// Re-run button (once terminal, when the activity originated from an
-    /// executable hub). Built entirely from framework controls — no hand-rolled HTML.
+    /// status line once terminal), the structured message log (per-message rows
+    /// with log-level colour coding) and the script's rendered result, plus a Cancel
+    /// button (while running) and a Re-run button (once terminal, when the activity
+    /// originated from an executable hub). Built entirely from framework controls —
+    /// no hand-rolled HTML.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var zoneId = host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId();
         return host.Workspace.GetMeshNodeStream()
-            .Select(node =>
+            .CombineLatest(RenderedResult(host), (node, result) =>
             {
                 if (node?.Content is not ActivityLog log)
                     return (UiControl?)Controls.Label(host.Localize("ui.noActivityData"))
@@ -71,7 +113,9 @@ public static class ActivityLayoutAreas
                     .WithStyle("padding: 16px; gap: 12px;")
                     .WithView(BuildHeader(log, zoneId))
                     .WithView(BuildProgressIndicator(log))
-                    .WithView(BuildLog(log, locale: host.ViewerLocale()));
+                    .WithView(BuildLog(log, locale: host.ViewerLocale(), hasResult: result is not null));
+                if (result is not null)
+                    stack = stack.WithView(result, ResultArea);
 
                 // While running: Cancel button. Per the Activity Control Plane
                 // pattern (Doc/Architecture/ActivityControlPlane.md), cancellation
@@ -148,13 +192,18 @@ public static class ActivityLayoutAreas
     /// Compact running-progress view for embedding next to an executable Code
     /// node (or anywhere a caller wants live script feedback). Streams the same
     /// ActivityLog content as <see cref="Overview"/> but trims chrome and shows
-    /// only the live progress indicator + message log + inline Cancel button
-    /// (while running). No header, no Re-run. Built from framework controls.
+    /// only the live progress indicator + message log + the script's rendered
+    /// result + inline Cancel button (while running). No header, no Re-run.
+    /// Built from framework controls.
+    /// <para>This IS the code cell's output pane (<c>CodeLayoutAreas.BuildContent</c>
+    /// embeds it), so a script whose result is a control renders that control HERE —
+    /// see <see cref="RenderedResult"/>. Order follows a notebook cell: status,
+    /// printed lines, then the result.</para>
     /// </summary>
     public static IObservable<UiControl?> Progress(LayoutAreaHost host, RenderingContext _)
     {
         return host.Workspace.GetMeshNodeStream()
-            .Select(node =>
+            .CombineLatest(RenderedResult(host), (node, result) =>
             {
                 if (node?.Content is not ActivityLog log)
                     return (UiControl?)Controls.Label(host.Localize("ui.noActivityYet"))
@@ -163,7 +212,9 @@ public static class ActivityLayoutAreas
                 var stack = Controls.Stack
                     .WithStyle("gap: 8px;")
                     .WithView(BuildProgressIndicator(log))
-                    .WithView(BuildLog(log, locale: host.ViewerLocale()));
+                    .WithView(BuildLog(log, locale: host.ViewerLocale(), hasResult: result is not null));
+                if (result is not null)
+                    stack = stack.WithView(result, ResultArea);
 
                 // Inline Cancel: same content-patch pattern as the Overview's
                 // button. Only rendered while the activity is actually running
@@ -259,7 +310,14 @@ public static class ActivityLayoutAreas
     /// the former hand-rolled messages HTML and is unit-testable without a
     /// layout host.
     /// </summary>
-    public static StackControl BuildLog(ActivityLog log, string? locale = null)
+    /// <param name="log">The activity log to render.</param>
+    /// <param name="locale">Viewer locale for the empty-log line.</param>
+    /// <param name="hasResult">
+    /// True when the caller is rendering the script's returned control beside this log
+    /// (<see cref="ResultArea"/>). The log is then empty because the run's output IS that
+    /// control — printing "this run produced no output" above it would contradict it.
+    /// </param>
+    public static StackControl BuildLog(ActivityLog log, string? locale = null, bool hasResult = false)
     {
         var stack = Controls.Stack
             .WithStyle(
@@ -267,7 +325,7 @@ public static class ActivityLayoutAreas
                 + "font-size: .85rem; gap: 2px; max-height: 320px; overflow: auto;");
 
         if (log.Messages.Count == 0)
-            return stack.WithView(BuildEmptyLogLabel(log, locale));
+            return hasResult ? stack : stack.WithView(BuildEmptyLogLabel(log, locale));
 
         foreach (var msg in log.Messages)
         {
