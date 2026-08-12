@@ -20,7 +20,7 @@ namespace MeshWeaver.Markdown.Export.Pixel;
 /// promise-cached in an instance dictionary — resolved once per mesh, replayed to every later
 /// subscriber, and dead when the mesh is.</para>
 /// </summary>
-public sealed class HeadlessChromiumPdfRenderer(
+public sealed partial class HeadlessChromiumPdfRenderer(
     PixelRenderingOptions options,
     IoPoolRegistry ioPools,
     ILogger<HeadlessChromiumPdfRenderer>? logger = null) : IPixelPdfRenderer
@@ -246,7 +246,16 @@ public sealed class HeadlessChromiumPdfRenderer(
         yield return "--no-pdf-header-footer";
         yield return $"--print-to-pdf={pdfPath}";
 
-        if (options.NoSandbox)
+        // 🚨 As root the sandbox is not a choice — Chromium REFUSES to start at all:
+        //     "Running as root without --no-sandbox is not supported."
+        // The portal container runs as uid 0, so without this every PDF export dies in one
+        // second with that message. This is not overriding the operator's decision: where a
+        // decision exists (a non-root deployment, where the namespace sandbox does work) the
+        // flag is still theirs to make via NoSandbox. Where the browser cannot use its sandbox
+        // by construction, passing the flag is the only way to run at all, and the isolation
+        // that actually holds is the layer above it — the print document's `default-src 'none'`
+        // CSP plus the process-level network denial below.
+        if (options.NoSandbox || RunningAsRoot())
             yield return "--no-sandbox";
 
         foreach (var extra in options.AdditionalArguments)
@@ -279,6 +288,21 @@ public sealed class HeadlessChromiumPdfRenderer(
 
         return end > 0 && long.TryParse(digits[..end], out bytes);
     }
+
+    /// <summary>
+    /// True when this process is uid 0 on a Unix host, which is exactly the condition under
+    /// which Chromium's sandbox is unavailable. Read from the OS rather than inferred from a
+    /// user name, so a container with no passwd entry answers correctly; never true on Windows,
+    /// where the question does not arise.
+    /// </summary>
+    private static bool RunningAsRoot()
+        => !OperatingSystem.IsWindows() && GetEuid() == 0;
+
+    // DllImport rather than LibraryImport: the generated variant demands AllowUnsafeBlocks for
+    // the whole project, which is far too big a switch to flip for one argument-free syscall
+    // whose return value needs no marshalling.
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "geteuid")]
+    private static extern uint GetEuid();
 
     private const string PrintCompletionPhrase = "bytes written to file";
 

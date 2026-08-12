@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
-Name: "Pixel-Faithful Export — when the PDF has to look like the screen"
-Abstract: "Deck → PDF is content-faithful by default: the markdown AST is rebuilt into a QuestPDF document, which is why it is fast, small, text-selectable and needs no browser. That model has no notion of a CSS gradient, a raw-HTML slide body or a transform, so design-led decks lose exactly what they were designed for. The pixel-faithful path composes the deck into one self-contained HTML document carrying the LIVE stage CSS and prints it with a headless browser — augmenting the fast path, never replacing it, and shipping the capability without shipping the browser."
+Name: "PDF Export — one browser, two fidelities"
+Abstract: "Every PDF MeshWeaver exports is printed by the headless Chromium in the portal image. The two fidelities differ in the DOCUMENT handed to it: content-faithful composes the markdown AST into a structured, branded print document — cover page, contents, running header and footer in CSS Paged Media — while pixel-faithful composes the deck's own live stage so gradients, raw HTML and transforms survive. One engine, two documents; the choice is fidelity, not capability."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#4f46e5'/><rect x='4' y='6' width='16' height='9' rx='1.5' fill='#fff'/><rect x='5.5' y='7.5' width='13' height='6' rx='1' fill='#818cf8'/><rect x='9' y='17' width='6' height='1.8' rx='.9' fill='#fff'/></svg>"
 Authors:
   - "Roland Buergi"
@@ -13,42 +13,48 @@ Tags:
 
 > **Read first:** [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) — the headless browser is a `Process` leaf and obeys those rules exactly. For what a deck and a slide *are*, see [Slides & Decks](/Doc/GUI/SlidesAndDecks).
 
-## Two exports, deliberately
+## Two documents, one engine
 
 `Deck → Export to PDF` has two renderers, and the choice between them is a real product decision, not a migration:
 
 | | **Content-faithful** (default) | **Pixel-faithful** (opt-in) |
 |---|---|---|
-| How | Markdig AST → `Document` model → QuestPDF | Slides → one self-contained HTML doc → headless browser prints it |
+| How | Markdig AST → `Document` model → print HTML + CSS Paged Media → browser | Slides → one self-contained HTML doc carrying the live stage CSS → browser |
 | Text | Selectable, searchable | A picture of text |
 | Size / speed | Small, fast | Larger, a few seconds |
-| Needs | Nothing | A Chromium/Chrome/Edge on the server |
-| Carries | Headings, lists, tables, links, images | **Everything the browser draws** — gradients, background images, raw HTML, CSS layout, transforms, web fonts |
+| Carries | Headings, lists, tables, links — plus **cover page, contents, running header/footer, page breaks** | **Everything the browser draws** — gradients, background images, raw HTML, CSS layout, transforms, web fonts |
 
-**Content-faithful stays the default because for most decks it is the better artifact.** Pixel fidelity matters for one specific class of deck — the design-led, HTML-authored one, where the meaning *is* the rendering. Making every export pay for a browser to serve that minority would be the wrong trade, which is why this augments the fast path instead of replacing it.
+**Both print with the same browser.** Until #1230 the content-faithful path drew its PDF with a document model (QuestPDF), whose Community tier is free only below a revenue threshold — a licence MeshWeaver cannot ship under. Its replacement is the engine already in the image, so there is now ONE PDF back end instead of two, and the page furniture is expressed in CSS rather than in a fluent drawing API.
+
+**Content-faithful stays the default because for most documents it is the better artifact**: structured and text-selectable, and the only one that carries a cover page, a contents list and a running header. Pixel fidelity matters for one specific class of deck — the design-led, HTML-authored one, where the meaning *is* the rendering.
 
 ## What the document model structurally cannot do
 
 `SlideContent` has a `Background` field holding **raw CSS** (`linear-gradient(135deg, #667eea 0%, #764ba2 100%)`), and its `Content` is markdown through which **raw HTML and inline SVG pass unchanged**. The live stage takes both and hands them to a browser.
 
-`PdfDocumentRenderer` has neither concept. It walks a typed element tree — heading, paragraph, table, list — and there is no element that means "a gradient" or "this author's `<div style="transform: rotate(-3deg)">`". So the gap is not a missing feature in the PDF renderer; it is that **reproducing browser rendering requires a browser**. That is the whole argument for this path, and the reason it is opt-in rather than the fix for a bug.
+The `Document` model has neither concept. It is a typed element tree — heading, paragraph, table, list — and there is no element that means "a gradient" or "this author's `<div style="transform: rotate(-3deg)">`". Printing that model as HTML did not change this: the content-faithful path still reconstructs the *content*, so a deck's own CSS is still not what lands on the page. **Reproducing an author's rendering requires printing the author's document**, which is exactly what the pixel path does and why it remains a separate choice rather than a bug fix.
 
 ## The pipeline
 
 ```
-Deck node
-  └─ DeckLayoutAreas.ResolveDeckSelection      ← the SAME order the live views use
-       └─ SlidePrintComposer.Compose            ← pure, synchronous, no IO, no browser
-            ├─ MarkdownViewLogic.Render          ← the framework's own markdown pipeline
-            └─ SlidePrint.{html,css} templates   ← + SlideLayoutAreas.ThemeTokens
-       └─ inline api/content assets as data: URIs (read under the user's identity)
-       └─ IPixelPdfRenderer.Render               ← the ONLY browser step
-            └─ IIoPool(Process).InvokeBlocking   ← off the hub scheduler, bounded
+Deck node                                       Markdown node (content-faithful)
+  └─ DeckLayoutAreas.ResolveDeckSelection         └─ DocumentBuilder.Build
+       └─ SlidePrintComposer.Compose                   ← Markdig AST → Document model,
+            ├─ MarkdownViewLogic.Render                  page-break rules, TOC headings
+            └─ SlidePrint.{html,css} templates      └─ DocumentPrintComposer.Compose
+       └─ inline api/content assets as data:             ← Document → print HTML,
+            URIs (read under the user's identity)          MarkupNode tree + the
+                                                           DocumentPrint.{html,css} templates
+       └──────────────┬──────────────────────────────────────────┘
+                      └─ IPixelPdfRenderer.Render      ← the ONLY browser step, shared
+                           └─ IIoPool(Process).InvokeBlocking  ← off the hub, bounded
 ```
+
+Both composers are **pure, synchronous, no IO, no browser**, and both build markup through `MarkupNode` — the one place in the assembly that turns a tree into a string of HTML, escaping text and attribute values on the single path out. Neither builds HTML by string interpolation, and the page furniture lives in real `.html` / `.css` template files rather than in C#.
 
 **Nothing visual is re-invented.** The slide body is rendered by `MarkdownViewLogic.Render` — the very renderer the portal uses, so raw HTML and SVG behave identically. The stage styling comes from `SlideLayoutAreas.ThemeTokens` (made `public` for exactly this consumer) plus a stylesheet that mirrors `BuildStage`: same 16:9 box, same padding ratios, same type scale. Copying the theme into the exporter would have let the printed deck and the on-screen deck drift; referencing the one declaration means they cannot.
 
-**Markup lives in template files**, not in C#. `SlidePrint.html`, `SlidePrint.css` and `SlidePrintSection.html` are embedded resources with named placeholders; the composer substitutes into them. There is no HTML-string building anywhere in the path.
+**Markup lives in template files**, not in C#. `SlidePrint.{html,css}` / `SlidePrintSection.html` for the deck, `DocumentPrint.{html,css}` for the document, all embedded resources with named placeholders that the composers substitute into. The document stylesheet is where the cover, contents, header, footer and page-break rules are actually written, so they are reviewable as CSS rather than buried in a fluent API.
 
 ### The page box IS one slide
 
@@ -67,7 +73,7 @@ Chromium **discards every background paint when printing** unless colour adjustm
 
 ### A pixel export IS the slides — nothing else
 
-The browser prints the deck's own stage, so there is no document model to hang branding on: a pixel-faithful export has **no cover page, no table of contents, no running header or footer, and no page-break rules**. Those belong to the QuestPDF document and cannot be glued onto browser-printed pages within one document. The export dialog therefore **hides** them when pixel fidelity is selected, rather than leaving controls on screen that would silently do nothing.
+The browser prints the deck's own stage, so there is no document structure to hang branding on: a pixel-faithful export has **no cover page, no table of contents, no running header or footer, and no page-break rules**. Those belong to the composed print document of the content-faithful path — which owns its `@page` rules — and cannot be glued onto a deck whose page box IS one slide. The export dialog therefore **hides** them when pixel fidelity is selected, rather than leaving controls on screen that would silently do nothing.
 
 If a deck needs a branded cover, the honest answer today is to make the cover a slide — where the deck's own CSS can style it far better than the document model could.
 
@@ -106,39 +112,39 @@ the exporting user may read, never fetched by the browser.
 The DOM is only round-tripped when an anchor is actually present, so a deck with no embeds prints
 byte-identically to what the composer produced.
 
-## Where the browser runs — and why it isn't in the image
+## Where the browser runs — it IS in the image
 
-**MeshWeaver ships the capability; the operator supplies the binary.** Nothing about pixel fidelity is baked into the portal image: no NuGet package, no bundled browser download, no post-install step. `HeadlessChromiumPdfRenderer` drives an *already-installed* browser as a plain `Process`.
+**The portal image ships a headless Chromium** (`deploy/base-images/portal-ai/Dockerfile`). It has to: since #1230 the browser is not an optional extra for a minority of decks, it is the PDF renderer. A portal whose PDF export depended on an operator having installed Chrome by hand would have no PDF export.
 
-That is a deliberate answer to "where does it run", and the reason is the shared deployment: `memex` serves every tenant from one image. Adding a browser there would add hundreds of megabytes, a sandbox/security surface, and a new crash mode to **every** portal, in service of a minority of decks. So the cost is opt-in too.
+Three things about that image are load-bearing, and each was measured rather than assumed:
 
-Resolution order, first hit wins:
+- **It is the headless *shell*, not the full browser.** The desktop build never finishes a print in a container: it blocks in start-up paths that want dbus, UPower, GSettings and the component updater, none of which exist there — 150 s in, no PDF, process still alive. The headless shell has none of that machinery, prints the same document in about two seconds, and is roughly half the size.
+- **It comes from Playwright, not from `apt`.** The base is Ubuntu 24.04, where `chromium-browser` is a snap shim that installs no browser at all in a container and there is no plain `chromium` deb; Google Chrome and Microsoft Edge have no Linux arm64 build, so either would have produced a green amd64 leg and an arm64 leg with no browser. Playwright publishes a build for both, and its binary is even named differently per architecture — the Dockerfile matches both names and then runs `--version`, so a mismatch fails the BUILD rather than a user's export.
+- **The generic font families are pinned to faces that have a bold.** The CJK coverage font that Playwright's dependency list installs claims `sans-serif` and `system-ui` and ships a Regular face only, so before `fonts-local.conf` existed every heading, table header and bold run printed at regular weight — silently. The print stylesheet names concrete families too, so the renderer does not depend on the host's fontconfig either.
+
+`PixelRenderingOptions` still resolves the executable at runtime, first hit wins, so a deployment can point at a different browser:
 
 1. `MarkdownExportConfig.PixelRendering.ExecutablePath`
-2. `MESHWEAVER_CHROMIUM_PATH`, `CHROME_BIN`, `PUPPETEER_EXECUTABLE_PATH` — the conventions images that already carry a browser tend to set, so such an image works with no MeshWeaver configuration at all
-3. Well-known install locations per platform (`/usr/bin/chromium`, `/usr/bin/google-chrome`, the macOS app bundles, the Windows Program Files paths)
+2. `MESHWEAVER_CHROMIUM_PATH`, `CHROME_BIN`, `PUPPETEER_EXECUTABLE_PATH` — the image sets `CHROME_BIN`
+3. Well-known install locations per platform (`/usr/bin/chromium` — where the image symlinks it — `/usr/bin/google-chrome`, the macOS app bundles, the Windows Program Files paths)
 
 A configured-but-missing `ExecutablePath` reports **unavailable** and logs a warning rather than falling through to auto-detection — an operator who pointed at the wrong path must see that, not silently get a different browser.
 
-```csharp
-builder.AddMarkdownExport(cfg =>
-{
-    cfg.PixelRendering = cfg.PixelRendering with
-    {
-        ExecutablePath = "/usr/bin/chromium",
-        NoSandbox = true,                       // see below
-        SettleBudget = TimeSpan.FromSeconds(5),
-    };
-});
+### The sandbox, and why `--no-sandbox` is not a preference here
+
+The portal container runs as **uid 0**, and Chromium flatly refuses to start as root without `--no-sandbox`:
+
+```
+Running as root without --no-sandbox is not supported.
 ```
 
-`NoSandbox` is **off by default on purpose**: `--no-sandbox` disables Chromium's process sandbox, and that is an operator's security decision, not a default anyone should inherit. Most containers running as a non-root user without `SYS_ADMIN` need it (or a seccomp profile permitting user namespaces) for the browser to start at all.
+So the renderer passes the flag when `NoSandbox` is set **or** when the process is actually running as root — read from `geteuid()`, not inferred from a user name, so a container with no passwd entry answers correctly. That is not overriding an operator decision: where a decision exists (a non-root deployment, where the namespace sandbox does work) `NoSandbox` is still theirs. Where the browser cannot use its sandbox by construction, the flag is the only way to run at all, and the isolation that actually holds is the layer above it — the print document's `default-src 'none'` CSP plus the process-level network denial, both described above and both tested with the other neutralised.
 
 ## Capability, not an error
 
-The export dialog offers the fidelity choice **only when the server has confirmed both** that the node is a Deck *and* that a browser resolves. `ExportDocumentLayoutArea` subscribes `IPixelPdfRenderer.Probe()` — promise-cached in the renderer, so the file-system probe runs once per mesh and replays — and enriches `ExportDocumentControl.PixelFidelityAvailable` when the answer lands. A portal without a browser simply shows no choice, and exports exactly as it did before.
+The export dialog offers the fidelity choice **only when the server has confirmed both** that the node is a Deck *and* that a browser resolves. `ExportDocumentLayoutArea` subscribes `IPixelPdfRenderer.Probe()` — promise-cached in the renderer, so the file-system probe runs once per mesh and replays — and enriches `ExportDocumentControl.PixelFidelityAvailable` when the answer lands.
 
-If pixel fidelity is nonetheless requested where it cannot run, the export **fails with an actionable message**. It does not quietly downgrade: a user who asked for pixel fidelity must never receive a content-faithful file believing otherwise.
+On the portal image the probe always succeeds, so the choice is always offered. The "no browser here" contract still matters and is still tested: a MeshWeaver embedded somewhere without one gets a **loud, actionable failure** from either fidelity rather than a quiet downgrade. A user who asked for a PDF must never receive something that lost its formatting while believing otherwise.
 
 ## Threading — the browser is an ordinary I/O leaf
 
@@ -153,7 +159,17 @@ The public surface is `IObservable<T>` throughout; there is no `Task` in a signa
 
 ## Testing without a browser
 
-Every decision about *whether a gradient survives* happens in `SlidePrintComposer`, which is pure and synchronous — so the fidelity contract is pinned by ordinary unit tests that need nothing installed (`SlidePrintComposerTests`). The browser tests (`HeadlessChromiumRenderTests`, `DeckPixelExportScriptRelayTest`) ask the renderer's own probe and then assert **whichever contract applies to the machine**: with a browser, a real PDF with one page per slide; without one, a loud, actionable refusal. They are never skipped, and a missing browser can neither hide a regression nor redden a build.
+Every decision about *what the page looks like* happens in a composer that is pure and synchronous — `SlidePrintComposer` for decks, `DocumentPrintComposer` for documents — so both contracts are pinned by ordinary unit tests that need nothing installed (`SlidePrintComposerTests`, `DocumentPrintComposerTests`). That is where "is the cover suppressed when the brand has no name", "does the contents entry link to an id a heading actually carries" and "can a brand header containing `</style>` break out of the stylesheet" are answered.
+
+The browser tests (`HeadlessChromiumRenderTests`, `RendererOutputTests`, `PdfHeaderLogoTests`, `DeckPixelExportScriptRelayTest`) ask the renderer's own probe and then assert **whichever contract applies to the machine**: with a browser, a real PDF — cover, contents and body on separate pages, the running header on every page but the cover, `N / M` in the footer; without one, a loud, actionable refusal. They are never skipped, and a missing browser can neither hide a regression nor redden a build. CI provisions the same browser build the image ships, as an explicit infrastructure step, so a shard cannot pass by taking the "no browser" branch.
+
+### 🚧 The one thing that did not survive: page numbers in the contents list
+
+The document model could print `Chapter 3 ......... 12`. **The browser cannot**, and the contents list therefore carries clickable links but no page numbers.
+
+The reason is specific: reading a target's page from CSS needs `target-counter()` from CSS Generated Content for Paged Media, and Chromium implements no part of it — verified directly against the browser this image ships, alongside the features that *do* work (`@page` margin boxes, named pages, `counter(page)` / `counter(pages)`), which is what the rest of the furniture is built on.
+
+The alternative is a two-pass print: print once, read back from the PDF's link annotations which page each anchor landed on, inject the numbers and print again. It was rejected deliberately — it doubles the cost of every export with a contents list, and its failure mode is *silently wrong page numbers* when the inserted digits reflow the list. An honestly absent column beats a confidently wrong one, and in a PDF the clickable entry is the affordance a reader actually uses.
 
 ## See also
 

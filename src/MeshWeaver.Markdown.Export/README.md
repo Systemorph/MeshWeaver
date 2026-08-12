@@ -1,15 +1,17 @@
 # MeshWeaver.Markdown.Export
 
-Server-side export of markdown nodes to PDF and DOCX. The default pipeline is pure C# — no headless browser, no Pandoc, no Node.js required.
+Server-side export of markdown nodes to PDF and DOCX. No Pandoc, no Node.js; PDF is printed by the
+headless Chromium the portal image ships (see [PDF Export](../MeshWeaver.Documentation/Data/Architecture/PixelFaithfulExport.md)).
 
-Pipeline: `Markdig AST` → `IDocumentVisitor` → { `QuestPDF` for PDF, `DocumentFormat.OpenXml` for DOCX }.
+Pipeline: `Markdig AST` → `Document` model → { print HTML + CSS Paged Media → browser, for PDF |
+`DocumentFormat.OpenXml`, for DOCX }.
 
 Features:
 
 - **Embedded layout areas** (`@@("…/area/Foo/…")`) resolved to real document structure — see below.
-- Table of contents (built from document heading structure).
+- Table of contents (built from document heading structure; PDF entries are links, without page numbers — see the doc page).
 - Page break rules (before H1, between subtree children, explicit `\newpage` / `<!-- pagebreak -->`).
-- Branded cover page, header, and footer resolved from a `CorporateIdentity` mesh node.
+- Branded cover page, running header, and running footer (with `N / M` page numbers in PDF) resolved from a `CorporateIdentity` mesh node.
 - MeshWeaver annotations become native Word comments and tracked changes in DOCX.
 - Mermaid / MathJax SVGs captured from the client's already-rendered DOM and embedded as images.
 
@@ -27,7 +29,7 @@ markdown ──parse──▶ ExportMarkdownPipeline ──find embeds──▶ 
                                         ┌────────────────────────────┴────────────────────┐
                                    MarkupNode.Render()                          MarkupToDocument
                                    → HTML (email / print)                       → DocumentElement
-                                                                                (QuestPDF / OpenXml)
+                                                                              (print HTML / OpenXml)
 ```
 
 Two rules keep this from rotting the way it did before:
@@ -50,7 +52,7 @@ never a silent gap: a document that looks complete while missing a section its a
 worse than one that says so. One unresolvable area never fails the export.
 
 Note on images: the content-fidelity renderers draw **no** images at all (both emit bracketed alt
-text — `Pdf/PdfDocumentRenderer` and `Docx/DocxDocumentRenderer`), so an area's pictures do not
+text — `Pdf/DocumentPrintComposer` and `Docx/DocxDocumentRenderer`), so an area's pictures do not
 appear in PDF/DOCX. Links do survive, absolutised against the portal's base URL so they still work
 once the file is mailed on. The pixel path *does* render images, and inlines them as `data:` URIs
 via `SlideAssetInliner` because its print document is loaded from `file://` under a restrictive CSP.

@@ -56,9 +56,6 @@ public static class MarkdownExportExtensions
         Action<MarkdownExportConfig>? configure = null)
         where TBuilder : MeshBuilder
     {
-        // Accept QuestPDF's Community License once per process. Safe to call repeatedly.
-        QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
-
         var cfg = new MarkdownExportConfig();
         configure?.Invoke(cfg);
 
@@ -85,11 +82,14 @@ public static class MarkdownExportExtensions
         builder.ConfigureServices(services => services
             .AddSingleton(cfg)
             .AddSingleton(cfg.PixelRendering)
-            // Pixel-faithful renderer: a mesh-scoped singleton so its promise-cached browser probe
-            // lives (and dies) with the mesh — never static, never bleeding across test meshes.
-            // Registering it costs nothing when no browser is installed: Probe() then emits null
-            // and the fidelity option is simply not offered.
+            // The browser leaf: a mesh-scoped singleton so its promise-cached probe lives (and
+            // dies) with the mesh — never static, never bleeding across test meshes. Since #1230
+            // it backs BOTH fidelities: the content-faithful PDF prints a composed document with
+            // it, and the pixel-faithful deck export prints the live stage with it.
             .AddSingleton<Pixel.IPixelPdfRenderer, Pixel.HeadlessChromiumPdfRenderer>()
+            // The content-faithful PDF renderer is a thin, stateless composition over that leaf;
+            // registering it keeps the export script free of construction details.
+            .AddSingleton<Pdf.PdfDocumentRenderer>()
             .AddTransient<ExportTemplateResolver>()
             .AddTransient<BrandingResolver>()
             // Make this assembly visible to kernel scripts. Without this the

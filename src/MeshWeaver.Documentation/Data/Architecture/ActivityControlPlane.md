@@ -554,7 +554,10 @@ var branding = await Mesh.GetWorkspace()
 
 Log.LogInformation("Rendering");
 var doc   = new DocumentBuilder().Build(src!.Name, [(src.Name, md)], inputs.Options, branding);
-var bytes = new PdfDocumentRenderer().Render(doc);
+// The PDF renderer composes the document into print HTML and prints it with the headless
+// browser, so it returns a COLD IObservable<byte[]> — the work runs on subscription.
+var bytes = await Mesh.ServiceProvider.GetRequiredService<PdfDocumentRenderer>()
+    .Render(doc).FirstAsync().ToTask(Ct);
 
 Log.LogInformation("Writing {Bytes} bytes to content collection", bytes.Length);
 var outputPath = $"{inputs.TargetCollection}/{Sanitize(src.Name)}.pdf";
@@ -563,7 +566,7 @@ var outputPath = $"{inputs.TargetCollection}/{Sanitize(src.Name)}.pdf";
 return new ExportOutput(outputPath, "application/pdf", bytes.Length);
 ```
 
-The script uses the public renderer types directly (`PdfDocumentRenderer`, `DocumentBuilder`) — no service layer in the middle. The kernel exposes `Mesh`, `Log`, `Ct` globals; that plus the public types is enough.
+The script uses the public renderer types directly (`PdfDocumentRenderer`, `DocumentBuilder`) — no service layer in the middle. `PdfDocumentRenderer` is resolved from DI because it wraps the browser leaf; `DocumentBuilder` is a plain `new`. The kernel exposes `Mesh`, `Log`, `Ct` globals; that plus the public types is enough.
 
 #### 2. The form layout area — bind the inputs DIRECTLY to the node
 

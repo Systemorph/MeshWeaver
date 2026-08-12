@@ -5,7 +5,6 @@
 
   <ItemGroup>
     <PackageReference Include="Markdig" />
-    <PackageReference Include="QuestPDF" />
     <PackageReference Include="DocumentFormat.OpenXml" />
     <!-- Email export walks the rendered markdown DOM to substitute layout-area placeholders and
          to strip what mail clients cannot render. Same parser the Blazor MarkdownHtmlRenderer
@@ -26,6 +25,11 @@
     <EmbeddedResource Include="Pixel\SlidePrint.html" />
     <EmbeddedResource Include="Pixel\SlidePrint.css" />
     <EmbeddedResource Include="Pixel\SlidePrintSection.html" />
+
+    <!-- Content-faithful PDF print templates. Same convention: the page furniture (cover, TOC,
+         running header/footer, page-break rules) is CSS Paged Media in a real stylesheet. -->
+    <EmbeddedResource Include="Pdf\DocumentPrint.html" />
+    <EmbeddedResource Include="Pdf\DocumentPrint.css" />
   </ItemGroup>
 
   <ItemGroup>

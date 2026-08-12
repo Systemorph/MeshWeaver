@@ -1,0 +1,366 @@
+/* Stylesheet for the content-faithful PDF print document.
+ *
+ * This is the whole of the page furniture the export promises — cover page, table of
+ * contents, running header, running footer with page numbers, and the page-break rules.
+ * It replaces a document-model renderer, so every rule below is a parity requirement, not
+ * decoration. (Never spell a placeholder token in a comment: substitution is a plain string
+ * replace and would fill the comment too.)
+ *
+ * Everything dynamic arrives already escaped by DocumentPrintComposer: strings as CSS string
+ * literals, colours only after they matched a strict colour pattern. Branding text is authored
+ * in a mesh node, so it is untrusted input landing inside a <style> element — see
+ * DocumentPrintComposer.CssString.
+ */
+
+/* ── Page geometry ─────────────────────────────────────────────────────────────────────
+ * A4, portrait or landscape, 2cm margins — the same box QuestPDF used, so an existing
+ * export keeps its proportions. */
+@page {
+    size: {{PAGE_SIZE}};
+    margin: 2cm;
+}
+
+/* The cover carries no running header, no footer and no page number.
+ *
+ * 🚨 It is a NAMED page, not `@page :first`, and the difference is load-bearing: with the
+ * cover switched off, page one is the table of contents, which DOES carry the header and
+ * footer. Keying the bare page on "is the cover" rather than "is first" keeps those two
+ * option combinations independent. */
+@page mw-cover {
+    margin: 2cm;
+}
+
+/* Every other page: the running header and footer live in @page margin boxes.
+ *
+ * Chromium implements margin boxes and the `page`/`pages` counters (verified against the
+ * browser this image ships). It does NOT implement `target-counter`, which is why the
+ * contents list carries links rather than page numbers — see the doc page. */
+@page mw-doc {
+    margin: 2cm;
+
+    /* 🚨 The whole header is ONE margin box, and that is deliberate.
+     *
+     * The obvious shape — text in @top-left, logo in @top-right — was tried and LOOKS WRONG:
+     * the boxes of the top row size to their content instead of tiling the row, so the rule
+     * beneath them prints as two disconnected line segments with a gap in the middle. A
+     * single full-width box gives one continuous rule, which is what the document model drew.
+     *
+     * The logo rides in as a BACKGROUND rather than `content: url(...)`. Replaced content in
+     * a margin box takes its intrinsic size and is then clipped, so a 900px-wide brand logo
+     * would print as a 900px-wide fragment of itself; `background-size: contain` fits the
+     * artwork to the band for any source size and works the same for raster or SVG.
+     * `print-color-adjust` is repeated here because a margin box does not inherit it from the
+     * body, and without it Chromium drops the paint entirely. */
+    @top-center {
+        content: {{HEADER_TEXT}};
+        width: 100%;
+        height: 1.2cm;
+        text-align: left;
+        vertical-align: bottom;
+        font-size: 9pt;
+        color: {{ACCENT}};
+        padding-bottom: 3pt;
+        border-bottom: {{HEADER_RULE}};
+        background-image: {{HEADER_LOGO}};
+        /* An explicit HEIGHT cap, not `contain`. `contain` fits the artwork to the
+         * positioning area, and the positioning area of a full-width box is the whole page
+         * width — so a wide logo printed four centimetres across and dwarfed the header. A
+         * height cap keeps the badge proportionate to the band whatever the source size and
+         * aspect ratio, which is what the 2cm slot in the document model amounted to. */
+        background-size: auto 0.8cm;
+        background-repeat: no-repeat;
+        background-position: right bottom;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    /* The footer is two boxes and needs no rule, so the tiling problem above does not arise:
+     * brand text hugs the left edge, the page number the right. */
+    @bottom-left {
+        content: {{FOOTER_TEXT}};
+        font-size: 9pt;
+        color: {{ACCENT}};
+        vertical-align: top;
+    }
+    /* Page numbering is entirely static CSS — no interpolation, nothing to escape. */
+    @bottom-right {
+        content: counter(page) " / " counter(pages);
+        font-size: 9pt;
+        vertical-align: top;
+    }
+}
+
+/* ── Document body ─────────────────────────────────────────────────────────────────── */
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    page: mw-doc;
+    /* 🚨 The concrete families come BEFORE the generics, and that ordering is load-bearing.
+     * On the portal image the generic `sans-serif` / `system-ui` resolve to a CJK font that
+     * has no bold face, so a chain led by `system-ui` matched it and printed every heading,
+     * table header and **bold** run at regular weight — silently. Naming Liberation Sans
+     * (which has the full weight range) first fixes it wherever this prints, independently of
+     * the host's fontconfig; the generics stay at the end so per-glyph fallback still reaches
+     * a CJK face for characters Liberation does not carry. */
+    font-family: {{FONT_FAMILY}}, "Segoe UI", "Liberation Sans", "DejaVu Sans", Arial, Helvetica, sans-serif;
+    font-size: 11pt;
+    line-height: 1.45;
+    color: #111827;
+    /* Same reason as the deck print: Chromium drops background paints unless colour
+     * adjustment is forced to exact, and code blocks, table headers and callouts are all
+     * carried by their background. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    orphans: 2;
+    widows: 2;
+}
+
+/* ── Cover page ────────────────────────────────────────────────────────────────────── */
+
+.mw-cover {
+    page: mw-cover;
+    break-after: page;
+    text-align: center;
+    padding-top: 3cm;
+}
+
+.mw-cover-logo {
+    display: block;
+    margin: 0 auto 20pt auto;
+    max-height: 3cm;
+    max-width: 100%;
+}
+
+.mw-cover-title {
+    font-size: 28pt;
+    font-weight: 700;
+    color: {{PRIMARY}};
+    margin: 0 0 20pt 0;
+}
+
+.mw-cover-tagline {
+    font-size: 14pt;
+    color: {{ACCENT}};
+    margin: 0 0 20pt 0;
+}
+
+.mw-cover-rule {
+    border: none;
+    border-top: 1px solid {{ACCENT}};
+    margin: 2cm 0 20pt 0;
+}
+
+.mw-cover-name {
+    font-size: 12pt;
+    margin: 0 0 20pt 0;
+}
+
+.mw-cover-website,
+.mw-cover-date {
+    font-size: 10pt;
+    margin: 0 0 20pt 0;
+}
+
+/* ── Table of contents ─────────────────────────────────────────────────────────────── */
+
+.mw-toc {
+    break-after: page;
+}
+
+.mw-toc-title {
+    font-size: 20pt;
+    font-weight: 700;
+    color: {{PRIMARY}};
+    margin: 0 0 10pt 0;
+}
+
+.mw-toc-entry {
+    margin: 0;
+}
+
+.mw-toc-entry a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.mw-toc-1 { font-size: 12pt; font-weight: 700; padding-left: 0; }
+.mw-toc-2 { font-size: 11pt; padding-left: 15pt; }
+.mw-toc-3 { font-size: 11pt; padding-left: 30pt; }
+.mw-toc-4 { font-size: 11pt; padding-left: 45pt; }
+.mw-toc-5 { font-size: 11pt; padding-left: 60pt; }
+.mw-toc-6 { font-size: 11pt; padding-left: 75pt; }
+
+/* ── Page breaks ───────────────────────────────────────────────────────────────────── */
+
+/* The document model's explicit break marker. `break-before` rather than `break-after`
+ * so a break emitted at the very start of the document is dropped by the fragmenter
+ * instead of producing a leading blank page. */
+.mw-page-break {
+    break-before: page;
+    height: 0;
+}
+
+/* A heading stranded at the foot of a page with its section overleaf is the artefact a
+ * document model never produces, so it must not appear here either. */
+h1, h2, h3, h4, h5, h6 {
+    break-after: avoid;
+    color: {{PRIMARY}};
+    margin: 0 0 8pt 0;
+}
+
+h1 { font-size: 22pt; }
+h2 { font-size: 18pt; }
+h3 { font-size: 14pt; }
+h4 { font-size: 12pt; }
+h5, h6 { font-size: 11pt; }
+
+.mw-chapter {
+    font-size: 20pt;
+    font-weight: 700;
+    color: {{PRIMARY}};
+    break-after: avoid;
+    margin: 0 0 8pt 0;
+}
+
+/* ── Blocks ────────────────────────────────────────────────────────────────────────── */
+
+p, ul, ol, blockquote, pre, table, figure, aside, hr {
+    margin: 0 0 8pt 0;
+}
+
+pre {
+    background: #f3f4f6;
+    padding: 8pt;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+    font-size: 9pt;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+code {
+    font-family: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+    background: #f3f4f6;
+}
+
+pre code {
+    background: none;
+}
+
+blockquote {
+    border-left: 3px solid {{ACCENT}};
+    padding-left: 10pt;
+    margin-left: 0;
+}
+
+hr {
+    border: none;
+    border-top: 0.75pt solid #e5e7eb;
+    margin: 6pt 0;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+/* A table that spans pages repeats its header row — the document model could not, and a
+ * headerless continuation is unreadable. */
+thead {
+    display: table-header-group;
+}
+
+th, td {
+    border: 0.5pt solid #e5e7eb;
+    padding: 4pt;
+    font-size: 10pt;
+    text-align: left;
+    vertical-align: top;
+}
+
+th {
+    background: #f9fafb;
+    font-weight: 700;
+}
+
+ul, ol {
+    padding-left: 20pt;
+}
+
+li {
+    margin: 0 0 2pt 0;
+}
+
+li > p {
+    margin: 0;
+}
+
+figure {
+    margin: 0 0 8pt 0;
+    text-align: center;
+    break-inside: avoid;
+}
+
+figure svg {
+    max-height: 10cm;
+    max-width: 100%;
+}
+
+/* Rendered client-side and pasted in verbatim; keep it from overflowing the page box. */
+.mw-math svg {
+    max-width: 100%;
+}
+
+.mw-mermaid-fallback {
+    background: #fef3c7;
+    padding: 8pt;
+}
+
+.mw-math-fallback {
+    background: #eef2ff;
+    padding: 8pt;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+    font-size: 10pt;
+    white-space: pre-wrap;
+}
+
+.mw-fallback-note {
+    font-style: italic;
+    font-size: 9pt;
+    margin: 0 0 4pt 0;
+}
+
+/* A block image the export could not embed. The document model printed the alt text here
+ * too — this is deliberately not an <img>, because the print document's CSP allows only
+ * already-inlined data: URIs and a linked image would print as a silent blank. */
+.mw-image-fallback {
+    font-style: italic;
+    color: #6b7280;
+}
+
+aside.mw-annotation {
+    background: #fff7ed;
+    border-left: 3px solid #f59e0b;
+    padding: 8pt;
+    break-inside: avoid;
+}
+
+.mw-annotation-label {
+    font-size: 9pt;
+    font-style: italic;
+    color: #92400e;
+    margin: 0 0 4pt 0;
+}
+
+.mw-annotation-text {
+    font-size: 10pt;
+    margin: 0;
+}
+
+a {
+    color: inherit;
+}

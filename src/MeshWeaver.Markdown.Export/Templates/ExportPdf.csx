@@ -263,7 +263,14 @@ var resolvedAreas = await DocumentAreaResolution
 Log.LogInformation("Rendering PDF");
 var document = new DocumentBuilder(sourcePath, resolvedAreas)
     .Build(title, chapters, effectiveOptions, branding);
-var bytes = new PdfDocumentRenderer().Render(document);
+// The content-faithful renderer composes the document model into print HTML and prints it with
+// the same headless browser the pixel path uses (#1230 replaced the QuestPDF document model).
+// Cold observable — the work happens on subscription, which is what awaiting the first emission
+// does here; the browser itself runs on the Process I/O pool, never on this thread's scheduler.
+var bytes = await Mesh.ServiceProvider.GetRequiredService<PdfDocumentRenderer>()
+    .Render(document)
+    .FirstAsync()
+    .ToTask(Ct);
 Log.LogInformation("Rendered {Bytes} bytes", bytes.Length);
 
 return new RenderedDocument(

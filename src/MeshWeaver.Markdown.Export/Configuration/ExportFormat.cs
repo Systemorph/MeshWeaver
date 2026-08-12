@@ -5,7 +5,7 @@ namespace MeshWeaver.Markdown.Export.Configuration;
 /// </summary>
 public enum ExportFormat
 {
-    /// <summary>PDF via QuestPDF.</summary>
+    /// <summary>PDF, printed from CSS Paged Media by the headless browser.</summary>
     Pdf,
 
     /// <summary>Microsoft Word .docx via DocumentFormat.OpenXml.</summary>

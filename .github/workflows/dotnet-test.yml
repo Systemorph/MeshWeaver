@@ -494,6 +494,56 @@ jobs:
           fi
         done
         exit $rc
+    # ── Acquire the headless browser BEFORE the tests, as infrastructure ──────
+    # 🚨 Since #1230 the PDF export IS a headless browser: the document model was replaced
+    # by CSS Paged Media printed by Chromium, so every PDF test — the renderer's own, and the
+    # export-script round trips in the Monolith / Orleans / Security suites — needs one. This
+    # step provisions the EXACT build the portal image ships (same Playwright version, same
+    # `--only-shell` Chromium), so CI cannot pass on a browser production does not have, nor
+    # fail on one it does.
+    #
+    # Same reasoning as the Testcontainers pre-pull above: making the dependency explicit
+    # means a CDN blip fails HERE with an unambiguous infra error instead of surfacing as a
+    # pile of plausible-looking PDF test failures. NO `continue-on-error` and no
+    # input-shaped `if:` — a browser this step failed to install must redden the shard, not
+    # silently leave the tests asserting the "no browser here" branch and calling it green.
+    #
+    # Keep PLAYWRIGHT_VERSION in step with deploy/base-images/portal-ai/Dockerfile.
+    - name: "Provision the headless browser (infra, not a test)"
+      env:
+        PLAYWRIGHT_VERSION: 1.62.1
+        PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
+      run: |
+        set -euo pipefail
+        sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+        sudo chown "$(id -u):$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
+        ok=0
+        for attempt in 1 2 3; do
+          if npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium; then
+            ok=1; break
+          fi
+          delay=$((10 * attempt))
+          echo "browser install attempt $attempt failed; retrying in ${delay}s" >&2
+          sleep $delay
+        done
+        if [ $ok -eq 0 ]; then
+          echo "::error::could not install the headless browser after 3 attempts — this is an INFRA failure, not a test failure."
+          exit 1
+        fi
+        # The binary is named differently per platform (see the Dockerfile); match both so this
+        # keeps working if the runner architecture ever changes.
+        BROWSER="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f \
+          \( -name headless_shell -o -name chrome-headless-shell \) | head -n 1)"
+        if [ -z "$BROWSER" ]; then
+          echo "::error::the browser installed but no headless-shell binary was found under $PLAYWRIGHT_BROWSERS_PATH"
+          find "$PLAYWRIGHT_BROWSERS_PATH" -maxdepth 3
+          exit 1
+        fi
+        "$BROWSER" --version
+        # First entry in PixelRenderingOptions.EnvironmentVariables, so the renderer's probe
+        # resolves this exact binary rather than whatever browser the runner image happens to
+        # carry.
+        echo "MESHWEAVER_CHROMIUM_PATH=$BROWSER" >> "$GITHUB_ENV"
     - name: Run Tests
       env:
         # The runner VM is destroyed after the job, so Testcontainers' resource

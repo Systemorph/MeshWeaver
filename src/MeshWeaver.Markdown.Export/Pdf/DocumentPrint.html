@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!-- Print document skeleton for the content-faithful PDF export.
+     DocumentPrintComposer fills the placeholders below: the title (HTML-encoded), the
+     stylesheet (DocumentPrint.css with its branding values resolved), the optional cover
+     page, the optional table of contents, and the document body. The document is
+     self-contained by construction — the headless browser prints it from a file:// URL
+     with no network.
+     NB: never spell a placeholder token inside a comment — substitution is a plain string
+     replace and would fill the comment too. -->
+<html lang="en">
+<head>
+    <!-- 🚨 SECURITY: this document is printed by a browser running INSIDE the server's trust
+         boundary — it can reach internal services and cloud metadata endpoints the document's
+         author never could, and can read local files over file:. Almost everything here comes
+         from the typed document model and is HTML-encoded, but two things are not: the client-
+         captured Mermaid / MathJax SVG, which is pasted in verbatim so it can render at all.
+         'none' by default; the only subresources this document legitimately needs are assets
+         already inlined as data: URIs (the brand logo) plus the inline stylesheet. Scripts,
+         connections, frames, objects and every remote or file: origin are denied. Must stay the
+         FIRST element in <head> — a policy declared after content does not govern it. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'" />
+    <meta charset="utf-8" />
+    <title>{{TITLE}}</title>
+    <style>
+{{STYLES}}
+    </style>
+</head>
+<body>
+{{COVER}}
+{{TOC}}
+<main>
+{{BODY}}
+</main>
+</body>
+</html>
