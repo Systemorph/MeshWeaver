@@ -4,113 +4,33 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Mesh;
 
 /// <summary>
-/// Bad-data-tolerant reads of <see cref="MeshNode.Content"/>. The polymorphic
-/// converter degrades an unknown/incompatible <c>$type</c> to a raw
-/// <see cref="JsonElement"/> instead of throwing; this recovers it into the known
-/// target type at the read site (a stale <c>$type</c> is just an ignored member).
+/// Bad-data-tolerant reads of <see cref="MeshNode.Content"/> — <see cref="ObjectAsExtensions.As{T}"/>
+/// with the node's path in the diagnostics. <b>This is THE way to read a node's content as a typed
+/// instance; <c>node.Content is T</c> / <c>as T</c> is the trap-door</b> and yields a silent
+/// <c>null</c> whenever the content arrives as untyped JSON, as the as-written DOM, or typed by a
+/// different build of the same record. See <see cref="ObjectAsExtensions"/> for why each of those
+/// happens in a running mesh, and for the rule that comes first: read where the type is registered
+/// — usually by letting the owning hub handle it.
 /// </summary>
 public static class MeshNodeContentExtensions
 {
     /// <summary>
     /// Content as <typeparamref name="T"/>: already-typed → as-is; a degraded
-    /// <see cref="JsonElement"/> → deserialized into <typeparamref name="T"/>;
-    /// typed with a SAME-NAMED but different CLR type (the same class compiled
-    /// into two dynamic node assemblies, or resolved by another hub's registry at
-    /// the query boundary) → recovered by a JSON round-trip; typed with a
-    /// DIFFERENTLY-named type → <c>null</c> (call sites probe-dispatch on that);
-    /// otherwise <c>null</c> (logged loud — never silently swallowed).
+    /// <see cref="JsonElement"/> or <c>JsonNode</c> → deserialized into <typeparamref name="T"/>;
+    /// typed with a SAME-NAMED but different CLR type (the same class compiled into two dynamic
+    /// node assemblies, or resolved by another hub's registry at the query boundary) → recovered by
+    /// a JSON round-trip; typed with a DIFFERENTLY-named type → <c>null</c> (call sites
+    /// probe-dispatch on that); otherwise <c>null</c> (logged loud — never silently swallowed).
     /// </summary>
+    /// <param name="node">The node whose content to read.</param>
+    /// <param name="options">The owning hub's <c>JsonSerializerOptions</c> — the registry behind
+    /// them is what resolves the content's <c>$type</c>.</param>
+    /// <param name="logger">Optional; without it an unconvertible value still returns null, just
+    /// without the diagnosis.</param>
     public static T? ContentAs<T>(this MeshNode? node, JsonSerializerOptions options, ILogger? logger = null)
         where T : class
-    {
-        switch (node?.Content)
-        {
-            case null:
-                return null;
-            case T typed:
-                return typed;
-            case JsonElement je:
-                try
-                {
-                    return je.Deserialize<T>(options);
-                }
-                catch (JsonException ex)
-                {
-                    // Don't rethrow (a throw on read faults the node), don't swallow:
-                    // log loud with the path + raw JSON so the corruption is visible.
-                    logger?.LogError(ex,
-                        "ContentAs<{TargetType}> could not recover Content for {Path}: {RawJson}",
-                        typeof(T).Name, node.Path, je.GetRawText());
-                    return null;
-                }
-            case System.Text.Json.Nodes.JsonNode jn:
-                // The DOM twin of the JsonElement case. Node builders assign JsonObject content,
-                // and a freshly created node's own stream carries it in that shape until the
-                // materialization pipeline re-types it — falling through to the same-short-name
-                // branch below returned a SILENT null for it ("JsonObject" never matches T), the
-                // exact shape-blindness this accessor exists to prevent (found 2026-08-02: the
-                // compile-state mirror projected nothing for every just-created NodeType node).
-                try
-                {
-                    return jn.Deserialize<T>(options);
-                }
-                catch (JsonException ex)
-                {
-                    logger?.LogError(ex,
-                        "ContentAs<{TargetType}> could not recover Content for {Path}: {RawJson}",
-                        typeof(T).Name, node.Path, jn.ToJsonString());
-                    return null;
-                }
-            default:
-                // Content is a typed object, but not OUR T. Recover ONLY when the runtime type has the
-                // SAME short name as T: the same class compiled into a different dynamic node assembly
-                // (@@-included copies), or a same-short-named type another hub's registry resolved when
-                // the node crossed the query/message boundary. The silent null here was the prod
-                // "BalanceSheet dashboards render empty" outage (agentic-pensions#12): 200 fact nodes
-                // arrived typed with the fact NodeType's own assembly and the dashboard's loader
-                // dropped every one.
-                //
-                // A DIFFERENTLY-named type must stay null: call sites probe-dispatch on it — e.g. the
-                // token validator's `ContentAs<ApiTokenIndex>() ?? treat node as the token itself`.
-                // Shape-recovering ApiToken→ApiTokenIndex there (both carry TokenHash) yields a
-                // half-populated index with a null TokenPath and every login fails "Token not found"
-                // (the McpAccessControlTests regression that reverted the first cut of this recovery).
-                if (node.Content.GetType().Name == typeof(T).Name)
-                {
-                    try
-                    {
-                        // Serialize AS the concrete runtime type: the object-declared path would route
-                        // through ObjectPolymorphicConverter.GetTypeName → an UNGUARDED GetOrAddType that
-                        // adopts the foreign type into the caller's registry as a read side effect. The
-                        // concrete-type path goes through PolymorphicTypeInfoResolver, whose collectible-
-                        // assembly guard formats the discriminator WITHOUT registering.
-                        var element = JsonSerializer.SerializeToElement(node.Content, node.Content.GetType(), options);
-                        var recovered = element.Deserialize<T>(options);
-                        if (recovered is not null)
-                        {
-                            // Debug, not Warning: this fires per node per read on the cross-assembly path
-                            // (a healthy, recoverable shape) — Warning would storm at snapshot size × emission.
-                            logger?.LogDebug(
-                                "ContentAs<{TargetType}> for {Path}: recovered Content typed as foreign {ActualType} "
-                                + "({ActualAssembly}) via JSON round-trip",
-                                typeof(T).Name, node.Path, node.Content.GetType().Name,
-                                node.Content.GetType().Assembly.GetName().Name);
-                            return recovered;
-                        }
-                    }
-                    catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
-                    {
-                        // fall through to the loud log below
-                    }
-                }
-                // Assembly-qualified on purpose: dynamic node assemblies compile without namespaces,
-                // so the bare type name is identical on BOTH sides of a cross-assembly mismatch —
-                // only the assembly identity makes this diagnosable.
-                logger?.LogError(
-                    "ContentAs<{TargetType}> for {Path}: Content is {ActualType} ({ActualAssembly}), not convertible",
-                    typeof(T).Name, node.Path, node.Content.GetType().FullName,
-                    node.Content.GetType().Assembly.GetName().Name);
-                return null;
-        }
-    }
+        // Node path as the log subject: a dynamic node assembly compiles without a namespace, so
+        // the bare type name is identical on both sides of a cross-assembly mismatch and the path
+        // is the only thing that says WHICH node degraded.
+        => node?.Content.As<T>(options, logger, node.Path);
 }

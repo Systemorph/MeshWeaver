@@ -213,6 +213,12 @@ public class SearchResultStormTest(ITestOutputHelper output) : MonolithMeshTestB
     /// as <c>Removed</c> — a phantom row that flashes into a live search grid, and two re-renders of
     /// the whole result list that nothing in the result set justifies.</para>
     ///
+    /// <para>#1193 made that supplement apply the snapshot's exclusions; #1250 deleted the
+    /// supplement outright, once the same shape turned out to bypass row-level security as well
+    /// (<c>Matches</c> performs no permission check) and to cover no real write lag. The invariant
+    /// this test pins is unchanged — it is now held by construction, because the re-query is the
+    /// live path's only source of rows.</para>
+    ///
     /// <para>The storm test hit it because a <c>MonotonicWriteGuard</c> resolution writes a
     /// <c>{path}/_Activity/write-conflict-{n}</c> satellite, and whether the 25-update storm produced
     /// a conflict at all was timing. This test does not race anything: it WRITES the satellite
