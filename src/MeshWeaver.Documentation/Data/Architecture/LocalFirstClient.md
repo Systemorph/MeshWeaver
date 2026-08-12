@@ -45,7 +45,7 @@ var hub = sp.GetRequiredService<IMessageHub>();
 
 // One device-user identity for every operation (PostPipeline fails closed without a context).
 hub.ServiceProvider.GetRequiredService<AccessService>()
-    .SetCircuitContext(new AccessContext { ObjectId = "device-user", Name = "Device User" });
+    .SetHostIdentity(new AccessContext { ObjectId = "device-user", Name = "Device User" });
 ```
 
 - **`CreateMeshWeaverServiceProvider()`**, never `BuildServiceProvider()` — it runs the MeshWeaver module setup.
@@ -95,7 +95,7 @@ The MAUI client renders layout-area control trees with the **native view pack** 
 
 Application writes from the client (a button click, a chat submit) run **off** a hub-handler turn, so `AccessService.Context` (the request-scoped AsyncLocal) is null on that thread. The client still attributes every write to the device user because:
 
-- `MauiProgram` calls `accessService.SetCircuitContext(deviceUser)` once at boot. `SetCircuitContext` also writes the **non-AsyncLocal** `persistentCircuitContext` fallback, so `AccessService.CircuitContext` returns the device user on *every* thread/await — there is no Blazor circuit to set the AsyncLocal per inbound activity.
+- `MauiProgram` calls `accessService.SetHostIdentity(deviceUser)` once at boot. `SetHostIdentity` records the **non-AsyncLocal** standing identity of a single-identity host, so `AccessService.CircuitContext` returns the device user on *every* thread/await — there is no Blazor circuit to set the AsyncLocal per inbound activity. 🚨 This API is for processes that serve exactly ONE user (the device client, the xUnit host); a multi-user server must never call it, because the value is process-wide and would hand one user's identity to every other user's context-less read.
 - Every framework write primitive (`IMeshService.CreateNode`, `MeshNodeStreamHandle.Update`, and therefore `hub.SubmitMessage`/`StartThread`) wraps its cold observable with `CarryAccessContext`, which captures `Context ?? CircuitContext` eagerly and re-stamps it on each emission (see [Access Context Propagation](/Doc/Architecture/AccessContextPropagation)). On the client that capture resolves to the device user via the `CircuitContext` fallback.
 
 **The rule:** submit through the framework primitives (`hub.SubmitMessage` / `StartThread` / `stream.Update`) — never a bespoke `hub.Post`/wire message from UI code. A bespoke post off a UI thread has no ambient context and is **failed closed** by the PostPipeline (no identity, no delivery). The native Monaco chat composer reads its text via the WebView and forwards through `hub.SubmitMessage`, so the user's identity rides along.

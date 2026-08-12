@@ -91,8 +91,8 @@ public class ActivityOwnerCredentialTest(ITestOutputHelper output) : MonolithMes
         // 🚨 Drop the DevLogin persistent circuit fallback so it cannot mask the
         // defect: identity now flows ONLY through the per-delivery AsyncLocal,
         // exactly as it does on a production background hub thread.
-        accessService.ClearPersistentCircuitContext();
-        accessService.SetCircuitContext(null);
+        accessService.ClearHostIdentity();
+        accessService.SetHostIdentity(null);
         accessService.SetContext(new AccessContext { ObjectId = Owner, Name = Owner });
 
         string? activityPath = null;
@@ -150,8 +150,8 @@ public class ActivityOwnerCredentialTest(ITestOutputHelper output) : MonolithMes
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var workspace = Mesh.GetWorkspace();
-        accessService.ClearPersistentCircuitContext();
-        accessService.SetCircuitContext(null);
+        accessService.ClearHostIdentity();
+        accessService.SetHostIdentity(null);
 
         // Owner creates an activity node under the partition.
         var id = $"rls-{Guid.NewGuid():N}"[..12];

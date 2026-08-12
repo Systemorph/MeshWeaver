@@ -65,7 +65,7 @@ public class PermissionFoldUnavailableTest(ITestOutputHelper output) : MonolithM
     {
         var client = GetClient();
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "Entitled", Name = "Entitled" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "Entitled", Name = "Entitled" });
 
         // GetDataRequest carries [RequiresPermission(Permission.Read)], so it goes through the fold.
         Func<Task> act = () => client
@@ -99,7 +99,7 @@ public class PermissionFoldUnavailableTest(ITestOutputHelper output) : MonolithM
         // which is a far worse bug than the one being fixed.
         var client = GetClient();
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "Entitled", Name = "Entitled" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "Entitled", Name = "Entitled" });
 
         Func<Task> act = () => client
             .Observe(new GetDataRequest(new UnifiedReference("data:")),
@@ -134,7 +134,7 @@ public class PermissionFoldDenialStillDeniesTest(ITestOutputHelper output) : Mon
     {
         var client = GetClient();
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "NoAccess", Name = "NoAccess" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "NoAccess", Name = "NoAccess" });
 
         Func<Task> act = () => client
             .Observe(new GetDataRequest(new UnifiedReference("data:")),
@@ -276,7 +276,7 @@ public class PermissionCheckShortCircuitTest(ITestOutputHelper output) : Monolit
     {
         var client = GetClient();
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext { ObjectId = "Entitled", Name = "Entitled" });
+        accessService.SetHostIdentity(new AccessContext { ObjectId = "Entitled", Name = "Entitled" });
         var target = new Address(NodePath);
 
         // 1. Decisive check FIRST. It faults ⇒ Undetermined ⇒ the delivery is refused as Unavailable.

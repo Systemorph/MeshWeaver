@@ -93,7 +93,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         response!.Success.Should().BeTrue("token should be valid, got error: {0}", response.Error ?? "");
 
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
+        accessService.SetHostIdentity(new AccessContext
         {
             ObjectId = response.UserId ?? response.UserEmail!,
             Name = response.UserName ?? "",
@@ -182,7 +182,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         // AccessAssignment writes so the seeds run as the DevLogin admin
         // (who has Create permission everywhere) rather than as anonymous
         // (who fails the AccessAssignment Create access check).
-        accessService.SetCircuitContext(null);
+        accessService.SetHostIdentity(null);
 
         // Wait for the runtime AccessAssignments AND the BreaksInheritance
         // policy on SharedOrg/Confidential to propagate through the synced
