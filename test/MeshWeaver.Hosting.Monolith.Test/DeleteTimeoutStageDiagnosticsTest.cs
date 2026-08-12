@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 ///
 /// <para>memex-cloud logged exactly one line for a delete that never finished:
 /// <c>[DeleteNode] timeout path=KmuBasics/Buchungsjournal partial-deleted=0</c>. That line names
-/// the KIND of failure and nothing else, and the delete pipeline bounds FIVE independent stages
+/// the KIND of failure and nothing else, and the delete pipeline bounds SIX independent stages
 /// with the same <see cref="MeshOperationOptions.Timeout"/> — so it could equally have been the
 /// root read, the permission fold, the root validators, the storage enumeration, the pre-flight
 /// descendant fan-out, or the commit. Worse, <c>partial-deleted=0</c> was not evidence of
@@ -76,7 +76,7 @@ public class DeleteTimeoutStageDiagnosticsTest(ITestOutputHelper output) : Monol
 
         response.Success.Should().BeFalse("the silent descendant never answered the pre-flight");
         response.Error.Should().Contain("pre-validate-descendants",
-            "the failure must name WHICH of the pipeline's five bounded stages ran out of time — "
+            "the failure must name WHICH of the pipeline's six bounded stages ran out of time — "
             + "naming only the kind ('timeout') is what made #1198 unreadable");
         response.Error.Should().Contain(silent,
             "the fan-out waits for every descendant under one budget, so the ONE hub that went "
