@@ -4,6 +4,7 @@
 @using MeshWeaver.Blazor.Components.Monaco
 @using MeshWeaver.Mesh.Services.LanguageServer
 @using System.Text.Json
+@using System.Reactive.Disposables
 @using System.Reactive.Linq
 @using Microsoft.Extensions.Logging
 @using Microsoft.Extensions.DependencyInjection
@@ -29,7 +30,11 @@
 
 @code {
     private MonacoEditorView? editorRef;
-    private List<IDisposable> subscriptions = new();
+    // CompositeDisposable, not List<IDisposable> (#1308): the value binding below is subscribed
+    // to a stream whose emissions arrive off the renderer, so a re-bind or a teardown could be
+    // draining this while an emission registers into it. Add is thread-safe, and an Add after
+    // Dispose releases its argument instead of stranding a live subscription on a dead component.
+    private readonly CompositeDisposable subscriptions = new();
     private bool isUpdatingFromStream = false;
 
     private string BoundValue = "";
@@ -80,19 +85,11 @@
         BindData();
     }
 
-    private void DisposeSubscriptions()
-    {
-        foreach (var sub in subscriptions)
-        {
-            sub.Dispose();
-        }
-        subscriptions.Clear();
-    }
+    // Clear, not Dispose: OnParametersSet re-binds through here, after which the accumulator must
+    // still accept the fresh subscriptions. Dispose() below makes it terminal.
+    private void DisposeSubscriptions() => subscriptions.Clear();
 
-    public void Dispose()
-    {
-        DisposeSubscriptions();
-    }
+    public void Dispose() => subscriptions.Dispose();
 
     private void BindData()
     {
