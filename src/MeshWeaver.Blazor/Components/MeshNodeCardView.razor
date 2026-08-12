@@ -33,6 +33,12 @@ else
 
     private string Initial => !string.IsNullOrEmpty(Title) ? Title[0].ToString().ToUpper() : "?";
 
+    // The card IS the control's box, so the author's Class/Style land here rather than on the <a> that
+    // wraps it for navigation (a transparent display:block pass-through). Composed as single
+    // expressions because a COMPONENT attribute — unlike a plain HTML one — cannot mix markup and C#.
+    private string CardClass => $"mesh-node-card{ClassSuffix}";
+    private string CardStyle => $"cursor: pointer; width: 100%; display: block; box-sizing: border-box;{StyleSuffix}";
+
     /// <summary>
     /// Hard cap on the title so a very long name can never overflow the card (a backstop to the
     /// CSS single-line ellipsis, which can't kick in when a parent doesn't constrain width).
@@ -45,9 +51,23 @@ else
         ? Description[..97] + "..."
         : Description ?? "";
 
-    private LayoutAreaControl GetLayoutArea() =>
-        new LayoutAreaControl(NodePath, new LayoutAreaReference(ItemArea!))
+    /// <summary>
+    /// The embedded-area variant of the card. This branch renders NO element of its own — the area is a
+    /// different control that applies Style/Class to its own container — so the card's declaration is
+    /// FORWARDED to it rather than wrapped around it, the same way <c>PropertyView</c>/<c>EditFormView</c>
+    /// let the terminal view apply them. Forwarded only when actually declared, so an undeclared card
+    /// produces the identical control record as before.
+    /// </summary>
+    private LayoutAreaControl GetLayoutArea()
+    {
+        var area = new LayoutAreaControl(NodePath, new LayoutAreaReference(ItemArea!))
             .WithShowProgress(false);
+        if (!string.IsNullOrWhiteSpace(Style))
+            area = area.WithStyle(Style);
+        if (!string.IsNullOrWhiteSpace(Class))
+            area = area.WithClass(Class);
+        return area;
+    }
 
     private RenderFragment CardContent => __builder =>
     {
@@ -57,7 +77,7 @@ else
         }
         else
         {
-            <FluentCard Class="mesh-node-card" Style="cursor: pointer; width: 100%; display: block; box-sizing: border-box;">
+            <FluentCard Class="@CardClass" Style="@CardStyle">
                 <div class="mesh-node-card-content">
                     @if (!string.IsNullOrEmpty(ImageUrl))
                     {

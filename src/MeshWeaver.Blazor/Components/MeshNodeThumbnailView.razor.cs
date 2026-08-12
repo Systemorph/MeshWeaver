@@ -29,6 +29,12 @@ public partial class MeshNodeThumbnailView
 
     private string Initial => !string.IsNullOrEmpty(Title) ? Title[0].ToString().ToUpper() : "?";
 
+    // The card's Class/Style parameters were hard-coded, which SHADOWED the bound values entirely.
+    // The author's tokens now join / follow them. Composed as single expressions because a COMPONENT
+    // attribute — unlike a plain HTML one — cannot mix markup and C#.
+    private string CardClass => $"mesh-node-thumbnail{ClassSuffix}";
+    private string CardStyle => $"min-width: 320px; cursor: pointer; margin: 8px;{StyleSuffix}";
+
     private string TruncatedDescription => Description?.Length > 120
         ? Description.Substring(0, 117) + "..."
         : Description ?? string.Empty;

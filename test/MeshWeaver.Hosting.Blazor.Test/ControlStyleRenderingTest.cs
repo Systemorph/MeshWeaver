@@ -4,8 +4,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
+using MeshWeaver.Layout.Views;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Routing;
@@ -67,6 +69,20 @@ namespace MeshWeaver.Hosting.Blazor.Test;
 /// <c>CollaborativeMarkdownView</c>, <c>Monaco/DiffEditorView</c>), each verified by falsification.
 /// <c>MeshNodeContentEditorView</c> is not: its first render is a progress ring, and the styled root
 /// appears only once the node's editable fields have loaded from the mesh.</para>
+///
+/// <para><b>#1297 — the "which element" cases.</b> The last seven are the ones where the box was NOT
+/// simply the one root the view already had. <c>MeshNodeCardView</c> renders the card inside a
+/// navigation anchor, so the declaration goes on the CARD (applying it to both would double a declared
+/// margin) — and in the branch where the card delegates to an embedded area it is FORWARDED onto that
+/// area's control rather than wrapped, the way <c>PropertyView</c>/<c>EditFormView</c> already let the
+/// terminal view apply it. <c>MeshNodeThumbnailView</c> and <c>LayoutAreaDefinitionView</c> had literals
+/// SHADOWING the bound values (not merely missing them); <c>NavLink</c>'s <c>Class</c> was OVERWRITTEN by
+/// the active-state token; <c>DialogView</c>'s style slot composes <c>--dialog-*</c> variables from
+/// <c>Size</c>. Five of the seven are rendered here. <c>MeshNodePickerView</c> (a <c>FormComponentBase</c>
+/// that now emits <c>ComputedStyle</c>, so it stops dropping <c>Width</c>/<c>Height</c> too) needs a live
+/// pointer stream, and <c>MeshNodeRoleEditorView</c> renders a progress ring until its role loads.
+/// <c>NamedAreaView</c> — the audit's one "unclear" — is resolved as deliberately N/A; the reasoning
+/// lives in the view itself.</para>
 /// </summary>
 public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -636,6 +652,144 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
         html.Should().Contain($"collab-md-container {ClassValue}",
             because: "the view-mode class is empty in the default mode, so the author's class follows it");
         html.Should().Contain(StyleValue);
+    }
+
+    // ─── #1297: the views with a genuine "WHICH element" question ─────────────────────────────────
+    //
+    // The last of the both-drop bucket, and the only ones where the answer was not "the one root it
+    // already has". Each is decided on its own below; the shared conclusion is that the box is the
+    // element the user perceives as the control, which is not always the outermost element the view
+    // renders — and that where the view has NO element of its own, the declaration is FORWARDED to the
+    // control it delegates to rather than wrapped in a new box.
+
+    /// <summary>
+    /// <c>MeshNodeCardView</c> renders the card inside an <c>&lt;a&gt;</c> that exists only to make it
+    /// navigable (<c>display: block; width: 100%</c> — a transparent pass-through). The CARD is the box
+    /// the user sees and sizes, so that is where the declaration goes; putting it on the anchor as well
+    /// would apply a declared margin twice.
+    /// </summary>
+    [Fact]
+    public async Task MeshNodeCardControl_StyleAndClass_ReachTheCardNotTheAnchor()
+    {
+        var html = await RenderAsync<MeshNodeCardView>(
+            new MeshNodeCardControl("Some/Node", Title: "Node").WithStyle("margin: 12px").WithClass(ClassValue));
+
+        html.Should().Contain($"mesh-node-card {ClassValue}");
+        html.Should().Contain("box-sizing: border-box; margin: 12px",
+            because: "the author's declaration goes last so it wins over the card's own");
+        // Anchored on "color: inherit", which appears ONLY in the anchor's style — the card's own
+        // literal also ends in "box-sizing: border-box;", so a shorter needle would match the card and
+        // the guard could never fail. Verified by temporarily appending StyleSuffix to the anchor:
+        // this assertion fails, the two above still pass.
+        html.Should().NotContain("color: inherit; display: block; width: 100%; box-sizing: border-box; margin: 12px",
+            because: "the navigation anchor must NOT also carry it — that would apply the margin twice");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task MeshNodeCardControl_WithoutStyleOrClass_EmitsTheCardExactlyAsBefore()
+    {
+        var html = await RenderAsync<MeshNodeCardView>(new MeshNodeCardControl("Some/Node", Title: "Node"));
+
+        html.Should().Contain("class=\"mesh-node-card\"");
+        html.Should().Contain("style=\"cursor: pointer; width: 100%; display: block; box-sizing: border-box;\"");
+    }
+
+    /// <summary>
+    /// <c>MeshNodeThumbnailView</c> passed BOTH parameters to its <c>FluentCard</c> — hard-coded. The
+    /// bound values were not merely forgotten, they were shadowed by literals, which is why the audit
+    /// flagged this one as easy to misread as already-correct.
+    /// </summary>
+    [Fact]
+    public async Task MeshNodeThumbnailControl_StyleAndClass_AreNoLongerShadowedByLiterals()
+    {
+        var html = await RenderAsync<MeshNodeThumbnailView>(
+            new MeshNodeThumbnailControl("Some/Node", "Node").WithStyle("min-width: 100px").WithClass(ClassValue));
+
+        html.Should().Contain($"mesh-node-thumbnail {ClassValue}");
+        html.Should().Contain("margin: 8px; min-width: 100px",
+            because: "a declared min-width must override the hard-coded 320px, not lose to it");
+    }
+
+    /// <summary>
+    /// <c>LayoutAreaDefinitionView</c>'s root is the catalog card's anchor: fixed classes, no style
+    /// attribute at all.
+    /// </summary>
+    [Fact]
+    public async Task LayoutAreaDefinitionControl_StyleAndClass_ReachTheCardAnchor()
+    {
+        var html = await RenderAsync<LayoutAreaDefinitionView>(
+            new LayoutAreaDefinitionControl(new LayoutAreaDefinition("Sample", "/Sample"))
+                .WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"card layout-area-card text-decoration-none {ClassValue}\"");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task LayoutAreaDefinitionControl_WithoutStyleOrClass_EmitsTheAnchorExactlyAsBefore()
+    {
+        var html = await RenderAsync<LayoutAreaDefinitionView>(
+            new LayoutAreaDefinitionControl(new LayoutAreaDefinition("Sample", "/Sample")));
+
+        html.Should().Contain("class=\"card layout-area-card text-decoration-none\"");
+        html.Should().NotContain("style=\"\"");
+    }
+
+    /// <summary>
+    /// <c>NavLink</c> is the one case where <c>Class</c> was not forgotten but OVERWRITTEN: the
+    /// nav-menu branch wrote <c>Class="@(IsActive ? "active" : null)"</c>, so the active-state token was
+    /// the whole value. Both tokens are now joined.
+    /// </summary>
+    [Fact]
+    public async Task NavLinkControl_Class_JoinsTheActiveStateToken()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.NavLink>(
+            new NavLinkControl("Home", null, "/").WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain(ClassValue,
+            because: "the declared class was overwritten by the active-state token, not merely dropped");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <summary>
+    /// 🚨 The value must stay <c>null</c>, not <c>""</c>, when there is nothing to say — an inactive,
+    /// unstyled nav link emitted NO class attribute and must keep emitting none.
+    /// </summary>
+    [Fact]
+    public async Task NavLinkControl_WithoutClass_EmitsNoClassAttribute()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.NavLink>(new NavLinkControl("Home", null, "/"));
+
+        html.Should().NotContain("class=\"\"");
+        html.Should().NotContain(ClassValue);
+    }
+
+    /// <summary>
+    /// <c>DialogView</c>'s style slot is not free space: it composes <c>--dialog-width</c> /
+    /// <c>--dialog-height</c> from <c>Size</c>. The author's declaration therefore goes after those
+    /// variables — a declared width overrides the size preset instead of being dropped.
+    /// </summary>
+    [Fact]
+    public async Task DialogControl_StyleAndClass_FollowTheSizeVariables()
+    {
+        var html = await RenderAsync<DialogView>(
+            Controls.Dialog("Body", "Title").WithStyle("--dialog-width: 200px").WithClass(ClassValue));
+
+        html.Should().Contain(ClassValue);
+        html.Should().Contain("--dialog-width: 200px",
+            because: "the declared value must come after the Size-derived one so it wins");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task DialogControl_WithoutStyleOrClass_EmitsTheDialogExactlyAsBefore()
+    {
+        var html = await RenderAsync<DialogView>(Controls.Dialog("Body", "Title"));
+
+        html.Should().NotContain("class=\"\"");
+        html.Should().NotContain(ClassValue);
     }
 
     private sealed class NoopErrorBoundaryLogger : IErrorBoundaryLogger
