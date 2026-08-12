@@ -233,7 +233,13 @@ public class IoPoolTest
         release.Set();
         asyncGate.TrySetResult(0);
 
-        await drain.WaitAsync(Timeout5, TestContext.Current.CancellationToken);
+        // Assert the VALUE, not just that it returned: both leaves unwound inside the budget, so a
+        // non-zero residual would mean the join reported a survivor that had already finished — the
+        // other direction of the shared-counter defect. (Copilot review, #1338.)
+        var residual = await drain.WaitAsync(Timeout5, TestContext.Current.CancellationToken);
+        residual.Should().Be(0,
+            "both the blocking and the async leaf unwound within the budget — nothing to report");
+        pool.CurrentInFlight.Should().Be(0);
     }
 
 

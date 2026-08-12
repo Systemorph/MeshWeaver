@@ -151,9 +151,14 @@ public sealed class IoPool : IIoPool, IDisposable
                     }
                     finally
                     {
+                        // 🚨 ORDER MATTERS: the signal is set LAST. Drain() wakes on _blockingIdle, so
+                        // anything it releases must already observe fully-updated counters — setting
+                        // the signal before decrementing _inFlight let Drain return while
+                        // CurrentInFlight was still 1, which is both a false "no pool thread is
+                        // running" and a flake in this file's own assertion. (Copilot review, #1338.)
+                        Interlocked.Decrement(ref _inFlight);
                         if (Interlocked.Decrement(ref _blockingInFlight) == 0)
                             _blockingIdle.Set();
-                        Interlocked.Decrement(ref _inFlight);
                     }
                 }, cts.Token)
                 .ContinueWith(t =>
