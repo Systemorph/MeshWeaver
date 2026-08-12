@@ -77,19 +77,21 @@ public static class MeshNodeExtensions
     /// <summary>
     /// Updates a MeshNode's content with a typed update function.
     /// Path-aware typed-content update wrapper that delegates to
-    /// <see cref="MeshNodeStreamHandle.Update"/>. Returns
-    /// <see cref="IObservable{MeshNode}"/>; <b>callers MUST Subscribe</b> — the cold
+    /// <see cref="MeshNodeStreamHandle.Update{TContent}(Func{MeshNode, TContent, MeshNode})"/>.
+    /// Returns <see cref="IObservable{MeshNode}"/>; <b>callers MUST Subscribe</b> — the cold
     /// observable's side effect only runs on Subscribe. See
     /// <c>Doc/Architecture/AsynchronousCalls.md</c>.
+    /// <para>🚨 Unconvertible content faults the observable rather than skipping the write. This
+    /// used to read <c>content != null ? update(node, content) : node</c> — a SILENT no-op: when
+    /// the content arrived as JSON this reported success while writing nothing at all, so the
+    /// caller's change simply vanished with no exception and no log. Absence and
+    /// "could not be read" are now distinct (see the handle's overload docs).</para>
     /// </summary>
     public static IObservable<MeshNode> UpdateMeshNode<TContent>(this IWorkspace workspace,
         string nodePath, Func<MeshNode, TContent, MeshNode> update)
         where TContent : class
-        => workspace.GetMeshNodeStream(nodePath).Update(node =>
-        {
-            var content = node.ContentAs<TContent>(workspace.Hub.JsonSerializerOptions);
-            return content != null ? update(node, content) : node;
-        });
+        => workspace.GetMeshNodeStream(nodePath)
+            .Update<TContent>((node, content) => content is null ? node : update(node, content));
 
     /// <summary>
     /// Gets the parent path for this node.
