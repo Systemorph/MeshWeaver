@@ -6,7 +6,7 @@
 @inherits BlazorView<NodeImportControl, NodeImportView>
 @inject AccessService Access
 
-<div class="node-import-view" style="max-width: 800px;">
+<div class="node-import-view@(ClassSuffix)" style="max-width: 800px;@StyleSuffix">
     <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
         @if (IsFileMode)
         {

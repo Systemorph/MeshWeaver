@@ -24,7 +24,8 @@ public partial class CatalogView
 
     private Dictionary<string, bool> expandedGroups = new();
 
-    private string ContainerStyle => "display: flex; flex-direction: column;";
+    // The author's Style goes LAST so a declared flex-direction / gap overrides the container's own.
+    private string ContainerStyle => $"display: flex; flex-direction: column;{StyleSuffix}";
     private string CardStyle => $"height: {CardHeight}px; min-height: {CardHeight}px; max-height: {CardHeight}px; overflow: hidden; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px; background: var(--neutral-layer-card-container);";
 
     /// <summary>

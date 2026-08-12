@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Routing;
@@ -56,6 +57,16 @@ namespace MeshWeaver.Hosting.Blazor.Test;
 /// <c>ThreadMessageBubbleView</c> a live thread node. Each of the five positive tests was verified by
 /// falsification — reverting its view makes exactly that test fail — while the four
 /// backwards-compatibility guards pass with AND without the fix, which is what makes them guards.</para>
+///
+/// <para><b>#1297 — the literal-root drops.</b> The next bucket is the views that dropped BOTH, because
+/// their single root element carries only hard-coded declarations. That root IS the control's box, so
+/// that is where the author's Style and Class go — no wrapper is introduced, and the author's Style goes
+/// LAST so a declared width/height overrides the view's default instead of losing to it. Nine of the ten
+/// are rendered here (<c>NodeExportView</c>, <c>NodeImportView</c>, <c>ExportDocumentView</c>,
+/// <c>AppearanceView</c>, <c>CatalogView</c>, <c>CommentableView</c>, <c>MarkdownEditorView</c>,
+/// <c>CollaborativeMarkdownView</c>, <c>Monaco/DiffEditorView</c>), each verified by falsification.
+/// <c>MeshNodeContentEditorView</c> is not: its first render is a progress ring, and the styled root
+/// appears only once the node's editable fields have loaded from the mesh.</para>
 /// </summary>
 public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -447,6 +458,184 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
         public void StopApplication() { }
+    }
+
+    // ─── #1297: views whose LITERAL root element dropped both Style and Class ─────────────────────
+    //
+    // These render a panel/page/editor with ONE root element of their own carrying hard-coded
+    // declarations (`style="max-width: 720px;"`, `class="node-export-view"`) and no author input at
+    // all. That root IS the control's box, so it is where the author's Style and Class belong — no
+    // wrapper is introduced anywhere in this bucket, which is the whole point: #1288 showed a blanket
+    // wrapper breaks call sites that depend on the fragment's own root being the flex child.
+    //
+    // The author's Style goes LAST in the attribute (BlazorView.StyleSuffix) so a declared max-width or
+    // height WINS over the view's default rather than losing to it — dropping it was the bug; losing
+    // the cascade would be the same bug with extra steps.
+
+    /// <summary>
+    /// <c>NodeExportView</c>'s root was <c>class="node-export-view" style="max-width: 800px;"</c> —
+    /// both attributes present, neither carrying anything the author asked for.
+    /// </summary>
+    [Fact]
+    public async Task NodeExportControl_StyleAndClass_ReachTheLiteralRoot()
+    {
+        var html = await RenderAsync<NodeExportView>(
+            new NodeExportControl().WithStyle("max-width: 400px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"node-export-view {ClassValue}\"");
+        html.Should().Contain("max-width: 800px; max-width: 400px",
+            because: "the author's declaration must come LAST so it wins the cascade over the default");
+    }
+
+    /// <summary>
+    /// 🚨 BACKWARDS COMPATIBILITY for the whole bucket: with nothing declared, the root's attributes are
+    /// byte-identical to before — no trailing space in the class, no dangling space in the style.
+    /// </summary>
+    [Fact]
+    public async Task NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore()
+    {
+        var html = await RenderAsync<NodeExportView>(new NodeExportControl());
+
+        html.Should().Contain("class=\"node-export-view\" style=\"max-width: 800px;\"",
+            because: "ClassSuffix and StyleSuffix both contribute nothing when nothing was declared");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_StyleAndClass_ReachTheLiteralRoot"/>
+    [Fact]
+    public async Task NodeImportControl_StyleAndClass_ReachTheLiteralRoot()
+    {
+        var html = await RenderAsync<NodeImportView>(
+            new NodeImportControl().WithStyle("max-width: 400px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"node-import-view {ClassValue}\"");
+        html.Should().Contain("max-width: 800px; max-width: 400px");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_StyleAndClass_ReachTheLiteralRoot"/>
+    [Fact]
+    public async Task ExportDocumentControl_StyleAndClass_ReachTheLiteralRoot()
+    {
+        var html = await RenderAsync<ExportDocumentView>(
+            new ExportDocumentControl().WithStyle("max-width: 400px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"export-document-view {ClassValue}\"");
+        html.Should().Contain("max-width: 720px; max-width: 400px");
+    }
+
+    /// <summary>
+    /// <c>AppearanceView</c>'s root had a literal style and NO class attribute, so the class had nowhere
+    /// to land at all.
+    /// </summary>
+    [Fact]
+    public async Task AppearanceControl_StyleAndClass_ReachTheLiteralRoot()
+    {
+        var html = await RenderAsync<AppearanceView>(
+            new AppearanceControl().WithStyle("max-width: 300px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"{ClassValue}\"");
+        html.Should().Contain("max-width: 500px; max-width: 300px");
+    }
+
+    /// <summary>
+    /// <c>CatalogView</c> composes its root style in the code-behind (<c>ContainerStyle</c>), which was a
+    /// pure literal — so the fix belongs there rather than in the markup.
+    /// </summary>
+    [Fact]
+    public async Task CatalogControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<CatalogView>(
+            new CatalogControl().WithStyle("gap: 4px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"catalog-container {ClassValue}\"");
+        html.Should().Contain("flex-direction: column; gap: 4px");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task CatalogControl_WithoutStyleOrClass_EmitsTheContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<CatalogView>(new CatalogControl());
+
+        html.Should().Contain("class=\"catalog-container\" style=\"display: flex; flex-direction: column;\"");
+    }
+
+    /// <summary>
+    /// <c>CommentableView</c> is a container: it renders its child areas inside a positioning wrapper and
+    /// has no other element of its own, so the wrapper is the only place its own Style can live.
+    /// </summary>
+    [Fact]
+    public async Task CommentableControl_StyleAndClass_ReachTheWrapper()
+    {
+        var html = await RenderAsync<CommentableView>(
+            new CommentableControl().WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"commentable-wrapper {ClassValue}\"");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <summary>
+    /// The wrapper had NO style attribute before, so an unstyled commentable must still emit none —
+    /// Blazor omits a null attribute, and this pins that it stays omitted.
+    /// </summary>
+    [Fact]
+    public async Task CommentableControl_WithoutStyleOrClass_EmitsTheWrapperExactlyAsBefore()
+    {
+        var html = await RenderAsync<CommentableView>(new CommentableControl());
+
+        html.Should().Contain("class=\"commentable-wrapper\"");
+        html.Should().NotContain("style=\"\"",
+            because: "an undeclared Style must leave the attribute out, not emit an empty one");
+    }
+
+    /// <summary>
+    /// <c>DiffEditorView</c> read <c>ViewModel.Height</c> straight into its host box and ignored Style
+    /// entirely; the author's declaration now comes after it, so a declared height wins.
+    /// </summary>
+    [Fact]
+    public async Task DiffEditorControl_StyleAndClass_ReachTheHostBox()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.Monaco.DiffEditorView>(
+            new DiffEditorControl().WithStyle("height: 200px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"{ClassValue}\"");
+        html.Should().Contain("height: 500px; width: 100%; height: 200px",
+            because: "the control's own Height stays the default and the declared Style overrides it");
+    }
+
+    /// <summary>The collaborative editor's container had a class list and no style attribute at all.</summary>
+    [Fact]
+    public async Task MarkdownEditorControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<MarkdownEditorView>(
+            new MarkdownEditorControl().WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"collaborative-editor-container {ClassValue}\"");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task MarkdownEditorControl_WithoutStyleOrClass_EmitsTheContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<MarkdownEditorView>(new MarkdownEditorControl());
+
+        html.Should().Contain("class=\"collaborative-editor-container\"");
+        html.Should().NotContain("style=\"\"");
+    }
+
+    /// <summary>
+    /// <c>CollaborativeMarkdownView</c>'s container carries a private computed view-mode class; the
+    /// author's class joins it rather than replacing it.
+    /// </summary>
+    [Fact]
+    public async Task CollaborativeMarkdownControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<CollaborativeMarkdownView>(
+            new CollaborativeMarkdownControl().WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"collab-md-container {ClassValue}",
+            because: "the view-mode class is empty in the default mode, so the author's class follows it");
+        html.Should().Contain(StyleValue);
     }
 
     private sealed class NoopErrorBoundaryLogger : IErrorBoundaryLogger

@@ -8,7 +8,7 @@
 @inherits BlazorView<CollaborativeMarkdownControl, CollaborativeMarkdownView>
 @inject AccessService Access
 
-<div class="collab-md-container @ViewModeClass" data-theme="@Mode.ToString().ToLower()" @ref="containerRef">
+<div class="@ContainerClass" data-theme="@Mode.ToString().ToLower()" style="@Style" @ref="containerRef">
     @* Toolbar — comment filter. Tracked changes are already IN the document (they are projected from
        the version history), so there is nothing to "accept": the only action is Revert, per card. *@
     @if (HasCommentAnnotations)

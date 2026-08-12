@@ -21,7 +21,7 @@
 @inherits BlazorView<MarkdownEditorControl, MarkdownEditorView>
 @inject AccessService Access
 
-<div class="collaborative-editor-container">
+<div class="collaborative-editor-container@(ClassSuffix)" style="@Style">
     @* Suggest mode indicator stripe *@
     @if (TrackChangesActive)
     {
