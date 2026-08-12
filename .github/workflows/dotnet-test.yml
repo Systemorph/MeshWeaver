@@ -540,6 +540,35 @@ jobs:
           exit 1
         fi
         "$BROWSER" --version
+        # 🚨 Give the browser back its SANDBOX. Ubuntu 23.10+ (this runner is 24.04) restricts
+        # unprivileged user namespaces through AppArmor — and an unprivileged user namespace is
+        # exactly what Chromium's namespace sandbox is built from. Without this the browser
+        # aborts with "No usable sandbox!" and every PDF test fails with a rendering error that
+        # looks like a defect in the export. Note the direction: this ENABLES a security
+        # mechanism. The alternative — passing --no-sandbox in CI — would have CI exercise a
+        # weaker configuration than a properly configured host runs, which is precisely the
+        # divergence this step exists to remove. The knob is checked for existence because a
+        # kernel without it has no such restriction to lift.
+        if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+        # Prove it can actually PRINT here, not merely that it installed. This is the property
+        # every PDF test depends on, and asserting it in the infra step turns an environment
+        # problem into one unambiguous failure instead of a scattering of plausible-looking
+        # test failures across four shards (which is exactly how this was found).
+        # `timeout` is mandatory, not belt-and-braces: --print-to-pdf contracts to WRITE the PDF,
+        # not to exit afterwards (the renderer waits on the file, not on the process, for exactly
+        # this reason). An unbounded smoke print would hang the shard instead of failing it.
+        printf '<!doctype html><title>smoke</title><p>smoke</p>' > /tmp/mw-smoke.html
+        timeout 60 "$BROWSER" --headless=new --disable-gpu --disable-dev-shm-usage \
+          --no-pdf-header-footer --user-data-dir=/tmp/mw-smoke-profile \
+          --print-to-pdf=/tmp/mw-smoke.pdf file:///tmp/mw-smoke.html 2>/tmp/mw-smoke.err || true
+        if [ ! -s /tmp/mw-smoke.pdf ]; then
+          echo "::error::the headless browser installed but cannot print a PDF on this runner — this is an INFRA failure, not a test failure."
+          cat /tmp/mw-smoke.err >&2 || true
+          exit 1
+        fi
+        echo "browser smoke print OK ($(wc -c < /tmp/mw-smoke.pdf) bytes)"
         # First entry in PixelRenderingOptions.EnvironmentVariables, so the renderer's probe
         # resolves this exact binary rather than whatever browser the runner image happens to
         # carry.
