@@ -182,6 +182,21 @@ public class JsonPointerTest
     public void Segment_ComparesAcrossEscaping(string pointer, string probe, bool expected)
         => Assert.Equal(expected, JsonPointer.Parse(pointer).GetSegment(0) == probe);
 
+    /// <summary>A null property name is "no match", never an exception.</summary>
+    [Fact]
+    public void Segment_ComparedWithNull_IsFalseNotAThrow()
+    {
+        var segment = JsonPointer.Parse("/a").GetSegment(0);
+        Assert.False(segment.Equals((string?)null));
+        Assert.False(segment == null);
+        Assert.True(segment != null);
+
+        // …including for the empty segment, which a null must NOT be confused with.
+        var empty = JsonPointer.Parse("/").GetSegment(0);
+        Assert.False(empty.Equals((string?)null));
+        Assert.True(empty.Equals(string.Empty));
+    }
+
     // ---- construction ---------------------------------------------------------------
 
     [Theory]
