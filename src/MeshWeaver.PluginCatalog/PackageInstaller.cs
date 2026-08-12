@@ -1555,22 +1555,16 @@ public static class PackageInstaller
             //   • absent      → align. Repo content files legitimately omit the discriminator (the
             //                   node's nodeType implies the content type); skipping here would
             //                   re-open the default-churn for every discriminator-less file.
-            //   • string      → align only when it MATCHES the peer's discriminator.
+            //   • string      → align only when it NAMES the peer's type (see NamesPeerType — the
+            //                   peer's serialized discriminator OR its CLR short/full name, because
+            //                   a runtime-compiled type serializes without a discriminator at all).
             //   • non-string  → malformed; skip alignment entirely (raw compare → the malformed
             //                   value shows as a change instead of being silently repaired).
             var hasDiscriminator = el.TryGetProperty("$type", out var it);
             if (hasDiscriminator && it.ValueKind != JsonValueKind.String)
                 return candidate;
             var candidateType = hasDiscriminator ? it.GetString() : null;
-            var peerType = JsonSerializer.SerializeToNode(peer, options)
-                    is System.Text.Json.Nodes.JsonObject peerNode
-                && peerNode.TryGetPropertyValue("$type", out var pt)
-                && pt is System.Text.Json.Nodes.JsonValue pv
-                && pv.TryGetValue<string>(out var pts)
-                ? pts
-                : null;
-            if (candidateType is not null
-                && !string.Equals(candidateType, peerType, StringComparison.Ordinal))
+            if (candidateType is not null && !NamesPeerType(candidateType, peer, options))
                 return candidate;
 
             // Deserialize WITHOUT tolerating unknown members: with the ambient Skip handling, a
@@ -1591,6 +1585,37 @@ public static class PackageInstaller
         {
             return candidate;                       // schema drift / unknown member — raw compare
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="discriminator"/> (an element's <c>$type</c>) names
+    /// <paramref name="peer"/>'s type — the same-type guard in front of the alignment.
+    ///
+    /// <para>🚨 The peer's SERIALIZED <c>$type</c> is not sufficient evidence on its own. A
+    /// runtime-compiled content type is deliberately never adopted into a long-lived per-hub
+    /// <c>ITypeRegistry</c> (a per-compile collectible identity would poison later resolutions and
+    /// pin the assembly), so <c>ObjectPolymorphicConverter.Write</c> emits such a value with NO
+    /// discriminator at all. Reading "no <c>$type</c>" as "a different type" skipped the alignment
+    /// for exactly the packages whose content types are dynamic, and the raw compare then found the
+    /// one and only difference — the <c>$type</c> member the element carries and the typed peer does
+    /// not — so the node was rewritten on every re-install (<c>Underwriting/Rulebook/*</c>, 40
+    /// nodes per run, allow-listed as known debt since). The discriminator IS the type's short or
+    /// full CLR name by construction, so the peer's own name is the authoritative fallback.</para>
+    /// </summary>
+    private static bool NamesPeerType(string discriminator, object peer, JsonSerializerOptions options)
+    {
+        var peerType = peer.GetType();
+        if (string.Equals(discriminator, peerType.Name, StringComparison.Ordinal)
+            || string.Equals(discriminator, peerType.FullName, StringComparison.Ordinal))
+            return true;
+        // A peer whose hub DID register it may carry an explicit collection name that differs from
+        // the CLR name — honour that too.
+        return JsonSerializer.SerializeToNode(peer, options)
+                is System.Text.Json.Nodes.JsonObject peerNode
+            && peerNode.TryGetPropertyValue("$type", out var pt)
+            && pt is System.Text.Json.Nodes.JsonValue pv
+            && pv.TryGetValue<string>(out var pts)
+            && string.Equals(discriminator, pts, StringComparison.Ordinal);
     }
 
     // The node's scalar fields, applying the incoming's non-null values over the current (mirrors
@@ -2321,7 +2346,7 @@ public static class PackageInstaller
             return null;
         }
         var (id, ns) = NodeFileMapper.FromRelativePath(file.RelativePath);
-        return parsed with
+        return AsAuthored(parsed, file, logger) with
         {
             Id = id,
             Namespace = ns,
@@ -2331,6 +2356,55 @@ public static class PackageInstaller
             MainNode = parsed.MainNode ?? (string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}"),
             State = MeshNodeState.Active,
         };
+    }
+
+    /// <summary>
+    /// The node with the content the FILE declares, whenever the parse materialised a
+    /// RUNTIME-COMPILED (collectible-assembly) content type.
+    ///
+    /// <para>🚨 An install must write what the package says, and for a dynamically-compiled content
+    /// type the parse cannot know it guessed right. Such a type's <c>$type</c> discriminator is its
+    /// bare CLR name, and that name is unique only inside its own package — one customer node repo
+    /// ships <c>Currency</c> in four packages and eleven further names in two or more. The mesh-wide
+    /// content-type map answers by name, so the deserialiser hands the installer whichever
+    /// package's record compiled most recently, and materialising it is destructive both ways:
+    /// members the foreign record does not declare are DROPPED (<c>Reinsurance/Samples/AlpinaCedent</c>
+    /// installed with its whole content stripped to <c>{}</c>), and defaults it does declare are
+    /// INJECTED (<c>Ifrs17/Currency/*</c> gained <c>code</c>/<c>decimalPlaces</c> from
+    /// <c>ClaimsDeepfield</c>'s record). The unchanged-check then compares an authored file against
+    /// a foreign materialisation, finds a difference, and rewrites the node on EVERY install — with
+    /// the set of rewritten nodes varying run to run, because which package won the name depends on
+    /// compile order (Systemorph/MeshWeaver#1299).</para>
+    ///
+    /// <para>The authored element is written instead, and the OWNING hub — the one place the node's
+    /// own NodeType is known — types it on read. Statically-registered content
+    /// (<see cref="NodeTypeDefinition"/>, markdown, access assignments) is a real, process-unique
+    /// registration rather than a name guess, so it stays typed: the installer's own ordering and
+    /// compile-trigger logic reads <c>Content is NodeTypeDefinition</c>.</para>
+    /// </summary>
+    // Internal for the InstallAuthoredContentTest pin (InternalsVisibleTo).
+    internal static MeshNode AsAuthored(MeshNode parsed, PackageFile file, ILogger? logger)
+    {
+        if (parsed.Content is null || !parsed.Content.GetType().Assembly.IsCollectible)
+            return parsed;
+        try
+        {
+            using var doc = JsonDocument.Parse(file.Content);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("content", out var authored))
+                return parsed with { Content = authored.Clone() };
+        }
+        catch (JsonException)
+        {
+            // Unreachable in practice — a file that produced a typed content parsed as JSON once
+            // already. Fall through rather than invent a content shape.
+        }
+        logger?.LogWarning(
+            "[PackageInstaller] {Path} materialised the runtime-compiled content type {Type}, and the "
+            + "file's authored content could not be re-read — installing the materialised value, which "
+            + "may carry another package's defaults.",
+            file.RelativePath, parsed.Content.GetType().Name);
+        return parsed;
     }
 
     // Each write is System-impersonated INDIVIDUALLY — an ambient whole-pipeline impersonation
@@ -2375,7 +2449,7 @@ public static class PackageInstaller
 
         var (id, ns) = NodeFileMapper.FromRelativePath(rel);
         var rebasedNs = string.IsNullOrEmpty(ns) ? partition : $"{partition}/{ns}";
-        return parsed with
+        return AsAuthored(parsed, file, logger) with
         {
             Id = id,
             Namespace = rebasedNs,
