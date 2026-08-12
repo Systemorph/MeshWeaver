@@ -65,9 +65,12 @@ the deck is composed into one self-contained HTML document carrying the *live* s
 gradients, background images, raw-HTML slide bodies, CSS layout and transforms survive — none of
 which the document model can express.
 
-The browser is **not** shipped in the image: `HeadlessChromiumPdfRenderer` drives an already-installed
-Chromium/Chrome/Edge found via `MarkdownExportConfig.PixelRendering.ExecutablePath`, then `CHROME_BIN`
-/ `PUPPETEER_EXECUTABLE_PATH` / `MESHWEAVER_CHROMIUM_PATH`, then the platform's usual locations. Where
-none exists the option is not offered and nothing else changes.
+The `portal-ai` image **ships the browser** (`deploy/base-images/portal-ai`: a Playwright
+headless-shell Chromium at `/usr/bin/chromium`, `CHROME_BIN` set) — it has to, because since #1230
+the browser prints every PDF, not just this one. Resolution stays overridable:
+`HeadlessChromiumPdfRenderer` takes `MarkdownExportConfig.PixelRendering.ExecutablePath`, then
+`MESHWEAVER_CHROMIUM_PATH` / `CHROME_BIN` / `PUPPETEER_EXECUTABLE_PATH`, then the platform's usual
+locations. Where none exists, pixel fidelity is not offered and a PDF export fails loudly rather
+than returning a file that quietly lost its formatting.
 
 Full reference: `Doc/Architecture/PixelFaithfulExport`.

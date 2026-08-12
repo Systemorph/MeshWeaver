@@ -3,15 +3,19 @@ using System.Collections.Immutable;
 namespace MeshWeaver.Markdown.Export.Pixel;
 
 /// <summary>
-/// Deployment-level settings for pixel-faithful export (<see cref="Configuration.ExportFidelity.Pixel"/>).
+/// Deployment-level settings for the headless browser that prints every PDF export — both
+/// fidelities (<see cref="Configuration.ExportFidelity"/>).
 ///
-/// <para><b>The browser is NOT shipped in the portal image.</b> MeshWeaver ships the *capability*;
-/// the binary is an operator decision, because putting a browser in the shared portal image costs
-/// every tenant image size, start-up surface and a sandbox/security question that most decks never
-/// need. So the renderer resolves an <b>already-installed</b> Chromium/Chrome at runtime — from
-/// <see cref="ExecutablePath"/>, then from the well-known environment variables, then from the
-/// platform's usual install locations. When nothing is found, pixel fidelity simply is not offered
-/// and the content-faithful export is unaffected.</para>
+/// <para><b>The <c>portal-ai</c> image ships the browser</b> (<c>deploy/base-images/portal-ai</c>:
+/// a Playwright headless-shell Chromium at <c>/usr/bin/chromium</c>, with <c>CHROME_BIN</c> set).
+/// It has to, since #1230 made the browser the renderer for every PDF rather than an opt-in extra
+/// for design-led decks. The lean <c>portal</c> flavour uses the stock ASP.NET base and carries no
+/// browser.</para>
+///
+/// <para>Resolution stays runtime and overridable, so a deployment can point at a different
+/// binary: <see cref="ExecutablePath"/>, then the well-known environment variables, then the
+/// platform's usual install locations. When nothing is found, pixel fidelity is not offered and a
+/// PDF export fails loudly rather than returning a file that quietly lost its formatting.</para>
 /// </summary>
 public record PixelRenderingOptions
 {
