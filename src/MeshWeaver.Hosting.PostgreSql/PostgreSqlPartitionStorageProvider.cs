@@ -101,6 +101,19 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     internal IIoPool ReadPool => _readPool;
 
     /// <summary>
+    /// Shared per-adapter WRITE pool (<c>pg:{adapter}</c>, cap 1) — the gate every per-schema
+    /// adapter's writes serialise through.
+    /// <para>🚨 This accessor exists because its absence WAS the bug (#1310/#1312/#1313/#1316).
+    /// The provider resolved this pool for its own provisioning and then had no way to hand it to
+    /// the adapters that perform every actual write, so <see cref="PostgreSqlPathRoutingAdapter"/>
+    /// could only pass <c>readPool:</c> and each per-schema adapter silently fell back to
+    /// <see cref="IoPool.Unbounded"/>. The sibling Snowflake backend — a later port of this same
+    /// design — exposes <c>WritePool</c> and wires it; Postgres did not, so its half of the bound
+    /// never existed. Mirrors <c>SnowflakePartitionStorageProvider.WritePool</c>.</para>
+    /// </summary>
+    internal IIoPool WritePool => _ioPool;
+
+    /// <summary>
     /// The provider's logger, shared with every per-schema adapter the router creates. Without
     /// it the per-schema <see cref="IsolatedChangeFeed"/>s were constructed with a null logger,
     /// so a dropped / faulting change-feed observer — the exact event that silences the
@@ -565,7 +578,11 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
             TableMappings = null
         };
 
-        return new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, tableScopedDef, readPool: _readPool);
+        // Both pools — see PostgreSqlPathRoutingAdapter for why omitting ioPool is not a
+        // harmless default but a missing bound (#1310).
+        return new PostgreSqlStorageAdapter(
+            _baseDataSource, _embeddingProvider, tableScopedDef,
+            readPool: _readPool, ioPool: _ioPool);
     }
 
     /// <inheritdoc/>
