@@ -240,17 +240,10 @@ public static class QueryIdentityResolver
         {
             if (string.IsNullOrWhiteSpace(query))
                 continue;
-            ParsedQuery parsed;
-            try
-            {
-                parsed = new QueryParser().Parse(query);
-            }
-            catch (Exception)
-            {
-                // A query this layer cannot parse is not a query this DIAGNOSTIC should judge —
-                // the real parse downstream will report it. Never let the warning path break a read.
-                continue;
-            }
+            // Unguarded, exactly like every other Parse call site (MeshQuery.NamespacesForRequest
+            // parses the same string a moment later on the normal path). Swallowing here would only
+            // move an authoring error's stack trace, not prevent it.
+            var parsed = new QueryParser().Parse(query);
             if (IsNamedSegment(FirstSegment(parsed.Path)))
                 return true;
             foreach (var ns in parsed.ExtractNamespaces())
