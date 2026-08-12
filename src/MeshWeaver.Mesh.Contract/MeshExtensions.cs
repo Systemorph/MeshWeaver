@@ -619,19 +619,22 @@ public static class MeshExtensions
             {
                 if (existing == null)
                 {
-                    var configNode = hub.ServiceProvider.FindStaticNode(node.Path);
                     // A definition-only catalog type-def is NOT a real node at this path (Postgres
                     // owns the nodeType:NodeType partition root) — it must never stand in as an
                     // "existing" node and block creating the real PG root. See NodeTypeCatalogs.md.
-                    if (configNode is { IsDefinitionOnly: true })
-                        configNode = null;
+                    // FindServedStaticNode applies exactly that rule.
+                    var configNode = hub.ServiceProvider.FindServedStaticNode(node.Path);
                     if (configNode is not null)
-                        return configNode;
+                        // FromStatic: persistence holds NOTHING here — the refusal below comes from a
+                        // static provider CLAIMING the path, which is a configuration collision, not
+                        // a duplicate node. It gets its own message (#1209).
+                        return (Node: configNode, FromStatic: true);
                 }
-                return existing;
+                return (Node: existing, FromStatic: false);
             })
-            .SelectMany(existingNode =>
+            .SelectMany(found =>
             {
+                var (existingNode, fromStatic) = found;
                 if (existingNode != null)
                 {
                     // Transient → Active confirmation path.
@@ -658,8 +661,22 @@ public static class MeshExtensions
                         return saveObs.Select(savedConfirmed => (mode: "confirm", node: savedConfirmed));
                     }
                     // Node exists & not a confirmation → fail.
+                    // 🚨 Two very different situations reach this line, and conflating them is what
+                    // made #1209 undiagnosable. A DURABLE row at the path is a plain duplicate. A
+                    // STATIC provider claiming the path while persistence holds nothing is a
+                    // configuration collision whose downstream symptom is a 30 s timeout somewhere
+                    // else entirely (the caller falls back to an UPDATE, which activates the hub on
+                    // the static node — a hub with no persistence backing that emits one v0 snapshot
+                    // and never again). Say which one it is, name the claimant, and name the cure.
+                    var collision = fromStatic
+                        ? hub.ServiceProvider.DescribeStaticServeCollision(node.Path)
+                        : null;
+                    if (collision is not null)
+                        logger.LogWarning(
+                            "[CreateNode] REFUSED {Path}: static/durable claim collision. {Detail}",
+                            node.Path, collision);
                     Respond(CreateNodeResponse.Fail(
-                        $"Node already exists at path: {node.Path}",
+                        collision ?? $"Node already exists at path: {node.Path}",
                         NodeCreationRejectionReason.NodeAlreadyExists));
                     return Observable.Empty<(string mode, MeshNode node)>();
                 }
@@ -1264,8 +1281,9 @@ public static class MeshExtensions
                 {
                     if (existing.Contains(candidate.Path))
                         continue;
-                    var configNode = hub.ServiceProvider.FindStaticNode(candidate.Path);
-                    if (configNode is not null && configNode is not { IsDefinitionOnly: true })
+                    // Same ONE predicate the singular create and every serve seam use (#1209) —
+                    // a definition-only catalog type-def is not a real node at this path.
+                    if (hub.ServiceProvider.FindServedStaticNode(candidate.Path) is not null)
                         existing.Add(candidate.Path);
                 }
 
