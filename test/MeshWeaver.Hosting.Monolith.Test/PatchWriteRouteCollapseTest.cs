@@ -105,8 +105,8 @@ public class PatchWriteRouteCollapseTest(ITestOutputHelper output) : MonolithMes
     ///
     /// <para><b>Fail-without:</b> the post-commit flush writes the committed node, and ~200 ms later
     /// the persistence sampler writes the identical state again — two durable writes for one change.
-    /// <b>Pass-with:</b> the flush records the durable version on the OwnNodeCache and the save
-    /// handler drops the sampled duplicate.</para>
+    /// <b>Pass-with:</b> the flush records the durable version in the <c>PostCommitFlushRegistry</c>
+    /// and the save handler drops the sampled duplicate.</para>
     /// </summary>
     [Fact(Timeout = 55_000)]
     public async Task PatchDrivenOwnWrite_ReachesStorageExactlyOnce()

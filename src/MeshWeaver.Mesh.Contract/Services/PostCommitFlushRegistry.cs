@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -54,12 +55,30 @@ namespace MeshWeaver.Mesh.Services;
 /// already-persisted state — the same rule <c>MonotonicWriteGuardStorageAdapter.Forget</c>
 /// follows.</para>
 ///
-/// <para>Footprint: one <c>path → long</c> entry per node this process has patched, dropped on
-/// delete. Instance state on a mesh-scoped singleton — it dies with the mesh, never a static.</para>
+/// <para>Footprint: one <c>path → (long, timestamp)</c> entry per node this process has patched,
+/// dropped on delete and TTL-bounded (same shape and the same amortised time-gated sweep as
+/// <see cref="RecentlyDeletedRegistry"/>) so a portal that patches many distinct paths over a long
+/// uptime cannot accumulate entries forever. Instance state on a mesh-scoped singleton — it dies
+/// with the mesh, never a static.</para>
 /// </summary>
 public sealed class PostCommitFlushRegistry
 {
-    private readonly ConcurrentDictionary<string, long> highWater = new(StringComparer.OrdinalIgnoreCase);
+    // The mark only has to outlive the window between the flush's write and the sampler's queued
+    // SaveMeshNodeRequest reaching its handler — the sampler debounces at 200 ms, so 30 s is two
+    // orders of magnitude of headroom, and it matches RecentlyDeletedRegistry's TTL. Expiry is
+    // fail-SAFE, never fail-wrong: an expired mark simply lets the sampler write again, and that
+    // write carries the SAME version the flush already stored, which the store accepts as an
+    // equal-version rewrite. Only a write that regresses can produce a conflict, and that needs
+    // the row to advance inside the queue window — milliseconds, not seconds.
+    private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(30);
+
+    private readonly ConcurrentDictionary<string, (long Version, DateTimeOffset At)> highWater =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // UtcTicks of the last opportunistic prune sweep — gates the O(n) sweep to at most once per TTL
+    // so a write burst stays amortised O(1) while the map stays bounded even for paths that are
+    // never read back (HighWater only prunes the key it looks up).
+    private long lastPruneTicks;
 
     /// <summary>
     /// Monotonically (max) records that <paramref name="version"/> of <paramref name="path"/> is
@@ -69,15 +88,34 @@ public sealed class PostCommitFlushRegistry
     {
         if (string.IsNullOrEmpty(path))
             return;
-        highWater.AddOrUpdate(path, version, (_, current) => Math.Max(current, version));
+        var now = DateTimeOffset.UtcNow;
+        highWater.AddOrUpdate(path, (version, now),
+            (_, current) => (Math.Max(current.Version, version), now));
+
+        var last = Interlocked.Read(ref lastPruneTicks);
+        if (now.UtcTicks - last > Ttl.Ticks
+            && Interlocked.CompareExchange(ref lastPruneTicks, now.UtcTicks, last) == last)
+        {
+            foreach (var kv in highWater)
+                if (now - kv.Value.At > Ttl)
+                    highWater.TryRemove(kv.Key, out _);
+        }
     }
 
     /// <summary>
-    /// The highest version the post-commit flush has made durable for <paramref name="path"/>, or
-    /// <c>0</c> when this process has never flushed it (in which case nothing is suppressed).
+    /// The highest version the post-commit flush has made durable for <paramref name="path"/> within
+    /// the TTL window, or <c>0</c> when this process has not flushed it recently (in which case
+    /// nothing is suppressed). Expired entries are pruned on access.
     /// </summary>
     public long HighWater(string? path)
-        => !string.IsNullOrEmpty(path) && highWater.TryGetValue(path, out var version) ? version : 0L;
+    {
+        if (string.IsNullOrEmpty(path) || !highWater.TryGetValue(path, out var entry))
+            return 0L;
+        if (DateTimeOffset.UtcNow - entry.At <= Ttl)
+            return entry.Version;
+        highWater.TryRemove(path, out _);
+        return 0L;
+    }
 
     /// <summary>
     /// Drops the mark for a deleted path, so a same-id recreate — which legitimately restarts at
