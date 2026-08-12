@@ -403,6 +403,23 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
                     }
                 })
             .Should().Within(30.Seconds()).Emit();
+
+        // 🚨 The helper write is only ACKED at this point — that ack says the owner accepted the
+        // patch, NOT that the edit has reached the shared `nodetype-sources:{tornPath}` query the
+        // COMPILE reads. Triggering the release before it has makes the compile consume the
+        // PRE-EDIT helper (Answer() still present): Roslyn succeeds, the type settles Ok, and the
+        // watcher stamps LastReleaseRequestHandledAt — so the trigger is spent and nothing ever
+        // recompiles. The wait below then burns its full 120 s against a type that is permanently
+        // Ok, which is exactly this test's CI failure: a TimeoutException at the tornFailure wait
+        // after 120 s of total silence (no compile of TornType logged at all).
+        //
+        // Gate on the REAL condition — IsDirty is derived from CurrentSourceVersions, which
+        // InstallSourcesWatcher folds from the SAME shared query the compile reads. Once it is
+        // true, that query cannot hand the compile the pre-edit source. Canonical pattern:
+        // CodeEditRecompileTest ("Observe the NodeType getting DIRTY from the source change
+        // BEFORE triggering the release").
+        await WhenDefinition(tornPath, d => d.IsDirty, TimeSpan.FromSeconds(30));
+
         await workspace.GetMeshNodeStream(tornPath).Update(curr =>
             {
                 if (curr?.Content is not NodeTypeDefinition def) return curr!;
