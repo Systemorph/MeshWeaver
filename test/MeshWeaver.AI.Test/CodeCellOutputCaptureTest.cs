@@ -324,6 +324,64 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
         }
     }
 
+    // ── (iii-b) Progress renders the CONTROL a script returned ─────────────
+
+    [Fact(Timeout = 120000)]
+    public async Task Progress_Renders_The_Control_A_Script_Returned()
+    {
+        // #915's other half. A script whose result is a control logs NOTHING, so the output pane
+        // showed "✓ Done — This run produced no output." over an invisible result: the cell
+        // embeds the Progress area, and Progress rendered the log only. The control cannot be
+        // recovered from ActivityLog.ReturnValue either — a container serializes as bare
+        // NamedAreaControl references (children live in the non-serialized Views/Renderers), which
+        // is why the pane has to render the LIVE control off the kernel's area dictionary.
+        const string marker = "rendered-result-marker";
+        var codePath = await SeedExecutableCode($$"""
+            using MeshWeaver.Layout;
+            Controls.Stack.WithView(Controls.Markdown("{{marker}}"))
+            """);
+        var activityPath = await RunScript(codePath);
+
+        await GetClient().GetWorkspace().GetMeshNodeStream(activityPath)
+            .Select(n => n?.Content as ActivityLog)
+            .Should().Within(60.Seconds()).Match(l => l is not null
+                && l.Status == ActivityStatus.Succeeded);
+
+        var workspace = GetClient().GetWorkspace();
+        var reference = new LayoutAreaReference(ActivityLayoutAreas.ProgressArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(activityPath), reference);
+
+        // The result hangs off the Progress root under its OWN named area, after the status
+        // indicator and the log — a notebook cell's reading order.
+        var root = (StackControl)(await stream.GetControlStream(reference.Area!)
+            .Should().Within(60.Seconds()).Match(c => c is StackControl s
+                && s.Areas.Any(a => IsArea(a, ActivityLayoutAreas.ResultArea))))!;
+        var resultArea = root.Areas.First(a => IsArea(a, ActivityLayoutAreas.ResultArea)).Area!.ToString()!;
+
+        // …and it is the LIVE control tree: the returned Stack's child renders as the markdown
+        // the script wrote, not as an empty NamedAreaControl reference.
+        var resultStack = (StackControl)(await stream.GetControlStream(resultArea)
+            .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count >= 1))!;
+        await resultStack.Areas
+            .Select(a => stream.GetControlStream(a.Area!.ToString()!))
+            .Merge()
+            .Should().Within(30.Seconds()).Match(c => c is MarkdownControl m
+                && m.Markdown is not null
+                && m.Markdown.ToString()!.Contains(marker));
+
+        // The log says nothing: "This run produced no output." beside a rendered result would
+        // contradict the very thing under it.
+        var logArea = root.Areas[1].Area!.ToString()!;
+        await stream.GetControlStream(logArea)
+            .Should().Within(30.Seconds()).Match(c => c is StackControl s && s.Areas.Count == 0);
+    }
+
+    /// <summary>Area ids are rendered PREFIXED with their parent's path ("Progress/Result").</summary>
+    private static bool IsArea(NamedAreaControl area, string name) =>
+        area.Area?.ToString() is { } a
+        && (a == name || a.EndsWith("/" + name, StringComparison.Ordinal));
+
     // ── (iv) the SatelliteAccessRule defect, pinned at the rule ────────────
 
     [Fact(Timeout = 60000)]
