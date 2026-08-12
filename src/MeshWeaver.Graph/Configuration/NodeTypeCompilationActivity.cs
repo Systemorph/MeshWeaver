@@ -98,15 +98,38 @@ internal static class NodeTypeCompilationActivity
     }
 
     /// <summary>
-    /// Append an Information-level <see cref="LogMessage"/> to the activity
+    /// Append a single <see cref="LogMessage"/> (Information-level by default) to the activity
     /// log so callers can see progress in real time. No-op when
     /// <paramref name="activityPath"/> is null. Best-effort: failures log and
     /// swallow — observability must never break a compile.
+    ///
+    /// <para>🚨 ONE write per call, and a write is <b>O(size of the whole activity node)</b>: the
+    /// patcher <c>SerializeToNode</c>s the entire content and diffs every element on EVERY update.
+    /// So N appends to one activity cost <b>O(N²)</b> CPU + allocation. Never call this in a loop —
+    /// collect the messages and use <see cref="AppendLogs"/> (per phase) or <see cref="Complete"/>
+    /// (terminal). The per-item shape burned 719 MB of serialisation on a single memex-cloud import
+    /// activity (5,239 writes over a 141 kB node) and was half of the CFS throttling on that pod.</para>
     /// </summary>
     public static void AppendLog(IMessageHub hub, string? activityPath, string message, ILogger logger,
-        Microsoft.Extensions.Logging.LogLevel level = Microsoft.Extensions.Logging.LogLevel.Information)
+        Microsoft.Extensions.Logging.LogLevel level = Microsoft.Extensions.Logging.LogLevel.Information) =>
+        AppendLogs(hub, activityPath, [new LogMessage(message, level)], logger);
+
+    /// <summary>
+    /// Append MANY <see cref="LogMessage"/>s to the activity log in a <b>SINGLE</b>
+    /// <c>stream.Update</c> — the batched form of <see cref="AppendLog"/>, and the one to use for
+    /// anything that produces a line PER ITEM (per imported file, per pruned node, per diagnostic).
+    /// No-op when <paramref name="activityPath"/> is null or there is nothing to append.
+    /// Best-effort: failures log and swallow — observability must never break the work it observes.
+    ///
+    /// <para>Why batching is not a micro-optimisation: each <c>Update</c> re-serialises the WHOLE
+    /// activity node to compute its patch, so appending N lines one at a time is O(N²) in CPU and
+    /// allocation while appending them together is O(N). Emitting one line per phase instead of one
+    /// per item is the deliberate trade — coarser live progress, bounded cost.</para>
+    /// </summary>
+    public static void AppendLogs(
+        IMessageHub hub, string? activityPath, IReadOnlyList<LogMessage> messages, ILogger logger)
     {
-        if (string.IsNullOrEmpty(activityPath)) return;
+        if (string.IsNullOrEmpty(activityPath) || messages.Count == 0) return;
         try
         {
             // Set the property on the activity's stream — GetMeshNodeStream
@@ -125,7 +148,7 @@ internal static class NodeTypeCompilationActivity
                             {
                                 Content = log with
                                 {
-                                    Messages = log.Messages.Add(new LogMessage(message, level))
+                                    Messages = log.Messages.AddRange(messages)
                                 }
                             }
                             : current!)
