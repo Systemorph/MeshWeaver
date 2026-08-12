@@ -137,6 +137,22 @@ curl -sS -o /dev/null -w "%{http_code} verify=%{ssl_verify_result}\n" \
   --resolve portal.example.com:443:$IP https://portal.example.com/
 ```
 
+**Default SSL certificate (cluster-wide, one-time).** Without it, any client that connects
+without SNI gets the self-signed "Kubernetes Ingress Controller Fake Certificate" — and
+corporate TLS-inspection / URL-categorization appliances probe exactly that way, then flag the
+whole domain as insecure and block it for their users (seen 2026-08: a client's IT blocked
+`memex.meshweaver.cloud` in Firefox *and* Edge over this). Point the app-routing controller's
+default cert at the flagship host's cert-manager secret — patch the `NginxIngressController`
+CR, **not** the nginx deployment (the addon operator reverts direct deployment edits):
+```bash
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
+  "kubectl patch nginxingresscontroller default --type merge -p '{\"spec\":{\"defaultSSLCertificate\":{\"secret\":{\"name\":\"memexcloud-tls\",\"namespace\":\"memex-cloud\"}}}}'"
+# verify from outside — must show the real cert, not "Acme Co":
+echo | openssl s_client -connect <host>:443 -noservername 2>/dev/null | openssl x509 -noout -subject
+```
+The setting survives addon updates but is NOT re-created on a cluster rebuild — re-apply it
+whenever the cluster (or the `NginxIngressController` CR) is recreated.
+
 ---
 
 ## 6. Observability (Grafana + Loki + Prometheus) + admin access via VPN
