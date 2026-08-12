@@ -175,7 +175,11 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
                         // Same declaration, new identity: a REBUILD. The newest one is the answer.
                         ? new DiscriminatorClaim(contentType, declaration, Ambiguous: false)
                         : previous with { Ambiguous = true });
-        if (claim.Ambiguous && !ReferenceEquals(claim.ContentType, contentType))
+        // Warn only for a genuinely CONTESTING registration. A rebuild of a claimant that is
+        // already contested re-enters here with a new CLR identity but the SAME declaration, and
+        // warning on that would print "two different declarations (X and X)" — a misleading line
+        // about a name whose collision was already reported (Copilot review).
+        if (claim.Ambiguous && !string.Equals(claim.Declaration, declaration, StringComparison.Ordinal))
             WarnAmbiguous(discriminator, claim.Declaration, declaration);
     }
 
