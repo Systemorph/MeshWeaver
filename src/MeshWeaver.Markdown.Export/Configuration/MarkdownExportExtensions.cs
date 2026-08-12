@@ -19,19 +19,10 @@ namespace MeshWeaver.Markdown.Export.Configuration;
 /// </summary>
 public static class MarkdownExportExtensions
 {
-    /// <summary>
-    /// Registers the markdown-export messaging types on a hub type registry. Call this on any
-    /// hub (mesh, node, client) that sends or receives <see cref="ExportDocumentRequest"/> or
-    /// <see cref="ExportDocumentResponse"/>. Uses short names (<c>nameof</c>) so the <c>$type</c>
-    /// discriminator matches across hub boundaries — same convention as <c>AddAITypes</c>.
-    /// </summary>
-    public static ITypeRegistry AddMarkdownExportTypes(this ITypeRegistry typeRegistry)
-        => typeRegistry
-            .WithType(typeof(ExportDocumentRequest), nameof(ExportDocumentRequest))
-            .WithType(typeof(ExportDocumentResponse), nameof(ExportDocumentResponse))
-            .WithType(typeof(DocumentExportOptions), nameof(DocumentExportOptions))
-            .WithType(typeof(CorporateIdentity), nameof(CorporateIdentity))
-            .WithType(typeof(ExportDocumentControl), nameof(ExportDocumentControl));
+    // AddMarkdownExportTypes moved to MeshWeaver.Markdown.Export.Contract
+    // (MarkdownExportTypeRegistration) so a caller that only SENDS an export request need not
+    // reference the rendering engine. Same namespace, so every existing `using
+    // MeshWeaver.Markdown.Export.Configuration;` call site is unchanged.
 
     /// <summary>
     /// Registers the <c>CorporateIdentity</c> node type on the mesh builder.
@@ -97,7 +88,16 @@ public static class MarkdownExportExtensions
             // when AppDomain hasn't eagerly loaded the assembly before the
             // first script run. See KernelScriptAssembly.
             .AddSingleton(new MeshWeaver.Kernel.Hub.KernelScriptAssembly(
-                typeof(MarkdownExportTemplates).Assembly)));
+                typeof(MarkdownExportTemplates).Assembly))
+            // 🚨 …and the CONTRACT assembly, which is a SEPARATE registration because
+            // KernelScriptAssembly is per-assembly. The .csx templates reference both halves —
+            // DocumentExportOptions / ExportFormat / RenderedDocument live here, DocumentBuilder /
+            // PdfDocumentRenderer live in the engine — and the two now ship as different
+            // assemblies. Dropping this line compiles clean and fails only at RUNTIME, on the
+            // first export, with CS0246 from inside the script: the exact failure mode
+            // ExportTemplateCompilationTest exists to catch.
+            .AddSingleton(new MeshWeaver.Kernel.Hub.KernelScriptAssembly(
+                typeof(Messaging.RenderedDocument).Assembly)));
 
         // Seed the built-in PDF/DOCX template Code MeshNodes at
         // Templates/Export/{Pdf,Docx}. Layout areas drive export by posting

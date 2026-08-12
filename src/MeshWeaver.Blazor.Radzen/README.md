@@ -1,20 +1,19 @@
 # MeshWeaver.Blazor.Radzen
 
-A Radzen Blazor DataGrid adapter for MeshWeaver's GridModel, providing a fully open-source (MIT licensed) grid solution.
+Radzen Blazor renderers for MeshWeaver layout controls, providing a fully open-source (MIT licensed) view pack.
 
 ## Overview
 
-This project provides a Radzen DataGrid component that consumes the same `GridControl` and `GridOptions` models used by the previous AgGrid adapter. Radzen Blazor is completely free and open source under the MIT license.
+This project supplies Blazor views that render MeshWeaver `UiControl`s with [Radzen Blazor](https://github.com/radzenhq/radzen-blazor) components. It contributes two renderers:
 
-## Features
+| Control (from `MeshWeaver.Layout`) | Radzen view |
+|---|---|
+| `PivotGridControl` (`MeshWeaver.Layout.Pivot`) | `RadzenPivotGridView` — a cross-tab rendered on `RadzenDataGrid` |
+| `ChartControl` (`MeshWeaver.Layout.Chart`) | `RadzenChartView` |
 
-- **Pure .NET/Blazor**: Minimal JavaScript, fully managed code
-- **Reuses GridModel**: Same `GridOptions`, `ColDef`, and `GridControl` definitions
-- **Open Source**: MIT licensed, completely free with no restrictions
-- **Responsive Design**: Built-in responsive layout support
-- **Column Features**: Sorting, filtering, resizing, hiding
-- **Pagination**: Built-in paging support
-- **Theming**: Supports Radzen themes including dark mode
+Both views derive from `RadzenViewBase<TControl, TView>`, the Radzen counterpart to the standard `BlazorView` base in `MeshWeaver.Blazor`.
+
+For ordinary tabular data, use the framework's `DataGridControl` (`Controls.DataGrid(...)`) — this package is specifically the Radzen pivot and chart pack.
 
 ## Installation
 
@@ -23,15 +22,16 @@ This project provides a Radzen DataGrid component that consumes the same `GridCo
 <ProjectReference Include="..\MeshWeaver.Blazor.Radzen\MeshWeaver.Blazor.Radzen.csproj" />
 ```
 
-2. Configure Radzen services in your `Program.cs` or startup configuration:
+2. Register Radzen services in your DI configuration:
 ```csharp
-// Add Radzen services
-builder.Services.AddRadzenServices();
+services.AddRadzenServices();
 ```
 
-3. Register the Radzen DataGrid view in your MessageHub configuration:
+3. Register the views on your MessageHub configuration:
 ```csharp
-config.AddRadzenDataGrid();
+config
+    .AddRadzenDataGrid()   // PivotGridControl -> RadzenPivotGridView
+    .AddRadzenCharts();    // ChartControl     -> RadzenChartView
 ```
 
 4. Add Radzen CSS to your `App.razor` or layout:
@@ -46,131 +46,19 @@ Or for dark theme:
 
 ### Service Configuration
 
-The `AddRadzenServices()` extension method configures:
-- Radzen component services (DialogService, NotificationService, TooltipService, ContextMenuService)
+`AddRadzenServices()` registers:
+- Radzen component services (DialogService, NotificationService, TooltipService, ContextMenuService) via `AddRadzenComponents()`
+- `DynamicTypeGenerator` — builds the runtime row types the pivot view binds to. It is registered as a **singleton whose memoization cache lives and dies with the ServiceProvider**, never a process-wide static cache (see [NoStaticState.md](../MeshWeaver.Documentation/Data/Architecture/NoStaticState.md)).
 
-## Usage
+## Pivot Rendering
 
-Use the same `GridControl` and `GridOptions` as you would with AgGrid:
-
-```csharp
-var gridControl = new GridControl(
-    new GridOptions
-    {
-        ColumnDefs = new[]
-        {
-            new ColDef { Field = "name", HeaderName = "Name", Sortable = true },
-            new ColDef { Field = "age", HeaderName = "Age", Sortable = true, Filter = true },
-            new ColDef { Field = "email", HeaderName = "Email" }
-        },
-        RowData = new[]
-        {
-            new { name = "John", age = 30, email = "john@example.com" },
-            new { name = "Jane", age = 25, email = "jane@example.com" }
-        }
-    }
-);
-```
-
-## GridOptions Support Matrix
-
-| Feature | AgGrid | Radzen | Notes |
-|---------|--------|--------|-------|
-| **Columns** |
-| ColumnDefs | ✅ | ✅ | Fully supported |
-| RowData | ✅ | ✅ | Fully supported |
-| DefaultColDef | ✅ | ⚠️ | Partial - used for defaults |
-| Field | ✅ | ✅ | Fully supported |
-| HeaderName | ✅ | ✅ | Fully supported |
-| Width/MinWidth/MaxWidth | ✅ | ✅ | Width supported |
-| Flex | ✅ | ⚠️ | Mapped to auto width |
-| Hide | ✅ | ✅ | Via Visible property |
-| Resizable | ✅ | ✅ | Fully supported |
-| Sortable | ✅ | ✅ | Fully supported |
-| Filter | ✅ | ⚠️ | Simple filter only |
-| Pinned | ✅ | ❌ | Not supported |
-| **Styling** |
-| CellClass | ✅ | ⚠️ | Limited support |
-| CellStyle | ✅ | ✅ | Color, background, font-weight |
-| HeaderClass | ✅ | ⚠️ | Limited support |
-| RowStyle | ✅ | ⚠️ | Partial support |
-| RowHeight | ✅ | ⚠️ | Affects page size calculation |
-| HeaderHeight | ✅ | ❌ | Not directly supported |
-| **Formatting** |
-| ValueGetter | ✅ | ❌ | Not supported (JS function) |
-| ValueFormatter | ✅ | ⚠️ | Basic numeric formatting only |
-| CellRenderer | ✅ | ⚠️ | Use Template instead |
-| **Grouping & Aggregation** |
-| RowGroup | ✅ | ❌ | Not supported |
-| GroupDisplayType | ✅ | ❌ | Not supported |
-| AggFunc | ✅ | ❌ | Not supported |
-| **Pivot** |
-| PivotMode | ✅ | ❌ | Not supported |
-| Pivot | ✅ | ❌ | Not supported |
-| **Tree Data** |
-| TreeData | ✅ | ❌ | Not supported |
-| GetDataPath | ✅ | ❌ | Not supported |
-| **Column Groups** |
-| ColGroupDef | ✅ | ⚠️ | Flattened to columns |
-| **Other** |
-| Editable | ✅ | ✅ | Supported |
-| SideBar | ✅ | ❌ | Not supported |
-| DomLayout | ✅ | ⚠️ | autoHeight supported |
-
-## Limitations
-
-### JavaScript Functions
-AgGrid supports JavaScript function strings which are **not supported** in Radzen adapter. Consider:
-- Using simple field binding instead of ValueGetter
-- Using Template for custom rendering
-- Pre-formatting data on the server
-
-### Advanced Features Not Supported
-- **Grouping**: Row grouping, aggregation functions
-- **Pivot Tables**: Pivot mode and pivot columns
-- **Tree Data**: Hierarchical data structures
-- **Column Pinning**: Left/right pinned columns
-- **Master/Detail**: Expandable rows with detail views
-
-### Workarounds
-
-#### Custom Cell Rendering
-Use Radzen's Template feature in the component or pre-format data.
-
-#### Value Formatting
-Pre-format data on server:
-
-```csharp
-var rowData = items.Select(item => new
-{
-    name = item.Name,
-    amount = item.Amount.ToString("C2"),
-    date = item.Date.ToString("yyyy-MM-dd")
-});
-```
-
-#### Column Groups
-Column groups are automatically flattened to individual columns.
+`RadzenPivotGridView` flattens a `PivotGridControl`'s row/column hierarchy into dynamically generated row objects (`DynamicPivotRow` + `DynamicTypeGenerator`), because `RadzenDataGrid` binds to typed properties rather than an untyped cell matrix. Column groups are flattened into individual columns.
 
 ## Performance Considerations
 
 - **Large Datasets**: Radzen DataGrid performs well with ~1000-5000 rows. For larger datasets, use server-side paging.
 - **Custom Templates**: Complex templates can impact rendering performance.
 - **Filtering**: Filtering is client-side by default.
-
-## Migration from AgGrid
-
-To migrate from AgGrid to Radzen:
-
-1. Replace `config.AddAgGrid()` with `config.AddRadzenDataGrid()`
-2. Replace `services.AddBlazoriseServices()` with `services.AddRadzenServices()`
-3. Test grid functionality, especially:
-   - Custom cell renderers
-   - Value formatters
-   - Grouping/aggregation features
-4. Adjust GridOptions as needed:
-   - Remove unsupported features
-   - Pre-format data instead of using JS functions
 
 ## Theme Support
 
@@ -192,7 +80,6 @@ Radzen Blazor is MIT licensed and completely free to use. See [Radzen Blazor Git
 ## Dependencies
 
 - **MeshWeaver.Blazor** - Base BlazorView infrastructure
-- **MeshWeaver.GridModel** - Grid model definitions
 - **Radzen.Blazor** - Radzen Blazor components (MIT licensed)
 
 ## Related Projects
