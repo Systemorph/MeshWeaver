@@ -1,0 +1,54 @@
+@using MeshWeaver.Mesh
+@* Renders one level of a node menu, recursing into Children as NATIVE Fluent sub-menus.
+
+   Replaces the four verbatim-duplicated @foreach blocks the header used to carry (Node / Mesh / AI /
+   GitHub), each of which called FlattenMenuItems — a helper that DELETED the parent and spliced its
+   children inline behind a divider. That threw away the one thing that disambiguated them: with two
+   GitHub sync sources configured you got two identical "Sync now / Update to latest / Check branch"
+   triplets and no way to tell which repo either belonged to.
+
+   Nesting is the component library's own feature, not a hand-rolled flyout: FluentMenuItem.MenuItems
+   renders <fluent-menu slot="submenu">, so expansion, roles, aria-haspopup/aria-expanded and the
+   keyboard model (Enter / ArrowRight to open, ArrowLeft / Escape to close) all come from FAST. There is
+   deliberately NO OnClick on a parent — the web component toggles the submenu instead of invoking, and
+   a grouping parent has nowhere to navigate to anyway.
+
+   Depth is unbounded: this component recurses into itself, so a three-level menu renders without
+   further work. Nothing ships deeper than two today (Export → PDF/DOCX/Email; GitHub → per-source
+   actions), but the recursion costs nothing over a hard-coded single level. *@
+
+@foreach (var menuItem in Items)
+{
+    var item = menuItem;
+    @if (item.Area == NodeMenuItemDefinition.SeparatorArea)
+    {
+        <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+    }
+    else if (item.IsSubmenuParent)
+    {
+        <FluentMenuItem title="@(item.Tooltip ?? item.Label)">
+            <ChildContent>
+                <NodeMenuItemLabel Item="@item" />
+            </ChildContent>
+            <MenuItems>
+                <NodeMenuItemList Items="@(item.Children ?? [])" OnItemClick="@OnItemClick" />
+            </MenuItems>
+        </FluentMenuItem>
+    }
+    else
+    {
+        <FluentMenuItem OnClick="@(() => OnItemClick.InvokeAsync(item))" title="@(item.Tooltip ?? item.Label)">
+            <NodeMenuItemLabel Item="@item" />
+        </FluentMenuItem>
+    }
+}
+
+@code {
+    /// <summary>The items to render at this level.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<NodeMenuItemDefinition> Items { get; set; } = [];
+
+    /// <summary>Raised when an ACTIVATABLE item is chosen. Parents never raise it.</summary>
+    [Parameter]
+    public EventCallback<NodeMenuItemDefinition> OnItemClick { get; set; }
+}

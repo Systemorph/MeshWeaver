@@ -96,10 +96,18 @@ public static class InstanceSyncLayoutArea
             + $"?spaceId={Uri.EscapeDataString(spacePath)}"
             + $"&sourceId={Uri.EscapeDataString(source.Id)}"
             + $"&returnPath={Uri.EscapeDataString(returnPath)}";
+        // 🚨 forceLoad — /connect/instance is a server-side minimal-API endpoint. WithNavigateToHref
+        // navigates INSIDE the Blazor circuit, so the router matched its own catch-all page and the
+        // user got "does not match any registered address pattern" instead of the OAuth redirect.
+        // Only a full browser load leaves the SPA and reaches the endpoint.
         card = card.WithView(Controls.Button(LocalizationCatalog.Get("ui.connectOAuth", locale))
             .WithAppearance(Appearance.Outline)
             .WithIconStart(FluentIcons.PlugConnected())
-            .WithNavigateToHref(connectHref));
+            .WithClickAction(ctx =>
+            {
+                ctx.NavigateTo(connectHref, forceLoad: true);
+                return Task.CompletedTask;
+            }));
 
         var sourcePath = source.Path;
         var configPath = InstanceSyncService.ConfigPath(spacePath, source.Id);

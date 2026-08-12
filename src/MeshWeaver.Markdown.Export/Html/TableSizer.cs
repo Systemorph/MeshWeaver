@@ -1,7 +1,7 @@
 using System.Globalization;
 using HtmlAgilityPack;
 
-namespace MeshWeaver.Markdown.Export.Email;
+namespace MeshWeaver.Markdown.Export.Html;
 
 /// <summary>
 /// Gives every markdown table explicit, content-proportional column widths.
@@ -25,7 +25,7 @@ namespace MeshWeaver.Markdown.Export.Email;
 /// squeezed to nothing becomes unreadable. Square-root damping plus a floor and a cap keeps a
 /// paragraph column from starving the others while leaving a tiny column legible.</para>
 /// </summary>
-public static class EmailTableSizer
+public static class TableSizer
 {
     /// <summary>Narrowest a column may be, in percent — below this even short values wrap badly.</summary>
     private const double MinPercent = 11.0;
@@ -41,7 +41,7 @@ public static class EmailTableSizer
         + "font-size:13px;line-height:1.45";
 
     private const string CellStyle =
-        "border:1px solid " + EmailStyles.BorderColor + ";padding:8px 10px;vertical-align:top;text-align:left";
+        "border:1px solid " + MarkupStyles.BorderColor + ";padding:8px 10px;vertical-align:top;text-align:left";
 
     private const string HeaderCellExtra = ";background:#f1f5f9;font-weight:700";
 
@@ -98,7 +98,12 @@ public static class EmailTableSizer
             }
         }
 
-        table.SetAttributeValue("role", "presentation");
+        // 🚨 Deliberately NOT role="presentation". These are the document's OWN tables — data the
+        // author wrote — and marking them presentational strips their semantics from a screen
+        // reader, which is a real loss for the reader and buys nothing: the sizing below is what
+        // Word needs, and Word does not consult `role`. Only the LAYOUT tables the card grid is
+        // built from carry role="presentation", and those are set by AreaMarkupRenderer, which
+        // knows they are scaffolding rather than content.
         table.SetAttributeValue("cellpadding", "0");
         table.SetAttributeValue("cellspacing", "0");
         table.SetAttributeValue("border", "0");

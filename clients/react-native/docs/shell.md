@@ -34,11 +34,24 @@ The shell reads them straight out of the same `{areas,data}` tree:
 | **AI** | `$Menu:AI` (when present) | Threads · Models · … |
 | **You** | in-app client providers | My profile · Voice · Connect to mesh · Zoom & display |
 
-Each `NodeMenuItemDefinition` carries `{ label, area, href, icon, order }`. A mesh item navigates to its
-`area` on the current node; a `client:*`-style item opens an in-app screen (see below). This is the same
-split MAUI's `PortalShellPage` renders (`hub.GetMenu(path, area, context)` + `IClientMenuProvider[]`).
+Each `NodeMenuItemDefinition` carries `{ label, area, href, icon, tooltip, order, children }`. A mesh item
+navigates to its `area` on the current node; a `client:*`-style item opens an in-app screen (see below).
+This is the same split MAUI's `PortalShellPage` renders (`hub.GetMenu(path, area, context)` +
+`IClientMenuProvider[]`).
 
-`src/Shell.tsx` → `LeftMenu` / `menuItems(tree, "$Menu:…")`.
+### Nested entries drill down
+
+An item carrying `children` is a **sub-menu parent** and is never activatable — the `_group` sentinel
+`area` marks one that exists only to hold others (`_separator` still draws a divider). Tapping a parent
+**replaces** the list with its children and offers a back control, so exactly one level is on screen at a
+time; parents show a `›` chevron and rows clear the 44 pt touch target.
+
+That is deliberately NOT the web clients' nested flyout. A panel opening beside its parent needs hover and
+width, and a phone has neither. Parity across clients means equivalent **capability** — every nested entry
+is reachable everywhere — not an identical gesture. MAUI's shell drills down the same way.
+
+`src/leftMenu.tsx` → `LeftMenuView` / `menuItems(tree, "$Menu:…")`; `src/Shell.tsx` supplies the client
+destinations. Pinned by `src/leftMenu.test.tsx`.
 
 ## Navigation
 

@@ -331,7 +331,8 @@ public static class PackageInstaller
     ///     baseline, fully public: <c>PartitionAccessPolicy { PublicRead = true }</c> at
     ///     <c>{partition}/_Policy</c> (#902). Declared segments are irrelevant — everything is
     ///     readable.</item>
-    ///   <item><b>Free</b> (<see cref="PackageManifest.Price"/> 0 or absent) with no declared
+    ///   <item><b>Free</b> (<see cref="PackageManifest.Price"/> 0 or absent AND no
+    ///     <see cref="PackageManifest.ContactEmail"/>) with no declared
     ///     <see cref="PackageManifest.PublicSegments"/> — the same fully-public policy: a free
     ///     package that a catalog hands out must be readable by everyone, signed in or not.</item>
     ///   <item><b>Free with declared <see cref="PackageManifest.PublicSegments"/></b> — public read
@@ -341,10 +342,12 @@ public static class PackageInstaller
     ///     Store's <c>CatalogGate</c> seeds for <c>/Store</c> (#200/#204). Underscore satellites
     ///     and the well-known <c>Public</c> segment follow the <c>PluginGate</c> conventions so the
     ///     two mechanisms converge instead of fighting.</item>
-    ///   <item><b>Priced</b> (any non-zero <see cref="PackageManifest.Price"/> — positive =
-    ///     purchasable, negative = coupon-only) — the installer writes NOTHING: the partition lands
-    ///     gated, readable only via the entitlement machinery (PluginGate / purchase), which is
-    ///     exactly the point of a price.</item>
+    ///   <item><b>Commercial</b> (<see cref="PackageEntitlement.IsCommercial"/>: any non-zero
+    ///     <see cref="PackageManifest.Price"/> — positive = purchasable, negative = coupon-only —
+    ///     or a <see cref="PackageManifest.ContactEmail"/>, i.e. sold contact-sales) — the installer
+    ///     writes NOTHING: the partition lands gated, readable only via the entitlement machinery
+    ///     (PluginGate / purchase / an admin-issued grant), which is exactly the point of asking to
+    ///     be paid or to be called.</item>
     /// </list>
     ///
     /// <para><b>Why the installer owns it.</b> An installed package is written entirely under
@@ -378,13 +381,14 @@ public static class PackageInstaller
         if (string.IsNullOrWhiteSpace(partition))
             return Observable.Return(Unit.Default);
 
-        // A priced package (positive = purchasable, negative = coupon-only) installs GATED: no
-        // public read of any kind — entitlement (PluginGate / purchase / coupon) is the only way
-        // in. Pre-installed overrides a price: platform baseline is public by definition.
+        // A commercial package — priced (positive = purchasable, negative = coupon-only) or
+        // contact-sales — installs GATED: no public read of any kind, entitlement (PluginGate /
+        // purchase / coupon / a grant issued after the sales conversation) is the only way in.
+        // Pre-installed overrides both: platform baseline is public by definition.
         if (!manifest.PreInstalled && manifest.IsCommercial())
         {
             logger?.LogDebug(
-                "[PackageInstaller] {Id} is priced — {Partition} stays gated (entitlement only)",
+                "[PackageInstaller] {Id} is commercial — {Partition} stays gated (entitlement only)",
                 manifest.Id, partition);
             return Observable.Return(Unit.Default);
         }

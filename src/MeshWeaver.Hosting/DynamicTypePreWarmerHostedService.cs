@@ -1,5 +1,7 @@
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using MeshWeaver.Graph;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -61,15 +63,17 @@ public sealed class DynamicTypePreWarmerHostedService(
     public const string BetweenTypesConfigKey = "PreWarm:BetweenTypes";
 
     /// <summary>
-    /// Config key opting a deployment INTO the ONE LINKED BATCH BUILD sweep (issue #1207):
+    /// Config key overriding whether the sweep runs as ONE LINKED BATCH BUILD (issue #1207):
     /// batched source discovery + direct compiler drive, no per-type hub activations, no
     /// compile-watcher settles, no cross-silo hops.
     ///
-    /// <para><b>Default: OFF, everywhere.</b> It is not yet trustworthy at production scale — see
-    /// the note in <c>KickWarmup</c> and #1216: its first production run resolved zero sources for
-    /// 169 of 237 types. Set <c>true</c> only where the discovery has been verified against that
-    /// mesh's own content, and check the sweep summary (`compiled` vs `contentBroken`) afterwards.
-    /// The activation-driven path remains the default and is unaffected by this key.</para>
+    /// <para>Absent, the mode follows the same initial-bake discriminator as
+    /// <see cref="BetweenTypesConfigKey"/>: a pod whose bake GATES readiness batches; an ungated
+    /// background warm keeps the activation-driven path. This is the ESCAPE HATCH — set
+    /// <c>false</c> to force the activation sweep on a gated pod (measured 18m55s for a 237-type
+    /// fleet where the batch takes ~60s), or <c>true</c> to batch an ungated warm-up. See the note
+    /// in <c>KickWarmup</c> for why the default was walked back once and what had to be proven
+    /// before restoring it.</para>
     /// </summary>
     public const string BatchBakeConfigKey = "PreWarm:BatchBake";
 
@@ -171,23 +175,33 @@ public sealed class DynamicTypePreWarmerHostedService(
                     gate is { GatesReadiness: true } ? "gated (zero)" : "serving (trickle)");
         }
 
-        // Batch mode (issue #1207) is OPT-IN — it must be asked for explicitly.
+        // Batch mode (issue #1207) follows the SAME initial-bake discriminator as the pacing above:
+        // a pod whose bake GATES readiness serves nobody while it bakes, so it runs the sweep as one
+        // linked batch build (no per-type hub activations); an ungated pod warming in the background
+        // of live traffic keeps the activation-driven path.
         //
-        // 🚨 It shipped defaulting ON for a gated pod and was WRONG AT PRODUCTION SCALE the first
-        // time it ran there (memex-cloud, 2026-08-11, ci.2947): the sweep finished in 19s with
-        // `compiled=4 compileErrors=59 contentBroken=169` out of 237 — i.e. the batched source
-        // discovery resolved NO sources for 169 types and PARTIAL sources for 59 more, so types
-        // that compile fine on the activation path were reported broken. The bake gate caught it
-        // and refused readiness (no outage, previous image kept serving), but with the default ON
-        // every gated portal that self-updates would stall its own rollout the same way — and a
-        // helm upgrade would silently undo the live `PreWarm__BatchBake=false` patches.
+        // History, because this default was walked back once and the reason it is safe to restore
+        // matters more than the default itself. It first shipped ON and was WRONG AT PRODUCTION
+        // SCALE (memex-cloud, ci.2947): 19s sweep, `compiled=4 compileErrors=59 contentBroken=169`
+        // of 237, because batched discovery resolved no sources for most types. Two real defects,
+        // both now fixed and both pinned by tests: a default query limit truncated the global fetch
+        // and `nodeType:Code` could not see Postgres-stored Code nodes at all (#1216/#1220), and
+        // `scope:subtree` was silently dropped for a WILDCARD namespace so nested sources were
+        // missed (#1232). Discovery also now REFUSES to answer rather than guess — a type that
+        // declares sources but resolves none fails the whole batch to the activation path, so a
+        // discovery bug can no longer masquerade as the non-gating NoSources content verdict.
         //
-        // The defect is in the discovery, not the gate: a wrongly-empty source set becomes
-        // PreWarmStatus.NoSources ("content-broken"), which by design does NOT gate — so on an
-        // UNGATED pod the same bug would ship a fleet of empty assemblies silently. Until
-        // discovery is proven at scale, correctness beats speed: no config, no batch.
-        // Tracked in #1216.
-        var batchBake = false;
+        // Verified in production on all three portals (2026-08-11, ci.2982/ci.2990):
+        //   memex-cloud  237/237 in 62s (the same fleet took 18m55s on the activation path)
+        //   memex        83 already baked + 1 pending in 6.9s
+        //   atioz        39/39 in 38s; the follower pod finished in 1.1s off the shared store
+        // all with compileErrors=0, timedOut=0, contentBroken=0.
+        //
+        // The default is what every deployment gets, so it must be the verified path — carrying it
+        // as three live `kubectl set env` patches meant a helm upgrade, a new namespace or a fresh
+        // deployment silently fell back to the slow path. `PreWarm:BatchBake` returns to being the
+        // ESCAPE HATCH (set it false to force the activation sweep), not the enabler.
+        var batchBake = gate is { GatesReadiness: true };
         var batchRaw = services.GetService<IConfiguration>()?[BatchBakeConfigKey];
         if (!string.IsNullOrWhiteSpace(batchRaw))
         {
@@ -201,9 +215,32 @@ public sealed class DynamicTypePreWarmerHostedService(
                     batchBake ? "gated (batch)" : "serving (activation-driven)");
         }
 
+        // 🚨 SEQUENCE THE SWEEP BEHIND THE STATIC REPO IMPORT — it is content this bake must see.
+        //
+        // The import is kicked fire-and-forget from its own StartAsync (it has to be: subscribing on
+        // the startup thread re-enters the hub schedulers and deadlocks), and ApplicationStarted —
+        // where this method runs — fires as soon as every StartAsync has RETURNED. So without this
+        // wait the sweep's ONE enumeration snapshot (Query(...).Take(1)) can be taken while the
+        // import is still landing content, and every NodeType missing from that snapshot is never
+        // baked: it compiles on the activation path when a user first opens it.
+        //
+        // Observed resolving BOTH ways on memex-cloud 2026-08-12 — the 23:02 pod enumerated 237
+        // types with the whole statically-served MeshWeaver/… tree absent, its 05:52 successor 279
+        // on the same content. Those 42 unbaked types are the "waiting for code" stall.
+        //
+        // Absent (no static import registered — every test host, non-portal hosts) this is
+        // immediate, so the shape is unchanged there. The signal also settles when the import FAILS,
+        // so a faulted import delays the bake rather than cancelling it.
+        var importSettled = services.GetService<StaticRepoImportSettled>();
+        if (importSettled is { IsSettled: false })
+            logger.LogInformation(
+                "DynamicTypePreWarmer: waiting for the static repo import to settle before "
+                + "enumerating — types it has not written yet would be missed by the bake");
+
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
-        _warmSubscription = DynamicTypePreWarmer
-            .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake)
+        _warmSubscription = (importSettled?.Settled ?? Observable.Return(Unit.Default))
+            .SelectMany(_ => DynamicTypePreWarmer
+                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake))
             .Subscribe(
                 outcome =>
                 {

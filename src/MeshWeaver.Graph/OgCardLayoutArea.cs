@@ -128,7 +128,7 @@ public static class OgCardLayoutArea
     {
         if (string.IsNullOrWhiteSpace(id))
             return [];
-        var value = id.Trim().TrimStart('?');
+        var value = StripReferenceParameters(id.Trim().TrimStart('?'));
 
         if (value.StartsWith("urls=", StringComparison.OrdinalIgnoreCase))
             return SplitTargets(value["urls=".Length..]);
@@ -141,6 +141,35 @@ public static class OgCardLayoutArea
         }
 
         return SplitTargets(value);
+    }
+
+    /// <summary>
+    /// Drops REFERENCE PARAMETERS the client appends to the area id, which are configuration and
+    /// never targets.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 An <c>@@</c> embed hides the embedded node's header, and the client carries that by
+    /// appending to the <c>LayoutAreaReference.Id</c> — see
+    /// <c>PathBasedLayoutArea.AppendParameter</c>, which picks its separator with
+    /// <c>s.Contains('?') ? "&amp;" : "?"</c>. Our id already IS a query
+    /// (<c>ParseAreaAndId</c> keeps the leading '?'), so the append lands as
+    /// <c>?urls=A,B,C&amp;showHeader=false</c>.
+    /// <para>Every other area reads its parameters with query semantics and is unaffected. This
+    /// one does not: the multi-target list is COMMA-separated, so without this strip the trailing
+    /// <c>&amp;showHeader=false</c> is swallowed into the LAST entry, turning it into
+    /// <c>https://host/Page&amp;showHeader=false</c> — one path segment matching no route. The
+    /// portal answers that 200 with its "does not match any registered address pattern" shell,
+    /// which carries no og: tags, so the final card of EVERY <c>@@</c>-embedded grid renders blank
+    /// and its link dead-ends. Found in production 2026-08-12: two grids of eight cards, and in
+    /// each the eighth was empty.</para>
+    /// <para>Splitting on the first '&amp;' is the documented contract, not a heuristic: a target
+    /// carrying a literal <c>&amp;</c>, <c>=</c>, <c>%</c> or comma must be percent-encoded (see
+    /// the class remarks), so an unencoded '&amp;' is always a parameter boundary.</para>
+    /// </remarks>
+    private static string StripReferenceParameters(string value)
+    {
+        var amp = value.IndexOf('&');
+        return amp < 0 ? value : value[..amp];
     }
 
     /// <summary>

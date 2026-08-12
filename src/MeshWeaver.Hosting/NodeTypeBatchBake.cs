@@ -134,7 +134,11 @@ internal static class NodeTypeBatchBake
         // mesh_nodes across every schema, plus every non-Postgres provider (the static catalog).
         $"nodeType:{CodeNodeType.NodeType}",
         // The `code` satellite table across every schema — where a Source/ or Test/ segment puts a
-        // Code node, and therefore where nearly all of them are.
+        // Code node, and therefore where nearly all of them are. These match on NAMESPACE, so they
+        // cover every Code node BELOW such a folder but not one whose own last segment IS the word
+        // (namespace `X/Y` for `X/Y/Source`); `CodeNodeSegmentNameValidator` forbids that name, which
+        // is what makes "the union is every Code node" true by construction rather than by luck
+        // (issue #1235, part 2).
         $"namespace:*/{CodeNodeType.SourceSubNamespace} scope:subtree nodeType:{CodeNodeType.NodeType}",
         $"namespace:*/{CodeNodeType.TestSubNamespace} scope:subtree nodeType:{CodeNodeType.NodeType}",
     ];
@@ -249,7 +253,17 @@ internal static class NodeTypeBatchBake
             var value = token[(colon + 1)..];
             if (key.Equals("path", StringComparison.OrdinalIgnoreCase)
                 || key.Equals("namespace", StringComparison.OrdinalIgnoreCase))
+            {
+                // 🚨 A WILDCARD location is not mirrorable (issue #1235). The matcher is
+                // CodeQueryResolver.Matches, which compares locations with a literal
+                // path.StartsWith(ns + "/") — it has no glob at all, so `namespace:*/Source`
+                // would match NOTHING and the type would resolve a silently partial source
+                // set. That is the #1216 failure shape, and the shape this gate exists to
+                // prevent: run it against the mesh instead, where the wildcard is understood.
+                if (QueryWildcard.ContainsWildcard(value))
+                    return false;
                 hasLocation = true;
+            }
             else if (key.Equals("scope", StringComparison.OrdinalIgnoreCase))
             {
                 // The matcher understands children (default) and subtree/descendants only.
