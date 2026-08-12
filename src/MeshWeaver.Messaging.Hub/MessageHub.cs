@@ -711,6 +711,19 @@ public sealed class MessageHub : IMessageHub
         return messageService.OpenGate(name);
     }
 
+    /// <summary>
+    /// Declares the named initialization gate DEAD — see <see cref="IMessageHub.FailGate"/> for
+    /// the contract. Everything deferred behind it is answered immediately, and later messages
+    /// that would have been deferred are answered too rather than parked.
+    /// </summary>
+    /// <param name="name">The name of the gate that can never open.</param>
+    /// <param name="reason">Why it can never open; becomes the failure message senders receive.</param>
+    /// <returns><c>true</c> if the gate existed and was failed; <c>false</c> if it was not found.</returns>
+    public bool FailGate(string name, string reason)
+    {
+        return messageService.FailGate(name, reason);
+    }
+
 
     /// <summary>
     /// Threshold above which per-message dispatch latency is reported at

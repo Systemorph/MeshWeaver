@@ -24,8 +24,29 @@ namespace MeshWeaver.Hosting;
 /// nothing), and <b>never Task return types</b> on the public surface.
 /// See <c>Doc/Architecture/AsynchronousCalls</c>.
 ///
-/// Each call is bounded by <see cref="MeshOperationOptions.Timeout"/> so a lost/slow response
-/// surfaces as <see cref="TimeoutException"/> within a few seconds — never a hang.
+/// <para>🚨 <b>Boundedness here comes from the HUB, per leg — this class adds no ceiling of its
+/// own, deliberately.</b> Every write below is a <c>hub.Observe(request, …)</c>, and
+/// <c>MessageHub.Observe</c> applies the hub's <c>RequestTimeout</c> (default 60 s, set with
+/// <c>WithRequestTimeout</c>) to its own response subject: a lost, misrouted or never-answered
+/// request surfaces as a named <see cref="TimeoutException"/>, a routing failure as a
+/// <see cref="DeliveryFailure"/>. The DELETE path is additionally bounded by
+/// <see cref="MeshOperationOptions.Timeout"/> — applied SERVER-side by
+/// <c>MeshExtensions.HandleDeleteNodeRequest</c>, which owns the fan-out it is bounding.</para>
+///
+/// <para>🚨 This class used to CLAIM a second, client-side ceiling — "each call is bounded by
+/// MeshOperationOptions.Timeout … never a hang" — that nothing applied: <c>OpTimeout</c> was
+/// declared here and never read, and <c>Doc/Architecture/AsynchronousCalls</c> told authors to
+/// write <c>.Timeout(OpTimeout)</c> on this surface as if it were already the rule. #1270 deleted
+/// the dead property and the false claim rather than switching the ceiling ON, and the reason is
+/// worth keeping: <b>a client-side ceiling makes the CALLER abandon a write that is still
+/// running.</b> It cancels nothing — the create is mid-flight in the mesh — so the operation's
+/// continuation outlives the caller's DI scope and resolves services from it after disposal. Tried
+/// on this PR's first CI run and it did exactly that: <c>[FATAL ERROR]
+/// System.ObjectDisposedException : Instances cannot be resolved … from this LifetimeScope</c> on a
+/// thread-pool thread, killing a test host that had reported 90/90 passing. A bound whose own
+/// failure mode is an unhandled exception in someone else's scope is not an improvement over no
+/// bound; making abandonment safe is a separate, larger change. Bound a mesh operation with the
+/// hub's <c>RequestTimeout</c>, which is enforced where the request actually lives.</para>
 /// </summary>
 internal sealed class MeshService(
     IEnumerable<IMeshQueryProvider> providers,
@@ -71,14 +92,8 @@ internal sealed class MeshService(
     private IMessageHub? _issuingHub;
     private IMessageHub IssuingHub => _issuingHub ??= hub.NodeOperationIssuingHub();
 
-    /// <summary>
-    /// Per-call timeout ceiling. Every CRUD observable is bounded by this so a lost response
-    /// (routing failure, deleted hub, stuck handler) surfaces as TimeoutException within
-    /// a few seconds instead of hanging forever. Default 30s, configurable via
-    /// <c>WithMeshOperationTimeout</c>.
-    /// </summary>
-    private TimeSpan OpTimeout =>
-        (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions()).Timeout;
+    // 🗑️ `OpTimeout` lived here, declared and never read (#1270). It is gone rather than wired up
+    // — see the class remarks for why a client-side ceiling on these writes is the wrong repair.
 
     private AccessContext? CaptureContext()
     {
