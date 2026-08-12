@@ -300,13 +300,19 @@ public sealed class IoPool : IIoPool, IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        // 🚨 DRAIN BEFORE flipping the flag. Drain() returns early when _disposed is true (its
-        // idempotence guard), so setting the flag first meant Dispose() joined NOTHING — while its
-        // own summary promises "when it returns, no pool thread is running, so the caller may safely
-        // unload the node ALCs whose types that work referenced". That promise was unbacked on the
-        // disposal path, which is the path that unloads every ALC. (Copilot review, #1334.)
-        Drain();
+        // 🚨 Dispose() joins NOTHING today: it sets _disposed and only THEN calls Drain(), whose
+        // idempotence guard returns early on exactly that flag — so the promise in this method's
+        // summary ("when it returns, no pool thread is running, so the caller may safely unload the
+        // node ALCs whose types that work referenced") is unbacked on the disposal path, which is the
+        // path that unloads every ALC.
+        //
+        // Deliberately NOT fixed here. Swapping the two lines makes Dispose actually cancel and join,
+        // which CHANGES TEARDOWN SEMANTICS repo-wide, and the first CI run that carried it saw
+        // OrderedRouteDispatcherTest hang for its full 30s budget (it passes locally in 1s, so the
+        // attribution is unproven either way). That belongs in its own PR where a hang can only have
+        // one cause. Tracked with the evidence in #1338's review thread.
         _disposed = true;
+        Drain();
         _poolCts.Dispose();
         _gate.Dispose();
         _blockingIdle.Dispose();
