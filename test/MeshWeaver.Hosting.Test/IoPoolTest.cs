@@ -156,7 +156,7 @@ public class IoPoolTest
     // proceeds over live work. Deterministic: the leaf below ignores its cancellation token, which
     // is EXACTLY the case Drain's non-zero return is documented to report.
     [Fact]
-    public void Drain_joins_InvokeBlocking_leaves_too()
+    public async Task Drain_joins_InvokeBlocking_leaves_too()
     {
         using var pool = new IoPool(2);
         using var entered = new ManualResetEventSlim(false);
@@ -177,14 +177,17 @@ public class IoPoolTest
         // earlier shape let Drain sit out the leaf's full 10s hold to observe the same thing.
         // (Copilot review, #1334.)
         var drain = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
-        drain.Wait(TimeSpan.FromMilliseconds(300)).Should().BeFalse(
+        // await, never Task.Wait/.Result — CI's analyzers (xUnit1031) reject blocking task ops in a
+        // test, and they are right: this test exists to prove a JOIN, so it must not itself block.
+        var raced = await Task.WhenAny(drain, Task.Delay(300, TestContext.Current.CancellationToken));
+        raced.Should().NotBeSameAs(drain,
             "Drain must block while a blocking leaf is still executing — a blocking leaf holds no "
             + "gate permit, so re-acquiring the gate joins nothing and Drain used to return 0 here");
 
         release.Set();
 
-        drain.Wait(Timeout5).Should().BeTrue("the leaf unwound, so the join must complete");
-        drain.Result.Should().Be(0, "the leaf unwound within the budget — nothing to report");
+        var residual = await drain.WaitAsync(Timeout5, TestContext.Current.CancellationToken);
+        residual.Should().Be(0, "the leaf unwound within the budget — nothing to report");
         pool.CurrentInFlight.Should().Be(0);
     }
 
@@ -196,7 +199,7 @@ public class IoPoolTest
     /// re-introducing the very bug the join was added to fix. (Copilot review, #1334.)
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public void Drain_joinsABlockingLeaf_evenWhileAnAsyncLeafIsRunning()
+    public async Task Drain_joinsABlockingLeaf_evenWhileAnAsyncLeafIsRunning()
     {
         using var pool = new IoPool(4);
         using var asyncEntered = new ManualResetEventSlim(false);
@@ -222,14 +225,15 @@ public class IoPoolTest
         blockingEntered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
 
         var drain = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
-        drain.Wait(TimeSpan.FromMilliseconds(300)).Should().BeFalse(
+        var raced = await Task.WhenAny(drain, Task.Delay(300, TestContext.Current.CancellationToken));
+        raced.Should().NotBeSameAs(drain,
             "the blocking leaf is still running, and a concurrently-running ASYNC leaf must not make "
             + "the blocking join believe the pool is idle");
 
         release.Set();
         asyncGate.TrySetResult(0);
 
-        drain.Wait(Timeout5).Should().BeTrue();
+        await drain.WaitAsync(Timeout5, TestContext.Current.CancellationToken);
     }
 
     /// <summary>
