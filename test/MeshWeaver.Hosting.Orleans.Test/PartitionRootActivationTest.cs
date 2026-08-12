@@ -49,13 +49,20 @@ public class PartitionRootActivationTest(ITestOutputHelper output)
     /// root and the ping responds in &lt; 1 s. 5 s leaves comfortable headroom
     /// for grain startup on a slow CI agent without overlapping the 30 s
     /// deadlock window.
+    ///
+    /// <para>Measured 2026-08-12 (issue #1289), same machine, five matched arms:
+    /// 335 ms alone, 408 ms in a full 156-test suite run, 335 ms under
+    /// <c>DOTNET_PROCESSOR_COUNT=2</c>, 352 ms on the previous day's main, 341 ms
+    /// in Debug - all while the box carried load average 12.6. So the budget is
+    /// ~14x the observed cost, not a thin margin: a run that burns the full 5 s
+    /// is a 14x outlier, i.e. the silo stopped answering, and the assertions
+    /// below are written to say so.</para>
     /// </summary>
     private static readonly TimeSpan FastBudget = TimeSpan.FromSeconds(5);
 
     [Fact]
     public async Task BarePartitionPath_NoMeshNode_RespondsToPing()
     {
-        var ct = new CancellationTokenSource(FastBudget).Token;
         var client = GetClient($"prtest-{Guid.NewGuid():N}");
 
         // A bare partition-root path. With InMemoryPartitionStorageProvider
@@ -71,16 +78,33 @@ public class PartitionRootActivationTest(ITestOutputHelper output)
         // Ping the grain at the bare partition path. PingRequest is the
         // canonical hub-readiness probe â€” handled by the default hub config
         // installed via ConfigureDefaultNodeHub (no NodeType required).
-        var response = await client
-            .Observe(new PingRequest(), o => o.WithTarget(new Address(partitionRoot)))
-            .FirstAsync()
-            .ToTask(ct);
+        //
+        // The budget is spent via .Timeout(), not a CancellationToken, and the
+        // TimeoutException is swallowed so the ASSERTIONS below run. With
+        // `.ToTask(cancellationToken)` the budget expiring threw a bare
+        // TaskCanceledException out of the await, so the two messages that name
+        // what a missing ping MEANS (the 30 s prod symptom) never printed and the
+        // failure said only "a task was canceled" - a detector that fires without
+        // saying what it detected (issue #1289).
+        IMessageDelivery<PingResponse>? response = null;
+        try
+        {
+            response = await client
+                .Observe(new PingRequest(), o => o.WithTarget(new Address(partitionRoot)))
+                .FirstAsync()
+                .Timeout(FastBudget)
+                .ToTask();
+        }
+        catch (TimeoutException)
+        {
+            // Fall through: `response` stays null and the assertion below reports it.
+        }
 
         sw.Stop();
 
         // Post-fix: ping returns the grain's PingResponse within milliseconds.
-        // Pre-fix: would time out at the FastBudget cancellation token
-        // (CancellationException) or at the 30 s Orleans response promise.
+        // Pre-fix: no response at all inside FastBudget (and, without the budget,
+        // the 30 s Orleans response promise).
         response.Should().NotBeNull(
             "the partition-root fallback must synthesize a MeshNode so MessageHubGrain " +
             "activates â€” null Node strands activation on Where(r.Node is not null), and " +

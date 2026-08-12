@@ -346,11 +346,17 @@ internal static class NodeTypeBatchBake
                 + "with {Limit}, because a truncated source set compiles WRONG", query, SourceDiscoveryLimit);
         var bounded = $"{query} limit:{SourceDiscoveryLimit}";
         return Observable
+            // 🚨 .AsSystem() — batch-bake source discovery is framework infrastructure, not a
+            // user-scoped read, and this Defer's subscription does not carry the caller's ambient
+            // identity. Unstamped it would resolve as Anonymous and hand the compiler a silently
+            // TRUNCATED source set, which "compiles WRONG" exactly as the limit: note above warns.
+            // Declared on the request so no scheduler hop can lose it. See
+            // Doc/Architecture/QueryIdentity.
             .Defer(() => meshService.Query<MeshNode>(new MeshQueryRequest
             {
                 Query = bounded,
-                Limit = SourceDiscoveryLimit
-            }))
+                Limit = SourceDiscoveryLimit,
+            }.AsSystem()))
             .Scan(
                 ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
                 MeshNodeCompilationService.ApplyQueryChange)
