@@ -208,9 +208,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                 var (matched, parsedQuery, _) = collected;
 
                 // Satellite paths and partition roots are not content-query results.
-                // 🚨 The rules live in IsExcludedFromResults — one predicate, documented there —
-                // precisely so the LIVE path (ProcessBatch's notification supplement) applies the
-                // same set. Duplicating them here is how the two drifted apart (#1193).
+                // 🚨 The rules live in IsExcludedFromResults — one predicate, documented there.
+                // This read is now the SOLE source of rows for both the Initial snapshot and every
+                // live delta (#1250 removed the live path's parallel admission of raw notification
+                // entities), so applying them here applies them everywhere.
                 IEnumerable<object> matchedNodes =
                     matched.Where(n => !IsExcludedFromResults(n, parsedQuery));
 
@@ -328,12 +329,12 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     }
 
     /// <summary>
-    /// The result-set exclusions this provider applies to EVERY emission — the snapshot
-    /// (<see cref="RunQueryNodes"/>) and the live change feed
-    /// (<see cref="ProcessBatch{T}"/>'s notification supplement) alike.
+    /// The result-set exclusions this provider applies to EVERY emission. They live in
+    /// <see cref="RunQueryNodes"/> — the single read behind the Initial snapshot AND every live
+    /// delta (<see cref="ProcessBatch{T}"/> only diffs that read's output).
     ///
-    /// <para>🚨 <b>One predicate, both paths (#1193).</b> The snapshot used to own these rules
-    /// inline while the live path's write-lag supplement admitted any notified entity on
+    /// <para>🚨 <b>One predicate, one path (#1193, #1250).</b> The snapshot used to own these rules
+    /// inline while the live path ran a parallel admission of raw change-notification entities on
     /// <c>_evaluator.Matches</c> alone — and <c>Matches</c> is <c>true</c> for EVERY node when the
     /// query carries no filter and no free-text term (a bare <c>path:X scope:descendants</c>
     /// catalog listing is exactly that shape). So a write to a node the snapshot deliberately
@@ -345,7 +346,10 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// writes: it landed inside a <c>path:{root} scope:descendants</c> subscription and turned
     /// <c>SearchResultStormTest</c>'s exact re-render count into a coin flip. The add-then-remove
     /// of an unchanged node is self-evidently wrong — nothing about it changed between the two
-    /// frames; only which code path judged it did.</para>
+    /// frames; only which code path judged it did. #1193 taught that admission to apply these
+    /// exclusions; #1250 deleted the admission outright, because the SAME shape also bypassed
+    /// row-level security (<c>Matches</c> performs no permission check) and covered no real
+    /// write lag.</para>
     ///
     /// <para><b>1. Satellite paths.</b> Match PG's table separation: a NON-satellite content query
     /// must not return satellite nodes. On PG these live in separate per-prefix tables (the
@@ -1324,13 +1328,46 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
                         // subscribers attaching during the debounce gap saw the
                         // pre-write Replay(1) snapshot. Trade throughput (one
                         // RunQuery per change vs batched) for correctness.
+                        //
+                        // 🚨🚨 THE NOTIFICATION IS A TRIGGER, NEVER A RESULT ROW (#1250).
+                        // The notification's raw `Entity` is deliberately discarded: RunQuery is
+                        // the ONLY source of rows, so every emission — Initial and every live
+                        // delta alike — carries exactly what the (RLS-filtered, when this is the
+                        // secured IMeshQueryProvider surface) read returned.
+                        //
+                        // This used to "supplement" the re-query with `change.Entity` whenever
+                        // `_evaluator.Matches` accepted it, to cover a supposed write lag. It
+                        // could never do that, and it was a row-level-security BYPASS:
+                        //  • Matches() consults ONLY the query's filter and free-text term
+                        //    (QueryEvaluator.Matches) — no permission check of any kind. A write
+                        //    under the subscription's base path to a node the subscriber cannot
+                        //    read was injected into their result set as an `Added` carrying the
+                        //    node AND its Content, and nothing downstream re-filtered it
+                        //    (MeshQuery.TryFilterDuplicateLiveChange forwards duplicate Addeds by
+                        //    design). The next re-query took it back out as `Removed` — a flicker
+                        //    of data the caller was never entitled to.
+                        //  • There was no write lag to cover. EVERY adapter that populates
+                        //    `Entity` commits to the store BEFORE publishing
+                        //    (InMemoryStorageAdapter.Write, SqliteStorageAdapter.Write,
+                        //    PostgreSqlStorageAdapter.Write/PublishChanges,
+                        //    SnowflakeStorageAdapter.Write; FileSystemChangeWatcher notifies with
+                        //    the node it just READ back). Conversely every source whose
+                        //    notification can outrun row visibility — PG's LISTEN/NOTIFY
+                        //    (PostgreSqlChangeListener), the Cosmos change feed, the Snowflake
+                        //    poller — passes `Entity = null`, so the supplement could not fire
+                        //    for them even in principle.
+                        //  • Whenever the supplement DID change the outcome, the re-query was the
+                        //    one that was right: the row it re-added was one the read had
+                        //    excluded by RLS, by satellite-table routing (#1193), by a path
+                        //    filter, or past the load cap. It also raced the per-schema PG
+                        //    delegate over the same write, which is the provider race #889
+                        //    documents in MeshQuery.TryFilterDuplicateLiveChange.
                         disposables.Add(
                             changeBuffer
-                                .Select(n => RunQuery()
-                                    .Select(newResults => (batch: (IList<DataChangeNotification>)new[] { n }, newResults)))
+                                .Select(_ => RunQuery())
                                 .Concat()
                                 .Subscribe(
-                                    t => ProcessBatch(t.batch, t.newResults, currentItems, parsedQuery, observer),
+                                    newResults => ProcessBatch(newResults, currentItems, parsedQuery, observer),
                                     ex => observer.OnError(ex)));
 
                         lock (earlyLock)
@@ -1372,8 +1409,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         });
     }
 
+    /// <summary>
+    /// Diffs one re-query snapshot against the live result set and emits the Added / Updated /
+    /// Removed deltas. <b>The re-query is the ONLY source of result rows</b> — see the note on the
+    /// live pipeline in <see cref="ObserveQueryInternal{T}"/> for why the change notification's raw
+    /// entity is deliberately not admitted here (#1250).
+    /// </summary>
     private void ProcessBatch<T>(
-        IList<DataChangeNotification> batch,
         List<(string? Path, T Item)> newResults,
         Dictionary<string, T> currentItems,
         ParsedQuery parsedQuery,
@@ -1383,31 +1425,6 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
         foreach (var (path, item) in newResults)
             if (!string.IsNullOrEmpty(path))
                 newItems[path] = item;
-
-        var changesByPath = batch
-            .GroupBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
-
-        // Supplement re-query results with entities from notifications
-        // that haven't appeared in the store yet (write lag).
-        //
-        // 🚨 An admitted entity must pass the SAME result-set exclusions the re-query applies
-        // (IsExcludedFromResults) — `_evaluator.Matches` is not enough. Matches() consults only
-        // the query's filter and free-text term, so for a bare `path:X scope:descendants`
-        // listing (neither present) it returns true for EVERY notified node, satellites and
-        // partition roots included. Admitting one produced a phantom structural `Added` that
-        // the next re-query immediately took back out as `Removed` — see IsExcludedFromResults.
-        // A Deleted notification still removes unconditionally: dropping a path that is gone can
-        // never be wrong, and an excluded path was never in the set to begin with.
-        foreach (var (path, change) in changesByPath)
-        {
-            if (change.Entity is not T directMatch || !_evaluator.Matches(directMatch, parsedQuery))
-                continue;
-            if (change.Kind == DataChangeKind.Deleted)
-                newItems.Remove(path);
-            else if (!IsExcludedFromResults(directMatch, parsedQuery))
-                newItems[path] = directMatch;
-        }
 
         var addedItems = new List<T>();
         var updatedItems = new List<T>();
