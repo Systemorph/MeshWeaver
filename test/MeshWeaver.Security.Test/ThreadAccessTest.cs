@@ -375,6 +375,6 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var context = new AccessContext { ObjectId = userId, Name = userId };
         accessService.SetContext(context);
-        accessService.SetCircuitContext(context);
+        accessService.SetHostIdentity(context);
     }
 }

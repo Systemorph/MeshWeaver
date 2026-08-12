@@ -91,7 +91,7 @@ public class ExportImportAccessControlTest : MonolithMeshTestBase
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var ctx = new AccessContext { ObjectId = userId, Name = userId };
         access.SetContext(ctx);
-        access.SetCircuitContext(ctx);
+        access.SetHostIdentity(ctx);
     }
 
     private MeshExportManifest ReadManifest(byte[] zip)

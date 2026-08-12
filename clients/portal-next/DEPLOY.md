@@ -35,7 +35,7 @@ for a one-off experiment — kept for reference; the chart above is the source o
 # grpc-web/src/gen (protobuf TS) is GENERATED + gitignored, and the .proto lives OUTSIDE the
 # clients/ context (src/MeshWeaver.Hosting.Grpc/Protos), and buf ships glibc binaries — so
 # generate on the HOST first, then build (see the Dockerfile header):
-npm --prefix clients/grpc-web install && npm --prefix clients/grpc-web run gen
+npm --prefix clients/grpc-web ci && npm --prefix clients/grpc-web run gen
 
 # From the repo root — the build context is clients/ (the app compiles ../react + ../grpc-web sources)
 docker build -f clients/portal-next/Dockerfile -t meshweaver/portal-next:dev clients/

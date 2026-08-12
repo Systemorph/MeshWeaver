@@ -41,7 +41,7 @@ public class ThreadCreatableFromHomeTest(ITestOutputHelper output) : MonolithMes
     public async Task Thread_IsCreatableFromOwnerHome_AndReachable()
     {
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        access.SetCircuitContext(TestUsers.Admin); // the owner — must be able to create threads in their partition
+        access.SetHostIdentity(TestUsers.Admin); // the owner — must be able to create threads in their partition
 
         var client = GetClient();
         // The owner's partition must be live (onboarded ⇒ partition exists). A PingRequest activates it;

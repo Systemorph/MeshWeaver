@@ -68,7 +68,7 @@ public class NavigationProgressTest
         // TrackNavigationActivity before the un-proxyable IMessageHub.Post (TypeLoad-faults
         // under Castle DynamicProxy in CI).
         var systemAccess = new AccessService();
-        systemAccess.SetCircuitContext(new AccessContext { ObjectId = WellKnownUsers.System, Name = "System" });
+        systemAccess.SetHostIdentity(new AccessContext { ObjectId = WellKnownUsers.System, Name = "System" });
         _hubServiceProvider.GetService(typeof(AccessService)).Returns(systemAccess);
 
         _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav")));

@@ -175,14 +175,14 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         // watcher's Throttle/Subscribe continuation has no live AccessContext (#948).
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var previousContext = access.CircuitContext;
-        access.SetCircuitContext((previousContext ?? TestUsers.Admin) with { Locale = "de" });
+        access.SetHostIdentity((previousContext ?? TestUsers.Admin) with { Locale = "de" });
         try
         {
             client.SubmitMessage(threadPath, "hello", modelName: StaleModel, createdBy: TestUser);
         }
         finally
         {
-            access.SetCircuitContext(previousContext);
+            access.SetHostIdentity(previousContext);
         }
 
         var thread = await WaitForThread(threadPath,
