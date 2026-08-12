@@ -1206,7 +1206,7 @@ public partial class MeshSearchView
     /// <summary>
     /// Tears down the tree's live subscriptions. Also runs on <see cref="ResetTree"/>, so the probe
     /// accumulator is CLEARED (disposes its contents, stays usable) rather than disposed; only
-    /// <see cref="Dispose"/> makes it terminal.
+    /// <see cref="DisposeAsync"/> makes it terminal.
     /// </summary>
     private void DisposeTreeSubscriptions()
     {
