@@ -242,8 +242,118 @@ internal class PathResolutionService : IPathResolver, IDisposable
 
         var resolved = ResolveSegments(normalized.Split('/'), routeShapeOnly);
         if (forNavigation)
-            resolved = resolved.SelectMany(RewriteLegacyUserHome);
+            resolved = resolved
+                .SelectMany(RewriteLegacyUserHome)
+                // Moved-node redirects are NAVIGATION-ONLY, for the same reason the legacy-home
+                // rewrite above is: a route or a read that silently answers with a DIFFERENT node
+                // than the caller named corrupts callers downstream (the "NO FALLBACK" banner in
+                // RoutingServiceBase.RouteMessage). Browsing is the one surface where landing on
+                // the new location is what the user meant.
+                .SelectMany(r => FollowRedirects(r, normalized));
         return resolved.DistinctUntilChanged(AddressResolutionEquality.Instance);
+    }
+
+    /// <summary>
+    /// Follows a <c>Redirect</c> declaration (<see cref="NodeRedirect"/>) left behind at a retired
+    /// path, and keeps following while the new location is itself a redirect. Subtree-applying: the
+    /// unmatched <see cref="AddressResolution.Remainder"/> rides along, so one declaration at
+    /// <c>Old</c> moves <c>Old/A/B</c> to <c>New/A/B</c>.
+    ///
+    /// <para><b>Termination is proven two ways, not one.</b> A visited-set catches every cycle
+    /// (A → B → A, the A → A self-redirect, and the A → A/child descent that would otherwise
+    /// re-enter the same declaration forever); <see cref="NodeRedirectRules.MaxHops"/> bounds the
+    /// acyclic-but-long chain, which the visited-set alone would happily walk. Both are needed —
+    /// each is the other's backstop, and each hop costs a live resolution query, so an unbounded
+    /// walk on a hub-reachable path is exactly the shape that wedges a hub.</para>
+    ///
+    /// <para><b>A stopped chain is loud, not silent.</b> A loop / cap overrun / missing target logs
+    /// at Error (naming the full chain) AND returns the redirect node's own resolution tagged with
+    /// <see cref="AddressResolution.RedirectDiagnostic"/> — so the viewer lands on a page that names
+    /// the intended destination, and both the GUI and the tests can read the reason as a value.</para>
+    ///
+    /// <para>🚨 <b>Not an access-control surface.</b> This rewrites a PATH and nothing else. The
+    /// caller then resolves, gates and reads the target exactly as if the viewer had typed the target
+    /// URL — the anonymous gate in <c>NavigationService.ProcessResolvedPath</c> and the content
+    /// stream's RLS both run on the FINAL path, for the CALLING user. A redirect therefore cannot
+    /// widen what anyone can see; it can only change which path they are denied on.</para>
+    ///
+    /// <para>100% reactive: recursion is <c>Observable.Defer</c> + <c>SelectMany</c>, never a loop
+    /// with an await (see <c>Doc/Architecture/AsynchronousCalls.md</c>).</para>
+    /// </summary>
+    private IObservable<AddressResolution?> FollowRedirects(
+        AddressResolution? resolution,
+        string requestedPath,
+        ImmutableHashSet<string>? visited = null,
+        int hop = 0)
+    {
+        // Nothing resolved, or what resolved is not a redirect declaration → literal answer.
+        if (resolution?.Node is null
+            || !string.Equals(resolution.Node.NodeType, NodeRedirectRules.NodeTypeName, StringComparison.Ordinal))
+            return Observable.Return(resolution);
+
+        // 🚨 ContentAs, never `is NodeRedirect`: the node crosses a hub boundary to get here, so an
+        // unresolved $type degrades it to a raw JsonElement and a soft-cast would silently read the
+        // declaration as absent — the redirect would just stop working, with nothing to grep.
+        var redirect = resolution.Node.ContentAs<NodeRedirect>(_hub.JsonSerializerOptions, _logger);
+        var next = NodeRedirectRules.Rewrite(redirect, resolution.Remainder);
+        if (next is null)
+        {
+            // The declaration does not apply here (no target, or an Exact declaration reached by a
+            // deep link). Not an error: the caller keeps the literal resolution and the redirect
+            // node's own view names the destination.
+            if (redirect is not null && NodeRedirectRules.Normalize(redirect.TargetPath).Length == 0)
+                return Observable.Return<AddressResolution?>(
+                    resolution with { RedirectDiagnostic = RedirectDiagnostic.TargetMissing });
+            return Observable.Return(resolution);
+        }
+
+        var seen = (visited ?? ImmutableHashSet<string>.Empty)
+            .Add(NodeRedirectRules.Normalize(requestedPath))
+            .Add(NodeRedirectRules.Normalize(resolution.Prefix));
+
+        if (NodeRedirectRules.IsCycle(seen, next))
+        {
+            _logger?.LogError(
+                "Redirect cycle at '{Redirect}': following it would re-enter '{Next}', already visited on this chain [{Chain}]. "
+                + "Serving the redirect node itself. Fix the declaration — a Redirect node must not point back into its own chain.",
+                resolution.Prefix, next, string.Join(" → ", seen));
+            return Observable.Return<AddressResolution?>(
+                resolution with { RedirectDiagnostic = RedirectDiagnostic.Loop });
+        }
+
+        if (hop + 1 >= NodeRedirectRules.MaxHops)
+        {
+            _logger?.LogError(
+                "Redirect chain from '{Requested}' exceeded the {MaxHops}-hop cap at '{Redirect}' → '{Next}' [{Chain}]. "
+                + "Serving the redirect node itself. Collapse the chain — point the first declaration at the final target.",
+                requestedPath, NodeRedirectRules.MaxHops, resolution.Prefix, next, string.Join(" → ", seen));
+            return Observable.Return<AddressResolution?>(
+                resolution with { RedirectDiagnostic = RedirectDiagnostic.DepthExceeded });
+        }
+
+        return Observable.Defer(() => ResolveSegments(next.Split('/'), routeShapeOnly: false))
+            .SelectMany(target =>
+            {
+                if (target is null)
+                {
+                    _logger?.LogError(
+                        "Redirect at '{Redirect}' points at '{Next}', which does not resolve to any node. "
+                        + "Serving the redirect node itself so the viewer at least sees where it was meant to go.",
+                        resolution.Prefix, next);
+                    return Observable.Return<AddressResolution?>(
+                        resolution with { RedirectDiagnostic = RedirectDiagnostic.TargetMissing });
+                }
+
+                return FollowRedirects(target, next, seen, hop + 1)
+                    .Select(final => final is null
+                        ? null
+                        // Keep the ORIGINAL requested path across every hop: the GUI needs
+                        // "you asked for X" to rewrite the URL and tell the viewer, and an
+                        // intermediate hop is an implementation detail nobody typed.
+                        : final.RedirectDiagnostic is not null
+                            ? final
+                            : final with { RedirectedFrom = requestedPath });
+            });
     }
 
     /// <summary>

@@ -84,6 +84,14 @@
         {
             <NavigationProgressBar Status="@Status" Compact="true" CssClass="overlay" />
         }
+        @* The URL asked for one place and we are showing another (a declared Redirect node, or the
+           nearest existing ancestor of a path that is not there). Say so — silently serving a
+           different page than the address bar promised is how people conclude the product is
+           broken. Dismissible: it is information, not an error. *@
+        @if (RedirectNotice is { } redirectNotice)
+        {
+            <FluentMessageBar Intent="MessageIntent.Info" AllowDismiss="true" Title="@redirectNotice" />
+        }
         <LayoutAreaView ViewModel="@ViewModel" Top="true" DrivesMenu="true" />
     }
 </CascadingValue>
