@@ -310,7 +310,7 @@ public static class EducationLayoutAreas
     // A query stream reports Initial/Reset as the FULL result but Added/Updated/Removed as ONLY the changed
     // items — so the rail folds the changes instead of re-rendering from a delta, which would blank every
     // page the delta does not mention the moment someone adds or renames one.
-    private static ImmutableDictionary<string, MeshNode> ApplyQueryChange(
+    internal static ImmutableDictionary<string, MeshNode> ApplyQueryChange(
         ImmutableDictionary<string, MeshNode> nodes, QueryResultChange<MeshNode> change)
         => change.ChangeType switch
         {
