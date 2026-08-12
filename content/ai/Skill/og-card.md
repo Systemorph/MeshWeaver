@@ -1,7 +1,7 @@
 ---
 nodeType: Skill
 name: /og-card
-description: Embed link-preview cards (OgCard) in a document — one card or a responsive grid, for external pages or mesh nodes. Read it BEFORE authoring a card: three rules prevent every empty card seen so far (use the mesh-node form for mesh targets, give the node a description, write `?` not `&`). Also covers the embed forms that actually work, how a card gets its picture and title, and the traps that make a broken card look fine and a fine card look broken.
+description: Embed link-preview cards (OgCard) in a document — one card or a responsive grid, for external pages or mesh nodes. Read it BEFORE authoring a card — three rules prevent every empty card seen so far (use the mesh-node form for mesh targets, give the node a description, write `?` not `&`). Also covers the embed forms that actually work, how a card gets its picture and title, and the traps that make a broken card look fine and a fine card look broken.
 icon: Link
 category: Skills
 order: 40
