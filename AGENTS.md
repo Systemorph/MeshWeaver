@@ -52,6 +52,7 @@ did nothing. The cure is always the same shape: **demand a positive, specific su
 | **`dotnet build a.csproj b.csproj`** (several project args) | `MSB1008: Only one project can be specified`, exit 1 | Nothing built. Reads like a transient and gets retried instead of fixed | One project per invocation |
 | **`dotnet build … \| tail`** | A tidy tail with no error lines | `Build FAILED` scrolled off, and `$?` is **`tail`'s** status, not the build's | Capture the build's own exit code; grep the `0 Error(s)` summary |
 | **A build that finishes suspiciously fast** | `Build succeeded` in ~2 s | Up-to-date no-op — your edit may not be in it at all | Re-run with `--no-incremental` to prove a real compile happened |
+| **`--no-build` after editing a doc / non-`.cs` asset** | Tests pass, so the edit is fine | `src/MeshWeaver.Documentation/Data/**` ships as `<EmbeddedResource>`; a stale DLL still holds the **old** file, so the test never saw your change. Caught while writing this table — the run predated the edit by 54 s | Rebuild after editing embedded content, and check the DLL's mtime is newer than the file's |
 | **Reading a background task's output file right after launching it** | Plausible contents, so "the wait completed" | You read a stale, empty, or partial file. One session's "29 minutes of sleeps" had actually elapsed **2 minutes** | Compare wall-clock elapsed against the expected duration, not just the contents |
 
 **Capping a run without `timeout`** — `timeout` exists on CI's Linux runners, NOT on this macOS host.
