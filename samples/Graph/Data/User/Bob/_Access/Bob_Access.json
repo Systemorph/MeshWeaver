@@ -10,7 +10,7 @@
     "displayName": "Bob Smith",
     "roles": [
       {
-        "role": "Admin"
+        "role": "Viewer"
       }
     ]
   }

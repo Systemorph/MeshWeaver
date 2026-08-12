@@ -159,6 +159,27 @@ A node-local counter is monotonic across activations **by construction**: the no
 
 Pinned by `StaleActivationSeedRollbackTest` (deterministic: recycle the owner, advance the durable row out of band, assert the reactivated hub serves durable state and never rolls the store back) and `MonotonicWriteGuardTests`.
 
+## One Change, One Durable Write
+
+An own MeshNode has exactly **two** ways to reach storage, and for any given change only one of them may run.
+
+| Route | Who | When |
+|---|---|---|
+| **Post-commit flush** — `DataExtensions.ApplyMeshNodePatchInTurn` → `IPostCommitFlush.Flush` → `IStorageAdapter.Write` | the owner, off-turn on the reduced stream's post-commit emission | a **cross-hub patch** (`PatchDataRequest`, i.e. any `stream.Update` from a mirror). The caller's `PatchDataResponse` ack chains off this write, which is what gives `stream.Update` read-after-write. |
+| **Persistence sampler** — `MeshDataSource`'s own-stream `Sample(200 ms)` → `SaveMeshNodeRequest` → `HandleSaveMeshNode` → `IStorageAdapter.Write` | the owner hub's inbox | every **own-node** change (`UpdateOwn`, a reconcile, the type source's re-stamp) — everything that never went through a patch. |
+
+For a patch, both used to fire. That is not merely a wasted write: **the two are never ordered against each other** — the flush writes from an emission thread, the sampler through the inbox — so under a sustained write rate the row advances while the sampler's message queues, and its write lands as a strict version **regression**. The guard above then reports a `CONFLICT` for a **strictly sequential** writer and resolves it by merging; with no common ancestor that merge keeps the string **superset** and the array **union**, so *a deletion the newer write made is silently re-added*. Resurrection is a deliberate trade-off for a genuine conflict (`MeshNodePatchMerge.TryMergeTwoWay`) — never for one the framework manufactured against itself, and the noise also devalued the guard's alarm into background chatter ([issue #1249](https://github.com/Systemorph/MeshWeaver/issues/1249)).
+
+**`PostCommitFlushRegistry` is what keeps it to one.** The flush records `path → durable version` on the write's emission; `HandleSaveMeshNode` and the dispose-time `FlushPendingOwnSave` drop any sampled state at or below that mark. Three properties make the predicate sound:
+
+- **A version, not a snapshot stamp.** The sampler's gate chain runs in the *same synchronous fan-out* as the flush and — having subscribed at hub init — runs **first**, so nothing the flush stamps can be visible to it. The mark is therefore read at **handler** time, after the flush settled. (This is why `OwnNodeCache.PersistedSnapshot`, which works fine for the initial-**load** echo, cannot serve here.)
+- **`<=` cannot suppress newer content.** Two distinct own states never share a version — `MeshNodeTypeSource.UpdateImpl` re-stamps any own update arriving at or below its previous version with `NextVersion`.
+- **It fails open.** The mark is raised only on a write that actually emitted (a failed flush, or the try-then-claim `null` sentinel, leaves the sampler as the writer of record), and it is dropped on delete so a same-id recreate at `Version = 1` is never read as already-persisted.
+
+It is registered at the mesh **root** (`MeshBuilder`, next to `RecentlyDeletedRegistry`) because the flush is a mesh-level singleton while its reader runs on the per-node owner hub; a hub-level registration would hand each side its own instance and neither would see the other's writes.
+
+Pinned by `PatchWriteRouteCollapseTest`: one patch ⇒ exactly one durable write; a sequential writer's deleted text is not resurrected; and a genuine second writer still trips the guard, merge and `_Activity/write-conflict-*` record.
+
 ## Never-Mutated Nodes Keep Their Seed Version
 
 A node loaded from persistence — or seeded via `AddMeshNodes` / `IStaticNodeProvider` — and **never** written through `Update` keeps whatever `Version` it was created with, typically `0`. The `HandleSaveMeshNode` path persists the node's `Version` verbatim; it does **not** synthesise a bump on save. So a static config node legitimately reads back as `Version == 0`.
