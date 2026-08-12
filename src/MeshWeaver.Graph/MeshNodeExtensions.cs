@@ -465,6 +465,17 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(TrackedChangeStatus), nameof(TrackedChangeStatus));
         typeRegistry.WithType(typeof(Notification), nameof(Notification));
         typeRegistry.WithType(typeof(NotificationType), nameof(NotificationType));
+        // Email — the content of the built-in "Email" NodeType (EmailNodeType). It was the ONE
+        // built-in content type missing from this list, and the omission was invisible until a
+        // CROSS-HUB writer produced one: an in-process writer (EmailInboundProcessor) carries the
+        // content typed past ContentDiscriminatorValidator, but a foreign hub's write arrives as
+        // JSON with `$type: "Email"`, which the validator then correctly refuses as unresolvable —
+        // that broke the Store contact form's notification phase in production (2026-08-12). Every
+        // content type a built-in NodeType declares via WithContentType MUST be registered here;
+        // the validator's strict branch assumes exactly that.
+        typeRegistry.WithType(typeof(Email), nameof(Email));
+        typeRegistry.WithType(typeof(EmailDirection), nameof(EmailDirection));
+        typeRegistry.WithType(typeof(EmailStatus), nameof(EmailStatus));
         typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
         typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
         typeRegistry.WithType(typeof(PartitionDefinition), nameof(PartitionDefinition));
