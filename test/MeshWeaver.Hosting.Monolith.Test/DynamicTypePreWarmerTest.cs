@@ -3,8 +3,10 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -847,5 +849,99 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
             d => d.CompilationStatus == CompilationStatus.Ok, TimeSpan.FromSeconds(10));
         after.LastCompileSucceededAt.Should().Be(baseline,
             "AlreadyBaked means NOT rebuilt — the record must be untouched by the sweep");
+    }
+
+    /// <summary>
+    /// 🚨 THE SWEEP MUST NOT ENUMERATE BEFORE THE STATIC REPO IMPORT HAS SETTLED.
+    ///
+    /// <para>The sweep takes exactly ONE enumeration snapshot (<c>Query(...).Take(1)</c>), and the
+    /// static repo import that writes a large part of the fleet is kicked fire-and-forget from its
+    /// own <c>StartAsync</c> — so <c>ApplicationStarted</c>, where the sweep is launched, fires while
+    /// that import is still landing content. Anything missing from the snapshot is never baked and
+    /// compiles on the activation path when a user first opens it.</para>
+    ///
+    /// <para>memex-cloud 2026-08-12 showed the race resolving both ways on consecutive pods: 23:02
+    /// enumerated <b>237</b> types with the whole statically-served <c>MeshWeaver/…</c> tree absent,
+    /// 05:52 enumerated <b>279</b> on the same content. Those 42 unbaked types were the
+    /// "waiting for code" stall.</para>
+    ///
+    /// <para>This pins the two halves of the contract with the SAME composition
+    /// <see cref="DynamicTypePreWarmerHostedService"/> uses: nothing is enumerated while the signal
+    /// is unsettled, and a type written in that window IS in the snapshot once it settles.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task Sweep_WaitsForTheStaticImportToSettle_SoLateContentIsStillBaked()
+    {
+        const string LatePath = $"{Partition}/LateImportedType";
+        var importSettled = new StaticRepoImportSettled();
+        var enumerations = 0;
+        var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PreWarmGate");
+
+        // The exact shape KickWarmup composes: the sweep is DEFERRED behind the signal, so
+        // enumeration cannot happen at subscribe time.
+        var sweep = importSettled.Settled.SelectMany(_ => Observable.Defer(() =>
+        {
+            Interlocked.Increment(ref enumerations);
+            return DynamicTypePreWarmer.WarmDynamicTypes(
+                Mesh, logger, perTypeBudget: TimeSpan.FromSeconds(90));
+        }));
+
+        // Subscribe FIRST — this is the moment the un-gated sweep would have enumerated.
+        var lateTypeSeen = sweep
+            .Where(o => o.TypePath == LatePath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(100))
+            .ToTask();
+
+        // …then write the type, standing in for what the import is still landing.
+        await NodeFactory.CreateNode(new MeshNode("LateImportedType", Partition)
+        {
+            Name = "Late Imported Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Written while the static import was still running.",
+                Configuration = "config => config"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        Volatile.Read(ref enumerations).Should().Be(0,
+            "the sweep must still be waiting on the import signal — enumerating here is exactly the "
+            + "race that left 42 memex-cloud types unbaked");
+
+        importSettled.MarkSettled();
+
+        var outcome = await lateTypeSeen;
+        Output.WriteLine($"{outcome.TypePath} → {outcome.Status} {outcome.Detail}");
+        Volatile.Read(ref enumerations).Should().Be(1,
+            "settling enumerates exactly once — the signal is a one-shot ordering gate, not a poll");
+        outcome.ReachedUsableBuild.Should().BeTrue(
+            "a type written before the signal settled must be baked by the sweep, not left to a "
+            + "user's first click");
+    }
+
+    /// <summary>
+    /// The signal's own contract: one-shot, replayed to late subscribers, and idempotent — the
+    /// hosted service marks it from BOTH its completion and its error handler (a faulted import must
+    /// delay the bake, never cancel it), so a second mark cannot re-fire the sweep.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task StaticImportSignal_IsOneShot_ReplayedAndIdempotent()
+    {
+        var settled = new StaticRepoImportSettled();
+        settled.IsSettled.Should().BeFalse();
+
+        var emissions = 0;
+        using var sub = settled.Settled.Subscribe(_ => Interlocked.Increment(ref emissions));
+        Volatile.Read(ref emissions).Should().Be(0, "nothing emits before the import settles");
+
+        settled.MarkSettled();
+        settled.MarkSettled();   // idempotent — both handlers may mark
+        settled.IsSettled.Should().BeTrue();
+        Volatile.Read(ref emissions).Should().Be(1, "one-shot: a second mark must not re-fire");
+
+        // A subscriber arriving AFTER the fact still gets it — the pre-warmer may resolve the signal
+        // late (its own hosted service starts after the import's), and must not hang.
+        await settled.Settled.Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
     }
 }
