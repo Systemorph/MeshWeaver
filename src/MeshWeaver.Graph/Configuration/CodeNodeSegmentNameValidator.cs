@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -46,13 +47,27 @@ public sealed class CodeNodeSegmentNameValidator : INodeValidator
         [NodeOperation.Create, NodeOperation.Update];
 
     /// <summary>
-    /// The path segments that route a node to the <c>code</c> table, taken from the storage
+    /// The path segments that route a node to the <c>code</c> table, derived from the storage
     /// mapping itself so the rule cannot drift from the routing it protects.
+    ///
+    /// <para>A <c>static readonly</c> constant lookup, computed once — never written at runtime, so
+    /// it is the sanctioned kind of static (see AGENTS.md → "No static collections"). It must not be
+    /// a LINQ-returning property: this guard runs on EVERY node create and update, and re-walking
+    /// <see cref="SatelliteTableMapping.Defaults"/> per path segment would allocate on the write
+    /// path for a value that cannot change.</para>
     /// </summary>
-    private static IEnumerable<string> CodeTableSegments =>
-        SatelliteTableMapping.Defaults
+    private static readonly ImmutableArray<string> CodeTableSegments =
+        [.. SatelliteTableMapping.Defaults
             .Where(m => m.Table.Equals("code", StringComparison.OrdinalIgnoreCase))
-            .Select(m => m.Segment);
+            .Select(m => m.Segment)];
+
+    private static bool IsCodeSegment(string segment)
+    {
+        foreach (var known in CodeTableSegments)
+            if (segment.Equals(known, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
 
     /// <summary>
     /// True when a Code node at <paramref name="path"/> would be INVISIBLE to the batch bake's
@@ -74,13 +89,14 @@ public sealed class CodeNodeSegmentNameValidator : INodeValidator
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0) return false;
 
-        var isCodeSegment = (string s) =>
-            CodeTableSegments.Any(seg => s.Equals(seg, StringComparison.OrdinalIgnoreCase));
-
         // Last segment is the routing segment, and nothing above it is — so the namespace has
         // nothing for `*/Source` / `*/Source/*` (or their Test twins) to bite on.
-        return isCodeSegment(segments[^1])
-               && !segments[..^1].Any(isCodeSegment);
+        if (!IsCodeSegment(segments[^1]))
+            return false;
+        for (var i = 0; i < segments.Length - 1; i++)
+            if (IsCodeSegment(segments[i]))
+                return false;
+        return true;
     }
 
     /// <summary>
