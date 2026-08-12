@@ -146,6 +146,45 @@ public class IoPoolTest
         pool.CurrentInFlight.Should().Be(0);
     }
 
+    // 🚨 REPRO for the #613 family: Drain()'s contract says "0 means the join is REAL: no pool
+    // thread is still running when this returns", and every teardown orchestrator
+    // (MonolithMeshTestBase, MeshTeardownExtensions, HubTestBase) trusts that return value before
+    // it disposes the Autofac scope and unloads the collectible node ALCs. But the join is
+    // implemented by re-acquiring the SemaphoreSlim gate — and InvokeBlocking NEVER takes a gate
+    // permit (it dispatches on the LimitedConcurrencyLevelTaskScheduler and only bumps _inFlight).
+    // So for a blocking leaf the permits are free immediately, Drain returns 0, and teardown
+    // proceeds over live work. Deterministic: the leaf below ignores its cancellation token, which
+    // is EXACTLY the case Drain's non-zero return is documented to report.
+    [Fact]
+    public void Drain_joins_InvokeBlocking_leaves_too()
+    {
+        using var pool = new IoPool(2);
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+
+        pool.InvokeBlocking(_ =>
+        {
+            entered.Set();
+            release.Wait(Timeout10);   // deliberately ignores the token — the reportable case
+            return 0;
+        }).Subscribe(_ => { }, _ => { });
+
+        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        pool.CurrentInFlight.Should().Be(1, "a running blocking leaf must be visible as in-flight");
+
+        var leaked = pool.Drain();
+
+        // Either the drain JOINED (in-flight back to 0) or it must REPORT the survivor. Reporting
+        // 0 while a leaf still runs is the lie teardown acts on.
+        if (leaked == 0)
+            pool.CurrentInFlight.Should().Be(0,
+                "Drain returned 0 — 'the join is REAL' — so no pool thread may still be running. " +
+                "A blocking leaf survives the drain unseen because InvokeBlocking takes no gate " +
+                "permit, so re-acquiring the gate joins nothing.");
+
+        release.Set();
+    }
+
     [Fact]
     public void Invoke_is_cold_no_work_runs_until_subscribe()
     {

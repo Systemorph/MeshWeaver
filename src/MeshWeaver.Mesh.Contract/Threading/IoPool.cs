@@ -20,6 +20,12 @@ public sealed class IoPool : IIoPool, IDisposable
     // in-flight leaves unwind promptly — the join then knows they will release their gate permits.
     private readonly CancellationTokenSource _poolCts = new();
     private int _inFlight;
+
+    // 🚨 Idle signal for BLOCKING leaves, which hold no gate permit — see Drain(). Set while no
+    // blocking leaf is running, so the join has something real to wait on instead of polling.
+    // A ManualResetEventSlim here is consistent with this file being the ONE sanctioned home for
+    // such a primitive: IoPool IS the boundary between the turn-based schedulers and blocking I/O.
+    private readonly ManualResetEventSlim _blockingIdle = new(initialState: true);
     private volatile bool _disposed;
 
     // Teardown safety net for the drain join: cancellation makes in-flight leaves release in ms,
@@ -127,14 +133,16 @@ public sealed class IoPool : IIoPool, IDisposable
                     // _inFlight increments only once the scheduler grants a slot —
                     // so CurrentInFlight reflects actually-running blocking work,
                     // capped at the scheduler's MaximumConcurrencyLevel.
-                    Interlocked.Increment(ref _inFlight);
+                    if (Interlocked.Increment(ref _inFlight) == 1)
+                        _blockingIdle.Reset();
                     try
                     {
                         return work(cts.Token);
                     }
                     finally
                     {
-                        Interlocked.Decrement(ref _inFlight);
+                        if (Interlocked.Decrement(ref _inFlight) == 0)
+                            _blockingIdle.Set();
                     }
                 }, cts.Token)
                 .ContinueWith(t =>
@@ -228,8 +236,10 @@ public sealed class IoPool : IIoPool, IDisposable
     /// last running leaf has released, then we release them back so the pool stays usable/idempotent.
     /// </remarks>
     /// <returns>
-    /// The number of leaves that did NOT unwind within the drain budget — permits that could not be
-    /// re-acquired because a leaf ignored its cancellation token. <c>0</c> means the join is REAL:
+    /// The number of leaves that did NOT unwind within the drain budget — gate permits that could not
+    /// be re-acquired because an async leaf ignored its cancellation token, PLUS any blocking leaf
+    /// (<see cref="InvokeBlocking{T}"/>) still running, which holds no permit and so is counted
+    /// separately. <c>0</c> means the join is REAL:
     /// no pool thread is still running when this returns. Anything else means teardown is about to
     /// proceed over live work (the use-after-unload SIGSEGV precondition) — the caller must surface
     /// it, never swallow it: a drain that silently gives up is how "disposal completed" becomes a
@@ -247,7 +257,26 @@ public sealed class IoPool : IIoPool, IDisposable
         }
         if (acquired > 0)
             _gate.Release(acquired);
-        return _maxConcurrency - acquired;
+        var gateResidual = _maxConcurrency - acquired;
+
+        // 🚨 BLOCKING LEAVES HOLD NO GATE PERMIT — so the gate join above joins NOTHING for them, and
+        // this method returned 0 ("the join is REAL: no pool thread is still running") while a
+        // Roslyn compile or a file read was still executing. That is precisely the use-after-unload
+        // precondition Drain exists to rule out, and it was reachable on every node read
+        // (CachingStorageAdapter routes through InvokeBlocking on the FileSystem pool). The existing
+        // guard test only exercised Invoke, which DOES take a permit, so this went untested.
+        // Repro: IoPoolTest.Drain_joins_InvokeBlocking_leaves_too.
+        //
+        // Join them on their own idle signal, bounded by the SAME budget — no new timeout, no poll.
+        // Re-read the counter when the wait expires: a leaf that finished between the signal reset
+        // and our wait would otherwise be reported as surviving.
+        if (!_blockingIdle.Wait(DrainTimeout))
+        {
+            var stillRunning = Volatile.Read(ref _inFlight);
+            return gateResidual + stillRunning;
+        }
+
+        return gateResidual;
     }
 
     /// <summary>
@@ -262,6 +291,7 @@ public sealed class IoPool : IIoPool, IDisposable
         Drain();
         _poolCts.Dispose();
         _gate.Dispose();
+        _blockingIdle.Dispose();
     }
 
     /// <summary>
