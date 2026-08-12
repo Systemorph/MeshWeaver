@@ -97,62 +97,62 @@ public static class BlazorViewRegistry
             return control switch
             {
                 LayoutAreaControl layoutArea
-                    => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
-                HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
-                LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
-                NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
-                //PropertyControl property => StandardView<PropertyControl, PropertyColumnView>(property, stream, area),
-                MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
-                DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
-                CatalogControl catalog => StandardView<CatalogControl, CatalogView>(catalog, stream, area),
+                    => ControlView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
+                HtmlControl html => ControlView<HtmlControl, HtmlView>(html, stream, area),
+                LabelControl label => ControlView<LabelControl, Label>(label, stream, area),
+                NavLinkControl link => ControlView<NavLinkControl, NavLink>(link, stream, area),
+                //PropertyControl property => ControlView<PropertyControl, PropertyColumnView>(property, stream, area),
+                MenuItemControl menu => ControlView<MenuItemControl, MenuItemView>(menu, stream, area),
+                DataGridControl dataGrid => ControlView<DataGridControl, DataGridView>(dataGrid, stream, area),
+                CatalogControl catalog => ControlView<CatalogControl, CatalogView>(catalog, stream, area),
                 // Must precede the IContainerControl case below — CommentableControl IS a
                 // container, and the generic container view would render its child area without
                 // the select-to-comment affordance that is the whole point of the wrapper.
-                CommentableControl commentable => StandardView<CommentableControl, CommentableView>(commentable, stream, area),
-                IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
+                CommentableControl commentable => ControlView<CommentableControl, CommentableView>(commentable, stream, area),
+                IContainerControl container => ControlView<IContainerControl, ContainerView>(container, stream, area),
                 NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString()!) ?? throw new InvalidOperationException($"Type not found: {number.Type}")), stream, area),
-                TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
-                TextAreaControl textbox => StandardView<TextAreaControl, TextAreaView>(textbox, stream, area),
+                TextFieldControl textbox => ControlView<TextFieldControl, TextFieldView>(textbox, stream, area),
+                TextAreaControl textbox => ControlView<TextAreaControl, TextAreaView>(textbox, stream, area),
                 RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type?.ToString() ?? throw new ArgumentException($"Cannot find type {radioGroup.Type} for radio group.")) ?? throw new InvalidOperationException($"Type not found: {radioGroup.Type}")), stream, area),
-                DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
-                ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
-                ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
-                SelectControl select => StandardView<SelectControl, SelectView>(select, stream, area),
-                ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
-                IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
-                BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
-                FileBrowserControl fileBrowser => StandardView<FileBrowserControl, FileBrowserView>(fileBrowser, stream, area),
-                NodeImportControl nodeImport => StandardView<NodeImportControl, NodeImportView>(nodeImport, stream, area),
-                NodeExportControl nodeExport => StandardView<NodeExportControl, NodeExportView>(nodeExport, stream, area),
-                ExportDocumentControl exportDoc => StandardView<ExportDocumentControl, ExportDocumentView>(exportDoc, stream, area),
-                ProgressControl progress => StandardView<ProgressControl, ProgressView>(progress, stream, area),
-                CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
-                SwitchControl switchCtrl => StandardView<SwitchControl, Switch>(switchCtrl, stream, area),
+                DateTimeControl dateTime => ControlView<DateTimeControl, DateTimeView>(dateTime, stream, area),
+                ComboboxControl combobox => ControlView<ComboboxControl, Combobox>(combobox, stream, area),
+                ListboxControl listbox => ControlView<ListboxControl, Listbox>(listbox, stream, area),
+                SelectControl select => ControlView<SelectControl, SelectView>(select, stream, area),
+                ButtonControl button => ControlView<ButtonControl, ButtonView>(button, stream, area),
+                IconControl icon => ControlView<IconControl, IconView>(icon, stream, area),
+                BadgeControl badge => ControlView<BadgeControl, BadgeView>(badge, stream, area),
+                FileBrowserControl fileBrowser => ControlView<FileBrowserControl, FileBrowserView>(fileBrowser, stream, area),
+                NodeImportControl nodeImport => ControlView<NodeImportControl, NodeImportView>(nodeImport, stream, area),
+                NodeExportControl nodeExport => ControlView<NodeExportControl, NodeExportView>(nodeExport, stream, area),
+                ExportDocumentControl exportDoc => ControlView<ExportDocumentControl, ExportDocumentView>(exportDoc, stream, area),
+                ProgressControl progress => ControlView<ProgressControl, ProgressView>(progress, stream, area),
+                CheckBoxControl checkbox => ControlView<CheckBoxControl, Checkbox>(checkbox, stream, area),
+                SwitchControl switchCtrl => ControlView<SwitchControl, Switch>(switchCtrl, stream, area),
                 ItemTemplateControl itemTemplate
-                    => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
-                CollaborativeMarkdownControl collaborativeMarkdown => StandardView<CollaborativeMarkdownControl, CollaborativeMarkdownView>(collaborativeMarkdown, stream, area),
-                CodeEditorControl codeEditor => StandardView<CodeEditorControl, CodeEditorView>(codeEditor, stream, area),
-                DiffEditorControl diffEditor => StandardView<DiffEditorControl, DiffEditorView>(diffEditor, stream, area),
-                MarkdownControl markdown => StandardView<MarkdownControl, Components.MarkdownView>(markdown, stream, area),
-                VideoControl video => StandardView<VideoControl, VideoView>(video, stream, area),
-                MarkdownEditorControl markdownEditor => StandardView<MarkdownEditorControl, MarkdownEditorView>(markdownEditor, stream, area),
-                NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
-                SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
-                LayoutAreaDefinitionControl layoutAreaDefinition => StandardView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
-                RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),
-                SlideShowControl slideShow => StandardView<SlideShowControl, Components.SlideShowView>(slideShow, stream, area),
-                SearchBoxControl searchBox => StandardView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
-                MeshNodePickerControl picker => StandardView<MeshNodePickerControl, MeshNodePickerView>(picker, stream, area),
-                MeshNodeCollectionControl collection => StandardView<MeshNodeCollectionControl, MeshNodeCollectionView>(collection, stream, area),
-                MeshSearchControl meshSearch => StandardView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
-                MeshNodeCardControl card => StandardView<MeshNodeCardControl, MeshNodeCardView>(card, stream, area),
-                HighlightControl highlight => StandardView<HighlightControl, HighlightView>(highlight, stream, area),
-                DocumentSourceControl docSource => StandardView<DocumentSourceControl, DocumentSourceView>(docSource, stream, area),
-                AppearanceControl appearance => StandardView<AppearanceControl, AppearanceView>(appearance, stream, area),
-                ThreadMessageBubbleControl bubble => StandardView<ThreadMessageBubbleControl, ThreadMessageBubbleView>(bubble, stream, area),
-                KpiStripControl kpiStrip => StandardView<KpiStripControl, KpiStripView>(kpiStrip, stream, area),
-                TowerControl tower => StandardView<TowerControl, TowerView>(tower, stream, area),
-                ComparisonBarsControl comparisonBars => StandardView<ComparisonBarsControl, ComparisonBarsView>(comparisonBars, stream, area),
+                    => ControlView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
+                CollaborativeMarkdownControl collaborativeMarkdown => ControlView<CollaborativeMarkdownControl, CollaborativeMarkdownView>(collaborativeMarkdown, stream, area),
+                CodeEditorControl codeEditor => ControlView<CodeEditorControl, CodeEditorView>(codeEditor, stream, area),
+                DiffEditorControl diffEditor => ControlView<DiffEditorControl, DiffEditorView>(diffEditor, stream, area),
+                MarkdownControl markdown => ControlView<MarkdownControl, Components.MarkdownView>(markdown, stream, area),
+                VideoControl video => ControlView<VideoControl, VideoView>(video, stream, area),
+                MarkdownEditorControl markdownEditor => ControlView<MarkdownEditorControl, MarkdownEditorView>(markdownEditor, stream, area),
+                NamedAreaControl namedView => ControlView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
+                SpacerControl spacer => ControlView<SpacerControl, SpacerView>(spacer, stream, area),
+                LayoutAreaDefinitionControl layoutAreaDefinition => ControlView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
+                RedirectControl redirect => ControlView<RedirectControl, RedirectView>(redirect, stream, area),
+                SlideShowControl slideShow => ControlView<SlideShowControl, Components.SlideShowView>(slideShow, stream, area),
+                SearchBoxControl searchBox => ControlView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
+                MeshNodePickerControl picker => ControlView<MeshNodePickerControl, MeshNodePickerView>(picker, stream, area),
+                MeshNodeCollectionControl collection => ControlView<MeshNodeCollectionControl, MeshNodeCollectionView>(collection, stream, area),
+                MeshSearchControl meshSearch => ControlView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
+                MeshNodeCardControl card => ControlView<MeshNodeCardControl, MeshNodeCardView>(card, stream, area),
+                HighlightControl highlight => ControlView<HighlightControl, HighlightView>(highlight, stream, area),
+                DocumentSourceControl docSource => ControlView<DocumentSourceControl, DocumentSourceView>(docSource, stream, area),
+                AppearanceControl appearance => ControlView<AppearanceControl, AppearanceView>(appearance, stream, area),
+                ThreadMessageBubbleControl bubble => ControlView<ThreadMessageBubbleControl, ThreadMessageBubbleView>(bubble, stream, area),
+                KpiStripControl kpiStrip => ControlView<KpiStripControl, KpiStripView>(kpiStrip, stream, area),
+                TowerControl tower => ControlView<TowerControl, TowerView>(tower, stream, area),
+                ComparisonBarsControl comparisonBars => ControlView<ComparisonBarsControl, ComparisonBarsView>(comparisonBars, stream, area),
                 _ => FallbackHtml(instance, stream, area),
             };
         }
@@ -174,6 +174,49 @@ public static class BlazorViewRegistry
             );
         }
     }
+
+
+    /// <summary>
+    /// Registers <typeparamref name="TView"/> as the control view for <typeparamref name="TControl"/> —
+    /// the ONE entry point <c>MapControl</c> uses, and the reason a plain
+    /// <c>ComponentBase</c> can no longer be registered as one.
+    /// </summary>
+    /// <remarks>
+    /// <para>🚨 This exists for the constraint, nothing else: the body is
+    /// <see cref="LayoutClientConfiguration.StandardView{TViewModel,TView}"/> verbatim. Registering a view
+    /// that does NOT derive from <see cref="BlazorView{TViewModel,TView}"/> compiles fine through the
+    /// unconstrained helper and then silently renders a control whose <c>Style</c>, <c>Class</c> and
+    /// <c>Id</c> are never bound — <see cref="BlazorView{TViewModel,TView}.BindData"/> is the only thing
+    /// that binds them, and a component that is not a <c>BlazorView</c> never runs it. That is #1333, and
+    /// it went unnoticed for three views because nothing in the type system said anything was wrong.
+    /// The constraint turns that class of bug into a compile error at the registration line.</para>
+    /// <para>Pairing <typeparamref name="TControl"/> with the view's OWN view-model type is deliberate:
+    /// <c>where TView : BlazorView&lt;TControl, TView&gt;</c> also rejects registering a view under a
+    /// control it does not actually bind.</para>
+    /// <para>Two holes remain, both narrow and both visible: the <c>NumberFieldControl</c> /
+    /// <c>RadioGroupControl</c> cases construct their view type by reflection
+    /// (<c>typeof(NumberFieldView&lt;&gt;).MakeGenericType(…)</c>), so no static constraint can reach
+    /// them — they go through the unconstrained <c>StandardView(instance, viewType, …)</c> overload;
+    /// and <c>MapSkinnedView</c> passes <c>UiControl</c> as the view-model to views typed on a
+    /// narrower control, so this pairing cannot hold there.</para>
+    /// <para>The constraint cannot live on <c>LayoutClientConfiguration.StandardView</c> itself:
+    /// that type is in <c>MeshWeaver.Layout</c>, which <c>MeshWeaver.Blazor</c> references and not the
+    /// other way round, so the renderer-agnostic layer cannot name <c>BlazorView</c>.</para>
+    /// </remarks>
+    /// <typeparam name="TControl">The control type this view renders.</typeparam>
+    /// <typeparam name="TView">The Blazor view component, which MUST derive from <c>BlazorView&lt;TControl, TView&gt;</c>.</typeparam>
+    /// <param name="control">The control instance.</param>
+    /// <param name="stream">The synchronization stream, or null.</param>
+    /// <param name="area">The area name.</param>
+    /// <returns>A <see cref="ViewDescriptor"/> targeting <typeparamref name="TView"/>.</returns>
+    private static ViewDescriptor ControlView<TControl, TView>(
+        TControl control,
+        ISynchronizationStream<JsonElement>? stream,
+        string area
+    )
+        where TControl : IUiControl
+        where TView : BlazorView<TControl, TView>
+        => StandardView<TControl, TView>(control, stream, area);
 
 
     private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement>? stream, string area, object skin)
