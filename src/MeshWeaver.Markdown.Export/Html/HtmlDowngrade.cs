@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using HtmlAgilityPack;
 
-namespace MeshWeaver.Markdown.Export.Email;
+namespace MeshWeaver.Markdown.Export.Html;
 
 /// <summary>
 /// Reduces rendered portal HTML to what a mail client can actually display. Operates on a real
@@ -11,7 +11,7 @@ namespace MeshWeaver.Markdown.Export.Email;
 /// <para>Everything removed here is removed because it either does not work or actively breaks
 /// in mail — see the per-rule comments. Nothing is removed for taste.</para>
 /// </summary>
-public static class EmailHtmlSanitizer
+public static class HtmlDowngrade
 {
     /// <summary>
     /// Elements deleted with their subtree.
@@ -44,12 +44,12 @@ public static class EmailHtmlSanitizer
     /// <summary>
     /// Strips unsupported markup from <paramref name="node"/>'s subtree and rewrites every
     /// relative <c>href</c>/<c>src</c> to an absolute URL against
-    /// <see cref="EmailHtmlOptions.NormalizedBaseUrl"/>.
+    /// <see cref="DocumentHtmlOptions.NormalizedBaseUrl"/>.
     ///
     /// <para>Absolutising is not cosmetic: a mail client has no page origin, so a relative
     /// <c>/Some/Node</c> link is simply dead when clicked out of the inbox.</para>
     /// </summary>
-    public static void Sanitize(HtmlNode node, EmailHtmlOptions options)
+    public static void Sanitize(HtmlNode node, DocumentHtmlOptions options)
     {
         foreach (var stripped in node
                      .Descendants()

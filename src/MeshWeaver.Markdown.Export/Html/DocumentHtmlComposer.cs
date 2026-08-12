@@ -3,7 +3,7 @@ using HtmlAgilityPack;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Markdown.Export.Email;
+namespace MeshWeaver.Markdown.Export.Html;
 
 /// <summary>
 /// Composes a markdown mesh node into ONE self-contained, email-client-safe HTML document.
@@ -22,7 +22,7 @@ namespace MeshWeaver.Markdown.Export.Email;
 /// the same rules and nothing can slip through by being generated later.</description></item>
 /// </list>
 /// </summary>
-public static class EmailDocumentComposer
+public static class DocumentHtmlComposer
 {
     /// <summary>
     /// Renders <paramref name="markdown"/> to a complete email-safe HTML document.
@@ -42,7 +42,7 @@ public static class EmailDocumentComposer
         string title,
         string markdown,
         string? nodePath,
-        EmailHtmlOptions options,
+        DocumentHtmlOptions options,
         ILogger? logger = null)
         => Observable.Defer(() =>
         {
@@ -51,16 +51,16 @@ public static class EmailDocumentComposer
             var document = new HtmlDocument();
             document.LoadHtml(rendered.Html ?? string.Empty);
 
-            return EmailAreaResolver.Resolve(document, hub, options, logger)
+            return LayoutAreaResolver.Resolve(document, hub, options, logger)
                 .Select(_ =>
                 {
                     // Sizing runs on the finished DOM so a table produced by a resolved layout
                     // area is treated exactly like one written in the markdown.
-                    var tables = EmailTableSizer.SizeTables(document.DocumentNode);
+                    var tables = TableSizer.SizeTables(document.DocumentNode);
                     if (tables > 0)
                         logger?.LogInformation("Email export sized {Tables} table(s)", tables);
 
-                    EmailHtmlSanitizer.Sanitize(document.DocumentNode, options);
+                    HtmlDowngrade.Sanitize(document.DocumentNode, options);
                     return Wrap(title, document.DocumentNode.InnerHtml, options);
                 });
         });
@@ -91,7 +91,7 @@ public static class EmailDocumentComposer
             return documentHtml;
 
         var intro = HtmlNode.CreateNode(
-            EmailNode.El("div").Style("margin:0 0 20px 0").Add(EmailNode.Raw(introHtml)).Render());
+            MarkupNode.El("div").Style("margin:0 0 20px 0").Add(MarkupNode.Raw(introHtml)).Render());
         host.PrependChild(intro);
 
         return document.DocumentNode.OuterHtml;
@@ -101,21 +101,21 @@ public static class EmailDocumentComposer
     /// Wraps the body markup in the outer document: charset, title, a painted background and the
     /// bounded, centred content column carrying the base typography every child inherits.
     /// </summary>
-    internal static string Wrap(string title, string bodyHtml, EmailHtmlOptions options)
+    internal static string Wrap(string title, string bodyHtml, DocumentHtmlOptions options)
     {
-        var head = EmailNode.El("head",
-            EmailNode.El("meta").With("charset", "utf-8"),
-            EmailNode.El("meta")
+        var head = MarkupNode.El("head",
+            MarkupNode.El("meta").With("charset", "utf-8"),
+            MarkupNode.El("meta")
                 .With("name", "viewport")
                 .With("content", "width=device-width, initial-scale=1"),
-            EmailNode.El("title", EmailNode.Text(title)));
+            MarkupNode.El("title", MarkupNode.Text(title)));
 
-        var body = EmailNode.El("body")
-            .Style(EmailStyles.Body)
-            .Add(EmailNode.El("div")
-                .Style(EmailStyles.Wrapper(options.ContentWidthPx))
-                .Add(EmailNode.Raw(bodyHtml)));
+        var body = MarkupNode.El("body")
+            .Style(MarkupStyles.Body)
+            .Add(MarkupNode.El("div")
+                .Style(MarkupStyles.Wrapper(options.ContentWidthPx))
+                .Add(MarkupNode.Raw(bodyHtml)));
 
-        return "<!doctype html>" + EmailNode.El("html", head, body).Render();
+        return "<!doctype html>" + MarkupNode.El("html", head, body).Render();
     }
 }

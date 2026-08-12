@@ -103,7 +103,7 @@ public static class SendDocumentLayoutArea
         {
             ["recipient"] = "",
             ["email"] = "",
-            ["subject"] = $"Shared with you: {nodeName}",
+            ["subject"] = $"{host.Localize("ui.sendDocument.defaultSubject")}: {nodeName}",
             ["message"] = host.Localize("ui.sendDocument.defaultMessage"),
             // Reading the document IN the message is the better default: nothing to open, and no
             // attachment for a mail gateway to strip. Attachment stays one click away.
