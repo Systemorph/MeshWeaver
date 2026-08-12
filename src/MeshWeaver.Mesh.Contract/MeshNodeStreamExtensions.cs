@@ -1636,7 +1636,7 @@ public static class MeshNodeStreamExtensions
                                     }
                                     else
                                     {
-                                        // Unexpected response â€” node not found / no handler.
+                                        // Unexpected response — node not found / no handler.
                                         EmitOnce(null);
                                     }
                                 }
