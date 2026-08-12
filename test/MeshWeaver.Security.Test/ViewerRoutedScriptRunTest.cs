@@ -122,6 +122,12 @@ public class ViewerRoutedScriptRunTest(ITestOutputHelper output) : MonolithMeshT
                 + "their own home by ActivityParentPath = \"{viewer}\", so no write ever lands in "
                 + $"the gated partition. Error: {dispatch.Error}");
 
+            // ActivityLog is nullable in the contract; assert it is populated FIRST so a
+            // regression reads as "the dispatch reported no activity path" rather than as a
+            // baffling string comparison against null.
+            dispatch.ActivityLog.Should().NotBeNullOrEmpty(
+                "a successful dispatch must report the path its Activity actually landed at");
+
             dispatch.ActivityLog.Should().StartWith($"{OrdinaryUser}/_Activity/",
                 "\"{viewer}\" must expand to the CALLER's home. Landing under "
                 + $"'{PluginNs}/_Activity/' is the #1295 production failure: the run's Activity is "
@@ -151,6 +157,8 @@ public class ViewerRoutedScriptRunTest(ITestOutputHelper output) : MonolithMeshT
                 .Should().Within(60.Seconds()).Emit()).Message;
 
             dispatch.Success.Should().BeTrue(dispatch.Error ?? "dispatch was refused");
+            dispatch.ActivityLog.Should().NotBeNullOrEmpty(
+                "the Activity path is what this test reads the stamp from");
 
             var activity = await Mesh.GetMeshNode(dispatch.ActivityLog!)
                 .Where(node => node is not null)
