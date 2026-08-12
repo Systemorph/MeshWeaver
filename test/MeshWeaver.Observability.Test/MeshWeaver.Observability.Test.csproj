@@ -4,6 +4,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Observability\MeshWeaver.Observability.csproj" />
+    <!-- The in-cluster watcher: LogPipelineGapTest pins its judgement about its OWN input (a long
+         window Loki answers with nothing is lost evidence, not silence worth trusting). -->
+    <ProjectReference Include="..\..\tools\MeshWeaver.LogWatcher\MeshWeaver.LogWatcher.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
   </ItemGroup>

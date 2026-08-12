@@ -67,6 +67,25 @@ public sealed record LogWatcherOptions
     /// </summary>
     public int QueryLimit { get; init; } = 5000;
 
+    /// <summary>
+    /// A window at least this long that comes back with ZERO lines is reported as a log-pipeline
+    /// incident instead of being silently accepted as "nothing happened".
+    ///
+    /// <para>🚨 Why a LENGTH threshold is the right discriminator. The query is UNFILTERED
+    /// (see <see cref="QueryLimit"/>), so a running portal cannot legitimately produce no lines at
+    /// all. But in steady state the window is only about one <see cref="PollInterval"/> wide, and a
+    /// genuinely idle namespace (a deployment scaled to zero) does return zero for those — which is
+    /// not worth ticketing. A LONG window only ever arises when the cursor could not advance, i.e.
+    /// Loki was unreachable and every poll threw; so a long window that comes back EMPTY is the
+    /// store having lost that stretch, which is provable and always worth knowing.</para>
+    ///
+    /// <para>That is exactly what happened on 2026-08-12: Loki was evicted at 05:35, its emptyDir
+    /// store went with it, and when it returned the watcher re-read the outage window, got nothing,
+    /// advanced its cursor and reported nothing. The incident that destroyed the evidence was itself
+    /// never ticketed.</para>
+    /// </summary>
+    public TimeSpan SilentWindowAlarm { get; init; } = TimeSpan.FromMinutes(5);
+
     /// <summary>Evidence lines sent per report.</summary>
     public int MaxSamplesPerReport { get; init; } = 5;
 

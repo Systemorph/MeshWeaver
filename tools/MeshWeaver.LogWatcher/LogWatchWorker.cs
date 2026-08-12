@@ -90,6 +90,29 @@ public sealed class LogWatchWorker(
             var reports = BurstAggregator.Aggregate(
                 entries, options.MaxSamplesPerReport, options.MaxSampleLength, options.IgnoreCategories);
 
+            // 🚨 REACHABLE BUT EMPTY over a LONG window = the store lost that stretch. Report it as
+            // an incident of its own instead of accepting silence as good news. See
+            // LogWatcherOptions.SilentWindowAlarm for why the window's LENGTH is the discriminator
+            // (a short empty window is just a quiet minute; a long one only exists because every
+            // poll during an outage threw and the cursor could not advance).
+            //
+            // Note the asymmetry that makes this the ONLY hole worth plugging: while Loki is
+            // unreachable the query THROWS, Tick's Catch logs it loudly and the cursor stays put —
+            // that half was already safe. It is the recovery, with an empty store, that used to pass
+            // silently.
+            var silentWindow = end - start;
+            if (LogPipelineGap.IsLostWindow(entries.Count, silentWindow, options.SilentWindowAlarm))
+            {
+                logger?.LogCritical(
+                    "{Namespace}: Loki returned ZERO lines for a {Minutes:F0} minute window "
+                    + "[{Start:u}, {End:u}) — the query is UNFILTERED, so a running portal cannot be "
+                    + "this quiet. The store lost this stretch (or nothing runs there). Reporting it "
+                    + "as an incident; the cursor still advances because re-reading cannot recover "
+                    + "data that is gone.",
+                    ns, silentWindow.TotalMinutes, start.UtcDateTime, end.UtcDateTime);
+                reports = reports.Add(LogPipelineGap.Report(ns, start, end));
+            }
+
             if (reports.Count > 0)
                 logger?.LogInformation(
                     "{Namespace}: {Bursts} distinct fingerprint(s) from {Lines} red line(s)",
