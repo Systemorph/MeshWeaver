@@ -130,6 +130,45 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     /// <summary>
+    /// The export group reads <b>PDF, Email, DOCX</b> — bare format/action names, in that sequence,
+    /// each with a tooltip.
+    ///
+    /// <para>Order is asserted as a SEQUENCE rather than as three <c>Order</c> values, because the
+    /// number is an implementation detail and the sequence is the thing the user asked for; a
+    /// renumbering that preserves the reading order should not fail, and one that scrambles it
+    /// must.</para>
+    ///
+    /// <para>The tooltip assertion is the other half of the shape: once a label is shortened to
+    /// "PDF", the tooltip is the ONLY place left that says what the entry does, so an entry that
+    /// loses it becomes unexplainable rather than merely terse.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ExportGroup_ReadsPdfEmailDocx_InThatOrder_EachWithATooltip()
+    {
+        var client = GetClient();
+        var items = await FetchNodeMenuItems(client, new Address(MarkdownNodePath));
+
+        var group = items
+            .Where(i => i.Area is ExportDocumentLayoutArea.PdfArea
+                        or ExportDocumentLayoutArea.DocxArea
+                        or SendDocumentLayoutArea.SendArea)
+            .OrderBy(i => i.Order)
+            .ToArray();
+
+        foreach (var item in group)
+            Output.WriteLine($"  {item.Order}: {item.Icon} {item.Label} — \"{item.Tooltip}\"");
+
+        group.Select(i => i.Label).Should().Equal(
+            MarkdownExportMenuProvider.PdfLabel,      // "PDF"
+            SendDocumentLayoutArea.SendLabel,         // "Email"
+            MarkdownExportMenuProvider.DocxLabel);    // "DOCX"
+
+        group.Where(i => string.IsNullOrWhiteSpace(i.Tooltip)).Select(i => i.Label)
+            .Should().BeEmpty(
+                "a bare format name is only usable when the tooltip carries the explanation");
+    }
+
+    /// <summary>
     /// Every node-menu entry carries an icon, and it is an EMOJI.
     ///
     /// <para>Asserted as an invariant over the whole menu rather than item by item, because the
