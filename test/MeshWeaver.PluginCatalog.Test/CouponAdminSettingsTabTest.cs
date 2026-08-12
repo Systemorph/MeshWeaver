@@ -59,16 +59,56 @@ public class CouponAdminSettingsTabTest
         Assert.Equal("4 / 10", row.Redeemed);
     }
 
+    /// <summary>
+    /// 🚨 An EMPTY list is not "any plugin". It means the coupon may be REDEEMED anywhere and
+    /// grants only the package it was redeemed ON — the old label promised the opposite, and read
+    /// as if the coupon unlocked the whole store (Systemorph/MeshWeaver.Plugins#321).
+    /// </summary>
     [Fact]
-    public void ToRow_EmptyAllowList_ReadsAsAnyPlugin_AndZeroPriceIsFree()
+    public void ToRow_EmptyList_SaysItUnlocksTheRedeemedOnPackage_NotAnyPlugin()
     {
         var row = CouponAdminSettingsTab.ToRow(Coupon("OPEN",
             """{"$type":"CouponContent","price":0,"validUntil":"2026-12-31T00:00:00+00:00"}"""), Options);
-        Assert.Equal("any plugin", row.Unlocks);
+        Assert.Equal("the package it is used on", row.Unlocks);
+        Assert.DoesNotContain("any", row.Unlocks, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("free", row.Price);
         Assert.Equal("until 2026-12-31", row.Valid);
         Assert.Equal("0", row.Redeemed);
         Assert.Equal("", row.Notes);
+    }
+
+    /// <summary>
+    /// "Unlocks everything" is the coupon's own <c>grantsAll</c> flag, and it wins the cell — it is
+    /// the one thing that unlocks more than the list names.
+    /// </summary>
+    [Fact]
+    public void ToRow_GrantsAll_SaysEverything_EvenBesideAList()
+    {
+        Assert.Equal("everything", CouponAdminSettingsTab.ToRow(Coupon("UNLOCKALL",
+            """{"$type":"CouponContent","grantsAll":true}"""), Options).Unlocks);
+        Assert.Equal("everything", CouponAdminSettingsTab.ToRow(Coupon("UNLOCKALL",
+            """{"$type":"CouponContent","grantsAll":true,"plugins":["Chess"]}"""), Options).Unlocks);
+        Assert.Equal("Chess", CouponAdminSettingsTab.ToRow(Coupon("JUSTCHESS",
+            """{"$type":"CouponContent","grantsAll":false,"plugins":["Chess"]}"""), Options).Unlocks);
+    }
+
+    /// <summary>
+    /// The labels resolve through the viewer's catalog when a host supplied one — the projection
+    /// stays pure and falls back to English only when called without one (as these tests do).
+    /// </summary>
+    [Fact]
+    public void ToRow_Labels_ComeFromTheLocalizer_WhenOneIsSupplied()
+    {
+        string German(string key) => key switch
+        {
+            "ui.couponUnlocksEverything" => "alles",
+            "ui.couponUnlocksRedeemedOn" => "das Paket, auf dem er eingelöst wird",
+            _ => key,
+        };
+        Assert.Equal("alles", CouponAdminSettingsTab.ToRow(Coupon("A",
+            """{"grantsAll":true}"""), Options, German).Unlocks);
+        Assert.Equal("das Paket, auf dem er eingelöst wird", CouponAdminSettingsTab.ToRow(Coupon("B",
+            """{"plugins":[]}"""), Options, German).Unlocks);
     }
 
     [Fact]
@@ -87,7 +127,7 @@ public class CouponAdminSettingsTabTest
             { NodeType = "Store/Coupon", Content = null };
         var row = CouponAdminSettingsTab.ToRow(empty, Options);
         Assert.Equal("N2", row.Code);
-        Assert.Equal("any plugin", row.Unlocks);
+        Assert.Equal("the package it is used on", row.Unlocks);
         Assert.Equal("free", row.Price);
     }
 
