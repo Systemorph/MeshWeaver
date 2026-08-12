@@ -360,11 +360,15 @@ public class IoPoolTest
         using var pool = new IoPool(1);
         var legAEntered = new ManualResetEventSlim();
         var releaseLegA = new ManualResetEventSlim();
+        // Whether leg A was RELEASED rather than timing out. If the wait ever timed out, leg A would
+        // free the permit on its own and the "leg B is parked on the gate" premise would be false —
+        // the test could then pass for the wrong reason. Asserted on the test thread below.
+        var legAReleasedCleanly = 0;
 
         var legA = Observable.Create<int>(obs =>
         {
             legAEntered.Set();
-            releaseLegA.Wait(Timeout10);
+            if (releaseLegA.Wait(Timeout10)) Interlocked.Exchange(ref legAReleasedCleanly, 1);
             obs.OnNext(1);
             return System.Reactive.Disposables.Disposable.Empty;
         });
@@ -374,11 +378,14 @@ public class IoPoolTest
 
         // Leg B can never acquire the permit — it is parked on the gate when the drain cancels.
         var legBTerminated = new ManualResetEventSlim();
-        var legBSubscribed = false;
+        // Written from the pool's subscribe thread, read from the test thread — Interlocked/Volatile,
+        // not a plain bool: a stale read of `false` is the PASSING value here, so an unsynchronised
+        // field could hide a real regression (leg B being subscribed despite the drain).
+        var legBSubscribed = 0;
         using var subB = pool
             .SubscribeThroughPool(Observable.Create<int>(obs =>
             {
-                legBSubscribed = true;
+                Interlocked.Exchange(ref legBSubscribed, 1);
                 obs.OnNext(2);
                 return System.Reactive.Disposables.Disposable.Empty;
             }))
@@ -392,7 +399,10 @@ public class IoPoolTest
         releaseLegA.Set();
         await drainDone.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
 
-        legBSubscribed.Should().BeFalse(
+        Volatile.Read(ref legAReleasedCleanly).Should().Be(1,
+            "leg A must have been RELEASED, not timed out — a timed-out wait would free the permit on "
+            + "its own and leg B would no longer be parked on the gate, so the test would prove nothing");
+        Volatile.Read(ref legBSubscribed).Should().Be(0,
             "the drain cancels before the permit is granted, so leg B's source must never be subscribed");
 
         // 🚨 THE REGRESSION GUARD. Before the fix this never fired and the test hung to its timeout.
