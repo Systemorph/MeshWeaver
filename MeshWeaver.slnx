@@ -104,6 +104,7 @@
     <Project Path="src/MeshWeaver.Markdown/MeshWeaver.Markdown.csproj" />
     <Project Path="src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj" />
     <Project Path="src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
+    <Project Path="src/MeshWeaver.Markdown.Export.Contract/MeshWeaver.Markdown.Export.Contract.csproj" />
     <Project Path="src/MeshWeaver.Maui.Abstractions/MeshWeaver.Maui.Abstractions.csproj" />
     <Project Path="src/MeshWeaver.Mcp/MeshWeaver.Mcp.csproj" />
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
