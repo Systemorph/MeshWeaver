@@ -291,11 +291,32 @@ public static class MeshDataSourceExtensions
         // the confirmed SpaceDeletionPartitionDropTests resurrection. The owning hub recorded the
         // delete in the mesh-scoped registry, so tombstone this hub's cache and skip the write.
         var recentlyDeleted = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+        var flushed = hub.ServiceProvider.GetService<PostCommitFlushRegistry>();
         if (recentlyDeleted?.IsRecentlyDeleted(node.Path) == true)
         {
             var ownCache = hub.ServiceProvider.GetService<OwnNodeCache>();
             if (ownCache is not null) ownCache.IsDeleted = true;
+            flushed?.Forget(node.Path);
             logger?.LogDebug("[SaveMeshNode] skip resurrecting write to recently-deleted {Path}", node.Path);
+            return request.Processed();
+        }
+        // 🚨 ONE change, ONE durable write (#1249). A patch-driven change is ALREADY durable by the
+        // time this handler runs: DataExtensions.ApplyMeshNodePatchInTurn chains
+        // IPostCommitFlush.Flush off the post-commit emission and the caller's PatchDataResponse ack
+        // off THAT. The sampler that posted this request saw the same commit and would write it a
+        // second time — and because the two routes are unordered (flush from an emission thread,
+        // this one through the hub inbox) that second write lands as a version REGRESSION whenever
+        // the row moved on in between. MonotonicWriteGuard then fires a CONFLICT on a strictly
+        // SEQUENTIAL writer, and the base-less merge that resolves it keeps the string SUPERSET /
+        // array UNION — silently re-adding text or elements the newer write DELETED. The guard's
+        // alarm was right; its input was ours. See PostCommitFlushRegistry for the whole mechanism,
+        // including why comparing VERSIONS (not snapshot identity) is what makes this sound.
+        var alreadyFlushed = flushed?.HighWater(node.Path) ?? 0L;
+        if (node.Version <= alreadyFlushed)
+        {
+            logger?.LogDebug(
+                "[SaveMeshNode] skip {Path} at version={Version} — the post-commit flush already "
+                + "persisted version={PersistedVersion}", node.Path, node.Version, alreadyFlushed);
             return request.Processed();
         }
         logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
@@ -388,6 +409,10 @@ public static class MeshDataSourceExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DeleteMeshNodeHandler");
         var path = request.Message.Path;
+        // The row is going away — drop the post-commit flush's durable-version mark so a same-id
+        // recreate at Version = 1 is never read as "already persisted" (#1249). Same rule as
+        // MonotonicWriteGuardStorageAdapter.Forget on Delete.
+        hub.ServiceProvider.GetService<PostCommitFlushRegistry>()?.Forget(path);
         persistence.Delete(path)
             .Subscribe(
                 _ => { },
@@ -1153,6 +1178,12 @@ public static class MeshDataSourceExtensions
                         // is [SystemMessage] (PostPipeline accepts a null AccessContext — per-node hub
                         // self-write); no ImpersonateAsHub stamping (the hub address polluted CreatedBy via
                         // the AsyncLocal leak, fixed 2026-05-22). See AccessContextPropagation.md.
+                        // 🚨 A PATCH-driven change is already durable when this fires — the post-commit
+                        // flush wrote it and the caller's ack chained off that write. The duplicate is
+                        // dropped in HandleSaveMeshNode against PostCommitFlushRegistry, NOT here:
+                        // this gate chain runs in the same synchronous fan-out as the flush (and, having
+                        // subscribed at hub init, runs BEFORE it), so nothing the flush stamps can be
+                        // visible at this point. The handler reads the mark after the flush settled (#1249).
                         var posted = saveHub.Post(new SaveMeshNodeRequest(node));
                         // Only a delivery the hub ACCEPTED counts as dispatched — Post returns
                         // Failed("Hub is shutting down") from the hoisted teardown guard when the
@@ -1306,6 +1337,10 @@ public static class MeshDataSourceExtensions
             {
                 case DataChangeKind.Deleted:
                     cache.IsDeleted = true;
+                    // The row is gone, so the post-commit flush's durable-version mark no longer
+                    // describes anything: a same-id recreate legitimately restarts at Version = 1
+                    // and must not be read as "already persisted" (#1249).
+                    hub.ServiceProvider.GetService<PostCommitFlushRegistry>()?.Forget(ownPath);
                     // The mesh-scoped tombstone is populated synchronously by the delete handler
                     // (HandleDeleteNodeRequest, before the fan-out that activates this hub) — no
                     // MarkDeleted needed here; this only tracks the own-node cache flag.
@@ -1373,14 +1408,24 @@ public static class MeshDataSourceExtensions
     /// the mesh IO pool, which outlives this hub, so the write completes in the background;
     /// the hub never awaits. Applies the same guards as <c>HandleSaveMeshNode</c>
     /// (recently-deleted tombstone, Version >= 1) plus the sampler's own gates re-checked
-    /// at flush time (IsDeleted, PersistedSnapshot identity). A fault propagates to
-    /// DisposeImpl's Catch wrapper and is logged as <c>[DISPOSE-ACTION] … faulted</c>.
+    /// at flush time (IsDeleted, PersistedSnapshot identity, and the post-commit flush's
+    /// durable-version high-water — see <see cref="PostCommitFlushRegistry"/>). A fault
+    /// propagates to DisposeImpl's Catch wrapper and is logged as
+    /// <c>[DISPOSE-ACTION] … faulted</c>.
     /// </summary>
     private static IObservable<System.Reactive.Unit> FlushPendingOwnSave(
         IMessageHub hub, OwnNodeCache cache, PendingOwnSave pending)
     {
         var node = pending.TakeUnsaved();
         if (node is null || cache.IsDeleted || ReferenceEquals(node, cache.PersistedSnapshot))
+            return Observable.Return(System.Reactive.Unit.Default);
+
+        // Same route-collapse gate as HandleSaveMeshNode: a patch-driven state is already durable
+        // (the post-commit flush wrote it and the caller's ack chained off that write), so flushing
+        // it again at teardown is the duplicate #1249 is about. A pending own write that never went
+        // through a patch has no mark and still flushes — the DisposalPendingSaveFlushTest case.
+        var flushed = hub.ServiceProvider.GetService<PostCommitFlushRegistry>();
+        if (node.Version <= (flushed?.HighWater(node.Path) ?? 0L))
             return Observable.Return(System.Reactive.Unit.Default);
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
