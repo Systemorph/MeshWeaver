@@ -126,9 +126,26 @@ public static class JsonEquivalence
                 : null;
         if (value.TryGetValue<long>(out var asLong)) return asLong;
         if (value.TryGetValue<decimal>(out var asDecimalValue)) return asDecimalValue;
-        if (value.TryGetValue<double>(out var asDouble)) return (decimal)asDouble;
-        if (value.TryGetValue<float>(out var asFloat)) return (decimal)asFloat;
+        if (value.TryGetValue<double>(out var asDouble)) return ToDecimalOrNull(asDouble);
+        if (value.TryGetValue<float>(out var asFloat)) return ToDecimalOrNull(asFloat);
         return null;
+    }
+
+    /// <summary>
+    /// A <see cref="decimal"/> for a floating-point value that has one, and <c>null</c> otherwise.
+    /// </summary>
+    /// <remarks>
+    /// 🚨 A bare <c>(decimal)</c> cast throws <see cref="OverflowException"/> for NaN, ±∞ and any
+    /// magnitude past decimal's range — which would turn a plain equality check into a crash.
+    /// Returning null instead routes the pair to the boxed-value comparison below, which still
+    /// answers correctly. The bound is deliberately just inside <see cref="decimal.MaxValue"/>:
+    /// doubles within a rounding step of the limit can still overflow on conversion.
+    /// </remarks>
+    private static decimal? ToDecimalOrNull(double value)
+    {
+        const double limit = 7.9e28d;
+        if (!double.IsFinite(value) || value < -limit || value > limit) return null;
+        return (decimal)value;
     }
 
     private static string? GetString(JsonValue value)

@@ -76,6 +76,53 @@ public class JsonPatchDiffTest
         Assert.Single(JsonNode.Parse("""{"a":1e300}""").CreatePatch(JsonNode.Parse("""{"a":1e301}""")).Operations);
     }
 
+    /// <summary>
+    /// Equivalence over nodes holding a raw CLR <see cref="double"/> rather than a parsed
+    /// <see cref="JsonElement"/> — the path where a bare <c>(decimal)</c> cast throws
+    /// <see cref="OverflowException"/> on NaN, ±∞ or an out-of-range magnitude. Values with no
+    /// decimal representation fall through to a boxed comparison, which still answers correctly.
+    /// </summary>
+    /// <remarks>
+    /// NaN compares EQUAL to NaN here: the fallback is <see cref="object.Equals(object)"/>, and
+    /// <see cref="double.Equals(double)"/> deliberately differs from <c>==</c> on NaN. For a diff
+    /// that is the answer we want — two structurally identical documents must produce no operations.
+    /// </remarks>
+    [Theory]
+    [InlineData(1.5, 1.5, true)]
+    [InlineData(1.5, 2.5, false)]
+    [InlineData(1e300, 1e300, true)]
+    [InlineData(1e300, 1e301, false)]
+    [InlineData(double.MaxValue, double.MaxValue, true)]
+    [InlineData(double.MaxValue, double.MinValue, false)]
+    [InlineData(double.NaN, double.NaN, true)]
+    [InlineData(double.NaN, 1.0, false)]
+    [InlineData(double.PositiveInfinity, double.PositiveInfinity, true)]
+    [InlineData(double.PositiveInfinity, double.NegativeInfinity, false)]
+    public void RawDoubleValues_CompareWithoutThrowing(double a, double b, bool equivalent)
+    {
+        var left = new JsonObject { ["a"] = JsonValue.Create(a) };
+        var right = new JsonObject { ["a"] = JsonValue.Create(b) };
+        Assert.Equal(equivalent, left.IsEquivalentTo(right));
+    }
+
+    /// <summary>
+    /// The diff over the same raw-double nodes, restricted to JSON-representable magnitudes.
+    /// (±∞ and NaN are rejected by <c>System.Text.Json</c> itself — "cannot be written as valid
+    /// JSON" — long before any of this code sees them, so there is nothing here to assert.)
+    /// </summary>
+    [Theory]
+    [InlineData(1.5, 1.5, 0)]
+    [InlineData(1.5, 2.5, 1)]
+    [InlineData(1e300, 1e300, 0)]
+    [InlineData(1e300, 1e301, 1)]
+    [InlineData(double.MaxValue, double.MaxValue, 0)]
+    public void RawDoubleValues_DiffWithoutThrowing(double a, double b, int operations)
+    {
+        var left = new JsonObject { ["a"] = JsonValue.Create(a) };
+        var right = new JsonObject { ["a"] = JsonValue.Create(b) };
+        Assert.Equal(operations, left.CreatePatch(right).Operations.Count);
+    }
+
     // ---- arrays -----------------------------------------------------------------------
 
     [Theory]

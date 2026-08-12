@@ -561,12 +561,12 @@ public readonly ref struct JsonPointerSegment
     /// <c>false</c> (the segment's escape counts as one character, the probe's as two). Pass the
     /// real property name. This asymmetry is inherited from json-everything and is preserved
     /// deliberately; <c>JsonPointerTest.Segment_ComparesAcrossEscaping</c> pins it.
+    /// <para>
+    /// A null <paramref name="value"/> returns false rather than throwing — a JSON property name is
+    /// never null, so "no match" is the useful answer.
+    /// </para>
     /// </remarks>
-    public bool Equals(string? value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        return SegmentEquals(value.AsSpan());
-    }
+    public bool Equals(string? value) => value is not null && SegmentEquals(value.AsSpan());
 
     /// <summary>Compares against an array index.</summary>
     public bool Equals(int value) => SegmentEquals(value.ToString(System.Globalization.CultureInfo.InvariantCulture).AsSpan());
@@ -621,11 +621,11 @@ public readonly ref struct JsonPointerSegment
     /// <summary>Segment inequality.</summary>
     public static bool operator !=(JsonPointerSegment left, JsonPointerSegment right) => !left.Equals(right);
 
-    /// <summary>Compares a segment with a property name (escaped or unescaped).</summary>
-    public static bool operator ==(JsonPointerSegment left, string right) => left.SegmentEquals(right.AsSpan());
+    /// <summary>Compares a segment with a property name. A null name never matches.</summary>
+    public static bool operator ==(JsonPointerSegment left, string? right) => left.Equals(right);
 
-    /// <summary>Compares a segment with a property name (escaped or unescaped).</summary>
-    public static bool operator !=(JsonPointerSegment left, string right) => !left.SegmentEquals(right.AsSpan());
+    /// <summary>Compares a segment with a property name. A null name never matches.</summary>
+    public static bool operator !=(JsonPointerSegment left, string? right) => !left.Equals(right);
 
     /// <summary>Compares a segment with a property name span.</summary>
     public static bool operator ==(JsonPointerSegment left, ReadOnlySpan<char> right) => left.SegmentEquals(right);
