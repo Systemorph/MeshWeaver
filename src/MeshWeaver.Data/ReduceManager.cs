@@ -1,6 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
-using Json.Patch;
+using MeshWeaver.Json;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;

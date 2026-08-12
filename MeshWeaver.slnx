@@ -142,6 +142,7 @@
     <Project Path="test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.Test/MeshWeaver.Hosting.Orleans.Test.csproj" />
     <Project Path="test/MeshWeaver.Import.Test/MeshWeaver.Import.Test.csproj" />
+    <Project Path="test/MeshWeaver.Json.Test/MeshWeaver.Json.Test.csproj" />
     <Project Path="test/MeshWeaver.Layout.Test/MeshWeaver.Layout.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Test/MeshWeaver.Markdown.Test.csproj" />
     <Project Path="test/MeshWeaver.MathDemo.Test/MeshWeaver.MathDemo.Test.csproj" />

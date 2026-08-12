@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
-using Json.Patch;
-using Json.Pointer;
+using MeshWeaver.Json;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
