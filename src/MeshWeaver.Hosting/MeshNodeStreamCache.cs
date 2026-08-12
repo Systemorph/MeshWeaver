@@ -109,9 +109,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         /// <summary>Marks the entry's hydration as terminally errored — its replay
         /// subject holds an OnError terminal, so every future subscriber would
         /// replay the stale failure. Set by the storm-breaker bookkeeping observer;
-        /// consumed by the change-feed invalidation reset, which evicts ONLY
-        /// faulted entries (a healthy live entry must never be torn down by a
-        /// routine post-commit Updated broadcast).</summary>
+        /// consumed by TWO evict-only readers, both of which evict ONLY faulted
+        /// entries (a healthy live entry must never be torn down): the change-feed
+        /// invalidation reset (a routine post-commit Updated broadcast) and the
+        /// faulted-entry guard in <c>GetStreamRaw</c>, which drops the entry on the
+        /// next read whenever NO breaker window is open — without it a single owner
+        /// fault poisons the path for the process lifetime (#1202).</summary>
         public void MarkFaulted() { lock (gate) faulted = true; }
 
         /// <summary>True when the entry's hydration terminated with an error.</summary>
@@ -864,10 +867,25 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 {
                     entry.MarkFaulted();
                     if (IsMissingNodeFailure(ex)) RecordNegative(p, ex);
-                    // A transient owner failure stays out of the negative cache (the node
-                    // exists — see IsTransientOwnerFailure), but a STREAK of them is the
-                    // poisoned-activation loop; record it so re-probes back off past the grace.
-                    else if (IsTransientOwnerFailure(ex)) RecordTransient(p, ex);
+                    // Everything that is NOT a genuine missing node stays out of the negative
+                    // cache (the node exists — see IsTransientOwnerFailure), but a STREAK of
+                    // failures is the poisoned-activation loop; record it so re-probes back off
+                    // past the grace.
+                    //
+                    // 🚨 The `else` is deliberately unconditional, not `else if
+                    // (IsTransientOwnerFailure(ex))`. EVERY fault must land in exactly one
+                    // breaker, because the faulted-entry guard in GetStreamRaw now re-probes any
+                    // entry the breakers left unwindowed — an error class recorded by NEITHER
+                    // breaker would re-probe once per read with no bound at all. That
+                    // "un-broker'd" bucket is also what wedged memex on 2026-07-23 (an Npgsql
+                    // connect failure fell through both predicates and replayed forever until a
+                    // manual recycle); the classifier grew a marker list to plug that ONE class,
+                    // and this closes the bucket in general. The transient breaker is the right
+                    // home: its grace keeps the "clean cache, instant re-probe" contract for the
+                    // first TransientGraceFailures faults of ANY class, then bounds a persistent
+                    // one at ≤ TransientMaxCooldown. A successful read or a change-feed
+                    // invalidation clears it immediately, exactly as before.
+                    else RecordTransient(p, ex);
                 });
             disposal.Add(bookkeeping);
             return entry;
@@ -1021,6 +1039,76 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     }
 
     /// <summary>
+    /// Drops the path's TERMINALLY-ERRORED read entry so the next resolution re-probes the owner
+    /// for real. The single teardown behind all three re-probe triggers — the storm breaker's
+    /// window expiry, the transient breaker's, and the faulted-entry guard — so they cannot drift.
+    ///
+    /// <para>🚨 It must detach the UPSTREAM, not just the cache entry. The poison is TWO layers
+    /// deep: the cache's <c>Entry</c> holds the terminal on its <c>Replay(1)</c>, and the
+    /// cacheHub WORKSPACE holds the errored <c>ISynchronizationStream</c> in its own
+    /// <c>(owner, reference, identity)</c> cache. Dropping only the entry re-creates a fresh
+    /// entry over the SAME dead stream — no <c>SubscribeRequest</c> is ever posted, and the
+    /// reader gets the identical exception instance back. That is why the memex-cloud probes
+    /// kept returning the byte-identical request id (#1202), and why the breakers' own
+    /// "re-probe" branches only ever grew their backoff instead of reaching the owner.</para>
+    ///
+    /// <para>The protocol is the idle sweep's, for the same reason: DETACH first, so from that
+    /// instant a concurrent read builds a FRESH stream (new StreamId) and can no longer adopt
+    /// the doomed one; then CLAIM the entry pair-exact; only the winner tears down. This is what
+    /// makes disposing safe here — the earlier "never dispose the upstream on a re-probe" rule
+    /// guarded against disposing a stream the fresh subscribe could still adopt, which detaching
+    /// first makes impossible (the <c>UnsubscribeRequest</c> carries the OLD StreamId). A loser
+    /// re-parks what it detached, so a stream belonging to someone else's fresh entry is never
+    /// disposed.</para>
+    ///
+    /// <para>Only a FAULTED entry qualifies. A healthy live entry is never torn down — the same
+    /// rule <see cref="ResetFailureState"/> follows: a breaker record can outlive the fault that
+    /// wrote it (the write path records too), and severing live GUI subscribers over a stale
+    /// counter would be a regression, not a fix.</para>
+    /// </summary>
+    /// <returns>True when this caller claimed and tore the entry down.</returns>
+    private bool EvictFaultedEntry(string path, string reason)
+    {
+        if (!_streams.TryGetValue(path, out var lazy) || !lazy.IsValueCreated || !lazy.Value.IsFaulted)
+            return false;
+
+        var stale = lazy.Value;
+        IReadOnlyList<ISynchronizationStream> detached;
+        try
+        {
+            detached = stale.Handle.DetachUpstreams();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "MeshNodeStreamCache: error detaching upstreams for {Path}", path);
+            detached = [];
+        }
+
+        // Pair-exact: never unlink an entry a concurrent reader has already replaced.
+        if (!_streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy)))
+        {
+            // Lost the claim — the detach above may have taken the WINNER's fresh stream with it
+            // (DetachRemoteStreams scans by (owner, reference) across identities). Hand everything
+            // back; the workspace re-owns the lifetime and the winner's probe keeps running.
+            try { stale.Handle.ReparkUpstreams(detached); }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "MeshNodeStreamCache: error re-parking upstreams for {Path}", path);
+            }
+            return false;
+        }
+
+        stale.MarkEvicted();
+        var released = TearDownEntry(path, stale, detached);
+        readStreamEvictions.OnNext(new ReadStreamEviction(path, released, reason));
+        logger.LogDebug(
+            "MeshNodeStreamCache: evicted faulted read entry for {Path} ({Reason}; upstreams disposed: {Count}) "
+            + "— the next resolution opens a fresh SubscribeRequest instead of replaying the stale terminal error",
+            path, reason, detached.Count);
+        return true;
+    }
+
+    /// <summary>
     /// Records an upstream read failure for <paramref name="path"/> in the storm
     /// breaker's negative cache with an exponential-backoff window
     /// (<see cref="StormBaseCooldown"/> · 2^(n-1), capped at
@@ -1051,8 +1139,9 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     }
 
     /// <summary>
-    /// Records a TRANSIENT owner fault (<see cref="IsTransientOwnerFailure"/>) for
-    /// <paramref name="path"/> in the transient-fault breaker. The first
+    /// Records an owner fault that is NOT a genuine missing node — the transient class
+    /// (<see cref="IsTransientOwnerFailure"/>) and, since #1202, every other non-missing
+    /// class too, so no fault is left un-broker'd — for <paramref name="path"/>. The first
     /// <see cref="TransientGraceFailures"/> consecutive faults open NO window (the ordinary
     /// just-idle reactivation miss keeps its instant re-probe); past the grace, each further
     /// fault opens an exponential-backoff window (<see cref="TransientBaseCooldown"/> ·
@@ -1086,7 +1175,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         _transientStreaks[path] = new TransientStreak(error, failCount, openUntil, now);
         if (failCount == TransientGraceFailures + 1)
             logger.LogWarning(
-                "[TRANSIENT-BREAKER] '{Path}' has faulted {FailCount} consecutive times with a transient-classified "
+                "[TRANSIENT-BREAKER] '{Path}' has faulted {FailCount} consecutive times with a non-missing-node "
                 + "owner failure: {Error}. The fault is empirically NOT transient (a poisoned activation / wedged owner) — "
                 + "re-probes now back off exponentially (cap {Cap}s) instead of hammering the owner. A recycle or a "
                 + "successful resolution clears the streak immediately.",
@@ -1254,35 +1343,21 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         //      it (the atomic TryUpdate lets exactly one reader win). Without this, every
         //      ~100ms read re-evicted the still-hydrating fresh probe before it resolved,
         //      so the negative entry never cleared.
-        //   2. The stale-entry eviction disposes ONLY the Rx hydration + marks the entry
-        //      evicted — it does NOT synchronously dispose the upstream sync stream. A
-        //      terminally-errored upstream ("No node found") has ALREADY torn down its own
-        //      keep-alive/heartbeat, so it leaks nothing; but posting UnsubscribeRequest to
-        //      the owner mid-reprobe RACES the fresh re-subscribe and wedges the owner's
-        //      action block (its snapshot DataChangedEvent then never lands → the read
-        //      never resolves). The idle sweep reaps genuinely-idle LIVE upstreams (the
-        //      actual leak); an errored/superseded upstream is reaped by the change-feed
-        //      parking + workspace disposal, exactly as before the idle-release change.
+        //   2. The stale-entry eviction (EvictFaultedEntry) DETACHES the upstream before it
+        //      claims the entry, so the fresh probe builds a NEW sync stream and can never
+        //      adopt the doomed one. That ordering is what makes the teardown safe: the old
+        //      "dispose nothing, the change feed will reap it" rule was guarding against
+        //      disposing a stream the fresh re-subscribe could still adopt (UnsubscribeRequest
+        //      racing it wedges the owner's action block). It also left the errored stream in
+        //      the WORKSPACE's remote-stream cache — so the "re-probe" re-created an entry over
+        //      the same dead stream, posted no SubscribeRequest at all, and replayed the
+        //      identical exception while the backoff grew. See EvictFaultedEntry (#1202).
         if (_negative.TryGetValue(path, out var neg))
         {
             if (neg.OpenUntil > DateTimeOffset.UtcNow)
                 return Observable.Throw<MeshNode>(neg.Error);
-            if (!neg.Reprobing
-                && _negative.TryUpdate(path, neg with { Reprobing = true }, neg)
-                && _streams.TryRemove(path, out var staleLazy) && staleLazy.IsValueCreated)
-            {
-                try
-                {
-                    // Drop the errored entry's Rx hydration and mark it evicted so any
-                    // straggling SharedView wrapper transparently re-resolves. Deliberately
-                    // NOT DetachUpstreams()/TearDownEntry() here — see guard #2 above.
-                    var stale = staleLazy.Value;
-                    stale.MarkEvicted();
-                    stale.HydrationSub.Dispose();
-                    readStreamEvictions.OnNext(new ReadStreamEviction(path, false, "storm-breaker"));
-                }
-                catch (Exception ex) { logger.LogDebug(ex, "MeshNodeStreamCache: error disposing stale entry for {Path}", path); }
-            }
+            if (!neg.Reprobing && _negative.TryUpdate(path, neg with { Reprobing = true }, neg))
+                EvictFaultedEntry(path, "storm-breaker");
         }
 
         // TRANSIENT-FAULT BREAKER: same fast-fail + single-flight re-probe discipline as the
@@ -1295,19 +1370,41 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 return Observable.Throw<MeshNode>(streak.Error);
             if (streak.FailCount > TransientGraceFailures
                 && !streak.Reprobing
-                && _transientStreaks.TryUpdate(path, streak with { Reprobing = true }, streak)
-                && _streams.TryRemove(path, out var staleTransientLazy) && staleTransientLazy.IsValueCreated)
-            {
-                try
-                {
-                    var stale = staleTransientLazy.Value;
-                    stale.MarkEvicted();
-                    stale.HydrationSub.Dispose();
-                    readStreamEvictions.OnNext(new ReadStreamEviction(path, false, "transient-breaker"));
-                }
-                catch (Exception ex) { logger.LogDebug(ex, "MeshNodeStreamCache: error disposing stale entry for {Path}", path); }
-            }
+                && _transientStreaks.TryUpdate(path, streak with { Reprobing = true }, streak))
+                EvictFaultedEntry(path, "transient-breaker");
         }
+
+        // 🚨 FAULTED-ENTRY GUARD (#1202). Reaching this line means NO breaker window is open
+        // for the path — both branches above RETURN while theirs is. If the cached entry's
+        // hydration nonetheless terminated with an ERROR, its Replay(1) holds that terminal
+        // and would hand this reader — and every future one — the SAME exception INSTANCE,
+        // i.e. the same failed SubscribeRequest id, forever. Nothing ever re-opens an
+        // upstream, so the bookkeeping observer never fires again, the breakers' fail
+        // counters stay frozen at the value the FIRST fault wrote, and their eviction
+        // branches (which require a count past the grace) are dead BY CONSTRUCTION.
+        //
+        // That is the memex-cloud poison: one 60s owner timeout on `DataModeling/Formatting`
+        // made the path permanently unreadable for the pod's lifetime, the decisive evidence
+        // being the byte-identical request id `3kjIJ9lXPUCqPU5Zkgmhjw` returned by three
+        // reads spanning eleven minutes. The only escapes were a change-feed invalidation
+        // (ResetFailureState — a write on a read-only path never comes) and the 10-minute
+        // idle sweep, whose sliding window every read's Touch() resets: the failure is
+        // self-sustaining under exactly the load pattern that surfaces it.
+        //
+        // A fault that left NO window is either inside the transient grace — where the stated
+        // contract is "clean cache, instant re-probe" — or a class no breaker records. Both
+        // mean the same thing: PROBE AGAIN. So drop the errored entry and let SharedView below
+        // open a fresh upstream.
+        //
+        // 🚨 Why here and NOT in GetEntry: GetEntry runs a pin-or-recreate LOOP, so evicting a
+        // faulted entry there would spin forever on an entry that faults during creation
+        // (create → faulted → evict → create → …). This guard runs once per read CALL, which
+        // also bounds the re-probe rate: only a TERMINAL entry qualifies, so an upstream that
+        // is still in flight is shared rather than torn down — one new probe per FAULT, never
+        // one per read. And because a fresh probe re-runs the bookkeeping observer, the fail
+        // counters finally advance, so the transient breaker's exponential backoff engages on
+        // a persistently-failing path exactly as it was designed to.
+        EvictFaultedEntry(path, "faulted");
 
         var shared = SharedView(path);
 
@@ -2113,6 +2210,8 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
 /// <paramref name="UpstreamReleased"/> is true when at least one upstream sync
 /// stream (the <c>SubscribeRequest</c> client whose 45s heartbeat kept the
 /// owner-side mirror alive) was actually disposed as part of the release.
-/// <paramref name="Reason"/> ∈ { "idle", "invalidate", "storm-breaker" }.
+/// <paramref name="Reason"/> ∈ { "idle", "invalidate", "storm-breaker", "transient-breaker",
+/// "faulted" } — the last three all come from <c>EvictFaultedEntry</c>, distinguished by which
+/// re-probe trigger claimed the entry.
 /// </summary>
 internal sealed record ReadStreamEviction(string Path, bool UpstreamReleased, string Reason);
