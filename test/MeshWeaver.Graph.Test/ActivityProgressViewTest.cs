@@ -151,4 +151,64 @@ public class ActivityProgressViewTest
         // user label + status label + timestamp hint.
         header.Areas.Should().HaveCount(3);
     }
+
+    // ── The status line yields to the rendered result (2026-08-12 UX feedback) ──
+
+    [Theory]
+    [InlineData(ActivityStatus.Running, true, true)]    // progress while executing, result or not
+    [InlineData(ActivityStatus.Running, false, true)]
+    [InlineData(ActivityStatus.Succeeded, true, false)] // the result IS the success — no "✓ Done" heading
+    [InlineData(ActivityStatus.Succeeded, false, true)] // no result → the explicit Done is the only feedback
+    [InlineData(ActivityStatus.Failed, true, true)]     // a failure stays loud, result or not
+    [InlineData(ActivityStatus.Warning, true, true)]
+    [InlineData(ActivityStatus.Cancelled, true, true)]
+    public void StatusLine_ShowsOnlyWhenItCarriesInformation(
+        ActivityStatus status, bool hasResult, bool expected)
+    {
+        var log = new ActivityLog("test") { Status = status, End = DateTime.UtcNow };
+
+        ActivityLayoutAreas.ShowsStatusLine(log, hasResult).Should().Be(expected);
+    }
+
+    // ── The toolbar chip is the ONE surface saying whether the cell is executing ──
+
+    [Fact]
+    public void CellStatusChip_NeverRun_IsAbsent()
+    {
+        // The provenance text already says "never executed" — a chip would repeat it.
+        CodeLayoutAreas.CellStatusChip(null).Should().BeNull();
+    }
+
+    [Fact]
+    public void CellStatusChip_Running_SaysRunning()
+    {
+        var chip = CodeLayoutAreas.CellStatusChip(Running());
+
+        chip.Should().BeOfType<LabelControl>()
+            .Subject.Data!.ToString().Should().Contain("Running");
+    }
+
+    [Theory]
+    [InlineData(ActivityStatus.Succeeded, "✓", "Done")]
+    [InlineData(ActivityStatus.Failed, "✗", "Failed")]
+    [InlineData(ActivityStatus.Warning, "⚠", "warnings")]
+    [InlineData(ActivityStatus.Cancelled, "⊘", "Cancelled")]
+    public void CellStatusChip_Terminal_ShowsGlyphAndWord(
+        ActivityStatus status, string glyph, string word)
+    {
+        var log = new ActivityLog("test") { Status = status, End = DateTime.UtcNow };
+
+        var chip = CodeLayoutAreas.CellStatusChip(log);
+
+        var text = chip.Should().BeOfType<LabelControl>().Subject.Data!.ToString()!;
+        text.Should().Contain(glyph).And.Contain(word);
+    }
+
+    [Fact]
+    public void StatusGlyph_LocalizesTheWord()
+    {
+        // The German course pages render German status words — the glyph is language-neutral.
+        ActivityLayoutAreas.StatusGlyph(ActivityStatus.Succeeded, "de").Label.Should().Be("Fertig");
+        ActivityLayoutAreas.StatusGlyph(ActivityStatus.Succeeded).Label.Should().Be("Done");
+    }
 }

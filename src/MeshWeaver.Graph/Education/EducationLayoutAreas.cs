@@ -397,7 +397,7 @@ public static class EducationLayoutAreas
                || nodeType.EndsWith("/" + ExerciseSubNamespace, StringComparison.OrdinalIgnoreCase));
 
     // The 'Exercise' (or 'Exercises') folder segment courses group their your-turn pages under.
-    private static bool IsExerciseSegment(ReadOnlySpan<char> segment)
+    internal static bool IsExerciseSegment(ReadOnlySpan<char> segment)
         => segment.Equals(ExerciseSubNamespace, StringComparison.OrdinalIgnoreCase)
            || segment.Equals(ExerciseSubNamespace + "s", StringComparison.OrdinalIgnoreCase);
 
@@ -411,7 +411,7 @@ public static class EducationLayoutAreas
         return beforeParent < 0 ? parent : parent[(beforeParent + 1)..];
     }
 
-    private static ReadOnlySpan<char> LastSegment(string path)
+    internal static ReadOnlySpan<char> LastSegment(string path)
     {
         var last = path.LastIndexOf('/');
         return last < 0 ? path.AsSpan() : path.AsSpan(last + 1);
@@ -788,7 +788,7 @@ public static class EducationLayoutAreas
     /// then durable circuit) — mirrors <c>CodeLayoutAreas.ResolveViewerHome</c>. System / anonymous /
     /// hub-shaped principals yield <c>null</c>: they have no home partition to copy into.
     /// </summary>
-    private static string? ResolveViewerHome(AccessService? accessService)
+    internal static string? ResolveViewerHome(AccessService? accessService)
     {
         if (accessService is null)
             return null;

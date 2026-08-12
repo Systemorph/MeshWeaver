@@ -743,6 +743,9 @@ public static class MemexConfiguration
                 // Interactive courses: Course/Module/Exercise/ExerciseAttempt
                 // node types + the stream-update validation control plane.
                 .AddCourses()
+                // Whole-course left-hand index for NODE-NATIVE courses (Edu/Lesson-shaped
+                // plugin partitions) — the same menu AddCourses gives its own course type.
+                .AddEducationNavigation()
                 .AddPortalType()
                 .AddAI(serveFromPartition);
 
