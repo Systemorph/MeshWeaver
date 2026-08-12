@@ -147,6 +147,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         Icon = peeked.Icon,
                         Price = peeked.Price,
                         Currency = peeked.Currency,
+                        // Contact-sales: commercial without a price (PackageEntitlement.IsCommercial).
+                        ContactEmail = peeked.ContactEmail,
                         Poster = peeked.Poster,
                         // The package's own declaration that it belongs to the platform's default
                         // install — read off the ROOT's content, where the plugins repo authors it.
@@ -183,7 +185,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
         string? NodeType, string? Name, string? Description,
         string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
         bool PreInstalled, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
-        string? License);
+        string? License, string? ContactEmail);
 
     // Reads the node's type/name/description — plus the storefront card fields (category/icon on
     // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
@@ -198,6 +200,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             decimal? price = null;
             string? currency = null;
             string? poster = null;
+            string? contactEmail = null;
             var preInstalled = false;
             var requires = ImmutableList<string>.Empty;
             string? license = null;
@@ -211,6 +214,11 @@ public sealed class NodeRepoPackageSource : IPackageSource
                     currency = c.GetString();
                 if (content.TryGetProperty("poster", out var po) && po.ValueKind == JsonValueKind.String)
                     poster = po.GetString();
+                // The sales contact ("contactEmail"). A contact-sales package normally names NO
+                // price, so leaving this unread is what made it arrive as free — installable with
+                // no admin and published by the access step. See PackageManifest.ContactEmail.
+                if (content.TryGetProperty("contactEmail", out var ce) && ce.ValueKind == JsonValueKind.String)
+                    contactEmail = ce.GetString();
                 // Only a literal `true` opts in — anything else (absent, false, a string) leaves the
                 // package out of the default install. A malformed value must never silently install
                 // a package on every instance.
@@ -246,7 +254,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("description", out var d) ? d.GetString() : null,
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
-                price, currency, poster, preInstalled, requires, publicSegments, license);
+                price, currency, poster, preInstalled, requires, publicSegments, license,
+                contactEmail);
         }
         catch (JsonException ex)
         {

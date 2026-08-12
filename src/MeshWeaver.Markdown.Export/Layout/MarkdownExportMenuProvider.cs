@@ -18,10 +18,35 @@ namespace MeshWeaver.Markdown.Export.Layout;
 /// </summary>
 public class MarkdownExportMenuProvider : INodeMenuProvider
 {
-    /// <summary>Menu item label for the PDF export.</summary>
-    public const string PdfLabel = "Export to PDF";
-    /// <summary>Menu item label for the DOCX export.</summary>
-    public const string DocxLabel = "Export to DOCX";
+    // Labels are bare format/action names — PDF, Email, DOCX — not sentences. The icon carries the
+    // glyph, the label carries the format, and the TOOLTIP carries the explanation the label no
+    // longer does. That is the AGENTS.md-preferred shape (language-neutral glyph + short label +
+    // translated tooltip) and it shrinks the translation surface to almost nothing: "PDF" and
+    // "DOCX" are format names and are deliberately NOT translated, in either catalog.
+
+    /// <summary>Menu item label for the PDF export. A format name — never translated.</summary>
+    public const string PdfLabel = "PDF";
+
+    /// <summary>Menu item label for the DOCX export. A format name — never translated.</summary>
+    public const string DocxLabel = "DOCX";
+
+    // Icons are EMOJI, matching every other node-menu entry (✏️ 🔖 ➡️ 📋 🗑️ 📁 🧾 🕘 ♻️ ✉️ 🔄).
+    // A Fluent icon NAME must never be used here: the renderer treats a non-emoji value as an image
+    // URL and would emit a broken <img src="DocumentPdf">. These three sat icon-less, which is what
+    // made the export block read as a foreign group wedged between two iconed ones.
+
+    /// <summary>Icon for the PDF export — a page, the thing the export produces.</summary>
+    public const string PdfIcon = "📄";
+
+    /// <summary>Icon for the DOCX export — a written document, distinct from the plain PDF page.</summary>
+    public const string DocxIcon = "📝";
+
+    /// <summary>
+    /// Icon for the email share — an outbox tray. Deliberately NOT an envelope: ✉️ already belongs
+    /// to "Invite people" in this same menu, and two envelopes at 16 px are indistinguishable.
+    /// The tray also says the right thing — this entry SENDS the document out.
+    /// </summary>
+    public const string SendIcon = "📤";
 
     /// <summary>The menu context this provider contributes to — the Node menu.</summary>
     public string Context => NodeMenuItemsExtensions.NodeMenuContext;
@@ -51,33 +76,35 @@ public class MarkdownExportMenuProvider : INodeMenuProvider
                 if (node is null || node.NodeType != "Markdown" || !perms.HasFlag(Permission.Read))
                     return (IReadOnlyCollection<NodeMenuItemDefinition>)[];
 
+                // Order is PDF, Email, DOCX — the sequence the user named them in, not
+                // alphabetical and not file-formats-then-actions. Email sits between the two file
+                // exports deliberately: it is the third way of getting this document to someone.
                 return
                 [
                     new NodeMenuItemDefinition(
                         Label: PdfLabel,
                         Area: ExportDocumentLayoutArea.PdfArea,
+                        Icon: PdfIcon,
                         RequiredPermission: Permission.Read,
                         Order: 27,
                         Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.PdfArea))
-                        { LabelKey = "menu.exportPdf" },
-                    new NodeMenuItemDefinition(
-                        Label: DocxLabel,
-                        Area: ExportDocumentLayoutArea.DocxArea,
-                        RequiredPermission: Permission.Read,
-                        Order: 28,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea))
-                        { LabelKey = "menu.exportDocx" },
-                    // Sits with the export entries as the third member of the same block: the two
-                    // above produce a FILE, this one delivers the document itself. It is the
-                    // former "Send to contacts" grown up — same entry, same slot, now able to put
-                    // the rendered document in the email BODY rather than only attaching a PDF.
+                        { LabelKey = "menu.exportPdf", TooltipKey = "menu.exportPdf.tooltip" },
                     new NodeMenuItemDefinition(
                         Label: SendDocumentLayoutArea.SendLabel,
                         Area: SendDocumentLayoutArea.SendArea,
+                        Icon: SendIcon,
+                        RequiredPermission: Permission.Read,
+                        Order: 28,
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
+                        { LabelKey = "menu.sendToContacts", TooltipKey = "menu.sendToContacts.tooltip" },
+                    new NodeMenuItemDefinition(
+                        Label: DocxLabel,
+                        Area: ExportDocumentLayoutArea.DocxArea,
+                        Icon: DocxIcon,
                         RequiredPermission: Permission.Read,
                         Order: 29,
-                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, SendDocumentLayoutArea.SendArea))
-                        { LabelKey = "menu.sendToContacts" },
+                        Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ExportDocumentLayoutArea.DocxArea))
+                        { LabelKey = "menu.exportDocx", TooltipKey = "menu.exportDocx.tooltip" },
                 ];
             });
     }

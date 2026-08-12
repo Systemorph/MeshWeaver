@@ -67,7 +67,10 @@ public static class NodeMenuItemsExtensions
         config = config.Set(true, nameof(AddDefaultMeshMenu));
 
         return config
-            .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition))
+            // MenuPresentation/MenuEntryPresentation are registered so the catalog node round-trips
+            // through the type registry — it is authored and edited as ordinary node content.
+            .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition),
+                typeof(MenuPresentation), typeof(MenuEntryPresentation))
             .AddNodeMenuItems(NodeMenuContext, DefaultNodeMenuProvider)
             .AddNodeMenuItems(MeshMenuContext, DefaultMeshMenuProvider)
             .AddLayout(layout => layout.WithRenderer(_ => true, RenderMenus));
@@ -119,13 +122,36 @@ public static class NodeMenuItemsExtensions
             // bare area name either: RenderArea registers the rendered UiControls under the area
             // key, and replacing that bucket would dispose the live menu control alongside the
             // stale subscription.
+            // The DATA half of the menu: presentation (text / icon / order / grouping / hidden) comes
+            // from an editable catalog node, so re-wording or re-grouping an entry is a node edit
+            // rather than a build + image + rollout. Seeded with the standard presentation, and
+            // fail-safe in both directions — no catalog, an unreadable one, or an entry naming an
+            // unknown area all reduce to "render the compiled defaults". Combined (not merged) so a
+            // catalog change re-renders the menu live, exactly like a permission change does.
+            var catalogStream = MenuPresentationOverlay.CatalogStream(
+                host.Workspace, host.Hub.JsonSerializerOptions, context, logger);
+
             host.ReplaceDisposable(
                 $"menu-subscription:{area}",
                 items
                     .DistinctUntilChanged(MenuItemsSequenceComparer.Instance)
+                    .CombineLatest(catalogStream, (slice, catalog) => (slice, catalog))
+                    .Select(t => (IReadOnlyList<NodeMenuItemDefinition>)
+                    [
+                        .. MenuPresentationOverlay
+                            .Apply(t.slice, t.catalog, access.ViewerLocale(),
+                                reason => logger?.LogWarning(
+                                    "Menu catalog for context '{Context}': {Reason}", context, reason))
+                            .Select(i => i.Localized(access))
+                    ])
+                    // The catalog is a SECOND emission source, so the pre-overlay dedup above no
+                    // longer covers the whole pipeline: a catalog re-publish carrying identical
+                    // content would push an equal-but-not-identical MenuControl and re-render every
+                    // layout area (the render-storm cascade the Children-by-sequence equality was
+                    // added to close). Dedup the FINAL list too — value equality, Children folded in.
+                    .DistinctUntilChanged(MeshWeaver.Mesh.MenuItemsSequenceComparer.Instance)
                     .Subscribe(
-                        slice => host.UpdateArea(areaContext,
-                            new MenuControl([.. slice.Select(i => i.Localized(access))])),
+                        list => host.UpdateArea(areaContext, new MenuControl(list)),
                         ex => logger?.LogWarning(ex, "Menu render failed for context '{Context}'", context)));
         }
 

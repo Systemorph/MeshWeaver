@@ -9,11 +9,12 @@ namespace MeshWeaver.PluginCatalog;
 /// <summary>
 /// WHO may bring a package onto this instance — the free / commercial boundary (#830).
 ///
-/// <para><b>The rule.</b> A <b>free</b> package (<see cref="PackageManifest.Price"/> null or 0)
-/// syncs, installs and auto-updates with NO special permission: that is what makes the platform
-/// baseline and every gratis plugin land on a fresh instance without an operator in the loop. A
-/// <b>commercial</b> package (a non-zero price — positive = purchasable, negative = coupon-only;
-/// the same "priced" test <see cref="PackageInstaller.EnsureDeclaredAccess"/> already applies when
+/// <para><b>The rule.</b> A <b>free</b> package (<see cref="PackageManifest.Price"/> null or 0, and
+/// no <see cref="PackageManifest.ContactEmail"/>) syncs, installs and auto-updates with NO special
+/// permission: that is what makes the platform baseline and every gratis plugin land on a fresh
+/// instance without an operator in the loop. A <b>commercial</b> package (a non-zero price —
+/// positive = purchasable, negative = coupon-only — or a named sales contact; the same
+/// <see cref="IsCommercial"/> test <see cref="PackageInstaller.EnsureDeclaredAccess"/> applies when
 /// it decides a partition installs gated) requires <b>Global Admin</b> on the installing instance
 /// to be accessed, installed or auto-updated.</para>
 ///
@@ -53,13 +54,24 @@ public static class PackageEntitlement
 
     /// <summary>
     /// True when the package is COMMERCIAL — it carries a non-zero
-    /// <see cref="PackageManifest.Price"/> (positive = purchasable, negative = coupon-only).
-    /// Free is the complement: no price at all, or an explicit 0.
+    /// <see cref="PackageManifest.Price"/> (positive = purchasable, negative = coupon-only) OR it
+    /// names a sales contact (<see cref="PackageManifest.ContactEmail"/>: sold with a person in the
+    /// loop). Free is the complement: nothing to pay and nobody to ask.
+    ///
+    /// <para>🚨 The contact-sales half is not a nicety. A package sold that way normally names NO
+    /// price — "nothing to self-serve" — so on the price-only test it read as FREE, and the two
+    /// decisions that call this both took the wrong branch at once: <see cref="Authorize"/> let any
+    /// unattended install pull it in with no admin, and
+    /// <see cref="PackageInstaller.EnsureDeclaredAccess"/> published the partition
+    /// (<c>_Policy · PublicRead = true</c>, since these declare no <c>publicSegments</c>) until the
+    /// Store's <c>PluginGate</c> reconciled it dark again. The whole point of naming a sales contact
+    /// is that the content is NOT self-service.</para>
     /// </summary>
     /// <param name="manifest">The package manifest (null counts as free — nothing to gate).</param>
-    /// <returns><c>true</c> for a priced package.</returns>
+    /// <returns><c>true</c> for a priced or contact-sales package.</returns>
     public static bool IsCommercial(this PackageManifest? manifest) =>
-        manifest?.Price is { } price && price != 0m;
+        manifest?.Price is { } price && price != 0m
+        || !string.IsNullOrWhiteSpace(manifest?.ContactEmail);
 
     /// <summary>
     /// Authorizes installing / auto-updating <paramref name="manifest"/> on this instance. Emits
@@ -127,15 +139,21 @@ public static class PackageEntitlement
     public static string Reason(PackageManifest manifest, string? userId)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        var price = manifest.Currency is { Length: > 0 } currency
-            ? $"{manifest.Price} {currency}"
-            : $"{manifest.Price}";
+        // Name what made it commercial — a price, or the sales contact. A contact-sales package has
+        // no price, and reporting "price " with a blank where the number goes reads as a bug in the
+        // gate rather than as the deliberate refusal it is.
+        var terms = manifest.Price is { } amount
+            ? manifest.Currency is { Length: > 0 } currency
+                ? $"price {amount} {currency}"
+                : $"price {amount}"
+            : $"contact sales: {manifest.ContactEmail}";
         var who = string.IsNullOrWhiteSpace(userId)
             ? "no authorizing principal (unattended install)"
             : $"'{userId}'";
-        return $"Package '{manifest.Id}' is commercial (price {price}) — installing or auto-updating "
+        return $"Package '{manifest.Id}' is commercial ({terms}) — installing or auto-updating "
                + $"it requires Global Admin on this instance, and {who} is not one. "
-               + "Free packages (no price, or price 0) need no special permission.";
+               + "Free packages (no price and no sales contact, or price 0) need no special "
+               + "permission.";
     }
 }
 
