@@ -304,15 +304,21 @@ public class ContentImportAccessContextTest(ITestOutputHelper output) : Monolith
 
         var nodeStamp = await _nodeStamps.FirstAsync().Timeout(StepTimeout).ToTask(ct);
         var fileStamp = await _stampedIdentities.FirstAsync().Timeout(StepTimeout).ToTask(ct);
-        var secondStageAmbient = await _secondStageAmbient.FirstAsync().Timeout(StepTimeout).ToTask(ct);
+        // The run is over, so the sample set is complete: close the subject and take ALL of it.
+        // Asserting only the first sample would let a later one silently see the enclosing scope.
+        _secondStageAmbient.OnCompleted();
+        var stage2Ambients = await _secondStageAmbient.ToList().Timeout(StepTimeout).ToTask(ct);
         Output.WriteLine($"ok={results.Count(r => r)}/{results.Count} nodeStamp={nodeStamp} " +
-                         $"fileStamp={fileStamp} stage2Ambient={secondStageAmbient ?? "(null)"}");
+                         $"fileStamp={fileStamp} " +
+                         $"stage2Ambients=[{string.Join(", ", stage2Ambients.Select(a => a ?? "(null)"))}]");
 
-        secondStageAmbient.Should().NotBe(Importer.ObjectId,
-            because: "the hop must be real. The enclosing Observable.Using scope covers only the " +
-                     "first stage; if the second stage could see it, this test would pass whether or " +
-                     "not the identity is declared and would pin nothing. That escape IS the defect — " +
-                     "in production the ambient here is null and every post built here is refused");
+        stage2Ambients.Should().NotBeEmpty("the second stage must actually have built its posts");
+        stage2Ambients.Should().NotContain(Importer.ObjectId,
+            because: "the hop must be real, at EVERY sample. The enclosing Observable.Using scope " +
+                     "covers only the first stage; if any part of the second stage could see it, this " +
+                     "test would pass whether or not the identity is declared and would pin nothing. " +
+                     "That escape IS the defect — in production the ambient here is null and every " +
+                     "post built here is refused");
 
         nodeStamp.Should().Be(Importer.ObjectId,
             because: "stage one is built inside the scope, so MeshService's eager capture pins the " +
