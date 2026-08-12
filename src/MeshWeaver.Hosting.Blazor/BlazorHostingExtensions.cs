@@ -18,6 +18,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Components.Server.Circuits;
+using Microsoft.Extensions.Logging;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Hosting.Blazor;
@@ -72,6 +73,8 @@ public static class BlazorHostingExtensions
     /// <param name="app">The web application to map the endpoints onto.</param>
     public static void MapMeshWeaver(this WebApplication app)
     {
+        AssertAccessControlInstalled(app.Services);
+
         app.MapPublicStaticAssets(app.Services);
         app.MapContentFiles(app.Services);
 
@@ -79,6 +82,67 @@ public static class BlazorHostingExtensions
         app.MapGet("/layout-preview/{area}", (string area) => Results.StatusCode(StatusCodes.Status501NotImplemented));
 
         //app.MapRazorComponents<ApplicationPage>();
+    }
+
+    /// <summary>
+    /// 🚨 THE BOOT GATE. Mapping these routes publishes mesh content over HTTP, so this is the
+    /// moment to insist that the mesh actually has an access evaluator — and to REFUSE rather than
+    /// serve if it does not.
+    ///
+    /// <para><b>What it is protecting against.</b> With no <c>EffectivePermissionsDelegate</c>
+    /// registered, <c>ResolveEvaluator</c> falls back to an evaluator that answers
+    /// <see cref="Permission.All"/> for every caller on every path, and
+    /// <c>AddAccessControlPipeline</c> is not installed either (both come from the single
+    /// <c>AddRowLevelSecurity()</c> call). Anonymous callers are still refused — the content and SEO
+    /// routes both run through <see cref="AnonymousGate"/>, which is independently fail-closed — but
+    /// every SIGNED-IN caller gets full read access to every partition. Nothing anywhere logs that,
+    /// and the portal looks completely healthy while doing it.</para>
+    ///
+    /// <para><b>Why refuse, rather than default each request to deny.</b> A per-request deny on this
+    /// configuration would produce a portal that boots, serves, and fails every single content
+    /// request — indistinguishable from a broken permission backend, and discovered by users rather
+    /// than by the operator. The misconfiguration is static and knowable at startup, so it is
+    /// reported at startup, naming the exact call to add. (The per-request deny still exists, in
+    /// <c>AccessControlPipeline</c>, for the narrower case where the pipeline is installed without
+    /// its evaluator — there the mesh is already inconsistent and there is no earlier moment.)</para>
+    ///
+    /// <para><b>The exemption is a DECLARATION, never an inference.</b> A genuinely ungated host
+    /// says <c>AllowUnsecuredMesh(reason)</c> and boots, with the reason logged at
+    /// <see cref="LogLevel.Warning"/>. What is forbidden is the previous arrangement, where "no
+    /// evaluator" silently meant "this is fine" — the runtime twin of a CI gate that skips when its
+    /// input is missing and reports green.</para>
+    /// </summary>
+    /// <param name="services">The application's service provider, holding the mesh hub.</param>
+    /// <exception cref="InvalidOperationException">
+    /// The mesh registers no evaluator and has not declared itself ungated.
+    /// </exception>
+    private static void AssertAccessControlInstalled(IServiceProvider services)
+    {
+        var hub = services.GetRequiredService<IMessageHub>();
+        var logger = services.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessControl");
+
+        if (hub.Configuration.Get<EffectivePermissionsDelegate>() is not null)
+            return;
+
+        if (hub.Configuration.Get<UnsecuredMeshDeclaration>() is { } declaration)
+        {
+            // Loud, once, at startup — and at Warning rather than Debug precisely because the whole
+            // point is that a human reading the boot log cannot miss it.
+            logger?.LogWarning(
+                "🔓 MeshWeaver is serving content routes with NO ACCESS CONTROL — declared deliberately "
+                + "via AllowUnsecuredMesh. Every signed-in caller has full read access to every "
+                + "partition. Reason given: {Reason}",
+                declaration.Reason);
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "MapMeshWeaver() maps mesh content over HTTP, but this mesh registers no "
+            + "EffectivePermissionsDelegate — every permission check would return Permission.All and "
+            + "every signed-in caller would read every partition. Add .AddRowLevelSecurity() to the "
+            + "MeshBuilder. If this host is ungated on purpose (a single-user sidecar, a test "
+            + "fixture), declare it explicitly with .ConfigureHub(c => c.AllowUnsecuredMesh(\"why\")) "
+            + "— the absence of an evaluator is not accepted as a statement of intent.");
     }
 
     internal static string GetContentType(string path)
@@ -369,11 +433,15 @@ public static class BlazorHostingExtensions
     {
         // Lazy resolution of IMessageHub to avoid circular dependency during startup
         IMessageHub? mainHub = null;
+        // Same lazy shape, same reason: the logger is what a suppressed fault is traded FOR — the
+        // response body stops describing the failure, so the server-side record must exist.
+        ILogger? logger = null;
 
         app.MapMethods(ContentCollectionsExtensions.ContentFileRoutePrefix + "/{**path}", ["GET", "HEAD"],
             (HttpContext context, string path) =>
         {
             mainHub ??= services.GetRequiredService<IMessageHub>();
+            logger ??= services.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.ContentRoute");
 
             if (string.IsNullOrEmpty(path))
                 return Task.FromResult(Results.NotFound("Path is required"));
@@ -389,7 +457,7 @@ public static class BlazorHostingExtensions
             // No await on hub round-trips — chain via SelectMany; deadlock surface
             // (await pathResolver.ResolvePath / hub.Observe) eliminated.
             return ResolveContentFile(context, mainHub, path, caller)
-                .Catch<IResult, Exception>(ex => Observable.Return(ContentFailure(ex)))
+                .Catch<IResult, Exception>(ex => Observable.Return(ContentFailure(ex, logger, path)))
                 .FirstAsync()
                 .ToTask(context.RequestAborted);
         });
@@ -449,22 +517,57 @@ public static class BlazorHostingExtensions
     /// Maps a faulted content read onto its HTTP answer, keeping the tri-state the access pipeline
     /// took care to preserve (#974): "we checked, you may not" and "we could not check" are
     /// different answers and must not collapse into one.
+    ///
+    /// <para>🚨 <b>The body never describes the failure.</b> This route is anonymously reachable over
+    /// a fully predictable URL scheme, so every byte it returns is a byte an unauthenticated prober
+    /// gets to read. The exception text here is not generic: a <see cref="DeliveryFailureException"/>
+    /// carries the refusing hub's own message, which is written to be diagnostic — e.g.
+    /// <c>"Access denied: user 'Anonymous' lacks Read permission on 'Doc'"</c>, i.e. the permission
+    /// model, the principal, AND proof the node exists. Echoing it handed that to the caller
+    /// verbatim.</para>
+    ///
+    /// <para><b>Why the fallback still needs this after the tri-state.</b> The two typed arms below
+    /// catch the classified refusals, but they are property patterns over
+    /// <see cref="DeliveryFailureException.Failure"/> — which is <c>null</c> for the string-only
+    /// constructors, and is <see cref="ErrorType.Unknown"/> / <see cref="ErrorType.NotFound"/> /
+    /// <see cref="ErrorType.Exception"/> for every failure a hub reports without classifying. All of
+    /// those fall through to <c>_</c>, still carrying a hub-authored message and still caller-
+    /// triggerable. So the suppression belongs on the fallback, not only on the refusal arms.</para>
+    ///
+    /// <para><b>Nothing is lost, it MOVES.</b> The detail goes to the server-side log, which is where
+    /// diagnostics belong — a response body is not a log sink. Dropping it silently would be the
+    /// actual regression, which is why <paramref name="logger"/> is not optional in intent.</para>
     /// </summary>
     /// <param name="ex">The exception that faulted the read.</param>
+    /// <param name="logger">Where the suppressed detail goes instead of into the response.</param>
+    /// <param name="path">The requested content path, for correlating the log line.</param>
     /// <returns>The response to send.</returns>
-    private static IResult ContentFailure(Exception ex) => ex switch
+    internal static IResult ContentFailure(Exception ex, ILogger? logger, string path)
     {
-        // Refused: answer exactly as a missing file, so the status cannot be used to probe which
-        // paths exist. (A 403 here would confirm the file to a caller who may not see it.)
-        DeliveryFailureException { Failure.ErrorType: ErrorType.Unauthorized } =>
-            Results.NotFound(ContentNotFound),
-        // No verdict reached — a degraded dependency, NOT a statement about this caller's rights.
-        // Still fail closed (nothing is served), but 503 so the caller retries instead of caching
-        // an absence that was never asserted.
-        DeliveryFailureException { Failure.ErrorType: ErrorType.Unavailable } =>
-            Results.StatusCode(StatusCodes.Status503ServiceUnavailable),
-        _ => Results.Problem($"Error retrieving content: {ex.Message}")
-    };
+        switch (ex)
+        {
+            // Refused: answer exactly as a missing file, so the status cannot be used to probe which
+            // paths exist. (A 403 here would confirm the file to a caller who may not see it.)
+            case DeliveryFailureException { Failure.ErrorType: ErrorType.Unauthorized }:
+                logger?.LogDebug(ex, "Content read refused for {Path}", path);
+                return Results.NotFound(ContentNotFound);
+            // No verdict reached — a degraded dependency, NOT a statement about this caller's rights.
+            // Still fail closed (nothing is served), but 503 so the caller retries instead of caching
+            // an absence that was never asserted.
+            case DeliveryFailureException { Failure.ErrorType: ErrorType.Unavailable }:
+                logger?.LogWarning(ex, "Content read could not be authorized for {Path}", path);
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            default:
+                logger?.LogError(ex, "Content read failed for {Path}", path);
+                return Results.Problem(ContentError);
+        }
+    }
+
+    /// <summary>
+    /// The body a genuinely-faulted content read answers with. Constant on purpose — see
+    /// <see cref="ContentFailure"/>: the detail is logged server-side, never returned.
+    /// </summary>
+    private const string ContentError = "Error retrieving content";
 
     /// <summary>
     /// The identity of a content-file request. NEVER null — an unauthenticated caller resolves to
