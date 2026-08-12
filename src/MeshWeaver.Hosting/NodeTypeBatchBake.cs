@@ -493,7 +493,7 @@ internal static class NodeTypeBatchBake
                 "BatchBake: {TypePath} → {Status}{Detail} — {Memory}",
                 o.TypePath, o.Status,
                 string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})",
-                compileMemory.ToString()));
+                compileMemory));
     }
 
     private static IObservable<PreWarmOutcome> StampAndReport(

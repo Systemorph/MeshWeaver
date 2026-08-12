@@ -322,7 +322,7 @@ public sealed class DynamicTypePreWarmerHostedService(
                         elapsed,
                         Volatile.Read(ref compiled), Volatile.Read(ref alreadyBaked), Volatile.Read(ref errored),
                         Volatile.Read(ref timedOut), Volatile.Read(ref skipped), Volatile.Read(ref contentBroken),
-                        Volatile.Read(ref faulted), sweepMemory.ToString());
+                        Volatile.Read(ref faulted), sweepMemory);
 
                     // MarkComplete keeps a recorded regression red — completion is not absolution.
                     gate?.MarkComplete(

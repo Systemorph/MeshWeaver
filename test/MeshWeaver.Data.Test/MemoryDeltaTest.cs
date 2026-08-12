@@ -61,7 +61,12 @@ public class MemoryDeltaTest
         rendered.Should().Contain("managed");
         rendered.Should().Contain("working set");
         rendered.Should().Contain("MB");
-        rendered.Should().MatchRegex(@"managed [+-]\d+ MB, working set [+-]\d+ MB");
+        rendered.Should().MatchRegex(@"managed [+-]?\d+ MB, working set [+-]?\d+ MB");
+
+        // A delta under 1 MB must render a bare "0", never "-0" — a sign on a zero reads as a
+        // measurement rather than as rounding. (Copilot review, #1321.)
+        new MemoryDelta(GC.GetTotalMemory(false) + 512 * 1024, Environment.WorkingSet + 512 * 1024)
+            .ToString().Should().NotContain("-0 MB");
     }
 
     /// <summary>
