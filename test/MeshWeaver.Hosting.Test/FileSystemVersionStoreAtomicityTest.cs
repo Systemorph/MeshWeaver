@@ -33,15 +33,20 @@ namespace MeshWeaver.Hosting.Test;
 ///
 /// <para>🚨 The assertion is on the READ of an ENUMERATED version, never on write throughput or
 /// timing, so it cannot be satisfied by making anything faster — only by making publication
-/// atomic. <see cref="Reads"/> is asserted non-zero so a loop that never observed a write cannot
-/// pass vacuously.</para>
+/// atomic. The observation count is asserted non-zero so a probe that never sampled a published
+/// snapshot cannot pass vacuously, and a deterministic round-trip of the whole history through the
+/// store's own API runs afterwards regardless of what the probe saw.</para>
 /// </summary>
 public class FileSystemVersionStoreAtomicityTest : IDisposable
 {
-    private const int Versions = 40;
+    private const int Versions = 12;
 
-    /// <summary>Big enough that the byte stream needs several async chunks, which is what opens the
-    /// window between "file exists under its final name" and "file holds valid JSON".</summary>
+    /// <summary>
+    /// Big enough that the byte stream needs several async chunks, which is what opens the window
+    /// between "file exists under its final name" and "file holds valid JSON". Calibrated against
+    /// the UNFIXED store: 512 KB never reproduced locally, 4 MB reproduced on roughly a third of
+    /// the writes. Sized down to 12 versions so the whole test writes ~48 MB rather than 160 MB.
+    /// </summary>
     private const int PayloadBytes = 4 * 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new();
