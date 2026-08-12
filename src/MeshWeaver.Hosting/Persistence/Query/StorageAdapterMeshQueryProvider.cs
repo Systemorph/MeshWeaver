@@ -165,20 +165,20 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     public static readonly TimeSpan DefaultDebounceInterval = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
-    /// Gets the effective user ID from the request or from the current access context.
-    /// Returns WellKnownUsers.Anonymous for unauthenticated/virtual access.
+    /// The viewer this read runs behind. Delegates to <see cref="QueryIdentityResolver"/> — the ONE
+    /// definition of the rule, shared with every native provider. This method used to hold its own
+    /// copy, and the copies had drifted: an explicit <c>UserId = ""</c> meant "the anonymous
+    /// visitor" here and "go look at the ambient context" in the Postgres and Snowflake twins.
+    ///
+    /// <para>By the time a request reaches this provider through <c>IMeshService</c> the viewer is
+    /// already stamped, so the ambient lookup below is defence in depth for a caller that
+    /// constructed a provider directly (tests, tooling) — never the primary mechanism.</para>
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
-    {
-        // If request has explicit UserId set (including empty for anonymous), use it
-        if (request.UserId != null)
-            return string.IsNullOrEmpty(request.UserId) ? WellKnownUsers.Anonymous : request.UserId;
-
-        // Get from access context, falling back to circuit context
-        var userId = accessService?.Context?.ObjectId
-                     ?? accessService?.CircuitContext?.ObjectId;
-        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
-    }
+        => QueryIdentityResolver.ResolveAndReport(
+            request,
+            accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId,
+            logger).UserId;
 
     /// <summary>
     /// Pure-IObservable query: composes <see cref="FindMatchingNodes"/> across every

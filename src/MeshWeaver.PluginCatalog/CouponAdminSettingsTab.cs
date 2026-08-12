@@ -86,8 +86,16 @@ public static class CouponAdminSettingsTab
     {
         /// <summary>The coupon code (the node id).</summary>
         public string Code { get; init; } = string.Empty;
-        /// <summary>The plugin allow-list, comma-joined; "any plugin" when the list is empty
-        /// (an empty list is valid everywhere and grants the redeemed-on plugin).</summary>
+        /// <summary>
+        /// What the coupon unlocks: the package list comma-joined; the <c>grantsAll</c> label when
+        /// the coupon covers everything; the empty-list label otherwise.
+        ///
+        /// <para>🚨 It used to read <b>"any plugin"</b> for an empty list, which described
+        /// behaviour the Store never had. An empty list means the coupon may be REDEEMED anywhere
+        /// and grants only the package it was redeemed ON — the opposite of "unlocks any plugin"
+        /// (Systemorph/MeshWeaver.Plugins#321). "Unlocks everything" is the coupon's own
+        /// <c>grantsAll</c> flag, and now has its own label.</para>
+        /// </summary>
         public string Unlocks { get; init; } = string.Empty;
         /// <summary>The effective price: "free" when the coupon carries none (or 0), else the
         /// discounted amount with currency.</summary>
@@ -106,7 +114,13 @@ public static class CouponAdminSettingsTab
     /// own class; a foreign hub may still deliver it typed, a query a <c>JsonElement</c>, a
     /// builder a <c>JsonNode</c>). Pure.
     /// </summary>
-    public static CouponRow ToRow(MeshNode node, JsonSerializerOptions options)
+    /// <param name="localize">
+    /// Resolves the two <see cref="CouponRow.Unlocks"/> labels for the viewer's language. Optional
+    /// so the projection stays a pure function callable without a host (its tests do exactly that);
+    /// callers that HAVE a host must pass <c>host.Localize</c>, or a German admin reads English.
+    /// </param>
+    public static CouponRow ToRow(
+        MeshNode node, JsonSerializerOptions options, Func<string, string>? localize = null)
     {
         var content = ElementOf(node, options);
         var plugins = content is { } c && c.TryGetProperty("plugins", out var p)
@@ -114,6 +128,8 @@ public static class CouponAdminSettingsTab
             ? p.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String)
                 .Select(e => e.GetString()!).ToArray()
             : [];
+        var grantsAll = content is { } g && g.TryGetProperty("grantsAll", out var ga)
+                        && ga.ValueKind == JsonValueKind.True;
         var price = ReadDecimal(content, "price");
         var currency = ReadString(content, "currency") ?? "CHF";
         var validFrom = ReadString(content, "validFrom");
@@ -124,7 +140,13 @@ public static class CouponAdminSettingsTab
         return new CouponRow
         {
             Code = node.Id,
-            Unlocks = plugins.Length == 0 ? "any plugin" : string.Join(", ", plugins),
+            // grantsAll wins the cell: it is the one thing that unlocks more than the list names.
+            // An empty list is NOT "any plugin" — see CouponRow.Unlocks.
+            Unlocks = grantsAll
+                ? Label(localize, "ui.couponUnlocksEverything", "everything")
+                : plugins.Length == 0
+                    ? Label(localize, "ui.couponUnlocksRedeemedOn", "the package it is used on")
+                    : string.Join(", ", plugins),
             Price = price is null or 0m ? "free" : $"{currency} {price:0.##}",
             Valid = (validFrom, validUntil) switch
             {
@@ -137,6 +159,12 @@ public static class CouponAdminSettingsTab
             Notes = ReadString(content, "notes") ?? "",
         };
     }
+
+    // The localized label, or the English fallback when this projection was called without a host
+    // (its unit tests). Never CultureInfo.CurrentUICulture — a layout-area render hops the hub
+    // scheduler and an ambient culture does not survive it.
+    private static string Label(Func<string, string>? localize, string key, string english) =>
+        localize?.Invoke(key) is { Length: > 0 } localized && localized != key ? localized : english;
 
     private static string DatePart(string isoTimestamp) =>
         isoTimestamp.Length >= 10 ? isoTimestamp[..10] : isoTimestamp;
@@ -225,9 +253,12 @@ public static class CouponAdminSettingsTab
         if (coupons.IsEmpty)
             return Controls.Markdown(host.Localize("ui.mdNoCoupons"));
 
+        // One delegate for the whole grid, not one per row: this projection re-runs on every
+        // snapshot of a live query, so a per-row closure is an allocation per coupon per frame.
+        var localize = (Func<string, string>)(key => host.Localize(key));
         var rows = coupons.Values
             .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(n => ToRow(n, options))
+            .Select(n => ToRow(n, options, localize))
             .ToImmutableArray();
 
         // Rows bind INLINE — a per-render UpdateData under a fresh id would accumulate orphaned

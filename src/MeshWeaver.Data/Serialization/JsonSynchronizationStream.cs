@@ -1,8 +1,7 @@
 ﻿using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Json.Patch;
-using Json.Pointer;
+using MeshWeaver.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
@@ -1183,14 +1182,17 @@ public static class JsonSynchronizationStream
                     ApplyRemove(currentNode!, segments);
                     break;
                 default:
-                    // For other operations, fall back to the library's Apply
+                    // move/copy/test are never produced by ToJsonPatch, so this branch only ever
+                    // sees a patch authored elsewhere. Defer them to MeshWeaver.Json's applier,
+                    // which implements RFC 6902 (including correct ~0/~1 decoding) directly.
                     var parsedPath = JsonPointer.Parse(pathString);
                     var operation = op switch
                     {
+                        // 🚨 Move/Copy take (FROM, PATH) — not (path, from).
                         "move" when opElement.TryGetProperty("from", out var fromEl) =>
-                            PatchOperation.Move(parsedPath, JsonPointer.Parse(fromEl.GetString()!)),
+                            PatchOperation.Move(JsonPointer.Parse(fromEl.GetString()!), parsedPath),
                         "copy" when opElement.TryGetProperty("from", out var fromEl) =>
-                            PatchOperation.Copy(parsedPath, JsonPointer.Parse(fromEl.GetString()!)),
+                            PatchOperation.Copy(JsonPointer.Parse(fromEl.GetString()!), parsedPath),
                         "test" => PatchOperation.Test(parsedPath, value),
                         _ => throw new InvalidOperationException($"Unknown patch operation: {op}")
                     };
@@ -1204,7 +1206,12 @@ public static class JsonSynchronizationStream
         {
             var fallbackPatch = new JsonPatch(operations);
             var result = fallbackPatch.Apply(currentNode);
-            return (JsonSerializer.SerializeToElement(result, options), fallbackPatch);
+            if (!result.IsSuccess)
+                throw new InvalidOperationException(
+                    $"Patch operation {result.Operation} failed: {result.Error}");
+            // 🚨 result.Result — NOT `result`. Serializing the PatchResult itself would put
+            // {"Result":…,"Error":…,"IsSuccess":…} into the stream's state.
+            return (JsonSerializer.SerializeToElement(result.Result, options), fallbackPatch);
         }
 
         // Serialize back to JsonElement
@@ -1594,8 +1601,9 @@ public static class JsonSynchronizationStream
             OperationType.Add => PatchOperation.Add(newPath, original.Value),
             OperationType.Remove => PatchOperation.Remove(newPath),
             OperationType.Replace => PatchOperation.Replace(newPath, original.Value),
-            OperationType.Move => PatchOperation.Move(newPath, original.From),
-            OperationType.Copy => PatchOperation.Copy(newPath, original.From),
+            // 🚨 Move/Copy take (FROM, PATH). Only the TARGET is re-rooted under parentPath.
+            OperationType.Move => PatchOperation.Move(original.From, newPath),
+            OperationType.Copy => PatchOperation.Copy(original.From, newPath),
             OperationType.Test => PatchOperation.Test(newPath, original.Value),
             _ => throw new InvalidOperationException($"Unsupported operation: {original.Op}")
         };
@@ -1624,9 +1632,11 @@ public static class JsonSynchronizationStream
     public static object? DecodePointerSegment(string? segment, JsonSerializerOptions options)
     {
         if (segment is null) return null;
-        // RFC 6901: escape ~ as ~0 and / as ~1
-
-        segment = segment.Replace("~0", "~").Replace("~1", "/");
+        // 🚨 RFC 6901 §4 unescaping is ~1→/ BEFORE ~0→~, and it must be a SINGLE pass: the
+        // previous `Replace("~0","~").Replace("~1","/")` decoded "a~01b" (an id containing the
+        // literal "~1") to "a/b" instead of "a~1b", because the first pass produced a "~1" the
+        // second pass then consumed. JsonPointerSegment.Decode walks the string once.
+        segment = JsonPointerSegment.Decode(segment);
         var ret = JsonSerializer.Deserialize<object>(segment, options);
         return ret;
     }

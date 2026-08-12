@@ -1,6 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
-using Json.Pointer;
+using MeshWeaver.Json;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
