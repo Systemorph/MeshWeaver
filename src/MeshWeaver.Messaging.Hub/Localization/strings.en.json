@@ -431,6 +431,8 @@
   "ui.iconName": "Icon Name:",
   "ui.language": "Language:",
   "ui.openCoupon": "Open a coupon:",
+  "ui.couponUnlocksEverything": "everything",
+  "ui.couponUnlocksRedeemedOn": "the package it is used on",
   "ui.typeDeleteToConfirm": "Type DELETE to confirm:",
   "ui.createRelease": "Create Release",
   "ui.runTests": "Run Tests",
