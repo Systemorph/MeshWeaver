@@ -253,9 +253,12 @@ public static class CouponAdminSettingsTab
         if (coupons.IsEmpty)
             return Controls.Markdown(host.Localize("ui.mdNoCoupons"));
 
+        // One delegate for the whole grid, not one per row: this projection re-runs on every
+        // snapshot of a live query, so a per-row closure is an allocation per coupon per frame.
+        var localize = (Func<string, string>)(key => host.Localize(key));
         var rows = coupons.Values
             .OrderBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(n => ToRow(n, options, key => host.Localize(key)))
+            .Select(n => ToRow(n, options, localize))
             .ToImmutableArray();
 
         // Rows bind INLINE — a per-render UpdateData under a fresh id would accumulate orphaned
