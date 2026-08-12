@@ -38,6 +38,7 @@ public static class GraphConfigurationExtensions
                 .AddSlideType()
                 .AddDeckType()
                 .AddCommentType()
+                .AddRedirectType()
                 .AddTrackedChangeType()
                 .AddAccessAssignmentType()
                 .AddPartitionAccessPolicyType()

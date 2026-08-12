@@ -415,6 +415,12 @@ public static class MeshNodeExtensions
         // resolves it typed rather than as an untyped JsonElement.
         typeRegistry.WithType(typeof(NodeTypeCompileState), nameof(NodeTypeCompileState));
         typeRegistry.WithType(typeof(Comment), nameof(Comment));
+        // Moved-node redirect declarations. MUST be registered: the redirect node is read on the
+        // hub that resolves the navigation, NOT on its own hub, so without the $type the content
+        // degrades to an untyped JsonElement and the declaration silently reads as absent — the
+        // redirect would just stop working, with no error anywhere.
+        typeRegistry.WithType(typeof(NodeRedirect), nameof(NodeRedirect));
+        typeRegistry.WithType(typeof(RedirectScope), nameof(RedirectScope));
         typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
         // Slide MeshNode Content — presentation pages (see SlideNodeType). Registered
         // under the short name so slide nodes round-trip typed across hub boundaries.

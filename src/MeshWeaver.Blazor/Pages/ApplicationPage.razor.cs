@@ -102,6 +102,21 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     private IDisposable? _navContextSubscription;
 
     /// <summary>
+    /// The localized "you were moved here" line, or <c>null</c> on a normal navigation.
+    /// <see cref="NavigationContext.RedirectedFrom"/> is set by <c>NavigationService</c> for exactly
+    /// one render after it issues a redirect — a declared <c>Redirect</c> node, or the
+    /// nearest-existing-ancestor fallback — so the viewer is never silently served a page other than
+    /// the one the URL named.
+    /// </summary>
+    private string? RedirectNotice => _currentContext?.RedirectedFrom is { } from
+        ? Access.Localize(
+            _currentContext.RedirectKind == NavigationRedirectKind.ParentFallback
+                ? "redirect.parentFallbackNotice"
+                : "redirect.notice",
+            from)
+        : null;
+
+    /// <summary>
     /// Subscribes to the navigation context and status streams so the component reacts reactively
     /// to address resolution changes and navigation status updates throughout the circuit lifetime.
     /// </summary>
