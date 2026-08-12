@@ -28,7 +28,7 @@ The repos under `meshweaver.azurecr.io`:
 | `memex-portal-ai-base` | The custom runtime **base** image every portal build layers on | **Never delete `latest`** — it breaks every future build |
 
 > 🚨 `memex-portal-ai`, `memex-migration`, `mw-plugin-test` and `memex-portal-next` form the
-> **five-image set** that `.github/scripts/check-image-set.sh` asserts is complete for a given commit, and
+> **four-image set** that `.github/scripts/check-image-set.sh` asserts is complete for a given commit, and
 > CD's reconciler republishes when it is not. Deleting one leg's tag for a commit makes that commit look
 > unpublished to the reconciler. Prune whole versions, never one repo's tag in isolation.
 

@@ -176,7 +176,7 @@ computes `3.0.0-rc1.ci.<n>`, so its version tag has never matched its siblings'.
 (the self-updater reads `memex-portal-ai` only; deployments pin portal-next explicitly), and changing
 a published tag shape would break whatever is pinned today. It is documented at the line that
 produces it rather than silently "fixed". This is also why `check-image-set.sh` identifies the set by
-**short SHA** and not by version tag: the SHA is the one identity all five images share.
+**short SHA** and not by version tag: the SHA is the one identity all four images share.
 
 ## See also
 
