@@ -103,9 +103,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     // not a detached hub.Observe subscription.
     private static readonly TimeSpan UpdateResponseWaitBound = TimeSpan.FromSeconds(2);
 
-    // 🚨 Retry budget for the ONE provably-safe late-NACK case (OwnerDisposing — the owner
-    // stated the patch NEVER applied). Each re-enqueue re-runs the ORIGINAL update lambda
-    // against the freshest state and re-diffs, so a superseding write makes it a no-op;
+    // 🚨 Retry budget for the provably-safe NACK cases — the ones where the owner STATED the
+    // patch never applied: OwnerDisposing, OwnerNotReady, and Conflict. Each re-enqueue re-runs
+    // the ORIGINAL update lambda against the freshest state and re-diffs, so a superseding write
+    // makes it a no-op;
     // two re-enqueues cover a re-enqueue that itself lands on a disposing fresh activation
     // (recycle churn). NEVER retried: silence (a busy owner still applies the original
     // patch) and every other NACK code (validation/RLS/NotFound are terminal verdicts).
@@ -1078,9 +1079,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     resp.Error ?? "Update rejected by owner");
                                 // OwnerNotReady carries the same provably-never-applied contract
                                 // as OwnerDisposing (activation had not loaded its state — #667),
-                                // so the same idempotent re-enqueue applies.
+                                // so the same idempotent re-enqueue applies — and so does Conflict,
+                                // which the owner emits only when nothing landed (see the primary
+                                // rejection site for the concurrent-writer data loss it caused).
                                 if (lateErr.Code is MeshNodeErrorCode.OwnerDisposing
                                         or MeshNodeErrorCode.OwnerNotReady
+                                        or MeshNodeErrorCode.Conflict
                                     && attempt < MaxOwnerDisposingReenqueues)
                                 {
                                     diagLogger?.LogWarning(
@@ -1156,8 +1160,28 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             // (the re-diff against the freshest state makes it
                                             // idempotent), chaining its outcome to THIS caller.
                                             // Every other code stays a fail-fast terminal.
+                                            // 🚨 Conflict belongs to this set, and dropping it
+                                            // was silent data loss. The owner emits Conflict ONLY
+                                            // when the merge refused keys AND the node is
+                                            // byte-identical to its pre-merge state — i.e. nothing
+                                            // landed — and its own message says "re-read and
+                                            // re-apply". Nobody did: the write was surfaced as a
+                                            // terminal error and the caller's change vanished.
+                                            // That is exactly what stream.Update promises NOT to
+                                            // do; concurrent writers are supposed to coalesce.
+                                            // Re-enqueueing re-runs the update lambda against the
+                                            // owner's current state, which IS the re-read-and-
+                                            // re-apply the owner asked for.
+                                            //
+                                            // Measured: 5 concurrent TrackActivity calls, 4
+                                            // increments (UserActivityTrackingTests
+                                            // .TrackActivity_ConcurrentSamePath_DoesNotRaceAlreadyExists,
+                                            // CI shard 1) — one writer composed against a base the
+                                            // other four had already moved, was refused, and its
+                                            // increment was thrown away.
                                             if (err.Code is MeshNodeErrorCode.OwnerDisposing
                                                     or MeshNodeErrorCode.OwnerNotReady
+                                                    or MeshNodeErrorCode.Conflict
                                                 && attempt < MaxOwnerDisposingReenqueues)
                                             {
                                                 diagLogger?.LogWarning(
