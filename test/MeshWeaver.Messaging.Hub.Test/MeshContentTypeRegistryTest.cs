@@ -25,10 +25,19 @@ namespace MeshWeaver.Messaging.Hub.Test;
 /// unchanged-check nondeterministic on one image digest (Systemorph/MeshWeaver#1299).</para>
 ///
 /// <para>The types here are built with <see cref="AssemblyBuilder"/> because that is the shape
-/// under test: production never passes a <c>nodeTypePath</c>, so the declaring identity IS the
-/// assembly's simple name — which, for a compiled NodeType, is derived from the NodeType path
-/// and is therefore stable across rebuilds and distinct between two types that merely share a
-/// short name.</para>
+/// under test: the declaring identity falls back to the assembly's simple name — which, for a
+/// compiled NodeType, is derived from the NodeType path and is therefore stable across rebuilds and
+/// distinct between two types that merely share a short name.</para>
+///
+/// <para>🚨 <b>The name rule is a fallback now, not the whole story.</b> It used to be everything,
+/// because production never passed a <c>nodeTypePath</c> — <c>MeshDataSource.WithContentType</c>
+/// called <c>Register(dataType)</c> with no path, so <c>TryResolveByNodeType</c> had no entries
+/// outside these tests and every lookup went through the contestable name. The NodeType path now
+/// reaches that call ambiently (<c>NodeTypePathHolder</c>), so the EXACT route carries production
+/// traffic and the name route only covers what it cannot reach: a node with no NodeType, or a type
+/// whose hub has not activated yet. Refusing a contested name is still right — but a refusal leaves
+/// consumers reading a default-valued record, which is why the exact route had to be wired rather
+/// than merely kept (see <see cref="TryRecoverForNodeType_ResolvesBothClaimantsOfAContestedName"/>).</para>
 /// </summary>
 public class MeshContentTypeRegistryTest
 {
@@ -225,5 +234,88 @@ public class MeshContentTypeRegistryTest
         var element = JsonSerializer.Deserialize<JsonElement>("""{"$type":"Currency"}""");
 
         registry.TryRecover(element, JsonSerializerOptions.Default).Should().BeNull();
+    }
+
+    /// <summary>
+    /// 🚨 The EXACT route resolves what the name route must refuse — and this is the whole reason it
+    /// exists. Refusing a contested name is right (a wrong answer is silently lossy), but a refusal
+    /// leaves every consumer reading <c>Content as T ?? new T()</c> a DEFAULT record. Eleven content
+    /// types in one customer repo are in exactly that state today, including <c>UWDeepfieldHome</c>,
+    /// whose layout area therefore renders defaults in production while its tests stay green.
+    ///
+    /// <para>Keyed on the node's own NodeType path there is nothing to contest: each package's nodes
+    /// resolve to that package's record.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void TryRecoverForNodeType_ResolvesBothClaimantsOfAContestedName()
+    {
+        var registry = new MeshContentTypeRegistry();
+        var ifrs17 = EmitTypeWithProperty("Ifrs17_Currency", "Currency", "Code");
+        var claims = EmitTypeWithProperty("ClaimsDeepfield_Currency", "Currency", "Code");
+        registry.Register(ifrs17, "Ifrs17/Currency");
+        registry.Register(claims, "ClaimsDeepfield/Currency");
+
+        var element = JsonSerializer.Deserialize<JsonElement>("""{"$type":"Currency","Code":"CHF"}""");
+
+        // The name route refuses — correctly, and that is what leaves consumers with a default.
+        registry.TryRecover(element, JsonSerializerOptions.Default).Should().BeNull();
+
+        // The exact route answers, and answers DIFFERENTLY per package.
+        registry.TryRecoverForNodeType("Ifrs17/Currency", element, JsonSerializerOptions.Default)!
+            .GetType().Should().Be(ifrs17, "the node's own NodeType names which package's record it is");
+        registry.TryRecoverForNodeType("ClaimsDeepfield/Currency", element, JsonSerializerOptions.Default)!
+            .GetType().Should().Be(claims);
+
+        // …and it round-trips the payload, not merely the type tag.
+        var recovered = registry.TryRecoverForNodeType(
+            "Ifrs17/Currency", element, JsonSerializerOptions.Default);
+        ifrs17.GetProperty("Code")!.GetValue(recovered).Should().Be("CHF");
+    }
+
+    /// <summary>
+    /// A node with no NodeType, or one whose type has not activated in this process yet, is no worse
+    /// off than before: the exact route falls back to the name route (which still refuses a
+    /// contested name).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void TryRecoverForNodeType_FallsBackToTheNameRoute_WhenThePathIsAbsentOrUnknown()
+    {
+        var registry = new MeshContentTypeRegistry();
+        var scenario = EmitTypeWithProperty("SST_Scenario", "Scenario", "Code");
+        registry.Register(scenario, "SST/Scenario");
+
+        var element = JsonSerializer.Deserialize<JsonElement>("""{"$type":"Scenario","Code":"base"}""");
+
+        registry.TryRecoverForNodeType(null, element, JsonSerializerOptions.Default)!
+            .GetType().Should().Be(scenario, "no NodeType in hand — the uncontested name still resolves");
+        registry.TryRecoverForNodeType("SST/NeverRegistered", element, JsonSerializerOptions.Default)!
+            .GetType().Should().Be(scenario, "an unregistered path falls back rather than failing");
+    }
+
+    /// <summary>A type with one settable string property — enough to prove the payload round-trips.</summary>
+    private static Type EmitTypeWithProperty(string assemblyName, string typeName, string propertyName)
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName(assemblyName), AssemblyBuilderAccess.RunAndCollect);
+        var module = assembly.DefineDynamicModule(assemblyName);
+        var typeBuilder = module.DefineType(typeName, TypeAttributes.Public | TypeAttributes.Class);
+        var field = typeBuilder.DefineField($"_{propertyName}", typeof(string), FieldAttributes.Private);
+        var property = typeBuilder.DefineProperty(propertyName, PropertyAttributes.None, typeof(string), null);
+        const MethodAttributes accessors =
+            MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig;
+        var getter = typeBuilder.DefineMethod($"get_{propertyName}", accessors, typeof(string), Type.EmptyTypes);
+        var gil = getter.GetILGenerator();
+        gil.Emit(OpCodes.Ldarg_0);
+        gil.Emit(OpCodes.Ldfld, field);
+        gil.Emit(OpCodes.Ret);
+        var setter = typeBuilder.DefineMethod($"set_{propertyName}", accessors, null, [typeof(string)]);
+        var sil = setter.GetILGenerator();
+        sil.Emit(OpCodes.Ldarg_0);
+        sil.Emit(OpCodes.Ldarg_1);
+        sil.Emit(OpCodes.Stfld, field);
+        sil.Emit(OpCodes.Ret);
+        property.SetGetMethod(getter);
+        property.SetSetMethod(setter);
+        return typeBuilder.CreateType()!;
     }
 }

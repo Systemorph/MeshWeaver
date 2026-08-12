@@ -2544,8 +2544,10 @@ public class MeshOperations
                 try
                 {
                     var probeAddress = new Address($"{addressPrefix}/{Guid.NewGuid():N}");
+                    // Stamp the NodeType path so a WithContentType reached from this probe records
+                    // an EXACT registry entry rather than a bare-name one (see NodeTypePathHolder).
                     var probeHub = hub.GetHostedHub(
-                        probeAddress, c => hubConfig(c).AsTransientNodeProbe());
+                        probeAddress, c => hubConfig(c.WithNodeTypePath(nodeType)).AsTransientNodeProbe());
                     if (probeHub == null) return null;
                     try
                     {

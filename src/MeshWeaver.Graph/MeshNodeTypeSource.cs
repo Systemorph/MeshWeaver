@@ -1016,7 +1016,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 // untyped even after the type was known process-wide. Deserialises to the
                 // CONCRETE type explicitly, so nothing is adopted into this hub's frozen
                 // options (no collectible-ALC identity becomes a long-lived answer).
-                var recovered = _contentTypeRegistry?.TryRecover(je, _workspace.Hub.JsonSerializerOptions);
+                var recovered = _contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, je, _workspace.Hub.JsonSerializerOptions);
                 if (recovered is not null)
                 {
                     _logger?.LogDebug(
