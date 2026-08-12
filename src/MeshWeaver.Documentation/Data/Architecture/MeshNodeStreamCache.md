@@ -157,6 +157,23 @@ A read whose owner answers *NotFound* is cached as a **negative entry** with exp
 
 The primary rule still stands: **optional / maybe-absent nodes are read via a query** (empty result on absence), never by pointing an exact-path stream at them. The breaker is the backstop, not the pattern.
 
+A failure that is *not* a genuine missing node — a transient reactivation miss, a request timeout, a lost database connection, or anything else the classifier does not recognise — is recorded in the **transient breaker** instead. Its first `TransientGraceFailures` (3) faults open no window at all (the just-idle-page case keeps its instant re-probe); beyond the grace, re-probes back off 1 s doubling to a 60 s cap. Every fault lands in exactly one of the two breakers — there is no un-broker'd bucket where a fault can repeat unbounded.
+
+### A faulted entry is never served twice
+
+Both breakers *suppress* while their window is open. When no window is open, the opposite must hold: the read has to actually re-probe. `GetStreamRaw`'s third guard enforces that — an entry whose hydration terminated with an error is evicted before the read resolves, so `SharedView` opens a fresh upstream.
+
+The eviction (`EvictFaultedEntry`) is the one teardown shared by all three re-probe triggers, and it must reach **two** layers:
+
+1. the cache's own `Entry`, whose `Replay(1)` holds the terminal error, and
+2. the cacheHub **workspace's** remote-stream cache, keyed `(owner, reference, identity)`, which holds the errored `ISynchronizationStream`.
+
+Dropping only (1) re-creates a fresh entry over the same dead stream: no `SubscribeRequest` is posted and the reader gets the *identical exception instance* back. That was #1202 — three probes eleven minutes apart returning the byte-identical request id, a path unreadable for the pod's lifetime, and breakers whose fail counters were frozen at one because no new upstream ever ran the bookkeeping observer again.
+
+The protocol is the idle sweep's: **detach → claim pair-exact → tear down** (a loser re-parks what it detached). Detaching first is what makes disposal safe — a concurrent read builds a new stream with a new `StreamId`, so the `UnsubscribeRequest` for the old one cannot race it. Only a **faulted** entry qualifies; a healthy live entry is never torn down, because a breaker record can outlive the fault that wrote it and severing live subscribers over a stale counter would be a regression.
+
+🚨 The guard lives in `GetStreamRaw`, **never in `GetEntry`** — `GetEntry` is a pin-or-recreate loop, and evicting there spins forever on an entry that faults during creation. Running once per read *call* also bounds the re-probe: only a terminal entry qualifies, so an in-flight probe is shared, giving one new upstream per **fault**, not per read.
+
 ## 🚨 Never go around the cache
 
 An ad-hoc `workspace.GetRemoteStream<MeshNode, …>(addr, …)` would open a **separate** stream instance. Writes through it are invisible to every reader on the cached handle (and vice versa) — this exact bug once made compile results never land on a NodeType's node. So the public overloads now **throw `InvalidOperationException`** for `MeshNode` (`Workspace.ThrowIfMeshNode`); framework plumbing that legitimately needs the raw reduce uses the internal `GetRemoteStreamUnchecked` overload.
