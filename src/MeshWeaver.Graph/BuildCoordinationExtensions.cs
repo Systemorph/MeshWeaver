@@ -301,12 +301,16 @@ public static class BuildCoordinationExtensions
     /// same reason: it is the ONE record a process in another cluster shares with the builder, so
     /// it answers where <see cref="ObserveBuildGo"/> can only wait (#1440).
     ///
-    /// <para>Emits the GO record, or <c>null</c> for "this row carries no GO for that fingerprint".
-    /// <c>null</c> is also what a host with no durable store answers — there the mirror IS the
-    /// whole world and <see cref="ObserveBuildGo"/> is complete on its own — and what a FAILED read
-    /// answers, loudly: a store that cannot be read has told us nothing about the build, which is
-    /// not the same as telling us there is no GO, and the caller must keep its other doors open
-    /// rather than conclude anything. Emits exactly once and completes.</para>
+    /// <para>Emits the GO record, or <c>null</c>. 🚨 <c>null</c> is deliberately NOT a claim that
+    /// there is no GO — it is "this call has no GO to give you", which covers three cases the
+    /// caller treats identically: the row carries no GO for that fingerprint; there is no durable
+    /// store at all (the mirror IS the whole world there, and <see cref="ObserveBuildGo"/> is
+    /// complete on its own); or the read FAILED, which is logged loudly. Collapsing them is safe
+    /// only because every caller's <c>null</c> branch is the conservative one — it bakes, into
+    /// content-addressed stores, which costs at worst one redundant build and can never corrupt.
+    /// Fail OPEN, the same asymmetry <c>BuildNodeType.ArbitrateDurably</c> applies, and the reason
+    /// no caller may read <c>null</c> as evidence that a build has not happened. Emits exactly once
+    /// and completes.</para>
     /// </summary>
     /// <param name="hub">The calling hub.</param>
     /// <param name="frameworkVersion">The fingerprint whose GO is wanted.</param>
@@ -330,7 +334,8 @@ public static class BuildCoordinationExtensions
             {
                 logger?.LogWarning(ex,
                     "Build GO: could not read the durable witness at {Path} for {Fingerprint} — "
-                    + "treating it as 'no verdict', not as 'no GO'",
+                    + "answering 'no GO to give you'. That is NOT evidence the build has not "
+                    + "happened; the caller's null branch is the conservative one (it bakes)",
                     BuildNodeType.RootPath, frameworkVersion);
                 return Observable.Return<BuildGo?>(null);
             });

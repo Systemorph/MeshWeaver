@@ -173,7 +173,7 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
     // candidate during its grant wait, which exercises the master path instead.
 
     private static readonly IReadOnlyDictionary<string, NodeTypeDefinition?> NoDynamicTypes =
-        new Dictionary<string, NodeTypeDefinition?>();
+        ImmutableDictionary<string, NodeTypeDefinition?>.Empty;
 
     private static IObservable<Unit> AfterTheGrantWindow() =>
         Observable.Timer(BuildProtocolDriver.GrantWindow + TimeSpan.FromSeconds(2))
