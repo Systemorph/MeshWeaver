@@ -2095,9 +2095,24 @@ internal class MeshNodeCompilationService(
             debugInformationFormat: DebugInformationFormat.PortablePdb,
             pdbFilePath: pdbPath);
 
-        var emitResult = compilation.Emit(
-            dllImage, pdbImage, xmlDocumentationStream: xmlDoc,
-            options: emitOptions, cancellationToken: ct);
+        EmitResult emitResult;
+        try
+        {
+            emitResult = compilation.Emit(
+                dllImage, pdbImage, xmlDocumentationStream: xmlDoc,
+                options: emitOptions, cancellationToken: ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Roslyn THREW instead of returning diagnostics — an emit-phase fault, not a
+            // compile error. Stamp the canary verdict on the exception and rethrow the
+            // ORIGINAL untouched: the type name is what CI triage keys on, so this must
+            // never become a wrapper. The verdict travels to the pipeline's single
+            // reporting funnel via SummarizeCompileError — no second log from here, the
+            // log-once contract above still holds.
+            ex.Data[EmitCanaryDataKey] = ProbeSharedEmitState(compilation);
+            throw;
+        }
 
         if (!emitResult.Success)
             // Deterministic compile error — propagates straight out of the retry loop,
@@ -2118,6 +2133,77 @@ internal class MeshNodeCompilationService(
         // common path hands out a span over it instead of copying a multi-megabyte image.
         static ReadOnlySpan<byte> Bytes(MemoryStream s)
             => s.TryGetBuffer(out var seg) ? seg.AsSpan() : s.ToArray();
+    }
+
+    /// <summary>
+    /// Key under which <see cref="EmitCompilationToDirectory"/> stamps the canary verdict on a
+    /// thrown-from-Emit exception, and under which
+    /// <c>NodeTypeCompilationHelpers.SummarizeCompileError</c> reads it back.
+    /// </summary>
+    internal const string EmitCanaryDataKey = "MeshWeaver.EmitCanary";
+
+    /// <summary>
+    /// A minimal, self-contained compilation used ONLY by <see cref="ProbeSharedEmitState"/>.
+    /// Three levels of nested generics on purpose: that is what makes Roslyn's metadata writer
+    /// walk a type's containing chain (<c>GetConsolidatedTypeParameters</c> recursing through
+    /// <c>ContainingTypeDefinition</c>) — the exact path issue #890's NRE dies on. A flat class
+    /// would emit fine even on a poisoned writer and the canary would answer "healthy" wrongly.
+    /// </summary>
+    private const string EmitCanarySource =
+        "public class MwEmitCanary<T> { public class Inner<U> { public class Leaf<V> "
+        + "{ public T A; public U B; public V C; } } }";
+
+    /// <summary>
+    /// Answers ONE question, at the moment a Roslyn <c>Emit</c> throws: is the fault specific to
+    /// THIS compilation's inputs, or is process-wide emit state broken?
+    ///
+    /// <para>It re-emits a trivial nested-generic compilation built against <b>the same
+    /// <see cref="MetadataReference"/> instances</b> as the compilation that just failed, to a
+    /// <see cref="MemoryStream"/>. Those references — and the Roslyn symbols cached on their
+    /// shared <c>AssemblyMetadata</c> — are the only state the two compilations have in common,
+    /// so the canary separates the two halves of the search space that issue #890 could not:
+    /// canary FAILS ⇒ the shared reference/symbol state is poisoned (a process-wide fault; the
+    /// next step is bisecting the reference set and reporting upstream). Canary SUCCEEDS ⇒ the
+    /// shared state is fine and the fault is a property of this node's own compilation inputs
+    /// (the next step is dumping its generated source).</para>
+    ///
+    /// <para>🚨 It cannot fail into the fault path it is diagnosing: every outcome — including
+    /// the canary throwing — returns a STRING. A diagnostic that throws while diagnosing would
+    /// replace the original exception and destroy the evidence it exists to preserve. It is also
+    /// bounded: one tiny in-memory emit, only ever on an already-failing path, never on the
+    /// success path or on a normal compile error.</para>
+    /// </summary>
+    /// <param name="faulted">The compilation whose <c>Emit</c> threw; only its references are used.</param>
+    /// <returns>A one-line verdict, safe to append to a log message.</returns>
+    internal static string ProbeSharedEmitState(CSharpCompilation faulted)
+    {
+        try
+        {
+            var canary = CSharpCompilation.Create(
+                "MeshWeaverEmitCanary",
+                syntaxTrees: [CSharpSyntaxTree.ParseText(EmitCanarySource)],
+                references: faulted.References,
+                options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+            using var canaryStream = new MemoryStream();
+            var result = canary.Emit(canaryStream);
+            if (result.Success)
+                return "canary=OK (a trivial nested-generic emit against the SAME reference set "
+                    + "still succeeds ⇒ shared Roslyn/reference state is healthy; the fault is "
+                    + "specific to THIS compilation's inputs — dump its generated source)";
+
+            var ids = result.Diagnostics
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .Select(d => d.Id).Distinct().Take(5);
+            return $"canary=DIAGNOSTICS ({string.Join(",", ids)}) — the shared reference set no "
+                + "longer binds a trivial compilation ⇒ process-wide reference state is broken";
+        }
+        catch (Exception probeError)
+        {
+            return $"canary=THREW {probeError.GetType().Name}: {probeError.Message} — a trivial "
+                + "emit against the SAME reference set fails too ⇒ process-wide Roslyn/reference "
+                + "state is POISONED, not this compilation's inputs (bisect the reference set)";
+        }
     }
 
     /// <summary>
