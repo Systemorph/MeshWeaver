@@ -427,7 +427,7 @@ delivery there. Giving the gate a terminal for that case changes the behaviour o
 message and wants its own argument; the node-operation validator below is bounded today.
 
 **Decision callers give the check a terminal; live subscribers do not.** `RlsNodeValidator` bounds
-its whole chain with `RowLevelSecurityOptions.PermissionEstablishmentBudget` (default 30 s —
+its whole chain with `MeshOperationOptions.PermissionEstablishmentBudget` (default 20 s —
 comfortably above any healthy cold fold, strictly below the 60 s hub `RequestTimeout`) and answers
 `Unavailable` past it. That is *not* a ceiling that turns a slow check into a denial: reporting a
 stalled read as a refusal sends a correctly-entitled caller to request permissions they already
@@ -443,6 +443,33 @@ deadline, and it must re-emit when the grants finally land.
 Before this existed, `CreateNodeRequest` simply sat `Executing` — 33 s in the reported case — until
 its *caller's* `RequestTimeout` ended it, which names the caller's impatience rather than the read
 that starved (#1446).
+
+### 🚨 The budget is DERIVED, never configured beside the bound it sits inside (#1198)
+
+A bound that is nested inside another bound only earns its keep by firing **first** — it is the only
+level that knows *which* read starved; the level above it can say no more than "the operation ran out
+of time". That ordering was left to coincidence and duly failed: on the delete path the enclosing
+`MeshOperationOptions.Timeout`, the descendant handler answering the pre-flight fan-out, and this
+establishment budget were **three independently-configured constants all reading 30 s**. Equal is not
+an ordering — the outer clock starts first — so the innermost bound could never win, and every
+starved delete reported the caller's timeout instead of the read.
+
+There is now exactly **one** configured value, `MeshOperationOptions.Timeout`, and every nested rung
+is derived from it by `MeshOperationOptions.Nest`, which contracts strictly:
+
+| rung | what it bounds | default |
+|---|---|---|
+| `Timeout` | the mesh operation, as its caller bounds it | 30 s |
+| `NestedTimeout` | a handler running inside one of that operation's stages — a descendant answering `ValidateDeleteRequest`, a cascade leg re-entering the delete handler | 25 s |
+| `PermissionEstablishmentBudget` | one authorization fold inside such a handler | 20 s |
+
+`RowLevelSecurityOptions` is gone: an independently-settable inner budget is exactly what drifted.
+The contraction parameters (`NestingReserve`, `MinNestingFraction`) refuse a non-contracting value,
+so the collision is unrepresentable rather than merely absent. The reserve is deliberately generous
+about the delay between the outer clock starting and the inner one starting (post, routing, warm
+activation); when a genuinely cold hub exceeds even that, the outer bound firing is the *correct*
+answer — "the hub never answered" is what went wrong. The inner bound exists to attribute a starved
+**read**, not a slow **start**.
 
 ## Reactive update semantics
 
