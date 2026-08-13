@@ -137,6 +137,22 @@ curl -sS -o /dev/null -w "%{http_code} verify=%{ssl_verify_result}\n" \
   --resolve portal.example.com:443:$IP https://portal.example.com/
 ```
 
+**Default SSL certificate (cluster-wide, one-time).** Without it, any client that connects
+without SNI gets the self-signed "Kubernetes Ingress Controller Fake Certificate" — and
+corporate TLS-inspection / URL-categorization appliances probe exactly that way, then flag the
+whole domain as insecure and block it for their users (seen 2026-08: a client's IT blocked
+`memex.meshweaver.cloud` in Firefox *and* Edge over this). Point the app-routing controller's
+default cert at the flagship host's cert-manager secret — patch the `NginxIngressController`
+CR, **not** the nginx deployment (the addon operator reverts direct deployment edits):
+```bash
+az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
+  "kubectl patch nginxingresscontroller default --type merge -p '{\"spec\":{\"defaultSSLCertificate\":{\"secret\":{\"name\":\"memexcloud-tls\",\"namespace\":\"memex-cloud\"}}}}'"
+# verify from outside — must show the real cert, not "Acme Co":
+echo | openssl s_client -connect <host>:443 -noservername 2>/dev/null | openssl x509 -noout -subject
+```
+The setting survives addon updates but is NOT re-created on a cluster rebuild — re-apply it
+whenever the cluster (or the `NginxIngressController` CR) is recreated.
+
 ---
 
 ## 6. Observability (Grafana + Loki + Prometheus) + admin access via VPN
@@ -269,6 +285,7 @@ reverts them):
 |---|---|
 | `config.memex_portal.PreWarm__DynamicTypes: "true"` | every new pod sweeps + compiles ALL dynamic NodeTypes at start (resumes from the shared `/data` cache — warm restarts are cheap) |
 | `config.memex_portal.PreWarm__GateReadiness: "true"` | `/health` stays red until the sweep is green; with `maxSurge 1 / maxUnavailable 0` a regressed type STALLS the rollout with the old image serving. **✅ ON.** It was tried 2026-08-02 and reverted the same day on 7 FALSE regressions — all cross-silo `SubscribeRequest` timeouts, not compile errors (#694 residue). The gate no longer reads "no answer" as "it broke": a `TimedOut` outcome is filed as *unevaluated* and can never gate, and that leniency now survives the cascade (a dependent of an unevaluated upstream is `UpstreamUnevaluated`, also non-gating). Only a `CompileError` — or an `UpstreamFailed` cascading from one — on a **previously-healthy** type stalls a roll |
+| `config.memex_portal.PreWarm__AllowUnprovenBake: "false"` | **✅ OFF (strict).** The gate also refuses readiness when the sweep *errored* — enumeration threw or timed out — because such a pod verified **nothing** and a gate that certifies "I verified nothing" is worse than no gate. That guard used to live in the pre-run bake Job (*"FINDING NOTHING IS NOT PASSING"*, exit 3, `Bake__AllowEmpty`) and was lost when #1357 retired the Job; it is now enforced on the surviving path as `BakePhase.Faulted`. ⚠️ **"Empty" is not "unproven"** — a mesh that genuinely has no dynamic NodeTypes enumerates fine, completes and serves; only the *inability to get an answer* gates. Set `"true"` only to roll forward past an environment that cannot answer the enumeration, accepting lazy compilation. It can never waive a real regression, and `/health` keeps reporting the bake as unproven |
 | `probes.startup: {periodSeconds: 10, failureThreshold: 180}` (= 30 min) | ⚠️ REQUIRED with the gate: a cold bake is **~2.4 s/type**, sequential *(measured 2026-08-10, prod Loki, three portals)* — ~10 min on memex-cloud, the largest mesh — and the default 5 min budget kills the pod mid-bake forever. 30 min is that worst case plus a plain cold boot, x2. `progressDeadlineSeconds` is DERIVED from these two in the chart, so raising them can't leave it behind. **Was `1080` (3 h)** until 2026-08-10, sized from a "~90 s/type" estimate that was 37x too high — a window that long detected nothing |
 
 **🚨 Before you trust the gate, verify the namespace actually reads it.** The gate protects a
@@ -284,14 +301,21 @@ the outage happens anyway.
 Both are rendered correctly by the chart — a `helm upgrade` restores them. A per-env `portal-patch.json`
 or a hand `kubectl patch` can still override them, which is how the drift happened.
 
-⛔ **The bake Job (`bake.enabled`) stays OFF on AKS until core asserts fingerprint-match.** On its
-first AKS run (memex-cloud, 2026-07-30) `memex-bake:3.0.0-ci.1565` computed a **different framework
-fingerprint** than the running `portal-ai:3.0.0-ci.1565` — same version, separately published — so
+🪦 **There is no pre-run bake Job any more, and there never can be one (#1347).** The separate
+`memex-bake` image was removed after two weeks of running in zero namespaces. On its only AKS run
+(memex-cloud, 2026-07-30) `memex-bake:3.0.0-ci.1565` computed a **different framework fingerprint**
+than the running `portal-ai:3.0.0-ci.1565` — same version, same commit, separately published — so
 its framework-stale kickoff started flipping CURRENT NodeType records to `Pending` and rebuilding
-them for a framework nothing serves. (Killed after ~6 min; the portal's CompileWatcher heals the
-flips; serving pods keep their loaded assemblies throughout.) Until the Job refuses to bake when its
-fingerprint differs from the image being rolled, the pod-side sweep is the ONE deploy-time compile
-mechanism — it runs in the serving process, so its fingerprint is right by construction.
+them for a framework nothing serves. That was not a bug to tune: `InformationalVersion` carries
+`+build.<UtcNow.Ticks>` under `CIRun` (`Directory.Build.props`, and the stamp is load-bearing ABI
+safety), so **every** `dotnet publish` mints a fresh `MeshWeaver.Graph` MVID and no second image can
+ever agree with the portal's framework identity.
+
+**The pod-side sweep is the bake.** It runs in the serving process, so its fingerprint is right by
+construction, and it is fast — 76 s for 280 types (memex-cloud, batch direct-compile). The "fail
+before prod" contract the Job was meant to give is given, and given better, by
+`PreWarm__GateReadiness` + `maxSurge:1` / `maxUnavailable:0`: the new pod refuses readiness until
+its OWN bake is green while the old image keeps serving.
 
 **Verify after every roll** — the bake completing is the deploy signal, not HTTP 200:
 

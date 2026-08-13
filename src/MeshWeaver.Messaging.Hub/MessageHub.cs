@@ -1948,7 +1948,10 @@ public sealed class MessageHub : IMessageHub
                 // collective completion via the collection's `DisposalCompleted` observable —
                 // no `await hostedHubs.Disposal`, no Task.Run. Each child hub completes its own
                 // reactive disposal and the collection completes once all have. On completion
-                // OR error (the collection caps the wait internally), advance to ShutDown.
+                // OR error, advance to ShutDown. The collection carries NO deadline of its own
+                // (#1317) — this hub's DisposalWatchdogTimeout is the single backstop over the
+                // whole phase, and unlike a give-up it force-tears-down rather than abandoning
+                // children mid-disposal.
                 hostedHubs.Dispose();
                 var hostedSw = disposeHostedHubsStopwatch;
                 hostedHubsDisposalSubscription = hostedHubs.DisposalCompleted

@@ -144,40 +144,16 @@ ollama:
 # swaps whatever else on the machine is already running them at its next restart.
 portal:
   image: "ghcr.io/systemorph/memex-portal-ai:latest"
+  # How long a rolled-out pod may keep serving the sessions it already has. The container's preStop
+  # drains the ingress (15s) and then waits on /drain until its last Blazor circuit closes, so this
+  # is the ceiling on "how long may someone keep working on the OLD build after a roll" — not a
+  # delay: a pod with no circuits exits in seconds. It also bounds how long a second silo lives
+  # alongside the new one, which matters because both hold their own set of compiled NodeType
+  # assemblies. 30 minutes covers a working session; lower it where memory is tighter than
+  # continuity.
+  drainSeconds: 1800
 migration:
   image: "ghcr.io/systemorph/memex-migration:latest"
-
-# ---- NodeType bake job ---------------------------------------------------------------------------
-# Compiles every dynamic NodeType against the image being deployed, into the shared /data assembly
-# cache, BEFORE the portal rolls onto it — and fails the release when a type that USED TO compile no
-# longer does. Same run-once Job shape as memex-migration.
-#
-# OFF by default: it only makes sense where /data is a SHARED, persistent volume
-# (persistence.data.claimName). With an emptyDir it warms a directory that dies with the Job.
-bake:
-  enabled: false
-  image: "ghcr.io/systemorph/memex-bake:latest"
-  # ⏱️ DERIVED from the MEASURED per-type bake cost — do not adjust either number alone.
-  #
-  #   measured 2026-08-10 (production Loki, all three portals on one image): ~2.4 s per NodeType,
-  #   agreeing within 3% across a 10x spread in mesh size —
-  #     memex-cloud 237-241 types / 567 s   memex 72-81 / 179 s   atioz 22-36 / 68 s
-  #
-  #   largest production mesh   ~240 types x 2.4 s  ~= 570 s  (~10 min)
-  #   + Job overhead            image pull + wait-for-postgres init + process boot
-  #   worst realistic run                           ~= 15 min
-  #   x4 headroom                                    = 3600 s (1 h)
-  #
-  # Headroom is deliberately WIDER here than on the startup probe (30 min): tripping this deadline
-  # kills the Job and reports a FAILURE for work that was only slow, which is the one wrong answer a
-  # gate must not give. 1 h still covers ~1500 types — 6x the largest mesh we run — and a bake past
-  # an hour is stuck, not slow.
-  #
-  # 🚨 This was 14400 (4 h) until 2026-08-10, sized from a "~90 s per NodeType" estimate that
-  # measurement showed to be 37x too high. A deadline that generous is not a safety margin; it is an
-  # absent detector. See deploy/CHANGE-PROPAGATION.md#the-bake-tax.
-  activeDeadlineSeconds: 3600   # 1h
-  ttlSecondsAfterFinished: 3600
 
 # ---- Startup probe budget ------------------------------------------------------------------------
 # periodSeconds × failureThreshold is the HARD ceiling on how long a pod may take to serve /health
@@ -353,6 +329,11 @@ config:
     # config.yaml for what each key does.
     PreWarm__DynamicTypes: "false"
     PreWarm__GateReadiness: "false"
+    # Operator escape hatch: serve even when the sweep ERRORED and therefore proved nothing.
+    # Leave "false" — an unproven bake is not a passed bake, which is the guard the retired
+    # pre-run bake Job used to enforce from outside the portal as Bake__AllowEmpty. It never
+    # relaxes a real regression, and the /health payload keeps saying the bake was unproven.
+    PreWarm__AllowUnprovenBake: "false"
     Deployment__Orleans__Clustering: "Localhost"
     Storage__Name: "content"
     Storage__SourceType: "FileSystem"

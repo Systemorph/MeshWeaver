@@ -227,15 +227,15 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     }
 
     // Reactive completion source of truth — completed exactly once (CAS-guarded) when every
-    // hosted hub has finished disposing (or the 10 s cap elapses). ReplaySubject(1) so a late
-    // subscriber (the owning hub's ShutDown phase) still observes the terminal notification.
+    // hosted hub has finished disposing. ReplaySubject(1) so a late subscriber (the owning hub's
+    // ShutDown phase) still observes the terminal notification.
     private readonly ReplaySubject<Unit> disposalCompleted = new(1);
     private int disposalSignalled;
     private IDisposable? disposalSubscription;
 
     /// <summary>
     /// Observable completion of the collection's disposal — fires <see cref="Unit"/> + completes
-    /// once ALL hosted hubs have finished disposing (or the 10 s cap elapses). Native reactive
+    /// once ALL hosted hubs have finished disposing. Native reactive
     /// surface (NOT bridged from a Task); the owning <see cref="MessageHub"/> subscribes to it to
     /// advance its own ShutDown phase, never awaiting a Task on the action block.
     /// </summary>
@@ -260,9 +260,28 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// <summary>
     /// Disposes each hosted hub SYNCHRONOUSLY (kicking off its own reactive disposal), then
     /// OBSERVES their collective completion — no <c>async</c>/<c>await</c>, no
-    /// <c>Task.WhenAll</c>. Per-child <c>Catch</c> keeps one wedged/faulted child from stalling
-    /// the join (CombineLatest needs an emission from every input); the 10 s <c>Timeout</c> caps
-    /// the whole wait so the owning hub's ShutDown phase is never blocked.
+    /// <c>Task.WhenAll</c>. Per-child <c>Catch</c> keeps one faulted child from stalling the join
+    /// (CombineLatest needs an emission from every input).
+    ///
+    /// <para>🚨 <b>This is a JOIN, and a join must not out-run the answers it is joining — so it
+    /// carries no deadline of its own</b> (issue #1317). It used to cap the whole wait at a flat
+    /// <c>Timeout(5s)</c>. Every leg it waits on is already bounded, and bounded LONGER: each child
+    /// is a <see cref="MessageHub"/>, whose <c>Dispose</c> arms a disposal watchdog (8 s) that
+    /// force-tears-down and signals <c>DisposalCompleted</c> as its last act — so a child's answer
+    /// is guaranteed terminal, just not inside 5 s. The cap therefore expired 3 s BEFORE the
+    /// mechanism that produces a clean answer, in precisely the wedged case it was written for.
+    /// Nesting made it fire with nothing wedged at all: a child's own disposal is its quiesce
+    /// budget (2 s by default) plus its own hosted-subtree join, so a busy two-level tree exceeds a
+    /// flat 5 s while every individual step stays inside its own budget.</para>
+    ///
+    /// <para>What that cost: on expiry the collection signalled done anyway, the owner advanced to
+    /// ShutDown and tore down the DI container — while children were still mid-disposal, resolving
+    /// services from it. That is the post-teardown straggler class described throughout this file
+    /// (#613), i.e. the cap was manufacturing the very leak the rest of the file works to prevent,
+    /// and it silently voided the in-flight-construction contract asserted below. Removing it does
+    /// not remove a bound: the owning hub keeps its OWN disposal watchdog over this whole phase,
+    /// which is where a "the shutdown path wedged" deadline belongs, and which force-tears-down
+    /// rather than merely giving up.</para>
     /// </summary>
     private void DisposeHubsReactive()
     {
@@ -280,7 +299,19 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Error during disposal of hub {address}", address);
+                // 🚨 Answer this leg NOW, from a known-terminal state — do not wait on a signal
+                // that may never come. MessageHub.Dispose flips its disposal flag BEFORE it arms
+                // the watchdog that guarantees DisposalCompleted, so a Dispose that threw in
+                // between leaves a hub that is permanently unanswerable AND refuses to retry
+                // (the flag makes a second Dispose a no-op). Subscribing to its DisposalCompleted
+                // would then park this join forever; the removed cap was the only thing hiding
+                // that, which is exactly the failure mode PR #1298 named — a gate that can never
+                // open must answer immediately rather than sit on a timeout.
+                logger.LogError(ex,
+                    "Error during disposal of hub {address} — its disposal can no longer complete, "
+                    + "so the join settles this hub now instead of waiting on a signal it will never send",
+                    address);
+                return Observable.Return(Unit.Default);
             }
             return h.DisposalCompleted
                 .Take(1)
@@ -341,8 +372,10 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
             .Select(_ => Unit.Default)
             .Take(1);
 
+        // No Timeout — see the remarks on this method. Every leg answers from its own terminal
+        // state, so there is nothing left for a deadline here to rescue; the owning hub's disposal
+        // watchdog is the single backstop over this phase.
         disposalSubscription = all
-            .Timeout(TimeSpan.FromSeconds(5))
             .Subscribe(
                 _ =>
                 {
@@ -352,12 +385,8 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 },
                 ex =>
                 {
-                    if (ex is TimeoutException)
-                        logger.LogError("Hosted hubs disposal timed out after 10 seconds ({elapsed}ms). Some hubs may not have disposed properly.",
-                            totalStopwatch.ElapsedMilliseconds);
-                    else
-                        logger.LogError(ex, "Error during hosted hubs disposal after {elapsed}ms", totalStopwatch.ElapsedMilliseconds);
-                    // Complete anyway — a wedged child must not block the owning hub's ShutDown.
+                    logger.LogError(ex, "Error during hosted hubs disposal after {elapsed}ms", totalStopwatch.ElapsedMilliseconds);
+                    // Complete anyway — a faulted join must not block the owning hub's ShutDown.
                     SignalDone();
                 });
     }

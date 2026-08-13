@@ -166,7 +166,10 @@ internal static class NodeTypeDataModelAreas
             .Select(node => ResolveInstanceHubConfig(hub, node!)
                 .SelectMany(config => config == null
                     ? Observable.Return<NodeTypeInstanceModel?>(null)
-                    : ProbeInstanceModel(hub, config))
+                    // This hub IS the NodeType hub (ResolveInstanceHubConfig matches its
+                    // Address.Path against the compiled configurations' NodeType), so its path is
+                    // the NodeType path the probe's WithContentType should register under.
+                    : ProbeInstanceModel(hub, config, hub.Address.Path))
                 .Catch<NodeTypeInstanceModel?, Exception>(ex =>
                 {
                     logger?.LogWarning(ex,
@@ -230,9 +233,16 @@ internal static class NodeTypeDataModelAreas
     /// <see cref="ITypeDefinition"/>s stay valid (the assembly load context is owned
     /// by the compilation cache, not the probe).
     /// </summary>
+    /// <param name="hub">The hub hosting the probe.</param>
+    /// <param name="config">The instance configuration to apply.</param>
+    /// <param name="nodeTypePath">The NodeType path this configuration belongs to, stamped so a
+    /// <c>WithContentType</c> reached from the probe records an EXACT registry entry rather than a
+    /// bare-name one (see <c>NodeTypePathHolder</c>). Optional: a caller with no NodeType in hand
+    /// leaves the probe unstamped instead of recording a meaningless key.</param>
     internal static IObservable<NodeTypeInstanceModel?> ProbeInstanceModel(
         IMessageHub hub,
-        Func<MessageHubConfiguration, MessageHubConfiguration> config)
+        Func<MessageHubConfiguration, MessageHubConfiguration> config,
+        string? nodeTypePath = null)
     {
         var probeAddress = new Address($"$model-probe/{Guid.NewGuid():N}");
         // 🚨 AsTransientNodeProbe: this hub exists to be read and disposed. It must get the data
@@ -240,7 +250,8 @@ internal static class NodeTypeDataModelAreas
         // reads) but NOT the per-node control plane — the compile / release-request / sources
         // watchers and the compile-state mirror are month-scale machinery that, on a
         // microsecond-scale hub, only opened `sync/` sub-hubs and then faulted on teardown.
-        var probe = hub.GetHostedHub(probeAddress, c => config(c.AddData()).AsTransientNodeProbe());
+        var probe = hub.GetHostedHub(probeAddress,
+            c => config(c.AddData().WithNodeTypePath(nodeTypePath)).AsTransientNodeProbe());
         if (probe == null)
             return Observable.Return<NodeTypeInstanceModel?>(null);
 

@@ -312,7 +312,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 // an untyped value they would silently `as MyType ?? new MyType()`.
                 if (deserialized is JsonElement degraded && contentTypeRegistry is not null)
                 {
-                    var recovered = contentTypeRegistry.TryRecover(degraded, jsonOptions);
+                    var recovered = contentTypeRegistry.TryRecoverForNodeType(node.NodeType, degraded, jsonOptions);
                     if (recovered is not null)
                         return node with { Content = recovered };
                 }
@@ -332,7 +332,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 // dynamically-compiled type this hub's options lack); only if
                 // it can't resolve do we surface loudly with the raw JSON
                 // snippet so the caller sees which discriminator is missing.
-                var recovered = contentTypeRegistry?.TryRecover(je, jsonOptions);
+                var recovered = contentTypeRegistry?.TryRecoverForNodeType(node.NodeType, je, jsonOptions);
                 if (recovered is not null)
                     return node with { Content = recovered };
                 throw new MeshNodeStreamException(BuildDeserializationError(node, je, ex), ex);
