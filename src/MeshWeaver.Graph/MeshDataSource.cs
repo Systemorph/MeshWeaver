@@ -388,6 +388,12 @@ public static class MeshDataSourceExtensions
     /// each further cycle requires a NEW foreign write to the row. If the in-memory state already
     /// advanced past the stored version, the lambda no-ops (UpdateOwn completes with the
     /// unchanged node and skips the write).
+    /// <para>🚨 The MINT here is the point, which is what separates this from
+    /// <c>MeshNodeStreamHandle.AdoptPersisted</c> (the change-feed reconcile in
+    /// <c>SubscribeToOwnDeletion</c>). There, adopting an already-durable external write is a pure
+    /// OBSERVATION — minting above it manufactures a revision that exists nowhere and the sampler
+    /// persists it (#1432). Here a write was REFUSED, so this hub MUST climb strictly above the
+    /// durable row or its next save is refused too. Same word, opposite requirement.</para>
     /// </summary>
     private static void AdoptDurableTruth(IMessageHub hub, MeshNode stored, long refusedVersion, ILogger? logger)
     {
@@ -1377,25 +1383,32 @@ public static class MeshDataSourceExtensions
                     recentlyDeleted?.Clear(ownPath);
                     try
                     {
-                        // 🚨 FORWARD-ONLY refresh — never move the in-RAM node BACKWARD.
-                        // `notification.Entity` is the node as PERSISTED. The durable write + its
-                        // change notification are OFF-TURN, so under a write burst this notification
-                        // LAGS the in-RAM stream: by the time it arrives, the in-RAM commit may already
-                        // carry many newer writes. A blind `_ => newNode` overwrite re-applied that
-                        // STALE persisted snapshot over fresher in-RAM state and silently dropped every
-                        // field added since it was persisted — the concurrent cross-hub-write data-loss
-                        // bug (CrossHubPatchAtomicityTest: a burst of cross-mirror dict-adds settling
-                        // with entries permanently lost). The single-write echo-suppression above only
-                        // skips the EXACT latest version, not the older lagging echoes. The IN-RAM
-                        // commit is authoritative (the owner's monotonic Version is the one clock); a
-                        // persisted snapshot may only REPLACE it when it is STRICTLY NEWER (a genuine
-                        // out-of-band external write). A lagged own-write echo (version <= live) is a
-                        // no-op, so the in-RAM stream only ever moves forward.
+                        // 🚨 ADOPTION, NOT A WRITE — `notification.Entity` is the node as PERSISTED,
+                        // at the version storage already holds it under. AdoptPersisted lands it
+                        // VERBATIM: it does not mint (an `Update` here minted durable+1 — a phantom
+                        // revision that exists nowhere, which the persistence sampler then wrote back,
+                        // #1432) and it records the durable version so neither the sampler nor the
+                        // dispose-time flush echoes the observation to storage. Provenance is the
+                        // discriminator: only the durable change feed reaches this line, so nothing
+                        // here has to guess whether content is "already durable" — it is, by
+                        // construction. Every genuine change keeps going through Update and mints.
+                        //
+                        // 🚨 FORWARD-ONLY (AdoptPersisted's built-in guard) — never move the in-RAM
+                        // node BACKWARD. The durable write + its change notification are OFF-TURN, so
+                        // under a write burst this notification LAGS the in-RAM stream: by the time it
+                        // arrives, the in-RAM commit may already carry many newer writes. A blind
+                        // `_ => newNode` overwrite re-applied that STALE persisted snapshot over fresher
+                        // in-RAM state and silently dropped every field added since it was persisted —
+                        // the concurrent cross-hub-write data-loss bug (CrossHubPatchAtomicityTest: a
+                        // burst of cross-mirror dict-adds settling with entries permanently lost). The
+                        // single-write echo-suppression above only skips the EXACT latest version, not
+                        // the older lagging echoes. The IN-RAM commit is authoritative (the owner's
+                        // monotonic Version is the one clock); a persisted snapshot may only REPLACE it
+                        // when it is STRICTLY NEWER (a genuine out-of-band external write). A lagged
+                        // own-write echo (version <= live) is a no-op, so the in-RAM stream only ever
+                        // moves forward.
                         hub.GetWorkspace().GetMeshNodeStream()
-                            .Update(current =>
-                                current is not null && current.Version >= newNode.Version
-                                    ? current
-                                    : newNode)
+                            .AdoptPersisted(newNode)
                             .Subscribe(
                                 _ => { },
                                 ex => TryLogWarning(hub, ex,
