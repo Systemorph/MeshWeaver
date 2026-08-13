@@ -482,6 +482,26 @@ public sealed class GitHubSyncService
     {
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
         {
+            // 🚨 A CONFIGURED SUBDIRECTORY THAT MATCHES NOTHING IS A CONFIGURATION ERROR, NOT AN
+            // EMPTY REPO (issue #1326). The tree filter compares the configured prefix against repo
+            // paths with StringComparison.Ordinal — correct, because git paths ARE case-sensitive —
+            // so a casing/typo mismatch yields ZERO files, and an empty snapshot flows on as "the
+            // repo carries nothing": every existing node becomes absent-from-the-source and, under
+            // the default FullReplace, the import MIRRORS THE WHOLE SPACE AWAY. Refuse loudly and
+            // name the subdirectory instead. Only guarded when a subdirectory is configured — a
+            // genuinely empty repo (no subdirectory) is a legitimate first-sync state.
+            if (snapshot.Files.Count == 0 && !string.IsNullOrWhiteSpace(subdirectory))
+            {
+                var message =
+                    $"No files found under subdirectory '{subdirectory.Trim().Trim('/')}' at "
+                    + $"{Short(snapshot.CommitSha)} in {repoUrl}. Refusing to import an empty snapshot — "
+                    + "it would prune the whole Space. Check the subdirectory (including its exact "
+                    + "capitalisation — git paths are case-sensitive) on the sync source.";
+                logger?.LogWarning("[GitSync] {Space}: {Message}", spaceId, message);
+                progress?.Invoke(message, LogLevel.Error);
+                return Observable.Throw<(StaticRepoImportResult, string)>(
+                    new InvalidOperationException(message));
+            }
             // Git-diff scope: when we know the last SUCCESSFULLY-synced commit (a routine
             // webhook/update — not a force, not a first import), ask GitHub what changed between it
             // and the head and import ONLY those nodes. A null answer (no base, force, force-push,
@@ -494,8 +514,10 @@ public sealed class GitHubSyncService
             return diff.SelectMany(changedFiles =>
                 ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
                 {
+                    // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
+                    // needs them to tell "the repo dropped this node" from "this node never syncs".
                     var source = new InMemoryStaticRepoSource(
-                        spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs);
+                        spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs, ignore);
                     var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
                     if (changedNodePaths is not null)
                         logger?.LogInformation(
