@@ -106,6 +106,45 @@ An **unsupported** browser language deliberately writes *nothing*, leaving the p
 translation shipped later applies automatically instead of the user being pinned to a tag we would
 only ever render in English.
 
+### …and where an ANONYMOUS visitor's comes from
+
+Steps 1–3 all read a **profile**, and an anonymous visitor does not have one. Without a fourth
+source, `AccessContext.Locale` is null for every logged-out visitor and the whole feature is inert
+for exactly the audience it matters most to: the first-time viewer of a paywall, an invitation link
+or a public course page is anonymous *by definition*.
+
+So the request's `Accept-Language` header is negotiated against `Locales.Supported` and **seeded**
+onto the identity, on both entry paths:
+
+| Path | Where | Reads the header from |
+|---|---|---|
+| SSR / HTTP request | `UserContextMiddleware` | `HttpContext.Request.Headers.AcceptLanguage` |
+| Blazor circuit | `CircuitAccessHandler` **constructor** | `IHttpContextAccessor` — the live `/_blazor` request |
+
+`Locales.Negotiate` does the parsing: the full RFC 9110 list with `q=` weights, tried in descending
+weight, each matched by `Locales.TryMatch` so region variants fold onto the primary subtag exactly as
+everywhere else (`en-GB` → `en`). `q=0` is an explicit refusal and `*` is an absence of preference —
+both are skipped, so neither can pin a caller to a language it never asked for. Nothing matched
+returns **null**, not `en`, so "unsupported" stays distinguishable from "asked for English".
+
+Two properties this rests on, both load-bearing:
+
+- **It is a SEED, never an override.** A signed-in user's stored preference still wins:
+  `MeshUserProjection.Apply` — the single projection both entry paths use — keeps a profile's
+  language when the profile states one and only falls back to the seed when it does not. (Before
+  this, the two paths projected differently: the circuit read the profile's locale and time zone, the
+  middleware read only id and name. That divergence was invisible while nothing seeded a locale and
+  would have rendered German SSR chrome for an English-profile user the moment one existed.)
+- **It lands BEFORE the first render.** The header is read in the circuit handler's *constructor*,
+  because Blazor resolves the circuit's `CircuitHandler`s — and then runs `OnCircuitOpenedAsync` /
+  `OnConnectionUpAsync` — before it adds and renders any root component. That ordering is what makes
+  the seed effective at all: `LayoutAreaHost` captures the access context in its **constructor**, so
+  a locale arriving mid-circuit re-renders nothing.
+
+Note this is still an *explicit* resolution off `AccessContext.Locale` — the header is read once, at
+identity time, and never becomes a second ambient mechanism. `CultureInfo.CurrentUICulture` is not
+consulted anywhere (see "The one rule" above).
+
 ## Adding a language
 
 1. Add the tag to `Locales.Supported` and an endonym to `Locales.DisplayNames`.
@@ -134,5 +173,10 @@ only ever render in English.
 ## Tests
 
 - `LocalizationTest` (MeshWeaver.Messaging.Hub.Test) — catalog loads, fallback chain, plurals,
-  attribute lookup, and **every shipped language covers the full English key list with no orphans**.
+  attribute lookup, `Locales.Negotiate` over real `Accept-Language` shapes, and **every shipped
+  language covers the full English key list with no orphans**.
 - `LocalePreferenceTest` (MeshWeaver.Hosting.Monolith.Test) — the write-once decision.
+- `AnonymousCircuitLocaleSeedTest` (MeshWeaver.Hosting.Blazor.Test) — the anonymous seed, driven over
+  a **real SignalR WebSocket into Blazor's real `ComponentHub`**, because the only question that
+  matters is whether the circuit can still see the request that established it. A unit test of the
+  negotiation would stay green while the browser saw nothing.

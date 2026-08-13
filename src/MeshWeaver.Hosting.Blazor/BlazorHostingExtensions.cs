@@ -42,6 +42,14 @@ public static class BlazorHostingExtensions
             .ConfigureServices(services => services
                 .AddContentService()
                 .AddFluentUIComponents()
+                // 🚨 Required by CircuitAccessHandler, which reads the establishing /_blazor
+                // request's Accept-Language to seed an ANONYMOUS visitor's language (they have no
+                // profile to read one from). Registered HERE rather than left to each host: the
+                // handler treats a missing accessor as "no request-derived language", so a host
+                // that forgot the call would silently serve English to every anonymous visitor —
+                // the exact defect this seeding exists to fix. AddHttpContextAccessor is
+                // TryAdd-based, so a host that already calls it is unaffected.
+                .AddHttpContextAccessor()
                 .AddSingleton<UserIdentityCache>()
                 .AddScoped<ICircuitContextAccessor, CircuitContextAccessor>()
                 .AddScoped<PortalApplication>()

@@ -8,6 +8,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Components.Server.Circuits;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -46,23 +47,67 @@ public class CircuitAccessHandler : CircuitHandler
     private IDisposable? _identityRecovery;
 
     /// <summary>
+    /// The language this circuit's browser asked for, negotiated against <see cref="Locales.Supported"/>
+    /// — or <see langword="null"/> when it asked for nothing this deployment ships.
+    ///
+    /// <para>🚨 Captured in the CONSTRUCTOR, deliberately, and this is the load-bearing detail of the
+    /// whole seed. Blazor resolves the circuit's <c>CircuitHandler</c>s from inside a
+    /// <c>ComponentHub</c> hub method that it <b>awaits</b> — <c>StartCircuit</c> for a classic
+    /// Blazor Server payload, and the first <c>UpdateRootComponents</c> for a Blazor Web App, where
+    /// handler creation is deliberately deferred so a handler can see the restored application
+    /// state. Either way this constructor runs while the <c>/_blazor</c> request carrying the header
+    /// is unambiguously alive, on its own execution flow. The circuit lifecycle that follows
+    /// (<see cref="OnCircuitOpenedAsync"/>, then <see cref="OnConnectionUpAsync"/>) is dispatched
+    /// fire-and-forget from that same method, so reading the accessor THERE would be racing the
+    /// request's lifetime for no benefit.</para>
+    ///
+    /// <para><b>And the seed lands before the FIRST RENDER.</b> The framework runs
+    /// <see cref="OnCircuitOpenedAsync"/> / <see cref="OnConnectionUpAsync"/> before it adds and
+    /// renders any root component, so the language is on the circuit's identity by the time anything
+    /// draws. That ordering is not a nicety: <c>LayoutAreaHost</c> captures the access context in its
+    /// CONSTRUCTOR, so a locale arriving mid-circuit would re-render nothing and the fix would look
+    /// correct in a unit test while doing nothing in the browser. Pinned end-to-end over a real
+    /// SignalR connection by <c>AnonymousCircuitLocaleSeedTest</c>.</para>
+    ///
+    /// <para><b>Why the header at all.</b> An anonymous visitor has no profile, so
+    /// <c>AccessContext.Locale</c> is null for every one of them and every server-rendered string
+    /// falls back to English — which makes "the viewer's language wins for chrome" inert for exactly
+    /// the audience it was written for (a first-time visitor hitting a paywall is anonymous by
+    /// definition). The header is the only statement of language such a visitor makes. It is read
+    /// ONCE, here, and seeded onto the identity — it never becomes a second, ambient resolution
+    /// mechanism, and <c>CultureInfo.CurrentUICulture</c> is never consulted (a layout-area render
+    /// hops the hub scheduler, where an AsyncLocal culture would not survive and one user's UI would
+    /// pick up another user's language).</para>
+    /// </summary>
+    private readonly string? _requestLocale;
+
+    /// <summary>
     /// Initializes a new instance of the <c>CircuitAccessHandler</c> class.
     /// </summary>
     /// <param name="hub">The message hub used to resolve the <c>AccessService</c> and mesh services.</param>
     /// <param name="authStateProvider">Provides the authentication state used to resolve the circuit's user.</param>
     /// <param name="circuitContextAccessor">The circuit-scoped accessor that carries the circuit id and user context.</param>
     /// <param name="loggerFactory">Factory used to create the access-context logger.</param>
+    /// <param name="httpContextAccessor">
+    /// Access to the <c>/_blazor</c> request that is establishing this circuit, used ONLY to read
+    /// <c>Accept-Language</c> (see <see cref="_requestLocale"/>). Optional so a host that does not
+    /// register it still builds circuits — such a host simply has no request-derived language and
+    /// falls back to English, exactly as before.
+    /// </param>
     public CircuitAccessHandler(
         IMessageHub hub,
         AuthenticationStateProvider authStateProvider,
         ICircuitContextAccessor circuitContextAccessor,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IHttpContextAccessor? httpContextAccessor = null)
     {
         _hub = hub;
         _authStateProvider = authStateProvider;
         _circuitContextAccessor = circuitContextAccessor;
         _logger = loggerFactory.CreateLogger("MeshWeaver.AccessContext");
         _circuitLogger = loggerFactory.CreateLogger("MeshWeaver.Blazor.Circuit");
+        _requestLocale = Locales.Negotiate(
+            httpContextAccessor?.HttpContext?.Request.Headers.AcceptLanguage.ToString());
     }
 
     /// <summary>
@@ -248,7 +293,12 @@ public class CircuitAccessHandler : CircuitHandler
                     {
                         ObjectId = WellKnownUsers.Anonymous,
                         Name = "Guest",
-                        IsVirtual = true
+                        IsVirtual = true,
+                        // 🚨 THE PAYWALL CASE. This visitor has no profile and never will until they
+                        // sign up, so the request header is the only thing that can make the portal
+                        // speak their language. Null here (the previous behaviour) is what served
+                        // English chrome to every anonymous viewer, whatever their browser asked for.
+                        Locale = _requestLocale
                     },
                     // Nothing to re-ask: an unauthenticated circuit has no email, and the anonymous
                     // VUser is the ANSWER here, not a degraded stand-in for one.
@@ -271,7 +321,12 @@ public class CircuitAccessHandler : CircuitHandler
                        ?? string.Empty,
                 ObjectId = UsernameFromEmail(email),
                 Email = email,
-                Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
+                Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList(),
+                // The browser's request is a SEED, never an override: ApplyMeshUser below keeps a
+                // profile's language when the profile states one and only falls back to this. So a
+                // signed-in user's stored preference still wins, and a signed-in user who has never
+                // stated one finally gets their browser's language instead of unconditional English.
+                Locale = _requestLocale
             };
 
             // Authoritative resolution: the mesh User node's Id. The cache is a
@@ -318,9 +373,10 @@ public class CircuitAccessHandler : CircuitHandler
     }
 
     /// <summary>
-    /// Projects a resolved mesh <c>User</c> node onto a seeded context — the ONE place the
-    /// authoritative identity is read, shared by the circuit-open success path and by the
-    /// degraded-identity repair so the two can never drift apart.
+    /// Projects a resolved mesh <c>User</c> node onto a seeded context. A thin alias for
+    /// <see cref="MeshUserProjection.Apply"/> — the ONE place the authoritative identity is read,
+    /// shared by the circuit-open success path, by the degraded-identity repair, AND by the SSR
+    /// request path (<c>UserContextMiddleware</c>) so none of the three can drift apart.
     ///
     /// <para>Resolves the viewer's display time zone from their profile so it rides on the
     /// AccessContext to every render path — the Blazor circuit AND server-side hub layout areas —
@@ -346,20 +402,7 @@ public class CircuitAccessHandler : CircuitHandler
         AccessContext seed,
         MeshNode meshUser,
         System.Text.Json.JsonSerializerOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(seed);
-        ArgumentNullException.ThrowIfNull(meshUser);
-        var profile = meshUser.ContentAs<User>(options);
-        var timeZoneId = profile?.TimeZoneId;
-        var locale = profile?.Locale;
-        return seed with
-        {
-            ObjectId = meshUser.Id,
-            Name = meshUser.Name ?? meshUser.Id,
-            TimeZoneId = string.IsNullOrWhiteSpace(timeZoneId) ? seed.TimeZoneId : timeZoneId,
-            Locale = string.IsNullOrWhiteSpace(locale) ? seed.Locale : locale
-        };
-    }
+        => MeshUserProjection.Apply(seed, meshUser, options);
 
     /// <summary>
     /// The repair for a circuit that opened on a degraded identity: waits for the mesh user index
