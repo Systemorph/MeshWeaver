@@ -240,4 +240,67 @@ public class StaleActivationDurableFirstSeedTest(ITestOutputHelper output) : Mon
         after.Version.Should().Be(durableVersion, "the durable row must be untouched by the reactivation");
         after.Name.Should().Be("durable-advance");
     }
+
+    /// <summary>
+    /// #1432 — adopting an ALREADY-DURABLE external write is an OBSERVATION: it must mint nothing
+    /// and write nothing back. The hub here stays LIVE throughout — no recycle, no gate, no
+    /// reactivation — so nothing about this depends on the #1384 race; the race only ever decided
+    /// whether anyone noticed.
+    ///
+    /// <para><b>Fail-without:</b> the change-feed reconcile in <c>SubscribeToOwnDeletion</c> adopted
+    /// the persisted node through <c>Update</c>, whose <c>UpdateOwn</c> mints unconditionally
+    /// (<c>NextVersion(Math.Max(current.Version, updated.Version))</c>). Adopting durable v5000 left
+    /// the hub serving <b>v5001</b> — a revision that exists nowhere, content-identical to v5000 —
+    /// and because the mint is a fresh <c>with</c>-copy, <c>OwnNodeCache.PersistedSnapshot</c>'s
+    /// reference gate did not suppress it and the 200 ms persistence sampler wrote the phantom BACK
+    /// (an observation-time write-back, the #590 shape). <b>Pass-with:</b> <c>AdoptPersisted</c>
+    /// lands the durable node verbatim at v5000 and records that version on
+    /// <c>PostCommitFlushRegistry</c>, so <c>HandleSaveMeshNode</c> and the dispose flush both skip
+    /// it — served version, durable version and durable write count are all unchanged.</para>
+    /// </summary>
+    [Fact(Timeout = 55_000)]
+    public async Task LiveHub_AdoptingAnExternalDurableWrite_MintsNothing_AndWritesNothingBack()
+    {
+        var id = $"live-adopt-{Guid.NewGuid():N}";
+        var path = $"{TestPartition}/{id}";
+
+        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
+        {
+            Name = "created", NodeType = "Markdown", State = MeshNodeState.Active
+        }).Should().Within(30.Seconds()).Emit();
+        await ReadNode(path).Should().Within(30.Seconds()).Match(n => n is { Name: "created" });
+
+        // Durable state advances OUT OF BAND — a second writer / migration / GitSync / another
+        // silo. Straight through IStorageAdapter, whose Changes feed is what the live owner's
+        // reconcile subscribes to.
+        const long externalVersion = 5000L;
+        var durable = (await ReadDurable(path).Should().Within(30.Seconds()).Emit())!;
+        var writesBefore = Gated.WriteCount(path);
+        await Storage.Write(durable with
+        {
+            Name = "external-advance", Version = externalVersion
+        }, JsonOptions).Should().Within(30.Seconds()).Emit();
+
+        // The live hub adopts it — that part is required behaviour and must keep working.
+        var served = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null)
+            .Should().Within(20.Seconds())
+            .Match(n => n.Name == "external-advance",
+                "the live owner must adopt an external durable write into its in-RAM node");
+
+        // Negative window: several persistence-sampler periods (200 ms) for a write-back to appear.
+        await Observable.Timer(TimeSpan.FromSeconds(2)).Should().Within(20.Seconds()).Emit();
+        var after = await ReadDurable(path).Should().Within(20.Seconds()).Emit();
+
+        served.Version.Should().Be(externalVersion,
+            "adopting an already-durable external write is an OBSERVATION — minting a revision "
+            + "above it makes the in-RAM node a phantom the sampler then writes back");
+        after!.Version.Should().Be(externalVersion,
+            $"observing someone else's durable write must not write anything back (row now reads "
+            + $"v{after.Version}/'{after.Name}')");
+        after.Name.Should().Be("external-advance");
+        Gated.WriteCount(path).Should().Be(writesBefore + 1,
+            "exactly ONE write reached storage in this window — the external one. A second is the "
+            + "owner echoing its own observation back.");
+    }
 }
