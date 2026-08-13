@@ -87,7 +87,9 @@ public class RendererOutputTests : IDisposable
         contents.Should().Contain("2 / " + pdfDoc.NumberOfPages);
         // #1309: the contents list names the page, not just the link. Both sections are on the
         // one body page here, so both entries read 3 — and 3 is where the body actually starts.
-        contents.Should().Contain("Report3").And.Contain("Details3");
+        // Whitespace is stripped so the assertion does not depend on whether the extractor puts
+        // a gap between an entry's title and its number.
+        Packed(contents).Should().Contain("Report3").And.Contain("Details3");
 
         var body = string.Join("\n", pdfDoc.GetPages().Skip(2).Select(p => p.Text));
         body.Should().Contain("executive").And.Contain("Column A").And.Contain("var answer = 42;");
@@ -159,9 +161,8 @@ public class RendererOutputTests : IDisposable
         landsOn.Should().Contain(p => p > 3 + 1,
             "a section that begins two or more pages in is what proves a boundary was crossed");
 
-        // 1. What the contents list PRINTS. Whitespace is stripped so the assertion does not
-        //    depend on whether the extractor puts a gap between the title and its number.
-        var contents = new string(pdfDoc.GetPage(2).Text.Where(c => !char.IsWhiteSpace(c)).ToArray());
+        // 1. What the contents list PRINTS.
+        var contents = Packed(pdfDoc.GetPage(2).Text);
         for (var i = 0; i < headings.Length; i++)
             contents.Should().Contain(headings[i] + landsOn[i].ToString(CultureInfo.InvariantCulture),
                 $"the contents entry for '{headings[i]}' must print the page it starts on");
@@ -227,6 +228,14 @@ public class RendererOutputTests : IDisposable
         docx[0].Should().Be((byte)'P');
         docx[1].Should().Be((byte)'K');
     }
+
+    /// <summary>
+    /// Extracted page text with every space removed, so an assertion pairing a contents entry
+    /// with its page number ("Details" immediately followed by "3") does not depend on whether
+    /// the PDF text extractor chooses to put a gap across the column that separates them.
+    /// </summary>
+    private static string Packed(string pageText) =>
+        new(pageText.Where(c => !char.IsWhiteSpace(c)).ToArray());
 
     public void Dispose() => pools.Dispose();
 }

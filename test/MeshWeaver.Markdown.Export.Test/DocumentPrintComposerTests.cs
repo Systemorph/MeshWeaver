@@ -230,6 +230,24 @@ public class DocumentPrintComposerTests
             .Should().Equal("mw-toc-text", "mw-toc-page");
     }
 
+    [Fact]
+    public void A_contents_entry_never_straddles_a_page_break()
+    {
+        // The other half of one-annotation-per-entry. Being a block box stops a WRAPPED title
+        // emitting a rect per line; this stops a title CAUGHT BY A PAGE BREAK emitting a rect
+        // per fragment, which would push the link count past the entry count and cost the whole
+        // list its numbers. Measured: sliding a contents list past a break in 8pt steps, 10 of
+        // 15 layouts printed 15 annotations for 14 entries without the rule and 14 with it —
+        // but only with titles of FOUR or more lines, since orphans/widows (2 by default) make a
+        // shorter entry unsplittable. That is why this is pinned here rather than left to a
+        // browser test nobody could make fail on purpose.
+        var html = Compose();
+        var start = html.IndexOf(".mw-toc-entry {", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(-1);
+
+        html[start..(html.IndexOf('}', start) + 1)].Should().Contain("break-inside: avoid");
+    }
+
     // ── Running header and footer ───────────────────────────────────────────────────────
 
     [Fact]

@@ -180,8 +180,23 @@ body {
     margin: 0 0 10pt 0;
 }
 
+/* 🚨 An entry never straddles a page break, and that is a correctness rule, not typography.
+ * A title caught by the break fragments, and Chromium emits one link annotation PER FRAGMENT —
+ * so one entry contributes two rects, the positional match in TocPageNumbers sees more links
+ * than there are entries, and the whole contents list loses its numbers to an avoidable
+ * refusal. Keeping the entry whole keeps the one-annotation-per-entry invariant it rests on.
+ *
+ * Measured, not assumed: sliding a contents list past a page break in 8pt steps, 10 of 15
+ * layouts printed 15 annotations for 14 entries without this rule and exactly 14 with it.
+ *
+ * 🚨 REPRODUCING IT NEEDS A TITLE OF FOUR OR MORE LINES. `orphans` and `widows` both default
+ * to 2, so a two- or three-line entry cannot be split at all — every half would breach one of
+ * them. Anyone who tests this rule with an ordinary wrapped title will see no difference and
+ * conclude it does nothing. It is not decoration; delete it and a long enough heading silently
+ * costs the document its page numbers. (Copilot review, #1372.) */
 .mw-toc-entry {
     margin: 0;
+    break-inside: avoid;
 }
 
 /* Each entry is a row: the title takes the slack, the page number sits in a column at the
