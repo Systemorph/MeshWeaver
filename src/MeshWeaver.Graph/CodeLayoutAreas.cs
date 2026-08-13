@@ -226,7 +226,9 @@ public static class CodeLayoutAreas
         // no separate page behind a button. Everyone else keeps the read-only fence rendering.
         if (canEdit)
         {
-            cell = cell.WithView(BuildCellEditor(hubAddress.ToString(), language, editorHeight),
+            // Address.Path, never ToString(): a hosted address stringifies as "path~host", and the
+            // editor uses this as the auto-save target and the LSP source path — both node paths.
+            cell = cell.WithView(BuildCellEditor(hubAddress.Path, language, editorHeight),
                 CellCodeArea);
         }
         else if (!string.IsNullOrEmpty(codeConfig?.Code))
@@ -380,7 +382,7 @@ public static class CodeLayoutAreas
             // copy happen at CLICK time under the clicker's AccessContext.
             // An EDITOR gets no Edit button at all: their cell IS the editor (see
             // BuildContent) — there is no second mode to navigate to.
-            var sourcePath = hubAddress.ToString();
+            var sourcePath = hubAddress.Path;
             toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.edit", locale))
                     .WithIconStart(FluentIcons.Edit())
                     .WithClickAction(ctx =>
@@ -845,7 +847,9 @@ public static class CodeLayoutAreas
         //     the kernel's imports/references, the script globals in scope).
         // Either way the editor completes exactly what that cell can actually compile, so
         // there is no longer a reason to leave standalone scripts without language services.
-        var sourcePath = host.Hub.Address.ToString();
+        // Address.Path, never ToString(): a hosted address stringifies as "path~host", and both
+        // LSP paths must be the plain node path.
+        var sourcePath = host.Hub.Address.Path;
         CodeEditorLanguageServerConfig? lspConfig = language == "csharp"
             ? new CodeEditorLanguageServerConfig(
                 NodeTypePath: OwnerPathOf(sourcePath),
