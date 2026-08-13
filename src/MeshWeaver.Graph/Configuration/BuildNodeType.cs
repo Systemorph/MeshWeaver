@@ -223,17 +223,17 @@ public static class BuildNodeType
     /// and not merely within one (#1424). Three steps, and the ORDER is the fix:
     ///
     /// <list type="number">
-    /// <item>Read the durable row. It is the only witness a second cluster also sees — Orleans
-    /// membership is per-cluster by construction, and no change feed crosses the process boundary
-    /// (the PG <c>LISTEN</c> session is not started in the partitioned wiring), so a mirror can be
-    /// arbitrarily far behind another cluster's grant and will never be told.</item>
-    /// <item>Decide with <see cref="Arbitrate"/> over the DURABLE holder state and the union of
-    /// durable + mirror registrations. Registrations come from the mirror as well because a
-    /// candidate that registered milliseconds ago has not reached storage yet, and per-candidate
-    /// keys make the union safe (that is exactly why <see cref="BuildState.RequestedClaims"/> is a
-    /// map). Holder state comes ONLY from durable — that is the contested field.</item>
-    /// <item>Commit with <see cref="IStorageAdapter.WriteIfVersion"/> against the version we read,
-    /// and write the grant into this hub's mirror only if the store says we won. The mirror write
+    /// <item>Read the claim LOCK (<see cref="ClaimPath"/>). It is the only witness a second cluster
+    /// also sees — Orleans membership is per-cluster by construction, and no change feed crosses the
+    /// process boundary (the PG <c>LISTEN</c> session is not started in the partitioned wiring), so
+    /// a mirror can be arbitrarily far behind another cluster's grant and will never be told.</item>
+    /// <item>Decide with <see cref="Arbitrate"/> over the LOCK's holder state and THIS cluster's
+    /// pending registrations. Registrations come from the mirror because a candidate that registered
+    /// milliseconds ago has not reached storage yet — and a cluster can only ever grant one of its
+    /// own candidates anyway. Holder state comes only from the lock: that is the contested field,
+    /// and the one place it cannot be overwritten by a whole-node flush.</item>
+    /// <item>Commit with <see cref="IStorageAdapter.WriteIfVersion"/> against the version step 1
+    /// read, and publish the grant on the Build node only if the store says we won. That publication
     /// is what <c>ObserveBuildClaim</c> emits on, and it commits ~200 ms before the persistence
     /// sampler reaches storage — so the durable decision has to come FIRST or the loser has already
     /// started baking by the time it could be told.</item>
@@ -278,10 +278,22 @@ public static class BuildNodeType
         return workspace.GetMeshNodeStream()
             .Where(n => n is not null)
             .Take(1)
-            .SelectMany(mirror => storage.Read(claimPath, options)
-                .Take(1)
-                .SelectMany(held => CommitGrant(
-                    workspace, storage, options, membership, logger, mirror, claimPath, held)));
+            .SelectMany(mirror =>
+            {
+                // Candidates come from THIS hub's mirror: a registration written milliseconds ago
+                // has not reached storage yet, and a cluster can only ever grant one of its own
+                // candidates anyway. Checked BEFORE the lock is read, so the periodic tick on a
+                // quiet build node costs nothing at all — no storage round-trip, no write.
+                var pending = mirror.ContentAs<BuildState>(options)?.RequestedClaims;
+                if (pending is not { Count: > 0 })
+                    return Observable.Return(Unit.Default);
+
+                return storage.Read(claimPath, options)
+                    .Take(1)
+                    .SelectMany(held => CommitGrant(
+                        workspace, storage, options, membership, logger,
+                        pending, claimPath, held));
+            });
     }
 
     /// <summary>
@@ -301,17 +313,10 @@ public static class BuildNodeType
         System.Text.Json.JsonSerializerOptions options,
         IClusterMembership? membership,
         ILogger? logger,
-        MeshNode mirror,
+        ImmutableDictionary<string, BuildClaimRequest> pending,
         string claimPath,
         MeshNode? held)
     {
-        // Candidates come from THIS hub's mirror: a registration written milliseconds ago has not
-        // reached storage yet, and each cluster can only ever grant one of its own candidates
-        // anyway. Nothing pending ⇒ nothing to decide, and no read of anything else.
-        var pending = mirror.ContentAs<BuildState>(options)?.RequestedClaims;
-        if (pending is not { Count: > 0 })
-            return Observable.Return(Unit.Default);
-
         // Holder state comes from the LOCK — never from the mirror and never from the Build node's
         // own durable row (see ClaimPath for why that row cannot hold it).
         var decisionInput = (held ?? NewClaimNode(claimPath)) with
