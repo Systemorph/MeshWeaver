@@ -199,6 +199,9 @@ public static class DataExtensions
             )
             .WithType(typeof(Address), nameof(Address))
             .WithType(typeof(ActivityLog), nameof(ActivityLog))
+            // A sealed slice of an activity's transcript, stored as its own satellite node. Registered
+            // beside ActivityLog because the segment crosses the wire on exactly the same paths.
+            .WithType(typeof(ActivityLogSegment), nameof(ActivityLogSegment))
             // ActivityLog content children — serialised inside log entries / user attribution.
             .WithType(typeof(LogMessage), nameof(LogMessage))
             .WithType(typeof(UserInfo), nameof(UserInfo))

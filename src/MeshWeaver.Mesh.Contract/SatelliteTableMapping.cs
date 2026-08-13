@@ -25,6 +25,11 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
     public static IReadOnlyList<SatelliteTableMapping> Defaults { get; } =
     [
         new SatelliteTableMapping("_Activity", "activities", "Activity"),
+        // An activity's sealed log slices ({activityPath}/_Log/{index}) — same table as the activity
+        // they belong to, so a partition's activity data stays in one place and no new table is
+        // provisioned. The path already contains _Activity, so segment resolution agrees either way;
+        // the entry is what makes a nodeType-filtered query find them.
+        new SatelliteTableMapping("_Log", "activities", "ActivityLogSegment"),
         new SatelliteTableMapping("_UserActivity", "user_activities", "UserActivity"),
         new SatelliteTableMapping("_Thread", "threads", "Thread", "ThreadComposer"),
         new SatelliteTableMapping("_ThreadMessage", "threads", "ThreadMessage"),
