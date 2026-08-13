@@ -175,39 +175,24 @@ public class NoStaticCollectionsTest
             ["MeshWeaver.Kernel.Hub.KernelScriptReferences.Materialized"] = "MEMO: assembly path -> shared PE reference",
             ["MeshWeaver.Kernel.Hub.KernelScriptReferences.SharedSnapshot"] = "MEMO: the snapshot over the same memo",
 
-            // 🚨 CACHE — the known violation this guard was written for, listed rather than fixed
-            // here ON PURPOSE. Removing it means giving every mesh its own reference set, which
-            // MEASURABLY costs ~15 MiB per compiling mesh (+98% peak RSS across the full
-            // Hosting.Monolith.Test project) — a certain cost against an uncertain benefit, since
-            // the Roslyn 5.6 source shows the symbol whose ContainingType goes null in #890 is a
-            // SOURCE symbol of the compilation being emitted, never a PE symbol arriving from a
-            // reference. That trade is decided by the emit canary's second leg, not by this guard.
-            // The entry stays until the canary reads canary=REFERENCES; #1438 removes both the
-            // field and this line. Listing it is the point: an allowlist entry is a visible debt,
-            // which is precisely what the field lacked when two reviews called it a constant.
-            ["MeshWeaver.Graph.Configuration.MeshNodeCompilationService._references"] =
-                "CACHE: process-wide Roslyn reference set — tracked by #890, migration held in #1438 pending the canary verdict",
         };
 
     /// <summary>
     /// The rule the #890 regression slipped through: <c>MeshNodeCompilationService._references</c>
-    /// is a <c>private static readonly IReadOnlyList&lt;MetadataReference&gt;</c>, which the
+    /// was a <c>private static readonly IReadOnlyList&lt;MetadataReference&gt;</c>, which the
     /// collection guard above cannot see (the declared type is an interface, not
     /// <c>List&lt;&gt;</c>) and which two reviews classified as a write-once constant lookup. The
-    /// list IS write-once; its ELEMENTS are not — a <c>PortableExecutableReference</c> owns lazily
+    /// list was write-once; its ELEMENTS were not — a <c>PortableExecutableReference</c> owns lazily
     /// memory-mapped, <see cref="IDisposable"/> metadata and Roslyn caches derived assembly/symbol
-    /// tables against that instance, so every dynamic-NodeType compile in a test host shares them.
+    /// tables against that instance, so every dynamic-NodeType compile in a test host shared them.
     /// This guard keys on the ELEMENT type, so no declared-type spelling — array,
     /// <c>ImmutableArray</c>, <c>IReadOnlyList</c>, <c>Lazy&lt;&gt;</c>, or a plain field — can
     /// hide it again.
     ///
-    /// <para>🚨 The guard ships BEFORE the field it was written for is removed, and that ordering
-    /// is deliberate. Removing the field costs a measured +98% peak RSS in the test host, and
-    /// whether that buys anything is decided by the emit canary, not by this test. So the field is
-    /// listed in <see cref="AllowedRoslynReferenceHolders"/> as a <c>CACHE</c> debt with its issue
-    /// number — visible and counted — rather than left invisible until someone re-derives the whole
-    /// argument. Landing the detector early is the cheap half; paying the memory is the half that
-    /// waits for evidence.</para>
+    /// <para>The field it was written for is gone as of this change — the reference set is now the
+    /// mesh-scoped <c>CompilationReferenceSet</c> — so <see cref="AllowedRoslynReferenceHolders"/>
+    /// carries no <c>CACHE</c> debt again. The only entries left are the kernel script path's
+    /// deliberate process-wide memo.</para>
     /// </summary>
     [Fact]
     public void No_static_fields_hold_Roslyn_metadata_references_outside_allowlist()

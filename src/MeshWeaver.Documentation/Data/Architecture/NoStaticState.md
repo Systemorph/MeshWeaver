@@ -138,11 +138,12 @@ The build guard classifies permitted static fields into four buckets. Everything
 > `NoStaticCollectionsTest`, whatever the declared collection type, because the declared-type check
 > could not see an `IReadOnlyList<>`.
 >
-> The field itself is still there, listed as a `CACHE` debt with its issue number rather than
-> silently exempt — removing it gives every mesh its own reference set, which measurably costs ~15 MiB
-> per compiling mesh, and whether that buys anything is decided by #890's emit canary. **Landing the
-> detector does not require paying for the fix**, and an allowlist entry with a reason is what turns
-> "nobody noticed" into "we know, and here is the open question".
+> The field is now the mesh-scoped `CompilationReferenceSet`, so the reference set dies with the mesh
+> that built it. That cost ~15 MiB of resident PE metadata per compiling mesh (+98% peak RSS across
+> the full `Hosting.Monolith.Test` project) — a real price, paid because a process-wide Roslyn cache
+> is the shape this rule exists to forbid. It shipped **after** the detector, not with it: the guard
+> landed first carrying the field as a visible `CACHE` debt, which is the cheap half, and the memory
+> was paid only once the evidence justified it.
 
 ### MEMO — Pure memoization on process-global keys
 

@@ -172,75 +172,23 @@ internal class MeshNodeCompilationService(
     // side menu can evaluate the *same* queries the compiler uses — the Sources /
     // Tests lists displayed in the UI are guaranteed to match the files compiled.
     //
-    // Default Roslyn references are process-wide: TPA list + a few well-known
-    // additions never change at runtime. Eager static-field init runs once at
-    // type load and the result is then a plain field read on every compile —
-    // no Lazy property dispatch, no synchronization, zero per-compile cost.
-    private static readonly IReadOnlyList<MetadataReference> _references = GetDefaultReferences();
+    // 🚨 The default Roslyn reference set belongs to the MESH, not the process. This was
+    // `private static readonly IReadOnlyList<MetadataReference> _references`, defended twice in
+    // review as "a write-once constant lookup" — but only the LIST is write-once. Each
+    // PortableExecutableReference owns lazily materialized, IDisposable metadata plus the Roslyn
+    // symbol tables cached against it, so the field was a mutable process-wide cache in
+    // static-readonly clothing, and it was the one piece of state every compilation in a test
+    // host shared. See CompilationReferenceSet for the full rationale, the measured cost, and
+    // why the set is never disposed. Resolved (not constructed) here: the set itself is lazy, so
+    // a mesh that never compiles never materializes one.
+    private readonly CompilationReferenceSet _referenceSet =
+        hub.ServiceProvider.GetRequiredService<CompilationReferenceSet>();
 
     /// <summary>
-    /// Builds the process-wide MetadataReference list — TPA assemblies plus a few
-    /// well-known additions. Uses <see cref="MetadataReference.CreateFromFile(string, MetadataReferenceProperties, DocumentationProvider)"/>
-    /// (mmap, lazy read) — Roslyn typically reads only a small fraction of each
-    /// assembly's metadata, so the upfront cost is tiny. An earlier attempt at
-    /// <see cref="MetadataReference.CreateFromStream(Stream, MetadataReferenceProperties, DocumentationProvider, string?)"/>
-    /// to avoid finalizer pressure ended up reading the whole DLL into managed
-    /// memory eagerly — net 10%+ slower in the autocomplete-test CPU profile,
-    /// since most of those bytes were never touched. The file-handle finalizer
-    /// pressure those references add is also tiny in practice (the static field
-    /// holds them for the process lifetime; finalizers only run at shutdown).
+    /// The reference set this compiler binds against — exposed so a test can assert it IS the
+    /// mesh's singleton (i.e. that no compile can reach a process-wide set again).
     /// </summary>
-    private static List<MetadataReference> GetDefaultReferences()
-    {
-        var references = new List<MetadataReference>();
-
-        var trustedAssemblies = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
-        if (trustedAssemblies != null)
-        {
-            foreach (var path in trustedAssemblies.Split(Path.PathSeparator))
-            {
-                if (string.IsNullOrEmpty(path) || !File.Exists(path))
-                    continue;
-                try
-                {
-                    references.Add(MetadataReference.CreateFromFile(path));
-                }
-                catch
-                {
-                    // Skip assemblies that can't be loaded
-                }
-            }
-        }
-
-        // Three well-known additions in case TPA didn't include them. Dedup
-        // against TPA-derived set by Display path so we don't double-load.
-        var seen = new HashSet<string>(
-            references.Select(r => r.Display ?? string.Empty),
-            StringComparer.OrdinalIgnoreCase);
-        foreach (var assembly in new[]
-        {
-            typeof(object).Assembly,                                           // System.Runtime
-            typeof(System.ComponentModel.DataAnnotations.KeyAttribute).Assembly, // DataAnnotations
-            typeof(System.Text.Json.Serialization.JsonPropertyNameAttribute).Assembly, // System.Text.Json
-        })
-        {
-            if (!string.IsNullOrEmpty(assembly.Location)
-                && File.Exists(assembly.Location)
-                && seen.Add(assembly.Location))
-            {
-                try
-                {
-                    references.Add(MetadataReference.CreateFromFile(assembly.Location));
-                }
-                catch
-                {
-                    // Skip if it can't be loaded
-                }
-            }
-        }
-
-        return references;
-    }
+    internal CompilationReferenceSet ReferenceSet => _referenceSet;
 
     /// <summary>
     /// Regex matching @@path references in code files. The capture must LOOK LIKE A NODE PATH —
@@ -1682,10 +1630,10 @@ internal class MeshNodeCompilationService(
         IObservable<ImmutableArray<MetadataReference>> referencesObs =
             allNugetRefs.Count > 0
                 ? _ioPool.Run(ct => nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct))
-                    .Select(resolved => _references
+                    .Select(resolved => _referenceSet.References
                         .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
                         .ToImmutableArray())
-                : Observable.Return(_references.ToImmutableArray());
+                : Observable.Return(_referenceSet.References);
 
         return referencesObs.Select(references =>
         {
@@ -1901,12 +1849,12 @@ internal class MeshNodeCompilationService(
         var nugetRefList = extractedRefs.ToList();
         StripBuiltInScopeGeneratorRef(nugetRefList, builtInPresent: BuiltInGeneratorPaths.Count > 0);
         var nugetRefs = nugetRefList.ToArray();
-        IEnumerable<MetadataReference> references = _references;
+        IEnumerable<MetadataReference> references = _referenceSet.References;
         IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
         {
             var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
-            references = _references.Concat(
+            references = _referenceSet.References.Concat(
                 resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
             nugetAssemblyPaths = resolved.AssemblyPaths;
             cacheService.RegisterProbingDirectories(nodeName, resolved.ProbingDirectories);

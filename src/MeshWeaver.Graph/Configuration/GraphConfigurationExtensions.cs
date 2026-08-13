@@ -262,6 +262,15 @@ public static class GraphConfigurationExtensions
                 .AddNodeCopyDispatchHandler()
                 .WithServices(services =>
                 {
+                    // 📚 The Roslyn MetadataReference set every dynamic-NodeType compilation binds
+                    // against — mesh-scoped, so it dies with the mesh instead of living in a
+                    // `static readonly` field for the life of the process. It used to be exactly
+                    // that static field, misclassified as a "write-once constant lookup": the list
+                    // is write-once, but each PortableExecutableReference owns lazily materialized
+                    // IDisposable metadata plus Roslyn's symbol tables cached against it. Lazy, so
+                    // a mesh that never compiles never materializes one. See
+                    // CompilationReferenceSet for the rationale and the measured cost.
+                    services.AddSingleton<CompilationReferenceSet>();
                     // Register MeshNodeCompilationService as both concrete and interface
                     // for callers that need the concrete CompileAndGetConfigurations entry point.
                     services.AddSingleton<MeshNodeCompilationService>();
