@@ -28,13 +28,20 @@ namespace MeshWeaver.Threading.Test;
 /// </summary>
 public class FanOutSpliceNegotiationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private readonly ConcurrentBag<SubscribeRequest> subscribes = [];
+    /// <summary>
+    /// Recorded with the TARGET they were addressed to, so the assertion can name the one node
+    /// under test. Asserting over every subscribe the mesh happens to post during startup would
+    /// make this test fail for reasons that have nothing to do with the capability — and any
+    /// subscribe posted by something other than <c>JsonSynchronizationStream</c> is a different
+    /// question from the one asked here.
+    /// </summary>
+    private readonly ConcurrentBag<(string? Target, SubscribeRequest Request)> subscribes = [];
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .ConfigureDefaultNodeHub(config => config.WithHandler<SubscribeRequest>((_, delivery) =>
             {
-                subscribes.Add(delivery.Message);
+                subscribes.Add((delivery.Target?.ToString(), delivery.Message));
                 return delivery;
             }));
 
@@ -56,12 +63,16 @@ public class FanOutSpliceNegotiationTest(ITestOutputHelper output) : MonolithMes
             .Where(n => n is not null)
             .FirstAsync().Timeout(30.Seconds()).ToTask();
 
-        var recorded = subscribes.ToList();
+        var recorded = subscribes
+            .Where(s => s.Target is not null
+                        && s.Target.EndsWith(path, StringComparison.OrdinalIgnoreCase))
+            .Select(s => s.Request)
+            .ToList();
         recorded.Should().NotBeEmpty(
             "reading a node opens a SubscribeRequest against its owning hub — with none recorded this "
             + "test would pass on no evidence");
         Output.WriteLine(
-            $"SubscribeRequests seen: {recorded.Count}, "
+            $"SubscribeRequests for {path}: {recorded.Count}, "
             + $"declaring AcceptsStringSplice: {recorded.Count(r => r.AcceptsStringSplice)}");
 
         recorded.Should().AllSatisfy(r => r.AcceptsStringSplice.Should().BeTrue(
