@@ -182,6 +182,110 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
         result.RequestedClaims.Should().ContainKey("late");
     }
 
+    // ---- The cross-cluster election (#1424): priority, convergence window, determinism ----
+    //
+    // One arbiter runs per Orleans cluster that touches the node, each over its own mirror of the
+    // same durable row — so the grant must be a deterministic election over converged data, never
+    // "first arbiter to look wins" (the pilot's double bake).
+
+    /// <summary>
+    /// A dedicated bake process beats every serving pod, however much earlier the pod registered —
+    /// this is what makes the pods stand down exactly when a bake Job is present.
+    /// </summary>
+    [Fact]
+    public void Arbitrate_PriorityOutranksAnEarlierRegistration()
+    {
+        var t0 = new DateTime(2026, 8, 13, 12, 0, 0, DateTimeKind.Utc);
+        var node = BuildNode(new BuildState
+        {
+            RequestedClaims = ImmutableDictionary<string, BuildClaimRequest>.Empty
+                .Add("pod", new BuildClaimRequest("fp", t0))
+                .Add("bake-job", new BuildClaimRequest(
+                    "fp", t0.AddSeconds(3), Priority: BuildClaimRequest.BakePriority)),
+        });
+
+        var result = BuildNodeType.Arbitrate(node, Options, t0.AddSeconds(10))
+            .ContentAs<BuildState>(Options)!;
+
+        result.ClaimedBy.Should().Be("bake-job");
+        result.RequestedClaims.Should().ContainKey("pod");
+    }
+
+    /// <summary>
+    /// A fresh root election inside the settle window grants NOTHING — same reference back, no
+    /// write — because a concurrent registration from another cluster may still be propagating.
+    /// The re-check timer, not a new emission, is what revisits it.
+    /// </summary>
+    [Fact]
+    public void Arbitrate_FreshRootElection_WaitsOutTheSettleWindow()
+    {
+        var t0 = new DateTime(2026, 8, 13, 12, 0, 0, DateTimeKind.Utc);
+        var node = BuildNode(new BuildState
+        {
+            RequestedClaims = ImmutableDictionary<string, BuildClaimRequest>.Empty
+                .Add("pod", new BuildClaimRequest("fp", t0)),
+        });
+
+        BuildNodeType.Arbitrate(
+                node, Options, t0 + BuildNodeType.GrantSettleWindow - TimeSpan.FromSeconds(1))
+            .Should().BeSameAs(node);
+
+        BuildNodeType.Arbitrate(
+                node, Options, t0 + BuildNodeType.GrantSettleWindow + TimeSpan.FromSeconds(1))
+            .ContentAs<BuildState>(Options)!.ClaimedBy.Should().Be("pod");
+    }
+
+    /// <summary>
+    /// Chunk claims are NOT window-gated: the root election already decided the builder, and 37
+    /// chunks × 5 s of settle would put minutes of pure waiting into a ~2-minute bake.
+    /// </summary>
+    [Fact]
+    public void Arbitrate_ChunkClaims_GrantWithoutTheWindow()
+    {
+        var t0 = new DateTime(2026, 8, 13, 12, 0, 0, DateTimeKind.Utc);
+        var chunk = new MeshNode("Chess", "Admin/Build")
+        {
+            NodeType = BuildNodeType.NodeType,
+            Content = new BuildState
+            {
+                RequestedClaims = ImmutableDictionary<string, BuildClaimRequest>.Empty
+                    .Add("winner", new BuildClaimRequest("fp", t0)),
+            },
+        };
+
+        BuildNodeType.Arbitrate(chunk, Options, t0.AddSeconds(1))
+            .ContentAs<BuildState>(Options)!.ClaimedBy.Should().Be("winner");
+    }
+
+    /// <summary>
+    /// The property the whole fix rests on: two arbiters looking at the SAME converged data
+    /// compute the SAME winner, so their concurrent grant writes are idempotent instead of
+    /// last-write-wins. Asserted over both discriminators (priority and timestamp) at once.
+    /// </summary>
+    [Fact]
+    public void Arbitrate_IsDeterministic_AcrossArbiters()
+    {
+        var t0 = new DateTime(2026, 8, 13, 12, 0, 0, DateTimeKind.Utc);
+        var state = new BuildState
+        {
+            RequestedClaims = ImmutableDictionary<string, BuildClaimRequest>.Empty
+                .Add("pod-a", new BuildClaimRequest("fp", t0.AddMilliseconds(1)))
+                .Add("pod-b", new BuildClaimRequest("fp", t0.AddMilliseconds(2)))
+                .Add("bake-job", new BuildClaimRequest(
+                    "fp", t0.AddMilliseconds(3), Priority: BuildClaimRequest.BakePriority)),
+        };
+        var now = t0.AddSeconds(10);
+
+        var one = BuildNodeType.Arbitrate(BuildNode(state), Options, now)
+            .ContentAs<BuildState>(Options)!;
+        var two = BuildNodeType.Arbitrate(BuildNode(state), Options, now)
+            .ContentAs<BuildState>(Options)!;
+
+        one.ClaimedBy.Should().Be("bake-job");
+        two.ClaimedBy.Should().Be(one.ClaimedBy);
+        two.ClaimedAt.Should().Be(one.ClaimedAt);
+    }
+
     [Fact]
     public void Arbitrate_LeavesLiveClaimAlone()
     {

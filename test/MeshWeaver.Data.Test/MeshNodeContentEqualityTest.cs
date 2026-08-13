@@ -90,6 +90,45 @@ public class MeshNodeContentEqualityTest
         Assert.True(a.Equals(b));
     }
 
+    /// <summary>
+    /// #1384: the routing-enrichment GRAFT must not read as a content change.
+    ///
+    /// <para><c>MeshNodeTypeSource.Initialize</c> seeds a reactivating per-node hub with
+    /// <c>GraftRoutingEnrichment(durableRow)</c> — <c>durableRow with { HubConfiguration =
+    /// routing.HubConfiguration }</c> — while every other route to the own node (notably the
+    /// <c>storage.Changes</c> reconcile in <c>MeshDataSourceExtensions.SubscribeToOwnDeletion</c>,
+    /// and the in-memory adapter, which strips the delegate before storing AND before publishing)
+    /// carries the RAW row. So a grafted snapshot and a raw commit at the SAME version meet
+    /// routinely.</para>
+    ///
+    /// <para>If that pair compared UNEQUAL, <c>UpdateImpl</c>'s update filter would classify it as
+    /// a genuine content change, <c>alreadyAdvanced</c> would be false (the version did not
+    /// advance), and the node would be re-stamped <c>NextVersion(7000) = 7001</c> and persisted —
+    /// an activation-time write-back, i.e. the #590 invariant this asserts against. This pins the
+    /// predicate in the exact shape <c>UpdateImpl</c> evaluates it, so switching
+    /// <see cref="MeshNode"/> to compiler-synthesized record equality (which compares the
+    /// delegate by reference) cannot silently reintroduce that mint.</para>
+    /// </summary>
+    [Fact]
+    public void RoutingGraft_VersusRawRow_AtSameVersion_IsNotAContentChange()
+    {
+        // The raw durable row as storage hands it back: no in-process delegate, ever.
+        var raw = new MeshNode("read-reactivation", "TestData")
+        {
+            Name = "durable-advance", NodeType = "Markdown",
+            State = MeshNodeState.Active, Version = 7000
+        };
+        // The activation seed: the same row with the routing node's enrichment grafted on.
+        var grafted = raw with { HubConfiguration = c => c };
+
+        // Exactly MeshNodeTypeSource.UpdateImpl's update predicate:
+        //   !ex.Equals(nv with { Version = ex.Version })
+        Assert.False(!grafted.Equals(raw with { Version = grafted.Version }));
+
+        // And symmetrically — the graft is not a change in either direction.
+        Assert.False(!raw.Equals(grafted with { Version = raw.Version }));
+    }
+
     [Fact]
     public void TypedContent_UnchangedBehavior_StillCompares()
     {

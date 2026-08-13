@@ -205,6 +205,21 @@ what changed:
 
 - **Owner → subscriber:** a **JSON patch** (RFC 6901 / merge-patch RFC 7396)
   for deltas (`ToJsonPatch`); a **Full** for the initial snapshot and roll-backs.
+- **Big strings, owner → subscriber → a `splice` operation, NEGOTIATED.** A `replace`
+  of a string leaf at or above `PatchStringSplice.MinSpliceLength` travels as
+  `{"op":"splice","path":…,"value":{"$sd":[start,removed,"inserted"],"$sdb":[baseLength,"fingerprint"]}}`
+  — the changed span plus a fingerprint of the text it was diffed against, so a streaming
+  cell costs `O(chunk)` per frame instead of `O(length)` per frame **per subscriber**
+  (measured: a 20 kB answer over 200 frames, 1.93 MB → 42 kB). The subscriber applies it
+  only when the fingerprint proves its text IS that base; otherwise it refuses and takes
+  the ordinary stale-patch route, `RequestFreshSnapshot()` (§6) — never a blind splice.
+  🚨 **Emitted only to a subscriber that set `SubscribeRequest.AcceptsStringSplice`.**
+  Unlike the write direction, this fan-out is consumed by hand-rolled appliers in
+  `clients/grpc-web`, `clients/react` and `clients/python` that this repo's CI does not
+  build, and each of them fails *silently* on a shape it does not know — the JS ones skip
+  an unknown `op`, the Python one applies it as a replace. So the capability is declared,
+  not assumed, and everyone who does not declare it receives byte-identical bytes to
+  before. (`PatchStringSplice.Compress`; test `FanOutStringSpliceTest`.)
 - **Subscriber → owner:** a `DataChangeRequest` carrying the **changed entities
   only** (per `(Collection, Id)`), not the whole store.
 - **Big strings → `EntityDeltaUpdate` (recursive string-delta):** a changed string

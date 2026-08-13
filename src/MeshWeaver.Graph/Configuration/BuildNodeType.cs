@@ -53,6 +53,16 @@ public static class BuildNodeType
     public static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMinutes(2);
 
     /// <summary>
+    /// How long a registration must have been visible before the arbiter may grant (#1424). One
+    /// arbiter runs per Orleans cluster that touches the node, over its own mirror of the same
+    /// durable row — the window is the time a concurrent registration from ANOTHER cluster needs
+    /// to propagate (a Postgres NOTIFY plus a mirror refresh, measured sub-second; 5 s covers a
+    /// slow feed) so that every arbiter elects from the same candidate set and computes the same
+    /// winner. Costs 5 s once per build against a bake measured in minutes.
+    /// </summary>
+    public static readonly TimeSpan GrantSettleWindow = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Registers the Build node type on the mesh builder by adding its MeshNode definition.
     /// </summary>
     /// <typeparam name="TBuilder">The mesh builder type.</typeparam>
@@ -124,7 +134,17 @@ public static class BuildNodeType
                     "|",
                     state!.RequestedClaims!.Keys.OrderBy(k => k, StringComparer.Ordinal)
                         .Append(state.ClaimedBy ?? string.Empty)))
-                .DistinctUntilChanged(),
+                .DistinctUntilChanged()
+                // A registration inside the settle window arbitrates to "not yet" (#1424), and no
+                // further emission is coming if nobody else registers — so every trigger also
+                // schedules ONE re-check just past the window. Redundant re-checks are free: an
+                // already-granted (or still-too-young) node comes back unchanged and writes
+                // nothing. SelectMany (not Switch): a second candidate's trigger must not cancel
+                // the first's pending re-check.
+                .SelectMany(key => Observable
+                    .Timer(GrantSettleWindow + TimeSpan.FromSeconds(1))
+                    .Select(_ => key)
+                    .StartWith(key)),
             _ => TryArbitrate(),
             hub.Address,
             logger,
@@ -168,8 +188,33 @@ public static class BuildNodeType
         if (HolderStillHoldsIt(state, now, membership))
             return node;
 
+        // 🚨 #1424 — CONVERGE BEFORE DECIDING, on the ROOT. There is one arbiter per Orleans
+        // cluster that touches this node (a bake Job's cluster and the serving cluster each
+        // activate their own hub over the same durable row), so the grant must be a DETERMINISTIC
+        // ELECTION over data both sides have seen — never "first arbiter to look wins", which is
+        // how the pilot got two winners and two full bakes. Holding the grant until the oldest
+        // registration has had a propagation window lets a concurrent registration from the other
+        // cluster land; the ordering below then computes the SAME winner on every arbiter, making
+        // concurrent grant writes idempotent. Under partition this degrades to the pilot's
+        // behaviour (a redundant bake into content-addressed stores), never a wedge and never
+        // corruption.
+        //
+        // FRESH ROOT ELECTIONS ONLY. The race this window closes is the simultaneous-boot one —
+        // several processes registering on an UNCLAIMED root within milliseconds of a rollout. A
+        // TAKEOVER is a different shape: the successor queue accumulated while the holder was
+        // alive and is long converged, and #1355's immediate-takeover property must not wait on a
+        // window. Chunks are excluded too: the root election decides THE builder, chunk claims
+        // arrive pre-arbitrated by it, and 37 chunks × 5 s of settle would put minutes of pure
+        // waiting into a bake measured at ~1m42s. When parallel builders make chunk contention
+        // real, chunk elections get the same treatment.
+        if (state.ClaimedBy is null
+            && string.Equals(node.Path, RootPath, StringComparison.OrdinalIgnoreCase)
+            && now - pending.Min(kv => kv.Value.RequestedAt) < GrantSettleWindow)
+            return node;
+
         var granted = pending
-            .OrderBy(kv => kv.Value.RequestedAt)
+            .OrderByDescending(kv => kv.Value.Priority)
+            .ThenBy(kv => kv.Value.RequestedAt)
             .ThenBy(kv => kv.Key, StringComparer.Ordinal)
             .First();
 
