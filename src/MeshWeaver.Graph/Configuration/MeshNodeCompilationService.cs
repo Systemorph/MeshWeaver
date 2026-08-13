@@ -271,7 +271,7 @@ internal class MeshNodeCompilationService(
     /// verbatim there finds nothing, and an unresolved include is left VERBATIM in the source —
     /// so Roslyn parses the <c>@@</c> line itself and reports CS9008 / CS8803 / CS0103 on symbol
     /// names that are really path segments. On memex-cloud 2026-08-12 that parked 15 NodeTypes
-    /// (FutuRe, Cession, SocialMedia, Northwind/AnalyticsCatalog, Type/article) and cost a serial
+    /// (FutuRe, Cession, SocialMedia, Northwind/AnalyticsCatalog) and cost a serial
     /// 15s read per unresolved include on the ACTIVATION path — the "waiting for code" stall.</para>
     ///
     /// <para>The anchor is the DEEPEST occurrence of the include's first segment in the including
