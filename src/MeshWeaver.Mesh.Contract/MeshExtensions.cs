@@ -2262,7 +2262,52 @@ public static class MeshExtensions
                             return Observable.Empty<System.Reactive.Unit>();
                         }
 
-                        return RunDeletionValidatorsWithWarningsObs(hub, rootNode, capturedRequest, request.AccessContext)
+                        // 2b. 🚨 Is this node DELETABLE at all? Stage 1's existence gate reads
+                        //     across EVERY storage provider, read-only ones included, while the
+                        //     commit can only remove through the WRITABLE ones — so a node served
+                        //     solely by a read-only provider (static Agent/Harness/LanguageModel
+                        //     definitions, embedded documentation) passed the gate and then died
+                        //     in the commit with "no writable storage provider has this node":
+                        //     an ERROR that reads like a routing bug (#1433).
+                        //
+                        //     Asking here, BEFORE any storage side effect, is the part that
+                        //     matters. HierarchicalPathDeletion walks the subtree BOTTOM-UP, so
+                        //     the undeletable root is reached LAST — refusing at the commit means
+                        //     every writable descendant has already been removed and the operation
+                        //     still fails: a half-destroyed subtree. Refusing here removes nothing.
+                        //
+                        //     Root only. Descendants come from ListDescendantPaths, which
+                        //     enumerates WRITABLE providers exclusively (deliberately — a
+                        //     read-only provider can neither be deleted from nor leak survivors),
+                        //     so no read-only path can reach the plan; a cascade leaf carries
+                        //     CascadeRootPath and skips the probe. And the check is only ever a
+                        //     PRE-flight: PersistenceService.Delete still refuses at commit, so
+                        //     an adapter that cannot answer (the interface default, null) loses
+                        //     the early diagnosis, never the protection.
+                        return (capturedRequest.CascadeRootPath is null
+                                ? persistence.FindDeleteBlockingProvider(path)
+                                : Observable.Return<string?>(null))
+                            .TimeoutAtStage(opts.Timeout, () => DeleteStageTimeout(
+                                DeleteStage.ValidateRoot,
+                                $"the storage-provider probe for '{path}' did not answer within "
+                                + $"{opts.Timeout.TotalSeconds:0}s"))
+                            .SelectMany(blockingProvider =>
+                            {
+                                if (blockingProvider is not null)
+                                {
+                                    var msg = $"Cannot delete '{path}': it is served by the "
+                                        + $"read-only storage provider '{blockingProvider}'. "
+                                        + "Nothing was deleted.";
+                                    logger.LogWarning(
+                                        "[DeleteNode] read-only-provider path={Path} provider={Provider}",
+                                        path, blockingProvider);
+                                    PostFailed(msg, NodeDeletionRejectionReason.ValidationFailed,
+                                        [new LogMessage(msg, LogLevel.Error)],
+                                        ImmutableList.Create(path));
+                                    return Observable.Empty<System.Reactive.Unit>();
+                                }
+
+                                return RunDeletionValidatorsWithWarningsObs(hub, rootNode, capturedRequest, request.AccessContext)
                             .TimeoutAtStage(opts.Timeout, () => DeleteStageTimeout(
                                 DeleteStage.ValidateRoot,
                                 $"the INodeValidator chain for '{path}' did not complete within "
@@ -2526,6 +2571,7 @@ public static class MeshExtensions
                                             .Select(_ => System.Reactive.Unit.Default);
                                         });
                                     }));
+                            });
                             });
                     });
             })

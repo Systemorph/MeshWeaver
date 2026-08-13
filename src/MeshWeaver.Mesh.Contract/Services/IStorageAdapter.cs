@@ -136,6 +136,34 @@ public interface IStorageAdapter
         => System.Reactive.Linq.Observable.Select(Delete(path), _ => true);
 
     /// <summary>
+    /// 🚨 PRE-FLIGHT for <see cref="Delete"/> — names the READ-ONLY storage provider that makes
+    /// <paramref name="path"/> structurally undeletable, or <c>null</c> when a delete is
+    /// unobstructed. This is the question <see cref="Delete"/> itself answers at COMMIT time,
+    /// exposed so a caller can ask it BEFORE it starts removing anything (#1433).
+    ///
+    /// <para><b>Why it exists.</b> A composite adapter reads across every provider (read-only ones
+    /// included) but can only delete through the WRITABLE ones, so a path served solely by a
+    /// read-only provider passes an existence check and then cannot be committed. In a RECURSIVE
+    /// delete that is not a cosmetic mismatch: <c>HierarchicalPathDeletion</c> walks bottom-up, so
+    /// by the time the undeletable root is reached its writable descendants are already gone —
+    /// the subtree is destroyed and the operation still fails. Asking first is what keeps the
+    /// gate and the commit looking at the same thing.</para>
+    ///
+    /// <para>Non-null means REFUSE — it never means "delete it some other way". Nothing here
+    /// widens what a delete removes; a read-only provider is never asked to delete.</para>
+    ///
+    /// <para>The default is <c>null</c>: a single-store adapter has no read-only provider behind
+    /// it, so nothing can block a delete that its own <see cref="Delete"/> would not already
+    /// refuse. That default cannot open a hole — <see cref="Delete"/> remains the authority and
+    /// still refuses at commit; this only moves an inevitable refusal earlier. Decorators MUST
+    /// forward to their inner adapter (same rule as <see cref="ListDescendantPaths"/>).</para>
+    /// </summary>
+    /// <param name="path">The path a delete is being considered for.</param>
+    /// <returns>The blocking read-only provider's name, or <c>null</c> when nothing blocks.</returns>
+    IObservable<string?> FindDeleteBlockingProvider(string path)
+        => System.Reactive.Linq.Observable.Return<string?>(null);
+
+    /// <summary>
     /// Lists child paths under a parent path.
     /// Returns both node paths (records present at that level) and directory paths
     /// (intermediate folders that have nodes under them but no node at the folder level).

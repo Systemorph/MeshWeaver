@@ -22,7 +22,12 @@ namespace MeshWeaver.Hosting.Persistence;
 ///   <item><b>Delete</b> — fan out across <i>every</i> writable provider in
 ///     parallel; each self-checks containment (read-or-not) and deletes if
 ///     owned. Multiple owners (rare, but possible during cache races) each
-///     delete their copy. The user-facing emit is the deleted path.</item>
+///     delete their copy. The user-facing emit is the deleted path.
+///     🚨 Read spans MORE providers than Delete can reach, so "readable" and
+///     "deletable" are not the same predicate; <see cref="FindDeleteBlockingProvider"/>
+///     is how a caller asks the DELETE question before it starts removing
+///     things, and Delete classifies rather than blanket-refusing when nothing
+///     was removed (#1433).</item>
 ///   <item><b>Exists</b> — fan-out OR; any provider reporting true wins.</item>
 /// </list>
 ///
@@ -34,6 +39,9 @@ public sealed class PersistenceService : IStorageAdapter
 {
     private readonly IReadOnlyList<IPartitionStorageProvider> _allOrdered;
     private readonly IReadOnlyList<IPartitionStorageProvider> _writable;
+    // The complement of _writable, in read order. A path only THIS set serves is readable but
+    // structurally undeletable — see FindDeleteBlockingProvider / Delete (#1433).
+    private readonly IReadOnlyList<IPartitionStorageProvider> _readOnly;
     private readonly ILogger<PersistenceService>? _logger;
 
     /// <summary>
@@ -70,6 +78,7 @@ public sealed class PersistenceService : IStorageAdapter
             .ToList();
         _allOrdered = specific.Concat(wildcard).ToList();
         _writable = _allOrdered.Where(p => !p.IsReadOnly).ToList();
+        _readOnly = _allOrdered.Where(p => p.IsReadOnly).ToList();
 
         // Surface the union of every provider's Changes feed so consumers
         // that subscribe to IStorageAdapter.Changes see writes from any
@@ -209,9 +218,32 @@ public sealed class PersistenceService : IStorageAdapter
     /// <summary>
     /// Fan out across every writable adapter: each self-checks containment
     /// (Read returns non-null) and deletes if owned. Aggregates into the
-    /// deleted-path emit. Throws when nothing was actually deleted (every
-    /// adapter's Read returned null) — the user's semantics for
-    /// "delete-nonexistent must error".
+    /// deleted-path emit.
+    ///
+    /// <para>🚨 When nothing was deleted, the outcome is CLASSIFIED rather than blanket-refused
+    /// (#1433). The old shape threw one <c>InvalidOperationException</c> for two states that mean
+    /// opposite things — and, because <see cref="Read"/> consults EVERY provider while this
+    /// consults only the writable ones, it threw it for a delete whose requested end state
+    /// already held:</para>
+    /// <list type="bullet">
+    ///   <item><b>Nothing anywhere has the path</b> → it is gone; the delete's requested end state
+    ///     HOLDS, so this completes with the path. The caller's existence gate is what answers
+    ///     "did this node exist" (<c>HandleDeleteNodeRequest</c> stage 1 →
+    ///     <c>NodeNotFound</c>); by the time a commit runs, the row having vanished in between is
+    ///     a benign race — a parallel prune, another replica — not a failure. Every concurrent
+    ///     delete pruning the same subtree hit this: an ERROR-level "no writable storage provider
+    ///     has this node" that reads like a routing bug, for a path that is correctly gone. The
+    ///     recursive-delete drain pass already models it exactly this way, with
+    ///     <see cref="IStorageAdapter.DeleteIfExists"/>.</item>
+    ///   <item><b>A READ-ONLY provider serves it</b> → genuinely undeletable, and now SAID so:
+    ///     the refusal names the provider instead of claiming nothing has the node.</item>
+    /// </list>
+    ///
+    /// <para>🚨 What this does NOT do: widen what gets removed. The delete fan-out is still
+    /// <see cref="_writable"/> only, still gated on that provider's own containment read — a
+    /// read-only provider is never asked to delete, so shipped documentation and static nodes
+    /// cannot be tombstoned. The only case that newly SUCCEEDS is the one in which zero bytes are
+    /// removed, because there was nothing anywhere to remove.</para>
     /// </summary>
     public IObservable<string> Delete(string path)
         => _writable
@@ -223,8 +255,61 @@ public sealed class PersistenceService : IStorageAdapter
             .Aggregate(false, (any, deleted) => any || deleted)
             .SelectMany(any => any
                 ? Observable.Return(path)
-                : Observable.Throw<string>(new InvalidOperationException(
-                    $"Cannot delete '{path}': no writable storage provider has this node.")));
+                // No writable provider held it. Ask ONLY the read-only set here: the writable
+                // answer is the one we just computed, and re-probing it would let a concurrent
+                // RE-CREATE turn this into a false "deleted" for a node that now exists.
+                : FindServingReadOnlyProvider(path).SelectMany(blocking => blocking is null
+                    ? Observable.Return(path)
+                    : Observable.Throw<string>(new InvalidOperationException(
+                        $"Cannot delete '{path}': it is served by the READ-ONLY storage provider "
+                        + $"'{blocking}', which no delete can remove from. The node is readable but "
+                        + "not stored in any writable provider — remove it at its source, or "
+                        + "override it in a writable partition first."))));
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A WRITABLE holder wins: a path served by BOTH a read-only provider and a writable one (a
+    /// db-synced override of a shipped node) is deletable — the delete removes the writable copy —
+    /// so only "no writable provider has it, and a read-only one does" blocks.
+    /// </remarks>
+    public IObservable<string?> FindDeleteBlockingProvider(string path)
+        => _readOnly.Count == 0
+            // Nothing read-only is registered, so nothing can block. No probe at all — this runs
+            // on every user-initiated delete and must cost nothing on the common configuration.
+            ? Observable.Return<string?>(null)
+            : AnyWritableHas(path).SelectMany(writable => writable
+                ? Observable.Return<string?>(null)
+                : FindServingReadOnlyProvider(path));
+
+    /// <summary>
+    /// The first READ-ONLY provider (in the same order <see cref="Read"/> consults) whose adapter
+    /// holds <paramref name="path"/>, or <c>null</c>. A pure read — it never mutates anything.
+    /// </summary>
+    private IObservable<string?> FindServingReadOnlyProvider(string path)
+        => _readOnly.Count == 0
+            ? Observable.Return<string?>(null)
+            : _readOnly
+                .Select(p => p.Adapter.Read(path, JsonSerializerOptionsCache)
+                    .Select(node => node is null ? null : DescribeProvider(p)))
+                .Concat()
+                .Where(name => name is not null)
+                .DefaultIfEmpty(null)
+                .FirstAsync();
+
+    /// <summary>Fan-out OR: does any WRITABLE provider hold <paramref name="path"/>?</summary>
+    private IObservable<bool> AnyWritableHas(string path)
+        => _writable.Count == 0
+            ? Observable.Return(false)
+            : _writable
+                .Select(p => p.Adapter.Read(path, JsonSerializerOptionsCache)
+                    .Select(node => node is not null))
+                .Merge()
+                .Aggregate(false, (any, has) => any || has);
+
+    private static string DescribeProvider(IPartitionStorageProvider provider)
+        => provider.PartitionDefinition?.DataSource is { Length: > 0 } source
+            ? $"{provider.Name} ({source})"
+            : provider.Name;
 
     /// <summary>
     /// Shared JsonSerializerOptions instance for containment-check reads

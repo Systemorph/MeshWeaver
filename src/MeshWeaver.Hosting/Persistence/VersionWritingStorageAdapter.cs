@@ -71,6 +71,12 @@ internal class VersionWritingStorageAdapter(
     public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
         => inner.ListDescendantPaths(rootPath);
 
+    /// <inheritdoc />
+    /// <remarks>Pure delegation — only the composite below knows its providers, and the
+    /// interface default (<c>null</c>) would silently drop the delete pre-flight (#1433).</remarks>
+    public IObservable<string?> FindDeleteBlockingProvider(string path)
+        => inner.FindDeleteBlockingProvider(path);
+
     public IObservable<bool> Exists(string path) => inner.Exists(path);
 
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
