@@ -107,30 +107,40 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
     /// — one holder's teardown would kill another's. Measured: <c>compile-state</c> +13 → <b>0</b>
     /// and the NodeType's own hub +3 → <b>0</b>.</para>
     ///
-    /// <para><b>What still retains, and why the bound is 9 rather than ~2</b> — one mechanism, and it
-    /// is a NODE-LIFECYCLE question rather than a stream one. Every compile creates
-    /// <c>{typePath}/_Activity/compile-&lt;ts&gt;</c> (<c>NodeTypeCompilationHelpers.RunCompile</c>),
-    /// whose hub is activated by the first activity-log write's <c>SubscribeRequest</c> and which now
-    /// accounts for essentially the whole residual (+3–5 <c>sync/</c> apiece, plus the node hub).
-    /// Nothing in the compile path releases it at terminal status: <c>Complete(...)</c> is the last
-    /// touch, and there is no hook that drops the mirror, prunes the node, or disposes the hub.</para>
+    /// <para><b>What the 8.7 → 6.0 change closed (#1324): the finished activity's mirror was a
+    /// KEEP-ALIVE, not merely something nobody had collected yet.</b> The previous pass left the
+    /// question open as "is the residual a permanent leak or a ~25-minute bounded retention", because
+    /// both existing reclaimers are time-based and invisible to a seconds-long test: the cache's idle
+    /// sweep needs zero subscribers AND ten minutes untouched
+    /// (<c>MeshNodeStreamCacheOptions.ReadStreamIdleExpiration</c>), and an idle node hub/grain is
+    /// collected only after its own idle window. The answer is that the framing was wrong in the
+    /// consumer's favour: a mirror posts a <c>HeartBeatEvent</c> to its owner every 45 s
+    /// (<c>SyncStreamOptions.HeartbeatInterval</c>) for the express purpose of keeping the hub alive,
+    /// and that message re-arms BOTH clocks. A finished compile was not waiting to be reclaimed — it
+    /// was preventing its own reclamation, for as long as anything kept touching the path.</para>
     ///
-    /// <para>🚨 The two reclamation mechanisms that EXIST are both time-based and therefore invisible
-    /// to this test, which measures seconds: the shared mesh-node cache's idle sweep needs zero
-    /// subscribers AND ten minutes untouched (<c>MeshNodeStreamCacheOptions.ReadStreamIdleExpiration</c>),
-    /// and <c>KernelContainer.DisposeOnTimeout</c> disposes an idle node hub after fifteen — but its
-    /// timer is reset by EVERY message, and a surviving mirror heart-beats the owner every 45 s
-    /// (<c>SyncStreamOptions.HeartbeatInterval</c>), which also holds the Orleans grain up via
-    /// <c>TryDelayDeactivation</c>. So whether the residual is a permanent leak or a ~25-minute
-    /// bounded retention turns entirely on whether the activity's mirror is actually released once
-    /// the compile ends — that is the question for the next pass, and it needs a longer-horizon
-    /// measurement than this one. Do NOT "fix" it by shortening a timer.</para>
+    /// <para>The cure is an EVENT, not a shorter timer: an <c>ActivityLog</c> that reaches a status
+    /// where <c>IsTerminal()</c> holds will never be written again, so
+    /// <c>ActivityLogAppender.Append</c> releases the path's shared entry as part of that same write
+    /// (<c>IMeshNodeStreamCache.ReleaseIfUnwatched</c>, which makes the SAME atomic zero-subscriber
+    /// check the sweep makes — a reader still watching the finished activity keeps it). Measured on
+    /// this repro, matched runs from an identical 38-hub baseline with four retained activities:
+    /// <b>6.5 → 5.0 hubs per compile activity</b>, of which the <c>cache/</c>-side mirror hubs go
+    /// <b>3 → 0</b>; totals <b>8.7 → 6.0 per recompile</b>. The direct property — no terminal activity
+    /// still holds a warm mirror — is asserted at the end of the test, and fails before the fix.</para>
+    ///
+    /// <para><b>What is left, and why the bound is 8 rather than ~1.</b> The whole residual is now the
+    /// activity's OWN node hub plus the four <c>sync/</c> sub-hubs its data source builds at startup.
+    /// Nothing subscribes to it any more, so on Orleans it is finally eligible for the idle
+    /// deactivation that the heartbeat used to keep pushing away; the monolith has no idle collection
+    /// for node hubs at all, which is what this test still counts. That is a host-lifecycle question,
+    /// not a stream one. Do NOT "fix" it by shortening a timer.</para>
     ///
     /// <para>So this bound is a RATCHET at the measured value, not an aspiration: it fails the moment
-    /// the residual gets worse, and it is to be tightened again by whoever closes the activity-hub
-    /// mechanism above.</para>
+    /// the residual gets worse — 8 sits above the 6.0/6.7 measured here and below the 8.7 the
+    /// un-released mirror produced, so a regression of THIS fix reds the test.</para>
     /// </summary>
-    private const int MaxHubsPerRecompile = 9;
+    private const int MaxHubsPerRecompile = 8;
 
     /// <summary>
     /// Live collectible contexts for this NodeType. The name is
@@ -218,6 +228,34 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
                 + $"managed = {AfterCollectionBytes() / (1024 * 1024)} MB");
         }
 
+        var activities = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{TypePath}/_Activity"))
+            .Should().Within(30.Seconds()).Emit();
+
+        // 🚨 THE MECHANISM, waited on before anything is counted. A terminal activity releases its
+        // shared mirror as part of the write that reports the terminal status
+        // (ActivityLogAppender), so this settles as fast as that write lands — but it IS a write,
+        // and the NodeType flips to Ok slightly ahead of it, so the loop above can return while the
+        // last compile's Complete(...) is still in flight. Waiting on the CONDITION rather than
+        // snapshotting into that window is what makes both this assertion and the hub count below
+        // deterministic; a fixed sleep would race CI either way (WritingTests.md).
+        //
+        // `compile-state` is deliberately exempt: it is the type's LIVE compile state, one fixed-id
+        // node per NodeType rather than one per compile, so it does not grow with recompiles and a
+        // warm mirror on it is correct.
+        var compileActivities = (activities?.Items ?? [])
+            .Select(n => n.Path)
+            .Where(p => !p.EndsWith($"/{NodeTypeCompileStateMirror.StateId}", StringComparison.Ordinal))
+            .ToList();
+        var cache = (MeshNodeStreamCache)Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var stillWarm = compileActivities;
+        await Observable.Interval(50.Milliseconds()).StartWith(0L)
+            .Select(_ => stillWarm = compileActivities.Where(p => cache.IsReadStreamLive(p)).ToList())
+            .Where(warm => warm.Count == 0)
+            .FirstAsync()
+            .Timeout(30.Seconds(), Observable.Return(stillWarm))
+            .ToTask();
+
         FullyCollect();
         var live = LiveContexts();
         var managedGrowth = AfterCollectionBytes() - managedBaseline;
@@ -230,15 +268,24 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         // names its own retainer instead of leaving the next investigation to re-derive it.
         var hubsAfter = HubAddresses();
         var hubGrowth = hubsAfter.Count - hubBaseline.Count;
-        var activities = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{TypePath}/_Activity"))
-            .Should().Within(30.Seconds()).Emit();
         Output.WriteLine(
             $"WHERE: live hubs {hubBaseline.Count} -> {hubsAfter.Count} (+{hubGrowth} over {Recompiles} "
             + $"recompiles = {(double)hubGrowth / Recompiles:F1} per recompile), compile-activity nodes "
             + $"under {TypePath}/_Activity = {activities?.Items?.Count ?? -1}");
-        foreach (var line in HubsByParent(hubsAfter.Except(hubBaseline).ToHashSet()))
+        var newHubs = hubsAfter.Except(hubBaseline).ToHashSet();
+        foreach (var line in HubsByParent(newHubs))
             Output.WriteLine($"  {line}");
+        // The SHARP number. The total above is a difference of two whole-mesh counts, so it carries
+        // the settling of every unrelated framework hub with it — measured 5.3 / 7.0 / 6.3 for the
+        // SAME code. This one counts only hubs a compile activity is responsible for (its node hub,
+        // anything hosted under it, and the mirror sync hubs under the shared cache), which is the
+        // population the retention is about and the one a fix has to move.
+        var attributed = AttributedToCompileActivities(newHubs);
+        Output.WriteLine(
+            $"ATTRIBUTED to compile activities: {attributed.Total} hubs across {attributed.Activities} "
+            + $"retained activities = {attributed.PerActivity:F1} PER ACTIVITY — "
+            + $"{attributed.OwnerSide} owner-side (the activity node hub + its own streams), "
+            + $"{attributed.MirrorSide} mirror-side (the shared cache's client mirror)");
         Output.WriteLine($"FINAL live contexts for {TypePath} after {Recompiles} recompiles: {live}");
         Output.WriteLine(
             $"FINAL managed growth over {Recompiles} recompiles: "
@@ -297,6 +344,15 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
             + $"({hubGrowth} over {Recompiles}) — each carries an Autofac scope, a TypeRegistry and a "
             + "JsonSerializerOptions, and in production that is the 130 MB/min curve. The breakdown "
             + "printed above names which parent hub grew");
+
+        // 🚨 AND THE MECHANISM, stated directly rather than inferred from a count. Asserted LAST so
+        // that a failure still carries the full attribution printed above — the diagnosis and the
+        // verdict arrive in one output.
+        stillWarm.Should().BeEmpty(
+            "a terminal activity is never written again, so its shared mirror must be released when "
+            + "the activity ends — leaving it up does not postpone reclamation, it PREVENTS it: the "
+            + "mirror posts a HeartBeatEvent to the owner every 45 s expressly to keep its hub/grain "
+            + $"alive, which re-arms every idle clock the platform has. Still warm: {string.Join(", ", stillWarm)}");
     }
 
     /// <summary>
@@ -336,6 +392,53 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
             counts[key] = counts.GetValueOrDefault(key) + 1;
         }
         return counts.OrderByDescending(kv => kv.Value).Select(kv => $"+{kv.Value,3}  {kv.Key}");
+    }
+
+    /// <summary>
+    /// Splits the newly-retained hubs into the two halves the compile activities are responsible
+    /// for, walking the same indented disposal tree <see cref="HubsByParent"/> does:
+    /// <list type="bullet">
+    ///   <item><b>owner-side</b> — the <c>_Activity/compile-&lt;ts&gt;</c> node hub itself and every
+    ///     hub hosted under it (its own data-source sync streams);</item>
+    ///   <item><b>mirror-side</b> — the <c>sync/</c> hubs under the process-wide <c>cache/</c> hub,
+    ///     i.e. the client end of the shared mirror the write path opened.</item>
+    /// </list>
+    /// The mirror side is what the terminal-status release reclaims, and it is what carried the 45 s
+    /// heartbeat that stopped the owner side from ever going idle.
+    /// </summary>
+    private (int Total, int OwnerSide, int MirrorSide, int Activities, double PerActivity)
+        AttributedToCompileActivities(IReadOnlySet<string> newHubs)
+    {
+        const string activityMarker = "/_Activity/compile-";
+        var owner = 0;
+        var mirror = 0;
+        var activities = 0;
+        var stack = new List<string>();
+        foreach (var line in Mesh.GetDisposalDiagnostics().Split('\n'))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(line, @"^(\s*)Hub (\S+) RunLevel");
+            if (!m.Success) continue;
+            var depth = m.Groups[1].Value.Length / 2;
+            var address = m.Groups[2].Value;
+            while (stack.Count > depth) stack.RemoveAt(stack.Count - 1);
+            var parent = stack.Count > 0 ? stack[^1] : "<root>";
+            stack.Add(address);
+            if (!newHubs.Contains(address)) continue;
+            if (address.Contains(activityMarker, StringComparison.Ordinal))
+            {
+                activities++;
+                owner++;
+            }
+            else if (parent.Contains(activityMarker, StringComparison.Ordinal))
+                owner++;
+            else if (parent.StartsWith("cache/", StringComparison.Ordinal))
+                mirror++;
+        }
+        // Normalised PER ACTIVITY, because how many of the loop's activities land inside the
+        // baseline-to-final delta varies run to run (3 or 4) — dividing by Recompiles would fold
+        // that straight back into the number this metric exists to keep clean.
+        return (owner + mirror, owner, mirror, activities,
+            activities == 0 ? 0 : (double)(owner + mirror) / activities);
     }
 
     /// <summary>
