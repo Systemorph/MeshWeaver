@@ -4,6 +4,8 @@ using System.Reactive.Threading.Tasks;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using MeshWeaver.AI.Attributes;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
@@ -918,6 +920,14 @@ internal sealed class AccessContextAIFunction : DelegatingAIFunction
     private readonly AccessService _accessService;
     private readonly TimeSpan? _timeout;
 
+    /// <summary>
+    /// Names of the underlying method's parameters whose CLR type is <see cref="string"/> — the
+    /// ones <see cref="NormalizeJsonTextArguments"/> may hand raw JSON text. Computed once at wrap
+    /// time (the wrapper is built once per agent per tool). Empty when the function exposes no
+    /// underlying method (a lambda-built tool), which simply disables the normalization.
+    /// </summary>
+    private readonly HashSet<string> _jsonTextParameters;
+
     public AccessContextAIFunction(AIFunction inner, IAgentChat chat, AccessService accessService)
         : base(inner)
     {
@@ -927,6 +937,65 @@ internal sealed class AccessContextAIFunction : DelegatingAIFunction
             ? null
             : (inner.UnderlyingMethod?.GetCustomAttribute<ToolTimeoutAttribute>()?.Timeout
                 ?? DefaultTimeout);
+        _jsonTextParameters = inner.UnderlyingMethod?.GetParameters()
+                .Where(p => p.ParameterType == typeof(string) && p.Name is { Length: > 0 })
+                .Select(p => p.Name!)
+                .ToHashSet(StringComparer.Ordinal)
+            ?? [];
+    }
+
+    /// <summary>
+    /// 🚨 A JSON <b>object</b> or <b>array</b> the model sent for a <see cref="string"/>-typed tool
+    /// parameter is that parameter's value AS JSON TEXT — hand it over as text instead of letting the
+    /// binder die (issue #1419).
+    ///
+    /// <para><b>Why the model does this.</b> Our tool surface carries JSON documents in <c>string</c>
+    /// parameters and the model-facing <c>[Description]</c>s say so outright — <c>create</c>'s is
+    /// <i>"JSON MeshNode with required: id, name, nodeType, namespace. Example: {…}"</i> and
+    /// <c>patch</c>'s is <i>"JSON object with ONLY the fields to change"</i>. A model that sends the
+    /// object literal is following the instruction; it is the marshaller that has no rule for it.
+    /// <c>ReflectionAIFunction</c>'s per-parameter marshaller calls
+    /// <c>JsonSerializer.Deserialize(element, stringTypeInfo)</c>, <c>StringConverter</c> refuses a
+    /// <c>StartObject</c> token, and the resulting <c>JsonException</c> escapes
+    /// <see cref="InvokeCoreAsync"/> — so the tool body never runs and the whole agent round fails
+    /// (<c>[ThreadExec] ERROR</c>), rather than the model getting a result it can act on.</para>
+    ///
+    /// <para><b>Why raw text is the right value, not a pre-deserialized object.</b> The tool bodies
+    /// parse the JSON themselves, against the hub's <c>JsonSerializerOptions</c> — the options that
+    /// carry the TypeRegistry these payloads' <c>$type</c> discriminators resolve against (and
+    /// <c>MeshOperations.RepairJson</c> for truncated model output). Deserializing here would do it
+    /// with the wrong options in the wrong place; passing the text keeps the read where the types are
+    /// registered.</para>
+    ///
+    /// <para><b>Bound.</b> Only <see cref="JsonValueKind.Object"/> / <see cref="JsonValueKind.Array"/>
+    /// (and their <see cref="JsonNode"/> equivalents), and only for a parameter the method declares as
+    /// <c>string</c>. A JSON string already binds; a number, boolean or null sent for a <c>string</c>
+    /// parameter is a genuine model error with no defensible reinterpretation and still fails loudly.
+    /// Every other parameter type is untouched, so an object destined for a POCO parameter still binds
+    /// normally. Idempotent — a coerced value is a <c>string</c> and no longer matches.</para>
+    /// </summary>
+    private void NormalizeJsonTextArguments(AIFunctionArguments arguments)
+    {
+        if (_jsonTextParameters.Count == 0)
+            return;
+
+        // Materialize the keys first: we write back into the same dictionary while iterating.
+        foreach (var name in arguments.Keys.ToArray())
+        {
+            if (!_jsonTextParameters.Contains(name)
+                || !arguments.TryGetValue(name, out var value))
+                continue;
+
+            var text = value switch
+            {
+                JsonElement { ValueKind: JsonValueKind.Object or JsonValueKind.Array } e
+                    => e.GetRawText(),
+                JsonObject or JsonArray => ((JsonNode)value).ToJsonString(),
+                _ => null
+            };
+            if (text is not null)
+                arguments[name] = text;
+        }
     }
 
     protected override async ValueTask<object?> InvokeCoreAsync(
@@ -935,6 +1004,8 @@ internal sealed class AccessContextAIFunction : DelegatingAIFunction
         var userCtx = _chat.ExecutionContext?.UserAccessContext;
         if (userCtx != null)
             _accessService.SetContext(userCtx);
+
+        NormalizeJsonTextArguments(arguments);
 
         if (_timeout is null)
             return await base.InvokeCoreAsync(arguments, cancellationToken);
