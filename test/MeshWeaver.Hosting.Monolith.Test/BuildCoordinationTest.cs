@@ -8,6 +8,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -22,6 +23,12 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private static readonly TimeSpan WaitBudget = TimeSpan.FromSeconds(15);
+
+    // The protocol-bake test drives a full cold Roslyn kickoff compile plus a protocol sweep —
+    // the same budget reasoning as NodeTypeReleaseTest's override: align the base class's dispose
+    // watchdog with the longest [Fact] timeout in the class so it cannot kill the test before its
+    // own declared budget.
+    protected override TimeSpan TestHardDeadline => TimeSpan.FromSeconds(240);
 
     [Fact(Timeout = 60_000)]
     public async Task ClaimQueue_Go_And_HolderGuard()
@@ -78,6 +85,73 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
         final.Ready.Should().ContainKey("fp-b");
         final.ClaimedBy.Should().BeNull();
         final.Status.Should().Be(BuildStatus.Ready);
+    }
+
+    /// <summary>
+    /// The executor path end-to-end: a protocol-driven sweep claims the root, opens a chunk per
+    /// partition with its own <c>_Activity</c>, records the release paths the build produced, and
+    /// publishes the GO — including when the share already holds every build (that re-publish IS
+    /// the crashed-before-GO healing path).
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ProtocolDrivenBake_PublishesGo_AndChunkReportsReleases()
+    {
+        var workspace = Mesh.GetWorkspace();
+        const string partition = "TestBuildProto";
+        const string typeId = "Sample";
+        var typePath = $"{partition}/{typeId}";
+
+        await NodeFactory.CreateNode(new MeshNode(typeId, partition)
+        {
+            Name = "Sample Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Sample for the protocol bake test.",
+                Configuration = "config => config.AddDefaultLayoutAreas()"
+            }
+        }).Should().Emit();
+
+        // The kickoff compile (per-NodeType hub watcher) settles first — cold Roslyn on a 2-core
+        // CI runner can take 60-90s.
+        _ = await workspace.GetMeshNodeStream(typePath)
+            .Should().Within(90.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && !string.IsNullOrEmpty(d.LatestReleasePath));
+
+        var outcomes = await DynamicTypePreWarmer
+            .WarmDynamicTypes(Mesh, buildProtocol: true)
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(120))
+            .ToTask();
+        (outcomes.Count > 0).Should().Be(true);
+
+        var root = await workspace.GetMeshNodeStream(BuildNodeType.RootPath)
+            .Select(n => n?.ContentAs<BuildState>(Mesh.JsonSerializerOptions))
+            .Where(s => s?.Ready is { Count: > 0 })
+            .FirstAsync().Timeout(WaitBudget).ToTask();
+        root!.Status.Should().Be(BuildStatus.Ready);
+        root.ClaimedBy.Should().BeNull();
+
+        var chunk = await workspace.GetMeshNodeStream($"{BuildNodeType.RootPath}/{partition}")
+            .Select(n => n?.ContentAs<BuildState>(Mesh.JsonSerializerOptions))
+            .Where(s => s is { Status: BuildStatus.Ready })
+            .FirstAsync().Timeout(WaitBudget).ToTask();
+        // The sweep may have re-baked the type (a host without an assembly store re-compiles by
+        // design), so the chunk's written path can be a NEWER release than the kickoff one — what
+        // is contractual is that the paths it reports are release nodes of this chunk's types.
+        chunk!.WrittenPaths.Should().NotBeNull();
+        (chunk.WrittenPaths!.Count > 0).Should().Be(true);
+        chunk.WrittenPaths.All(p => p.StartsWith($"{typePath}/Release/", StringComparison.Ordinal))
+            .Should().Be(true);
+        chunk.ActivityPath.Should().NotBeNull();
+
+        var activity = await workspace.GetMeshNodeStream(chunk.ActivityPath!)
+            .Select(n => n?.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions))
+            .Where(l => l is not null && l.Status.IsTerminal())
+            .FirstAsync().Timeout(WaitBudget).ToTask();
+        activity!.Status.Should().Be(ActivityStatus.Succeeded);
     }
 
     // ---- Arbitrate as a pure decision procedure: the staleness rules without wall-clock ----

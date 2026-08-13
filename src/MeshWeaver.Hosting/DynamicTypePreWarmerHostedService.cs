@@ -216,6 +216,23 @@ public sealed class DynamicTypePreWarmerHostedService(
                     batchBake ? "gated (batch)" : "serving (activation-driven)");
         }
 
+        // Build-protocol mode (Doc/Architecture/BuildCoordination): coordination through the
+        // Admin/Build claim + chunk nodes + the per-fingerprint GO instead of the file lease and
+        // the follower's share poll. DEFAULT OFF while the protocol slices land — execution is the
+        // same sweep either way, so this flips only WHO decides and HOW completion is broadcast.
+        var buildProtocol = false;
+        var protocolRaw = services.GetService<IConfiguration>()?[BuildProtocolDriver.EnabledConfigKey];
+        if (!string.IsNullOrWhiteSpace(protocolRaw))
+        {
+            if (bool.TryParse(protocolRaw, out var parsedProtocol))
+                buildProtocol = parsedProtocol;
+            else
+                logger.LogWarning(
+                    "DynamicTypePreWarmer: ignoring invalid {Key}='{Value}' — build-protocol "
+                    + "coordination stays off",
+                    BuildProtocolDriver.EnabledConfigKey, protocolRaw);
+        }
+
         // 🚨 SEQUENCE THE SWEEP BEHIND THE STATIC REPO IMPORT — it is content this bake must see.
         //
         // The import is kicked fire-and-forget from its own StartAsync (it has to be: subscribing on
@@ -248,7 +265,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
         _warmSubscription = (importSettled?.Settled ?? Observable.Return(Unit.Default))
             .SelectMany(_ => DynamicTypePreWarmer
-                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake))
+                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol))
             .Subscribe(
                 outcome =>
                 {
