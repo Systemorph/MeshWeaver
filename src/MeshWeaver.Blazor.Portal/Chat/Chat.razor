@@ -27,20 +27,9 @@ else
 
     private LayoutAreaControl? GetThreadComposerLayoutArea()
     {
-        // Durable circuit user first; skip a leaked system-security / hub principal on the
-        // AsyncLocal Context (which would point the composer at a non-existent
-        // system-security/_Thread/ThreadComposer). Mirrors ThreadSidePanelContent.ResolveUserHome.
-        string? userHome = null;
-        foreach (var candidate in new[] { AccessService.CircuitContext?.ObjectId, AccessService.Context?.ObjectId })
-        {
-            if (!string.IsNullOrEmpty(candidate)
-                && candidate != WellKnownUsers.System
-                && !AccessService.LooksLikeHubPrincipal(candidate))
-            {
-                userHome = candidate;
-                break;
-            }
-        }
+        // Durable circuit user first; a leaked system-security / hub principal on the AsyncLocal
+        // Context would point the composer at a non-existent system-security/_Thread/ThreadComposer.
+        var userHome = CircuitUser.ResolveUserId(AccessService);
         return string.IsNullOrEmpty(userHome)
             ? null
             : new LayoutAreaControl(ThreadComposerNodeType.PathFor(userHome), new LayoutAreaReference(string.Empty));

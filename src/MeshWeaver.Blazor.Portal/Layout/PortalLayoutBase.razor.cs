@@ -364,6 +364,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         // 'GlobalSettings'" DeliveryFailure → bounded resubscribe storm. Gate the navigation on the
         // canonical IsGlobalAdmin() predicate so a non-admin never issues that subscribe; route them
         // to their own account page instead.
+        // Resolve the user BEFORE subscribing: the callback runs on a hub scheduler, where both
+        // AccessContext AsyncLocals (Context AND CircuitContext) have been nulled.
+        var userId = CircuitUser.ResolveUserId(AccessService);
         Hub.IsGlobalAdmin()
             .Take(1)
             .Timeout(TimeSpan.FromSeconds(5))
@@ -375,7 +378,6 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
                     NavigationManager.NavigateTo($"/{GlobalSettingsLayoutArea.GlobalSettingsArea}");
                     return;
                 }
-                var userId = AccessService?.Context?.ObjectId;
                 NavigationManager.NavigateTo(string.IsNullOrEmpty(userId) ? "/" : $"/User/{userId}");
             }));
     }
@@ -388,9 +390,13 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// </summary>
     private void NavigateToThreads()
     {
-        var userId = AccessService?.Context?.ObjectId;
+        var userId = CircuitUser.ResolveUserId(AccessService);
         if (string.IsNullOrEmpty(userId))
+        {
+            Logger.LogWarning(
+                "NavigateToThreads: no circuit user resolved (CircuitContext and Context both empty) — not navigating.");
             return;
+        }
         NavigationManager.NavigateTo($"/User/{userId}/Activity");
     }
 
@@ -453,9 +459,17 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// </summary>
     private void OpenNewThreadInMain()
     {
-        var userId = AccessService?.Context?.ObjectId;
+        // 🚨 CircuitUser.ResolveUserId, never AccessService.Context alone: a menu click is a circuit
+        // inbound activity, where CircuitAccessHandler stamps CircuitContext — Context is only set
+        // during a hub message delivery, so reading it here is always null and the click silently
+        // did nothing (the dead "New thread" menu entry).
+        var userId = CircuitUser.ResolveUserId(AccessService);
         if (string.IsNullOrEmpty(userId))
+        {
+            Logger.LogWarning(
+                "OpenNewThreadInMain: no circuit user resolved (CircuitContext and Context both empty) — not navigating.");
             return;
+        }
 
         // Drop any side-panel conversation first, so the composer exists exactly once, in main.
         SidePanelState.SetContentPath(null);
