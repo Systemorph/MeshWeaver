@@ -76,7 +76,11 @@ public class FileSystemVersionStore : IVersionQuery
             var filePath = Path.Combine(dir, fileName);
 
             var json = JsonSerializer.Serialize(node, writeOptions);
-            await File.WriteAllTextAsync(filePath, json, ct).ConfigureAwait(false);
+            // 🚨 Atomic publication, never File.WriteAllTextAsync on filePath: GetVersions
+            // discovers history by globbing "{id}_*.json", so creating the target first and
+            // filling it afterwards publishes an EMPTY version that a caller can list and then
+            // fail to deserialize. See AtomicFileWrite.
+            await AtomicFileWrite.WriteAllTextAsync(filePath, json, ct).ConfigureAwait(false);
             return node;
         });
 
