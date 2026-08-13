@@ -101,7 +101,7 @@ public class StrikethroughRenderTests : IDisposable
     {
         var browser = new HeadlessChromiumPdfRenderer(
             new PixelRenderingOptions { NoSandbox = OperatingSystem.IsLinux() }, pools);
-        var renderer = new PdfDocumentRenderer(browser);
+        var renderer = new PdfDocumentRenderer(browser, pools);
 
         if (await browser.Probe().FirstAsync().ToTask() is null)
         {
