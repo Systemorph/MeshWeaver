@@ -1,6 +1,7 @@
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -168,7 +169,7 @@ public static class GitHubActivityExtensions
                         // deletes user-visible data, and "pruned N" alone left no record of WHAT.
                         if (r.PrunedPaths.Count > 0)
                             ctx.Log($"Pruned {r.PrunedPaths.Count} node(s) absent from the repo: {string.Join(", ", r.PrunedPaths)}");
-                        ctx.Log($"Imported {r.Outcome} ({r.Count} node(s)).");
+                        ctx.Log($"Imported {DescribeOutcome(r)}.");
                         return Unit.Default;
                     });
                 }, onActivityCreated));
@@ -193,11 +194,27 @@ public static class GitHubActivityExtensions
                     // deletes user-visible data, and "pruned N" alone left no record of WHAT.
                     if (r.PrunedPaths.Count > 0)
                         ctx.Log($"Pruned {r.PrunedPaths.Count} node(s) absent from the repo: {string.Join(", ", r.PrunedPaths)}");
-                    ctx.Log($"Re-imported {r.Outcome} ({r.Count} node(s)) at {commitish}.");
+                    ctx.Log($"Re-imported {DescribeOutcome(r)} at {commitish}.");
                     return Unit.Default;
                 });
             }, onActivityCreated);
     }
+
+    /// <summary>
+    /// One user-facing line for an import outcome.
+    ///
+    /// <para>🚨 "Skipped" is the one outcome that reports a success on evidence THIS run never
+    /// gathered: it means a prior import already recorded this exact content fingerprint, so the
+    /// short-circuit fired and the partition was never read. Rendered as
+    /// <c>Skipped (0 node(s))</c> it was indistinguishable from "checked, nothing to do" — which is
+    /// how a genuinely-behind Space read as up to date (issue #1326). Name the evidence.</para>
+    /// </summary>
+    private static string DescribeOutcome(StaticRepoImportResult result) =>
+        string.Equals(result.Outcome, "Skipped", StringComparison.OrdinalIgnoreCase)
+            ? "Skipped — an earlier FULL import already recorded this exact content at fingerprint "
+              + $"{result.Fingerprint} ({result.Partition}/_Activity/import-{result.Fingerprint}), "
+              + "so the partition was not re-read"
+            : $"{result.Outcome} ({result.Count} node(s))";
 
     /// <summary>Create a branch from a base ref on the configured repo.</summary>
     public static IObservable<string> CreateBranchOnGitHub(
