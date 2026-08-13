@@ -323,20 +323,27 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
 
     private object? Materialize(JsonElement content, Type contentType, JsonSerializerOptions options)
     {
+        object? recovered;
         try
         {
             // Deserialise to the CONCRETE type explicitly: STJ maps the JSON to its properties and
             // ignores the stale $type member, so recovery works regardless of whether `options`'
             // (frozen) registry knows the type — exactly the ContentAs<T> JsonElement contract.
-            var recovered = content.Deserialize(contentType, options);
-            if (recovered is not null)
-                WarnIfLossy(content, contentType, options);
-            return recovered;
+            recovered = content.Deserialize(contentType, options);
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
         {
             return null;
         }
+
+        // 🚨 OUTSIDE the try, deliberately: a DIAGNOSTIC must never be able to change the answer.
+        // Called inside it, any throw while composing the report — EnumerateObject on content that
+        // is a primitive or an array, say — would be swallowed by the catch above and silently turn
+        // a SUCCESSFUL recovery into null. That is the very failure mode this report exists to
+        // expose, so it must not be reachable through the report itself (Copilot review, #1388).
+        if (recovered is not null)
+            WarnIfLossy(content, contentType, options);
+        return recovered;
     }
 
     // Once per (target type, dropped member set): a mismatch is a property of the installed
@@ -365,7 +372,9 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
     /// </summary>
     private void WarnIfLossy(JsonElement content, Type contentType, JsonSerializerOptions options)
     {
-        if (logger is null || HasExtensionDataBuffer(contentType))
+        // Only an object HAS members to drop. Both public routes already require one, but this
+        // method must be safe on its own terms — see the call site.
+        if (logger is null || content.ValueKind != JsonValueKind.Object || HasExtensionDataBuffer(contentType))
             return;
 
         HashSet<string> declared;

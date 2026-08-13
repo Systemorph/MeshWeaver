@@ -383,7 +383,9 @@ public class MeshContentTypeRegistryTest
         recovered.Should().NotBeNull(
             "reported, not refused: content written against an EARLIER version of the RIGHT type "
             + "legitimately carries members it has since lost, and refusing those would turn "
-            + "cosmetic drift into an empty render");
+            + "cosmetic drift into an empty render. This also pins that the REPORT cannot change "
+            + "the answer — composing it used to run inside the deserialize's try, where any throw "
+            + "would have been swallowed into a null recovery");
         logger.Warnings.Should().ContainSingle().Which
             .Should().Contain("Article")
             .And.Contain("abstract")
