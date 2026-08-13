@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Subjects;
+using Microsoft.Reactive.Testing;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -96,6 +97,10 @@ public class StaleAssemblySelfHealWatcherTest
             }
         };
 
+    /// <summary>Let the settle window elapse — the watcher only acts once the type goes quiet.</summary>
+    private static void Settle(TestScheduler scheduler) =>
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(30).Ticks);
+
     private static void AssertNoDispose(IMessageHub hub) =>
         hub.DidNotReceive().Post(
             Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>());
@@ -109,8 +114,9 @@ public class StaleAssemblySelfHealWatcherTest
     {
         var hub = BuildInstanceHub(out var capturedOptions);
         var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
-            typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler);
 
         // The replayed at-bind state: the very assembly this instance is running. Firing here
         // would recycle every instance on every emission of its own current state.
@@ -124,12 +130,18 @@ public class StaleAssemblySelfHealWatcherTest
         // 🚨 THE signal: a DIFFERENT assembly is published. This is the emission that was ignored
         // before the fix, leaving the instance executing the old DLL indefinitely.
         typeStream.OnNext(TypeNode(version: 12, assemblyPath: "TestData_StaleAssemblyType/v12-abc-222222222222.dll"));
+        // …but NOT instantly: the type may still be publishing (an install compiles the type, then
+        // recompiles when its Source/ lands). Recycling here disposes hubs mid-install.
+        AssertNoDispose(hub);
+
+        Settle(scheduler);
         AssertDisposedExactlyOnce(hub);
         AssertTargetsItself(capturedOptions);
 
         // Take(1): further publications do not re-post. The instance is already tearing down, and
         // re-enrichment will bind the newest assembly.
         typeStream.OnNext(TypeNode(version: 13, assemblyPath: "TestData_StaleAssemblyType/v13-abc-333333333333.dll"));
+        Settle(scheduler);
         AssertDisposedExactlyOnce(hub);
     }
 
@@ -143,11 +155,13 @@ public class StaleAssemblySelfHealWatcherTest
     {
         var hub = BuildInstanceHub(out _);
         var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
-            typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler);
 
         for (var version = 11; version <= 20; version++)
             typeStream.OnNext(TypeNode(version, assemblyPath: BoundAssembly));
+        Settle(scheduler);
 
         AssertNoDispose(hub);
     }
@@ -163,10 +177,12 @@ public class StaleAssemblySelfHealWatcherTest
     {
         var hub = BuildInstanceHub(out var capturedOptions);
         var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
-            typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler);
 
         typeStream.OnNext(TypeNode(version: 10, assemblyPath: "TestData_StaleAssemblyType/v10-abc-999999999999.dll"));
+        Settle(scheduler);
 
         AssertDisposedExactlyOnce(hub);
         AssertTargetsItself(capturedOptions);
@@ -178,8 +194,9 @@ public class StaleAssemblySelfHealWatcherTest
     {
         var hub = BuildInstanceHub(out _);
         var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
-            typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler);
 
         typeStream.OnNext(TypeNode(version: 11, assemblyPath: null));
         typeStream.OnNext(new MeshNode("StaleAssemblyType", "TestData")
@@ -188,7 +205,44 @@ public class StaleAssemblySelfHealWatcherTest
             Version = 12,
             Content = "not a definition"
         });
+        Settle(scheduler);
         AssertNoDispose(hub);
+    }
+
+    /// <summary>
+    /// 🚨 THE REGRESSION (#1343, caught by NodeRepoInstanceOrderingTest failing 6 runs in 8 while
+    /// the same commit with this watcher disabled passed 8/8).
+    ///
+    /// <para>An INSTALL publishes more than once — the type node lands and compiles, then its
+    /// <c>Source/</c> lands and it compiles AGAIN, seconds apart — all while its instances are
+    /// being activated and READ. Recycling on each publication put a <c>DisposeRequest</c> through
+    /// those hubs mid-read ("Hub Pack/Widget/Nested is shutting down") and the post-install read
+    /// timed out.</para>
+    ///
+    /// <para>A burst must therefore cost exactly ONE recycle, and only once the type goes quiet.</para>
+    /// </summary>
+    [Fact]
+    public void APublicationBurst_CostsExactlyOneRecycle_AndOnlyAfterItGoesQuiet()
+    {
+        var hub = BuildInstanceHub(out _);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler);
+
+        // The install shape: several builds in quick succession, instances live throughout.
+        for (var version = 11; version <= 15; version++)
+        {
+            typeStream.OnNext(TypeNode(version,
+                assemblyPath: $"TestData_StaleAssemblyType/v{version}-abc-{version}00000000.dll"));
+            // A short hop — far inside the settle window. Nothing may be disposed yet.
+            scheduler.AdvanceBy(TimeSpan.FromSeconds(1).Ticks);
+            AssertNoDispose(hub);
+        }
+
+        // Quiet at last: exactly one recycle, onto the NEWEST build.
+        Settle(scheduler);
+        AssertDisposedExactlyOnce(hub);
     }
 
     /// <summary>Disposal (the hub's RegisterForDisposal hook) stops the watcher.</summary>
@@ -197,11 +251,13 @@ public class StaleAssemblySelfHealWatcherTest
     {
         var hub = BuildInstanceHub(out _);
         var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
         var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
-            typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler);
 
         watcher.Dispose();
         typeStream.OnNext(TypeNode(version: 12, assemblyPath: "TestData_StaleAssemblyType/v12-abc-222222222222.dll"));
+        Settle(scheduler);
 
         AssertNoDispose(hub);
     }
