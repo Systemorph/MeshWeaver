@@ -329,6 +329,15 @@ config:
     # config.yaml for what each key does.
     PreWarm__DynamicTypes: "false"
     PreWarm__GateReadiness: "false"
+    # Operator escape hatch: serve even when the sweep ERRORED and therefore proved nothing.
+    # Leave "false" — an unproven bake is not a passed bake, which is the guard the retired
+    # pre-run bake Job used to enforce from outside the portal as Bake__AllowEmpty. It never
+    # relaxes a real regression, and the /health payload keeps saying the bake was unproven.
+    PreWarm__AllowUnprovenBake: "false"
+    # Arms DELETION of framework generations nothing is running any more (the claim + the
+    # report happen regardless). Off by default — see config.yaml for what is kept and why
+    # this is a decision taken against a report rather than a default.
+    AssemblyCache__Retention__Delete: "false"
     Deployment__Orleans__Clustering: "Localhost"
     Storage__Name: "content"
     Storage__SourceType: "FileSystem"

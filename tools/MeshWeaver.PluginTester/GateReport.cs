@@ -67,6 +67,20 @@ public sealed record PackageResult(string Id)
     /// <summary>Total nodes the package carried.</summary>
     public int NodeCount { get; init; }
 
+    /// <summary>
+    /// Whether <see cref="NodeCount"/> / <see cref="NodeTypes"/> are a MEASUREMENT. False when the
+    /// package pipeline threw before the install reported, in which case both are defaults and
+    /// printing them asserts a count nobody took.
+    ///
+    /// <para>🚨 Why this exists (#1360). A wait inside the install timed out AFTER the nodes had
+    /// been written — the identical snapshot wrote 34 nodes on the very next run — and the gate
+    /// reported <c>[FAIL] Essentials (0 node(s), 0 type(s))</c>. "Its hub vanished mid-install" and
+    /// "it legitimately had nothing to install" rendered as the same line, which is exactly why the
+    /// signature was filed away as harness noise. A failure still FAILS; it just may not claim to
+    /// have counted anything.</para>
+    /// </summary>
+    public bool CountsMeasured { get; init; } = true;
+
     /// <summary>Install failure detail; null when the install succeeded.</summary>
     public string? InstallError { get; init; }
 
@@ -154,7 +168,9 @@ public sealed record GateReport(IReadOnlyList<PackageResult> Packages)
         foreach (var package in Packages)
         {
             output.WriteLine($"[{Label(package, verdict)}] {package.Id} " +
-                             $"({package.NodeCount} node(s), {package.NodeTypes.Count} type(s))");
+                             (package.CountsMeasured
+                                 ? $"({package.NodeCount} node(s), {package.NodeTypes.Count} type(s))"
+                                 : "(counts unavailable — the pipeline threw before the install reported)"));
             if (package.InstallError is not null)
                 output.WriteLine($"    install{Debt(verdict, package.Id, "install")}: {package.InstallError}");
             if (package.IdempotenceError is not null)
