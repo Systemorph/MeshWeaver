@@ -53,10 +53,17 @@ internal sealed class InMemoryStaticRepoSource(
     public bool IsExcludedFromMirror(string nodePath)
     {
         if (string.IsNullOrEmpty(nodePath)) return false;
+        // The Space ROOT maps to the empty relative path, which SyncIgnore never ignores — the same
+        // mapping GitHubSyncService.Filter uses. Falling through with the bare partition name instead
+        // would hand the matcher a non-empty path, so a wildcard rule could "ignore" the root and make
+        // the prune-side decision disagree with export/import for a node neither of them can exclude.
+        if (string.Equals(nodePath, partition, StringComparison.OrdinalIgnoreCase))
+            return false;
         var prefix = partition + "/";
-        var relative = nodePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? nodePath[prefix.Length..]
-            : nodePath;
-        return ignoreRules.IsIgnored(relative);
+        // A path outside this partition is not this source's to exclude — the ignore rules are
+        // Space-relative, so matching them against a foreign absolute path would be meaningless.
+        if (!nodePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return ignoreRules.IsIgnored(nodePath[prefix.Length..]);
     }
 }
