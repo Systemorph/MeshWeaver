@@ -83,7 +83,7 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
             && (s == id || s.EndsWith("/" + id, StringComparison.Ordinal)));
 
     [Fact(Timeout = 60000)]
-    public async Task Toolbar_ContainsRunAndEdit_NoCancel_NoOutputEmbed_BeforeFirstRun()
+    public async Task Toolbar_ContainsRun_NoCancel_NoOutputEmbed_BeforeFirstRun()
     {
         var codePath = await SeedExecutableCode("\"hi\"");
         var workspace = GetClient().GetWorkspace();
@@ -118,26 +118,27 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
             IndexOf(CodeLayoutAreas.CellToolbarArea),
             "the toolbar moved to the BOTTOM of the cell, below the output segment");
 
-        // (a) Toolbar contains Run (and Edit); no Cancel while nothing runs.
+        // (a) Toolbar contains Run; no Cancel while nothing runs — and NO Edit button for the
+        // DevLogin admin: a viewer holding Update renders the cell's code segment as the inline
+        // editor (edit mode IS the mode), so there is no second mode to navigate to. The
+        // read-only viewer's copy-to-home Edit variant is pinned by CodeCellEditRightsTest.
         var toolbarArea = FindArea(cell, CodeLayoutAreas.CellToolbarArea);
         var toolbar = (StackControl)(await stream.GetControlStream(toolbarArea)
             .Should().Within(10.Seconds()).Match(c => c is StackControl))!;
         HasArea(toolbar, CodeLayoutAreas.RunButtonArea).Should().BeTrue(
             "executable Code node must surface Run in the cell toolbar");
-        HasArea(toolbar, CodeLayoutAreas.EditButtonArea).Should().BeTrue(
-            "Edit moved into the cell toolbar as well");
+        HasArea(toolbar, CodeLayoutAreas.EditButtonArea).Should().BeFalse(
+            "an editor's cell already IS the editor — the dedicated Edit button is retired");
         HasArea(toolbar, CodeLayoutAreas.CancelButtonArea).Should().BeFalse(
             "no activity is running — Cancel must not render");
 
-        // The DevLogin admin holds Update on the node — Edit is the DIRECT
-        // navigation button (rights-gated; the no-rights dialog variant is
-        // pinned by CodeCellEditRightsTest).
-        var editControl = await stream
-            .GetControlStream(FindArea(toolbar, CodeLayoutAreas.EditButtonArea))
-            .Should().Within(10.Seconds()).Match(c => c is not null);
-        editControl.Should().BeOfType<ButtonControl>()
-            .Which.NavigateToHref.Should().NotBeNull(
-                "an editor's Edit button navigates straight to the Edit area");
+        // …and the code segment renders as the inline Monaco editor auto-saving into this node.
+        var codeControl = await stream
+            .GetControlStream(FindArea(cell, CodeLayoutAreas.CellCodeArea))
+            .Should().Within(10.Seconds()).Match(c => c is CodeEditorControl);
+        codeControl.Should().BeOfType<CodeEditorControl>()
+            .Which.AutoSaveAddress.Should().Be(codePath,
+                "the inline editor persists its debounced text back into THIS node");
 
         var runControl = await stream
             .GetControlStream(FindArea(toolbar, CodeLayoutAreas.RunButtonArea))
