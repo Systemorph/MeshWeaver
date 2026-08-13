@@ -108,9 +108,22 @@ public static class PluginGateRunner
     {
         var source = new NodeRepoPackageSource(
             (_, _, _, _) => Observable.Return(snapshot), repoUrl: "local");
+        // 🚨 WHICH STAGE FAILED is part of the verdict. The catch at the bottom wraps the WHOLE
+        // pipeline — fetch, install, every NodeType compile/render/Tests gate, the idempotence
+        // re-install — and used to label every one of them `install:` on a PackageResult built
+        // from scratch, so `NodeCount` defaulted to 0 and `NodeTypes` to empty. That is how
+        // Systemorph/MeshWeaver#1360 read as harness noise: `[FAIL] Essentials (0 node(s), 0
+        // type(s)) / install: TimeoutException` was produced by a wait that did not complete
+        // AFTER the nodes had been written (the same snapshot wrote 34 nodes on the re-run), yet
+        // the line is indistinguishable from a package that genuinely installed nothing. The
+        // counts were never measured — printing them as zeros asserts a measurement that was
+        // never taken. Packages run strictly sequentially (Concat in RunPackages), so a captured
+        // stage marker is exact.
+        var stage = "fetch";
         return source.FetchPackageFiles(package, "HEAD")
             .SelectMany(files =>
             {
+                stage = "install";
                 options.Output.WriteLine($"── {package.Id}: installing {files.Count} file(s)…");
                 var types = DiscoverNodeTypes(package, files);
                 // The authorizing principal is EXPLICIT — see GateMesh.AuthorizingUserId. Passing
@@ -122,6 +135,7 @@ public static class PluginGateRunner
                         authorizingUserId: GateMesh.AuthorizingUserId)
                     .SelectMany(install =>
                     {
+                        stage = "checks";
                         options.Output.WriteLine(
                             $"── {package.Id}: installed ({install.Written} written, " +
                             $"{install.Unchanged} unchanged); checking {types.Count} NodeType(s)…");
@@ -159,7 +173,10 @@ public static class PluginGateRunner
             })
             .Catch((Exception ex) => Observable.Return(new PackageResult(package.Id)
             {
-                InstallError = $"{ex.GetType().Name}: {ex.Message}",
+                // Named for the stage that actually threw, and marked as NOT a measurement so
+                // WriteSummary prints "counts unavailable" instead of a fabricated "0 node(s)".
+                CountsMeasured = false,
+                InstallError = $"[{stage}] {ex.GetType().Name}: {ex.Message}",
             }));
     }
 
