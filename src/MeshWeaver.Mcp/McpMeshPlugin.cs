@@ -537,7 +537,7 @@ When the sync source has two-way enabled, `update` never overwrites a node chang
             space = spacePath,
             activityPath = (string?)null,
             hint = "The GitHub sync was started as an activity, but its handle did not confirm within 30s. " +
-                   $"Find it under the Space's activity feed: search 'nodeType:ActivityLog namespace:{spacePath}/_Activity'.",
+                   $"Find it under the Space's activity feed: search 'nodeType:Activity namespace:{spacePath}/_Activity'.",
         })));
 
         void OnCreated(string activityPath) => tcs.TrySetResult(JsonSerializer.Serialize(new
