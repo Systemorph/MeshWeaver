@@ -288,6 +288,13 @@ whole stack, because of what it *rules out*:
 - **It is not MeshWeaver corrupting the heap.** There is no `unsafe`, no `GCHandle`, no pinning, no
   `stackalloc` of object memory and no custom GC configuration anywhere in `src/` — pure managed code
   has no way to zero a MethodTable.
+  ⚠️ **2026-08-12: that argument is weaker than it reads.** It is sometimes restated as *"the crashing
+  process ships no native libraries"*, and that restatement is false. `NT_FILE` in `dotnet-3592.dmp`
+  lists **19 file-backed `.so` mappings** — `libcoreclr`, `libclrjit`, `libSystem.Native`,
+  `libSystem.Security.Cryptography.Native.OpenSsl`, `libcrypto`/`libssl`, `libicu*`, `libstdc++`,
+  `libhostpolicy`, `libhostfxr` — beside the 132 managed `.dll`s. What holds is the narrow claim (the
+  *app's own* code is pure managed); what does not hold is "there is no native code in the process,
+  therefore nothing could have written the zero".
 
 A zero MT inside the swept range means the sweep walked memory the GC believed held an object but that
 is in fact zeroed — a gap that was never filled with a free object, or a walk that ran past the true
@@ -297,7 +304,9 @@ MeshWeaver contributes is the *workload* that provokes it: per-`[Fact]` mesh bui
 collectible NodeType assemblies loading and unloading, and 48 gen2 GCs in 75 s.
 
 🚨 **Do not "fix" this by turning off concurrent GC** in the test host. That hides the fault without
-changing anything about why it happens, and the same workload runs in prod.
+changing anything about why it happens, and the same workload runs in prod. **This was tried anyway**
+(#1274, `<ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>` on `MeshWeaver.FutuRe.Test`)
+and it did not even hide it — see the 2026-08-12 section, which measures why and removes it again.
 
 ### 2026-08-09: reproduced twice more — the verdict is not a one-off, and `+0x5cb1e1` is its fingerprint
 
@@ -321,6 +330,12 @@ diagnosis predicts, and it is the opposite of what a teardown-ordering defect wo
 reproduce at one phase, by construction). Do not read the phase of any single sighting as evidence
 about the cause; read the RVA.
 
+> ⚠️ **"Read the RVA" is now known to be half a rule — see the 2026-08-12 section.** An RVA is only
+> meaningful against the runtime build it was taken on, and the runtime moves under you. Two dumps on
+> `10.0.11` fault at `0x5cf24c`, which is **not** `background_sweep`. The portable fingerprint is the
+> **instruction plus register state** (`8b 08` = `mov ecx,[rax]` with `RAX=0x0`, `si_addr=0x0`), which
+> is identical across all five sightings; the RVA and the function name are not.
+
 Two further things these sightings settle, both re-litigated at length in #613:
 
 - **The teardown work neither caused nor cured it.** The 11:05Z tree contains #967 (node ALCs unload
@@ -336,6 +351,119 @@ Two further things these sightings settle, both re-litigated at length in #613:
 **Check the trace log's completeness before reasoning from it** (see the `FAULT-BUDGET` note above):
 in the 11:05Z file all four suppression windows belonged to a *later* project's pid, so the crashing
 process's record was whole — which is what makes "zero quiesce leaks" evidence rather than an absence.
+
+### 2026-08-12: on runtime `10.0.11` it is **`plan_phase`**, not `background_sweep` — the frame moved, the fault did not
+
+Three dumps from the post-#1274 window, resolved against `10.0.11`. All fault at the **same
+instruction with the same registers** as the three `10.0.10` sightings — and in a **different GC
+function**.
+
+| | `dotnet-3592.dmp` (`31590331741`, 11:05Z) | `dotnet-3500.dmp` (`31597122789`, 12:34Z) | `dotnet-3433.dmp` (`31603530862`, 14:06Z) |
+|---|---|---|---|
+| runtime (from `NT_FILE`) | `10.0.11` | `10.0.11` | `10.0.11` |
+| `si_signo`/`si_code`/`si_addr` | 11 / 1 (`SEGV_MAPERR`) / **`0x0`** | 11 / 1 / **`0x0`** | 11 / 1 / **`0x0`** |
+| `TRAPNO`/`ERR`/`CR2` | 14 / `0x4` / `0x0` | 14 / `0x4` / `0x0` | 14 / `0x4` / `0x0` |
+| instruction | **`8b 08` = `mov ecx,[rax]`, `RAX=0x0`** | **`8b 08`, `RAX=0x0`** | **`8b 08`, `RAX=0x0`** |
+| faulting RVA | **`0x5cf24c`** | **`0x5cf24c`** | **`0x5cf24c`** |
+| resolves to | **`WKS::gc_heap::plan_phase(int)+0x24fc`** | **same** | **same** |
+
+**This is not RVA drift.** Resolved against the same `10.0.11` `coreclr.debug`, the old fingerprint
+`0x5cb1e1` still lands in `background_sweep` (`+0xad1`, versus `+0xa61` on `10.0.10` — the function
+moved 0x70 bytes between builds). The two functions are disjoint (`background_sweep` at
+`0x5ca710`+`0x140b`; `plan_phase` at `0x5ccd50`+`0x4b56`), and the crash is 0x4000 bytes away from
+the old one. The frame genuinely changed.
+
+The faulting instruction is `MethodTable::GetComponentSize` inlined into the heap walk — `mov ecx,
+[rax]; test ecx,ecx; js …` reads the MT flags dword and branches on `enum_flag_HasComponentSize`.
+`RAX` **is** the MethodTable pointer, and it is zero. Same dereference as before.
+
+#### What this settles, and what it does not
+
+**It settles the question #613 was reopened on.** The reopen offered two possibilities and could not
+choose: *(1) the `System.GC.Concurrent:false` setting is not reaching the crashing process*, or
+*(2) the fault is not in `background_sweep`*. It is **(2)**, measured directly. `plan_phase` is the
+stop-the-world plan/relocate step of a **blocking** collection; it is on the path of every blocking
+GC, including one that runs with concurrent GC disabled. So the premise #1274 was built on — *"only
+background GC can reach `background_sweep`, therefore disabling it removes the fault"* — does not
+cover the crash that is actually happening, and the unchanged CI rate (4.2 % → 3.8 %) needs no
+appeal to hypothesis (1) to explain it.
+
+Supporting, though weaker than the frame: `System.GC.Concurrent` is present as a host
+config-property key in the crashing process's memory (3 hits in `dotnet-3592.dmp`, including the
+UTF-16 `AppContext` copy), which is consistent with the runtimeconfig having carried it.
+
+**It does not settle what zeroes the MethodTable.** `plan_phase` also runs as the foreground
+collection *during* a background GC, so this frame alone does not prove concurrent GC was off at the
+moment of the fault. What five dumps do establish is the invariant: **the GC walks the heap and finds
+an object header holding exactly zero.** Which phase discovers it is incidental — and "background-GC
+bug" named the incidental part. Anything built on that name (a mitigation, an upstream report, a
+closure as external) needs re-deriving from the invariant instead.
+
+#### Two hypotheses these dumps falsify — check them off, do not re-open them
+
+Both were proposed again while this was being analysed, and both are decidable from the dump alone:
+
+- **Use-after-unload of a collectible ALC** (the `MessageHubGrain.OnDeactivateAsync` "KNOWN GAP":
+  `loadContext.Unload()` orders only on the hub's `DisposalCompleted`, and pooled I/O leaves are
+  mesh-shared). **Falsified twice over.** `RIP` is inside a **file-backed** mapping —
+  `/usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.11/libcoreclr.so`, resolving to a named
+  runtime symbol — not in unloaded or collected JIT code. And a freed `LoaderAllocator` yields a
+  **non-null unmapped** pointer; `si_addr` here is exactly `0x0`. This is the same distinction the
+  `exit=134` analysis already drew, in the other direction. The gap may be real and worth closing on
+  its own merits; it does not produce *this* fault.
+- **"Bounded disposal gives up and unloads on top of live work."** **Falsified for all three.**
+  `dotnet-3433`'s trace has **29** `DISPOSE_DONE … teardown clean`, **zero**
+  `DISPOSE_QUIESCE_LEAK`, **zero** `DISPOSE_DIRTY_TEARDOWN`, and no disposal-timeout record of any
+  kind — the only timeout-shaped lines are `MEM_WATCHDOG` memory samples. Its last teardown finished
+  cleanly in 2009 ms and the **next fixture had already started** (`CTOR` / `INIT_START` /
+  `INIT_BASE_DONE` at `14:06:27.943`) when the fault landed ~1 s later. `dotnet-3592` is the same
+  shape: 40 clean `DISPOSE_DONE`, zero leaks.
+
+#### Consequences recorded here so they are not re-litigated
+
+- **`<ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>` was removed** from
+  `MeshWeaver.FutuRe.Test.csproj`. It is a mitigation whose mechanism is not the one firing, it
+  measurably changed nothing, and left in place it reads to the next reader as "GC was already ruled
+  out" — the most expensive kind of comment. The instruction above ("do not fix this by turning off
+  concurrent GC") and the tree now agree again.
+- **Scope it as *ALC-heavy assemblies*, not `FutuRe.Test`.** `FutuRe.Test` is where it recurs, but a
+  `MeshWeaver.Hosting.Orleans.Test exit=139` has been observed once. Both build and tear down a mesh
+  with collectible NodeType assemblies per `[Fact]`; that workload, not the project, is the sample.
+- **The crashing process's phase, again, is not evidence.** `dotnet-3592`'s last trace record is
+  `FutuReAnalysisTest DISPOSE_INVOKED` at `11:21:52.614`; **40** `DISPOSE_DONE` records in that
+  process read `teardown clean`, with **zero** `DISPOSE_QUIESCE_LEAK` and **zero**
+  `DISPOSE_DIRTY_TEARDOWN`.
+
+#### The dump IS uploaded — and here is how to fetch 200 MB in ten minutes
+
+Two beliefs have repeatedly stalled this investigation. Both are wrong:
+
+- *"The `.dmp` is never uploaded; CI ships symbols with nothing to symbolicate."* It is uploaded.
+  `.github/workflows/dotnet-test.yml` copies `/tmp/coredumps/*.dmp` into `collected-logs/` before the
+  `testResults-shard<N>` upload, and both dumps above came straight out of that artifact.
+- *"The download is infeasible."* Through `gh api` it is — that measures ~11 KB/s, which is where two
+  investigations gave up. The artifact's blob URL supports HTTP **range** requests, so fetch it in
+  parallel chunks instead. 208 MB lands in about ten minutes:
+
+```bash
+# 1. mint the redirect (do NOT let gh follow it)
+TOK=$(gh auth token)
+URL=$(curl -s -o /dev/null -D - -H "Authorization: Bearer $TOK" \
+  "https://api.github.com/repos/Systemorph/MeshWeaver/actions/artifacts/<ARTIFACT_ID>/zip" \
+  | grep -i '^location' | sed 's/^location: //I' | tr -d '\r')
+# 2. fetch chunk i of N with a plain range request
+curl -sf -r "$START-$END" -o "part-$i" "$URL"
+```
+
+🚨 **Two traps, both of which silently corrupt the result:**
+
+- **The SAS expires in ~10 minutes.** Re-mint `URL` before each wave and fetch only the chunks that
+  are still missing — a resumable loop, not one long run.
+- **Use `curl -sf`, never a bare `curl` with `--retry`.** Without `-f`, an expired-SAS `403` writes
+  its 544-byte `AuthenticationFailed` XML body *into the part file* and curl reports success; with
+  `--retry` it will also do that on top of a chunk that had already completed. The first attempt here
+  assembled an 8 MB "208 MB" file that way. Verify every chunk's exact byte length before
+  concatenating.
 
 ## Reading the result honestly
 

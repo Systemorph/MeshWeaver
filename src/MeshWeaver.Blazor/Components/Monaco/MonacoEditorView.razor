@@ -4,7 +4,7 @@
 @inject IJSRuntime JSRuntime
 @inject ILogger<MonacoEditorView> Logger
 
-<div class="monaco-editor-container @(ShowBorder ? "with-border" : "")" style="@ContainerStyle">
+<div class="@ContainerClass" style="@ContainerStyleAttribute">
     @* 🚨 Do NOT wire OnDidChangeModelContent (or any other BlazorMonaco editor-event
        callback) here. BlazorMonaco registers those through its ASYNC SetEventListeners
        in OnAfterRenderAsync(firstRender); when the editor is mid-teardown/recreate that
@@ -165,6 +165,37 @@
     /// </summary>
     [Parameter]
     public bool AutoGrow { get; set; } = false;
+
+    /// <summary>
+    /// CSS class(es) the HOSTING control view declared, appended to the container's own class list.
+    /// This component has no <c>UiControl</c> of its own; a control view that renders nothing but a
+    /// <c>MonacoEditorView</c> (<c>CodeEditorView</c>) forwards its bound <c>Class</c> here rather than
+    /// wrapping the editor in a new box — the forwarding rule from #1288/#1297. Null ⇒ nothing appended,
+    /// so the emitted class list is byte-identical to what it was before.
+    /// </summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    /// <summary>
+    /// Inline style the HOSTING control view declared, appended AFTER <see cref="ContainerStyle"/> so a
+    /// declared height/max-height overrides the editor's own geometry instead of losing to it. Null ⇒
+    /// nothing appended. See <see cref="Class"/> for why the declaration lands here.
+    /// </summary>
+    [Parameter]
+    public string? Style { get; set; }
+
+    // 🚨 Composed here rather than inline in the attribute: `class="… @(ShowBorder ? "…" : "")@(Class…)"`
+    // does not parse (CS1073 — Razor cannot follow a quoted ternary with a second expression block).
+    // With no Class the emitted value is byte-identical to what it was before, trailing space and all.
+    private string ContainerClass =>
+        string.IsNullOrWhiteSpace(Class)
+            ? $"monaco-editor-container {(ShowBorder ? "with-border" : "")}"
+            : $"monaco-editor-container {(ShowBorder ? "with-border " : "")}{Class}";
+
+    // The forwarded Style goes LAST so a declared height beats the container's own — the ordering rule
+    // from #1297. Empty when nothing was declared, so the attribute is unchanged for every other caller.
+    private string ContainerStyleAttribute =>
+        string.IsNullOrWhiteSpace(Style) ? ContainerStyle : ContainerStyle + " " + Style;
 
     private string ContainerStyle => AutoGrow
         // Auto-grow: JS drives the height from the content size; CSS clamps the range.
