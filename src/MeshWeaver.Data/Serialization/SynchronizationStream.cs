@@ -150,10 +150,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 throw;
             }
 
-            // Same liveness contract as Workspace.GetStream: a cached child whose sub-hub is gone
-            // is replaced rather than handed out dead.
-            if (reduced.Hub?.RunLevel <= MessageHubRunLevel.Started
-                && reduced.Hub is not MessageHub { IsDisposing: true })
+            // Same liveness contract as Workspace.GetStream — literally the same predicate, so the
+            // two cannot drift apart again (they did: #1455).
+            if (StreamLiveness.IsUsable(reduced))
                 return (ISynchronizationStream<TReduced>)reduced;
 
             Remove(reference, lazy);
@@ -217,6 +216,12 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private bool isDisposed;
     private readonly object disposeLock = new();
     private readonly ILogger<SynchronizationStream<TStream>> logger;
+
+    /// <inheritdoc />
+    bool ISynchronizationStream.IsDisposed => isDisposed;
+
+    /// <inheritdoc />
+    public ISynchronizationStream? Source { get; init; }
 
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal
