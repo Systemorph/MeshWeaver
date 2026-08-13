@@ -227,6 +227,12 @@ public record LayoutDefinition(IMessageHub Hub)
     /// <summary>
     /// The visible "Area not found" placeholder control — shown instead of an eternal spinner when no
     /// renderer produced content for the requested area. Lists the hub's named areas to aid diagnosis.
+    ///
+    /// <para>🚨 Carries <see cref="AreaFrameClassifier.AreaNotFoundId"/> as its
+    /// <see cref="UiControl.Id"/> so a consumer can tell this VERDICT ("nothing will ever render
+    /// here") apart from the compile-progress PROMISE an instance serves while its NodeType is
+    /// still building — the two are indistinguishable to anything that only reads the prose.
+    /// Keep the id stable; the markdown is free to change.</para>
     /// </summary>
     private MarkdownControl BuildNotFoundControl(LayoutAreaHost host, object area)
     {
@@ -235,7 +241,10 @@ public record LayoutDefinition(IMessageHub Hub)
             ? "_no named areas registered on this hub_"
             : "Available named areas: " + string.Join(", ", availableAreas.Select(a => $"`{a}`"));
         return new MarkdownControl(
-            $"**Area not found**\n\nNo renderer is registered for area `{area}` on hub `{host.Hub.Address}`.\n\n{availableLine}");
+            $"**Area not found**\n\nNo renderer is registered for area `{area}` on hub `{host.Hub.Address}`.\n\n{availableLine}")
+        {
+            Id = AreaFrameClassifier.AreaNotFoundId
+        };
     }
 
     private EntityStoreAndUpdates NotFound(LayoutAreaHost host, RenderingContext context, EntityStore store)

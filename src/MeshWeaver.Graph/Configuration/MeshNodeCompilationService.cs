@@ -2056,8 +2056,17 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Runs the real Roslyn emit for <paramref name="nodeName"/> into <paramref name="releaseDir"/>
-    /// (dll + pdb + XML doc) and returns the DLL path it wrote. A failed emit throws a
-    /// <see cref="CompilationException"/> carrying the formatted diagnostics.
+    /// (dll + pdb + XML doc) and returns the DLL path it wrote TOGETHER WITH the digest of the image
+    /// it produced. A failed emit throws a <see cref="CompilationException"/> carrying the formatted
+    /// diagnostics.
+    ///
+    /// <para>🚨 It emits into memory and writes the bytes out, rather than streaming Roslyn straight
+    /// at the file, for one reason: the publisher has to be able to prove the file on disk IS the
+    /// image that was emitted. Streaming leaves nothing to compare against, which is how the old
+    /// <c>Length &gt; 0</c> gate came to publish an artifact whose metadata had an unwritten region
+    /// in it and PARK the NodeType for good (#1412). Peak memory is unchanged in practice — Roslyn
+    /// already serialises the whole PE into an in-memory <c>BlobBuilder</c> before it writes a single
+    /// byte. See <see cref="EmittedArtifact"/>.</para>
     ///
     /// <para>🚨 It does NOT log. A compile failure is reported EXACTLY ONCE, by the compile
     /// pipeline's single <c>.Catch&lt;…, CompilationException&gt;</c> funnel in
@@ -2071,32 +2080,130 @@ internal class MeshNodeCompilationService(
     /// "your C# does not compile" read like an emit/IO defect. Extracted and <c>internal</c> so
     /// the log-once contract is unit-testable against a real broken compilation.</para>
     /// </summary>
-    internal static string EmitCompilationToDirectory(
+    internal static EmittedArtifact EmitCompilationToDirectory(
         CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir, CancellationToken ct)
     {
         var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
         var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
         var xmlDocPath = Path.Combine(releaseDir, $"DynamicNode_{nodeName}.xml");
 
-        using (var dllStream = File.Create(dllPath))
-        using (var pdbStream = File.Create(pdbPath))
-        using (var xmlDocStream = File.Create(xmlDocPath))
+        using var dllImage = new MemoryStream();
+        using var pdbImage = new MemoryStream();
+        using var xmlDoc = new MemoryStream();
+
+        var emitOptions = new EmitOptions(
+            debugInformationFormat: DebugInformationFormat.PortablePdb,
+            pdbFilePath: pdbPath);
+
+        EmitResult emitResult;
+        try
         {
-            var emitOptions = new EmitOptions(
-                debugInformationFormat: DebugInformationFormat.PortablePdb,
-                pdbFilePath: pdbPath);
-
-            var emitResult = compilation.Emit(
-                dllStream, pdbStream, xmlDocumentationStream: xmlDocStream,
+            emitResult = compilation.Emit(
+                dllImage, pdbImage, xmlDocumentationStream: xmlDoc,
                 options: emitOptions, cancellationToken: ct);
-
-            if (!emitResult.Success)
-                // Deterministic compile error — propagates straight out of the retry loop,
-                // unlogged, to the pipeline's single reporting funnel.
-                throw new CompilationException(nodePath, FormatCompileFailure(nodePath, emitResult.Diagnostics));
         }
-        // Streams flushed + closed here, before EmitToDiskWithRetry verifies the file.
-        return dllPath;
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Roslyn THREW instead of returning diagnostics — an emit-phase fault, not a
+            // compile error. Stamp the canary verdict on the exception and rethrow the
+            // ORIGINAL untouched: the type name is what CI triage keys on, so this must
+            // never become a wrapper. The verdict travels to the pipeline's single
+            // reporting funnel via SummarizeCompileError — no second log from here, the
+            // log-once contract above still holds.
+            ex.Data[EmitCanaryDataKey] = ProbeSharedEmitState(compilation);
+            throw;
+        }
+
+        if (!emitResult.Success)
+            // Deterministic compile error — propagates straight out of the retry loop,
+            // unlogged, to the pipeline's single reporting funnel.
+            throw new CompilationException(nodePath, FormatCompileFailure(nodePath, emitResult.Diagnostics));
+
+        // The DLL last: it is the discovery key of the release directory, so a reader that ever sees
+        // the staging dir mid-write still finds the symbols and docs already beside it. (Publication
+        // itself is the atomic Directory.Move in EmitToDiskWithRetry; this is belt and braces.)
+        File.WriteAllBytes(pdbPath, Bytes(pdbImage));
+        File.WriteAllBytes(xmlDocPath, Bytes(xmlDoc));
+        var image = Bytes(dllImage);
+        File.WriteAllBytes(dllPath, image);
+
+        return EmittedArtifact.For(dllPath, image);
+
+        // Expandable MemoryStreams created with the parameterless ctor expose their buffer, so the
+        // common path hands out a span over it instead of copying a multi-megabyte image.
+        static ReadOnlySpan<byte> Bytes(MemoryStream s)
+            => s.TryGetBuffer(out var seg) ? seg.AsSpan() : s.ToArray();
+    }
+
+    /// <summary>
+    /// Key under which <see cref="EmitCompilationToDirectory"/> stamps the canary verdict on a
+    /// thrown-from-Emit exception, and under which
+    /// <c>NodeTypeCompilationHelpers.SummarizeCompileError</c> reads it back.
+    /// </summary>
+    internal const string EmitCanaryDataKey = "MeshWeaver.EmitCanary";
+
+    /// <summary>
+    /// A minimal, self-contained compilation used ONLY by <see cref="ProbeSharedEmitState"/>.
+    /// Three levels of nested generics on purpose: that is what makes Roslyn's metadata writer
+    /// walk a type's containing chain (<c>GetConsolidatedTypeParameters</c> recursing through
+    /// <c>ContainingTypeDefinition</c>) — the exact path issue #890's NRE dies on. A flat class
+    /// would emit fine even on a poisoned writer and the canary would answer "healthy" wrongly.
+    /// </summary>
+    private const string EmitCanarySource =
+        "public class MwEmitCanary<T> { public class Inner<U> { public class Leaf<V> "
+        + "{ public T A; public U B; public V C; } } }";
+
+    /// <summary>
+    /// Answers ONE question, at the moment a Roslyn <c>Emit</c> throws: is the fault specific to
+    /// THIS compilation's inputs, or is process-wide emit state broken?
+    ///
+    /// <para>It re-emits a trivial nested-generic compilation built against <b>the same
+    /// <see cref="MetadataReference"/> instances</b> as the compilation that just failed, to a
+    /// <see cref="MemoryStream"/>. Those references — and the Roslyn symbols cached on their
+    /// shared <c>AssemblyMetadata</c> — are the only state the two compilations have in common,
+    /// so the canary separates the two halves of the search space that issue #890 could not:
+    /// canary FAILS ⇒ the shared reference/symbol state is poisoned (a process-wide fault; the
+    /// next step is bisecting the reference set and reporting upstream). Canary SUCCEEDS ⇒ the
+    /// shared state is fine and the fault is a property of this node's own compilation inputs
+    /// (the next step is dumping its generated source).</para>
+    ///
+    /// <para>🚨 It cannot fail into the fault path it is diagnosing: every outcome — including
+    /// the canary throwing — returns a STRING. A diagnostic that throws while diagnosing would
+    /// replace the original exception and destroy the evidence it exists to preserve. It is also
+    /// bounded: one tiny in-memory emit, only ever on an already-failing path, never on the
+    /// success path or on a normal compile error.</para>
+    /// </summary>
+    /// <param name="faulted">The compilation whose <c>Emit</c> threw; only its references are used.</param>
+    /// <returns>A one-line verdict, safe to append to a log message.</returns>
+    internal static string ProbeSharedEmitState(CSharpCompilation faulted)
+    {
+        try
+        {
+            var canary = CSharpCompilation.Create(
+                "MeshWeaverEmitCanary",
+                syntaxTrees: [CSharpSyntaxTree.ParseText(EmitCanarySource)],
+                references: faulted.References,
+                options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+            using var canaryStream = new MemoryStream();
+            var result = canary.Emit(canaryStream);
+            if (result.Success)
+                return "canary=OK (a trivial nested-generic emit against the SAME reference set "
+                    + "still succeeds ⇒ shared Roslyn/reference state is healthy; the fault is "
+                    + "specific to THIS compilation's inputs — dump its generated source)";
+
+            var ids = result.Diagnostics
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .Select(d => d.Id).Distinct().Take(5);
+            return $"canary=DIAGNOSTICS ({string.Join(",", ids)}) — the shared reference set no "
+                + "longer binds a trivial compilation ⇒ process-wide reference state is broken";
+        }
+        catch (Exception probeError)
+        {
+            return $"canary=THREW {probeError.GetType().Name}: {probeError.Message} — a trivial "
+                + "emit against the SAME reference set fails too ⇒ process-wide Roslyn/reference "
+                + "state is POISONED, not this compilation's inputs (bisect the reference set)";
+        }
     }
 
     /// <summary>
@@ -2119,21 +2226,26 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Emits to a fresh per-attempt subdirectory under <paramref name="cacheDirectory"/> and
-    /// confirms the assembly actually persisted, re-emitting up to <paramref name="maxAttempts"/>
-    /// times when the DLL is missing or empty afterward. <paramref name="emitToReleaseDir"/> runs
-    /// the real Roslyn emit into the supplied directory and returns the DLL path it wrote; it may
-    /// throw <see cref="CompilationException"/> for a genuine compile error, which propagates
-    /// immediately (NEVER retried — only a lost/empty artifact triggers a re-emit). Extracted and
-    /// <c>internal</c> so the lost-write self-heal is unit-testable without a real flaky filesystem.
+    /// confirms the assembly on disk IS the image that was emitted, re-emitting up to
+    /// <paramref name="maxAttempts"/> times when it is not. <paramref name="emitToReleaseDir"/> runs
+    /// the real Roslyn emit into the supplied directory and returns the DLL path together with the
+    /// digest of the image it produced (<see cref="EmittedArtifact"/>); it may throw
+    /// <see cref="CompilationException"/> for a genuine compile error, which propagates immediately
+    /// (NEVER retried — only a lost or mismatched artifact triggers a re-emit). Extracted and
+    /// <c>internal</c> so the publication contract is unit-testable without a real flaky filesystem.
     /// </summary>
     internal static string EmitToDiskWithRetry(
         string cacheDirectory,
         string nodeName,
         int maxAttempts,
         ILogger logger,
-        Func<string, string> emitToReleaseDir)
+        Func<string, EmittedArtifact> emitToReleaseDir)
     {
         string? lastDllPath = null;
+        // Why the LAST attempt failed to publish, carried into the terminal exception: "could not
+        // be persisted" alone sent operators looking for a read-only cache directory when the real
+        // answer was an artifact that is present and unreadable.
+        var lastReason = "the artifact never appeared";
 
         static void TryDeleteDir(string dir)
         {
@@ -2165,10 +2277,10 @@ internal class MeshNodeCompilationService(
             // The real emit (a genuine compile error throws straight through — never retried). Discard
             // the half-written staging dir first so a failed emit leaves no partial artifact behind (the
             // old code leaked a glob-discoverable `{nodeName}_{ticks}` dir here — the same hazard).
-            string stagedDllPath;
+            EmittedArtifact staged;
             try
             {
-                stagedDllPath = emitToReleaseDir(stagingDir);
+                staged = emitToReleaseDir(stagingDir);
             }
             catch
             {
@@ -2176,24 +2288,39 @@ internal class MeshNodeCompilationService(
                 throw;
             }
 
-            // Confirm the bytes are genuinely on disk, then atomically publish. EVERY fault here is a
-            // RETRYABLE publish failure — an ephemeral-cache eviction racing the size read, or a
-            // transient rename IO error — so discard staging and re-emit rather than aborting the compile.
+            // Confirm the staged file IS the image the emit produced, then atomically publish. EVERY
+            // fault here is a RETRYABLE publish failure — an ephemeral-cache eviction racing the
+            // read, a lost or partial write, or a transient rename IO error — so discard staging and
+            // re-emit rather than aborting the compile.
+            //
+            // 🚨 The predicate is "these are the bytes we emitted", NOT "this file is non-empty".
+            // `Length > 0` accepts a 1-byte file, a truncated PE, and — the case that survived
+            // #1387 — a full-length image with an unwritten region inside its metadata. None of
+            // those is rejected by the loader in any way the pipeline survives: the first two make
+            // LoadNodeAssembly return null, the third loads fine and throws
+            // ReflectionTypeLoadException "…because the format is invalid" on the first GetTypes().
+            // CompileResultFromAssembly records either as CompilationStatus.Error, and the
+            // first-build kickoff is gated on Status == null, so it NEVER retries — the bytes may
+            // heal, the verdict does not, and the NodeType is parked for good (#1412). Proving the
+            // artifact before it enters the discovery namespace is the publication contract, the
+            // same one AtomicFileWrite gives the assembly store; it is emphatically NOT a retry
+            // around a load. See EmittedArtifact for why a digest and not a metadata walk.
             try
             {
-                if (File.Exists(stagedDllPath) && new FileInfo(stagedDllPath).Length > 0)
+                if (staged.MatchesFileOnDisk(out lastReason))
                 {
                     Directory.Move(stagingDir, releaseDir);
                     return lastDllPath;
                 }
 
                 logger.LogWarning(
-                    "Emit for {NodeName} reported success but the assembly was missing or empty at " +
-                    "{DllPath} after flush (attempt {Attempt}/{Max}); re-emitting.",
-                    nodeName, stagedDllPath, attempt, maxAttempts);
+                    "Emit for {NodeName} reported success but the staged assembly at {DllPath} is " +
+                    "not the image that was emitted — {Reason} (attempt {Attempt}/{Max}); re-emitting.",
+                    nodeName, staged.DllPath, lastReason, attempt, maxAttempts);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                lastReason = $"publishing failed — {ex.GetType().Name}: {ex.Message}";
                 logger.LogWarning(ex,
                     "Publishing the emitted assembly for {NodeName} failed (attempt {Attempt}/{Max}); re-emitting.",
                     nodeName, attempt, maxAttempts);
@@ -2204,9 +2331,10 @@ internal class MeshNodeCompilationService(
         }
 
         throw new CompilationException(nodeName,
-            $"Compilation succeeded but the emitted assembly for '{nodeName}' could not be persisted to " +
-            $"'{cacheDirectory}' after {maxAttempts} attempts (last target '{lastDllPath}'). The compilation " +
-            "host's cache directory may be read-only or evicting files.");
+            $"Compilation succeeded but the emitted assembly for '{nodeName}' could not be published to " +
+            $"'{cacheDirectory}' after {maxAttempts} attempts (last target '{lastDllPath}'; last failure: " +
+            $"{lastReason}). The compilation host's cache directory may be read-only, evicting files, or " +
+            "losing writes.");
     }
 
     /// <summary>
@@ -2233,205 +2361,6 @@ internal class MeshNodeCompilationService(
         var assemblyBytes = dllStream.ToArray();
         var pdbBytes = pdbStream.ToArray();
         cacheService.LoadAssemblyFromBytes(nodeName, assemblyBytes, pdbBytes);
-    }
-
-    /// <summary>
-    /// Compiles a node type to a specific release folder.
-    /// This method is thread-safe and multi-process safe when used with CompilationLock.
-    /// The caller is responsible for acquiring the lock before calling this method.
-    /// </summary>
-    /// <param name="release">The NodeTypeRelease containing all compilation inputs.</param>
-    /// <param name="node">The MeshNode being compiled.</param>
-    /// <param name="releaseFolder">Target folder for the compiled assembly.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>Compilation result with assembly location and configurations.</returns>
-    internal async Task<NodeCompilationResult?> CompileToReleaseAsync(
-        NodeTypeRelease release,
-        MeshNode node,
-        string releaseFolder,
-        CancellationToken ct = default)
-    {
-        var sanitizedPath = release.GetSanitizedPath();
-
-        logger.LogInformation("Compiling {NodePath} to release folder {ReleaseFolder}", node.Path, releaseFolder);
-
-        // Ensure release folder exists
-        Directory.CreateDirectory(releaseFolder);
-
-        var dllPath = Path.Combine(releaseFolder, $"{sanitizedPath}.dll");
-        var pdbPath = Path.Combine(releaseFolder, $"{sanitizedPath}.pdb");
-        var sourcePath = Path.Combine(releaseFolder, $"{sanitizedPath}.cs");
-        var xmlDocPath = Path.Combine(releaseFolder, $"{sanitizedPath}.xml");
-
-        ct.ThrowIfCancellationRequested();
-
-        // Generate source code
-        var codeConfig = string.IsNullOrEmpty(release.Code) ? null : new CodeConfiguration { Code = release.Code };
-        var rawSource = _attributeGenerator.GenerateAttributeSource(node, codeConfig, release.HubConfiguration, release.ContentCollections);
-
-        // Strip #r "nuget:..." directives — Roslyn compilation (unlike scripting) does not process them.
-        var (source, extractedRefs) = NuGetDirectiveParser.Extract(rawSource);
-        // 🚨 Same legacy-#r strip as AssembleCompilationInputs: a node Source still carrying
-        // `#r "nuget:MeshWeaver.BusinessRules.Generator"` must NOT reach the NuGet resolver —
-        // the generator ships built-in, and the mesh-local feed it used to resolve from is gone
-        // (#395), so resolving hard-fails ("The local source '…/dist/packages' doesn't exist").
-        // This RELEASE-folder compile path previously lacked the strip: the PensionFund sample
-        // (legacy #r intact) compiled green on CI only because the workflow's pack step happened
-        // to recreate the feed — the strip in the OTHER compile path never covered this one.
-        var nugetRefList = extractedRefs.ToList();
-        StripBuiltInScopeGeneratorRef(nugetRefList, builtInPresent: BuiltInGeneratorPaths.Count > 0);
-        var nugetRefs = nugetRefList.ToArray();
-        IEnumerable<MetadataReference> references = _references;
-        IReadOnlyList<string> probingDirs = [];
-        IReadOnlyList<string> nugetAssemblyPaths = [];
-        if (nugetRefs.Length > 0)
-        {
-            var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
-            references = _references.Concat(
-                resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
-            probingDirs = resolved.ProbingDirectories;
-            nugetAssemblyPaths = resolved.AssemblyPaths;
-        }
-
-        // Write source file for debugging
-        if (_cacheOptions.EnableSourceDebugging)
-        {
-            await File.WriteAllTextAsync(sourcePath, source, ct);
-            logger.LogDebug("Wrote source file: {SourcePath}", sourcePath);
-        }
-
-        // Parse with source path embedded for PDB source linking
-        var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(source, System.Text.Encoding.UTF8);
-        var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
-        var syntaxTree = CSharpSyntaxTree.ParseText(
-            sourceText,
-            parseOptions,
-            path: _cacheOptions.EnableSourceDebugging ? sourcePath : "",
-            cancellationToken: ct);
-
-        var assemblyName = sanitizedPath;
-
-        var compilation = RunSourceGenerators(CSharpCompilation.Create(
-            assemblyName,
-            syntaxTrees: [syntaxTree],
-            references: references,
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-                .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu)), nugetAssemblyPaths, logger, ct);
-
-        // Emit to release folder
-        await using var dllStream = File.Create(dllPath);
-        await using var pdbStream = File.Create(pdbPath);
-        await using var xmlDocStream = File.Create(xmlDocPath);
-
-        var emitOptions = new EmitOptions(
-            debugInformationFormat: DebugInformationFormat.PortablePdb,
-            pdbFilePath: pdbPath);
-
-        var emitResult = compilation.Emit(dllStream, pdbStream, xmlDocumentationStream: xmlDocStream, options: emitOptions, cancellationToken: ct);
-
-        if (!emitResult.Success)
-        {
-            // Clean up partial files on failure
-            await dllStream.DisposeAsync();
-            await pdbStream.DisposeAsync();
-            await xmlDocStream.DisposeAsync();
-
-            try { Directory.Delete(releaseFolder, recursive: true); } catch { /* ignore */ }
-
-            var errorMessage = FormatCompileFailure(node.Path, emitResult.Diagnostics);
-            logger.LogError("{ErrorMessage}", errorMessage);
-            throw new CompilationException(node.Path, errorMessage);
-        }
-
-        // Close streams before writing metadata
-        await dllStream.DisposeAsync();
-        await pdbStream.DisposeAsync();
-        await xmlDocStream.DisposeAsync();
-
-        // Write the NodeTypeRelease as release.json (contains all metadata)
-        var metadataPath = Path.Combine(releaseFolder, "release.json");
-        var metadataJson = JsonSerializer.Serialize(release, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(metadataPath, metadataJson, ct);
-
-        // Persist NuGet probing directories alongside the release so the load context
-        // can probe for transitive dependencies at load time.
-        if (probingDirs.Count > 0)
-        {
-            var probingPath = Path.Combine(releaseFolder, "probing.json");
-            var probingJson = JsonSerializer.Serialize(probingDirs);
-            await File.WriteAllTextAsync(probingPath, probingJson, ct);
-        }
-
-        logger.LogInformation("Successfully compiled {NodePath} to {DllPath}", node.Path, dllPath);
-
-        // Load and extract configurations
-        return await LoadAndExtractConfigurationsFromReleaseAsync(release, releaseFolder, ct);
-    }
-
-    /// <summary>
-    /// Loads an assembly from a release folder and extracts NodeTypeConfigurations.
-    /// </summary>
-    internal async Task<NodeCompilationResult?> LoadAndExtractConfigurationsFromReleaseAsync(
-        NodeTypeRelease release,
-        string releaseFolder,
-        CancellationToken _)
-    {
-        var sanitizedPath = release.GetSanitizedPath();
-        var dllPath = Path.Combine(releaseFolder, $"{sanitizedPath}.dll");
-
-        try
-        {
-            // PIN across load + the GetTypes/MeshNodeProviderAttribute scan below — same
-            // unload-during-scan race as CompileResultFromAssembly (TypeLoadException 'format is
-            // invalid'). Released when the method returns; Dispose() drains pins before Unload().
-            // Resolve+pin is ONE operation for the reason spelled out there: an eviction landing
-            // between the two steps otherwise yields an empty configuration list that reads as
-            // authoritative (#1151).
-            using var pinned = cacheService.PinForScanOfRelease(release, releaseFolder);
-            var context = pinned.Context;
-            var assembly = context.LoadNodeAssembly();
-            if (assembly == null)
-            {
-                logger.LogWarning("Failed to load assembly from {DllPath}", dllPath);
-                return new NodeCompilationResult(dllPath, []);
-            }
-
-            var configurations = new List<NodeTypeConfiguration>();
-            foreach (var type in assembly.GetTypes())
-            {
-                if (typeof(MeshNodeProviderAttribute).IsAssignableFrom(type) && !type.IsAbstract)
-                {
-                    var attribute = (MeshNodeProviderAttribute?)Activator.CreateInstance(type);
-                    if (attribute != null)
-                    {
-                        foreach (var meshNode in attribute.Nodes)
-                        {
-                            var hubConfig = meshNode.HubConfiguration;
-                            if (hubConfig != null)
-                            {
-                                configurations.Add(new NodeTypeConfiguration
-                                {
-                                    NodeType = meshNode.Path,
-                                    DataType = typeof(object),
-                                    HubConfiguration = hubConfig,
-                                    DisplayName = meshNode.Name,
-                                    Icon = meshNode.Icon,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {DllPath}", configurations.Count, dllPath);
-            return new NodeCompilationResult(dllPath, configurations);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to extract NodeTypeConfigurations from {DllPath}", dllPath);
-            return new NodeCompilationResult(dllPath, []);
-        }
     }
 }
 

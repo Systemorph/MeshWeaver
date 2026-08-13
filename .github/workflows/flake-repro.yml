@@ -25,9 +25,20 @@ on:
         type: string
         default: "FullyQualifiedName~CodeEditRecompileTest.PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease"
       iterations:
-        description: "Max loop iterations (stops on first failure)"
+        description: "Max loop iterations (stop-on-first-failure mode stops early; rate mode always runs all of them)"
         type: string
         default: "25"
+      mode:
+        # `hunt` answers "does it reproduce?" — stop at the first failure and keep the
+        # diagnostics from THAT iteration. `rate` answers "how often?" — run every
+        # iteration and report failures/iterations, which is the only mode in which a
+        # before/after comparison means anything. At a ~1-in-24 rate a clean 30-iteration
+        # hunt happens by luck ~28% of the time, so "one green loop" is not evidence that
+        # a fix worked; a rate over ≳100 iterations is.
+        description: "hunt = stop at first failure (diagnose) | rate = run all iterations and report failures/N (measure)"
+        type: choice
+        options: ["hunt", "rate"]
+        default: "hunt"
       loglevel:
         description: "Default log level for the looped runs (Debug/Trace to surface the watcher race)"
         type: string
@@ -52,6 +63,7 @@ jobs:
       REPRO_PROJECT: ${{ inputs.project || 'test/MeshWeaver.Hosting.Monolith.Test' }}
       REPRO_FILTER: ${{ inputs.filter || 'FullyQualifiedName~CodeEditRecompileTest.PressingCompileButton_SetsRequestedReleaseAt_AndProducesNewRelease' }}
       REPRO_ITERS: ${{ inputs.iterations || '80' }}
+      REPRO_MODE: ${{ inputs.mode || 'hunt' }}
       DOTNET_ENVIRONMENT: Development
       # 🚨 Logging cranked via ENV only — never a committed appsettings/Log* change
       # (those are production cost contract). Surfaces the watcher/messaging trace.
@@ -107,6 +119,13 @@ jobs:
         if: always()
         run: |
           set -uo pipefail
+          # 🚨 GitHub runs a `run:` block as `bash -e {0}`, and `set -uo pipefail` does NOT clear
+          # that. So the FIRST failing `dotnet test` killed the whole step on the spot: the
+          # `::error::REPRO on iteration N` annotation below had never once fired, the loop's own
+          # summary never printed, and `rate` mode could never reach a denominator — a reproduction
+          # and a harness crash were again indistinguishable, which is the exact failure mode the
+          # rest of this file is written to prevent. The loop checks every exit code itself.
+          set +e
           iters="$REPRO_ITERS"
           proj="$REPRO_PROJECT"
           filt="$REPRO_FILTER"
@@ -116,8 +135,14 @@ jobs:
             echo "::error::REPRO DID NOT RUN — project '$proj' not found. Nothing was reproduced; the job's failure is the harness, not the flake."
             exit 1
           fi
-          echo "Looping '$filt' in $proj up to $iters× on a 2-vCPU runner (nproc=$(nproc))."
-          failed=0
+          case "$REPRO_MODE" in
+            hunt|rate) ;;
+            *) echo "::error::REPRO DID NOT RUN — unknown mode '$REPRO_MODE' (expected 'hunt' or 'rate')."; exit 1 ;;
+          esac
+          echo "Looping '$filt' in $proj up to $iters× in '$REPRO_MODE' mode (nproc=$(nproc) — the flake is load-dependent, so record this alongside the rate)."
+          failures=0
+          ran=0
+          failed_iters=""
           for i in $(seq 1 "$iters"); do
             echo "::group::iteration $i / $iters"
             # --no-build --no-restore: run the Release binaries built above, exactly
@@ -129,15 +154,34 @@ jobs:
               --blame-hang-timeout 120s --blame-hang-dump-type mini
             rc=$?
             echo "::endgroup::"
+            ran=$((ran + 1))
             if [ "$rc" -ne 0 ]; then
+              failures=$((failures + 1))
+              failed_iters="$failed_iters $i"
               echo "::error::REPRO on iteration $i (exit $rc) — diagnostics uploaded below."
-              failed=1
-              break
+              # hunt: stop here so the uploaded diagnostics belong to THIS iteration.
+              # rate: keep going — the whole point is the denominator.
+              if [ "$REPRO_MODE" = "hunt" ]; then break; fi
+            else
+              echo "iteration $i passed"
             fi
-            echo "iteration $i passed"
           done
-          if [ "$failed" = "0" ]; then
-            echo "No repro in $iters iterations (the flake did not surface this run)."
+          # The measured rate is the deliverable of a `rate` run, so put it where it cannot be
+          # missed: a comparison is only meaningful as failures/iterations, never as "it was green".
+          {
+            echo "### Flake repro — \`$REPRO_MODE\` mode"
+            echo ""
+            echo "- filter: \`$filt\`"
+            echo "- project: \`$proj\`"
+            echo "- **result: $failures failure(s) in $ran iteration(s) run** (of $iters requested)"
+            if [ -n "$failed_iters" ]; then echo "- failing iterations:$failed_iters"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "RESULT: $failures failure(s) in $ran iteration(s) run (requested $iters); failing iterations:${failed_iters:- none}"
+          if [ "$failures" = "0" ]; then
+            echo "No repro in $ran iterations (the flake did not surface this run)."
+            failed=0
+          else
+            failed=1
           fi
           # Exit non-zero on repro so the run is CLEARLY marked failed in the Actions
           # list (repro achieved = red). The diagnostics-collection + upload steps

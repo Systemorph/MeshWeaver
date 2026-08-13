@@ -58,6 +58,15 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         var hub = context.RequestServices.GetRequiredService<PortalApplication>().Hub;
         var userService = hub.ServiceProvider.GetRequiredService<AccessService>();
 
+        // 🚨 THE ONLY THING WE KNOW about an ANONYMOUS visitor's language. Everything downstream
+        // resolves text off AccessContext.Locale (never an ambient culture — a hub render hops the
+        // scheduler and an AsyncLocal culture does not survive it), and an anonymous visitor has no
+        // profile to read it from. Without this seed the field is null for EVERY first-time
+        // visitor, so "the viewer's language wins for chrome" is inert for exactly the audience a
+        // paywall / invite / public course page exists for. Null when the browser asked for nothing
+        // we ship — see Locales.Negotiate on why that stays distinguishable from "English".
+        var requestLocale = Locales.Negotiate(context.Request.Headers.AcceptLanguage.ToString());
+
         // Try OAuth first (browser sessions), then Bearer token (MCP / API clients).
         // The bearer-token bridge to Task happens once at the ASP.NET middleware boundary —
         // production surface is IObservable end-to-end (see ExtractFromBearerToken).
@@ -125,6 +134,12 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             //      anonymous. The OnboardingMiddleware / dev login will
             //      provision the User node on a follow-up request and the
             //      cache picks it up.
+            // Seed the request's language BEFORE the profile lookup, so the profile can override it
+            // (MeshUserProjection keeps a set profile field and only falls back to the seed). A
+            // signed-in user's STORED preference must win over their browser's header — seeding is
+            // for the case where we know nothing, never an override.
+            userContext = userContext with { Locale = requestLocale };
+
             var identityIndexUnavailable = false;
             if (!string.IsNullOrEmpty(userContext.Email))
             {
@@ -132,11 +147,12 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 identityIndexUnavailable = lookup.IsUnavailable;
                 if (lookup.Node is { } meshUser)
                 {
-                    userContext = userContext with
-                    {
-                        ObjectId = meshUser.Id,
-                        Name = meshUser.Name ?? meshUser.Id
-                    };
+                    // The SAME projection the circuit path applies (see MeshUserProjection): id and
+                    // name from the node, time zone and language from the profile when it has them.
+                    // This used to take only Id/Name here, which left every server-rendered string
+                    // English for a German user — harmless while nothing seeded a locale, and a
+                    // visible SSR-vs-circuit split the moment one does.
+                    userContext = MeshUserProjection.Apply(userContext, meshUser, hub.JsonSerializerOptions);
                 }
                 else if (identityIndexUnavailable)
                 {
@@ -172,7 +188,9 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                         : "no mesh User node carries this email");
                 // Never null — treat as Anonymous (least privilege) rather than
                 // null, which would fail-close the request at the never-null guard.
-                userService.SetContext(AnonymousContext);
+                // The language still rides along: refusing an identity is not a reason to serve
+                // the wrong language.
+                userService.SetContext(AnonymousContext with { Locale = requestLocale });
                 await next(context);
                 return;
             }
@@ -203,7 +221,12 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             // Anonymous carries Permission.None by default; RLS still filters
             // reads to exactly what the Anonymous role is granted (public
             // pages), and any write is cleanly rejected — never fail-closed.
-            userService.SetContext(AnonymousContext);
+            //
+            // 🚨 …but it carries the REQUEST'S LANGUAGE. This is the paywall / invite / public
+            // course case: the visitor is anonymous BY DEFINITION, so the header is the only
+            // statement of language that exists, and dropping it here is what made the
+            // viewer's-language-wins decision inert for the audience it was written for.
+            userService.SetContext(AnonymousContext with { Locale = requestLocale });
         }
 
         await next(context);
