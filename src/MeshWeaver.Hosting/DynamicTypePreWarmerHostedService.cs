@@ -216,11 +216,13 @@ public sealed class DynamicTypePreWarmerHostedService(
                     batchBake ? "gated (batch)" : "serving (activation-driven)");
         }
 
-        // Build-protocol mode (Doc/Architecture/BuildCoordination): coordination through the
-        // Admin/Build claim + chunk nodes + the per-fingerprint GO instead of the file lease and
-        // the follower's share poll. DEFAULT OFF while the protocol slices land — execution is the
-        // same sweep either way, so this flips only WHO decides and HOW completion is broadcast.
-        var buildProtocol = false;
+        // Build-protocol coordination (Doc/Architecture/BuildCoordination): the Admin/Build claim
+        // decides who bakes, chunk nodes record what each part produced, and everyone else
+        // completes on the per-fingerprint GO. DEFAULT ON — this is the only coordination there
+        // is (the file lease it replaced is deleted), and it was verified on memex-cloud's gated
+        // roll 2026-08-13 (claim → 37 chunks → GO → gate green). Execution is the same sweep
+        // either way; the key is the ESCAPE HATCH (set false to bake solo, uncoordinated).
+        var buildProtocol = true;
         var protocolRaw = services.GetService<IConfiguration>()?[BuildProtocolDriver.EnabledConfigKey];
         if (!string.IsNullOrWhiteSpace(protocolRaw))
         {
@@ -229,7 +231,7 @@ public sealed class DynamicTypePreWarmerHostedService(
             else
                 logger.LogWarning(
                     "DynamicTypePreWarmer: ignoring invalid {Key}='{Value}' — build-protocol "
-                    + "coordination stays off",
+                    + "coordination stays on (the default)",
                     BuildProtocolDriver.EnabledConfigKey, protocolRaw);
         }
 
