@@ -65,11 +65,49 @@
 
 name: MeshWeaver Build and Test
 
+# ──────────── EVERY PR, WHATEVER ITS BASE — including a STACKED one ────────────
+# 🚨 The `pull_request` trigger deliberately carries NO `branches:` filter. Do not
+# re-add one. It used to say `branches: [ "main" ]`, and the consequence (#1401) was
+# that a PR based on ANOTHER PR's branch — a stacked PR, which is the recommended way
+# to split a large change into reviewable pieces — never ran this suite at all.
+#
+# The failure mode is the dangerous half: an ABSENT check looks like nothing to wait
+# for. There is no "skipped", no pending, no marker of any kind — a stacked PR renders
+# as a short, all-green check list, visually IDENTICAL to one that ran the full suite
+# and passed. #1398 → #1399 → #1400 were split exactly as intended and two of the three
+# reached `MERGEABLE/CLEAN` with zero runs in their entire history.
+#
+# Three things make that state stickier than it looks, all confirmed on those PRs:
+#   * GitHub retargets a child PR to `main` only when the parent's branch is DELETED
+#     on merge. Branch deletion is off here, so a child keeps pointing at a merged
+#     branch indefinitely — "it gets tested later, just out of order" is not real.
+#     Left alone, a stacked PR was never tested at ANY point, including at merge.
+#   * `gh pr edit --base main` fires `pull_request.edited`, which is NOT in the default
+#     type set (opened/synchronize/reopened). The base changed, the checks stayed
+#     absent, and the PR still read CLEAN. Only close+reopen ever queued a run.
+#   * The `main pr protection` ruleset is scoped to `~DEFAULT_BRANCH`, so a PR whose
+#     base is not `main` is outside it: the `Consolidate test results` required check
+#     is not required there, and its absence therefore does not even block the merge.
+# So the pre-fix state had no signal at all: nothing ran, nothing was pending, nothing
+# was required. Running unconditionally is what turns that silence back into evidence.
+#
+# What a stacked run tests: GitHub builds `refs/pull/N/merge`, i.e. the branch merged
+# with ITS BASE. For a stacked PR that base is the parent's branch, so the run tests
+# the layer's own diff on top of the parent — real coverage of the code being reviewed.
+# That is the same "tested against a base that is not main's tip" posture the ruleset
+# already sanctions repo-wide (`strict_required_status_checks_policy: false`).
+#
+# Cost is small and bounded, because the green-tree reuse below is keyed on the TREE:
+# when the parent merges and main lands the identical tree, `precheck` finds the marker
+# the stacked run wrote and skips build+test. A stacked series pays for one full suite
+# per layer, not two.
+#
+# `push:` stays `main`-only on purpose — a full suite on every feature-branch push
+# would double every PR's cost for no extra evidence (the PR run already covers it).
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  pull_request:      # ← NO `branches:` filter. See the block above (#1401) before adding one.
   workflow_dispatch:
 
 # A force-push to a PR branch obsoletes the in-flight run — cancel it instead of

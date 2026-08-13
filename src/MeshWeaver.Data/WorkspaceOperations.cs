@@ -186,7 +186,7 @@ public static class WorkspaceOperations
 
     /// <summary>Finishes a data-update log: status is rolled up from the message levels.</summary>
     private static ActivityLog Finish(IMessageHub hub, ImmutableList<LogMessage> messages) =>
-        new ActivityLog(ActivityCategory.DataUpdate) { Messages = messages }
+        new ActivityLog(ActivityCategory.DataUpdate).Append(messages)
             .Finish((int)hub.Version, null);
 
     // Maps an instance to its routing tuple. An EntityDeltaUpdate (a minimal-bytes
