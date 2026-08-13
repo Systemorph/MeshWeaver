@@ -139,9 +139,11 @@ public class PluginDependencyOrderTest(ITestOutputHelper output) : MonolithMeshT
         foreach (var pkg in closure)
             (await Install(pkg)).Written.Should().BeGreaterThan(0, $"{pkg.Id} must land");
 
-        var item = await Mesh.GetWorkspace().GetMeshNodeStream("Dependent/Item")
-            .Where(n => n is not null).Select(n => n!)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+        // Routed through StalledReadDiagnostics — this is issue #1405's read, and its reproduction
+        // carries NO distinguishing log line (thirty seconds of silence, then a bare
+        // TimeoutException). Happy path unchanged; on timeout the stalled stage is named.
+        var item = await StalledReadDiagnostics.ReadOrExplain(
+            Mesh, "Dependent/Item", TimeSpan.FromSeconds(30), Output.WriteLine);
         item.NodeType.Should().Be("Base/Widget",
             "the instance is typed by the NodeType its DEPENDENCY shipped — the whole point of "
             + "installing Base first");
