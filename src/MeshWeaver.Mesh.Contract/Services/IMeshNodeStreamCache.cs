@@ -105,6 +105,31 @@ public interface IMeshNodeStreamCache
     void Invalidate(string path);
 
     /// <summary>
+    /// Releases the warm entry for <paramref name="path"/> NOW — but ONLY when nothing is reading
+    /// it. Same protocol and same guard as the idle sweep
+    /// (<c>MeshNodeStreamCacheOptions.ReadStreamIdleExpiration</c>); the only difference is that the
+    /// caller supplies an EVENT proving the node is final instead of waiting out the ten-minute
+    /// heuristic. Returns true when this call claimed the entry and tore it down.
+    ///
+    /// <para><b>Why this exists.</b> The cache keeps a hydrated mirror per path because a path that
+    /// was just touched is usually about to be touched again — and that mirror posts a
+    /// <c>HeartBeatEvent</c> to the owner every 45 s expressly to keep its hub/grain alive. For a
+    /// node with a TERMINAL lifecycle the assumption is provably false: once an
+    /// <c>ActivityLog</c> reaches a status where <c>IsTerminal()</c> holds, no further write can
+    /// occur. Leaving the mirror up does not merely postpone reclamation — it actively PREVENTS it,
+    /// because the heartbeat resets every idle clock the platform has. A finished import or compile
+    /// therefore pins its own node hub (plus the sync sub-hubs on both sides) for as long as the
+    /// mirror lives. That is issue #1324's residual.</para>
+    ///
+    /// <para><b>Not a shorter timer.</b> Nothing about the idle heuristic changes; this adds the
+    /// missing EVENT. A live reader — a user watching the finished activity — still wins: the
+    /// zero-subscriber check is the same atomic one the sweep makes, so the entry survives and the
+    /// caller is told <c>false</c>. Idempotent, and a no-op for an unknown path or a path whose node
+    /// the caller owns (an own-node write never opens a cache entry).</para>
+    /// </summary>
+    bool ReleaseIfUnwatched(string path);
+
+    /// <summary>
     /// Process-wide synced-query cache: returns the cached
     /// <c>IObservable&lt;IEnumerable&lt;MeshNode&gt;&gt;</c> for the named query,
     /// creating it on first call. Replaces the legacy per-workspace registry

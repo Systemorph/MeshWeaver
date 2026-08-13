@@ -98,6 +98,7 @@ public class IndeterminateProbeReResolutionTest(ITestOutputHelper output) : HubT
         public IObservable<MeshNode> Overwrite(string path, MeshNode node, JsonSerializerOptions options)
             => Observable.Never<MeshNode>();
         public void Invalidate(string path) { }
+        public bool ReleaseIfUnwatched(string path) => false;
         public IObservable<IEnumerable<MeshNode>>? GetQuery(object id) => null;
         public IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries)
             => Observable.Never<IEnumerable<MeshNode>>();
