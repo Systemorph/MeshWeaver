@@ -115,6 +115,71 @@ public class LocalizationTest
         Locales.TryMatch("de-CH").Should().Be("de");
     }
 
+    // ---- Accept-Language: the ONLY language statement an anonymous visitor makes ----------
+
+    /// <summary>
+    /// <see cref="Locales.Negotiate"/> is what makes "the viewer's language wins for chrome" mean
+    /// anything for an ANONYMOUS visitor — the audience a paywall, an invite or a public course page
+    /// exists for, who has no profile to read a preference from. It must fold region variants onto
+    /// the primary subtag EXACTLY as <see cref="Locales.TryMatch"/> does (the product and the plugins
+    /// both match on the primary subtag; agreeing by construction is the whole point of putting the
+    /// rule here), and it must honour the header's weights rather than its textual order.
+    /// </summary>
+    [Theory]
+    // The paywall case: a British visitor on a German course page gets ENGLISH chrome.
+    [InlineData("en-GB", "en")]
+    [InlineData("en-US,en;q=0.9", "en")]
+    // The mirror.
+    [InlineData("de", "de")]
+    [InlineData("de-CH", "de")]
+    [InlineData("de-CH,de;q=0.9,en;q=0.8", "de")]
+    // Weight beats textual order — "en" is listed first but explicitly less preferred.
+    [InlineData("en;q=0.8,de;q=0.9", "de")]
+    // Languages we don't ship are skipped, not treated as a match that blocks the next candidate.
+    [InlineData("fr-FR,fr;q=0.9,de;q=0.8", "de")]
+    [InlineData("zh-CN,ja;q=0.9,en-GB;q=0.7", "en")]
+    // A malformed weight must not discard a preference the browser genuinely stated.
+    [InlineData("de;q=nonsense", "de")]
+    [InlineData("de;q=", "de")]
+    // Whitespace and casing are header noise, not meaning.
+    [InlineData("  DE-ch ;q=0.9 ", "de")]
+    public void Negotiate_PicksTheHighestWeightedSupportedLanguage(string header, string expected)
+        => Locales.Negotiate(header).Should().Be(expected);
+
+    /// <summary>
+    /// The null cases, kept apart because they are the ones that must NOT become "en": an
+    /// unresolvable header has to stay distinguishable from an explicit request for English, so a
+    /// better answer arriving later (a profile that loads a moment afterwards) is not shadowed by a
+    /// guess. Same contract as <see cref="Locales.TryMatch"/>.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    // Nothing we ship.
+    [InlineData("fr-FR,fr;q=0.9")]
+    [InlineData("zz-ZZ")]
+    // "*" is an ABSENCE of preference (curl, many bots). Matching it would pin every such caller to
+    // whichever language happens to head Locales.Supported.
+    [InlineData("*")]
+    [InlineData("*;q=0.5")]
+    // q=0 is an explicit REFUSAL of that language, not a weak preference for it.
+    [InlineData("de;q=0")]
+    [InlineData("de;q=0,en;q=0")]
+    // Garbage must degrade to "we know nothing", never to a throw.
+    [InlineData(",,,")]
+    [InlineData(";q=0.9")]
+    public void Negotiate_ReturnsNullWhenTheBrowserAskedForNothingWeShip(string? header)
+        => Locales.Negotiate(header).Should().BeNull();
+
+    /// <summary>
+    /// A refusal must not suppress the next acceptable candidate — <c>q=0</c> removes one language
+    /// from consideration, it does not end the negotiation.
+    /// </summary>
+    [Fact]
+    public void Negotiate_SkipsARefusedLanguageAndKeepsLooking()
+        => Locales.Negotiate("de;q=0,en;q=0.5").Should().Be("en");
+
     [Fact]
     public void MissingKey_FallsBackToEnglishThenToTheKeyItself()
     {
