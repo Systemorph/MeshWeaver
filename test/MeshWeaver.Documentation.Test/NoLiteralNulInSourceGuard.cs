@@ -7,7 +7,12 @@ using Xunit;
 namespace MeshWeaver.Documentation.Test;
 
 /// <summary>
-/// Governance guard: no tracked text file may contain a literal <b>U+0000</b> (NUL) character.
+/// Governance guard: no text file under the scanned source roots may contain a literal
+/// <b>U+0000</b> (NUL) character.
+///
+/// <para>The scan walks the WORKING TREE (<see cref="ScannedRoots"/>), not the git index — so a
+/// file that is merely staged, or not yet added at all, is caught just the same. That is
+/// deliberate: the point is to fail before the character is ever committed.</para>
 ///
 /// <para>This is not style policing — a literal NUL in a source file is a latent production failure
 /// with an invisible cause (#1449). The repo's own trees are synced into a mesh as nodes whose
@@ -69,7 +74,7 @@ public class NoLiteralNulInSourceGuard
             .ToList();
 
         Assert.True(offenders.Count == 0,
-            "A literal NUL (U+0000) is present in tracked text. It is invisible in every editor and "
+            "A literal NUL (U+0000) is present in a source file. It is invisible in every editor and "
             + "makes the file UNSTORABLE once synced into a mesh: PostgreSQL jsonb cannot represent "
             + "U+0000 and rejects the write with 22P05 (#1449). Write the character as an escape "
             + "('\\u001F' for a key separator) or remove it. Offending files:\n"

@@ -676,12 +676,6 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     {
         var ns = node.Namespace ?? "";
 
-        // Generate embedding
-        var embeddingText = string.Join(" ",
-            new[] { node.Name, node.NodeType }
-                .Where(s => !string.IsNullOrEmpty(s)));
-        var embeddingVector = await _embeddingProvider.GenerateEmbeddingAsync(embeddingText).ConfigureAwait(false);
-
         var contentJson = node.Content != null
             ? JsonSerializer.Serialize(node.Content, node.Content.GetType(), options)
             : null;
@@ -695,8 +689,19 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         // two can never disagree about what is storable. It never truncates or rewrites the content:
         // the value is unstorable by construction, so the only honest outcomes are "store it" and
         // "say exactly what is wrong with it".
+        //
+        // Deliberately AHEAD of the embedding call below: that call can be an EXTERNAL
+        // round-trip, and a write that is already doomed must not pay for one — nor, on the
+        // batch path, for one per node before the batch dies. Serialization has to happen
+        // first regardless; the check itself is the cheap part.
         if (UnstorableContentException.IsUnstorable(contentJson))
             throw UnstorableContentException.NulInContent(node.Path, contentJson!);
+
+        // Generate embedding
+        var embeddingText = string.Join(" ",
+            new[] { node.Name, node.NodeType }
+                .Where(s => !string.IsNullOrEmpty(s)));
+        var embeddingVector = await _embeddingProvider.GenerateEmbeddingAsync(embeddingText).ConfigureAwait(false);
 
         var table = ResolveTable(node.Path, node.NodeType);
         // sync_behavior lives only on mesh_nodes (the sole decouplable table); satellite
