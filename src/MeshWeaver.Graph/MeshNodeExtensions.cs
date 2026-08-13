@@ -505,6 +505,13 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
         typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
         typeRegistry.WithType(typeof(PartitionDefinition), nameof(PartitionDefinition));
+        // Build protocol (Doc/Architecture/BuildCoordination) — the coordination state on
+        // Admin/Build and its chunk children. Unregistered, the readiness subscription on every
+        // silo would read the GO signal as an untyped JsonElement and never go ready.
+        typeRegistry.WithType(typeof(BuildState), nameof(BuildState));
+        typeRegistry.WithType(typeof(BuildStatus), nameof(BuildStatus));
+        typeRegistry.WithType(typeof(BuildClaimRequest), nameof(BuildClaimRequest));
+        typeRegistry.WithType(typeof(BuildGo), nameof(BuildGo));
         // Compile trigger contract — CreateReleaseRequest / RunTests* are the
         // UI-facing triggers on the per-NodeType hub. (The cross-hub
         // RunCompileRequest/Response pair was deleted with the activity-dispatch
