@@ -159,6 +159,49 @@ The running script receives the cancellation, throws `OperationCanceledException
 
 ---
 
+## Writing log messages: `ActivityLogAppender`
+
+Every log line written onto a **persisted activity node** goes through `ActivityLogAppender.Append` (`src/MeshWeaver.Mesh.Contract/ActivityLogAppender.cs`). It is the append-side twin of the transition surface above: callers hand it messages plus an optional change to the log (terminal status, `End`, `ReturnValue`) and it performs **one** `stream.Update` carrying both — so a reader can never observe the terminal status before the lines that explain it.
+
+```csharp
+ActivityLogAppender.Append(hub, activityPath, [new LogMessage(text, LogLevel.Information)])
+    .Subscribe(_ => { }, ex => logger.LogDebug(ex, "activity append failed"));
+
+// terminal status + its explanation, atomically:
+ActivityLogAppender.Append(hub, activityPath, [new LogMessage(error, LogLevel.Error)],
+        log => log with { Status = ActivityStatus.Failed, End = DateTime.UtcNow })
+    .Subscribe(_ => { }, ex => logger.LogDebug(ex, "activity complete failed"));
+```
+
+### `Messages` is a bounded window
+
+`ActivityLog.Messages` holds at most `ActivityLog.MessageWindowLimit` (500) entries. Older lines are sealed into `ActivityLogSegment` satellites at `{activityPath}/_Log/{index:D6}` and drop off the head, leaving `MessageWindowKeep` (100) behind.
+
+**Why.** Every `stream.Update` re-serialises the whole `MeshNode.Content` to compute its patch, so appending N lines to one growing list costs **O(N²)** — measured at ~719 MB of serialisation for a single memex-cloud import activity (5,239 writes over a 141 kB node), and the dominant term in that pod's CFS throttling. A delta field does not escape it: the cross-hub path ships an RFC 7396 merge patch, which clones a changed array whole, and the three-way merge's base extraction clones the previous array too — so one append to an N-element collection ships ~2N elements. Bounding the head is the only lever that changes the asymptotics; with the window fixed, each write is O(1) and the activity is O(N).
+
+**Below the window nothing changes.** An activity that never reaches 500 messages takes exactly the single write per append it always did, with byte-identical content. Only long activities — the ones that actually hurt — take the new path.
+
+### Consequences for readers
+
+| You want… | Read… |
+|---|---|
+| How many lines the activity produced | `log.TotalMessageCount` — **never** `log.Messages.Count` |
+| Whether it errored / its terminal status | `log.HasErrors()`, `log.Finish(...)` — both answer from the `MaxSeverity` counter |
+| The latest line, or the last few | `log.Messages` — the window keeps the **most recent** entries, so `[^1]` and `TakeLast(n)` are unaffected |
+| The full transcript | the window plus the `_Log` segments, ordered by `ActivityLogSegment.FirstOrdinal` |
+
+🚨 **Enumerate segments with a children query on `{activityPath}/_Log`, never a point-read of a segment path.** A point-read of an absent satellite opens the shared stream cache's storm breaker on a path a concurrent write is about to use, and the breaker fast-fails writes too.
+
+🚨 **Never derive progress from `Messages.Count`.** It stops growing once an activity passes the window, so anything keyed on it — a `DistinctUntilChanged`, a change detector — silently freezes for exactly the long-running activities it exists to follow. `TotalMessageCount` is the monotonic signal.
+
+### How the flush stays safe without a lock
+
+A seal is **claimed inside the head's update lambda** (`ActivityLog.ClaimSeal`), which the owning hub serialises — so exactly one appender claims each slice and no two claims overlap. The claimed messages **stay on the head** until the segment write succeeds; only then are they trimmed (`ActivityLog.CompleteSeal`). A crash or a failed segment write therefore loses nothing and needs no watchdog: the claim is still standing and the messages are still there, so the next append retries the identical slice against the same (deterministic) segment index.
+
+`ActivityLogLogger` (the kernel's script logger) is the one writer that does **not** use the appender: it re-asserts whole content on every 100 ms flush rather than patching, so it is the single writer of its node and seals its own overflow directly under the lock it already holds for the terminal settle. Same window, same segment shape, no claim protocol needed because there is no second appender to race.
+
+---
+
 ## See also
 
 - [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) — the `Status` / `RequestedStatus` pattern and how to wire your own NodeType to it
