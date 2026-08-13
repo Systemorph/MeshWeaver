@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
@@ -25,15 +27,20 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <c>NodeTypeEnrichmentHelpers</c> only fires when an INSTANCE of the type is activated. A
 /// NodeType with no live instances therefore stays stale (and <c>compile</c> / CreateRelease
 /// up-to-date checks report it clean) — a runtime <c>MissingMethodException</c> timebomb — until
-/// an operator manually rebuilds it.</para>
+/// an operator manually rebuilds it. The fix is the owner-side, level-triggered kickoff in
+/// <c>NodeTypeCompilationHelpers.InstallCompileWatcher</c>.</para>
 ///
-/// <para><b>The fix</b> adds an owner-side, level-triggered kickoff in
-/// <c>NodeTypeCompilationHelpers.InstallCompileWatcher</c>: when the NodeType's own hub observes
-/// a settled Ok/Error state whose cached assembly is framework-stale, it flips
-/// <see cref="CompilationStatus.Pending"/> so the compile watcher rebuilds it against the CURRENT
-/// framework. This test forces the framework-stale shape on the NodeType (NO instance activated),
-/// then requires the NodeType to re-stamp the CURRENT framework version on its own. Before the fix
-/// nothing rebuilds and the wait for convergence times out.</para>
+/// <para>🚨 <b>The stale RECORD is only half the trigger — the other half is the STORE, and
+/// getting that wrong is what made this test a flake (issue #1368).</b> Since "Don't rebuild what
+/// the share already has" the kickoff asks <see cref="IAssemblyStore"/> before rebuilding, because
+/// <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> only says which framework the last
+/// WRITE-BACK came from — not whether bytes for the LIVE framework exist. The store answers the
+/// question that matters: its key carries the live framework tag, so a hit IS a usable build.
+/// A real self-update changes that tag, so every previously-cached DLL becomes invisible to the
+/// live lookup — the record AND the store go stale together. A test that forges only the record
+/// leaves genuine live-framework bytes on the volume, and the correct response to THAT state is
+/// to decline the rebuild. The two cases below therefore pin BOTH directions of the contract, and
+/// each one arranges the store to match the record it forges.</para>
 /// </summary>
 public class FrameworkStaleProactiveRebuildTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -48,11 +55,94 @@ public class FrameworkStaleProactiveRebuildTest(ITestOutputHelper output) : Mono
         => base.ConfigureMesh(builder).AddGraph();
 
     private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+    private IAssemblyStore AssemblyStore => Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
 
+    /// <summary>
+    /// #464: the record is framework-stale AND the store holds no bytes for the live framework —
+    /// the true post-self-update state. The NodeType's OWN hub must rebuild it, with no instance
+    /// activated and no user click.
+    /// </summary>
     [Fact(Timeout = 180_000)]
     public async Task FrameworkStaleNodeType_ProactivelyRebuilds_WithoutInstanceActivation()
     {
-        var typeId = $"ProactiveStale{Guid.NewGuid():N}";
+        var (nodeTypePath, realFv, baselineSucceededAt) = await CompileBaselineType("ProactiveStale");
+        var workspace = Mesh.GetWorkspace();
+
+        // Make the store MISS for the live framework, exactly as a self-update does. The store key
+        // embeds the framework tag (FileSystemAssemblyStore.FrameworkTag), so after a framework
+        // change every cached DLL still on the volume carries the OLD tag and the live-tag lookup
+        // finds nothing. We cannot change the running process's tag, so we remove the cached bytes
+        // — observationally identical through IAssemblyStore, which is all the kickoff can see.
+        EvictFromAssemblyStore(nodeTypePath);
+
+        var bogusFv = await ForceFrameworkStale(nodeTypePath);
+
+        // The NodeType's OWN hub must proactively rebuild and re-stamp the CURRENT framework
+        // version — Status back to Ok, a usable assembly, and a STRICTLY NEWER
+        // LastCompileSucceededAt than the baseline (proving a genuine fresh compile, not a
+        // replayed old Ok) — WITHOUT any instance activation. Before the fix nothing re-drives
+        // the stale-Ok type, so this times out.
+        var rebuilt = await workspace.GetMeshNodeStream(nodeTypePath)
+            .Should().Within(90.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition d
+                && d.CompilationStatus == CompilationStatus.Ok
+                && d.CompiledFrameworkVersion == realFv
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath)
+                && d.LastCompileSucceededAt is { } s && s > baselineSucceededAt);
+        Output.WriteLine($"NodeType proactively rebuilt against the current framework version (was '{bogusFv}').");
+
+        // The rebuild must leave a record whose store key names REAL bytes — see
+        // AssertRecordNamesStoredBytes for why this is the assertion that matters.
+        await AssertRecordNamesStoredBytes(nodeTypePath, rebuilt, "after the proactive rebuild");
+    }
+
+    /// <summary>
+    /// The other direction, and the one that was silently unpinned: the record is framework-stale
+    /// but the store ALREADY holds a build for the LIVE framework — a peer replica or a bake
+    /// service compiled it without this hub seeing the write-back. Rebuilding here is not merely
+    /// wasted work: with two images live at once each pod rebuilds to stamp its own version, sees
+    /// the other's stamp, and rebuilds back — a recompile storm across the pods currently serving
+    /// production. The kickoff must DECLINE.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task FrameworkStaleRecord_WithLiveFrameworkBytesInStore_DoesNotRebuild()
+    {
+        var (nodeTypePath, _, _) = await CompileBaselineType("StaleRecordFreshBytes");
+        var workspace = Mesh.GetWorkspace();
+
+        // NO eviction — the baseline compile's bytes stay in the store under the live framework
+        // tag. That is the whole premise, so assert it rather than assume it: a vacuous version of
+        // this test (bytes actually absent) would pass for the wrong reason.
+        var baseline = await workspace.GetMeshNodeStream(nodeTypePath).Should().Within(30.Seconds())
+            .Match(n => n.Content is NodeTypeDefinition { CompilationStatus: CompilationStatus.Ok });
+        await AssertRecordNamesStoredBytes(nodeTypePath, baseline, "before forging the stale record");
+
+        var bogusFv = await ForceFrameworkStale(nodeTypePath);
+
+        // No rebuild: the node must stay settled Ok carrying the forged stamp. There is no
+        // positive signal for "a decision to do nothing", so this is the sanctioned bounded
+        // negative observation — but it is NOT vacuous: the assertion above proves the store hit
+        // the kickoff relies on is real, and the sibling test proves the same kickoff DOES fire
+        // when the store misses. Any Pending/Compiling flip, or a re-stamped framework version,
+        // fails this immediately.
+        await workspace.GetMeshNodeStream(nodeTypePath)
+            .Where(n => n.Content is NodeTypeDefinition d
+                && (d.CompilationStatus != CompilationStatus.Ok
+                    || d.CompiledFrameworkVersion != bogusFv))
+            .Should().NotEmit(20.Seconds(),
+                "the assembly store already holds a build for the live framework, so the "
+                + "framework-stale kickoff must decline instead of storming a rebuild");
+        Output.WriteLine("Framework-stale kickoff correctly declined — the store already had live-framework bytes.");
+    }
+
+    /// <summary>
+    /// Creates a NodeType with a trivial source file and waits for its first build to settle Ok,
+    /// returning the path, the REAL (live) framework version it stamped, and its success time.
+    /// </summary>
+    private async Task<(string Path, string RealFrameworkVersion, DateTimeOffset SucceededAt)>
+        CompileBaselineType(string prefix)
+    {
+        var typeId = $"{prefix}{Guid.NewGuid():N}";
         var nodeTypePath = $"type/{typeId}";
 
         var source = $$"""
@@ -84,56 +174,89 @@ public class FrameworkStaleProactiveRebuildTest(ITestOutputHelper output) : Mono
             Content = new CodeConfiguration { Code = source, Language = "csharp" }
         }).Should().Emit();
 
-        var workspace = Mesh.GetWorkspace();
-
-        // 1. Baseline: wait for the first-build compile to settle Ok with a usable build, and
-        //    capture the REAL (live) framework version it stamped.
         await Mesh.Observe(new GetCompilationPathRequest(), o => o.WithTarget(new Address(nodeTypePath)))
             .Should().Within(90.Seconds()).Emit();
-        var okNode = await workspace.GetMeshNodeStream(nodeTypePath)
+        var okNode = await Mesh.GetWorkspace().GetMeshNodeStream(nodeTypePath)
             .Should().Within(60.Seconds())
             .Match(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Ok
                 && d.LastCompileSucceededAt is not null
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
                 && !string.IsNullOrEmpty(d.CompiledFrameworkVersion));
-        var baselineDef = (NodeTypeDefinition)okNode.Content!;
-        var realFv = baselineDef.CompiledFrameworkVersion!;
-        var baselineSucceededAt = baselineDef.LastCompileSucceededAt!.Value;
-        Output.WriteLine($"Baseline compile Ok — real framework version '{realFv}', succeededAt {baselineSucceededAt:O}.");
+        var def = (NodeTypeDefinition)okNode.Content!;
+        Output.WriteLine(
+            $"Baseline compile Ok for {nodeTypePath} — real framework version "
+            + $"'{def.CompiledFrameworkVersion}', succeededAt {def.LastCompileSucceededAt!.Value:O}, "
+            + $"store key v{def.LastCompiledVersion}, assembly '{def.LatestAssemblyPath}'.");
+        return (nodeTypePath, def.CompiledFrameworkVersion!, def.LastCompileSucceededAt!.Value);
+    }
 
-        // 2. Force the framework-stale shape: stamp a bogus CompiledFrameworkVersion while leaving
-        //    Status=Ok and the assembly fields intact — exactly what a binary redeploy leaves
-        //    behind. NO instance of the type is ever activated, so the reactive enrichment
-        //    self-heal never runs: only the proactive OWNER-side kickoff can recover this.
+    /// <summary>
+    /// Stamps a bogus <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> while leaving
+    /// Status=Ok and the assembly fields intact — what a binary redeploy leaves behind. NO instance
+    /// of the type is ever activated, so the reactive enrichment self-heal never runs: only the
+    /// proactive OWNER-side kickoff can act on this.
+    /// </summary>
+    private async Task<string> ForceFrameworkStale(string nodeTypePath)
+    {
+        var workspace = Mesh.GetWorkspace();
         var bogusFv = $"STALE-{Guid.NewGuid():N}";
         await workspace.GetMeshNodeStream(nodeTypePath)
             .Update(curr => curr.Content is NodeTypeDefinition d
                 ? curr with { Content = d with { CompiledFrameworkVersion = bogusFv } }
                 : curr)
             .Should().Emit();
-        // 🚧 Barrier: confirm the bogus stamp actually LANDED before waiting for convergence.
-        // GetMeshNodeStream replays the latest snapshot, so without this the convergence Match
-        // below could match the pre-stamp baseline Ok (still carrying realFv) and pass without
-        // any rebuild — masking a disabled kickoff. Observing bogusFv proves the stale state is
-        // the current one, so realFv can only reappear via a genuine recompile.
+        // 🚧 Barrier: confirm the bogus stamp actually LANDED before waiting on what follows.
+        // GetMeshNodeStream replays the latest snapshot, so without this a convergence Match could
+        // match the pre-stamp baseline Ok (still carrying the real framework version) and pass
+        // without any rebuild — masking a disabled kickoff.
         await workspace.GetMeshNodeStream(nodeTypePath)
             .Should().Within(20.Seconds())
             .Match(n => n.Content is NodeTypeDefinition d && d.CompiledFrameworkVersion == bogusFv);
-        Output.WriteLine($"Forced framework-stale (bogus framework version '{bogusFv}').");
+        Output.WriteLine($"Forced framework-stale on {nodeTypePath} (bogus framework version '{bogusFv}').");
+        return bogusFv;
+    }
 
-        // 3. The NodeType's OWN hub must proactively rebuild and re-stamp the CURRENT framework
-        //    version — Status back to Ok, a usable assembly, and a STRICTLY NEWER
-        //    LastCompileSucceededAt than the baseline (proving a genuine fresh compile, not a
-        //    replayed old Ok) — WITHOUT any instance activation. Before the fix nothing re-drives
-        //    the stale-Ok type, so this times out.
-        await workspace.GetMeshNodeStream(nodeTypePath)
-            .Should().Within(90.Seconds())
-            .Match(n => n.Content is NodeTypeDefinition d
-                && d.CompilationStatus == CompilationStatus.Ok
-                && d.CompiledFrameworkVersion == realFv
-                && !string.IsNullOrEmpty(d.LatestAssemblyPath)
-                && d.LastCompileSucceededAt is { } s && s > baselineSucceededAt);
-        Output.WriteLine("NodeType proactively rebuilt against the current framework version.");
+    /// <summary>
+    /// 🚨 The record's <see cref="NodeTypeDefinition.LastCompiledVersion"/> is one half of the
+    /// <see cref="IAssemblyStore"/> key <c>(nodeTypePath, version)</c>; it MUST name bytes that
+    /// exist. When it does not, every consumer that resolves an assembly through it misses:
+    /// activation falls back to the default config (no MeshNodeReference reducer — the instance
+    /// page renders nothing), the bake gate files a baked type as having no bytes, and the
+    /// framework-stale kickoff's store probe wrongly concludes a rebuild is needed.
+    ///
+    /// <para>This is the regression pin for issue #1368, where the <c>GetCompilationPathRequest</c>
+    /// write-back stamped the node's CURRENT version instead of the version the upload used, and
+    /// raced the activity write-back (which stamps correctly) for the last word.</para>
+    /// </summary>
+    private async Task AssertRecordNamesStoredBytes(string nodeTypePath, MeshNode node, string when)
+    {
+        var def = (NodeTypeDefinition)node.Content!;
+        def.LastCompiledVersion.Should().NotBeNull(
+            $"the compile write-back must record the assembly-store key version ({when})");
+        var resolved = await AssemblyStore
+            .TryGetAssemblyPath(nodeTypePath, def.LastCompiledVersion!.Value)
+            .Should().Within(30.Seconds()).Emit();
+        resolved.Should().NotBeNullOrEmpty(
+            $"LastCompiledVersion={def.LastCompiledVersion} must name assembly-store bytes that "
+            + $"exist ({when}); the record points at '{def.LatestAssemblyPath}'");
+        Output.WriteLine($"Store key v{def.LastCompiledVersion} resolves to '{resolved}' ({when}).");
+    }
+
+    /// <summary>
+    /// Removes this NodeType's cached assemblies from the filesystem assembly store, reproducing
+    /// what a framework-tag change does to the live lookup (see the class remarks).
+    /// </summary>
+    private void EvictFromAssemblyStore(string nodeTypePath)
+    {
+        var store = (FileSystemAssemblyStore)AssemblyStore;
+        var typeId = nodeTypePath.Split('/').Last();
+        var dirs = Directory.EnumerateDirectories(store.RootDirectory, $"*{typeId}*").ToList();
+        dirs.Should().NotBeEmpty(
+            $"the baseline compile must have cached '{nodeTypePath}' under {store.RootDirectory} — "
+            + "without bytes to evict this test's premise is not established");
+        foreach (var dir in dirs)
+            Directory.Delete(dir, recursive: true);
+        Output.WriteLine($"Evicted {dirs.Count} assembly-store director(ies) for {nodeTypePath}.");
     }
 }
