@@ -76,6 +76,17 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     /// </summary>
     public IReadOnlyList<CodeEditorDiagnostic>? Diagnostics { get; init; }
 
+    /// <summary>
+    /// Opt-in AUTO-SAVE: the path of the Code MeshNode this editor edits IN PLACE. When set,
+    /// the renderer persists the (debounced) editor text into that node's
+    /// <c>CodeConfiguration.Code</c> through the process-wide <c>IMeshNodeStreamCache</c> —
+    /// the same circuit-side seam the markdown editor's auto-save uses
+    /// (<see cref="MarkdownEditorControl.AutoSaveAddress"/>), so the write carries the
+    /// viewer's own identity and every reader on the path observes the patch in order.
+    /// Null = no auto-save (default; the classic bind-and-Save flow).
+    /// </summary>
+    public string? AutoSaveAddress { get; init; }
+
     /// <summary>Returns a copy with <paramref name="value"/> as its initial editor content.</summary>
     /// <param name="value">The initial text content of the editor.</param>
     /// <returns>A new instance with the updated Value.</returns>
@@ -129,6 +140,11 @@ public record CodeEditorControl() : UiControl<CodeEditorControl>(ModuleSetup.Mod
     /// <returns>A new instance with the updated Diagnostics.</returns>
     public CodeEditorControl WithDiagnostics(IReadOnlyList<CodeEditorDiagnostic> diagnostics) =>
         this with { Diagnostics = diagnostics };
+    /// <summary>Returns a copy that AUTO-SAVES the (debounced) editor text into the Code node at
+    /// <paramref name="nodePath"/> — see <see cref="AutoSaveAddress"/>.</summary>
+    /// <param name="nodePath">Path of the Code MeshNode this editor edits in place.</param>
+    /// <returns>A new instance with the updated AutoSaveAddress.</returns>
+    public CodeEditorControl WithAutoSave(string nodePath) => this with { AutoSaveAddress = nodePath };
 }
 
 /// <summary>
