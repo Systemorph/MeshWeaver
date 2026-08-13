@@ -231,6 +231,53 @@ EntityStore                      (root store — all collections)
 
 Each level can register a `PatchFunction` for write-back. Write-back travels the chain in reverse: typed changes are serialized to JSON, dispatched to the owner hub via `PatchDataChangeRequest` or `DataChangeRequest`, and applied using the registered `PatchFunction`.
 
+### 🚨 An intermediate reduce is `ReduceShared`, never `Reduce`
+
+**Every level of that chain is a hub.** `WorkspaceStreams.CreateReducedStream` constructs a
+`SynchronizationStream`, which constructs a hosted `sync/{id}` sub-hub with its own Autofac lifetime
+scope, `TypeRegistry` and `JsonSerializerOptions` — about 140 KB — and then registers the child for
+disposal **on its parent**. So a reduce is neither free nor garbage-collectable: when the parent is a
+data source's primary `EntityStore` stream, whose lifetime is the hub's, every call to `Reduce` mints
+a hub that is reclaimed only when the whole hub dies.
+
+That matters for the **middle** of a chain, because a middle stream has no owner. A stream factory
+that reduces `primary → InstanceCollection → MeshNode` hands the *last* stream to its caller, who
+disposes it on unsubscribe — but the `InstanceCollection` stream in the middle is nameless, nobody
+disposes it, and building a fresh one per call leaks one hub per call. Uncached, that factory runs
+once per inbound `SubscribeRequest`.
+
+```csharp
+// ❌ leaks a sync/ hub per call — the intermediate is parented on a hub-lifetime stream
+var collectionStream = primary?.Reduce<InstanceCollection>(new CollectionReference(nameof(MeshNode)));
+
+// ✅ memoized on the parent; one intermediate per (parent, reference), for the parent's life
+var collectionStream = primary?.ReduceShared<InstanceCollection>(new CollectionReference(nameof(MeshNode)));
+return collectionStream?.Reduce((WorkspaceReference<MeshNode>)ownPathReference, configuration);
+```
+
+**The rule is ownership, not depth:**
+
+| the stream is… | use | why |
+|---|---|---|
+| an intermediate nobody owns or disposes | `ReduceShared` | one instance per `(parent, reference)`, dies with the parent |
+| the stream you hand to a caller who will `Dispose()` it | `Reduce` | sharing would let one holder's teardown kill another's live stream |
+| caller-specific (a `configuration` with a client id / subscriber) | `Reduce` | it is not shareable by construction |
+
+`ReduceShared` is deliberately opt-in rather than a change to `Reduce`: the Blazor `LayoutAreaView`
+explicitly disposes the dialog and progress streams it reduces off its area stream, so making every
+reduce shared would break the second view on the same area. The same split — memoize when there is no
+caller-specific configuration — is what `Workspace.GetStream` does one layer up.
+
+> 🚨 **A cached child does NOT die with its parent, so caching one must check the PARENT's liveness,
+> not just the child's.** `CreateReducedStream` builds the child's `sync/{id}` sub-hub under
+> `stream.Host` — the data source's hub — so it is the parent's *sibling*, not its descendant, and it
+> stays alive after the parent is disposed. A cache that only asks "is the child still alive?"
+> therefore keeps serving a mirror of a dead source: reads bind to a stream that will never emit and
+> never complete, and the reader gets neither an answer nor the NACK
+> `DataExtensions.HandleGetDataRequest`'s disposal arm owes it — it hangs for its whole budget.
+> `ReduceShared` bypasses the cache entirely once the parent is disposed, falling through to a plain
+> `Reduce` so the behaviour is exactly what it always was. `SilentReadNackTest` pins this.
+
 ---
 
 ## Bidirectional Sync

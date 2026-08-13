@@ -128,6 +128,57 @@ hub.SubmitMessage(threadPath, "second");
 hub.SubmitMessage(threadPath, "third");
 ```
 
+## Big strings ship as a SPLICE, not as the whole value
+
+Step 2 above — "ships only the JSON-merge patch" — is per *leaf*, and a changed leaf normally travels
+whole. For a field that **grows one chunk at a time** that is quadratic: an agent response cell
+re-sent its entire text on every `Sample(100 ms)` tick, and `ExtractBaseValues` re-sent the entire
+*previous* text alongside it, so one reply cost `O(ticks × final length)` — **3.8 MB measured for a
+20 kB answer**, all of it Large-Object-Heap traffic on the writer and the owner both.
+
+So a changed **string** leaf at least `PatchStringSplice.MinSpliceLength` (1 kB) long, whose change
+is smaller than the value, is encoded as a splice instead:
+
+| where | shape |
+|---|---|
+| in the patch | `{ "$sd": [start, removedLength, "inserted"] }` |
+| in `BaseValues`, same leaf | `{ "$sdb": [baseLength, "fingerprint"] }` |
+
+Both halves matter. Splicing only the patch would still leave the base half re-shipping the previous
+value every tick, and the round would stay `O(ticks × length)`.
+
+**The owner applies a splice only when it can prove the offsets still address the right characters.**
+The fingerprint (length + truncated SHA-256) is compared against the owner's live text:
+
+- **match** → the owner's text *is* the text the writer diffed against, so applying the splice yields
+  byte-for-byte the string a whole-value patch would have written. This is the normal path.
+- **mismatch** → the owner moved on since the writer's base. The leaf is **refused**: the owner keeps
+  its newer value and NACKs `Conflict`, which re-runs the writer's update lambda against the fresh
+  state and re-diffs — the same self-healing route a refused scalar takes.
+
+That refusal is the deliberate half of the trade. A splice is never applied at an offset the
+fingerprint did not vouch for, so two mirrors splicing the same string concurrently cannot interleave
+into corrupted text; the loser re-diffs instead. The cost is that a *disjoint* concurrent edit to a
+big string, which the full-value three-way merge would have rebased and landed, now costs a round
+trip. For every field this applies to — streaming cells, markdown bodies, prerendered html — that is
+a trade of a rare extra round trip against a constant, per-tick, per-viewer megabyte.
+
+Below 1 kB, and for arrays and scalars, nothing changes: the whole value and the whole base still
+travel, and `MeshNodePatchMerge` resolves them exactly as before (arrays in particular *need* their
+full base — `MergeArray` consumes it to tell a writer's removal from an element the owner dropped).
+
+**Rolling deploys.** The marker lives *inside* the patch, so during the minute or two a rollout has
+old and new pods coexisting, a new writer can send a splice to a per-node hub still running the old
+image. That owner does not decode `$sd`, merges the marker object into a string-typed field, and the
+merged node then **fails to deserialize** — the write is NACKed `Deserialization` and never commits.
+Loud and non-destructive, and it self-heals: the mirror never advanced, so the next splice is
+computed against the same base and lands the whole missing span once the owner is upgraded.
+
+That failure mode is deliberate. The obvious alternative — carrying splices in a new sibling property
+the old owner would simply ignore — degrades instead into an owner that **acks a write it only
+partly applied**, which is the acked-write-loss class of [#648](https://github.com/Systemorph/MeshWeaver/issues/648).
+A visibly stalled field beats a silently lost one.
+
 ## Idle release — quiet paths give their upstream back
 
 A read entry does **not** live for the process lifetime. Like the write-side serial
@@ -150,6 +201,35 @@ Without this, every path ever read — GUI navigation, per-URL path resolution, 
 NodeType activation, MCP get/search, synced-query grain warming — leaked a
 permanently-connected upstream stream (~1,650 live streams / 37 heartbeats-per-second
 measured on a long-lived portal).
+
+### The idle sweep is not the only reaper — an evicted upstream dies with its last holder
+
+The idle sweep answers *"this path went quiet"*. It cannot answer *"this write is finished
+with its mirror"*, and that is the case a busy path is always in: `Workspace.EvictForPath`
+retires a path's upstream on **every** change event — including the echo of the writer's own
+write — so the next writer diffs against the owner's authoritative state rather than a stale
+snapshot. That eviction is load-bearing; parking the retired stream until the idle sweep
+happened to notice was not, and a continuously-written path never meets the sweep's
+"zero subscribers **and** ten minutes untouched" condition
+([#1324](https://github.com/Systemorph/MeshWeaver/issues/1324)).
+
+Reference counting the stream's Rx subscribers cannot decide it either: the reduce chain
+`JsonSynchronizationStream.CreateExternalClient` builds subscribes to the stream **itself**, so
+a retired mirror sits at 2–3 subscribers forever and a "dispose at zero" rule never fires.
+
+So holders **declare** themselves. Anything keeping a remote stream past the call that resolved
+it takes a lease from `Workspace.AcquireRemoteStreamUnchecked` and disposes it when done:
+
+| holder | lease lifetime |
+|---|---|
+| this cache's per-entry hydration (`CreateEntry` → `handle.Subscribe`) | the entry's whole life — it *is* the path's one live mirror |
+| a cross-hub write (`MeshNodeStreamHandle.UpdateRemote` / `WriteViaSyncStream`) | the write's `Observable.Create` subscription |
+| a reduce callback that hands the stream on (`MeshDataSource`, `SyncedQueryDataSourceExtensions`) | **none** — undeclared, so it keeps the conservative parking |
+
+An **evicted** stream with no remaining declared holder is disposed at once — `UnsubscribeRequest`
+reaches the owner, and both the client and owner `sync/` hubs die. A stream nobody leased is never
+touched by this and is still reclaimed by the idle release above or at workspace disposal. Steady
+state on a hot path is therefore ONE live mirror, not one per write.
 
 ## The storm breaker — absent nodes can't melt the silo
 

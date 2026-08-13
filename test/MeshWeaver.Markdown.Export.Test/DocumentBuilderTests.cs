@@ -100,6 +100,77 @@ public class DocumentBuilderTests
     }
 
     /// <summary>
+    /// #1373 — <c>~~strike~~</c> is struck through and NOTHING else.
+    ///
+    /// <para>Markdig folds every emphasis flavour into one <c>EmphasisInline</c> and distinguishes
+    /// them by the delimiter CHARACTER; the builder tested only the COUNT, so the doubled <c>~~</c>
+    /// satisfied "strong" as well and the run came out bold AND struck. It reached paper in both
+    /// formats — <c>&lt;strong&gt;&lt;s&gt;…&lt;/s&gt;&lt;/strong&gt;</c> in the PDF print,
+    /// <c>&lt;w:b/&gt;</c> beside <c>&lt;w:strike/&gt;</c> in Word.</para>
+    /// </summary>
+    [Fact]
+    public void Strikethrough_is_struck_and_not_bold()
+    {
+        var run = SingleRun("~~gone~~");
+
+        run.Strike.Should().BeTrue();
+        run.Bold.Should().BeFalse("`~~` is strikethrough — the doubled delimiter is not strength");
+        run.Italic.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// The rest of the emphasis table, which the count-only test got wrong in four more ways:
+    /// <c>++ins++</c> and <c>==mark==</c> came out bold, <c>~sub~</c> struck through, and
+    /// <c>^sup^</c> italic. The model has no style for those four, so they render as plain text —
+    /// their content is kept, their (unwritable) emphasis is not invented.
+    /// </summary>
+    [Theory]
+    // markdown            bold   italic  strike
+    [InlineData("**x**", true, false, false)]
+    [InlineData("__x__", true, false, false)]
+    [InlineData("*x*", false, true, false)]
+    [InlineData("_x_", false, true, false)]
+    [InlineData("~~x~~", false, false, true)]
+    [InlineData("~x~", false, false, false)]   // subscript
+    [InlineData("^x^", false, false, false)]   // superscript
+    [InlineData("++x++", false, false, false)] // inserted
+    [InlineData("==x==", false, false, false)] // marked
+    public void Emphasis_is_keyed_on_the_delimiter_character(
+        string markdown, bool bold, bool italic, bool strike)
+    {
+        var run = SingleRun(markdown);
+
+        run.Text.Should().Be("x", "no emphasis flavour may swallow its own content");
+        run.Bold.Should().Be(bold);
+        run.Italic.Should().Be(italic);
+        run.Strike.Should().Be(strike);
+    }
+
+    /// <summary>Triple asterisks still accumulate to bold+italic — nesting, not a special case.</summary>
+    [Fact]
+    public void Bold_italic_still_accumulates()
+    {
+        var run = SingleRun("***x***");
+
+        run.Bold.Should().BeTrue();
+        run.Italic.Should().BeTrue();
+        run.Strike.Should().BeFalse();
+    }
+
+    /// <summary>Strikethrough inside genuine bold keeps both — the fix removes a phantom, not a style.</summary>
+    [Fact]
+    public void Strikethrough_nested_in_bold_keeps_both()
+    {
+        var doc = new DocumentBuilder().Build(
+            "T", "**keep ~~gone~~**", new DocumentExportOptions(), BrandingOptions.Default);
+        var runs = doc.Elements.OfType<ParagraphElement>().Single()
+            .Content.OfType<TextInline>().ToArray();
+
+        runs.Should().Contain(r => r.Text == "keep " && r.Bold && !r.Strike);
+        runs.Should().Contain(r => r.Text == "gone" && r.Bold && r.Strike);
+    }
+
+    /// <summary>
     /// Two sections may share a title, and their anchors must not.
     ///
     /// <para>An HTML fragment reference resolves to the FIRST element carrying the id, so a
@@ -146,5 +217,13 @@ public class DocumentBuilderTests
             "T", "# ---\n\n# +++", new DocumentExportOptions(), BrandingOptions.Default);
 
         doc.TocHeadings.Select(h => h.AnchorId).Should().Equal("section", "section-2");
+    }
+
+    private static TextInline SingleRun(string markdown)
+    {
+        var doc = new DocumentBuilder().Build(
+            "T", markdown, new DocumentExportOptions(), BrandingOptions.Default);
+        return doc.Elements.OfType<ParagraphElement>().Single()
+            .Content.OfType<TextInline>().Single();
     }
 }

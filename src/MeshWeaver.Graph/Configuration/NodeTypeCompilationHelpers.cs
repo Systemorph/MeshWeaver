@@ -1130,7 +1130,14 @@ internal static class NodeTypeCompilationHelpers
                 ? string.Join("; ", errs.Select(m => m.Message))
                 : "Compilation produced no assembly",
             CompilationException ce => ce.Message,
-            { } other => $"{other.GetType().Name}: {other.Message}",
+            // A non-Roslyn abort out of Emit carries the canary verdict
+            // (MeshNodeCompilationService.ProbeSharedEmitState) — appended HERE, in the one
+            // funnel, so the answer to "is this compilation's inputs or the whole process?"
+            // rides the record triage already reads, without a second log line.
+            { } other => $"{other.GetType().Name}: {other.Message}"
+                + (other.Data[MeshNodeCompilationService.EmitCanaryDataKey] is string canary
+                    ? $" [{canary}]"
+                    : string.Empty),
         };
 
     /// <summary>

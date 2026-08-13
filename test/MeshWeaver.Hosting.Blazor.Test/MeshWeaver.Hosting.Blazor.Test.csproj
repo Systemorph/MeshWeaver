@@ -9,6 +9,11 @@
          degraded-identity repair entirely on a virtual clock; the window it exercises (the mesh
          user index unable to answer) cannot be held open against a live mesh. -->
     <PackageReference Include="Microsoft.Reactive.Testing" />
+    <!-- AnonymousCircuitLocaleSeedTest drives the REAL Blazor ComponentHub over a REAL SignalR
+         WebSocket connection, because the thing under test is precisely whether the circuit can
+         still see the request that established it. Nothing short of a real connection can answer
+         that — a unit test of the negotiation would pass while the browser saw nothing. -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />

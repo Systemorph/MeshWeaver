@@ -83,6 +83,47 @@ The same claim shape applies per chunk, which is what makes parallel builders sa
 each would-be builder claims `Admin/Build/{chunkName}`; the owning hub hands each chunk
 to exactly one.
 
+### 🚨 When may the claim be taken away — cluster MEMBERSHIP decides, not a clock
+
+A builder that dies mid-build must not wedge the fleet, so a claim has to be reclaimable. The
+obvious way is a staleness budget on the holder's heartbeat, and that is what this started as
+(`ClaimStaleAfter`, 10 minutes). It is the wrong instrument, and wrong in **both** directions: a
+timestamp answers "when did the holder last manage to write", which conflates *dead* with *busy*,
+*starved* and *descheduled*. So the fleet waits out ten minutes for a pod that is already gone, and
+it is licensed to evict a pod that is merely slow — putting two builders on one compile, the exact
+storm the claim exists to prevent (#1355).
+
+Where a cluster exists it already answers the real question authoritatively and immediately — it
+runs probes, indirect probes and a membership table for precisely this. So the candidate stamps its
+`IClusterMembership.LocalIdentity` into its claim request, the arbiter copies it to
+`BuildState.ClaimedByIdentity` on grant, and takeover is a lookup rather than a guess:
+
+| Membership says about the holder | Result |
+|---|---|
+| **Gone** | take over **immediately** — no budget to wait out once the cluster has positively recorded it as departed |
+| **Alive** | **never** take over, however old the heartbeat looks |
+| **Unknown** | fall back to the `ClaimStaleAfter` (10 min) heartbeat clock |
+
+`Unknown` is the only path that still consults a clock, and it covers exactly the hosts that have no
+cluster to ask — a monolith, a test, a dev box, the Orleans *client* host — plus a claim written
+before identities were stamped and an identity membership cannot resolve.
+
+🚨 **Absence from the membership snapshot is `Unknown`, never `Gone`.** Orleans keeps departed silos
+in the table as `Dead` until the defunct-cleanup window elapses, so a silo that really died IS in the
+snapshot and resolves to `Gone`. One that is missing entirely usually means our own snapshot is not
+hydrated yet — and reading that as death on a freshly-started silo would evict a live builder, which
+is the one failure this rule exists to make impossible.
+
+The heartbeat needs no defending here: it is a field on the Build node written through
+`stream.Update`, so it is durable mesh state rather than a file's last-write metadata. The
+predecessor lease kept its instant in an SMB timestamp, where Azure Files' metadata caching could
+report a heartbeat as stale while its holder was alive — that whole failure mode left with the lease.
+
+Code: `BuildNodeType.Arbitrate` (pure over `now` and the membership verdict, so every rule above is
+tested without a cluster and without wall-clock), `IClusterMembership`
+(`src/MeshWeaver.Mesh.Contract/Services/IClusterMembership.cs`), and `OrleansClusterMembership`
+registered silo-side by `ConfigureMeshWeaverServer`.
+
 ## The bake runs in its own, disposable cluster
 
 The build master is **not a portal pod**. It is an ephemeral silo with its **own Orleans
