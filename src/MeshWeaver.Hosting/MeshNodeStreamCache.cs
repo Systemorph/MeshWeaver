@@ -1963,7 +1963,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // distinct references instead of the shared system-security cache entry.
     // Keyed on the caller's stable hub JsonSerializerOptions (one instance per
     // hub) so repeated GetQuery(id, options, …) calls reuse the same wrapper.
-    private readonly ConcurrentDictionary<(object Id, JsonSerializerOptions Options), IObservable<IEnumerable<MeshNode>>> _optionsWrappedQueries = new();
+    //
+    // 🚨 The RAW stream the wrapper closed over is stored ALONGSIDE it, and the
+    // options overload re-wraps whenever it no longer matches the current raw.
+    // Without that, EvictFaultedQuery below would drop the poisoned entry from
+    // _queries while this dictionary kept handing every caller a wrapper over the
+    // dead chain — the eviction would be invisible from the public surface. Pairing
+    // the raw with the wrapper also makes the repair race-free: there is no window
+    // in which a concurrent GetQuery re-installs a wrapper over the raw that was
+    // just evicted, because the check is against whatever raw the caller resolved.
+    private readonly ConcurrentDictionary<(object Id, JsonSerializerOptions Options),
+        (IObservable<IEnumerable<MeshNode>> Raw, IObservable<IEnumerable<MeshNode>> Wrapper)> _optionsWrappedQueries = new();
 
     // Raw builder — PRIVATE. The public surface (hub/workspace.GetQuery → the
     // internal options overload below) always injects the caller hub's
@@ -2046,11 +2056,75 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                 // gate lock, contending with concurrent subscribers under
                 // load.
 
+            // 🚨 EVICT ON FAULT (#1316). Everything above is exactly what makes a
+            // TERMINAL fault permanent: ReplaySubject latches OnError and replays it
+            // to every later subscriber, AutoConnect(1) never reconnects, and this
+            // dictionary keeps the poisoned chain for the life of the process. One
+            // transient upstream error therefore converts into a per-id outage that
+            // only a pod restart clears — memex-cloud 2026-08-12, where an Npgsql
+            // CONNECT timeout (15 s handshake budget) landed on
+            // `nodetype-sources:Edu/Module`. From that instant the NodeType's sources
+            // watcher re-established once a second onto an instantly-replayed
+            // terminal, `CurrentSourceVersions` could never be written, and a null
+            // snapshot classifies as gating PreWarmStatus.CompileError
+            // (DynamicTypePreWarmer.ClassifyCompileFailure) — so a momentary database
+            // blip blocked the rollout of a type whose sources were never even read.
+            //
+            // The per-PATH sibling cache already learned this exact lesson from this
+            // exact error class — see EvictFaultedEntry: "an Npgsql connect failure …
+            // replayed forever until a manual recycle". The query cache never got the
+            // treatment. This is the same discipline, one dictionary over.
+            //
+            // `Do` (not a bookkeeping Subscribe) is deliberate: subscribing here would
+            // be the AutoConnect(1) first subscriber and would connect every CAS
+            // loser's discarded chain — the leak the AutoConnect comment above exists
+            // to prevent. `Do` stays cold and runs per-subscriber, so the FIRST
+            // consumer to observe the terminal evicts, and there is no eager connect.
+            var connected = stream;
+            stream = connected.Do(_ => { }, ex => EvictFaultedQuery(id, stream, ex));
+
             var updated = current.Add(id, stream);
             if (Interlocked.CompareExchange(ref _queries, updated, current) == current)
                 return stream;
             // CAS lost — another thread won concurrently; retry the read.
         }
+    }
+
+    /// <summary>
+    /// Drops <paramref name="id"/>'s TERMINALLY-ERRORED synced query so the next
+    /// <c>GetQuery(id, …)</c> builds a fresh chain and re-probes the providers for real,
+    /// instead of replaying the latched terminal to every future subscriber (#1316).
+    ///
+    /// <para>The subscriber that observed the fault still SEES it — this is a cache-hygiene
+    /// step, never a swallow and never a retry. Nothing re-subscribes on its own: the next
+    /// caller decides, and the callers are already paced (a NodeType sources watcher
+    /// re-establishes at 1 Hz; a render subscribes once per render). Concurrent callers cannot
+    /// multiply the re-probe either — <c>AutoConnect(1)</c> means the first of them connects
+    /// the single fresh upstream and the rest attach to its <c>Replay(1)</c>.</para>
+    ///
+    /// <para>Pair-exact, exactly like <see cref="EvictFaultedEntry"/>: a chain that some other
+    /// caller has ALREADY replaced is left alone, so a late terminal arriving from the old
+    /// chain can never evict the healthy new one. Unlike the per-path entry there is no
+    /// upstream to detach — the <c>SyncedQueryMeshNodes</c> instance is constructed INSIDE the
+    /// <c>Observable.Defer</c>, so a fresh chain builds a genuinely fresh instance with fresh
+    /// provider subscriptions, and the errored one's <c>Replay(1).RefCount()</c> has already
+    /// disposed its own upstream.</para>
+    /// </summary>
+    private void EvictFaultedQuery(object id, IObservable<IEnumerable<MeshNode>> faulted, Exception ex)
+    {
+        while (true)
+        {
+            var current = _queries;
+            if (!current.TryGetValue(id, out var found) || !ReferenceEquals(found, faulted))
+                return; // already replaced (or evicted) by another caller — never touch a newer chain
+            if (Interlocked.CompareExchange(ref _queries, current.Remove(id), current) == current)
+                break;
+        }
+
+        logger.LogWarning(ex,
+            "MeshNodeStreamCache: evicted faulted synced query '{QueryId}' — its Replay(1) had latched the "
+            + "terminal error and would have replayed it to every future subscriber for the life of the "
+            + "process. The next GetQuery('{QueryId}') opens a fresh upstream instead.", id, id);
     }
 
     public IObservable<IEnumerable<MeshNode>>? GetQuery(object id)
@@ -2070,14 +2144,39 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // calls — infrastructure callers (ImpersonateAsSystem) bypass the
         // per-user RLS wrap and rely on getting the SAME shared observable for
         // the same id (perf shortcut for SecurityService / NodeType compile
-        // watchers). GetOrAdd's factory may run more than once under a race,
-        // but each candidate wraps the same cached raw stream — losers are
-        // inert (no Subscribe), so there's no upstream leak.
-        return _optionsWrappedQueries.GetOrAdd((id, options), static (_, state) =>
-            System.Reactive.Linq.Observable.Select(state.raw, items =>
-                (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, state.options, state.logger, state.registry)).ToArray()),
-            (raw, options, logger, registry: contentTypeRegistry));
+        // watchers). The factory may run more than once under a race, but each
+        // candidate wraps the same cached raw stream — losers are inert (no
+        // Subscribe), so there's no upstream leak.
+        //
+        // 🚨 AddOrUpdate, not GetOrAdd (#1316). After EvictFaultedQuery drops a
+        // poisoned chain, `raw` above is a NEW observable while a memoised wrapper
+        // still closes over the DEAD one. GetOrAdd would keep returning that wrapper
+        // and the eviction would never be observable from the public surface — the
+        // query would stay broken exactly as before the fix. Re-wrapping whenever the
+        // stored raw is not the caller's current raw repairs it with no race: the
+        // decision is made against the raw this caller actually resolved, so a
+        // concurrent call can never re-install a wrapper over a raw that has since
+        // been evicted (its own GetQueryRaw would have returned the replacement).
+        return _optionsWrappedQueries.AddOrUpdate(
+            (id, options),
+            static (_, state) => (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry)),
+            static (_, existing, state) => ReferenceEquals(existing.Raw, state.raw)
+                ? existing
+                : (state.raw, WrapWithOptions(state.raw, state.options, state.logger, state.registry)),
+            (raw, options, logger, registry: contentTypeRegistry)).Wrapper;
     }
+
+    /// <summary>
+    /// Round-trips each emitted node's Content through the caller's options — the body of the
+    /// memoised wrapper built by <see cref="GetQuery(object, JsonSerializerOptions, string[])"/>.
+    /// </summary>
+    private static IObservable<IEnumerable<MeshNode>> WrapWithOptions(
+        IObservable<IEnumerable<MeshNode>> raw,
+        JsonSerializerOptions options,
+        ILogger logger,
+        MeshWeaver.Mesh.Services.IMeshContentTypeRegistry? registry)
+        => System.Reactive.Linq.Observable.Select(raw, items =>
+            (IEnumerable<MeshNode>)items.Select(node => DeserializeContent(node, options, logger, registry)).ToArray());
 
     private static MeshNode DeserializeContent(
         MeshNode node, JsonSerializerOptions options, ILogger logger,
