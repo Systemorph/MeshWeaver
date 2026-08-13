@@ -189,12 +189,17 @@ public class StreamingCellWriteByteCountTest(ITestOutputHelper output) : Monolit
         {
             if (target is null)
                 return;
-            var patch = request.Patch.Content?.Length ?? 0;
-            var baseValues = request.BaseValues?.Content?.Length ?? 0;
+            // UTF-8 byte counts, not string.Length: the payload travels as UTF-8, and a char count
+            // silently understates anything non-ASCII — which real chat is full of (German, emoji).
+            var patch = Utf8Bytes(request.Patch.Content);
+            var baseValues = Utf8Bytes(request.BaseValues?.Content);
             byTarget.AddOrUpdate(target,
                 _ => new Wire(1, patch, baseValues),
                 (_, w) => new Wire(w.Writes + 1, w.PatchBytes + patch, w.BaseBytes + baseValues));
         }
+
+        private static long Utf8Bytes(string? s) =>
+            string.IsNullOrEmpty(s) ? 0 : System.Text.Encoding.UTF8.GetByteCount(s);
 
         public void Reset() => byTarget.Clear();
 

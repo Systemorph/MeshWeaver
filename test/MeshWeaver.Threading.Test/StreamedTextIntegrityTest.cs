@@ -74,7 +74,10 @@ public class StreamedTextIntegrityTest(ITestOutputHelper output) : MonolithMeshT
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, "Streaming integrity", "TestUser");
-        var created = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(Mesh.Address))
+        // Target the CONTEXT namespace, the way a real client creates a thread — not the root mesh
+        // hub. Routing creation through the owning namespace is both the majority convention in the
+        // thread tests and what keeps this representative of the production path.
+        var created = await client.Observe(new CreateNodeRequest(threadNode), o => o.WithTarget(new Address(ContextPath)))
             .Should().Within(60.Seconds()).Emit();
         created.Message.Success.Should().BeTrue(created.Message.Error ?? "");
         var threadPath = created.Message.Node!.Path!;
