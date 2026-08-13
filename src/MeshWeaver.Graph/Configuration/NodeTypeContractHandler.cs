@@ -586,9 +586,16 @@ internal static class NodeTypeContractHandler
     /// </summary>
     private static long ResolvedStoreVersion(
         GetCompilationPathResponse response, NodeTypeDefinition def, MeshNode curr)
-        => long.TryParse(response.Version, out var v) && v > 0
-            ? v
-            : def.LastCompiledVersion ?? curr.Version;
+        // The path and the version are ONE reference, so they must come from ONE source.
+        // LatestAssemblyPath above takes response.ContentPath and falls back to the persisted
+        // value when the producer uploaded nothing (memory:// compile, no configurations, Null
+        // store, unreadable bytes). Taking the version from the response while the PATH fell
+        // back to def would pair the retained bytes with a key that was never theirs — the same
+        // record-names-an-empty-shelf defect, just reached the other way round.
+        => !string.IsNullOrEmpty(response.ContentPath)
+           && long.TryParse(response.Version, out var v) && v > 0
+            ? v                                        // path came from the response: take its key
+            : def.LastCompiledVersion ?? curr.Version; // path retained: retain its key
 
     private static GetCompilationPathResponse Fail(string? version, string error, ActivityLog? log = null) =>
         new(Success: false,
