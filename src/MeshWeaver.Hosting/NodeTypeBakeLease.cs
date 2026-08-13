@@ -169,18 +169,31 @@ public sealed class NodeTypeBakeLease : IDisposable
         {
             // The holder RELEASED between our create attempt and our read. That is an observed state
             // transition, not a transient — and the response to "the lease is free" is to take it.
-            // One attempt, because if it fails the lease is held again and following is correct.
-            if (TryCreate(path, holder, identity, logger, out var reacquired) == CreateOutcome.Acquired)
+            // One attempt, because whatever it finds IS the answer.
+            switch (TryCreate(path, holder, identity, logger, out var reacquired))
             {
-                logger?.LogInformation(
-                    "Bake lease for framework {Framework} was released as we read it — ACQUIRED by "
-                    + "{Holder}", Short(frameworkVersion), holder);
-                return reacquired;
+                case CreateOutcome.Acquired:
+                    logger?.LogInformation(
+                        "Bake lease for framework {Framework} was released as we read it — ACQUIRED "
+                        + "by {Holder}", Short(frameworkVersion), holder);
+                    return reacquired;
+
+                case CreateOutcome.Broken:
+                    // The lease PATH went with it. That is the no-SUBSTRATE case, not the
+                    // unknown-holder case, so it fails OPEN — following a lease that cannot exist
+                    // would wait for a holder that can never appear.
+                    logger?.LogWarning(
+                        "Bake lease for framework {Framework} vanished and cannot be re-created at "
+                        + "{Path} — no coordination substrate, so proceeding to bake",
+                        Short(frameworkVersion), path);
+                    return new NodeTypeBakeLease(path, holder, identity, logger);
+
+                default:
+                    logger?.LogInformation(
+                        "Bake lease for framework {Framework} was released and immediately re-taken "
+                        + "by another pod — following, not baking", Short(frameworkVersion));
+                    return null;
             }
-            logger?.LogInformation(
-                "Bake lease for framework {Framework} was released and immediately re-taken by another "
-                + "pod — following, not baking", Short(frameworkVersion));
-            return null;
         }
 
         var state = stamp?.Identity is { } holderIdentity && membership is not null
@@ -283,12 +296,30 @@ public sealed class NodeTypeBakeLease : IDisposable
         }
         catch (Exception ex)
         {
-            // We decided the lease was takeable and could not take it. FOLLOW rather than bake: the
-            // decision was ours, the failure is the share's, and a second baker is the worse outcome.
-            logger?.LogWarning(ex,
-                "Bake lease at {Path} could be taken over but the write failed — following, not "
-                + "baking. The next poll re-attempts it", path);
-            return null;
+            // We decided the lease was takeable and could not write it — and WHY decides the answer,
+            // by the same substrate-vs-holder split the whole class turns on. Asking TryCreate is
+            // what tells them apart: a path where a lease cannot even be CREATED has no coordination
+            // substrate left, and following a lease that can never exist would wait forever.
+            switch (TryCreate(path, holder, identity, logger, out var created))
+            {
+                case CreateOutcome.Acquired:
+                    logger?.LogInformation(
+                        "Bake lease at {Path} could not be overwritten but had already gone — "
+                        + "ACQUIRED by {Holder}", path, holder);
+                    return created;
+
+                case CreateOutcome.Broken:
+                    logger?.LogWarning(ex,
+                        "Bake lease at {Path} cannot be written and no lease can be created there — "
+                        + "no coordination substrate, so proceeding to bake", path);
+                    return new NodeTypeBakeLease(path, holder, identity, logger);
+
+                default:
+                    logger?.LogWarning(ex,
+                        "Bake lease at {Path} could be taken over but the write failed and it is "
+                        + "held again — following, not baking. The next poll re-attempts it", path);
+                    return null;
+            }
         }
     }
 

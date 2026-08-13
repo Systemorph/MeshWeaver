@@ -257,6 +257,23 @@ public class NodeTypeBakeLeaseTest : IDisposable
     }
 
     /// <summary>
+    /// The substrate-vs-holder split, at the other end: the coordination DIRECTORY works, but no
+    /// lease can ever exist at this path. That is "no substrate", not "unknown holder" — following
+    /// would wait forever for a holder that can never appear, so it bakes.
+    /// </summary>
+    [Fact]
+    public void ALeasePathThatCanNeverHoldALease_StillAllowsBaking()
+    {
+        // A DIRECTORY where the lease FILE belongs.
+        Directory.CreateDirectory(NodeTypeBakeLease.PathFor(dir, Framework));
+
+        using var lease = NodeTypeBakeLease.TryAcquire(dir, Framework, "pod-a");
+
+        lease.Should().NotBeNull(
+            "a lease that can never be created must not make the fleet wait for one");
+    }
+
+    /// <summary>
     /// Keyed per framework: a bake-ahead pod on a NEW image and the live pods on the OLD one write
     /// different files and must not block each other. Only same-image replicas contend.
     /// </summary>
