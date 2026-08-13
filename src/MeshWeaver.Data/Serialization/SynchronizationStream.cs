@@ -21,7 +21,7 @@ namespace MeshWeaver.Data.Serialization;
 /// and reduced/derived streams are produced through the <see cref="ReduceManager"/>.
 /// </summary>
 /// <typeparam name="TStream">Type of the state carried by the stream.</typeparam>
-public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
+public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, IStreamLivenessSource
 {
     /// <summary>
     /// The stream reference, i.e. the unique identifier of the stream.
@@ -217,11 +217,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private readonly object disposeLock = new();
     private readonly ILogger<SynchronizationStream<TStream>> logger;
 
-    /// <inheritdoc />
-    bool ISynchronizationStream.IsDisposed => isDisposed;
+    /// <summary>
+    /// The stream this one was reduced FROM — set by <c>WorkspaceStreams.CreateReducedStream</c>,
+    /// null for a stream that is not a reduce of another. INTERNAL on purpose: it exists so
+    /// <see cref="StreamLiveness.IsUsable"/> can walk the reduce chain in one place, and is exposed
+    /// through <see cref="IStreamLivenessSource"/> rather than the public stream contract.
+    /// </summary>
+    internal ISynchronizationStream? Source { get; init; }
 
     /// <inheritdoc />
-    public ISynchronizationStream? Source { get; init; }
+    ISynchronizationStream? IStreamLivenessSource.Source => Source;
+
+    /// <inheritdoc />
+    bool IStreamLivenessSource.IsDisposed => isDisposed;
 
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal
