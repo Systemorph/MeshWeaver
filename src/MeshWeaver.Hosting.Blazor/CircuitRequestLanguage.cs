@@ -79,7 +79,31 @@ public sealed class CircuitRequestLanguageFilter(CircuitRequestLanguage language
         return next(context);
     }
 
-    private void Publish(HubCallerContext context) =>
-        language.Set(Locales.Negotiate(
-            context.GetHttpContext()?.Request.Headers.AcceptLanguage.ToString()));
+    /// <summary>
+    /// Key under which the negotiated tag is memoised on the CONNECTION.
+    /// </summary>
+    private const string ItemsKey = "MeshWeaver.CircuitRequestLanguage";
+
+    /// <summary>
+    /// Publishes this connection's language, parsing the header at most ONCE per connection.
+    ///
+    /// <para>This filter is global, so it also sits on MeshWeaver's own SignalR hubs, where hub
+    /// invocations are mesh message traffic. Negotiating on every invocation would put a string
+    /// split and a sort on that path for a value that cannot change — a browser sends the same
+    /// <c>Accept-Language</c> on every request of a connection. Memoising on
+    /// <see cref="HubCallerContext.Items"/> keeps the cost to one parse per connection and makes
+    /// "a no-op on every other hub" true in cost as well as in effect. A benign race just
+    /// recomputes the same value.</para>
+    /// </summary>
+    private void Publish(HubCallerContext context)
+    {
+        if (!context.Items.TryGetValue(ItemsKey, out var negotiated))
+        {
+            negotiated = Locales.Negotiate(
+                context.GetHttpContext()?.Request.Headers.AcceptLanguage.ToString());
+            context.Items[ItemsKey] = negotiated;
+        }
+
+        language.Set(negotiated as string);
+    }
 }
