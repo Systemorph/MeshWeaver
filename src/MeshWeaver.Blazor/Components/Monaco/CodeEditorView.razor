@@ -121,12 +121,22 @@
 
         // AUTO-SAVE opt-in: persist the (debounced) editor text into the Code node the control
         // names. Created per bind and registered as a binding, so the base disposes it on
-        // re-bind and teardown — exactly the markdown editor's auto-save lifecycle.
+        // re-bind and teardown — exactly the markdown editor's auto-save lifecycle, including the
+        // LOUD resolution failure: a silently-absent cache would read as "auto-save just doesn't
+        // work" with nothing to diagnose by.
         autoSaveHandler = null;
         autoSavePath = ViewModel.AutoSaveAddress;
         if (!string.IsNullOrEmpty(autoSavePath))
         {
-            _cache ??= Services.GetService(typeof(IMeshNodeStreamCache)) as IMeshNodeStreamCache;
+            try
+            {
+                _cache ??= Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex,
+                    "Failed to resolve IMeshNodeStreamCache for auto-save at {Address}", autoSavePath);
+            }
             if (_cache != null)
             {
                 autoSaveHandler = new AutoSaveHandler(AutoSaveThrottleInterval, AutoSaveCode);
