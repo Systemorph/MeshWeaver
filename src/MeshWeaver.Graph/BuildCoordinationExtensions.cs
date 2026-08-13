@@ -56,6 +56,12 @@ public static class BuildCoordinationExtensions
     /// keyed by holder id (merge-safe across concurrent candidates); an existing registration
     /// keeps its original <see cref="BuildClaimRequest.RequestedAt"/> so re-requests cannot jump
     /// the queue. The grant arrives on the stream — observe it with <see cref="ObserveBuildClaim"/>.
+    ///
+    /// <para>The registration also carries this candidate's cluster-membership identity, taken from
+    /// the calling hub's <see cref="IClusterMembership"/> when there is one. That is what lets the
+    /// arbiter later ask the cluster whether this holder is still running, instead of aging a
+    /// heartbeat — see <c>BuildNodeType.Arbitrate</c>. No cluster (monolith, test, dev) simply
+    /// stamps nothing and keeps the clock.</para>
     /// </summary>
     /// <param name="hub">The calling hub.</param>
     /// <param name="holder">This candidate's unique id (e.g. pod name + process guid).</param>
@@ -65,7 +71,9 @@ public static class BuildCoordinationExtensions
     public static IObservable<MeshNode> RequestBuildClaim(
         this IMessageHub hub, string holder, string frameworkVersion,
         string path = BuildNodeType.RootPath)
-        => hub.EnsureBuildNode(path)
+    {
+        var identity = hub.ServiceProvider.GetService<IClusterMembership>()?.LocalIdentity;
+        return hub.EnsureBuildNode(path)
             .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream(path).Update(curr =>
             {
                 if (curr is null) return curr!;
@@ -78,10 +86,12 @@ public static class BuildCoordinationExtensions
                     {
                         RequestedClaims = (state.RequestedClaims
                             ?? ImmutableDictionary<string, BuildClaimRequest>.Empty)
-                            .SetItem(holder, new BuildClaimRequest(frameworkVersion, DateTime.UtcNow)),
+                            .SetItem(holder, new BuildClaimRequest(
+                                frameworkVersion, DateTime.UtcNow, identity)),
                     }
                 };
             }));
+    }
 
     /// <summary>
     /// Emits the node's <see cref="BuildState"/> each time <paramref name="holder"/> holds the
@@ -148,6 +158,7 @@ public static class BuildCoordinationExtensions
                 Ready = (s.Ready ?? ImmutableDictionary<string, BuildGo>.Empty)
                     .SetItem(go.FrameworkVersion, go),
                 ClaimedBy = null,
+                ClaimedByIdentity = null,
                 ClaimedAt = null,
                 HeartbeatAt = null,
             },
@@ -172,6 +183,7 @@ public static class BuildCoordinationExtensions
                 Status = BuildStatus.Failed,
                 Error = error,
                 ClaimedBy = null,
+                ClaimedByIdentity = null,
                 ClaimedAt = null,
                 HeartbeatAt = null,
             },
