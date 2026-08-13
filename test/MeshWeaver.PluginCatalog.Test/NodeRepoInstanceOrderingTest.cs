@@ -82,8 +82,11 @@ public class NodeRepoInstanceOrderingTest(ITestOutputHelper output) : MonolithMe
         (await Read("Pack")).NodeType.Should().Be("Space");
     }
 
-    private async Task<MeshNode> Read(string path) =>
-        await Mesh.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null).Select(n => n!)
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask();
+    // Routed through StalledReadDiagnostics: this read is the one issue #1405 stalls on, and its
+    // reproduction carries NO distinguishing log line — thirty seconds of silence and a bare
+    // TimeoutException. The wrapper adds nothing to the happy path; on timeout it names the
+    // stalled stage. See StalledReadDiagnostics for the evidence and the fork it resolves.
+    private Task<MeshNode> Read(string path) =>
+        StalledReadDiagnostics.ReadOrExplain(
+            Mesh, path, TimeSpan.FromSeconds(30), Output.WriteLine);
 }

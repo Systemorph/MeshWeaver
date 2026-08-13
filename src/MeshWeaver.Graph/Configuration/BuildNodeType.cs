@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -20,8 +21,14 @@ namespace MeshWeaver.Graph.Configuration;
 /// <see cref="BuildClaimRequest"/> under their own holder id in
 /// <see cref="BuildState.RequestedClaims"/> (per-candidate keys — RFC 7396 merge-safe), and the
 /// node's OWN hub arbitrates: <see cref="InstallClaimArbiter"/> grants the earliest pending
-/// request inside a serialised <c>Update</c> lambda, and steals a claim whose heartbeat has gone
-/// stale. Correctness comes from node state, never from an in-memory gate.</para>
+/// request inside a serialised <c>Update</c> lambda, and steals a claim whose holder has gone.
+/// Correctness comes from node state, never from an in-memory gate.</para>
+///
+/// <para><b>Takeover is decided by cluster MEMBERSHIP, not by a clock</b> (#1355). A staleness
+/// budget is a stand-in for "is the holder still alive?", and where a cluster exists it already
+/// answers that authoritatively — it runs probes, indirect probes and a membership table for
+/// exactly this question. See <see cref="Arbitrate"/> for the three-way rule; the clock survives
+/// only as the fallback for hosts with no cluster.</para>
 /// </summary>
 public static class BuildNodeType
 {
@@ -33,8 +40,12 @@ public static class BuildNodeType
 
     /// <summary>
     /// How long a claim survives without a heartbeat before the arbiter hands it to the next
-    /// candidate. Generously larger than <see cref="HeartbeatInterval"/>: a missed beat under load
-    /// must never produce two concurrent builders — the exact storm the claim exists to prevent.
+    /// candidate — the FALLBACK rule, used only where cluster membership has no opinion about the
+    /// holder (<c>ClusterMemberState.Unknown</c>: no cluster at all, or an identity it cannot
+    /// resolve). Generously larger than <see cref="HeartbeatInterval"/>: without a membership
+    /// verdict a missed beat under load must never produce two concurrent builders — the exact
+    /// storm the claim exists to prevent. Where membership CAN answer, this bound is not consulted
+    /// in either direction: a gone holder is taken over at once and a live one is never taken.
     /// </summary>
     public static readonly TimeSpan ClaimStaleAfter = TimeSpan.FromMinutes(10);
 
@@ -93,9 +104,13 @@ public static class BuildNodeType
         var logger = hub.ServiceProvider.GetService<ILogger<MeshNode>>();
         var workspace = hub.GetWorkspace();
 
+        // Absent on a monolith, a test, a dev box and the Orleans CLIENT host — all of which is
+        // "no cluster", which Arbitrate reads as Unknown and answers with the heartbeat clock.
+        var membership = hub.ServiceProvider.GetService<IClusterMembership>();
+
         void TryArbitrate() =>
             workspace.GetMeshNodeStream()
-                .Update(node => Arbitrate(node, hub.JsonSerializerOptions, DateTime.UtcNow))
+                .Update(node => Arbitrate(node, hub.JsonSerializerOptions, DateTime.UtcNow, membership))
                 .Subscribe(
                     _ => { },
                     ex => logger?.LogWarning(
@@ -115,9 +130,10 @@ public static class BuildNodeType
             logger,
             "build claim arbiter");
 
-        // A holder that died emits nothing — staleness can only be observed by a timer. The tick
-        // is cheap by construction: Arbitrate returns the node unchanged unless a pending claim
-        // exists AND the current claim is absent or stale, so a quiet node writes nothing.
+        // A holder that died emits nothing — its departure can only be observed by a timer, whether
+        // the evidence is a membership verdict or an aged heartbeat. The tick is cheap by
+        // construction: Arbitrate returns the node unchanged unless a pending claim exists AND the
+        // holder no longer holds it, so a quiet node writes nothing.
         var staleTick = Observable.Interval(HeartbeatInterval)
             .Subscribe(_ => TryArbitrate());
 
@@ -127,27 +143,29 @@ public static class BuildNodeType
     /// <summary>
     /// The single decision procedure, executed inside the owning hub's serialised
     /// <c>Update</c> lambda. Grants the earliest pending claim when the node is unclaimed or the
-    /// current claim's heartbeat is stale; otherwise returns the node unchanged. Pure over its
-    /// inputs so the staleness rules are testable without waiting on wall-clock.
+    /// current holder is gone; otherwise returns the node unchanged. Pure over its inputs — the
+    /// instant and the membership verdict are both parameters — so every takeover rule is testable
+    /// without a cluster and without waiting on wall-clock.
     /// </summary>
     /// <param name="node">The Build node as read inside the update lambda.</param>
     /// <param name="options">Serializer options for content recovery.</param>
     /// <param name="now">The decision instant.</param>
+    /// <param name="membership">
+    /// Cluster membership, or <c>null</c> where this host is in no cluster (monolith, test, dev,
+    /// Orleans client) — which is the same thing as a verdict of
+    /// <see cref="ClusterMemberState.Unknown"/> and leaves the heartbeat clock in charge.
+    /// </param>
     /// <returns>The node with a granted claim, or the node unchanged.</returns>
     public static MeshNode Arbitrate(
-        MeshNode node, System.Text.Json.JsonSerializerOptions options, DateTime now)
+        MeshNode node, System.Text.Json.JsonSerializerOptions options, DateTime now,
+        IClusterMembership? membership = null)
     {
         if (node is null) return node!;
         var state = node.ContentAs<BuildState>(options);
         if (state?.RequestedClaims is not { Count: > 0 } pending)
             return node;
 
-        var lastBeat = state.HeartbeatAt ?? state.ClaimedAt;
-        var claimLive = state.ClaimedBy is not null
-            && state.Status is BuildStatus.Planning or BuildStatus.Building
-            && lastBeat is { } beat
-            && now - beat <= ClaimStaleAfter;
-        if (claimLive)
+        if (HolderStillHoldsIt(state, now, membership))
             return node;
 
         var granted = pending
@@ -160,6 +178,7 @@ public static class BuildNodeType
             Content = state with
             {
                 ClaimedBy = granted.Key,
+                ClaimedByIdentity = granted.Value.ClusterIdentity,
                 ClaimedAt = now,
                 HeartbeatAt = now,
                 FrameworkVersion = granted.Value.FrameworkVersion,
@@ -170,4 +189,47 @@ public static class BuildNodeType
         };
     }
 
+    /// <summary>
+    /// Whether the current claim must be left alone — the takeover rule, and the whole of #1355.
+    ///
+    /// <para>A staleness budget only ever approximated "is the holder still alive?". It conflates a
+    /// dead process with a busy, starved or descheduled one, so it is wrong in both directions: it
+    /// makes the fleet wait out ten minutes for a pod that is already gone, and it licenses evicting
+    /// a pod that is merely slow. Where a cluster exists it knows the answer outright, so we ask it:</para>
+    ///
+    /// <list type="table">
+    /// <item><term>Gone</term><description>take over IMMEDIATELY — there is no budget to wait out
+    /// once the cluster has positively recorded the holder as departed.</description></item>
+    /// <item><term>Alive</term><description>NEVER take over, however old the heartbeat looks. A
+    /// heartbeat that stopped while the process runs means starved or busy, and two builders is the
+    /// storm the claim exists to prevent.</description></item>
+    /// <item><term>Unknown</term><description>fall back to <see cref="ClaimStaleAfter"/>. This is
+    /// the only path that still consults the clock, and it covers hosts with no cluster (monolith,
+    /// test, dev), a claim written before identities were stamped, and an identity membership
+    /// cannot resolve.</description></item>
+    /// </list>
+    ///
+    /// <para>🚨 Absence from the membership snapshot is Unknown, never Gone — see
+    /// <c>OrleansClusterMembership</c>. Reading "not in my snapshot" as death on a freshly-started
+    /// silo whose snapshot is not hydrated yet would evict a perfectly live builder, which is the
+    /// one failure this whole change is meant to make impossible.</para>
+    /// </summary>
+    private static bool HolderStillHoldsIt(
+        BuildState state, DateTime now, IClusterMembership? membership)
+    {
+        if (state.ClaimedBy is null) return false;
+        if (state.Status is not (BuildStatus.Planning or BuildStatus.Building)) return false;
+
+        var verdict = state.ClaimedByIdentity is { Length: > 0 } identity && membership is not null
+            ? membership.StateOf(identity)
+            : ClusterMemberState.Unknown;
+
+        if (verdict is ClusterMemberState.Gone) return false;
+        if (verdict is ClusterMemberState.Alive) return true;
+
+        // Unknown: the clock, exactly as before this change. A claim carrying no instant at all
+        // has nothing to age, so it is not defensible — the next candidate takes it.
+        return (state.HeartbeatAt ?? state.ClaimedAt) is { } beat
+            && now - beat <= ClaimStaleAfter;
+    }
 }
