@@ -275,8 +275,12 @@ public sealed class StarvedSourceQueryProvider : IMeshQueryProvider
     /// (observed: <c>Executing(CreateNodeRequest, 33014ms)</c>) until the 30 s assertion gave up.
     /// It passed whenever those security queries were already cached and failed when they were
     /// cold, which is why it reproduced on a CI shard and never locally (10/10 green).
-    /// <c>CodeQueryResolver</c> ANDs <c>nodeType:Code</c> into every source query it emits, and the
-    /// security queries carry their own node types — so that clause separates them exactly.</para>
+    /// <c>CodeQueryResolver</c> appends <c>nodeType:Code</c> to a source query that does not already
+    /// name a node type, and this type declares no <c>Sources</c> — so its discovery runs the
+    /// DEFAULT query (<c>namespace:{path}/Source scope:subtree</c>) and does carry the clause, while
+    /// the security queries carry node types of their own. That separates them here. (A type whose
+    /// declared source query named some OTHER node type would not be starved by this marker; nothing
+    /// in this suite does, and the starve is asserted to still bite — see the test's own proof.)</para>
     /// </summary>
     private const string StarveMarker = "namespace:SourceUnavailableTest/StarvedSourceType/Source";
 
