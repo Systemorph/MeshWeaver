@@ -64,8 +64,15 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// is eager + <see cref="System.Reactive.Subjects.ReplaySubject{T}"/>-backed, so the first caller
     /// kicks the DDL off on the per-adapter pool and every later subscriber replays the cached
     /// completion. Instance field (never static) so its lifetime is the mesh's.
+    ///
+    /// <para>🚨 <see cref="PromiseCache{TKey,TValue}"/>, not a bare dictionary: a ReplaySubject
+    /// latches <c>OnError</c> too, so a plain dictionary would replay ONE transient DDL failure —
+    /// a connect blip, a lock timeout, a momentary permission problem — to every later caller for
+    /// the life of the process. Every write to that partition would then fail <c>42P01</c> with no
+    /// self-heal short of restarting the pod (#1369). The cache evicts a faulted entry, so the
+    /// next caller provisions for real.</para>
     /// </summary>
-    private readonly ConcurrentDictionary<string, IObservable<Unit>> _provisioned =
+    private readonly PromiseCache<string, Unit> _provisioned =
         new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -416,7 +423,8 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
         // CREATE SCHEMA onto the per-adapter pool (cap 1 = one connection) and replays the
         // single completion to every subscriber. NO Observable.FromAsync here — the only
         // async edge lives sealed inside IIoPool (forbidden everywhere else; see
-        // ControlledIoPooling.md).
+        // ControlledIoPooling.md). A FAULTED attempt is evicted by the cache, so a transient
+        // DDL failure costs one caller an error rather than the partition its provisioning.
         return _provisioned.GetOrAdd(def.Schema!, _ =>
             _ioPool.Run(ct => EnsureSchemaAsync(def, ct)).Select(_ => Unit.Default));
     }
@@ -508,7 +516,7 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
             }, ct, _logger).ConfigureAwait(false);
 
             _schemasInitialized.TryRemove(schema, out _);
-            _provisioned.TryRemove(schema, out _);
+            _provisioned.Invalidate(schema);
             _registeredPartitions.TryRemove(@namespace, out _);
             _logger?.LogInformation(
                 "PostgreSqlPartitionStorageProvider: dropped schema {Schema} for deleted partition {Namespace}",

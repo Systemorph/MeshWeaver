@@ -9,7 +9,7 @@ Pipeline: `Markdig AST` → `Document` model → { print HTML + CSS Paged Media 
 Features:
 
 - **Embedded layout areas** (`@@("…/area/Foo/…")`) resolved to real document structure — see below.
-- Table of contents (built from document heading structure; PDF entries are links, without page numbers — see the doc page).
+- Table of contents (built from document heading structure; PDF entries are links AND carry the page each section starts on — read back out of a first print, then verified against the published one, because CSS cannot name a target's page. See the doc page).
 - Page break rules (before H1, between subtree children, explicit `\newpage` / `<!-- pagebreak -->`).
 - Branded cover page, running header, and running footer (with `N / M` page numbers in PDF) resolved from a `CorporateIdentity` mesh node.
 - MeshWeaver annotations become native Word comments and tracked changes in DOCX.

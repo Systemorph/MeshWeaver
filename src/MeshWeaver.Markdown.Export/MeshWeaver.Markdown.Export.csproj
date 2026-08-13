@@ -10,6 +10,12 @@
          to strip what mail clients cannot render. Same parser the Blazor MarkdownHtmlRenderer
          uses for the identical walk, so the two agree on what a placeholder div is. -->
     <PackageReference Include="HtmlAgilityPack" />
+    <!-- Reads the printed PDF back to recover the page each contents entry landed on: Chromium
+         implements no part of CSS `target-counter`, so the browser's own link annotations are the
+         only truthful source for a contents page number (#1309, TocPageNumbers). Already in this
+         project's graph via MeshWeaver.ContentCollections — declared here because this project now
+         uses the API directly. -->
+    <PackageReference Include="UglyToad.PdfPig" />
   </ItemGroup>
 
   <ItemGroup>
