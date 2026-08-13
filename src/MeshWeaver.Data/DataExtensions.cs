@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -1743,8 +1744,68 @@ public static class DataExtensions
         return request.Processed();
     }
 
+    /// <summary>
+    /// Serves a <see cref="GetDataRequest"/> off the referenced workspace stream.
+    ///
+    /// <para>🚨 <b>A read that is owed a reply ALWAYS produces one — including when the source
+    /// never emits.</b> The observable below is a LIVE workspace stream (deliberately no
+    /// <c>Take(1)</c>: every change ships to the consumer), so its only terminal signals are a
+    /// fault — handled by the <c>Catch</c> — and COMPLETION. And completion-without-a-value is
+    /// not hypothetical: <see cref="SynchronizationStream{TStream}.Dispose"/> completes its
+    /// store <em>without</em> publishing anything when the owning hub's data plane is torn down
+    /// before the initial state landed, and a reduced stream built over an already-disposed
+    /// parent completes on its very first subscribe. The old
+    /// <c>.Subscribe(response =&gt; hub.Post(...))</c> had no completion arm, so that terminal
+    /// signal was discarded: the delivery was marked <c>Processed</c>, the subscription died
+    /// silently with the hub, and the caller's callback sat registered for its entire budget.
+    /// That is #1362 — <c>GetMeshNode('ACME/ProductLaunch') timed out after 60.0s … the owning
+    /// per-node hub never answered</c>, whose trace shows <c>HANDLER_ENTER</c> /
+    /// <c>HANDLER_EXIT state=Processed</c> and then 53 s of nothing, with four
+    /// <c>[SYNC_STREAM] Not setting … — stream is disposed</c> warnings 30 ms after the
+    /// handler exited.</para>
+    ///
+    /// <para>Both silent arms answer exactly once: an empty completion <b>while the hub is winding
+    /// down</b>, and this hub being disposed with nothing emitted yet (the subscription is
+    /// <c>RegisterForDisposal</c>'d, so teardown can dispose it before the completion is
+    /// delivered). The answer is a transient <see cref="ErrorType.ShuttingDown"/> NACK — the same
+    /// classification routing already mints for a delivery that raced a hub's disposal, which
+    /// <c>MeshNodeStreamExtensions.GetMeshNode</c> re-probes ONCE against a fresh activation and
+    /// <c>MeshNodeStreamCache</c> rides out. NOT a timeout and NOT a default-empty
+    /// <c>GetDataResponse</c>: "the owner went away, ask again" and "the node does not exist" are
+    /// different facts, and collapsing them is what made the failure name the wrong thing. Mirrors
+    /// <see cref="RegisterOwnerDisposingNack"/>, which closed the identical hole on the WRITE path
+    /// (<c>PatchDataRequest</c>).</para>
+    ///
+    /// <para>🚨 <b>Why the completion arm is gated on <see cref="IsWindingDown"/> — an empty
+    /// completion is NOT proof the owner is going away.</b> The first version of this fix NACKed on
+    /// ANY empty completion, and that regressed
+    /// <c>LayoutAreaRetrievalTest.LayoutAreasUnifiedReference_MatchesTheTypedRequest</c>: a
+    /// <c>GetDataRequest(layoutAreas:)</c> was answered "its owner is shutting down" <b>18 ms after
+    /// a brand-new <c>host/1</c> started</b>, on a hub at <c>Started</c> that was not shutting down
+    /// by any measure. Two things made that bad rather than merely wrong. First, the claim was
+    /// false — and this NACK's whole value is that its classification is trustworthy. Second,
+    /// <c>layoutAreas:</c> has a DEDICATED handler (<c>LayoutExtensions.HandleLayoutAreasRequest</c>,
+    /// filtered) that answers it correctly, while the generic path here ALSO runs and its
+    /// <c>CreateLayoutAreasStream</c> can complete empty under a startup race — so the NACK was a
+    /// SECOND, contradictory answer that raced and beat a correct one. That is the "two failure
+    /// answers, one request" class the codebase forbids. At runtime the cost is not a test: the
+    /// same route serves the MCP <c>@Node/Path/layoutAreas/</c> listing, so an agent asking a
+    /// healthy portal for a node's areas would have been told the node was shutting down.</para>
+    ///
+    /// <para>Silence on a LIVE hub is therefore preserved exactly as before — this change never
+    /// makes a healthy read louder, only a dying one honest. The disposal arm needs no such gate:
+    /// it cannot run except during teardown.</para>
+    /// </summary>
     private static IMessageDelivery HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request)
     {
+        // ONE request, ONE answer — enforced by a single CAS'd state rather than two flags, so a
+        // disposal landing concurrently with an emission can never produce both a response and a
+        // NACK (the "two failure answers, one request" class).
+        //   0 = nothing shipped yet · 1 = a GetDataResponse was posted · 2 = a silent terminal
+        //       was NACKed.
+        var state = 0;
+        bool TryClaimSilentTerminal() => Interlocked.CompareExchange(ref state, 2, 0) == 0;
+
         var subscription = RunReadValidators(hub, request.Message.Reference)
             .SelectMany(validationResult =>
             {
@@ -1760,10 +1821,122 @@ public static class DataExtensions
             })
             .Catch<GetDataResponse, Exception>(ex =>
                 Observable.Return(new GetDataResponse(null, 0) { Error = ex.Message }))
-            .Subscribe(response => hub.Post(response, o => o.ResponseFor(request)));
+            .Subscribe(
+                response =>
+                {
+                    // Claim on the FIRST emission; later emissions of this live stream leave the
+                    // state at 1 and keep shipping, exactly as before.
+                    Interlocked.CompareExchange(ref state, 1, 0);
+                    hub.Post(response, o => o.ResponseFor(request));
+                },
+                () =>
+                {
+                    // 🚨 ONLY when the claim is TRUE. An empty completion is NOT by itself proof
+                    // that the owner is going away — that assumption was wrong and it regressed
+                    // LayoutAreaRetrievalTest within 18 ms of a brand-new hub starting (see the
+                    // note on this method). A hub at Started is healthy, some other handler may
+                    // already have answered this very request, and asserting "shutting down" there
+                    // is both a lie and a second, contradictory answer. When the hub is genuinely
+                    // winding down the completion IS the disposal signal and the caller is owed it;
+                    // otherwise stay silent here and let the disposal arm below be the one that
+                    // speaks, since it cannot run except during teardown.
+                    if (IsWindingDown(hub) && TryClaimSilentTerminal())
+                        NackSilentRead(hub, request,
+                            "the data stream for this reference completed without ever producing a value "
+                            + "while the owner is shutting down (the stream was disposed before the initial "
+                            + "state landed). Retry against the fresh activation.");
+                });
 
-        hub.RegisterForDisposal(subscription);
+        // Second arm, folded into the SAME single registration the subscription already needed
+        // (one disposable per read, exactly as before — never two): teardown can dispose the
+        // subscription BEFORE the stream's completion reaches it, in which case no completion is
+        // ever delivered and the caller is owed the same answer. Disposal runs in the ShutDown
+        // phase, where this hub's own Post is gated closed — NackSilentRead falls back to the
+        // parent, exactly as RegisterOwnerDisposingNack does.
+        hub.RegisterForDisposal(Disposable.Create(() =>
+        {
+            subscription.Dispose();
+            if (TryClaimSilentTerminal())
+                NackSilentRead(hub, request,
+                    "the owning hub was disposed while this read was still outstanding — it is "
+                    + "shutting down and never produced a value. Retry against the fresh activation.");
+        }));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Whether this hub has left normal service — the ONLY state in which an empty completion may
+    /// be reported as "the owner is shutting down". <c>RunLevel &gt; Started</c> covers the phased
+    /// shutdown (Quiescing → DisposeHostedHubs → HostedHubsDisposed → ShutDown → Dead);
+    /// <c>IsDisposing</c> covers the window where disposal has been entered but the run level has
+    /// not advanced yet. A hub at <c>Starting</c> is explicitly NOT winding down — that is the
+    /// brand-new-hub state the layoutAreas regression came from.
+    /// </summary>
+    private static bool IsWindingDown(IMessageHub hub)
+        => hub.RunLevel > MessageHubRunLevel.Started
+           || hub is MessageHub { IsDisposing: true };
+
+    /// <summary>
+    /// Posts the once-only transient NACK for a <see cref="GetDataRequest"/> whose source went
+    /// silent (see <see cref="HandleGetDataRequest"/>).
+    ///
+    /// <para>🚨 The MESSAGE TEXT is contract, the same way
+    /// <c>MessageService.NackThroughParent</c>'s is. It MUST carry a marker
+    /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c> matches — "shutting down" — so
+    /// long-lived stream consumers ride it out instead of tearing down, and it MUST NOT contain
+    /// "No node found", which would turn a retryable stall into a provable absence.</para>
+    ///
+    /// <para>Posts through this hub while it can still post, and through the PARENT once
+    /// <c>RunLevel &gt;= DisposeHostedHubs</c> closes its own gate — response correlation rides
+    /// <c>ResponseFor</c>'s RequestId, never the posting hub's identity. During a whole-mesh
+    /// teardown the parent is past that mark too, the post is skipped, and nobody is waiting.</para>
+    /// </summary>
+    private static void NackSilentRead(
+        IMessageHub hub, IMessageDelivery<GetDataRequest> request, string reason)
+    {
+        var message =
+            $"GetDataRequest({request.Message.Reference}) at '{hub.Address}': {reason}";
+        // 🚨 Everything here runs on a teardown path, where this hub's ServiceProvider may
+        // already be gone — resolving a logger can itself throw ObjectDisposedException. Logging
+        // must never mask (or replace) the NACK it is reporting, so it gets its own guard and the
+        // post below happens regardless. Same rule as GetMeshNode's timeout diagnostics.
+        try
+        {
+            hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Data.GetDataRequest")
+                ?.LogWarning("{Message}", message);
+        }
+        catch
+        {
+            // Deliberate: a dead ServiceProvider must not suppress the answer the caller is owed.
+        }
+        var failure = new DeliveryFailure(request) { ErrorType = ErrorType.ShuttingDown, Message = message };
+        try
+        {
+            if (hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                hub.Post(failure, o => o.ResponseFor(request));
+                return;
+            }
+            var parent = hub.Configuration.ParentHub;
+            if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                parent.Post(failure, o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            // The post itself failed — nothing else can carry the answer, so record why. Guarded
+            // for the same reason as above.
+            try
+            {
+                hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.Data.GetDataRequest")
+                    ?.LogDebug(ex, "Failed to NACK a silent GetDataRequest at {Address}", hub.Address);
+            }
+            catch
+            {
+                // As above.
+            }
+        }
     }
 
     /// <summary>
