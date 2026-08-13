@@ -352,6 +352,14 @@ public class AssemblyCacheRetentionTest : IDisposable
     [InlineData(".bake-lease-22825f59")]          // the lease
     [InlineData("vX-22825f59-9f4455cd1122.dll")]  // no version
     [InlineData("v7-zzzzzzzz-9f4455cd1122.dll")]  // tag is not hex
+    // 🚨 The WIDTHS are the deletion boundary, not decoration: the store always writes an 8-char
+    // tag and a 12-char hash, so a foreign name that merely happens to be hex must not be
+    // attributed — attribution is what makes a file deletable.
+    [InlineData("v1-ab-cd.dll")]                  // hex, three segments, but nothing this store wrote
+    [InlineData("v7-22825f5-9f4455cd1122.dll")]   // tag one char short
+    [InlineData("v7-22825f590-9f4455cd1122.dll")] // tag one char long
+    [InlineData("v7-22825f59-9f4455cd112.dll")]   // hash one char short
+    [InlineData("v7-22825f59-9f4455cd11223.dll")] // hash one char long
     public void AnythingElse_IsAttributedToNothing(string fileName) =>
         AssemblyCacheGenerations.TagOf(fileName).Should().BeNull(
             "an unattributable name is one the sweep can never delete");
