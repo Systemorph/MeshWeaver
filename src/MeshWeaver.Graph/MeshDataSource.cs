@@ -722,7 +722,7 @@ public static class MeshDataSourceExtensions
                 .Replace('+', '-').Replace('/', '_').TrimEnd('=')[..8];
             var version = $"{DateTime.UtcNow:yyyyMMddHHmmss}-{hash}";
 
-            var releaseNamespace = $"{nodeTypePath}/Release";
+            var releaseNamespace = $"{nodeTypePath}/{ReleaseNodeType.ReleaseSegment}";
             var releasePath = $"{releaseNamespace}/{version}";
 
             // Partition the compiler's combined {path → version} snapshot into
