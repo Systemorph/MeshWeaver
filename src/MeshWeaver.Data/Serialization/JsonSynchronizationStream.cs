@@ -419,7 +419,15 @@ public static class JsonSynchronizationStream
                 () => (isRealUser ? accessService?.SwitchAccessContext(ambient) : accessService?.ImpersonateAsSystem())
                       ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
                 _ => hub.Observe(
-                        new SubscribeRequest(reduced.StreamId, reference) { Identity = identityForSubscribe },
+                        new SubscribeRequest(reduced.StreamId, reference)
+                        {
+                            Identity = identityForSubscribe,
+                            // Declared by the assembly that also OWNS the applier
+                            // (ApplyPatchWithCorrectUnescaping below), so the claim can never be
+                            // wrong: whatever version of this code posts the subscribe is the version
+                            // that folds the frames.
+                            AcceptsStringSplice = true,
+                        },
                         o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
                     .Take(1))
             .Subscribe(
@@ -994,7 +1002,8 @@ public static class JsonSynchronizationStream
                 // (The client side already applies Fulls unconditionally — UpdateStream's
                 // monotonicity guard is PATCHES-ONLY; this mirrors that contract on the owner.)
                 .ToDataChanged<TReduced, DataChangedEvent>(
-                    c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy))
+                    c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy),
+                    request.AcceptsStringSplice)
                 .Synchronize()
                 .Where(x => x is not null)
                 .Select(x => x!)
@@ -1060,7 +1069,9 @@ public static class JsonSynchronizationStream
         return reduced;
     }
     private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
-        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange : JsonChange
+        this ISynchronizationStream<TReduced> stream,
+        Func<ChangeItem<TReduced>, bool> predicate,
+        bool acceptsStringSplice = false) where TChange : JsonChange
     {
         // Loss-detection chain (issue #1081): every emitted frame carries the Version of the frame
         // emitted immediately BEFORE it on this same forwarding subscription (-1 for the first).
@@ -1121,6 +1132,19 @@ public static class JsonSynchronizationStream
                         return null;
                     }
                     var patch = x.Updates.ToJsonPatch(stream.Host.JsonSerializerOptions, stream.Reference as WorkspaceReference);
+                    // 🚨 #1284, the fan-out half. A streaming cell rewrites its whole Text on every
+                    // Sample(100 ms) tick, so a whole-value `replace` costs O(ticks x final length)
+                    // PER SUBSCRIBER — the same quadratic the write path shed in #1414, once more for
+                    // every viewer and every cross-silo mirror. Encoding the changed span against the
+                    // text this subscription is KNOWN to hold (currentJson, the cache this method
+                    // keeps in lockstep with the subscriber) makes it O(chunk).
+                    //
+                    // Only for a subscriber that asked (SubscribeRequest.AcceptsStringSplice). Every
+                    // other one — every JS/Python client, every pod still on the previous image —
+                    // gets exactly the bytes it gets today, because the alternative is a consumer
+                    // that half-applies a frame in silence. See that property for the full argument.
+                    if (acceptsStringSplice)
+                        patch = PatchStringSplice.Compress(patch, currentJson.Value);
                     var patchJson = JsonSerializer.Serialize(patch, stream.Host.JsonSerializerOptions);
                     try
                     {
@@ -1284,6 +1308,9 @@ public static class JsonSynchronizationStream
                 case "remove":
                     ApplyRemove(currentNode!, segments);
                     break;
+                case "splice":
+                    ApplySplice(currentNode!, segments, value, pathString);
+                    break;
                 default:
                     // move/copy/test are never produced by ToJsonPatch, so this branch only ever
                     // sees a patch authored elsewhere. Defer them to MeshWeaver.Json's applier,
@@ -1380,6 +1407,52 @@ public static class JsonSynchronizationStream
                     $"Stale patch: replace at index {index} but array has {arr.Count} elements.");
             arr[index] = value;
         }
+    }
+
+    /// <summary>
+    /// Folds a <c>splice</c> (see <see cref="OperationType.Splice"/>) onto a string leaf — but ONLY
+    /// after the carried fingerprint proves the text already there is byte-identical to the text the
+    /// producer diffed against. That is the identical rule the write path follows (#1414): a splice
+    /// is never applied at an offset nothing vouched for, so the result is provably the same string
+    /// a whole-value <c>replace</c> would have written.
+    ///
+    /// <para>On a mismatch the correct reaction is neither to splice blind nor to drop the frame,
+    /// but to stop trusting the local snapshot: <see cref="StaleStreamStateException"/> is what
+    /// <c>SynchronizationStream.UpdateStream</c> already answers with a fresh authoritative Full from
+    /// the owner (storm-gated by <c>_resyncInFlight</c> — one resubscribe per gap, no timer, no
+    /// retry loop). In normal operation it cannot fire: the frame chain resyncs on a LOST frame
+    /// before any patch is applied, so producer and subscriber are in lockstep by construction. It
+    /// exists so that when they are not, the divergence is repaired rather than written into the
+    /// text.</para>
+    /// </summary>
+    private static void ApplySplice(JsonNode root, string[] segments, JsonNode? value, string pathString)
+    {
+        if (segments.Length == 0)
+            throw new InvalidOperationException("Cannot splice at root path");
+        if (!PatchStringSplice.TryDecodeOperation(value, out var delta, out var baseLength, out var fingerprint))
+            throw new InvalidOperationException(
+                $"Malformed splice operation at {pathString}: expected {{\"{PatchStringSplice.Marker}\":[start,removed,\"inserted\"],"
+                + $"\"{PatchStringSplice.BaseMarker}\":[length,\"fingerprint\"]}}");
+
+        var parent = EnsureParentPath(root, segments);
+        var key = segments[^1];
+        var live = parent switch
+        {
+            JsonObject obj => obj[key] as JsonValue,
+            JsonArray arr when int.TryParse(key, out var i) && i >= 0 && i < arr.Count => arr[i] as JsonValue,
+            _ => null,
+        };
+        var current = live is not null && live.TryGetValue<string>(out var s) ? s : null;
+        if (!PatchStringSplice.BaseMatches(current, baseLength, fingerprint))
+            throw new StaleStreamStateException(
+                $"Stale patch: splice at {pathString} was computed against a different base "
+                + $"(expected length {baseLength}, local length {current?.Length ?? -1}).");
+
+        var spliced = JsonValue.Create(delta.Apply(current));
+        if (parent is JsonObject target)
+            target[key] = spliced;
+        else if (parent is JsonArray array && int.TryParse(key, out var index))
+            array[index] = spliced;
     }
 
     private static void ApplyRemove(JsonNode root, string[] segments)
