@@ -981,10 +981,18 @@ internal static class NodeTypeEnrichmentHelpers
                             reason: $"latest assembly for '{nodeType}' missing from store (collection={def.LatestAssemblyCollection}, version={compileVersion})",
                             staleVersion: typeNode.Version);
                     }
+                    // 🚨 EVERY return below binds THIS assembly for the grain's lifetime, so each
+                    // one arms the stale-assembly watcher: the healthy binding is the one the
+                    // deploy of 2026-08-12 left executing old code, precisely because it was the
+                    // branch that succeeded and therefore had nothing watching it. See
+                    // WithStaleAssemblySelfHeal for why the gate is the published assembly path
+                    // and not the node version.
+                    var boundAssembly = def.LatestAssemblyPath;
+
                     if (compilationService is null)
-                        return Observable.Return(ApplyEntry(
-                            node, localPath, hubConfig: null,
-                            nodeType, meshConfiguration));
+                        return Observable.Return(WithStaleAssemblySelfHeal(
+                            ApplyEntry(node, localPath, hubConfig: null, nodeType, meshConfiguration),
+                            meshHub, nodeType, boundAssembly, meshConfiguration, logger));
 
                     return compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType)
                         .Take(1)
@@ -994,9 +1002,11 @@ internal static class NodeTypeEnrichmentHelpers
                                 .FirstOrDefault(c =>
                                     string.Equals(c.NodeType, nodeType, StringComparison.OrdinalIgnoreCase))
                                 ?? result?.NodeTypeConfigurations.FirstOrDefault();
-                            return ApplyEntry(
-                                node, localPath, matching?.HubConfiguration,
-                                nodeType, meshConfiguration);
+                            return WithStaleAssemblySelfHeal(
+                                ApplyEntry(
+                                    node, localPath, matching?.HubConfiguration,
+                                    nodeType, meshConfiguration),
+                                meshHub, nodeType, boundAssembly, meshConfiguration, logger);
                         })
                         .Catch<MeshNode, Exception>(ex =>
                         {
@@ -1007,9 +1017,9 @@ internal static class NodeTypeEnrichmentHelpers
                             logger?.LogWarning(ex,
                                 "EnrichWithNodeType: HubConfiguration reflection for '{NodeType}' faulted ({ExceptionType}) — instance '{InstancePath}' falls back to default config",
                                 nodeType, ex.GetType().Name, node.Path);
-                            return Observable.Return(ApplyEntry(
-                                node, localPath, hubConfig: null,
-                                nodeType, meshConfiguration));
+                            return Observable.Return(WithStaleAssemblySelfHeal(
+                                ApplyEntry(node, localPath, hubConfig: null, nodeType, meshConfiguration),
+                                meshHub, nodeType, boundAssembly, meshConfiguration, logger));
                         });
                 });
         }
@@ -1454,6 +1464,130 @@ internal static class NodeTypeEnrichmentHelpers
                 });
         return overlaid with { HubConfiguration = withWatcher };
     }
+
+    /// <summary>
+    /// Self-healing wrap for a HEALTHY per-instance binding whose assembly has since been
+    /// superseded — the fix for the memex 2026-08-12 deploy, where a GitSync update recompiled
+    /// three NodeTypes successfully and every instance kept executing the PREVIOUS assembly.
+    ///
+    /// <para>🚨 This is the case nobody was watching, precisely because it is the case that
+    /// WORKED. Every <see cref="WithOverlaySelfHeal"/> call site is a DEGRADED branch — error
+    /// overlay, slow-path timeout, unresolved pin, missing bytes, ABI-stale, compiling. An
+    /// instance that successfully bound a good assembly got no watcher at all, so when its type
+    /// later published a NEW build there was nothing to tell it: the binding is cached for the
+    /// grain's lifetime by the <see cref="EnrichWithNodeType"/> re-enrichment short-circuit, and
+    /// only idle-deactivation or a manual recycle ever replaced it.</para>
+    ///
+    /// <para><b>What made it costly is that every signal said the deploy had landed.</b> The
+    /// NodeType reported <c>CompilationStatus.Ok</c>, a fresh <c>LastCompileSucceededAt</c>, a new
+    /// <c>LatestAssemblyPath</c>, and <c>CompiledSources</c> equal to <c>CurrentSourceVersions</c>;
+    /// the source nodes read current; the type's own <c>Tests</c> area rendered green — while
+    /// executing the old code. The only way to see it from outside was to look for a string the
+    /// deploy had changed. <see cref="NodeTypeRecompileExtensions"/> closes the half where the
+    /// recompile is never TRIGGERED; this closes the half where it succeeds and nobody rebinds.</para>
+    ///
+    /// <para><b>The gate is the ASSEMBLY IDENTITY, deliberately not the node Version.</b> A
+    /// version gate is what failed here before (memex 2026-07-27: a recompile of an already-<c>Ok</c>
+    /// type need not advance the version, so the watcher waited for a bump that never came, and
+    /// <see cref="ArmOverlaySelfHeal"/> had to grow a grace timer to escape it). Comparing the
+    /// published <see cref="NodeTypeDefinition.LatestAssemblyPath"/> against the one this instance
+    /// actually bound is exact in both directions: it changes if and only if a different build was
+    /// produced, so it cannot miss a deploy, and it cannot fire on an unrelated node write (a
+    /// <c>RequestedReleaseAt</c> stamp, release notes, a pin edit). It also cannot hot-loop — after
+    /// the recycle the instance re-enriches against the NEW path, which becomes the next watcher's
+    /// baseline, so each published build costs each instance at most one self-recycle.</para>
+    ///
+    /// <para>Not armed when the type publishes no assembly path (nothing to compare) or when no hub
+    /// configuration will be composed — the same null-config carve-out
+    /// <see cref="WithOverlaySelfHeal"/> documents: routing keys the fail-fast NACK-fallback hub on
+    /// a null <c>HubConfiguration</c>, and wrapping would swap fail-fast for a bare hub that
+    /// ignores typed requests.</para>
+    /// </summary>
+    /// <param name="bound">The enriched node, already bound to <paramref name="boundAssemblyPath"/>.</param>
+    /// <param name="meshHub">The mesh hub, source of the NodeType stream.</param>
+    /// <param name="nodeType">The NodeType path this instance is bound to.</param>
+    /// <param name="boundAssemblyPath">
+    /// The <see cref="NodeTypeDefinition.LatestAssemblyPath"/> in force when this instance bound —
+    /// the identity a later publication is compared against.
+    /// </param>
+    /// <param name="meshConfiguration">Used only for the null-config carve-out above.</param>
+    /// <param name="logger">Best-effort diagnostics.</param>
+    internal static MeshNode WithStaleAssemblySelfHeal(
+        MeshNode bound,
+        IMessageHub meshHub,
+        string nodeType,
+        string? boundAssemblyPath,
+        MeshConfiguration meshConfiguration,
+        ILogger? logger)
+    {
+        // Nothing published to compare against, or nothing that would compose a configuration:
+        // leave the node exactly as it is.
+        if (string.IsNullOrEmpty(boundAssemblyPath)
+            || (bound.HubConfiguration is null && meshConfiguration.DefaultNodeHubConfiguration is null))
+            return bound;
+
+        var baseConfig = bound.HubConfiguration;
+        Func<MessageHubConfiguration, MessageHubConfiguration> withWatcher = config =>
+            (baseConfig is null ? config : baseConfig(config))
+                .WithInitialization(instanceHub =>
+                {
+                    // Fire-and-forget, exactly as the overlay watcher: a watcher that cannot be
+                    // armed must never fault hub initialization — the worst case is the pre-fix
+                    // world ("a manual recycle picks up the new build"), never a dead instance.
+                    try
+                    {
+                        instanceHub.RegisterForDisposal(ArmStaleAssemblySelfHeal(
+                            meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
+                            instanceHub, nodeType, boundAssemblyPath, logger));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogWarning(ex,
+                            "Stale-assembly self-heal: could not arm the NodeType watcher for '{NodeType}' on instance '{InstancePath}'",
+                            nodeType, instanceHub.Address);
+                    }
+                });
+        return bound with { HubConfiguration = withWatcher };
+    }
+
+    /// <summary>
+    /// Watcher core of <see cref="WithStaleAssemblySelfHeal"/>, split out so the firing contract is
+    /// unit-testable without building a hub (<c>StaleAssemblySelfHealWatcherTest</c>). Posts exactly
+    /// ONE self-<see cref="DisposeRequest"/> (<c>Take(1)</c>) when the NodeType publishes a USABLE
+    /// build whose <see cref="NodeTypeDefinition.LatestAssemblyPath"/> differs from
+    /// <paramref name="boundAssemblyPath"/>.
+    ///
+    /// <para>Unsettled states, non-<see cref="NodeTypeDefinition"/> content, and republications of
+    /// the SAME assembly are ignored — the last of those is what keeps an unrelated node write from
+    /// bouncing every instance of the type. Errors are logged, never rethrown: best-effort by
+    /// design.</para>
+    /// </summary>
+    internal static IDisposable ArmStaleAssemblySelfHeal(
+        IObservable<MeshNode> typeStream,
+        IMessageHub instanceHub,
+        string nodeType,
+        string boundAssemblyPath,
+        ILogger? logger)
+        => typeStream
+            .Where(t => t?.Content is NodeTypeDefinition d
+                && NodeTypeCompilationHelpers.HasUsableBuild(t, d)
+                && !string.IsNullOrEmpty(d.LatestAssemblyPath)
+                && !string.Equals(d.LatestAssemblyPath, boundAssemblyPath, StringComparison.Ordinal))
+            .Take(1)
+            .Subscribe(
+                t =>
+                {
+                    var published = (t.Content as NodeTypeDefinition)?.LatestAssemblyPath;
+                    logger?.LogInformation(
+                        "Stale-assembly self-heal: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — recycling instance '{InstancePath}' so it rebinds",
+                        nodeType, published, boundAssemblyPath, instanceHub.Address);
+                    // The RecycleLayoutArea idiom: the hub disposes itself, the grain deactivates,
+                    // and the next access re-enriches against the newly published assembly.
+                    instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                },
+                ex => logger?.LogWarning(ex,
+                    "Stale-assembly self-heal watcher for NodeType '{NodeType}' (instance '{InstancePath}') faulted — falling back to manual Recycle",
+                    nodeType, instanceHub.Address));
 
     /// <summary>
     /// Watcher core of <see cref="WithOverlaySelfHeal"/>, split out so the
