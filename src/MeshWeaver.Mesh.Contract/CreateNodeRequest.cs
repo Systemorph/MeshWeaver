@@ -110,7 +110,19 @@ public enum NodeCreationRejectionReason
     /// <summary>
     /// Node content validation failed.
     /// </summary>
-    ValidationFailed
+    ValidationFailed,
+
+    /// <summary>
+    /// The create was NOT evaluated: a check it depends on could not be established (#1446) —
+    /// typically the security layer's grant/policy reads over the target's scope starving on a
+    /// cross-silo activation that never answers.
+    ///
+    /// <para>🚨 An availability failure, not a verdict. Before this existed the create had no way to
+    /// say so and simply sat Executing until the caller's <c>RequestTimeout</c> ended it, which
+    /// reports the caller's impatience rather than the read that starved. Retrying is meaningful
+    /// here in a way it never is for <see cref="ValidationFailed"/>.</para>
+    /// </summary>
+    Unavailable
 }
 
 /// <summary>
@@ -348,7 +360,13 @@ public enum NodeDeletionRejectionReason
     /// warnings (from <see cref="DeleteNodeResponse.Log"/>) and re-issue the request with
     /// <c>ConfirmWarnings=true</c> to proceed.
     /// </summary>
-    WarningsRequireConfirmation
+    WarningsRequireConfirmation,
+
+    /// <summary>
+    /// The delete was NOT evaluated: a check it depends on could not be established (#1446).
+    /// See <see cref="NodeCreationRejectionReason.Unavailable"/>.
+    /// </summary>
+    Unavailable
 }
 
 /// <summary>
@@ -653,7 +671,13 @@ public enum NodeMoveRejectionReason
     /// <summary>
     /// Move validation failed.
     /// </summary>
-    ValidationFailed
+    ValidationFailed,
+
+    /// <summary>
+    /// The move was NOT evaluated: a check it depends on could not be established (#1446).
+    /// See <see cref="NodeCreationRejectionReason.Unavailable"/>.
+    /// </summary>
+    Unavailable
 }
 
 /// <summary>
