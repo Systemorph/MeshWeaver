@@ -193,9 +193,21 @@ public static class AssemblyCacheGenerations
     public const string ClaimsDirectoryName = ".generations";
 
     /// <summary>
+    /// Width of the framework tag the store writes — <c>FrameworkVersion[..8]</c>, see
+    /// <see cref="FileSystemAssemblyStore.FrameworkTag"/>.
+    /// </summary>
+    private const int FrameworkTagLength = 8;
+
+    /// <summary>
+    /// Width of the content hash the store writes — 12 hex chars (<c>ToHexString</c> of the first
+    /// 6 SHA-256 bytes), see <c>FileSystemAssemblyStore.ContentHash</c>.
+    /// </summary>
+    private const int ContentHashLength = 12;
+
+    /// <summary>
     /// The framework generation a cache filename belongs to, or <c>null</c> when the name is not one
-    /// this store wrote. Strict on purpose: everything this refuses is something the sweep will never
-    /// delete.
+    /// this store wrote. Strict on purpose — everything this refuses is something the sweep will
+    /// never delete, so the shape it accepts IS the deletion boundary.
     /// </summary>
     public static string? TagOf(string fileName)
     {
@@ -214,7 +226,15 @@ public static class AssemblyCacheGenerations
             return null;
         if (!long.TryParse(parts[0].AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out _))
             return null;
-        return IsHex(parts[1]) && IsHex(parts[2]) ? parts[1].ToLowerInvariant() : null;
+        // 🚨 The WIDTHS are part of the shape, not decoration. The store always emits an 8-char tag
+        // and a 12-char hash, so accepting any hex length would let a foreign name like
+        // `v1-ab-cd.dll` be attributed to a generation — and attribution is what makes a file
+        // deletable. Matching exactly what the writer emits is what keeps "only files this store
+        // wrote are ever deleted" literally true.
+        return parts[1].Length == FrameworkTagLength && IsHex(parts[1])
+               && parts[2].Length == ContentHashLength && IsHex(parts[2])
+            ? parts[1].ToLowerInvariant()
+            : null;
     }
 
     private static bool IsHex(string s) =>
@@ -289,9 +309,14 @@ public static class AssemblyCacheGenerations
                 {
                     at = ParseClaim(File.ReadAllText(file.FullName));
                 }
-                catch (IOException)
+                catch (Exception)
                 {
-                    // Unreadable RIGHT NOW is not "gone" — a null instant protects the generation.
+                    // 🚨 EVERY read failure, not just IOException — a denied ACL
+                    // (UnauthorizedAccessException) is every bit as much "I cannot evaluate this
+                    // claim" as a locked file, and letting it escape would abort the whole sweep
+                    // over one claim file. Unreadable RIGHT NOW is not "gone": a null instant
+                    // PROTECTS the generation, which is the conservative direction and exactly what
+                    // AssemblyCacheClaim.AtUtc promises.
                     at = null;
                 }
                 claims.Add(new AssemblyCacheClaim(
