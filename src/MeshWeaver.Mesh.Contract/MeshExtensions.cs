@@ -2444,9 +2444,8 @@ public static class MeshExtensions
                                             .Do(deletedPaths =>
                                             {
                                                 var messages = collectedMessages.ToImmutable();
-                                                var okLog = baseActivity with
+                                                var okLog = baseActivity.Append(messages) with
                                                 {
-                                                    Messages = messages,
                                                     AffectedPaths = deletedPaths.ToImmutableList(),
                                                     End = DateTime.UtcNow,
                                                     Status = messages.Any(m => m.LogLevel >= LogLevel.Warning)
@@ -3844,10 +3843,9 @@ public static class MeshExtensions
 
         void PostOk(MeshNode result, bool isCreate, string logLine)
         {
-            var okLog = baseActivity with
+            var okLog = baseActivity.Append(
+                new LogMessage(logLine, Microsoft.Extensions.Logging.LogLevel.Information)) with
             {
-                Messages = baseActivity.Messages.Add(
-                    new LogMessage(logLine, Microsoft.Extensions.Logging.LogLevel.Information)),
                 End = DateTime.UtcNow,
                 Status = ActivityStatus.Succeeded,
             };
@@ -3860,10 +3858,9 @@ public static class MeshExtensions
 
         void PostFail(string error, NodeUpsertRejectionReason reason)
         {
-            var failLog = baseActivity with
+            var failLog = baseActivity.Append(
+                new LogMessage(error, Microsoft.Extensions.Logging.LogLevel.Error)) with
             {
-                Messages = baseActivity.Messages.Add(
-                    new LogMessage(error, Microsoft.Extensions.Logging.LogLevel.Error)),
                 End = DateTime.UtcNow,
                 Status = ActivityStatus.Failed,
             };

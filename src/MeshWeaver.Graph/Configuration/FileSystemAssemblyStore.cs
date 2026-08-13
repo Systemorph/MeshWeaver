@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Security.Cryptography;
+using MeshWeaver.Mesh.Persistence;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
@@ -140,11 +141,40 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
         var relativeContentPath = Path.GetRelativePath(rootDirectory, dllPath).Replace('\\', '/');
 
-        File.WriteAllBytes(dllPath, assemblyBytes);
+        // 🚨 ATOMIC PUBLICATION — never File.WriteAllBytes on dllPath (MeshWeaver#1387).
+        // The DLL's NAME is its publication: both TryGetAssemblyPath above and the
+        // first-write-wins probe a few lines up discover it by globbing
+        // `v{version}-{tag}-*.dll`, and the winner's path goes straight to
+        // AssemblyLoadContext.LoadFromAssemblyPath. FileMode.Create (what WriteAllBytes uses)
+        // creates the target FIRST and streams the bytes afterwards, so a reader that globs
+        // inside that window loads a TRUNCATED PE image. The header is intact, so the load
+        // itself succeeds and the first Assembly.GetTypes() throws
+        //   ReflectionTypeLoadException: Could not load type 'X' from assembly
+        //   'DynamicNode_…' because the format is invalid
+        // which CompileResultFromAssembly records as a compile failure — and that failure is
+        // TERMINAL: it writes CompilationStatus.Error and the first-build kickoff (gated on
+        // Status == null) never retries, so one transient torn read PARKS the NodeType until
+        // someone deletes the file. A parked NodeType refuses portal readiness.
+        //
+        // The reader is not even necessarily in this process: on AKS this directory is
+        // /data/assembly-cache, a ReadWriteMany Azure Files share, so every replica globs the
+        // bytes another replica is mid-write on.
+        //
+        // Publish the PDB before the DLL: the DLL is the discovery key, so anything visible to
+        // a reader is complete AND already has its symbols.
         if (pdbBytes is { Length: > 0 })
-            File.WriteAllBytes(pdbPath, pdbBytes);
-        logger.LogInformation(
-            "Cached assembly at {DllPath} ({Bytes} bytes)", dllPath, assemblyBytes.Length);
+            AtomicFileWrite.PublishBytes(pdbPath, pdbBytes);
+        var published = AtomicFileWrite.PublishBytes(dllPath, assemblyBytes);
+        if (published)
+            logger.LogInformation(
+                "Cached assembly at {DllPath} ({Bytes} bytes)", dllPath, assemblyBytes.Length);
+        else
+            // Another writer (or another replica through the shared volume) published the same
+            // content-hashed name first. The bytes are identical by construction — the hash IS
+            // the name — so this is a no-op, not a conflict.
+            logger.LogDebug(
+                "Assembly already published at {DllPath} by a concurrent writer — kept theirs "
+                + "(identical bytes: the content hash is the file name)", dllPath);
         return Observable.Return(new AssemblyStoreLocation(dllPath, FileSystemCollectionName, relativeContentPath));
     }
 

@@ -73,9 +73,23 @@ internal class RoutingGrain(
     /// arrive on time" warning — nothing reported it as a routing fault, so the symptom surfaced
     /// 37 h later as "the deployment is stale". Reported at the DISPATCH site (event-driven, no
     /// timer, no watchdog).
+    ///
+    /// <para>🚨 The slot is claimed at DISPATCH — and for the stream branch that means at ENQUEUE,
+    /// before the leg is subscribed at all (see <see cref="OrderedRouteDispatcher"/>). So this
+    /// number mixes legs that are executing, legs merely queued behind another leg, and legs still
+    /// waiting for a ThreadPool thread. It is a back-pressure gauge; it is NOT evidence that any
+    /// individual leg is stuck. <see cref="ReportSaturation"/> carries the full reasoning.</para>
     /// </summary>
     private int inFlightRoutes;
     private int saturationReported;
+
+    /// <summary>
+    /// UTC ticks at which the current saturation episode began, so <see cref="ReportDrained"/> can
+    /// say how long it lasted. Written under the same latch that gates the report, read only by the
+    /// clearing report — a plain <see cref="Volatile"/> pair is sufficient and costs the hot dispatch
+    /// path nothing (it is touched only on the two edges, never per route).
+    /// </summary>
+    private long saturationSinceTicks;
 
     /// <summary>
     /// In-flight route count at which routing is declared to be falling behind and reported at
@@ -179,22 +193,70 @@ internal class RoutingGrain(
                     "[ROUTE] Route dispatch faulted for {Address} ({DeliveryId})", addressPath, deliveryId));
     }
 
+    /// <summary>
+    /// Reports the FIRST crossing of <see cref="SaturationThreshold"/>, then latches until
+    /// <see cref="ReportDrained"/> clears it at half the threshold.
+    ///
+    /// <para>🚨 <b>This is a gauge, not a bound — and issues #1172/#1284 are what happens when a
+    /// diagnostic asserts more than it measures.</b> Nothing throttles, queues or refuses at 64:
+    /// <see cref="Dispatch"/> hands every route to the pool unconditionally and
+    /// <see cref="RouteMessage"/> still returns <c>Forwarded</c> immediately. The previous wording
+    /// ("…and not terminating", "a delivery leg is not completing") stated a conclusion this
+    /// counter cannot observe, and the number itself was read as Orleans'
+    /// <c>NonReentrancyQueueSize</c> limit. It is neither: 64 is
+    /// <see cref="SaturationThreshold"/>, a MeshWeaver constant, and the reason every report in
+    /// prod said EXACTLY 64 is the latch below — the report fires on the single increment that
+    /// crosses the line, so 64 is the only value it can print. That artefact was then read as
+    /// evidence of a hard cap.</para>
+    ///
+    /// <para><b>What the count actually measures.</b> A slot is claimed at DISPATCH and released
+    /// when the leg terminates — and the leg's own bounds (<see cref="ResolveTimeout"/>,
+    /// <see cref="StreamPostTimeout"/>) are operators INSIDE the cold observable, so they do not
+    /// start until <c>IIoPool.SubscribeThroughPool</c> actually gets a ThreadPool thread and passes
+    /// the gate. The window from claim to subscribe is therefore bounded by nothing but ThreadPool
+    /// availability, which makes this counter partly an instrument for <b>CPU/ThreadPool
+    /// starvation</b> — the same quantity Orleans' <c>LocalSiloHealthMonitor</c> reports as a
+    /// "thread pool delay" (#1284). A silo that has lost the CPU raises BOTH without any leg being
+    /// stuck.</para>
+    ///
+    /// <para><b>So report the discriminators, never a cause.</b> <c>Deepest</c> counts legs QUEUED
+    /// BEHIND the one executing leg of a destination, so <c>Deepest &gt;= 1</c> already means a leg
+    /// is waiting on a leg — head-of-line blocking on one stream destination. <c>Deepest = 0</c>
+    /// with many destinations, or a backlog that clears in milliseconds, is load.
+    /// <see cref="ReportDrained"/> prints how long the episode lasted, which separates a throughput
+    /// burst from a real stall without anyone having to profile a pod.</para>
+    /// </summary>
     private void ReportSaturation(int inFlight, string addressPath)
     {
         if (inFlight < SaturationThreshold) return;
         if (Interlocked.Exchange(ref saturationReported, 1) == 1) return;
+        Volatile.Write(ref saturationSinceTicks, DateTime.UtcNow.Ticks);
+        var (destinations, deepest) = orderedDispatcher.QueueSnapshot();
         logger.LogCritical(
-            "[ROUTE] {InFlight} route dispatches are in flight on this silo and not terminating (latest target {Address}). "
-            + "Routing is falling behind — a delivery leg is not completing. Before issue #1028 this was invisible: "
-            + "the only trace was Orleans' NonReentrancyQueueSize growing inside a 'Response did not arrive on time' warning.",
-            inFlight, addressPath);
+            "[ROUTE] Routing back-pressure: {InFlight} route dispatches in flight (reporting threshold {Threshold}); "
+            + "stream destinations queued {Destinations}, deepest per-destination queue {Deepest}, routing pool subscribing {PoolInFlight}. "
+            + "Latest dispatch target {Address} — the address that happened to cross the threshold, NOT a diagnosis. "
+            + "A slot is held from dispatch until the leg terminates, INCLUDING the unbounded wait for a ThreadPool "
+            + "thread before the leg's own timeouts start, so a CPU-starved silo raises this with nothing stuck. "
+            + "A deepest queue of 1 or more means legs are blocked behind a leg (head-of-line on one destination); "
+            + "0 means nothing is waiting on anything, so read it as load and check the 'cleared after' line "
+            + "for how long it really lasted.",
+            inFlight, SaturationThreshold, destinations, deepest, routingPool.CurrentInFlight, addressPath);
     }
 
     private void ReportDrained(int inFlight)
     {
         if (inFlight > SaturationThreshold / 2) return;
         if (Interlocked.Exchange(ref saturationReported, 0) == 0) return;
-        logger.LogInformation("[ROUTE] Routing back-pressure cleared — {InFlight} route(s) in flight", inFlight);
+        var since = Volatile.Read(ref saturationSinceTicks);
+        // The episode's DURATION is the slow-vs-stuck discriminator: milliseconds is a burst the
+        // silo absorbed, minutes is a leg that really was not completing. Without it, five reports
+        // in eighteen seconds (prod, 2026-08-10) read as one permanent wedge when they were in fact
+        // five separate crossings — each one drained below half the threshold in between.
+        var lasted = since == 0 ? TimeSpan.Zero : DateTime.UtcNow - new DateTime(since, DateTimeKind.Utc);
+        logger.LogInformation(
+            "[ROUTE] Routing back-pressure cleared after {ElapsedMs} ms — {InFlight} route(s) in flight",
+            (long)lasted.TotalMilliseconds, inFlight);
     }
 
     /// <summary>

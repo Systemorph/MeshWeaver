@@ -60,31 +60,17 @@ public static class PricingLayoutAreas
     }
 
     /// <summary>
-    /// Extracts Pricing from a MeshNode, handling both typed content and JsonElement.
+    /// The node's pricing content. <c>ContentAs</c> — never <c>is</c> + a hand-rolled JsonElement
+    /// branch: the accessor covers the already-typed value AND the degraded JsonElement/JsonNode AND
+    /// a same-short-named <c>Pricing</c> from another build (every recompile of a dynamic NodeType
+    /// mints a new collectible assembly, so "the same" record has a different CLR identity per
+    /// build — the case the hand-rolled version had no round-trip to recover, leaving every pricing
+    /// view blank after a recompile with nothing to grep). It also reads with the HUB's options
+    /// rather than a locally-invented <c>JsonSerializerOptions</c>, so the registry behind them can
+    /// resolve the content's <c>$type</c>, and it logs instead of swallowing in a bare <c>catch</c>.
     /// </summary>
-    private static Pricing? ExtractPricing(MeshNode? node)
-    {
-        if (node?.Content is null)
-            return null;
-
-        if (node.Content is Pricing pricing)
-            return pricing;
-
-        if (node.Content is JsonElement json)
-        {
-            try
-            {
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                return JsonSerializer.Deserialize<Pricing>(json.GetRawText(), options);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        return null;
-    }
+    private static Pricing? ExtractPricing(LayoutAreaHost host, MeshNode? node) =>
+        node.ContentAs<Pricing>(host.Hub.JsonSerializerOptions);
 
     /// <summary>
     /// Overview view showing pricing header details.
@@ -101,7 +87,7 @@ public static class PricingLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes?.FirstOrDefault();
-            var pricing = ExtractPricing(node);
+            var pricing = ExtractPricing(host, node);
 
             if (pricing is null)
             {
@@ -428,7 +414,7 @@ public static class PricingLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes?.FirstOrDefault();
-            var pricing = ExtractPricing(node);
+            var pricing = ExtractPricing(host, node);
 
             if (pricing is null)
             {
@@ -510,7 +496,7 @@ public static class PricingLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes?.FirstOrDefault();
-            var pricing = ExtractPricing(node);
+            var pricing = ExtractPricing(host, node);
 
             if (pricing is null)
             {

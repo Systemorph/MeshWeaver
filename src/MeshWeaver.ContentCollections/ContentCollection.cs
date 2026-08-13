@@ -40,12 +40,6 @@ public class ContentCollection : IDisposable
         Config = config;
         this.provider = provider;
         markdownStream = CreateStream();
-        // ReplaySubject-backed promise cache (Pool.Run) behind a Lazy: nothing runs at
-        // construction or config registration — the FIRST actual load (Initialize() access)
-        // kicks the parse off on the pool, and every subscriber, first or late, replays
-        // the same completion.
-        initialized = new Lazy<IObservable<InstanceCollection>>(
-            () => Pool.Run(ct => InitializeCoreAsync(ct)));
     }
 
     private ISynchronizationStream<InstanceCollection> CreateStream()
@@ -288,7 +282,13 @@ public class ContentCollection : IDisposable
     protected static bool MarkdownFilter(string name)
         => name.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
 
-    private readonly Lazy<IObservable<InstanceCollection>> initialized;
+    // 🚨 PromiseSlot, not a bare Lazy: pool.Run is ReplaySubject-backed and a ReplaySubject latches
+    // OnError, so a Lazy pinned ONE failed scan — a blob blip, a hub recycling mid-parse — for the
+    // life of the collection instance; every later Initialize() replayed it and the collection
+    // never loaded (#1369). The slot evicts a faulted promise so the next Initialize() re-parses.
+    // It does not retry on its own. ContentService.GetCollection already relies on exactly this
+    // for the HubDisposingException case one layer up.
+    private readonly PromiseSlot<InstanceCollection> initialized = new();
 
     /// <summary>
     /// Monotonic trigger counter for <see cref="IngestContentFile"/>, and the highest trigger
@@ -320,10 +320,13 @@ public class ContentCollection : IDisposable
     /// Parses every markdown file in the backing store into the synchronization stream and
     /// attaches the change monitor. Promise-cached: the first subscriber kicks the parse off on
     /// <see cref="Pool"/>, every later subscriber replays the cached completion — the store is
-    /// scanned exactly once per collection instance.
+    /// scanned exactly once per collection instance. Nothing runs at construction or config
+    /// registration; the FIRST call kicks the parse off. A FAILED parse is evicted, so the next
+    /// call re-scans rather than replaying the fault.
     /// </summary>
     /// <returns>A single-emission observable of the initial parsed articles.</returns>
-    public IObservable<InstanceCollection> Initialize() => initialized.Value;
+    public IObservable<InstanceCollection> Initialize()
+        => initialized.GetOrCreate(() => Pool.Run(ct => InitializeCoreAsync(ct)));
 
     private async Task<InstanceCollection> InitializeCoreAsync(CancellationToken ct)
     {
