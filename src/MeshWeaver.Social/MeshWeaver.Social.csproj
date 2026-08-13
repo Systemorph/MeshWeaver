@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <Description>Social publishing for MeshWeaver: platform publisher abstraction with a LinkedIn implementation, approval-gated publishing, and analytics.</Description>
     <ProjectGuid>{d5c9f8a1-2b7e-4c9a-9f43-6d8f2a0e7b41}</ProjectGuid>
   </PropertyGroup>
 

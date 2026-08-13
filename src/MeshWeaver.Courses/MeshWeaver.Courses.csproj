@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <Description>Course authoring and delivery for MeshWeaver: course, module, and exercise node types with attempt tracking and validation.</Description>
     <ProjectGuid>{9f4c2d71-6b3e-4a8f-b2d5-1c7e9a0f4b62}</ProjectGuid>
   </PropertyGroup>
   <ItemGroup>

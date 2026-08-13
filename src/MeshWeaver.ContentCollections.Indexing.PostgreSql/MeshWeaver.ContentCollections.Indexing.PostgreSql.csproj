@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>PostgreSQL/pgvector storage for MeshWeaver content indexing: chunked content vector store with embedding-provider integration.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Npgsql" />
     <PackageReference Include="Pgvector" />

@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>SQLite storage backend for MeshWeaver, including local vector search — lightweight single-file persistence for dev and edge scenarios.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <!-- Override the transitive SQLitePCLRaw.lib.e_sqlite3 2.1.11 (vuln GHSA-2m69-gcr7-jv3q / NU1903)

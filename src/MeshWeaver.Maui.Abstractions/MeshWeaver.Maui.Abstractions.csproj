@@ -1,5 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>Shared abstractions for the MeshWeaver MAUI client: control manifests and projections consumed by both the server and the mobile app.</Description>
+  </PropertyGroup>
+
   <!--
     MAUI-FREE logic shared by the native MAUI view pack (MeshWeaver.Maui).
 
