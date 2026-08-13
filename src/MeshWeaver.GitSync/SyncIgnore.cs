@@ -95,6 +95,14 @@ public sealed class SyncIgnore
         }
         // The match ignores the path itself and everything beneath it.
         sb.Append("(/.*)?$");
-        return new Regex(sb.ToString(), RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        // 🚨 CASE-INSENSITIVE, unlike .gitignore (issue #1326). These rules are matched against
+        // MESH node paths as well as repo file paths, and every other path comparison in the sync
+        // pipeline is OrdinalIgnoreCase (ComputePrunableNodes, ChangedNodePaths, IsAtOrUnder,
+        // the partition fold). A case-sensitive matcher here means `release/Foo` is exported and
+        // — worse, since the prune now consults these rules — `Release/` vs `release/` decides
+        // whether a node is DELETED. Path case is not a meaningful distinction in the mesh, so the
+        // matcher must not invent one.
+        return new Regex(sb.ToString(),
+            RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     }
 }
