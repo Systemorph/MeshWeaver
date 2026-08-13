@@ -219,7 +219,7 @@ internal static class ContentIndexingActivity
                 // (project_baddata_contentas_pattern.)
                 var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
                 if (log is null) return node;
-                return node with { Content = log with { Messages = log.Messages.AddRange(messages) } };
+                return node with { Content = log.Append(messages) };
             }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Indexing activity log append failed for {Path}", activityPath));
         }
     }
@@ -241,13 +241,13 @@ internal static class ContentIndexingActivity
                 // indexing-activity timeout). See project_baddata_contentas_pattern.
                 var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
                 if (log is null) return node;
-                var messages = string.IsNullOrEmpty(finalMessage)
-                    ? log.Messages
-                    : log.Messages.Add(new LogMessage(finalMessage,
+                var withFinal = string.IsNullOrEmpty(finalMessage)
+                    ? log
+                    : log.Append(new LogMessage(finalMessage,
                         status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information));
                 return node with
                 {
-                    Content = log with { Messages = messages, Status = status, End = DateTime.UtcNow, RequestedStatus = null }
+                    Content = withFinal with { Status = status, End = DateTime.UtcNow, RequestedStatus = null }
                 };
             }).Select(_ => Unit.Default);
         }
