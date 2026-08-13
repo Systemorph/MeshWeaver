@@ -279,8 +279,8 @@ two **real** events:
 **Standing down is not bookkeeping.** `RequestBuildClaim`'s registration survives until a grant
 consumes it, so a follower that reached its answer some other way is later handed a build it will
 never run — holding the claim at `Planning`, never heartbeating, and never taken over, because its
-process is alive and [membership defends a live holder](#-when-may-the-claim-be-taken-away--cluster-membership-decides-not-a-clock)
-by design. The *next* image's fingerprint could then never be claimed and never get a GO, holding
+process is alive and the takeover rule below defends a live holder by design (a stopped heartbeat on
+a live process means busy, not dead). The *next* image's fingerprint could then never be claimed and never get a GO, holding
 every silo's readiness down. `WithdrawBuildClaim` removes the registration and gives back a claim
 that raced it; both halves are conditional, so they are safe against a concurrent grant.
 
