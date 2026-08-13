@@ -21,17 +21,21 @@ namespace MeshWeaver.Hosting;
 /// it record what each part of the build produced, and the per-fingerprint GO on the root is what
 /// every non-building silo waits for — a subscription, not a poll of the assembly share.
 ///
-/// <para><b>Execution is unchanged in this slice.</b> The winner runs the same sequential,
-/// dependency-ordered sweep (<c>WarmPending</c>) it always ran — one global order, so cross-chunk
-/// source dependencies stay structurally correct. What changes is coordination: the claim replaces
-/// <see cref="NodeTypeBakeLease"/>, chunk nodes make the build observable (queries in, release
-/// paths out, one <c>_Activity</c> each), and losers complete on the GO emission instead of
-/// re-probing the share every 60 s. Chunk-scoped execution (per-chunk sweeps on a disposable
+/// <para><b>Execution is unchanged.</b> The winner runs the same sequential, dependency-ordered
+/// sweep (<c>WarmPending</c>) it always ran — one global order, so cross-chunk source dependencies
+/// stay structurally correct. What changed is coordination: the claim replaced the file lease that
+/// used to live beside the assembly cache (its one-builder and steal-on-stale properties live on
+/// in the claim arbiter), chunk nodes make the build observable (queries in, release paths out,
+/// one <c>_Activity</c> each), and non-builders complete on the GO emission instead of re-probing
+/// the share every 60 s. Chunk-scoped execution (per-chunk sweeps on a disposable
 /// separate-ServiceId bake silo) plugs into the same nodes next.</para>
 /// </summary>
 public static class BuildProtocolDriver
 {
-    /// <summary>Config key: route the bake through the build protocol. Default: off.</summary>
+    /// <summary>
+    /// Config key: route the bake through the build protocol. Default: ON — this is the only
+    /// bake coordination there is; <c>false</c> is the escape hatch that bakes solo, uncoordinated.
+    /// </summary>
     public const string EnabledConfigKey = "PreWarm:BuildProtocol";
 
     /// <summary>
@@ -109,7 +113,7 @@ public static class BuildProtocolDriver
             })
             .SelectMany(_ => chunks
                 .OrderBy(c => c.Key, StringComparer.Ordinal)
-                .Select(c => OpenChunk(mesh, holder, c.Key, c.Value, logger))
+                .Select(c => OpenChunk(mesh, holder, fingerprint, c.Key, c.Value, logger))
                 .Concat())
             .ToList()
             .SelectMany(openedChunks => Observable.Using(
@@ -123,7 +127,8 @@ public static class BuildProtocolDriver
     }
 
     private static IObservable<OpenedChunk> OpenChunk(
-        IMessageHub mesh, string holder, string name, IReadOnlyList<string> members, ILogger? logger)
+        IMessageHub mesh, string holder, string fingerprint, string name,
+        IReadOnlyList<string> members, ILogger? logger)
     {
         var chunkPath = $"{BuildNodeType.RootPath}/{name}";
         var activityId = Guid.NewGuid().ToString("N");
@@ -135,7 +140,10 @@ public static class BuildProtocolDriver
                 Queries = ImmutableList.Create(
                     $"namespace:{name} scope:subtree nodeType:{MeshNode.NodeTypePath}"),
             })
-            .SelectMany(_ => mesh.RequestBuildClaim(holder, name, chunkPath))
+            // The chunk builds for the SAME fingerprint as the root — the field is the framework
+            // identity, never a place to smuggle the chunk name (the first prod run did, and the
+            // node read `frameworkVersion: "Chess"`).
+            .SelectMany(_ => mesh.RequestBuildClaim(holder, fingerprint, chunkPath))
             .SelectMany(_ => mesh.ObserveBuildClaim(holder, chunkPath)
                 .Take(1).Timeout(GrantWindow))
             .SelectMany(_ => meshService.CreateNode(new MeshNode(activityId, $"{chunkPath}/_Activity")
