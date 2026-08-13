@@ -182,6 +182,20 @@ config:
     # environment that cannot answer the enumeration, accepting lazy compilation; it can never
     # waive a real regression, and /health keeps reporting the bake as unproven.
     PreWarm__AllowUnprovenBake: "false"
+    # ---- Assembly-cache retention ------------------------------------------
+    # Every roll above writes a WHOLE NEW GENERATION of NodeType assemblies into
+    # /data/assembly-cache (the framework MVID changes per image, by design), and
+    # nothing ever removed one: 7817 DLLs across 93 generations, 3.2 GB of the
+    # 16 GiB share on 2026-08-12, of which 1% was loadable by the running pod.
+    # /data also holds the DataProtection key ring, so this share filling is not a
+    # contained failure.
+    #
+    # The pod always claims the generation it runs and always logs what is
+    # collectable. Flip this to "true" to let it collect — after reading one
+    # report and confirming the kept set (own framework + anything claimed in the
+    # last 24 h + the 3 newest + anything under 7 days old) covers your roll
+    # cadence and your rollback headroom.
+    AssemblyCache__Retention__Delete: "false"
     # ---- Platform self-update cadence --------------------------------------
     # The poller's built-in default is 6h, which is why a freshly published image
     # could sit unpicked for hours and look like "self-update is broken" (memex,
