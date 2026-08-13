@@ -52,14 +52,13 @@ public class CircuitAccessHandler : CircuitHandler
     ///
     /// <para>🚨 Captured in the CONSTRUCTOR, deliberately, and this is the load-bearing detail of the
     /// whole seed. Blazor resolves the circuit's <c>CircuitHandler</c>s from inside a
-    /// <c>ComponentHub</c> hub method that it <b>awaits</b> — <c>StartCircuit</c> for a classic
-    /// Blazor Server payload, and the first <c>UpdateRootComponents</c> for a Blazor Web App, where
-    /// handler creation is deliberately deferred so a handler can see the restored application
-    /// state. Either way this constructor runs while the <c>/_blazor</c> request carrying the header
-    /// is unambiguously alive, on its own execution flow. The circuit lifecycle that follows
+    /// <c>ComponentHub</c> hub method — <c>StartCircuit</c> for a classic Blazor Server payload, and
+    /// the first <c>UpdateRootComponents</c> for a Blazor Web App, where handler creation is
+    /// deliberately deferred so a handler can see the restored application state. Either way this
+    /// constructor runs inside that hub invocation, which is exactly the flow
+    /// <see cref="CircuitRequestLanguageFilter"/> wraps. The circuit lifecycle that follows
     /// (<see cref="OnCircuitOpenedAsync"/>, then <see cref="OnConnectionUpAsync"/>) is dispatched
-    /// fire-and-forget from that same method, so reading the accessor THERE would be racing the
-    /// request's lifetime for no benefit.</para>
+    /// fire-and-forget from that same method, so there is no later point that is any safer.</para>
     ///
     /// <para><b>And the seed lands before the FIRST RENDER.</b> The framework runs
     /// <see cref="OnCircuitOpenedAsync"/> / <see cref="OnConnectionUpAsync"/> before it adds and
@@ -88,17 +87,23 @@ public class CircuitAccessHandler : CircuitHandler
     /// <param name="authStateProvider">Provides the authentication state used to resolve the circuit's user.</param>
     /// <param name="circuitContextAccessor">The circuit-scoped accessor that carries the circuit id and user context.</param>
     /// <param name="loggerFactory">Factory used to create the access-context logger.</param>
+    /// <param name="connectionLanguage">
+    /// The language of the <c>/_blazor</c> connection establishing this circuit, published by
+    /// <see cref="CircuitRequestLanguageFilter"/> — see <see cref="_requestLocale"/>. Optional so a
+    /// host that does not register it still builds circuits; such a host simply has no
+    /// request-derived language and renders English, exactly as before.
+    /// </param>
     /// <param name="httpContextAccessor">
-    /// Access to the <c>/_blazor</c> request that is establishing this circuit, used ONLY to read
-    /// <c>Accept-Language</c> (see <see cref="_requestLocale"/>). Optional so a host that does not
-    /// register it still builds circuits — such a host simply has no request-derived language and
-    /// falls back to English, exactly as before.
+    /// Fallback source for the same header, for a host that runs the Blazor hub without the filter.
+    /// Reliable only over WebSockets (see <see cref="CircuitRequestLanguage"/>), which is why it is
+    /// the fallback rather than the source.
     /// </param>
     public CircuitAccessHandler(
         IMessageHub hub,
         AuthenticationStateProvider authStateProvider,
         ICircuitContextAccessor circuitContextAccessor,
         ILoggerFactory loggerFactory,
+        CircuitRequestLanguage? connectionLanguage = null,
         IHttpContextAccessor? httpContextAccessor = null)
     {
         _hub = hub;
@@ -106,8 +111,9 @@ public class CircuitAccessHandler : CircuitHandler
         _circuitContextAccessor = circuitContextAccessor;
         _logger = loggerFactory.CreateLogger("MeshWeaver.AccessContext");
         _circuitLogger = loggerFactory.CreateLogger("MeshWeaver.Blazor.Circuit");
-        _requestLocale = Locales.Negotiate(
-            httpContextAccessor?.HttpContext?.Request.Headers.AcceptLanguage.ToString());
+        _requestLocale = connectionLanguage?.Current
+                         ?? Locales.Negotiate(
+                             httpContextAccessor?.HttpContext?.Request.Headers.AcceptLanguage.ToString());
     }
 
     /// <summary>

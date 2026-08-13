@@ -126,6 +126,13 @@ public class AnonymousCircuitLocaleSeedTest(ITestOutputHelper output) : Monolith
         builder.Services.AddSingleton<IMessageHub>(Mesh);
         builder.Services.AddSingleton(sink);
         builder.Services.AddHttpContextAccessor();
+        // Exactly what AddBlazor() registers for the language seed — the connection-scoped source
+        // plus the global SignalR filter that publishes it. Registering it here rather than calling
+        // AddBlazor() keeps the harness minimal, but it must stay in step with AddBlazor: if these
+        // two drift, the long-polling rows below are what notices.
+        builder.Services.AddSingleton<CircuitRequestLanguage>();
+        builder.Services.AddSingleton<CircuitRequestLanguageFilter>();
+        builder.Services.Configure<HubOptions>(o => o.AddFilter<CircuitRequestLanguageFilter>());
         builder.Services.AddRazorComponents().AddInteractiveServerComponents();
         builder.Services.TryAddScoped<AuthenticationStateProvider, ServerAuthenticationStateProvider>();
         builder.Services.AddScoped<ICircuitContextAccessor, CircuitContextAccessor>();
@@ -167,7 +174,7 @@ public class AnonymousCircuitLocaleSeedTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// Opens a real Blazor circuit over a real SignalR WebSocket whose handshake carries
+    /// Opens a real Blazor circuit over a real SignalR connection whose request carries
     /// <paramref name="acceptLanguage"/>, and returns the identity the circuit resolved.
     ///
     /// <para>The two hub calls mirror what <c>blazor.web.js</c> does: <c>StartCircuit</c> with an
@@ -175,18 +182,27 @@ public class AnonymousCircuitLocaleSeedTest(ITestOutputHelper output) : Monolith
     /// <c>UpdateRootComponents</c>), then <c>UpdateRootComponents</c>, which is where the framework
     /// deliberately defers creating the circuit handlers to. That deferral is the reason the header
     /// is still readable: this whole exchange runs inside the live <c>/_blazor</c> request.</para>
+    ///
+    /// <para><paramref name="transport"/> is a real dimension, not thoroughness for its own sake: a
+    /// browser behind a proxy that blocks WebSockets falls back to long polling, where each poll is
+    /// a SEPARATE request. If the seed only survived one transport, the feature would work for most
+    /// visitors and silently not for the rest — and "most" is not something a test should leave
+    /// unstated.</para>
     /// </summary>
-    private async Task<AccessContext?> OpenCircuitAsync(string? acceptLanguage)
+    private async Task<AccessContext?> OpenCircuitAsync(
+        string? acceptLanguage, HttpTransportType transport = HttpTransportType.WebSockets)
     {
         var server = portal!.GetTestServer();
         var connection = new HubConnectionBuilder()
             .WithUrl(new Uri(server.BaseAddress, "_blazor"), o =>
             {
-                o.Transports = HttpTransportType.WebSockets;
-                // No negotiate round-trip: the WebSocket handshake IS the request whose header the
-                // circuit must be able to see, so there is exactly one request and no ambiguity
-                // about which one supplied the language.
-                o.SkipNegotiation = true;
+                o.Transports = transport;
+                // WebSockets: skip the negotiate round-trip so the handshake IS the one request that
+                // could have supplied the language — no ambiguity about where it came from. Long
+                // polling has to negotiate, so the header goes on every request the client makes.
+                o.SkipNegotiation = transport == HttpTransportType.WebSockets;
+                if (acceptLanguage is not null)
+                    o.Headers["Accept-Language"] = acceptLanguage;
                 o.HttpMessageHandlerFactory = _ => server.CreateHandler();
                 o.WebSocketFactory = async (context, ct) =>
                 {
@@ -239,10 +255,12 @@ public class AnonymousCircuitLocaleSeedTest(ITestOutputHelper output) : Monolith
     /// German. Before the fix <c>Locale</c> was null here and every such visitor was served the
     /// default language no matter what they asked for.
     /// </summary>
-    [Fact(Timeout = 60000)]
-    public async Task AnonymousCircuit_WithEnglishBrowser_ResolvesEnglish()
+    [Theory(Timeout = 60000)]
+    [InlineData(HttpTransportType.WebSockets)]
+    [InlineData(HttpTransportType.LongPolling)]
+    public async Task AnonymousCircuit_WithEnglishBrowser_ResolvesEnglish(HttpTransportType transport)
     {
-        var identity = await OpenCircuitAsync("en-GB");
+        var identity = await OpenCircuitAsync("en-GB", transport);
 
         identity.Should().NotBeNull("an open circuit always resolves an identity, anonymous at minimum");
         identity!.ObjectId.Should().Be(WellKnownUsers.Anonymous);
@@ -255,10 +273,12 @@ public class AnonymousCircuitLocaleSeedTest(ITestOutputHelper output) : Monolith
     /// with a German browser must resolve GERMAN. A fix that hard-coded the default would satisfy
     /// the test above and fail here.
     /// </summary>
-    [Fact(Timeout = 60000)]
-    public async Task AnonymousCircuit_WithGermanBrowser_ResolvesGerman()
+    [Theory(Timeout = 60000)]
+    [InlineData(HttpTransportType.WebSockets)]
+    [InlineData(HttpTransportType.LongPolling)]
+    public async Task AnonymousCircuit_WithGermanBrowser_ResolvesGerman(HttpTransportType transport)
     {
-        var identity = await OpenCircuitAsync("de-CH,de;q=0.9,en;q=0.8");
+        var identity = await OpenCircuitAsync("de-CH,de;q=0.9,en;q=0.8", transport);
 
         identity!.Locale.Should().Be("de",
             "the viewer's language wins for chrome — a Swiss-German browser gets German");

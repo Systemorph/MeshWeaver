@@ -16,6 +16,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.Extensions.Logging;
@@ -42,12 +43,19 @@ public static class BlazorHostingExtensions
             .ConfigureServices(services => services
                 .AddContentService()
                 .AddFluentUIComponents()
-                // 🚨 Required by CircuitAccessHandler, which reads the establishing /_blazor
-                // request's Accept-Language to seed an ANONYMOUS visitor's language (they have no
-                // profile to read one from). Registered HERE rather than left to each host: the
-                // handler treats a missing accessor as "no request-derived language", so a host
-                // that forgot the call would silently serve English to every anonymous visitor —
-                // the exact defect this seeding exists to fix. AddHttpContextAccessor is
+                // 🚨 The ANONYMOUS visitor's language. They have no profile, so the establishing
+                // /_blazor connection's Accept-Language is the only statement of language they make
+                // (see CircuitRequestLanguage). Registered HERE rather than left to each host: the
+                // handler treats a missing source as "no request-derived language", so a host that
+                // forgot the wiring would silently serve English to every anonymous visitor — the
+                // exact defect this seeding exists to fix.
+                .AddSingleton<CircuitRequestLanguage>()
+                .AddSingleton<CircuitRequestLanguageFilter>()
+                // GLOBAL SignalR filter: Blazor's ComponentHub is internal and cannot be named in a
+                // per-hub registration. Global filters apply to any hub that does not declare its
+                // own list, which ComponentHub does not. On every other hub this filter is a no-op.
+                .Configure<HubOptions>(o => o.AddFilter<CircuitRequestLanguageFilter>())
+                // The WebSocket-only fallback path — see CircuitAccessHandler's ctor.
                 // TryAdd-based, so a host that already calls it is unaffected.
                 .AddHttpContextAccessor()
                 .AddSingleton<UserIdentityCache>()

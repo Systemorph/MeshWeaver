@@ -119,7 +119,19 @@ onto the identity, on both entry paths:
 | Path | Where | Reads the header from |
 |---|---|---|
 | SSR / HTTP request | `UserContextMiddleware` | `HttpContext.Request.Headers.AcceptLanguage` |
-| Blazor circuit | `CircuitAccessHandler` **constructor** | `IHttpContextAccessor` — the live `/_blazor` request |
+| Blazor circuit | `CircuitAccessHandler` **constructor** | `CircuitRequestLanguage`, published per hub invocation by the global `CircuitRequestLanguageFilter` |
+
+🚨 **The circuit reads it off the SignalR CONNECTION, not off `IHttpContextAccessor`.** The accessor
+works over WebSockets — the upgrade request stays in flight for the connection's life — and returns
+nothing under **long polling**, where every poll is a separate request that ASP.NET disposes (which
+nulls the accessor's holder for every flow that captured it). A browser behind a proxy that blocks
+WebSockets falls back to long polling, i.e. exactly a corporate network, so an accessor-only fix
+would reach most visitors and silently miss the rest. SignalR keeps an `IHttpContextFeature` on the
+connection and refreshes it per request, so `HubCallerContext.GetHttpContext()` answers for every
+transport; the filter reads it in the hub invocation that *creates* the circuit handlers. The
+accessor remains only as a fallback for a host that runs the Blazor hub without the filter.
+`AnonymousCircuitLocaleSeedTest` runs its cases over **both** transports — the long-polling rows are
+what caught this, and are what stop it regressing.
 
 `Locales.Negotiate` does the parsing: the full RFC 9110 list with `q=` weights, tried in descending
 weight, each matched by `Locales.TryMatch` so region variants fold onto the primary subtag exactly as
