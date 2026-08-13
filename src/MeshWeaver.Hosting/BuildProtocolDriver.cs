@@ -70,7 +70,18 @@ public static class BuildProtocolDriver
         var holder = $"{Environment.MachineName}/{Guid.NewGuid():N}";
         var fingerprint = report.FrameworkVersion;
 
-        return mesh.RequestBuildClaim(holder, fingerprint)
+        // A DEDICATED bake process outranks every serving pod in the claim election (#1424): when
+        // a bake Job is running, the pods lose deterministically, follow its GO, and never pay the
+        // bake's cost — and when none is, priority 0 candidates elect among themselves and the
+        // pods remain their own fallback. Same mode key the host's bake entrypoint switches on.
+        var priority = string.Equals(
+            mesh.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>()
+                ?["Deployment:Mode"],
+            "Bake", StringComparison.OrdinalIgnoreCase)
+            ? BuildClaimRequest.BakePriority
+            : 0;
+
+        return mesh.RequestBuildClaim(holder, fingerprint, priority: priority)
             .SelectMany(_ => mesh.ObserveBuildClaim(holder)
                 .Take(1)
                 .Timeout(GrantWindow)
