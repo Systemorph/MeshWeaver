@@ -128,6 +128,75 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// The CONSUMER-visible outcome, and the bound on the re-probe in one test: a caller using
+    /// <c>GetMeshNode</c> against an owner that is torn down mid-read <b>gets its node</b>, quickly.
+    ///
+    /// <para>This is what the fix is FOR. Before it the same sequence produced
+    /// <c>GetMeshNode('…') timed out after 60.0s … Target: NO LOCAL HUB</c> — a minute of stall
+    /// ending in a wrong explanation. Now the NACK arrives, <c>GetMeshNode</c> re-probes ONCE
+    /// against the fresh activation, and the read resolves.</para>
+    ///
+    /// <para>🚨 It also bounds the re-probe by demonstration rather than by assertion, which
+    /// matters because a transient NACK a consumer answers by asking again is the shape behind the
+    /// 2026-06-08 resubscribe-storm outage. The claim is <c>Interlocked.Exchange(ref reProbed, 1)</c>
+    /// on a local declared INSIDE <c>GetMeshNode</c>'s <c>Observable.Create</c> — one per
+    /// subscription, no timer, no <c>Retry</c> operator, no shared counter. A loop would never
+    /// settle on a value; this settles on the real node, far inside the budget.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task GetMeshNode_WhenOwnerIsDisposedMidRead_RecoversOnTheReProbe()
+    {
+        var path = $"{TestPartition}/reprobe-recovers";
+        await NodeFactory.CreateNode(
+            new MeshNode("reprobe-recovers", TestPartition)
+            {
+                Name = "Recovers",
+                NodeType = "Markdown"
+            }).Should().Emit();
+
+        var warm = await ReadNode(path).Should().Match(n => n is not null);
+        warm!.Name.Should().Be("Recovers");
+
+        var owner = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
+        owner.Should().NotBeNull();
+        var dataSource = owner!.GetWorkspace().DataContext.GetDataSourceForType(typeof(MeshNode));
+        var primary = dataSource!.GetStreamForPartition(null);
+        Assert.NotNull(primary);
+        primary.Dispose();
+
+        var reader = GetClient(c => c.AddData());
+        var started = DateTime.UtcNow;
+        var read = reader.GetMeshNode(path, TimeSpan.FromSeconds(30))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
+
+        // Same ordering gate as above — the read must be genuinely outstanding at a hub that has
+        // already handled it before the teardown starts.
+        await Observable.Interval(TimeSpan.FromMilliseconds(25)).StartWith(0L)
+            .Where(_ => reader.GetPendingRequestDiagnostics()
+                            .Contains("GetDataRequest@", StringComparison.Ordinal)
+                        && owner!.GetPendingRequestDiagnostics()
+                            .Contains("Queue(buffer=0,deferred=0,exec=0)", StringComparison.Ordinal))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(20))
+            .ToTask(TestContext.Current.CancellationToken);
+
+        Mesh.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
+
+        var node = await read;
+        var elapsed = DateTime.UtcNow - started;
+        Output.WriteLine($"[TEST] recovered in {elapsed.TotalMilliseconds:F0} ms: {node?.Name}");
+
+        node.Should().NotBeNull(
+            "the re-probe lands on a FRESH activation whose data source is healthy — the caller "
+            + "gets its node instead of stalling for a minute and being told NO LOCAL HUB");
+        node!.Name.Should().Be("Recovers");
+        elapsed.Should().BeLessThan(TimeSpan.FromSeconds(25),
+            "two round-trips plus one recycle — a re-probe LOOP would never settle on a value and "
+            + "would consume the whole budget instead");
+    }
+
+    /// <summary>
     /// 🚨 THE REGRESSION GUARD. A LIVE hub whose data observable completes without a value must NOT
     /// be reported as shutting down.
     ///
