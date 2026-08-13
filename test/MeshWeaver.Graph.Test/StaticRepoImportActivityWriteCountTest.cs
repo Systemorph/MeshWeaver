@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -9,6 +10,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -64,6 +66,170 @@ public class StaticRepoImportActivityWriteCountTest(ITestOutputHelper output) : 
         // terminal summary. A test that only compared the two sizes would still pass if BOTH grew.
         large.Should().BeLessThan(LargeImport,
             "the write count is per-phase, so it must stay well under the per-item count");
+    }
+
+    /// <summary>How many messages each side of the head-size comparison appends.</summary>
+    private const int ShortActivity = ActivityLog.MessageWindowLimit;      // never overflows the window
+    private const int LongActivity = ActivityLog.MessageWindowLimit * 4;   // overflows it three times over
+
+    /// <summary>
+    /// Messages per append call. Purely a test-runtime concession: a cross-hub activity write costs
+    /// ~0.2 s here, so 2,500 single-message appends would take longer than the whole suite's budget.
+    /// It does not soften what is measured — the quantity under test is the SIZE of the content each
+    /// write serialises, and the window behaves identically however the messages arrive.
+    /// </summary>
+    private const int AppendBatch = 25;
+
+    /// <summary>
+    /// 🚨 THE SECOND REGRESSION GUARD: the cost of ONE append must not depend on how much the activity
+    /// has already logged.
+    ///
+    /// <para>Batching per phase (the test above) bounds how MANY writes an import makes. It does nothing
+    /// about how EXPENSIVE each one is: every <c>stream.Update</c> re-serialises the whole
+    /// <c>MeshNode.Content</c> to compute its patch, so appending to a list that keeps growing is O(N²)
+    /// however few writes you make — and the cross-hub path is worse, since an RFC 7396 merge patch
+    /// clones the changed array whole and the three-way merge clones the previous one too, shipping
+    /// ~2N elements to append one. No delta field escapes that; only bounding the head does.</para>
+    ///
+    /// <para>What is asserted is the SERIALISED SIZE of the activity's content — the exact quantity
+    /// every write pays, measured, not modelled — after a short activity and after one four times as
+    /// long. They must be within a small constant of each other. Before the window they differed by the
+    /// message ratio (4×); the absolute bound below is what stops both sides simply growing together.</para>
+    /// </summary>
+    [Fact(Timeout = 240000)]
+    public async Task AppendCost_DoesNotGrowWithTheLengthOfTheActivity()
+    {
+        var shortRun = await AppendAndMeasure(ShortActivity);
+        var longRun = await AppendAndMeasure(LongActivity);
+
+        Output.WriteLine(
+            $"head bytes: {ShortActivity} msgs -> {shortRun.HeadBytes:N0}; {LongActivity} msgs -> {longRun.HeadBytes:N0}"
+            + $" (ratio {(double)longRun.HeadBytes / shortRun.HeadBytes:F2}×)");
+        Output.WriteLine(
+            $"cumulative serialised bytes: {ShortActivity} msgs -> {shortRun.CumulativeBytes:N0}; "
+            + $"{LongActivity} msgs -> {longRun.CumulativeBytes:N0}");
+        Output.WriteLine(
+            $"activity writes: {ShortActivity} msgs -> {shortRun.Writes}; {LongActivity} msgs -> {longRun.Writes}; "
+            + $"segments sealed: {shortRun.Segments} / {longRun.Segments}");
+
+        longRun.HeadBytes.Should().BeLessThan(shortRun.HeadBytes * 3 / 2,
+            $"a {LongActivity}-message activity must not carry a bigger head than a {ShortActivity}-message "
+            + "one — Messages is a bounded window, so the per-append serialisation cost is a constant. "
+            + "A ratio near 4× means the window is gone and every append is re-serialising the whole "
+            + "transcript again (the O(n²) shape that burned ~719 MB on one memex-cloud import).");
+
+        // The write count must stay at one per append call plus the amortised seal traffic — the window
+        // must not be bought by turning every append into several writes.
+        var appendCalls = (LongActivity + AppendBatch - 1) / AppendBatch;
+        longRun.Writes.Should().BeLessThan(appendCalls + longRun.Segments * 2 + 4,
+            $"{appendCalls} append calls cost one write each; sealing adds ONE extra head write per "
+            + "segment, amortised over "
+            + $"{ActivityLog.MessageWindowLimit - ActivityLog.MessageWindowKeep} messages");
+
+        // …and nothing is lost: every message is either still in the window or durable in a segment.
+        longRun.TotalMessageCount.Should().Be(LongActivity);
+        longRun.MessagesInSegments.Should().Be(LongActivity - longRun.MessagesInWindow,
+            "every message that left the window must be durable in an ActivityLogSegment satellite");
+        longRun.Segments.Should().BeGreaterThan(0, "a four-window activity must have sealed segments");
+    }
+
+    private sealed record AppendMeasurement(
+        int HeadBytes, long CumulativeBytes, long Writes, int Segments,
+        int TotalMessageCount, int MessagesInWindow, int MessagesInSegments);
+
+    /// <summary>
+    /// Creates one activity in a fresh partition, appends <paramref name="messages"/> log lines to it
+    /// ONE AT A TIME through the canonical <see cref="ActivityLogAppender"/>, and reports what each of
+    /// those appends cost.
+    /// <para><c>CumulativeBytes</c> sums the activity content's serialised size at every append — the
+    /// real work the patcher does per write, observed rather than assumed.</para>
+    /// </summary>
+    private async Task<AppendMeasurement> AppendAndMeasure(int messages)
+    {
+        var partition = "Ms" + Guid.NewGuid().ToString("N")[..8];
+        var imported = await StaticRepoImporter.ImportSource(Mesh, new FakeRepoSource(partition)
+            {
+                Root = new MeshNode(partition)
+                {
+                    Name = "Append Cost", NodeType = "Space", State = MeshNodeState.Active,
+                    Content = new MarkdownContent { Content = "# Append Cost\n\nfixture." }
+                },
+                Nodes = Pages(partition, 1, "v1")
+            })
+            .FirstAsync().Timeout(120.Seconds());
+        imported.Outcome.Should().Be("Imported");
+
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var activityId = "measure" + Guid.NewGuid().ToString("N")[..8];
+        var activityPath = $"{partition}/_Activity/{activityId}";
+        await meshService.CreateNode(new MeshNode(activityId, $"{partition}/_Activity")
+        {
+            Name = "Append cost measurement",
+            NodeType = ActivityNodeType.NodeType,
+            MainNode = partition,
+            State = MeshNodeState.Active,
+            Content = new ActivityLog(ActivityCategory.DataUpdate)
+            {
+                Id = activityId, HubPath = partition, Status = ActivityStatus.Running
+            }
+        }).FirstAsync().Timeout(60.Seconds());
+
+        var cumulative = 0L;
+        var writes = 0;
+        MeshNode last = null!;
+        for (var sent = 0; sent < messages; sent += AppendBatch)
+        {
+            var batch = Enumerable.Range(sent, Math.Min(AppendBatch, messages - sent))
+                .Select(i => new LogMessage(
+                    $"line {i:D5}: a representative progress line for the measurement",
+                    LogLevel.Information))
+                .ToArray();
+            last = await ActivityLogAppender.Append(Mesh, activityPath, batch)
+                .FirstAsync().Timeout(60.Seconds());
+            writes++;
+            cumulative += ContentBytes(last);
+        }
+
+        var log = last.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)!;
+        var segments = await SegmentsOf(activityPath);
+
+        Output.WriteLine(
+            $"  {messages} messages in {writes} append calls -> node version {last.Version}, "
+            + $"window {log.Messages.Count}, segments {segments.Count}");
+
+        return new AppendMeasurement(
+            HeadBytes: ContentBytes(last),
+            CumulativeBytes: cumulative,
+            Writes: last.Version,
+            Segments: segments.Count,
+            TotalMessageCount: log.TotalMessageCount,
+            MessagesInWindow: log.Messages.Count,
+            MessagesInSegments: segments.Sum(s => s.Messages.Count));
+    }
+
+    private int ContentBytes(MeshNode node) =>
+        JsonSerializer.Serialize(node.Content, Mesh.JsonSerializerOptions).Length;
+
+    /// <summary>
+    /// The activity's sealed log segments, listed with a CHILDREN query — never a point-read of a
+    /// segment path. A point-read of an absent satellite opens the shared stream cache's storm breaker
+    /// on a path a concurrent write is about to use, and the breaker fast-fails writes too.
+    /// </summary>
+    private async Task<IReadOnlyList<ActivityLogSegment>> SegmentsOf(string activityPath)
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var change = await meshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"path:{ActivityLogAppender.SegmentNamespace(activityPath)} scope:children "
+                + $"nodeType:{ActivityLogAppender.SegmentNodeType}"))
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .FirstAsync().Timeout(30.Seconds());
+        return change.Items
+            .Select(n => n.ContentAs<ActivityLogSegment>(Mesh.JsonSerializerOptions))
+            .Where(s => s is not null)
+            .Select(s => s!)
+            .OrderBy(s => s.FirstOrdinal)
+            .ToArray();
     }
 
     /// <summary>

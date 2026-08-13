@@ -360,8 +360,19 @@ public static class ActivityLayoutAreas
                 "font-family: var(--font-monospace, ui-monospace, monospace); "
                 + "font-size: .85rem; gap: 2px; max-height: 320px; overflow: auto;");
 
-        if (log.Messages.Count == 0)
+        if (log.TotalMessageCount == 0)
             return hasResult ? stack : stack.WithView(BuildEmptyLogLabel(log, locale));
+
+        // Messages is a bounded WINDOW. Anything older has been sealed into ActivityLogSegment
+        // satellites under {activityPath}/_Log and is still durable — say so rather than letting the
+        // pane silently look like the run started midway. (The pane is a 320px scroller: it never
+        // showed more than ~20 rows at once anyway, and it used to rebuild one row per message on
+        // EVERY stream emission — so a 5,000-line script rebuilt 5,000 rows 5,000 times.)
+        var archived = log.TotalMessageCount - log.Messages.Count;
+        if (archived > 0)
+            stack = stack.WithView(Controls
+                .Label(LocalizationCatalog.Get("ui.activityEarlierMessages", locale, archived))
+                .WithStyle("font-style: italic; color: var(--neutral-foreground-hint);"));
 
         foreach (var msg in log.Messages)
         {
