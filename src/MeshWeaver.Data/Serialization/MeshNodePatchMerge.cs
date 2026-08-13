@@ -49,6 +49,14 @@ public static class MeshNodePatchMerge
                 && baseValues.TryGetPropertyValue(key, out var baseRaw) && baseRaw is not null;
             var baseVal = hasBase ? baseValues![key] : null;
 
+            // SPLICED string leaf — resolved before every other branch: its patch value is a marker
+            // object, not the field's value, so no generic rule below may touch it.
+            if (PatchStringSplice.TryDecode(patchVal, out var splice))
+            {
+                ApplySplice(live, key, splice, liveVal, baseVal, onRefuse);
+                continue;
+            }
+
             // Nested object on patch AND live → recurse (deep three-way merge).
             if (patchVal is JsonObject patchObj && liveVal is JsonObject liveObj)
             {
@@ -107,6 +115,68 @@ public static class MeshNodePatchMerge
             // Two concurrent scalar writes aren't mergeable; this is the RequestedReleaseAt-class flap guard.
             onRefuse?.Invoke(key);
         }
+    }
+
+    /// <summary>
+    /// Resolves a leaf the writer encoded as a <see cref="PatchStringSplice"/>.
+    ///
+    /// <para>The splice's offsets were computed against the writer's base, so they only address the
+    /// right characters while the owner's live text IS that base. The base fingerprint decides:</para>
+    /// <list type="bullet">
+    ///   <item><b>Fingerprint matches live</b> → apply the splice. The result is provably the exact
+    ///     string a full-value patch would have written — the splice is a pure encoding win.</item>
+    ///   <item><b>Fingerprint does not match</b> → the owner changed the field since the writer's
+    ///     base. REFUSE: keep the newer live value and report, which NACKs <c>Conflict</c> and
+    ///     re-runs the writer's update lambda against the fresh state (the same self-healing route a
+    ///     refused scalar takes). A splice is never applied at an offset the fingerprint did not
+    ///     vouch for, so concurrent splices from two mirrors cannot corrupt the text — the loser is
+    ///     re-diffed, never interleaved blind.</item>
+    ///   <item><b>A FULL base string carried alongside the splice</b> (a sender that did not
+    ///     fingerprint) → the full three-way string rebase, identical to the whole-value path.</item>
+    /// </list>
+    /// </summary>
+    private static void ApplySplice(
+        JsonObject live, string key, StringDelta splice,
+        JsonNode? liveVal, JsonNode? baseVal, Action<string>? onRefuse)
+    {
+        if (!TryGetString(liveVal, out var liveStr))
+        {
+            // Live is absent or no longer a string — the splice has nothing to anchor to.
+            onRefuse?.Invoke(key);
+            return;
+        }
+
+        if (PatchStringSplice.TryDecodeBase(baseVal, out var baseLength, out var fingerprint))
+        {
+            if (PatchStringSplice.BaseMatches(liveStr, baseLength, fingerprint))
+            {
+                live[key] = JsonValue.Create(splice.Apply(liveStr));
+                return;
+            }
+            onRefuse?.Invoke(key);
+            return;
+        }
+
+        if (TryGetString(baseVal, out var baseStr))
+        {
+            if (JsonNode.DeepEquals(liveVal, baseVal))
+            {
+                live[key] = JsonValue.Create(splice.Apply(liveStr));
+                return;
+            }
+            var intervening = StringDelta.Compute(baseStr, liveStr);
+            if (StringDelta.Overlaps(splice, intervening))
+            {
+                onRefuse?.Invoke(key);
+                return;
+            }
+            live[key] = JsonValue.Create(StringDelta.ApplyAll(baseStr, new[] { intervening, splice }));
+            return;
+        }
+
+        // No base signal at all: nothing vouches for the offsets. Refusing costs a re-diff;
+        // splicing blind costs the user's text.
+        onRefuse?.Invoke(key);
     }
 
     /// <summary>
@@ -285,6 +355,10 @@ public static class MeshNodePatchMerge
     /// <paramref name="baseNode"/>. A leaf absent at base (a writer-added field) is omitted — there is no
     /// old value to conflict with. Returns <c>null</c> when nothing comparable is carried (an empty base
     /// object would just be wire overhead).
+    /// <para>🚨 A leaf the patch encoded as a SPLICE carries a compact FINGERPRINT of the base
+    /// (<see cref="PatchStringSplice.EncodeBase"/>) instead of the whole old string. Without this the
+    /// splice would be pointless: the base half alone would still re-ship the entire previous value on
+    /// every write, leaving the round <c>O(ticks × length)</c>.</para>
     /// </summary>
     public static JsonObject? ExtractBaseValues(JsonObject baseNode, JsonObject patch)
     {
@@ -293,6 +367,11 @@ public static class MeshNodePatchMerge
         {
             if (!baseNode.TryGetPropertyValue(key, out var baseVal) || baseVal is null)
                 continue; // base lacked this field → no conflict signal
+            if (PatchStringSplice.TryDecode(patchVal, out _) && TryGetString(baseVal, out var spliceBase))
+            {
+                result[key] = PatchStringSplice.EncodeBase(spliceBase);
+                continue;
+            }
             if (patchVal is JsonObject patchObj && baseVal is JsonObject baseObj)
             {
                 var sub = ExtractBaseValues(baseObj, patchObj);
