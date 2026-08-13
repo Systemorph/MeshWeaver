@@ -1,8 +1,6 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using System.Text;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
@@ -17,8 +15,8 @@ namespace MeshWeaver.Markdown.Export.Pixel;
 /// <para>Both the probe (a file-system stat) and the print (a subprocess) are I/O leaves and run
 /// through <see cref="IIoPool"/>'s <see cref="IoPoolNames.Process"/> pool: off the hub scheduler and
 /// bounded, so a burst of exports can never spawn an unbounded pile of browsers. The probe is
-/// promise-cached in an instance dictionary — resolved once per mesh, replayed to every later
-/// subscriber, and dead when the mesh is.</para>
+/// promise-cached in an instance <see cref="PromiseSlot{TValue}"/> — resolved once per mesh,
+/// replayed to every later subscriber, dead when the mesh is, and re-run if it ever faults.</para>
 /// </summary>
 public sealed partial class HeadlessChromiumPdfRenderer(
     PixelRenderingOptions options,
@@ -26,22 +24,19 @@ public sealed partial class HeadlessChromiumPdfRenderer(
     ILogger<HeadlessChromiumPdfRenderer>? logger = null) : IPixelPdfRenderer
 {
     // Instance, never static: its lifetime is the mesh's, so a test mesh's probe cannot bleed
-    // into the next one. Single logical key — the shape is the documented promise-cache.
-    private readonly ConcurrentDictionary<string, IObservable<string?>> probe = new();
+    // into the next one. PromiseSlot is the documented promise-cache — the hand-rolled
+    // ReplaySubject it replaces latched OnError, so a probe that threw once (a permissions
+    // error reading an install directory) reported "no browser here" for the life of the
+    // process (#1369).
+    private readonly PromiseSlot<string?> probe = new();
 
     private IIoPool Pool => ioPools.Get(IoPoolNames.Process);
 
     /// <inheritdoc />
-    public IObservable<string?> Probe() =>
-        probe.GetOrAdd(string.Empty, _ =>
-        {
-            // The promise-cache shape, with InvokeBlocking because the probe is sync-blocking
-            // (File.Exists): the first subscriber runs it on the pool, the ReplaySubject replays
-            // the answer to everyone after.
-            var subject = new ReplaySubject<string?>(1);
-            Pool.InvokeBlocking(_ => ResolveExecutable()).Subscribe(subject);
-            return subject.AsObservable();
-        });
+    // RunBlocking because the probe is sync-blocking (File.Exists): the first caller runs it on
+    // the pool and the replay hands the answer to everyone after.
+    public IObservable<string?> Probe()
+        => probe.GetOrCreate(() => Pool.RunBlocking(_ => ResolveExecutable()));
 
     /// <inheritdoc />
     public IObservable<byte[]> Render(string html) =>
