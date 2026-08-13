@@ -111,4 +111,65 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             "that phrase turns a retryable stall into a PROVABLE absence (MeshNodeStreamCache"
             + ".IsMissingNodeFailure) — the exact confusion this NACK exists to avoid");
     }
+
+    /// <summary>
+    /// 🚨 THE RE-PROBE IS BOUNDED BY CONSTRUCTION, NOT BY LUCK.
+    ///
+    /// <para>A transient NACK that a consumer answers by asking again is exactly the shape behind
+    /// the 2026-06-08 production outage, where an initial-state retry watchdog amplified a
+    /// mishandled error into a resubscribe storm. So the bound must be PROVEN, not asserted.</para>
+    ///
+    /// <para><c>GetMeshNode</c>'s re-probe is claimed with
+    /// <c>Interlocked.Exchange(ref reProbed, 1) == 0</c> on a local declared INSIDE its
+    /// <c>Observable.Create</c> — one per subscription, no timer, no <c>Retry</c> operator, no
+    /// shared counter. A SECOND ShuttingDown therefore cannot re-probe again: it surfaces
+    /// "the owning hub answered ShuttingDown twice".</para>
+    ///
+    /// <para>This test drives exactly that sustained case — the owner's data plane stays dead, so
+    /// the re-probe's answer is a second NACK — and asserts the call TERMINATES on that specific
+    /// error. A loop could not produce this outcome: it would keep re-issuing and the test would
+    /// hit its budget instead. Two requests, then a definite answer.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task SustainedSilentOwner_ReProbesExactlyOnce_ThenTerminates()
+    {
+        var path = $"{TestPartition}/silent-read-sustained";
+        await NodeFactory.CreateNode(
+            new MeshNode("silent-read-sustained", TestPartition)
+            {
+                Name = "Sustained",
+                NodeType = "Markdown"
+            }).Should().Emit();
+
+        var warm = await ReadNode(path).Should().Match(n => n is not null);
+        warm!.Path.Should().Be(path);
+
+        var owner = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
+        owner.Should().NotBeNull();
+        var dataSource = owner!.GetWorkspace().DataContext.GetDataSourceForType(typeof(MeshNode));
+        var primary = dataSource!.GetStreamForPartition(null);
+        Assert.NotNull(primary);
+        primary.Dispose();
+
+        var reader = GetClient(c => c.AddData());
+        var started = DateTime.UtcNow;
+        // Generous budget on purpose: the point is that the call ends on the DOUBLE-NACK verdict
+        // long before the budget, not that a bound rescued it. If the re-probe looped, nothing
+        // here would terminate and the assertion below would never be reached.
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => reader
+            .GetMeshNode(path, TimeSpan.FromSeconds(20))
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken));
+        var elapsed = DateTime.UtcNow - started;
+
+        Output.WriteLine($"[TEST] terminated after {elapsed.TotalMilliseconds:F0} ms: {thrown.Message}");
+
+        thrown.Message.Should().Contain("answered ShuttingDown twice",
+            "the SECOND NACK must surface, proving the re-probe fired once and then stopped — "
+            + "not a TimeoutException (that would mean it never terminated) and not a null "
+            + "(that would mean 'shutting down' had been collapsed into 'not found')");
+        elapsed.Should().BeLessThan(TimeSpan.FromSeconds(15),
+            "two round-trips on a live hub, not a budget expiring — a storm or a hang would "
+            + "consume the whole 20 s instead");
+    }
 }
