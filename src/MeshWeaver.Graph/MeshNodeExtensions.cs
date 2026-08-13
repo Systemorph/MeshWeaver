@@ -478,9 +478,40 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(Email), nameof(Email));
         typeRegistry.WithType(typeof(EmailDirection), nameof(EmailDirection));
         typeRegistry.WithType(typeof(EmailStatus), nameof(EmailStatus));
+        // EventSubscription — the content of the built-in "EventSubscription" NodeType and the
+        // durable record behind every deferred reaction (email-invite → grant on sign-up, a timed
+        // action, a delegated sub-thread reaching a resting state). It was the ONE content type
+        // whose reader is a BACKGROUND SERVICE rather than a view, which is why the omission read
+        // as silence instead of an empty render: EventSubscriptionRunner tracks its pending set
+        // through workspace.GetQuery on the mesh hub, and that hub — which never WRITES an
+        // EventSubscription on a cold boot — could not resolve the $type, so every node degraded
+        // to an untyped JsonElement and the pending set came back EMPTY. With no pending set the
+        // change-feed, trigger-node-watch, Timer and NodeStatus firing paths have no candidates at
+        // all, and an invited user who signs up gets nothing until the next restart's cold-start
+        // reconcile (Timer/NodeStatus subscriptions, which that reconcile does not cover, never
+        // fire). Observed on every prod boot from 2026-07 (issue #1392): a dozen Admin/
+        // EventSubscription grant nodes logging "stayed an untyped JsonElement".
+        typeRegistry.WithType(typeof(EventSubscription), nameof(EventSubscription));
+        typeRegistry.WithType(typeof(EventSubscriptionStatus), nameof(EventSubscriptionStatus));
+        typeRegistry.WithType(typeof(EventTriggerType), nameof(EventTriggerType));
+        typeRegistry.WithType(typeof(EventContinuationType), nameof(EventContinuationType));
+        // ScheduledAction — the LEGACY predecessor EventSubscription supersedes. Still a built-in
+        // NodeType, and EventSubscriptionRunner's startup migration reads it the same way, so it
+        // needs the same registration: unresolvable, the migration silently folds nothing and an
+        // in-flight legacy invite stays stranded forever.
+        typeRegistry.WithType(typeof(ScheduledAction), nameof(ScheduledAction));
+        typeRegistry.WithType(typeof(ScheduledActionStatus), nameof(ScheduledActionStatus));
+        typeRegistry.WithType(typeof(ScheduledActionKind), nameof(ScheduledActionKind));
         typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
         typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
         typeRegistry.WithType(typeof(PartitionDefinition), nameof(PartitionDefinition));
+        // Build protocol (Doc/Architecture/BuildCoordination) — the coordination state on
+        // Admin/Build and its chunk children. Unregistered, the readiness subscription on every
+        // silo would read the GO signal as an untyped JsonElement and never go ready.
+        typeRegistry.WithType(typeof(BuildState), nameof(BuildState));
+        typeRegistry.WithType(typeof(BuildStatus), nameof(BuildStatus));
+        typeRegistry.WithType(typeof(BuildClaimRequest), nameof(BuildClaimRequest));
+        typeRegistry.WithType(typeof(BuildGo), nameof(BuildGo));
         // Compile trigger contract — CreateReleaseRequest / RunTests* are the
         // UI-facing triggers on the per-NodeType hub. (The cross-hub
         // RunCompileRequest/Response pair was deleted with the activity-dispatch

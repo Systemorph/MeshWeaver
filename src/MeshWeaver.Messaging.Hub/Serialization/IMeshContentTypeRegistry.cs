@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
 // 🚨 Namespace deliberately NOT MeshWeaver.Messaging.Serialization (where the file now lives).
@@ -269,8 +270,19 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
             return null;
         // Exact first: keyed on the node's own NodeType, so a name two packages share is not a
         // problem to be refused — each package's nodes resolve to their own type.
+        //
+        // 🚨 …but only when the content's OWN discriminator does not contradict it. Materialize
+        // deserialises to whatever type it is handed, and System.Text.Json ignores members that
+        // type does not declare and materialises defaults for the ones it does — so feeding it a
+        // mismatched type SUCCEEDS and returns a plausible, wrong object. That is what turned one
+        // bad registry entry into Systemorph/MeshWeaver#1379: an instance served its NodeType's
+        // NodeTypeDefinition as its own content, silently, on every read. The entry that caused it
+        // is fixed at the writer (MeshNodeHubFactory), but "the map said so" must never again be
+        // enough on its own to reshape content — an unresolvable read is honest and recoverable,
+        // a wrongly-typed one is neither.
         if (nodeTypePath is not null
             && TryResolveByNodeType(nodeTypePath, out var exact)
+            && DiscriminatorAdmits(content, exact)
             && Materialize(content, exact, options) is { } recovered)
             return recovered;
         // Then the name route, for a node with no NodeType or a type not yet activated in this
@@ -279,18 +291,128 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
         return TryRecover(content, options);
     }
 
-    private static object? Materialize(JsonElement content, Type contentType, JsonSerializerOptions options)
+    /// <summary>
+    /// True when <paramref name="content"/>'s own <c>$type</c> does not CONTRADICT
+    /// <paramref name="candidate"/> — the guard that stops the NodeType route from reshaping content
+    /// into a type its own discriminator disagrees with.
+    ///
+    /// <para><b>Absent is not contradicting.</b> Content written without a <c>$type</c> (a plain
+    /// JSON object) has nothing to disagree with, and the NodeType route is then the only answer
+    /// available — so it is admitted, exactly as before.</para>
+    ///
+    /// <para><b>The comparison is on the SHORT name, deliberately.</b> That is the framework's
+    /// existing recovery rule (<c>ObjectAsExtensions.As&lt;T&gt;</c>: "recover ONLY when the runtime
+    /// type has the SAME short name … a DIFFERENTLY-named type must stay null"), and it is what
+    /// keeps the whole point of the exact route intact: two packages that each ship a
+    /// <c>Currency</c> both carry <c>"$type":"Currency"</c>, each resolves to its OWN package's
+    /// CLR type through its own NodeType key, and both match here. A rebuild into a new collectible
+    /// assembly, and a declaration that moved namespace, match too — only a genuinely different
+    /// record name is refused.</para>
+    /// </summary>
+    private static bool DiscriminatorAdmits(JsonElement content, Type candidate)
     {
+        if (!content.TryGetProperty("$type", out var typeProp)
+            || typeProp.ValueKind != JsonValueKind.String
+            || typeProp.GetString() is not { Length: > 0 } discriminator)
+            return true;
+
+        var lastDot = discriminator.LastIndexOf('.');
+        var shortName = lastDot >= 0 ? discriminator[(lastDot + 1)..] : discriminator;
+        return string.Equals(shortName, candidate.Name, StringComparison.Ordinal);
+    }
+
+    private object? Materialize(JsonElement content, Type contentType, JsonSerializerOptions options)
+    {
+        object? recovered;
         try
         {
             // Deserialise to the CONCRETE type explicitly: STJ maps the JSON to its properties and
             // ignores the stale $type member, so recovery works regardless of whether `options`'
             // (frozen) registry knows the type — exactly the ContentAs<T> JsonElement contract.
-            return content.Deserialize(contentType, options);
+            recovered = content.Deserialize(contentType, options);
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
         {
             return null;
         }
+
+        // 🚨 OUTSIDE the try, deliberately: a DIAGNOSTIC must never be able to change the answer.
+        // Called inside it, any throw while composing the report — EnumerateObject on content that
+        // is a primitive or an array, say — would be swallowed by the catch above and silently turn
+        // a SUCCESSFUL recovery into null. That is the very failure mode this report exists to
+        // expose, so it must not be reachable through the report itself (Copilot review, #1388).
+        if (recovered is not null)
+            WarnIfLossy(content, contentType, options);
+        return recovered;
     }
+
+    // Once per (target type, dropped member set): a mismatch is a property of the installed
+    // content + declaration, so repeating it on every read would be noise.
+    private readonly ConcurrentDictionary<string, byte> _warnedLossy = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Names the members a recovery could not carry. <b>STJ ignores what the target does not
+    /// declare</b>, so materialising into a type that cannot represent the content SUCCEEDS and
+    /// returns a plausible, wrong object — the loss leaves no exception and no trace, and a later
+    /// persistence echo can make it permanent. Two of the three ways to get a wrong target are
+    /// already refused outright (an ambiguous discriminator, and one that contradicts the NodeType
+    /// declaration); the third — a declaration that simply names a type nothing instantiates —
+    /// cannot be detected from types alone, so it is reported here instead.
+    ///
+    /// <para>Reported, not refused: content written against an EARLIER version of the right type
+    /// legitimately carries members it has since lost, and refusing those would turn a cosmetic
+    /// drift into an empty render. The framework's cure for that case is a
+    /// <see cref="JsonExtensionDataAttribute"/> buffer, and a target that has one loses nothing —
+    /// so it is skipped here.</para>
+    ///
+    /// <para>Systemorph/MeshWeaver#1388: three sample Article NodeTypes declared a content type
+    /// that no instance used, and every article created without an explicit <c>$type</c> was
+    /// reshaped into it — losing <c>abstract</c>, which that type had no member for, with nothing
+    /// logged anywhere.</para>
+    /// </summary>
+    private void WarnIfLossy(JsonElement content, Type contentType, JsonSerializerOptions options)
+    {
+        // Only an object HAS members to drop. Both public routes already require one, but this
+        // method must be safe on its own terms — see the call site.
+        if (logger is null || content.ValueKind != JsonValueKind.Object || HasExtensionDataBuffer(contentType))
+            return;
+
+        HashSet<string> declared;
+        try
+        {
+            declared = options.GetTypeInfo(contentType).Properties
+                .Select(p => p.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+        {
+            return;   // no contract to compare against — the deserialize above already answered
+        }
+
+        var dropped = content.EnumerateObject()
+            .Select(p => p.Name)
+            .Where(n => !string.Equals(n, "$type", StringComparison.Ordinal) && !declared.Contains(n))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (dropped.Length == 0)
+            return;
+
+        var members = string.Join(", ", dropped);
+        if (!_warnedLossy.TryAdd(contentType.FullName + "|" + members, 0))
+            return;
+
+        logger.LogWarning(
+            "Content recovered into '{ContentType}' could not carry {Count} authored member(s): "
+            + "{Members}. System.Text.Json drops what the target does not declare, so this read "
+            + "SUCCEEDED and produced a plausible object with those values missing — and a write "
+            + "back through the same shape would make the loss permanent. Either the NodeType "
+            + "declares a content type its instances do not use (declare the one they carry), or "
+            + "'{ContentType}' is missing the members and needs a [JsonExtensionData] buffer to "
+            + "round-trip them.",
+            contentType.Name, dropped.Length, members, contentType.Name);
+    }
+
+    private static bool HasExtensionDataBuffer(Type contentType)
+        => contentType.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Any(p => p.IsDefined(typeof(JsonExtensionDataAttribute), inherit: true));
 }

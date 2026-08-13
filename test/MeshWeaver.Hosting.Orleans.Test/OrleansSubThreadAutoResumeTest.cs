@@ -175,7 +175,7 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
         //    node stream live, not batched to a single end-of-stream write.
         var liveProgressSnapshots = new List<string>();
         using (subRespStream
-            .Select(change => (change?.Content as ThreadMessage)?.Text)
+            .Select(change => change.ContentAs<ThreadMessage>(client.JsonSerializerOptions)?.Text)
             .Where(text => !string.IsNullOrEmpty(text))
             .Subscribe(text =>
             {
@@ -192,10 +192,30 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
                 }
             }))
         {
-            // 4) Wait for the sub-thread to finish: its IsExecuting flips false.
-            var subThreadSettled = await subThreadStream
-                .Select(change => change?.Content as MeshThread)
+            // 4) Wait for the sub-thread's round to finish — on the RESPONSE CELL reaching a
+            //    terminal ThreadMessageStatus, never on the thread-level IsExecuting flag.
+            //
+            //    🚨 IsExecuting is `Status is StartingExecution or Executing`, so `IsExecuting:false`
+            //    is ALSO true for the thread's INITIAL Idle state — and a completed round returns to
+            //    Idle, so the flag cannot tell "not started yet" from "finished". Worse, the very
+            //    snapshot that satisfied the `Messages.Count >= 2` wait above is Idle-with-2-cells,
+            //    and the shared MeshNodeStreamCache handle replays it (Replay(1)) to this
+            //    subscription immediately — so this wait could return BEFORE the sub-agent emitted a
+            //    single token, closing the progress window below on nothing. That is exactly what CI
+            //    run 31667783996 recorded: the two snapshots it saw were the "Allocating agent…" /
+            //    "Generating response…" placeholders, not one character of the sub-agent's report.
+            //    A response cell is created at Streaming and only ever reaches Completed when the
+            //    streaming loop exits, so it is the one predicate that means finished.
+            var subRespCompleted = await subRespStream
+                .Select(change => change.ContentAs<ThreadMessage>(client.JsonSerializerOptions))
                 .Should().Within(60.Seconds())
+                .Match(m => m is { Status: ThreadMessageStatus.Completed });
+            subRespCompleted!.Status.Should().Be(ThreadMessageStatus.Completed,
+                "the sub-thread's round must terminate cleanly");
+
+            var subThreadSettled = await subThreadStream
+                .Select(change => change.ContentAs<MeshThread>(client.JsonSerializerOptions))
+                .Should().Within(30.Seconds())
                 .Match(t => t is { IsExecuting: false } && t.Messages.Count >= 2);
             subThreadSettled!.IsExecuting.Should().BeFalse("sub-thread must terminate");
             subThreadSettled.Messages.Count.Should().BeGreaterThanOrEqualTo(2,
@@ -214,6 +234,16 @@ public class OrleansSubThreadAutoResumeTest(ITestOutputHelper output) : TestBase
             for (var i = 1; i < liveProgressSnapshots.Count; i++)
                 (liveProgressSnapshots[i] != liveProgressSnapshots[i - 1])
                     .Should().BeTrue("each captured snapshot should differ from the previous");
+
+            // The count alone is not enough: the framework writes "Allocating agent…" then
+            // "Generating response…" onto the cell BEFORE the sub-agent produces a token, so a
+            // window that closes too early can collect several distinct snapshots and none of
+            // them agent output — which is precisely how run 31667783996 read (two placeholders,
+            // zero report text). Require that what we observed is the sub-agent's stream.
+            var firstReportLine = StreamingSubAgentClient.ReportText.Split('\n')[0];
+            liveProgressSnapshots.Should().Contain(s => s.Contains(firstReportLine),
+                "at least one observed snapshot must carry the sub-agent's streamed report — "
+                + "placeholders alone prove nothing about live progress");
         }
 
         // 5) ToolCallEntry must flip to Success with full final text in Result.
@@ -405,7 +435,7 @@ internal class DelegatingParentAutoResumeClient : IChatClient
 /// </summary>
 internal class StreamingSubAgentClient : IChatClient
 {
-    private const string ReportText =
+    internal const string ReportText =
         "Line one: starting analysis.\n" +
         "Line two: collected inputs.\n" +
         "Line three: scanning records.\n" +

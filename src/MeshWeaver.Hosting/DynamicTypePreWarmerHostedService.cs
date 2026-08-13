@@ -216,6 +216,25 @@ public sealed class DynamicTypePreWarmerHostedService(
                     batchBake ? "gated (batch)" : "serving (activation-driven)");
         }
 
+        // Build-protocol coordination (Doc/Architecture/BuildCoordination): the Admin/Build claim
+        // decides who bakes, chunk nodes record what each part produced, and everyone else
+        // completes on the per-fingerprint GO. DEFAULT ON — this is the only coordination there
+        // is (the file lease it replaced is deleted), and it was verified on memex-cloud's gated
+        // roll 2026-08-13 (claim → 37 chunks → GO → gate green). Execution is the same sweep
+        // either way; the key is the ESCAPE HATCH (set false to bake solo, uncoordinated).
+        var buildProtocol = true;
+        var protocolRaw = services.GetService<IConfiguration>()?[BuildProtocolDriver.EnabledConfigKey];
+        if (!string.IsNullOrWhiteSpace(protocolRaw))
+        {
+            if (bool.TryParse(protocolRaw, out var parsedProtocol))
+                buildProtocol = parsedProtocol;
+            else
+                logger.LogWarning(
+                    "DynamicTypePreWarmer: ignoring invalid {Key}='{Value}' — build-protocol "
+                    + "coordination stays on (the default)",
+                    BuildProtocolDriver.EnabledConfigKey, protocolRaw);
+        }
+
         // 🚨 SEQUENCE THE SWEEP BEHIND THE STATIC REPO IMPORT — it is content this bake must see.
         //
         // The import is kicked fire-and-forget from its own StartAsync (it has to be: subscribing on
@@ -248,7 +267,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
         _warmSubscription = (importSettled?.Settled ?? Observable.Return(Unit.Default))
             .SelectMany(_ => DynamicTypePreWarmer
-                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake))
+                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol))
             .Subscribe(
                 outcome =>
                 {

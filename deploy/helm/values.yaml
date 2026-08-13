@@ -282,6 +282,20 @@ secrets:
     # tokens it accepts (empty list = serves ANY anonymous caller — dev/e2e only).
     PluginCatalog__RegistryToken: ""
     PluginCatalog__RegistryTokens: []
+    # ---- GitHub App identity (the machine credential for PRIVATE repos) -------
+    # PEM private key of the GitHub App whose INSTALLATION TOKEN every server-side GitHub read
+    # uses: the store's package feed (StoreManifestSource), the Store card's Provision → Import
+    # phase (UpdateToLatestFromGitHub), module discovery, and _GitSync.
+    # 🚨 Without it those reads fall back to ANONYMOUS. On a PUBLIC repo that still works, so the
+    # gap hides; on a PRIVATE one GitHub answers 404, which surfaces as an EMPTY STORE rather than
+    # as an error. Pairs with config.memex_portal.GitHub__App__ClientId below — the key alone is
+    # not enough, GitHubAppTokenService requires BOTH.
+    # Emitted only when non-empty, so a Key Vault CSI mount (objectName github-app-privatekey)
+    # stays authoritative and this can be left "" on every cluster deployment.
+    GitHub__App__PrivateKey: ""
+    # HMAC secret for INBOUND GitHub webhooks (/webhooks/github). Only an install that registers
+    # its own hooks on the plugin repos needs it; a registry CONSUMER does not.
+    GitHub__Webhook__Secret: ""
 config:
   memex_postgres:
     POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
@@ -379,3 +393,16 @@ config:
     # /api/email webhook rejects mismatches. Global (same across envs is fine —
     # each deployment validates against its own configured value).
     Email__SubscriptionClientState: "meshweaver-emailhook-7f3c9a21e84b46d2b1c05e9af6d3"
+    # ---- GitHub App identity (non-secret half) --------------------------------
+    # The App's client id, and which installation to use when the App is installed on more
+    # than one account. The PEM key is the secret half (secrets.memex_portal.GitHub__App__
+    # PrivateKey, normally injected from Key Vault) — GitHubAppTokenService needs BOTH and
+    # throws "The GitHub App is not configured" with only one.
+    # Empty on a deployment that reads no private repo. Set them on any install whose store
+    # feed or plugin imports point at a PRIVATE repo, otherwise those reads go ANONYMOUS and
+    # a private repo answers 404 — which renders as an EMPTY STORE, never as an error.
+    GitHub__App__ClientId: ""
+    # Pin the installation when the App has several: by owner (login) or by numeric id.
+    # Neither set + multiple installations = the FIRST one is used and a warning is logged.
+    GitHub__App__InstallationOwner: ""
+    GitHub__App__InstallationId: ""

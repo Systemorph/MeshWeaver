@@ -412,6 +412,7 @@
   "ui.sourceChanged": "Source changed — needs compile",
   "ui.upToDate": "Up to date",
   "ui.notYetRun": "Not yet run.",
+  "ui.activityEarlierMessages": "… {0} earlier messages archived",
   "ui.activityNoOutput": "This run produced no output.",
   "ui.running": "Running…",
   "ui.statusDone": "Done",

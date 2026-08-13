@@ -12,72 +12,29 @@ using MeshWeaver.Domain;
 public static class TodoLayoutAreas
 {
     /// <summary>
-    /// Extracts Todo from MeshNode content, handling various serialization formats
-    /// and cross-assembly type mismatches.
+    /// The node's Todo content. <c>ContentAs</c> is the framework accessor that every branch of the
+    /// hand-rolled extractor this replaced was trying to be — and it is strictly better at each:
+    ///
+    /// <list type="bullet">
+    /// <item>the already-typed value — same;</item>
+    /// <item>a degraded <c>JsonElement</c> (and <c>JsonNode</c>, which the hand-rolled version
+    ///   missed: application code builds content as a <c>JsonObject</c> and a change notification
+    ///   forwards that shape verbatim);</item>
+    /// <item>a same-short-named <c>Todo</c> from another build — every recompile of this NodeType
+    ///   mints a new collectible assembly, so "the same" record has a different CLR identity per
+    ///   build. The hand-rolled version reached for this with a <c>GetType().Name</c> probe and an
+    ///   UNGUARDED <c>JsonSerializer.Serialize(object)</c>, which routes through the polymorphic
+    ///   converter's <c>GetOrAddType</c> and adopts the foreign type into this hub's registry as a
+    ///   read side effect; the accessor serializes as the concrete runtime type, whose
+    ///   collectible-assembly guard formats the discriminator WITHOUT registering.</item>
+    /// </list>
+    ///
+    /// <para>It also reads with the HUB's options (the registry behind them is what resolves a
+    /// <c>$type</c>) instead of a locally-invented <c>JsonSerializerOptions</c>, and it diagnoses
+    /// through the logger instead of a bare <c>catch</c> plus <c>Console.WriteLine</c>.</para>
     /// </summary>
-    private static Todo? ExtractTodo(MeshNode? node)
-    {
-        if (node?.Content == null)
-            return null;
-
-        var options = new System.Text.Json.JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-        };
-
-        // Direct type match
-        if (node.Content is Todo todo)
-            return todo;
-
-        // JsonElement - deserialize to Todo
-        if (node.Content is System.Text.Json.JsonElement json)
-        {
-            try
-            {
-                return System.Text.Json.JsonSerializer.Deserialize<Todo>(json.GetRawText(), options);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        // Dictionary - convert to JSON then deserialize
-        if (node.Content is System.Collections.IDictionary dict)
-        {
-            try
-            {
-                var jsonStr = System.Text.Json.JsonSerializer.Serialize(dict);
-                return System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonStr, options);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        // Fallback: Content might be a Todo from a different assembly
-        // Serialize to JSON and deserialize to local Todo type
-        var contentTypeName = node.Content.GetType().Name;
-        if (contentTypeName == "Todo" || contentTypeName.EndsWith(".Todo"))
-        {
-            try
-            {
-                var jsonStr = System.Text.Json.JsonSerializer.Serialize(node.Content);
-                System.Console.WriteLine($"[ExtractTodo] Fallback serialization: {jsonStr.Substring(0, Math.Min(200, jsonStr.Length))}...");
-                return System.Text.Json.JsonSerializer.Deserialize<Todo>(jsonStr, options);
-            }
-            catch (Exception ex)
-            {
-                System.Console.WriteLine($"[ExtractTodo] Fallback failed: {ex.Message}");
-                return null;
-            }
-        }
-
-        // Try GetContent as last resort
-        return node.GetContent<Todo>();
-    }
+    private static Todo? ExtractTodo(LayoutAreaHost host, MeshNode? node) =>
+        node.ContentAs<Todo>(host.Hub.JsonSerializerOptions);
 
     /// <summary>
     /// Details view showing the Todo item with status, metadata, and action buttons.
@@ -87,7 +44,7 @@ public static class TodoLayoutAreas
     {
         return host.Workspace.GetStream<MeshNode>()
             .Select(nodes => nodes?.FirstOrDefault())
-            .Select(node => BuildTodoDetails(host, ExtractTodo(node)));
+            .Select(node => BuildTodoDetails(host, ExtractTodo(host, node)));
     }
 
     private static UiControl BuildTodoDetails(LayoutAreaHost host, Todo? todo)
@@ -393,7 +350,7 @@ public static class TodoLayoutAreas
     }
 
     private static UiControl BuildThumbnail(LayoutAreaHost host, MeshNode? node, string hubPath)
-        => BuildThumbnail(host, node, ExtractTodo(node), hubPath);
+        => BuildThumbnail(host, node, ExtractTodo(host, node), hubPath);
 
     private static UiControl BuildThumbnail(LayoutAreaHost host, MeshNode? node, Todo? todo, string hubPath)
     {
