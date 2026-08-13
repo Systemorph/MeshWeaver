@@ -77,15 +77,20 @@ public static class ReportsCatalogLayoutAreas
         // Report cards
         foreach (var child in children)
         {
-            container = container.WithView(BuildReportCard(child));
+            container = container.WithView(BuildReportCard(host, child));
         }
 
         return container;
     }
 
-    private static UiControl BuildReportCard(MeshNode child)
+    private static UiControl BuildReportCard(LayoutAreaHost host, MeshNode child)
     {
-        var mc = child.Content as MarkdownContent;
+        // ContentAs, never `as`. This reads ANOTHER node's content across a hub boundary — the very
+        // case the accessor exists for: a report stored as bare JSON has no $type to resolve and
+        // arrives as a raw JsonElement, and a report re-typed by a recompiled dynamic NodeType is a
+        // same-short-named record from a different collectible assembly. `as` was silently null for
+        // both, and the card rendered with an empty abstract, no authors, no tags and no thumbnail.
+        var mc = child.ContentAs<MarkdownContent>(host.Hub.JsonSerializerOptions);
         var childTitle = System.Web.HttpUtility.HtmlEncode(child.Name ?? child.Id);
         var abstractText = System.Web.HttpUtility.HtmlEncode(mc?.Abstract ?? "");
         var path = child.Path;

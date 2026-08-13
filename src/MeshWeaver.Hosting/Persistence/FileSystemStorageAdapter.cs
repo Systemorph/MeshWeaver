@@ -4,6 +4,7 @@ using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Persistence;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 
@@ -896,12 +897,13 @@ public class FileSystemStorageAdapter : IStorageAdapter
         return await reader.ReadToEndAsync(ct).ConfigureAwait(false);
     }
 
-    // Writes content via a temp file + atomic rename so a mid-write cancellation
-    // can never leave a truncated/empty target on disk. File.WriteAllTextAsync
-    // opens with FileMode.Create (truncates first); if ct cancels between
-    // truncate and the actual write, the original file is gone and the new one
-    // is empty — exactly the 0-byte SamplesGraph corruption pattern.
-    private static async Task WriteAtomicAsync(string filePath, string content, CancellationToken ct)
+    // Publishes content through AtomicFileWrite (temp file + rename) so a mid-write
+    // cancellation can never leave a truncated/empty target on disk — the 0-byte
+    // SamplesGraph corruption pattern. The shared helper is deliberately the ONLY
+    // implementation of this: FileSystemVersionStore hand-rolled a plain
+    // File.WriteAllTextAsync instead and reproduced the same defect against the
+    // version snapshots, which is what this file's comment had warned about all along.
+    private static Task WriteAtomicAsync(string filePath, string content, CancellationToken ct)
     {
         // DIAGNOSTIC: trace empty/tiny writes so we can identify the caller that
         // overwrites SamplesGraph JSON with 0-byte content. Remove once located.
@@ -912,17 +914,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 $"[FileSystemStorageAdapter.WriteAtomic] EMPTY/TINY WRITE — file='{filePath}' len={content?.Length ?? -1} content='{content}'\nStack:\n{stack}");
         }
 
-        var tempPath = filePath + ".tmp." + Guid.NewGuid().ToString("N");
-        try
-        {
-            await File.WriteAllTextAsync(tempPath, content, ct).ConfigureAwait(false);
-            File.Move(tempPath, filePath, overwrite: true);
-        }
-        catch
-        {
-            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
-            throw;
-        }
+        return AtomicFileWrite.WriteAllTextAsync(filePath, content, ct);
     }
 
     #endregion

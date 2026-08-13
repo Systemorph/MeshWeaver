@@ -15,12 +15,12 @@ at once, fight over the same disk, and pages start failing to open.
 
 Choosing that one server worked. What did not work well was noticing when it stopped.
 
-The others were watching a timestamp on a shared file. If the chosen server crashed halfway through,
-nobody could tell the difference between "it died" and "it is busy", so they waited out a
+The others were watching a timestamp the chosen server kept refreshing. If it crashed halfway
+through, nobody could tell the difference between "it died" and "it is busy", so they waited out a
 ten-minute grace period before one of them took over — and until then, nothing was being rebuilt.
-The reverse mistake was possible too: shared network drives can serve a cached timestamp, so a
-perfectly healthy server could look stalled and have its turn taken away, putting two servers on the
-same work — the exact situation the whole arrangement exists to prevent.
+The reverse mistake was possible too: a server that was merely slow or overloaded could stop
+refreshing for long enough to look stalled, have its turn taken away, and end up sharing the work
+with its replacement — the exact situation the whole arrangement exists to prevent.
 
 Both of those were guesses about something the system already knew for certain. Servers running the
 portal together form a cluster, and that cluster tracks continuously which of its members are alive
@@ -33,5 +33,5 @@ the cluster rather than of a file's clock:
 - the cluster has **no answer** — a single-server install, a developer machine — → the old
   ten-minute rule still applies, which is exactly what it was always for.
 
-The heartbeat itself was also moved from a file's clock into the file's contents, so a cached
-timestamp on a network drive can no longer be mistaken for a server that stopped responding.
+The timer has not been removed, then; it has been demoted to the one situation it was ever right
+for. Where there is a cluster to ask, nobody guesses from a clock any more.

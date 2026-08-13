@@ -634,9 +634,11 @@ internal static class NodeTypeBatchBake
                     // level-triggered probe re-bakes and re-stamps it. Saying so is the
                     // difference between a self-healing skip and a stamp that vanished.
                     //
-                    // 🚨 THE SINGLE-BAKER ELECTION DOES NOT CLOSE THIS, AND IS NOT MEANT TO (#1355).
+                    // 🚨 THE SINGLE-BAKER CLAIM DOES NOT CLOSE THIS, AND IS NOT MEANT TO (#1355).
                     // It removes one of the two writers that can race here — a SECOND BAKER, which
-                    // NodeTypeBakeLease now excludes with cluster membership rather than a clock. The
+                    // the build protocol's claim arbiter excludes, handing a claim on only when
+                    // cluster membership says the holder is gone rather than when a clock expires
+                    // (BuildNodeType.Arbitrate). The
                     // other writer is the type's OWN per-node hub, which is not a baker at all: it
                     // stamps compile state from the activation-driven path, the sources watcher and
                     // the release watcher, and it is legitimately live while a batch bake runs. So

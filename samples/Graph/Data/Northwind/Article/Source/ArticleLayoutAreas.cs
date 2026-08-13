@@ -51,8 +51,12 @@ public static class ArticleLayoutAreas
         container = container.WithView(
             Controls.Html($"<h1 style=\"margin: 0 0 8px 0;\">{System.Web.HttpUtility.HtmlEncode(node.Name ?? "Article")}</h1>"));
 
-        // Metadata bar: authors, published date, tags
-        var mdContent = node.Content as MarkdownContent;
+        // Metadata bar: authors, published date, tags.
+        // ContentAs, never `as`: a node whose content was stored as bare JSON (an import, an MCP
+        // create/patch carrying a raw body) has no $type for the polymorphic converter to resolve,
+        // so it arrives — and stays, even on this article's OWN hub — a raw JsonElement. `as` is
+        // then silently null and the whole header vanishes with no exception and no log line.
+        var mdContent = node.ContentAs<MarkdownContent>(host.Hub.JsonSerializerOptions);
         var metaParts = new List<string>();
 
         if (mdContent?.Authors?.Count > 0)
@@ -95,8 +99,10 @@ public static class ArticleLayoutAreas
                 $"<img src=\"{imgSrc}\" alt=\"\" style=\"max-width: 100%; border-radius: 8px; margin-bottom: 24px;\" />"));
         }
 
-        // Markdown body content
-        var rawContent = GetMarkdownContent(node);
+        // Markdown body content. MarkdownBody.Of is the framework's single reader — shared with the
+        // export templates (ExportSource.MarkdownOf) precisely so this extractor is not hand-copied
+        // into every sample space again.
+        var rawContent = MarkdownBody.Of(node, host.Hub.JsonSerializerOptions);
         if (!string.IsNullOrEmpty(rawContent))
         {
             container = container.WithView(Controls.Markdown(rawContent));
@@ -122,22 +128,5 @@ public static class ArticleLayoutAreas
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return (UiControl?)MeshNodeThumbnailControl.FromNode(node, hubPath);
         });
-    }
-
-    /// <summary>
-    /// Extracts markdown content from a MeshNode.
-    /// </summary>
-    private static string GetMarkdownContent(MeshNode? node)
-    {
-        if (node?.Content == null)
-            return string.Empty;
-
-        if (node.Content is MarkdownContent markdownContent)
-            return markdownContent.Content;
-
-        if (node.Content is string stringContent)
-            return stringContent;
-
-        return string.Empty;
     }
 }
