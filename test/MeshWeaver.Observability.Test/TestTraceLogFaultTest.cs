@@ -146,4 +146,46 @@ public class TestTraceLogFaultTest
     [Fact]
     public void TraceLogPath_IsTheFileCiCollects()
         => Assert.Equal("meshweaver-test-trace.log", Path.GetFileName(TestTraceLog.Path));
+
+    /// <summary>
+    /// A record short enough to fit is never touched — elision must not be a silent rewrite of
+    /// the common case.
+    /// </summary>
+    [Fact]
+    public void AShortFault_IsRecordedVerbatim()
+    {
+        var detail = new string('x', 1000);
+
+        Assert.Equal(detail, TestTraceLog.Elide(detail));
+    }
+
+    /// <summary>
+    /// 🚨 The regression this pins is issue #890's false premise. A .NET stack prints
+    /// deepest-frame-FIRST, so the frames identifying OUR call site are at the END. The old
+    /// head-only cut (<c>detail[..2500]</c>) therefore dropped exactly the frames a triager
+    /// needs — every time, silently — and the resulting "no MeshWeaver frame present" was read
+    /// as evidence about the fault rather than as an artifact of the cap.
+    ///
+    /// <para>Shaped like the real thing: ~2500 chars of library frames, then the MeshWeaver
+    /// frame. Under the old cap the assertion below fails; the elision keeps both ends.</para>
+    /// </summary>
+    [Fact]
+    public void ALongFault_KeepsBothTheThrowSiteAndOurOwnFramesAtTheEnd()
+    {
+        const string throwSite = "   at Microsoft.CodeAnalysis.CSharp.Symbols.NamedTypeSymbol.get_ContainingTypeDefinition()";
+        const string ourFrame = "   at MeshWeaver.Graph.Configuration.MeshNodeCompilationService.EmitCompilationToDirectory(...)";
+        var libraryNoise = string.Join(
+            Environment.NewLine,
+            Enumerable.Range(0, 400).Select(i => $"   at Microsoft.Cci.MetadataWriter.Frame{i}()"));
+        var detail = string.Join(Environment.NewLine, throwSite, libraryNoise, ourFrame);
+
+        var elided = TestTraceLog.Elide(detail);
+
+        Assert.True(detail.Length > elided.Length, "a stack this long must be shortened at all");
+        Assert.StartsWith(throwSite, elided, StringComparison.Ordinal);
+        Assert.EndsWith(ourFrame, elided, StringComparison.Ordinal);
+        // And it must SAY it dropped something — a shortened record that reads as complete is
+        // the defect, not the shortening.
+        Assert.Contains("elided from the MIDDLE", elided, StringComparison.Ordinal);
+    }
 }

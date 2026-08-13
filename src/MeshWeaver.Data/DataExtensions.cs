@@ -883,6 +883,7 @@ public static class DataExtensions
     /// Patch semantics:
     /// <list type="bullet">
     ///   <item><c>null</c> in patch → remove the key from current.</item>
+    ///   <item>A <see cref="Serialization.PatchStringSplice"/> marker → splice onto current's text.</item>
     ///   <item>Object in patch AND object in current at same key → recurse (deep merge).</item>
     ///   <item>Anything else → replace current's value with patch's value (deep clone).</item>
     /// </list>
@@ -890,6 +891,9 @@ public static class DataExtensions
     /// (e.g. <c>{ "Content": { "RequestedCancellationAt": "..." } }</c>) leaves every
     /// other nested field on the owner intact, instead of being overwritten by a
     /// full-object replacement.
+    /// <para>🚨 The splice case is not optional here. This is the base-less last-write-wins path,
+    /// and a marker object written verbatim into a string field would corrupt it — so the marker is
+    /// decoded wherever a patch is applied, not only on the three-way path that produced it.</para>
     /// </summary>
     internal static void MergePatchRecursive(
         System.Text.Json.Nodes.JsonObject current,
@@ -900,6 +904,19 @@ public static class DataExtensions
             if (kvp.Value is null)
             {
                 current.Remove(kvp.Key);
+                continue;
+            }
+            // Spliced string leaf. No base is carried on this path, so — exactly as
+            // StringDeltaPatch.Apply / EntityDelta.Apply do — the splice replays onto the
+            // target's CURRENT text, which is also what last-write-wins means here.
+            if (Serialization.PatchStringSplice.TryDecode(kvp.Value, out var splice))
+            {
+                if (current[kvp.Key] is System.Text.Json.Nodes.JsonValue liveValue
+                    && liveValue.TryGetValue<string>(out var liveText))
+                    current[kvp.Key] = System.Text.Json.Nodes.JsonValue.Create(splice.Apply(liveText));
+                // No string to splice onto (absent, or the shape changed) → leave the live value
+                // alone. Falling through would write the MARKER OBJECT into the field, which is the
+                // one outcome this whole branch exists to make impossible.
                 continue;
             }
             if (kvp.Value is System.Text.Json.Nodes.JsonObject patchObj
