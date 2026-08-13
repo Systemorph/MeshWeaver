@@ -38,8 +38,8 @@ jobs:
     - name: Pack NuGet packages
       run: dotnet pack --configuration Release --no-build --output ./nupkgs /p:PackageVersion=${{ env.VERSION }}
 
-    - name: Create nuget.config
-      run: |
-
+    # --skip-duplicate makes a re-run idempotent: a push that died midway (transient 5xx,
+    # rate limit) can be re-fired and completes the remaining packages instead of failing
+    # on the first 409 for one already published.
     - name: publish to nuget.org
-      run: dotnet nuget push ./nupkgs/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_PAT }}
+      run: dotnet nuget push ./nupkgs/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_PAT }} --skip-duplicate
