@@ -80,7 +80,9 @@ public sealed class AssemblyCacheRetentionHostedService(
     {
         // Sequence behind the bake when there is one: the sweep is a few thousand stat() calls on a
         // network share and has no deadline, so it has no business sharing a window with the compiles.
-        var bake = services.GetService<PreWarmCompletion>()?.Completed
+        // Any settlement will do — a bake that errored or proved nothing still means the compile queue
+        // has drained, which is the only thing the sweep is waiting for.
+        var bake = services.GetService<PreWarmCompletion>()?.Settled.Select(_ => Unit.Default)
             ?? Observable.Return(Unit.Default);
 
         _sweep = bake
