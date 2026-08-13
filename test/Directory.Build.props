@@ -26,6 +26,17 @@
          the central src policy here so the test tree tracks it uniformly. Vulnerability handling
          (bump/replace) is a deliberate dependency decision, not a per-build -warnaserror gate. -->
     <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904;$(WarningsNotAsErrors)</WarningsNotAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Security override, not a dependency we use: Testcontainers (any published version, incl.
+         4.13.0) floats SSH.NET at [2025.1.0, ), and <= 2025.1.0 carries GHSA-q939-rpr3-3284 (High,
+         ScpClient arbitrary file write). A bare <PackageVersion> pin is INERT for a transitive-only
+         package, so this direct reference lifts the graph to the patched version. PrivateAssets=all
+         per the root props' override convention. Remove when Testcontainers' floor reaches
+         2026.0.0. -->
+    <PackageReference Include="SSH.NET" PrivateAssets="all" />
+  </ItemGroup>
+  <PropertyGroup>
     <!-- Required so the global <Using> items below (incl. MeshWeaver.Reactive.Assertions)
          are actually emitted. With ImplicitUsings disabled, <Using> is silently ignored,
          and Should()/Seconds() fail to resolve across every test file. -->

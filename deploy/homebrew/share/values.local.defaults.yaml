@@ -1,0 +1,33 @@
+# =============================================================================
+# memex-local — TRACKED local defaults (upgrade with `brew upgrade memex-local`)
+# =============================================================================
+# This layer sits BETWEEN the neutral chart defaults and the user's overlay:
+#
+#   helm upgrade --install memex <chart> \
+#     -f <chart>/values.yaml \
+#     -f <share>/values.local.defaults.yaml   <-- this file (tracked, no secrets)
+#     -f ~/.memex-local/values.local.yaml     <-- the user's overlay (wins)
+#
+# WHY A SEPARATE FILE: the user overlay is generated ONCE (it carries their
+# Entra ids and generated secrets), so anything shipped inside its template
+# never reaches EXISTING installs. Defaults that should follow the product —
+# like the startup bake below — live here instead: a `brew upgrade` +
+# `memex-local up` delivers them to every install, and the user overlay can
+# still override any key the ordinary helm way (later file wins).
+# =============================================================================
+
+config:
+  memex_portal:
+    # ---- Startup bake — same process as prod, in this same silo --------------
+    # Compile every dynamic NodeType at startup through the build protocol
+    # (Doc/Architecture/BuildCoordination): the portal is the sole claim
+    # candidate locally, so it claims Admin/Build, bakes in one linked batch at
+    # full speed, publishes the per-fingerprint GO — and the first open of
+    # every type after a `memex-local update` stops paying a cold Roslyn
+    # compile. The readiness GATE stays off: a single-replica k3s has no
+    # previous pod to keep serving while it bakes, and arming the gate
+    # requires raising the startup-probe budget in the same change
+    # (deploy/helm/values.yaml).
+    PreWarm__DynamicTypes: "true"
+    PreWarm__BatchBake: "true"
+    PreWarm__BetweenTypes: "00:00:00"
