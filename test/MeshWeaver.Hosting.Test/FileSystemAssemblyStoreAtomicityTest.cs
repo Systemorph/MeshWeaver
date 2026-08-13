@@ -166,6 +166,43 @@ public class FileSystemAssemblyStoreAtomicityTest : IDisposable
     }
 
     /// <summary>
+    /// 🚨 A genuine IO fault must NOT be mistaken for the benign "another writer won" race and
+    /// swallowed into a <c>false</c> return. The two are told apart by the pre-check: having
+    /// established the target did not exist, the only way it can exist when the move fails is a
+    /// concurrent writer — a real fault leaves it absent, so it propagates.
+    ///
+    /// <para>Here the parent directory does not exist, so the write throws
+    /// <see cref="DirectoryNotFoundException"/> (an <see cref="IOException"/>) with no target
+    /// created. Returning <c>false</c> would tell <c>FileSystemAssemblyStore</c> the assembly was
+    /// already published and hand back a path to nothing.</para>
+    /// </summary>
+    [Fact]
+    public void AGenuineIoFailureIsNotSwallowedAsTheAlreadyPublishedRace()
+    {
+        var missingDirectory = Path.Combine(_root, "no-such-dir", "v1-tag-hash.dll");
+
+        Assert.ThrowsAny<IOException>(() => AtomicFileWrite.PublishBytes(missingDirectory, new byte[8]));
+        Assert.False(File.Exists(missingDirectory));
+    }
+
+    /// <summary>
+    /// The other half of that contract: when the target genuinely IS already there, publishing
+    /// reports <c>false</c> and leaves the incumbent's bytes untouched.
+    /// </summary>
+    [Fact]
+    public void PublishingOverAnExistingTargetKeepsTheIncumbentAndReportsFalse()
+    {
+        var typeDirectory = Path.Combine(_root, NodeTypePath);
+        Directory.CreateDirectory(typeDirectory);
+        var target = Path.Combine(typeDirectory, "v1-tag-hash.dll");
+        File.WriteAllBytes(target, [1, 2, 3]);
+
+        Assert.False(AtomicFileWrite.PublishBytes(target, [9, 9, 9, 9]));
+        Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(target));
+        Assert.Single(Directory.GetFiles(typeDirectory));
+    }
+
+    /// <summary>
     /// A completed publication leaves no residue: exactly the DLL and its PDB, nothing else.
     /// </summary>
     [Fact(Timeout = 60000)]

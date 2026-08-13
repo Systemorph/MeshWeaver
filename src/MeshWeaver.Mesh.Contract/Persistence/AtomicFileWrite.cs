@@ -92,6 +92,14 @@ public static class AtomicFileWrite
     /// </remarks>
     public static bool PublishBytes(string filePath, byte[] bytes)
     {
+        // Checked BEFORE any IO, which is what makes the catch filter below precise rather than a
+        // blanket "an IOException with the target present must have been the race". Having
+        // established here that the target did NOT exist, the only way it can exist by the time
+        // the move fails is that another writer created it in between — a genuine fault (denied,
+        // full disk, bad path) leaves the target absent, so it falls through and rethrows.
+        if (File.Exists(filePath))
+            return false;
+
         var tempPath = TempPathFor(filePath);
         try
         {
@@ -149,6 +157,11 @@ public static class AtomicFileWrite
     /// name already existed.</returns>
     public static async Task<bool> PublishAsync(string filePath, Func<string, Task> writeTemp)
     {
+        // Same pre-check as PublishBytes, and for the same reason: it is what narrows the catch
+        // filter below to the concurrent-writer race. See there.
+        if (File.Exists(filePath))
+            return false;
+
         var tempPath = TempPathFor(filePath);
         try
         {
