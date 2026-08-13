@@ -3,12 +3,12 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -117,28 +117,44 @@ public class DelegationSubThreadUsageTest(ITestOutputHelper output) : MonolithMe
         var subThreadPath = subThreads.Items[0].Path!;
         Output.WriteLine($"Sub-thread: {subThreadPath}");
 
-        // 5) Wait for the sub-thread's round to COMPLETE (so RecordUsage has fired) before reading
-        //    its usage — a point stream read on a not-yet-created satellite errors rather than waits.
-        await workspace.GetMeshNodeStream(subThreadPath)
-            .Select(n => n?.Content as MeshThread)
-            .Where(t => t is not null)
-            .Should().Within(60.Seconds())
-            .Match(t => !t!.IsExecuting && t.Messages.Count >= 2);
-
-        // 6) Read the sub-thread's TokenUsage satellite — keyed by the REAL model, NOT "(unknown)".
-        //    Pre-fix this node would be at .../_Usage/_unknown_. RecordUsage lands fire-and-forget
-        //    shortly after the terminal status, so poll (absence-tolerant) until it materialises.
+        // 5) Read the sub-thread's TokenUsage satellite — keyed by the REAL model, NOT "(unknown)".
+        //    Pre-fix this node would be at .../_Usage/_unknown_.
+        //
+        //    🚨 Through the LIVE CHILDREN QUERY of {subThreadPath}/_Usage — byte for byte the
+        //    primitive ThreadTokenChip binds to in the portal (and the one
+        //    ThreadTokenUsageTest.WaitForUsage documents) — and NEVER a point
+        //    GetMeshNodeStream({subThreadPath}/_Usage/{modelKey}) read. This test used to poll that
+        //    point read behind a .Catch — one of the unrelated-single-test CI reds catalogued in
+        //    #1384. Two independent reasons it cannot stay, both real:
+        //      • RecordUsage is subscribed as an INDEPENDENT side effect, deliberately NOT chained
+        //        before the round's terminal status write, so "the sub-thread settled" does NOT imply
+        //        "the satellite exists". A point read of an absent node answers with an authoritative
+        //        routing NotFound and TERMINATES the stream — it cannot wait for a node to appear.
+        //      • Worse, that NotFound opens MeshNodeStreamCache's storm-breaker window on the EXACT
+        //        path RecordUsage is about to accumulate into, and the breaker fast-fails WRITES too.
+        //        Runs 31666562025 / 31645997822 show the whole causal chain in order: one
+        //        "RouteMessage: NotFound … /_Usage/claude_haiku_4_5" from this poll, then
+        //        "[TokenUsage] RecordUsage failed … No node found" (its create-then-accumulate lost
+        //        Phase 2), then 45 s spent polling a satellite that exists with ZERO tokens because
+        //        the test's own read suppressed the write it was waiting for.
+        //    The children query starts from the (possibly empty) collection and re-emits when the
+        //    node lands: empty-on-absent, so it neither races nor poisons, and it is correct whether
+        //    the satellite already exists or is still seconds away. That also removes the need for
+        //    the "wait until the sub-thread settles" hop this used to make first — which was itself
+        //    unsound, since Thread.IsExecuting is false for the INITIAL Idle state as well as for a
+        //    finished round (the same defect fixed in OrleansSubThreadAutoResumeTest).
         var usagePath = $"{subThreadPath}/{TokenUsageNodeType.SatelliteSegment}/{UsageModelKey}";
-        var usage = await Observable.Interval(TimeSpan.FromMilliseconds(250)).StartWith(0L)
-            .SelectMany(_ => workspace.GetMeshNodeStream(usagePath)
-                .Take(1)
-                .Select(n => n?.Content as TokenUsage)
-                .Catch((Exception _) => Observable.Return<TokenUsage?>(null)))
-            .Where(u => u is not null && u.InputTokens == SubInTokens && u.OutputTokens == SubOutTokens)
-            .Select(u => u!)
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(45))
-            .ToTask();
+        var usage = (await Mesh.GetQuery(
+                $"usage:{subThreadPath}",
+                $"path:{subThreadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children "
+                + $"nodeType:{TokenUsageNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
+            .Select(nodes => nodes
+                .FirstOrDefault(n => string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase))
+                .ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
+            .Should().Within(60.Seconds())
+            .Match(u => u is not null
+                        && u.InputTokens == SubInTokens
+                        && u.OutputTokens == SubOutTokens))!;
 
         // 6) The fix: the sub-thread's usage carries the real model id and prices to > 0.
         usage.Model.Should().Be(ModelId, "the sub-thread's usage must be keyed by the model that actually ran");
