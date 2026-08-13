@@ -238,6 +238,28 @@ public class CachingStorageAdapter : IStorageAdapter
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Forwarded to a fresh inner adapter so the version comparison is taken against the FILE, never
+    /// against this decorator's snapshot — a stale cached read would let a compare-and-set "succeed"
+    /// against a row that has already moved, which is the one outcome the primitive exists to
+    /// prevent. Atomicity is still only as good as the file-system backend's (single-writer dev
+    /// host); a multi-replica deployment uses Postgres, which is genuinely atomic.
+    /// </remarks>
+    public IObservable<bool?> WriteIfVersion(
+        MeshNode node, long expectedVersion, JsonSerializerOptions options)
+    {
+        // Cast to the interface: WriteIfVersion is a DEFAULT interface member on the file-system
+        // adapter (it does not override it), so it is only reachable through IStorageAdapter.
+        IStorageAdapter innerAdapter =
+            new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);
+        return innerAdapter.WriteIfVersion(node, expectedVersion, options)
+            .Do(applied =>
+            {
+                if (applied is true) RefreshCacheForPath(node.Path);
+            });
+    }
+
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
     {
         var innerAdapter = new FileSystemStorageAdapter(_baseDirectory, _writeOptionsModifier, _ioPoolRegistry);

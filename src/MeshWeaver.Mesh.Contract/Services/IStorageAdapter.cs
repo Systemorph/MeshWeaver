@@ -119,6 +119,52 @@ public interface IStorageAdapter
                     n => n!)),
             written => (IReadOnlyList<MeshNode>)written);
 
+    /// <summary>
+    /// COMPARE-AND-SET — the atomic "first writer wins" primitive, and the WRITE-side twin of
+    /// <see cref="DeleteIfExists"/>. Applies <paramref name="node"/> only while the durable row
+    /// still carries <paramref name="expectedVersion"/> (or no row exists at all, when it is
+    /// <c>0</c>), and reports which of the two happened:
+    ///
+    /// <list type="bullet">
+    /// <item><c>true</c> — APPLIED. The durable row now holds <paramref name="node"/>.</item>
+    /// <item><c>false</c> — REFUSED. Somebody else moved the row (or it is absent when a version
+    /// was expected). The caller's intent did NOT land and it must not act as though it did.</item>
+    /// <item><c>null</c> — this adapter does not own the path, so the try-then-claim chain in
+    /// <c>PersistenceService</c> moves on to the next writable provider. Same "not mine" signal
+    /// <see cref="Write"/> gives by emitting <c>null</c>.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>Why the ordinary <see cref="Write"/> cannot serve here (#1424).</b> The regular
+    /// upsert is version-conditional but NOT exclusive: it applies at EQUAL versions, because
+    /// re-persisting an unchanged node is a legitimate, common shape. Two writers that each read the
+    /// row at version <c>v</c> and each mint <c>v+1</c> therefore BOTH commit, last-write-wins, and
+    /// neither is told it lost — the store returns the node it was handed, so the
+    /// <c>saved.Version &gt; written.Version</c> refusal signal never fires. That is exactly how two
+    /// Orleans clusters sharing one Postgres database each granted themselves the build claim and each
+    /// ran the full bake. Exclusivity needs an equality condition on a version the caller READ, which
+    /// is what this method is: at most one of N concurrent callers holding the same
+    /// <paramref name="expectedVersion"/> can be told <c>true</c>.</para>
+    ///
+    /// <para>Backends that can express the condition MUST override — Postgres via
+    /// <c>ON CONFLICT … DO UPDATE … WHERE target.version = @expected</c> (and
+    /// <c>DO NOTHING</c> for <paramref name="expectedVersion"/> <c>0</c>) plus the row count,
+    /// in-memory via <c>TryAdd</c>/<c>TryUpdate</c>. The default below is a NON-ATOMIC
+    /// read-compare-write, correct only for single-writer backends (a FileSystem dev host) —
+    /// the same contract, and the same caveat, as <see cref="DeleteIfExists"/>.</para>
+    ///
+    /// <para>🚨 Decorators MUST forward to their inner adapter, or the atomicity is silently lost at
+    /// the outermost decorator that falls back to the default — the same forwarding rule as
+    /// <see cref="Changes"/>, <see cref="DeleteIfExists"/>, <see cref="ResolvePath"/> and
+    /// <see cref="ListDescendantPaths"/>.</para>
+    /// </summary>
+    IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => System.Reactive.Linq.Observable.SelectMany(
+            System.Reactive.Linq.Observable.Take(Read(node.Path, options), 1),
+            stored => (stored?.Version ?? 0) != expectedVersion
+                ? System.Reactive.Linq.Observable.Return<bool?>(false)
+                : System.Reactive.Linq.Observable.Select(
+                    Write(node, options), written => written is null ? (bool?)null : true));
+
     /// <summary>Deletes a node from storage and emits the deleted path.</summary>
     IObservable<string> Delete(string path);
 

@@ -276,6 +276,10 @@ public static class BuildProtocolDriver
                     ClaimedBy = null, ClaimedAt = null, HeartbeatAt = null,
                 },
                 chunk.Path)
+            // This close-out clears the claim fields itself instead of going through
+            // CompleteBuild/FailBuild, so it has to drop the chunk's LOCK explicitly — clearing
+            // ClaimedBy on the node alone would free the chunk in this cluster only.
+            .SelectMany(node => mesh.ReleaseBuildClaim(holder, chunk.Path).Select(_ => node))
             .SelectMany(_ => FinishActivity(
                 mesh, chunk.ActivityPath,
                 failed.Count > 0 ? ActivityStatus.Failed : ActivityStatus.Succeeded))

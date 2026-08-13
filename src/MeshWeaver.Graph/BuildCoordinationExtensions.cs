@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -22,6 +23,13 @@ namespace MeshWeaver.Graph;
 /// (<see cref="ObserveBuildClaim"/>). Holder-side writes go through
 /// <see cref="UpdateBuildAsHolder"/>, which no-ops unless the caller still holds the claim —
 /// a builder that lost its claim to staleness cannot corrupt its successor's state.</para>
+///
+/// <para>🚨 <b>Who holds the build is decided on the claim LOCK</b>
+/// (<see cref="BuildNodeType.ClaimPath"/>), not on the Build node — a mirror is per-cluster and is
+/// flushed wholesale, so a field on it cannot be exclusive across clusters (#1424). The lock is
+/// touched by exactly three operations, all conditional: the arbiter's compare-and-set grant,
+/// <see cref="BeatBuildClaim"/>'s stamp refresh, and <see cref="ReleaseBuildClaim"/>. Everything
+/// else on this surface is ordinary node state.</para>
 /// </summary>
 public static class BuildCoordinationExtensions
 {
@@ -129,14 +137,79 @@ public static class BuildCoordinationExtensions
             return curr with { Content = change(state) };
         });
 
-    /// <summary>Refreshes the holder's liveness stamp. Call on <see cref="BuildNodeType.HeartbeatInterval"/>.</summary>
+    /// <summary>
+    /// Refreshes the holder's liveness stamp. Call on <see cref="BuildNodeType.HeartbeatInterval"/>.
+    ///
+    /// <para>Two writes, one meaning: the visible stamp on the Build node, and — the load-bearing
+    /// one — the stamp on the claim LOCK, which is what every cluster's arbiter ages when membership
+    /// has no opinion about the holder (across clusters it never has). The lock write is a
+    /// compare-and-set that no-ops unless this holder still owns the lock, so a superseded builder's
+    /// heartbeat cannot keep a claim it no longer has alive.</para>
+    /// </summary>
     /// <param name="hub">The calling hub.</param>
     /// <param name="holder">The claim holder.</param>
     /// <param name="path">Node path; defaults to the build root.</param>
     /// <returns>Cold observable emitting the node after the write.</returns>
     public static IObservable<MeshNode> BeatBuildClaim(
         this IMessageHub hub, string holder, string path = BuildNodeType.RootPath)
-        => hub.UpdateBuildAsHolder(holder, s => s with { HeartbeatAt = DateTime.UtcNow }, path);
+        => hub.UpdateBuildAsHolder(holder, s => s with { HeartbeatAt = DateTime.UtcNow }, path)
+            .SelectMany(node => OnOwnLock(
+                    hub, holder, path,
+                    (storage, held, state, options) => storage.WriteIfVersion(
+                        held with
+                        {
+                            Content = state with { HeartbeatAt = DateTime.UtcNow },
+                            Version = MeshNode.NextVersion(held.Version),
+                        },
+                        held.Version,
+                        options))
+                .Select(_ => node));
+
+    /// <summary>
+    /// Releases the claim LOCK — the step that lets any cluster's arbiter grant the next candidate.
+    /// A no-op unless <paramref name="holder"/> still owns the lock, so a superseded builder's
+    /// completion cannot release its successor's claim.
+    ///
+    /// <para><see cref="CompleteBuild"/> and <see cref="FailBuild"/> chain this automatically;
+    /// call it directly only where a claim is released WITHOUT going through them — the chunk
+    /// close-out in <c>BuildProtocolDriver</c>, which clears the claim fields itself.</para>
+    /// </summary>
+    /// <param name="hub">The calling hub.</param>
+    /// <param name="holder">The claim holder releasing the build.</param>
+    /// <param name="path">The Build node (root or chunk) whose claim is released.</param>
+    /// <returns>Cold observable completing when the lock is gone (or was never ours).</returns>
+    public static IObservable<System.Reactive.Unit> ReleaseBuildClaim(
+        this IMessageHub hub, string holder, string path)
+        => OnOwnLock(
+            hub, holder, path,
+            (storage, held, _, _) => storage.DeleteIfExists(held.Path).Select(_ => (bool?)true));
+
+    /// <summary>
+    /// Reads the claim lock for <paramref name="path"/> and runs <paramref name="act"/> only while
+    /// <paramref name="holder"/> still owns it. The read-then-act window is safe because every
+    /// action is itself conditional (a compare-and-set on the version read, or a rowcount-gated
+    /// delete) — the lock's whole point is that no write to it is unconditional.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> OnOwnLock(
+        IMessageHub hub,
+        string holder,
+        string path,
+        Func<IStorageAdapter, MeshNode, BuildState, JsonSerializerOptions, IObservable<bool?>> act)
+    {
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (storage is null)
+            return Observable.Return(System.Reactive.Unit.Default);
+        var options = hub.JsonSerializerOptions;
+        return storage.Read(BuildNodeType.ClaimPath(path), options)
+            .Take(1)
+            .SelectMany(held =>
+            {
+                var state = held?.ContentAs<BuildState>(options);
+                return held is null || state?.ClaimedBy != holder
+                    ? Observable.Return(System.Reactive.Unit.Default)
+                    : act(storage, held, state, options).Select(_ => System.Reactive.Unit.Default);
+            });
+    }
 
     /// <summary>
     /// Completes the build: records the GO for <paramref name="go"/>'s fingerprint on the
@@ -151,18 +224,21 @@ public static class BuildCoordinationExtensions
     public static IObservable<MeshNode> CompleteBuild(
         this IMessageHub hub, string holder, BuildGo go, string path = BuildNodeType.RootPath)
         => hub.UpdateBuildAsHolder(
-            holder,
-            s => s with
-            {
-                Status = BuildStatus.Ready,
-                Ready = (s.Ready ?? ImmutableDictionary<string, BuildGo>.Empty)
-                    .SetItem(go.FrameworkVersion, go),
-                ClaimedBy = null,
-                ClaimedByIdentity = null,
-                ClaimedAt = null,
-                HeartbeatAt = null,
-            },
-            path);
+                holder,
+                s => s with
+                {
+                    Status = BuildStatus.Ready,
+                    Ready = (s.Ready ?? ImmutableDictionary<string, BuildGo>.Empty)
+                        .SetItem(go.FrameworkVersion, go),
+                    ClaimedBy = null,
+                    ClaimedByIdentity = null,
+                    ClaimedAt = null,
+                    HeartbeatAt = null,
+                },
+                path)
+            // …and drop the LOCK, which is what actually frees the build for the next candidate in
+            // ANY cluster. Clearing ClaimedBy on the node alone would only free it here.
+            .SelectMany(node => hub.ReleaseBuildClaim(holder, path).Select(_ => node));
 
     /// <summary>
     /// Fails the build: records the error and releases the claim. The fingerprint gets NO GO —
@@ -177,17 +253,20 @@ public static class BuildCoordinationExtensions
     public static IObservable<MeshNode> FailBuild(
         this IMessageHub hub, string holder, string error, string path = BuildNodeType.RootPath)
         => hub.UpdateBuildAsHolder(
-            holder,
-            s => s with
-            {
-                Status = BuildStatus.Failed,
-                Error = error,
-                ClaimedBy = null,
-                ClaimedByIdentity = null,
-                ClaimedAt = null,
-                HeartbeatAt = null,
-            },
-            path);
+                holder,
+                s => s with
+                {
+                    Status = BuildStatus.Failed,
+                    Error = error,
+                    ClaimedBy = null,
+                    ClaimedByIdentity = null,
+                    ClaimedAt = null,
+                    HeartbeatAt = null,
+                },
+                path)
+            // A failed build releases the claim exactly like a completed one — the fingerprint gets
+            // no GO, but the build must not stay locked to a holder that has stopped.
+            .SelectMany(node => hub.ReleaseBuildClaim(holder, path).Select(_ => node));
 
     /// <summary>
     /// THE readiness primitive: emits the GO record once the build root's history covers
