@@ -354,6 +354,63 @@ public class MeshContentTypeRegistryTest
         scenario.GetProperty("Code")!.GetValue(recovered).Should().Be("base");
     }
 
+    /// <summary>
+    /// 🚨 A recovery that cannot carry part of its input must SAY SO (issue #1388).
+    ///
+    /// <para>This is the third way the exact route can land on a wrong target, and the only one it
+    /// cannot detect from types alone: the NodeType simply declares a content type its instances do
+    /// not use. The other two are refused outright — an ambiguous discriminator, and one that
+    /// contradicts the declaration — but a declaration nobody instantiates looks identical to a
+    /// correct one, and System.Text.Json makes the mismatch SUCCEED: it ignores whatever the target
+    /// does not declare, so the read returns a plausible object with authored values missing, no
+    /// exception, nothing to grep. Three sample Article NodeTypes were in exactly that state, and
+    /// every article created without an explicit <c>$type</c> lost its <c>abstract</c> — the one
+    /// field the declared type had no member for.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void ARecoveryThatDropsAuthoredMembers_IsReportedNamingThem()
+    {
+        var logger = new CapturingLogger();
+        var registry = new MeshContentTypeRegistry(logger);
+        var article = EmitTypeWithProperty("SST_Lossy", "Article", "Title");
+        registry.Register(article, "SST/Article");
+
+        var recovered = registry.TryRecoverForNodeType(
+            "SST/Article",
+            JsonSerializer.Deserialize<JsonElement>("""{"Title":"t","abstract":"a","authors":["x"]}"""),
+            JsonSerializerOptions.Default);
+
+        recovered.Should().NotBeNull(
+            "reported, not refused: content written against an EARLIER version of the RIGHT type "
+            + "legitimately carries members it has since lost, and refusing those would turn "
+            + "cosmetic drift into an empty render");
+        logger.Warnings.Should().ContainSingle().Which
+            .Should().Contain("Article")
+            .And.Contain("abstract")
+            .And.Contain("authors");
+    }
+
+    /// <summary>
+    /// The counter-case, so the report cannot become noise: when the target CAN represent
+    /// everything, nothing is said. Pinning this is what keeps the warning meaningful — a line that
+    /// fires on every healthy read is one nobody reads.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void ARecoveryThatCarriesEverything_IsSilent()
+    {
+        var logger = new CapturingLogger();
+        var registry = new MeshContentTypeRegistry(logger);
+        var scenario = EmitTypeWithProperty("SST_Lossless", "Scenario", "Code");
+        registry.Register(scenario, "SST/Scenario");
+
+        registry.TryRecoverForNodeType(
+            "SST/Scenario",
+            JsonSerializer.Deserialize<JsonElement>("""{"$type":"Scenario","Code":"base"}"""),
+            JsonSerializerOptions.Default).Should().NotBeNull();
+
+        logger.Warnings.Should().BeEmpty("$type is the discriminator, not an authored member");
+    }
+
     /// <summary>A type with one settable string property — enough to prove the payload round-trips.</summary>
     private static Type EmitTypeWithProperty(string assemblyName, string typeName, string propertyName)
     {
