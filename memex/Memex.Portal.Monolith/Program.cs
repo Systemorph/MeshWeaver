@@ -31,6 +31,13 @@ var assemblyCachePath = Path.Combine(
     "Memex", "assembly-cache");
 builder.Services.AddFileSystemAssemblyStore(assemblyCachePath);
 
+// 🚨 …and one whole GENERATION of that cache is written per framework build. The store keys every
+// file by the MeshWeaver.Graph MVID, which changes on every rebuild, so a dev box that rebuilds the
+// framework accumulates a full set of NodeType assemblies per rebuild and nothing removed one. This
+// claims the generation this process runs and REPORTS what is collectable; deletion stays off until
+// AssemblyCache:Retention:Delete is set. See AssemblyCacheGenerations.
+builder.Services.AddAssemblyCacheRetention(builder.Configuration);
+
 // Add Aspire service defaults (health checks, OpenTelemetry, service discovery)
 builder.AddServiceDefaults();
 
