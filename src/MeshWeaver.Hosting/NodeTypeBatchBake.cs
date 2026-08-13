@@ -459,6 +459,24 @@ internal static class NodeTypeBatchBake
         // returned. A type that repeatedly costs tens of MB and never gives them back is visible here
         // and nowhere else. See MemoryDelta.
         var compileMemory = MemoryDelta.Start();
+        // 🚨 …and what it COST IN TIME, on the same line, for the same reason (issue #1439).
+        // `Store/Plugin` reached ~1.4 MB of C# in one compile unit and started brushing the
+        // bootstrap's 300 s NodeType-liveness deadline — and the ONLY signal any of that produced
+        // was that deadline going red. Nothing recorded what an individual compile cost, so "which
+        // types are expensive", "is it Roslyn or discovery", and "did splitting that unit help"
+        // were all unanswerable, and the only available response to a budget being brushed was to
+        // widen it. The two ⏱ phase lines the compiler already computes are written to the compile
+        // ACTIVITY LOG, which this path deliberately does not create — so on the batch path, which
+        // is exactly the cold-bootstrap path, they were computed and discarded.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        // …and the DURABLE half of the same measurement. `LastCompileStartedAt` is written only by
+        // the activation path's Pending→Compiling flip, and the shared stamp field-set never touches
+        // it — so on the batch path, which is the cold-bootstrap path, `LastCompileSucceededAt` sat
+        // next to a stale-or-null start and the per-type duration was not derivable from the mesh at
+        // all, only from a log line that may have rotated. Stamping it here makes
+        // `LastCompileSucceededAt − LastCompileStartedAt` mean the same thing on both drivers.
+        var startedAt = DateTimeOffset.UtcNow;
+        var sourceBytes = SourceBytesOf(mesh, sources);
         var compiler = mesh.ServiceProvider.GetService<IMeshNodeCompilationService>();
         if (compiler is null)
             return Observable.Return(new PreWarmOutcome(
@@ -480,7 +498,8 @@ internal static class NodeTypeBatchBake
                     .DefaultIfEmpty((null, new InvalidOperationException(
                         $"Batch compile pipeline for '{typePath}' completed without producing an outcome — "
                         + "an upstream stage (include resolution / Roslyn bridge) terminated empty.")))
-                    .SelectMany(o => StampAndReport(mesh, typeNode, sources, o.Result, o.Error, logger)))
+                    .SelectMany(o => StampAndReport(
+                        mesh, typeNode, sources, o.Result, o.Error, startedAt, logger)))
             // The per-type budget bounds compile + stamp together. A timeout is NOT a verdict —
             // it reports TimedOut, which the gate files under "not evaluated", never a regression.
             .Timeout(budget)
@@ -489,11 +508,34 @@ internal static class NodeTypeBatchBake
                     ? new PreWarmOutcome(typePath, PreWarmStatus.TimedOut,
                         "batch compile did not settle within the per-type budget")
                     : new PreWarmOutcome(typePath, PreWarmStatus.Faulted, ex.Message)))
+            .Select(o => o with
+            {
+                Duration = clock.Elapsed,
+                SourceCount = sources.Count,
+                SourceBytes = sourceBytes,
+            })
             .Do(o => logger?.LogInformation(
-                "BatchBake: {TypePath} → {Status}{Detail} — {Memory}",
+                "BatchBake: {TypePath} → {Status}{Detail} — {Cost} — {Memory}",
                 o.TypePath, o.Status,
                 string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})",
+                o.DescribeCost(),
                 compileMemory));
+    }
+
+    /// <summary>
+    /// The size of a compile unit, in bytes of C# — the correlate a per-type duration is only
+    /// interesting next to (issue #1439). Reads each source node's <see cref="CodeConfiguration.Code"/>
+    /// through <c>ContentAs</c>, so a node whose content arrived as untyped JSON still counts;
+    /// anything that does not read back as code contributes nothing rather than throwing, because a
+    /// diagnostic must never be able to fail the operation it is describing.
+    /// </summary>
+    private static long SourceBytesOf(IMessageHub mesh, IReadOnlyList<MeshNode> sources)
+    {
+        var options = mesh.JsonSerializerOptions;
+        var total = 0L;
+        foreach (var node in sources)
+            total += node.ContentAs<CodeConfiguration>(options)?.Code?.Length ?? 0;
+        return total;
     }
 
     private static IObservable<PreWarmOutcome> StampAndReport(
@@ -502,6 +544,7 @@ internal static class NodeTypeBatchBake
         IReadOnlyList<MeshNode> sources,
         NodeCompilationResult? result,
         Exception? error,
+        DateTimeOffset startedAt,
         ILogger? logger)
     {
         var typePath = typeNode.Path;
@@ -521,7 +564,8 @@ internal static class NodeTypeBatchBake
         return releaseObservable
             .Take(1)
             .DefaultIfEmpty()
-            .SelectMany(releasePath => WriteStamp(mesh, typeNode, ok, result, error, releasePath, logger))
+            .SelectMany(releasePath => WriteStamp(
+                mesh, typeNode, ok, result, error, releasePath, startedAt, logger))
             .Select(_ =>
             {
                 if (ok)
@@ -595,6 +639,7 @@ internal static class NodeTypeBatchBake
         NodeCompilationResult? result,
         Exception? error,
         string? releasePath,
+        DateTimeOffset startedAt,
         ILogger? logger)
     {
         var storage = mesh.ServiceProvider.GetService<IStorageAdapter>();
@@ -627,14 +672,19 @@ internal static class NodeTypeBatchBake
                         + "stamp skipped", typeNode.Path);
                     return (Expected: read.Expected, Stamped: (MeshNode?)null);
                 }
-                var stamped = ok
-                    // currentNodeVersion = typeNode.Version — the version the compiler's
-                    // IAssemblyStore upload used (it uploaded the node it was handed), so
-                    // LastCompiledVersion always names a store key that has bytes.
-                    ? NodeTypeCompilationHelpers.ApplyCompileSuccess(
-                        def, result!, typeNode.Version, activityPath: null, releasePath)
-                    : NodeTypeCompilationHelpers.ApplyCompileFailure(
-                        def, result, error, activityPath: null);
+                var stamped = (ok
+                        // currentNodeVersion = typeNode.Version — the version the compiler's
+                        // IAssemblyStore upload used (it uploaded the node it was handed), so
+                        // LastCompiledVersion always names a store key that has bytes.
+                        ? NodeTypeCompilationHelpers.ApplyCompileSuccess(
+                            def, result!, typeNode.Version, activityPath: null, releasePath)
+                        : NodeTypeCompilationHelpers.ApplyCompileFailure(
+                            def, result, error, activityPath: null))
+                    // The batch driver has no Pending→Compiling flip to stamp this at, and the
+                    // shared field-set deliberately does not touch it (the activation path owns it
+                    // there). Written here so a per-type duration is derivable FROM THE MESH on both
+                    // drivers, not just from a log line — issue #1439.
+                    with { LastCompileStartedAt = startedAt };
                 return (Expected: read.Expected, Stamped: (MeshNode?)(fresh with
                 {
                     Content = stamped,

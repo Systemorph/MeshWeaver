@@ -961,4 +961,84 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
         // late (its own hosted service starts after the import's), and must not hang.
         await settled.Settled.Take(1).Timeout(TimeSpan.FromSeconds(5)).ToTask();
     }
+
+    // ————————————————————————————————— per-type compile cost (issue #1439)
+
+    /// <summary>
+    /// 🚨 WHAT A COMPILE UNIT COSTS, per type — the number whose absence is Systemorph/MeshWeaver#1439.
+    ///
+    /// <para>Before this, a NodeType's compile produced exactly one signal: a bootstrap deadline
+    /// that was either met or not. So a unit growing without limit (<c>Store/Plugin</c> reached
+    /// ~1.4 MB of C# in one unit and began brushing a 300 s liveness budget) could only be answered
+    /// by widening the budget, and "did splitting it help?" was unanswerable in principle. A budget
+    /// is not a measurement.</para>
+    ///
+    /// <para>This pins the rendering rules, which are the part that carries meaning: a zero duration
+    /// renders as NOTHING rather than as "0.0 s", because an outcome that compiled nothing (a type
+    /// skipped behind a broken upstream, or one already on the shared store) must not be readable as
+    /// a type that compiled instantly — that reading is precisely how a cheap-looking unit hides.</para>
+    /// </summary>
+    [Fact]
+    public void CompileCost_RendersDurationWithItsUnitSize_AndSaysNothingWhenNothingWasCompiled()
+    {
+        new PreWarmOutcome("A/Type", PreWarmStatus.UpstreamFailed).DescribeCost().Should().BeEmpty(
+            "a type that was skipped compiled nothing — a '0.0 s' here would read as 'instant'");
+
+        new PreWarmOutcome("A/Type", PreWarmStatus.AlreadyBaked)
+            { Duration = TimeSpan.Zero }.DescribeCost().Should().BeEmpty(
+                "…and so did a type found already baked on the shared store");
+
+        var measured = new PreWarmOutcome("Store/Plugin", PreWarmStatus.Compiled)
+        {
+            Duration = TimeSpan.FromSeconds(3.42),
+            SourceCount = 72,
+            SourceBytes = 1_432_600,
+        };
+        measured.DescribeCost().Should().Be("3.4 s over 72 file(s), 1399 KB",
+            "the duration is only interesting NEXT TO the size of the unit that produced it — a "
+            + "type whose duration grows while its unit does not is a different problem entirely");
+
+        new PreWarmOutcome("A/Type", PreWarmStatus.Compiled)
+            { Duration = TimeSpan.FromSeconds(12.5) }.DescribeCost().Should().Be("12.5 s",
+                "the activation path resolves no source set of its own, so it reports the duration "
+                + "alone rather than inventing a zero-sized unit");
+    }
+
+    /// <summary>
+    /// The cost is MEASURED, not merely declarable: a type the sweep actually drove comes back with
+    /// a non-zero duration, so the summary can rank real types by real cost.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task WarmDynamicTypes_ReportsAMeasuredDurationForEveryTypeItDrove()
+    {
+        const string partition = "PreWarmCost";
+        const string typePath = $"{partition}/CostedType";
+
+        await NodeFactory.CreateNode(new MeshNode("CostedType", partition)
+        {
+            Name = "Costed Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Compiles cleanly.",
+                Configuration = "config => config"
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PreWarmCost");
+
+        var outcome = await DynamicTypePreWarmer
+            .WarmDynamicTypes(Mesh, logger, perTypeBudget: TimeSpan.FromSeconds(90))
+            .Where(o => o.TypePath == typePath)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(100))
+            .ToTask();
+
+        Output.WriteLine($"{outcome.TypePath} → {outcome.Status} — {outcome.DescribeCost()}");
+        outcome.Duration.Should().BeGreaterThan(TimeSpan.Zero,
+            "the sweep drove this type, so it must report what driving it cost — a bake that "
+            + "reports only a pass/fail against a deadline is the state #1439 is about");
+        outcome.DescribeCost().Should().NotBeNullOrEmpty(
+            "…and it must render, because the per-type log line is where that number is read");
+    }
 }
