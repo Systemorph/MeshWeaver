@@ -74,8 +74,15 @@ spec:
           #     Poll until the pod reports "drained", i.e. its last circuit closed.
           #
           # Bounded by terminationGracePeriodSeconds above: a forgotten open tab delays the pod's
-          # exit, it cannot block the rollout for ever — k8s SIGKILLs at the ceiling. curl is not
-          # in the base image; wget is (Debian aspnet).
+          # exit, it cannot block the rollout for ever — k8s SIGKILLs at the ceiling.
+          #
+          # 🚨 curl, NOT wget: the base image installs curl (deploy/base-images/portal-ai/Dockerfile)
+          # and has no wget. Reaching for the missing one is not a typo you notice — `until wget …`
+          # fails with 127 on every iteration, so the loop never ends and EVERY roll would sit out
+          # the full grace period before being SIGKILLed. Verified in the image:
+          # `command -v curl` → /usr/bin/curl, `command -v wget` → missing.
+          #
+          # -f makes the 503 ("still open") a failure, so the loop continues; the 200 exits it.
           lifecycle:
             preStop:
               exec:
@@ -84,7 +91,7 @@ spec:
                   - "-c"
                   - >-
                     sleep 15;
-                    while ! wget -q -T 5 -O /dev/null http://127.0.0.1:8080/drain 2>/dev/null; do
+                    until curl -fsS -m 5 http://127.0.0.1:8080/drain >/dev/null 2>&1; do
                       sleep 5;
                     done
           envFrom:
