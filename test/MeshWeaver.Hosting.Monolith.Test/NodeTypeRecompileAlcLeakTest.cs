@@ -38,6 +38,16 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// several times and forcing full collections. A healthy framework keeps one (the live build). A
 /// count that tracks the number of recompiles is the leak, and the number it reaches is how many
 /// generations are pinned.</para>
+///
+/// <para><b>🚨 This test replaced <c>NodeTypeAssemblyLeakTest</c>, deleted with #1324, and the reason
+/// is worth keeping.</b> That test asserted that a NodeType's load context is collected <em>after the
+/// mesh is disposed</em> — a shutdown property. A portal never disposes its mesh, so it could not have
+/// failed for the retention it was assumed to cover, and for this bug's entire life it read as
+/// evidence that recompiles were clean while the process grew 130–340 MB/min in production. The
+/// live-mesh statement — contexts stay bounded across N recompiles with nothing torn down — is the one
+/// that matters, and it is asserted here. (It also poll-looped on <c>Task.Delay</c> waiting for
+/// collection, so a context that was merely slow to die passed identically to one that died at once.)
+/// The lesson generalises: an invariant asserted only at teardown is not a guard on steady state.</para>
 /// </summary>
 public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -47,6 +57,64 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
 
     /// <summary>How many times to recompile. Enough to tell "one pinned generation" from "all of them".</summary>
     private const int Recompiles = 3;
+
+    /// <summary>
+    /// Ceiling on message hubs RETAINED per recompile.
+    ///
+    /// <para>🚨 HUBS, NOT ONLY BYTES — because the hub count is what actually names the retainer, and
+    /// the byte figure alone sent the first two investigations to the wrong place (an ALC leak, then
+    /// Roslyn; heap dumps falsified both). Every retained hub carries its own Autofac lifetime scope,
+    /// <c>TypeRegistry</c> and <c>JsonSerializerOptions</c> — about 140 KB — so the two numbers move
+    /// together, but only this one says WHERE.</para>
+    ///
+    /// <para>Measured on this repro: <b>12 hubs and ~6–7 MB per recompile</b> (12.0 / 12.3 / 12.0
+    /// over three Release runs), down from 22 and ~8 MB. Attributed by walking the hosted-hub tree
+    /// (see <see cref="HubsByParent"/>, printed below): the three per-compile
+    /// <c>_Activity/compile-&lt;ts&gt;</c> node hubs ~+17 over three recompiles (plus the 2 node hubs
+    /// themselves), <c>_Activity/compile-state</c> +12, the NodeType's own hub +3, the shared
+    /// <c>cache/</c> hub +3–4. Almost all of them are <c>sync/{id}</c> sub-hubs — one per
+    /// <c>SynchronizationStream</c>.</para>
+    ///
+    /// <para><b>What the 22 → 12 change closed (#1324):</b> <c>Workspace.EvictForPath</c> fires on
+    /// EVERY mesh change event — including the echo of the writer's own write — and used to PARK the
+    /// mirror that write had used in <c>_evictedRemoteStreams</c> without disposing it, so a
+    /// continuously-written path minted a fresh client <c>sync/</c> hub (and its owner-side twin) per
+    /// write and never gave one back; instrumented over this loop the parked set grew 1 → 23
+    /// monotonically. The eviction itself is load-bearing (disabled, the next write diffs against a
+    /// stale snapshot and the owner's MergeGuard refuses it, so the compile never settles) and a
+    /// "dispose when the Rx subscriber count hits zero" rule does not fire at all (the reduce chain
+    /// <c>CreateExternalClient</c> builds subscribes to the stream itself, so an evicted stream sits
+    /// at 2–3 subscribers forever). The cure is a DECLARED holder: everything that keeps a remote
+    /// stream past the call that resolved it takes a lease
+    /// (<c>Workspace.AcquireRemoteStreamUnchecked</c>) and an evicted stream is disposed the instant
+    /// its last lease goes. Measured over this loop: 24 mirrors opened, 23 evicted, <b>18 reclaimed</b>
+    /// — the 6 survivors are the one live hydration mirror per path, which is the correct steady
+    /// state.</para>
+    ///
+    /// <para><b>What still retains, and why the bound is 15 rather than single digits</b> — two
+    /// mechanisms, neither of them the parking one:</para>
+    /// <list type="number">
+    ///   <item>The per-compile <c>_Activity/compile-&lt;ts&gt;</c> NODE HUBS (~6 apiece) are created
+    ///     per compile and never reclaimed — a node-lifecycle question, not a stream one. This is now
+    ///     the LARGEST share of the residual.</item>
+    ///   <item>Owner-side intermediate reduced streams. <c>MeshDataSource</c>'s own-node
+    ///     <c>AddWorkspaceReferenceStream&lt;MeshNode&gt;</c> factory builds
+    ///     <c>primary.Reduce&lt;InstanceCollection&gt;(CollectionReference("MeshNode"))</c> and then
+    ///     reduces THAT to the node — and <c>WorkspaceStreams.CreateReducedStream</c> registers each
+    ///     child for disposal ON ITS PARENT, which here is the data source's primary stream (hub
+    ///     lifetime). The factory runs uncached on every call that passes a <c>configuration</c> —
+    ///     i.e. once per inbound <c>SubscribeRequest</c> — so an unsubscribe reaps the subscription's
+    ///     own hub but leaves the intermediates behind. Same defect shape as #1345 (which memoized
+    ///     <c>Workspace.GetStream</c>), one layer down at <c>stream.Reduce</c>. Correlating the
+    ///     surviving hubs against the client stream ids says this is what <c>compile-state</c>'s +12
+    ///     now is: 27 of the 34 surviving <c>sync/</c> hubs match NO client mirror.</item>
+    /// </list>
+    ///
+    /// <para>So this bound is a RATCHET at the measured value, not an aspiration: it fails the moment
+    /// the residual gets worse, and it is to be tightened again by whoever fixes either mechanism
+    /// above.</para>
+    /// </summary>
+    private const int MaxHubsPerRecompile = 15;
 
     /// <summary>
     /// Live collectible contexts for this NodeType. The name is
@@ -95,9 +163,10 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         // Baseline AFTER the first compile, so the comparison is recompile-to-recompile and does not
         // charge the steady-state cost of having one built type to the recompiles.
         var managedBaseline = AfterCollectionBytes();
+        var hubBaseline = HubAddresses();
         Output.WriteLine(
             $"initial compile settled at {lastSucceeded:HH:mm:ss.fff} — contexts: {LiveContexts()}, "
-            + $"managed baseline = {managedBaseline / (1024 * 1024)} MB");
+            + $"managed baseline = {managedBaseline / (1024 * 1024)} MB, live hubs = {hubBaseline.Count}");
 
         for (var i = 1; i <= Recompiles; i++)
         {
@@ -138,20 +207,22 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         var managedGrowth = AfterCollectionBytes() - managedBaseline;
 
         // WHERE the bytes went. The contexts unload (above), so the retained memory belongs to
-        // ordinary managed objects — and the leading suspect is per-compile BOOKKEEPING: every compile
-        // mints {typePath}/_Activity/compile-<timestamp> plus a compile-state node, and a mesh node
-        // means a per-node hub with its own DI container and sync streams. If these counts climb with
-        // the recompiles, that is the retainer; if they are flat, the bytes are Roslyn state and the
-        // hunt moves there. Diagnostic output, deliberately not asserted — it names the direction for
-        // issue #1324 rather than pinning a number nobody has justified yet.
-        var hubs = System.Text.RegularExpressions.Regex
-            .Matches(Mesh.GetDisposalDiagnostics(), @"deferred=\d+").Count;
+        // ordinary managed objects — and heap dumps around this exact loop said which: message hubs,
+        // almost all of them `sync/{id}` sub-hubs (one per SynchronizationStream), each with its own
+        // Autofac scope, TypeRegistry and JsonSerializerOptions. So the hub DELTA is the primary
+        // measurement and it is ASSERTED below; the parent attribution is printed so a regression
+        // names its own retainer instead of leaving the next investigation to re-derive it.
+        var hubsAfter = HubAddresses();
+        var hubGrowth = hubsAfter.Count - hubBaseline.Count;
         var activities = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{TypePath}/_Activity"))
             .Should().Within(30.Seconds()).Emit();
         Output.WriteLine(
-            $"WHERE: live hubs = {hubs}, compile-activity nodes under {TypePath}/_Activity = "
-            + $"{activities?.Items?.Count ?? -1} after {Recompiles} recompiles");
+            $"WHERE: live hubs {hubBaseline.Count} -> {hubsAfter.Count} (+{hubGrowth} over {Recompiles} "
+            + $"recompiles = {(double)hubGrowth / Recompiles:F1} per recompile), compile-activity nodes "
+            + $"under {TypePath}/_Activity = {activities?.Items?.Count ?? -1}");
+        foreach (var line in HubsByParent(hubsAfter.Except(hubBaseline).ToHashSet()))
+            Output.WriteLine($"  {line}");
         Output.WriteLine($"FINAL live contexts for {TypePath} after {Recompiles} recompiles: {live}");
         Output.WriteLine(
             $"FINAL managed growth over {Recompiles} recompiles: "
@@ -187,17 +258,69 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         // Caching local reduced streams the way remote ones were always cached took it to ~9 MB
         // and 22 hubs, and took the mesh's steady-state hub count from 187 to 48.
         //
-        // 16 MB, not single digits, is deliberate: the REMAINING ~9 MB is a second, named retainer —
-        // `Workspace.EvictForPath` parks the evicted remote stream in `_evictedRemoteStreams`
-        // WITHOUT disposing it, so every change event on a subscribed path mints a fresh
-        // client/owner `sync/` pair (6 + 8 hubs per compile here). Tighten this bound to single
-        // digits in the change that fixes THAT — a bound nothing can currently pass is a red test,
-        // not a guard.
+        // 12 MB, not single digits, is deliberate. The eviction-parking retainer is fixed (#1324 —
+        // see MaxHubsPerRecompile), which took this from ~8 to ~6–7 MB per recompile; what is left
+        // belongs to the two mechanisms named there (per-compile activity NODE hubs, and the
+        // owner-side intermediate reduced streams registered on a hub-lifetime parent). Tighten this
+        // bound with whichever of those is fixed next — a bound nothing can currently pass is a red
+        // test, not a guard. Bytes also move with unrelated allocation, which is exactly why the hub
+        // delta below is the primary assertion.
         var perRecompile = managedGrowth / Recompiles;
-        perRecompile.Should().BeLessThan(16 * 1024 * 1024,
+        perRecompile.Should().BeLessThan(12 * 1024 * 1024,
             $"a recompile of a trivial type must return its memory; {perRecompile / (1024 * 1024)} MB "
             + $"retained per recompile ({managedGrowth / (1024 * 1024)} MB over {Recompiles}) means "
             + "compile state survives the context that owned it");
+
+        // 🚨 AND THE HUBS. The byte bound alone is a coarse instrument — it moves with unrelated
+        // allocation and it never says what is being retained, which is why two investigations
+        // chased the wrong suspect before heap dumps named message hubs. This is the direct
+        // measurement of the same thing, in the unit the fix will be reasoned about, and the
+        // per-parent breakdown above turns a failure into a diagnosis. See MaxHubsPerRecompile.
+        var hubsPerRecompile = (double)hubGrowth / Recompiles;
+        hubsPerRecompile.Should().BeLessThanOrEqualTo(MaxHubsPerRecompile,
+            $"a recompile must hand its message hubs back; {hubsPerRecompile:F1} retained per recompile "
+            + $"({hubGrowth} over {Recompiles}) — each carries an Autofac scope, a TypeRegistry and a "
+            + "JsonSerializerOptions, and in production that is the 130 MB/min curve. The breakdown "
+            + "printed above names which parent hub grew");
+    }
+
+    /// <summary>
+    /// Every live hub in the mesh's hosted-hub tree, by address. Read from
+    /// <c>GetDisposalDiagnostics</c>, which walks the tree recursively and prints one line per hub —
+    /// the only public surface that enumerates them.
+    /// </summary>
+    private List<string> HubAddresses() =>
+        System.Text.RegularExpressions.Regex
+            .Matches(Mesh.GetDisposalDiagnostics(), @"Hub (\S+) RunLevel")
+            .Select(m => m.Groups[1].Value)
+            .ToList();
+
+    /// <summary>
+    /// Groups the newly-appeared hubs by their PARENT in the hosted-hub tree — the attribution that
+    /// turns "+66 hubs" into "+22 under <c>_Activity/compile-state</c>, +17 under <c>cache/</c>, …".
+    /// The diagnostics tree is indented two spaces per level, so the enclosing hub is simply the last
+    /// address seen at a shallower depth. <c>sync/{id}</c> addresses are bucketed (they are opaque
+    /// per-stream ids; their PARENT is the informative half).
+    /// </summary>
+    private IEnumerable<string> HubsByParent(IReadOnlySet<string> newHubs)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var stack = new List<string>();
+        foreach (var line in Mesh.GetDisposalDiagnostics().Split('\n'))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(line, @"^(\s*)Hub (\S+) RunLevel");
+            if (!m.Success) continue;
+            var depth = m.Groups[1].Value.Length / 2;
+            var address = m.Groups[2].Value;
+            while (stack.Count > depth) stack.RemoveAt(stack.Count - 1);
+            var parent = stack.Count > 0 ? stack[^1] : "<root>";
+            stack.Add(address);
+            if (!newHubs.Contains(address)) continue;
+            var child = address.StartsWith("sync/", StringComparison.Ordinal) ? "sync/*" : address;
+            var key = $"{parent}  >>  {child}";
+            counts[key] = counts.GetValueOrDefault(key) + 1;
+        }
+        return counts.OrderByDescending(kv => kv.Value).Select(kv => $"+{kv.Value,3}  {kv.Key}");
     }
 
     /// <summary>

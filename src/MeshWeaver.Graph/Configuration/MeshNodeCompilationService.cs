@@ -574,13 +574,13 @@ internal class MeshNodeCompilationService(
     }
 
     private static ActivityLog AppendInfo(ActivityLog log, string message)
-        => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Information)) };
+        => log.Append(new LogMessage(message, LogLevel.Information));
 
     private static ActivityLog AppendWarning(ActivityLog log, string message)
-        => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Warning)) };
+        => log.Append(new LogMessage(message, LogLevel.Warning));
 
     private static ActivityLog AppendError(ActivityLog log, string message)
-        => log with { Messages = log.Messages.Add(new LogMessage(message, LogLevel.Error)) };
+        => log.Append(new LogMessage(message, LogLevel.Error));
 
     /// <summary>
     /// Source-set discovery via the workspace SyncedQuery registry — one

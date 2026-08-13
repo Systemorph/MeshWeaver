@@ -91,12 +91,24 @@ else
     var assemblyCache = Path.Combine(dataRoot, "assembly-cache");
     builder.Services.AddFileSystemAssemblyStore(assemblyCache);
 
-    // 🚨 ONE POD BAKES. The compile cache is shared but the decision to rebuild is per-process, so
-    // without a lease every replica on a new image starts the SAME sweep over the SAME NodeTypes
-    // into this SAME directory — concurrent cold compiles of one type, which is the storm the
-    // sequential sweep exists to prevent. Any rollout with maxSurge hits this by default.
-    // The lease lives beside the assemblies it guards, so it is shared exactly when they are.
-    builder.Services.AddSingleton(new BakeCoordination(assemblyCache));
+    // 🚨 ONE POD BAKES — coordinated by the build protocol (Doc/Architecture/BuildCoordination):
+    // the Admin/Build claim decides who runs the sweep and every other pod completes on the
+    // per-fingerprint GO subscription. Nothing to register here — the protocol is the pre-warmer's
+    // default. (A file lease beside the assembly cache used to serialise this; it is deleted, its
+    // one-builder and steal-on-stale properties carried by the claim arbiter.)
+
+    // 🚨 …and ONE WHOLE GENERATION of that cache is written per deploy, because the store keys every
+    // file by the MeshWeaver.Graph MVID and a CI build stamps a fresh InformationalVersion into
+    // every assembly. That is deliberate ABI safety; what was missing is anything that ever removes
+    // an old generation. Measured on memex 2026-08-12: 7817 DLLs across 93 generations, 3.2 GB — of
+    // which 83 files (1%) were loadable by the running image — on the SAME 16 GiB share that holds
+    // the DataProtection key ring below, so filling it takes auth-adjacent state down with it.
+    //
+    // This claims the generation this pod runs (the only thing that proves one is still referenced)
+    // and sweeps the ones nothing runs. Deletion is OFF unless AssemblyCache__Retention__Delete is
+    // explicitly true — until then it reports exactly what it would remove. See
+    // AssemblyCacheGenerations for why the claim, not an age or a count, is the proof.
+    builder.Services.AddAssemblyCacheRetention(builder.Configuration);
 
     // NuGet package cache → filesystem (zip-per-version, shared-volume safe).
     builder.Services.Replace(ServiceDescriptor.Singleton<INuGetPackageCache>(sp =>
@@ -148,6 +160,32 @@ builder.ConfigureMemexServices();
 var embeddingOptions = builder.Configuration.GetSection("Embedding").Get<EmbeddingOptions>() ?? new EmbeddingOptions();
 builder.Services.AddEmbeddings(embeddingOptions);
 
+// 🔥 BAKE MODE (Deployment:Mode=Bake): this SAME binary — and therefore the SAME image, the same
+// Graph MVID, the same framework fingerprint — runs as an ephemeral build master instead of a
+// serving portal. It joins NO live cluster (own ServiceId + localhost clustering below), runs the
+// protocol-coordinated sweep against the shared stores (Postgres, /data assembly cache, source
+// replica), publishes the per-fingerprint GO on Admin/Build, and EXITS (BakeModeCompletion).
+// Serving pods then find the share full and their GO already published.
+//
+// The retired 2025 bake image failed precisely because it was a DIFFERENT build with a foreign
+// fingerprint (#1347); same-image-different-mode is what makes its bakes valid by construction.
+// Exiting after GO also disposes every sync hub and collectible ALC the compiles minted — the
+// bake's memory cost (measured +1.9 GB managed for a full sweep) dies with the process.
+var bakeMode = string.Equals(
+    builder.Configuration["Deployment:Mode"], "Bake", StringComparison.OrdinalIgnoreCase);
+if (bakeMode)
+{
+    // The bake posture, forced regardless of the deployment's serving config: the sweep IS the
+    // job, batch direct-compile (nothing to be gentle to), and no readiness gate — a Job has no
+    // rotation to be held out of; its verdict is its EXIT CODE.
+    builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+    {
+        [DynamicTypePreWarmerHostedService.EnabledConfigKey] = "true",
+        [DynamicTypePreWarmerHostedService.BatchBakeConfigKey] = "true",
+        [NodeTypeBakeGateExtensions.EnabledConfigKey] = "false",
+    });
+}
+
 // Configure Orleans clustering (co-hosted silo + web).
 //  - "AzureTables" (default): Aspire injects Azure Table clustering via config — no
 //    explicit provider here, exactly as before (no regression for ACA/Marketplace).
@@ -164,8 +202,17 @@ builder.UseOrleansMeshServer(address, silo =>
     {
         silo.Configure<ClusterOptions>(opts =>
         {
-            opts.ClusterId = MemexDistributedConstants.ClusterId;
-            opts.ServiceId = MemexDistributedConstants.ServiceId;
+            // Bake mode gets its OWN service identity: bake grains instantiate in the bake
+            // cluster because it is the only cluster they exist in, and no discovery round-trip
+            // can land on (or starve against) a serving pod's activations — the #1218 class is
+            // unrepresentable rather than mitigated. Membership state is keyed by these ids, so
+            // the live cluster's tables are never touched.
+            opts.ClusterId = bakeMode
+                ? $"{MemexDistributedConstants.ClusterId}-bake"
+                : MemexDistributedConstants.ClusterId;
+            opts.ServiceId = bakeMode
+                ? $"{MemexDistributedConstants.ServiceId}-bake"
+                : MemexDistributedConstants.ServiceId;
         });
         // Membership-probe tolerance. EVERY portal crash on memex-cloud over 2026-07-15..22 was the
         // same self-inflicted death: a silo starved by load (boot import/compile storm, GC pauses
@@ -182,7 +229,14 @@ builder.UseOrleansMeshServer(address, silo =>
             opts.NumMissedProbesLimit = 5;
             opts.EnableIndirectProbes = true;
         });
-        if (string.Equals(orleansClustering, "Localhost", StringComparison.OrdinalIgnoreCase))
+        if (bakeMode)
+        {
+            // A bake silo is a cluster of ONE by design — it must never join (or even see) the
+            // serving membership, whatever provider the deployment configured. Localhost
+            // clustering is that isolation: no membership store, no gossip, no probes.
+            silo.UseLocalhostClustering();
+        }
+        else if (string.Equals(orleansClustering, "Localhost", StringComparison.OrdinalIgnoreCase))
         {
             silo.UseLocalhostClustering();
         }
@@ -290,6 +344,21 @@ builder.Services.AddHealthChecks()
 // assembly cache — types already baked for this framework are skipped, so a second replica
 // (or a restart) inherits the first pod's work instead of repeating it.
 builder.Services.AddDynamicTypePreWarming();
+
+if (bakeMode)
+{
+    // The sweep settling is this process's whole purpose — settle ⇒ exit, exit code = verdict.
+    builder.Services.AddHostedService<Memex.Portal.Distributed.BakeModeCompletion>();
+    // A bake Job must never act as a fleet manager: the self-updater patches the DEPLOYMENT'S
+    // image on its startup poll, and a short-lived Job doing that mid-roll is exactly the kind of
+    // surprise a build process must not spring. Remove the hosted service rather than flag it —
+    // there is no configuration in which a bake Job should self-update anything.
+    foreach (var descriptor in builder.Services
+                 .Where(d => d.ServiceType == typeof(IHostedService)
+                     && d.ImplementationType == typeof(Memex.Portal.Shared.SelfUpdate.SelfUpdateHostedService))
+                 .ToList())
+        builder.Services.Remove(descriptor);
+}
 
 // 🚦 "Fail before prod, not in prod." Opt-in (PreWarm:GateReadiness) gate that holds /health
 // RED until this pod's NodeTypes are built against ITS image. Combined with the deployment's

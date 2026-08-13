@@ -255,7 +255,8 @@ public static class DynamicTypePreWarmer
         ILogger? logger = null,
         TimeSpan? perTypeBudget = null,
         TimeSpan? betweenTypes = null,
-        bool batchBake = false)
+        bool batchBake = false,
+        bool buildProtocol = false)
     {
         var budget = perTypeBudget ?? DefaultPerTypeBudget;
         var pacing = betweenTypes ?? BetweenTypes;
@@ -317,7 +318,7 @@ public static class DynamicTypePreWarmer
                         .Probe(definitions, store, logger: logger)
                         .SelectMany(report => BakeOrFollow(
                             mesh, workspace, accessService, definitions, nodes, store, report,
-                            budget, pacing, batchBake, logger));
+                            budget, pacing, batchBake, buildProtocol, logger));
                 })
                 // 🚨 NO Catch HERE, AND NO LOG-AND-SWALLOW — DELIBERATELY.
                 //
@@ -344,27 +345,29 @@ public static class DynamicTypePreWarmer
     private static IAssemblyStore ResolveAssemblyStore(IMessageHub mesh) =>
         mesh.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
 
-    /// <summary>How often a FOLLOWING pod re-checks the share (and re-attempts the lease).</summary>
-    public static readonly TimeSpan FollowPollInterval = TimeSpan.FromSeconds(60);
-
     /// <summary>
-    /// 🚨 ONE POD BAKES; the rest WATCH THE SHARE FILL.
+    /// 🚨 ONE PROCESS BAKES; the rest SUBSCRIBE TO THE GO.
     ///
-    /// <para>The cache is shared but the decision to rebuild is per-process, so without this every
-    /// replica on a new image independently finds the same framework-stale cache and starts the same
-    /// sweep into the same volume. That is not just duplicated work — it is concurrent cold compiles
-    /// of the SAME NodeType, which is precisely the storm the sequential ordered sweep exists to
-    /// prevent (four concurrent compiles on memex, 2026-07-28 04:05, dropped six plugin roots to the
-    /// "did not settle" overlay). A rollout with <c>maxSurge</c>, or any <c>replicas &gt; 1</c>, hits
-    /// this by default.</para>
+    /// <para>The cache is shared but the decision to rebuild is per-process, so without
+    /// coordination every replica on a new image independently finds the same framework-stale cache
+    /// and starts the same sweep into the same volume — concurrent cold compiles of the SAME
+    /// NodeType, precisely the storm the sequential ordered sweep exists to prevent (four
+    /// concurrent compiles on memex, 2026-07-28 04:05, dropped six plugin roots to the "did not
+    /// settle" overlay). A rollout with <c>maxSurge</c>, or any <c>replicas &gt; 1</c>, hits this
+    /// by default.</para>
     ///
-    /// <para><b>The follower is not passive.</b> Each poll it re-probes the share AND re-attempts the
-    /// lease. So when the share completes it finishes immediately, and when the baker DIES its lease
-    /// goes stale and the next poll takes the bake over. There is no state that requires a human to
-    /// notice — the same level-triggered rule as the rest of this design.</para>
+    /// <para>Coordination is the build protocol (<c>Doc/Architecture/BuildCoordination</c>): the
+    /// <c>Admin/Build</c> claim decides who bakes, and every other process completes on the
+    /// per-fingerprint GO subscription. This replaced a file lease beside the assembly cache plus
+    /// a 60 s share-poll follower; the lease's one-builder and steal-on-stale properties live on
+    /// in the claim arbiter, asserted by the protocol's own tests. The protocol path runs even
+    /// when the report is complete — a complete share still (re)publishes its fingerprint's GO,
+    /// so a baker that crashed between finishing the share and announcing it heals on the next
+    /// boot instead of stranding future GO waiters.</para>
     ///
-    /// <para>With no <see cref="BakeCoordination"/> registered there is no fleet to coordinate with
-    /// (monolith, tests, dev), and the caller simply bakes.</para>
+    /// <para><paramref name="buildProtocol"/> <c>false</c> is the escape hatch: bake solo, no
+    /// coordination — the right shape for a monolith, a test, a dev box, and the wrong one for any
+    /// fleet.</para>
     /// </summary>
     private static IObservable<PreWarmOutcome> BakeOrFollow(
         IMessageHub mesh,
@@ -377,46 +380,18 @@ public static class DynamicTypePreWarmer
         TimeSpan budget,
         TimeSpan pacing,
         bool batchBake,
+        bool buildProtocol,
         ILogger? logger)
     {
-        // Nothing outstanding — no lease needed, and nothing for a follower to wait for.
-        if (report.IsComplete)
-            return WarmPending(mesh, workspace, accessService, definitions, nodes, report, budget, pacing, batchBake, logger);
+        if (buildProtocol)
+            return BuildProtocolDriver.Run(
+                mesh, report, definitions, store,
+                () => WarmPending(
+                    mesh, workspace, accessService, definitions, nodes, report,
+                    budget, pacing, batchBake, logger),
+                logger);
 
-        var coordination = mesh.ServiceProvider.GetService<BakeCoordination>();
-        if (coordination is null)
-            return WarmPending(mesh, workspace, accessService, definitions, nodes, report, budget, pacing, batchBake, logger);
-
-        // Cluster membership, when this host is in a cluster, is what decides takeover — a lease
-        // whose holder membership reports GONE is taken over at once, and one whose holder it reports
-        // ALIVE is never taken however old the heartbeat looks. Absent (monolith, test, Orleans
-        // client) the lease falls back to its staleness clock. See NodeTypeBakeLease.
-        var membership = mesh.ServiceProvider.GetService<IClusterMembership>();
-        var lease = NodeTypeBakeLease.TryAcquire(
-            coordination.LeaseDirectory, report.FrameworkVersion, Environment.MachineName,
-            logger, membership);
-
-        if (lease is not null)
-            // Observable.Using holds the lease for the LIFETIME of the bake and releases it on
-            // completion, error or unsubscribe — a lease that outlived its sweep would lock the
-            // fleet out until it went stale.
-            return Observable.Using(
-                () => lease,
-                _ => WarmPending(mesh, workspace, accessService, definitions, nodes, report, budget, pacing, batchBake, logger));
-
-        logger?.LogInformation(
-            "DynamicTypePreWarmer: another pod holds the bake lease — following the shared assembly "
-            + "store instead of compiling ({Pending} type(s) outstanding). {Report}",
-            report.Pending.Count, report.Summary);
-
-        // Re-enter after a pause: re-probe (has the baker finished?) and re-attempt the lease (has
-        // the baker died?). Recursion, not a loop, because each round's decision depends on the fresh
-        // probe — bounded in practice by the poll interval against a bake measured in hours.
-        return Observable
-            .Timer(FollowPollInterval)
-            .SelectMany(_ => NodeTypeBakeStatus.Probe(definitions, store, logger: logger))
-            .SelectMany(fresh => BakeOrFollow(
-                mesh, workspace, accessService, definitions, nodes, store, fresh, budget, pacing, batchBake, logger));
+        return WarmPending(mesh, workspace, accessService, definitions, nodes, report, budget, pacing, batchBake, logger);
     }
 
     /// <summary>

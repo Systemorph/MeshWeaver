@@ -130,11 +130,13 @@ public class Workspace : IWorkspace
         if (string.IsNullOrEmpty(path) || _remoteStreamCache.IsEmpty)
             return;
 
-        // Do NOT dispose the evicted stream — existing subscribers (e.g. live Blazor
-        // components) are still attached to it and need to keep receiving updates
-        // until they drop on their own. The eviction only prevents NEW callers from
-        // re-using the now-stale stream; the next GetRemoteStream creates a fresh one
-        // against the (re-)activated owner.
+        // Do NOT unconditionally dispose the evicted stream — an undeclared reader (e.g. a
+        // MeshDataSource reduce callback that handed the stream on) may still be attached and
+        // needs to keep receiving updates until it drops on its own. The eviction only prevents
+        // NEW callers from re-using the now-stale stream; the next GetRemoteStream creates a
+        // fresh one against the (re-)activated owner. A stream whose holders DECLARED
+        // themselves (see <see cref="LeaseRemoteStream"/>) and have all left is reclaimed
+        // immediately — it is out of the cache, so nothing can adopt it any more.
         foreach (var key in _remoteStreamCache.Keys)
         {
             // Owner-address match only — every identity's stream for that owner is evicted.
@@ -146,11 +148,121 @@ public class Workspace : IWorkspace
                 // disposed → TimerQueue-pinned forever). Only a materialised stream
                 // has a hub to dispose.
                 if (removed.IsValueCreated)
+                {
                     _evictedRemoteStreams[removed.Value] = 0;
+                    ReclaimIfUnheld(removed.Value);
+                }
                 _logger.LogDebug(
                     "Evicted remote stream cache for {Address} after change event.",
                     key.Owner);
             }
+        }
+    }
+
+    // 🚨 THE LIFETIME OF AN EVICTED STREAM — declared holders, NOT Rx subscriber counts.
+    //
+    // A change-feed eviction takes a stream OUT of _remoteStreamCache but cannot dispose it at
+    // the eviction site: it does not know whether anyone is still reading it. Parking it and
+    // hoping is what leaked — every write to a subscribed path minted a fresh client `sync/` hub
+    // (and, via its SubscribeRequest, a matching `sync/` hub on the owner) while every
+    // predecessor sat in _evictedRemoteStreams until the process died (Systemorph/MeshWeaver#1324:
+    // the parked set grew 1 → 23 monotonically over three NodeType recompiles and was never
+    // drained — its only reaper is the shared mesh-node cache's idle sweep, which needs zero
+    // subscribers AND ten minutes untouched, a condition a continuously-written path never meets).
+    //
+    // 🚨 Counting Rx subscribers CANNOT answer "is anyone still reading this": the reduce chain
+    // CreateExternalClient builds subscribes to the stream ITSELF (the outbound
+    // change-notification pipeline and the version-gate observer), so an evicted stream measures
+    // 2–3 subscribers and never reaches zero. That approach was implemented, measured and
+    // reverted — a mechanism that never triggers is worse than none.
+    //
+    // So holders DECLARE themselves. Everything that keeps a remote stream past the call that
+    // resolved it takes a LEASE (AcquireRemoteStreamUnchecked) and releases it when it is done — the
+    // shared mesh-node cache's hydration for as long as its entry lives, and each cross-hub write
+    // for the duration of its Observable.Create subscription. When the last declared holder
+    // leaves a stream that is already evicted, nothing can adopt it (it is out of the cache), so
+    // it is disposed at once: UnsubscribeRequest goes to the owner, both `sync/` hubs die.
+    //
+    // A stream NOBODY leased is never in this registry and keeps the old conservative parking —
+    // undeclared holders (the MeshDataSource / SyncedQueryDataSource reduce callbacks) are
+    // unaffected. Opting a call site in is one line and is what makes its streams reclaimable.
+    private readonly ConcurrentDictionary<ISynchronizationStream, int> _remoteStreamLeases =
+        new(StreamReferenceComparer.Instance);
+
+    /// <summary>
+    /// Resolves the remote stream for (<paramref name="owner"/>, <paramref name="reference"/>)
+    /// AND declares the caller as a holder of it. Dispose the returned lease when done — that is
+    /// what lets an evicted stream be reclaimed instead of parked forever (see the
+    /// <see cref="_remoteStreamLeases"/> note). The liveness re-check closes the window where the
+    /// stream was reclaimed between resolution and the lease: a dead instance is released and the
+    /// resolve retried, which builds a fresh one (the same retry contract as
+    /// <see cref="GetExternalClientSynchronizationStream{TReduced,TReference}"/>).
+    /// </summary>
+    internal (ISynchronizationStream<TReduced> Stream, IDisposable Lease)
+        AcquireRemoteStreamUnchecked<TReduced, TReference>(Address owner, TReference reference)
+        where TReference : WorkspaceReference
+    {
+        while (true)
+        {
+            var stream = GetRemoteStreamUnchecked<TReduced, TReference>(owner, reference);
+            var lease = LeaseRemoteStream(stream);
+            if (stream.Hub?.RunLevel <= MessageHubRunLevel.Started
+                && stream.Hub is not MessageHub { IsDisposing: true })
+                return (stream, lease);
+            lease.Dispose();
+        }
+    }
+
+    /// <summary>Declares a holder of <paramref name="stream"/>; disposing the returned
+    /// handle releases it (idempotent).</summary>
+    private IDisposable LeaseRemoteStream(ISynchronizationStream stream)
+    {
+        _remoteStreamLeases.AddOrUpdate(stream, 1, (_, count) => count + 1);
+        // Disposable.Create runs its action AT MOST ONCE (Interlocked-swapped internally), so a
+        // double-dispose of the lease handle cannot under-count the holders.
+        return System.Reactive.Disposables.Disposable.Create(() =>
+        {
+            while (true)
+            {
+                // 🚨 Read-then-TryUpdate, never AddOrUpdate: DetachRemoteStreams REMOVES the
+                // bookkeeping when it hands ownership out, and re-adding a zero entry here would
+                // pin a stream this workspace no longer owns.
+                if (!_remoteStreamLeases.TryGetValue(stream, out var current))
+                    return;
+                var remaining = current > 0 ? current - 1 : 0;
+                if (!_remoteStreamLeases.TryUpdate(stream, remaining, current))
+                    continue;
+                if (remaining == 0)
+                    ReclaimIfUnheld(stream);
+                return;
+            }
+        });
+    }
+
+    /// <summary>
+    /// Disposes <paramref name="stream"/> iff it is BOTH evicted (parked — no caller can adopt
+    /// it) AND has no remaining declared holder. Called from the two edges that can make that
+    /// true: the eviction itself, and the release of the last lease.
+    /// </summary>
+    private void ReclaimIfUnheld(ISynchronizationStream stream)
+    {
+        if (!_remoteStreamLeases.TryGetValue(stream, out var leases) || leases != 0)
+            return;
+        if (!_evictedRemoteStreams.TryRemove(stream, out _))
+            return;
+        _remoteStreamLeases.TryRemove(stream, out _);
+        try
+        {
+            stream.Dispose();
+            _logger.LogDebug(
+                "Workspace {WorkspaceId} disposed superseded remote stream for {Owner} — "
+                + "no declared holder remains.", Id, stream.Owner);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "Workspace {WorkspaceId} error disposing superseded remote stream for {Owner}",
+                Id, stream.Owner);
         }
     }
 
@@ -399,6 +511,12 @@ public class Workspace : IWorkspace
                 && _evictedRemoteStreams.TryRemove(parked, out _))
                 detached.Add(parked);
         }
+        // Ownership moves to the caller (it disposes, or hands them back via ParkRemoteStreams),
+        // so drop the lease bookkeeping: keeping a zero-count entry would pin a stream this
+        // workspace no longer owns. A re-parked stream simply re-enters the conservative
+        // "undeclared holders" bucket until a fresh lease is taken.
+        foreach (var stream in detached)
+            _remoteStreamLeases.TryRemove(stream, out _);
         return detached;
     }
 
@@ -440,7 +558,18 @@ public class Workspace : IWorkspace
                     () => (ISynchronizationStream)this.CreateExternalClient<TReduced, TReference>(address, reference),
                     LazyThreadSafetyMode.ExecutionAndPublication));
 
+            // The counterpart of the eviction line below, and the one #1324 needed: a client
+            // `sync/` hub (plus its owner-side twin) is born here, so "who keeps minting mirrors
+            // for this path, under which identity" is answerable from a Debug-level run instead of
+            // a heap dump. Logged only on a genuine MISS — a cache hit is free and silent.
+            var freshlyCreated = !lazy.IsValueCreated;
+
             var stream = lazy.Value;
+
+            if (freshlyCreated)
+                _logger.LogDebug(
+                    "Workspace {WorkspaceId} opened remote stream {StreamId} for {Owner} as {Identity}.",
+                    Id, stream.StreamId, key.Item1, key.Item3);
 
             // Check if cached stream is still alive. Hub.RunLevel alone is not
             // sufficient because hub shutdown is async: right after stream.Dispose()
@@ -674,6 +803,8 @@ public class Workspace : IWorkspace
                 _logger.LogDebug(ex, "Workspace {WorkspaceId} error disposing evicted remote stream", Id);
             }
         }
+        // Nothing left to reclaim — drop the holder bookkeeping so it stops referencing streams.
+        _remoteStreamLeases.Clear();
 
         // Local reduced streams are OWNED by their parent (CreateReducedStream registers each on
         // the data-source stream that produced it), so DataContext.Dispose below tears them down.

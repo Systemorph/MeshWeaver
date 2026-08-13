@@ -195,6 +195,20 @@ This is exactly what the `MeshNodeReference(path)` reducer registered by `AddSyn
 - When the cached stream's hub leaves `MessageHubRunLevel.Started` (disposed or failed), the next `GetRemoteStream` call replaces it with a fresh instance.
 - When an explicit `IMeshChangeFeed` event reports a path change (ownership churn — see `Workspace.EvictForPath`), open subscribers stay attached to their existing stream while new callers bind to a fresh one tied to the re-activated owner.
 
+**An evicted stream is closed as soon as its last declared holder lets go.** Eviction removes the
+stream from the cache but cannot dispose it at the eviction site — it does not know whether anyone
+is still reading. Rx subscriber counts cannot answer that either: the reduce chain
+`CreateExternalClient` builds subscribes to the stream itself, so an evicted stream sits at 2–3
+subscribers forever. So holders **declare** themselves: anything that keeps a remote stream past the
+call that resolved it takes one through `Workspace.AcquireRemoteStreamUnchecked` and disposes the
+returned lease when it is done — the shared mesh-node cache's hydration for its entry's whole life,
+each cross-hub write for the duration of its `Observable.Create` subscription. When the last lease on
+an already-evicted stream goes, it is disposed at once: `UnsubscribeRequest` reaches the owner and
+both `sync/` hubs die. A stream **nobody** leased keeps the conservative parking (it may still have
+undeclared readers) and is reclaimed by the mesh-node cache's idle release or at workspace disposal.
+Without the leases every write to a subscribed path left a client `sync/` hub and its owner-side twin
+behind for the process lifetime — [#1324](https://github.com/Systemorph/MeshWeaver/issues/1324).
+
 The full integrity story is a plain dictionary, single-threaded access, and shared-by-default semantics — made safe entirely by the actor model.
 
 The `RemoteStreamCacheTest` (`test/MeshWeaver.Query.Test`) pins this contract: two `GetRemoteStream(...)` calls for the same key are reference-equal, and a disposed stream is evicted before the next caller receives it.
