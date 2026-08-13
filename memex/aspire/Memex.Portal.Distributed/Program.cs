@@ -98,6 +98,19 @@ else
     // The lease lives beside the assemblies it guards, so it is shared exactly when they are.
     builder.Services.AddSingleton(new BakeCoordination(assemblyCache));
 
+    // 🚨 …and ONE WHOLE GENERATION of that cache is written per deploy, because the store keys every
+    // file by the MeshWeaver.Graph MVID and a CI build stamps a fresh InformationalVersion into
+    // every assembly. That is deliberate ABI safety; what was missing is anything that ever removes
+    // an old generation. Measured on memex 2026-08-12: 7817 DLLs across 93 generations, 3.2 GB — of
+    // which 83 files (1%) were loadable by the running image — on the SAME 16 GiB share that holds
+    // the DataProtection key ring below, so filling it takes auth-adjacent state down with it.
+    //
+    // This claims the generation this pod runs (the only thing that proves one is still referenced)
+    // and sweeps the ones nothing runs. Deletion is OFF unless AssemblyCache__Retention__Delete is
+    // explicitly true — until then it reports exactly what it would remove. See
+    // AssemblyCacheGenerations for why the claim, not an age or a count, is the proof.
+    builder.Services.AddAssemblyCacheRetention(builder.Configuration);
+
     // NuGet package cache → filesystem (zip-per-version, shared-volume safe).
     builder.Services.Replace(ServiceDescriptor.Singleton<INuGetPackageCache>(sp =>
         new FileSystemNuGetPackageCache(

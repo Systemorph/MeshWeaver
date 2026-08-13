@@ -370,6 +370,66 @@ On a framework-version mismatch the NodeType recompiles and **mints a new releas
 for the new framework. The old release is left intact as history so instances still
 loaded on it keep running until they cycle.
 
+### 🚨 That means one whole GENERATION of assemblies per deploy — and the store never removed one
+
+`FileSystemAssemblyStore` keys every file `v{version}-{frameworkTag}-{contentHash}.dll`, where the
+tag is the first 8 chars of the framework version. That tag is what stops a new image loading the
+previous image's bytes (`BadImageFormatException` → failed grain activations → a portal-wide wedge,
+prod 2026-06-20) — so a **fresh set of files for the whole fleet on every published build is
+correct**, and making the tag stable is not the fix.
+
+What was missing is anything that ever removes an old set. Measured on memex 2026-08-12:
+
+| | |
+|---|---|
+| DLLs under `/data/assembly-cache` | 7817 |
+| distinct framework generations | 93 |
+| size | 3.2 GB of a 16 GiB share |
+| **loadable by the running image** | **83 files — 1%** |
+
+The share is not private to the compiler. `/data` also holds the **DataProtection key ring**
+(`/data/dataprotection-keys`), the NuGet package cache and the Graph storage base path, so filling it
+is not a contained failure: key persistence and the compile cache fail together, and a full SMB share
+reports write failures far from their cause.
+
+#### What proves a generation is unreferenced
+
+Not its age, and not a count. A pod's generation is fixed for its whole life (it is its image's
+MVID), and a fully warm pod can go days without touching the share — so **file age says nothing at
+all about whether a generation is in use**, and a count is blind to a pod that has not rolled inside
+the window.
+
+The proof is a **live claim**. Every process that owns a filesystem assembly cache re-asserts
+`{root}/.generations/{tag}/{holder}` on an interval, and a generation any live claim names is never
+collected. The claim's instant is written into the file's **content**, not its last-write metadata:
+SMB metadata caching can report a timestamp that is stale while the holder is alive, and a
+falsely-stale claim is the one misreading that deletes a live generation.
+
+Every rule is a KEEP rule and they are ORed — a generation survives if **any** holds:
+
+| Keep rule | Covers |
+|---|---|
+| it is the sweeping process's own framework | a failed claim write must never let a pod delete what it is loading |
+| a claim younger than `ClaimTtl` (24 h) names it | another pod is still running that image |
+| it is among the `KeepGenerations` (3) most recently written | rollback headroom — and the rollout that first introduces claims, where the outgoing image is not asserting one yet |
+| its newest file is younger than `MinimumAge` (7 d) | a backstop bounding what a wrong answer from either of the above can do |
+
+Anything the sweep cannot attribute to a generation — the bake-lease files, the claim files, an
+untagged pre-2026-06 DLL, any foreign file — is counted and **never deleted**, and any error reading
+the tree or the claims **aborts the sweep with nothing collected**. Note the polarity: every other
+coordination path around the bake (`NodeTypeBakeLease`) fails **open**, because being wrong there
+costs duplicated work; this one fails **closed**, because being wrong here deletes an assembly a live
+pod is about to load.
+
+Deletion is **off by default** (`AssemblyCache:Retention:Delete`). Until it is armed the sweep
+measures the cache and logs exactly what it would remove — which is the evidence a deployment should
+arm it against.
+
+Code: `AssemblyCacheGenerations` (`src/MeshWeaver.Graph/Configuration/AssemblyCacheRetention.cs`),
+wired by `AddAssemblyCacheRetention` (`src/MeshWeaver.Hosting/AssemblyCacheRetentionHostedService.cs`).
+`BlobAssemblyStore` is unaffected: it keys `v{version}` with no framework tag, so a new image
+overwrites rather than accrues.
+
 ---
 
 ## 🚨 That recompile can FAIL — and nothing upstream can warn you
