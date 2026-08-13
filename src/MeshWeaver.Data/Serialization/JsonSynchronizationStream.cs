@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Reactive;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Json;
@@ -42,6 +43,13 @@ public static class JsonSynchronizationStream
     /// recycling pathologically and THAT is the bug.
     /// </summary>
     private const int MaxRecycleReArms = 3;
+
+    /// <summary>
+    /// How far up the hub tree the recycle re-arm looks for the local instance of a rejecting
+    /// owner (see <c>LocalInstanceOf</c>). Real trees are two or three deep — mesh → cache/client
+    /// → sync — so this is only a guard against a malformed parent chain.
+    /// </summary>
+    private const int MaxHostLookupDepth = 8;
 
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal
@@ -568,26 +576,121 @@ public static class JsonSynchronizationStream
             //
             // So the rejection itself is the event. The owner told us, in the same breath, both
             // that it is going and that it is coming back ("the address may reactivate; retry to
-            // get the authoritative answer"), and by the time that verdict is produced the hub is
-            // already at RunLevel Dead — so the re-ask lands on a FRESH activation, which a
-            // SubscribeRequest creates on arrival.
+            // get the authoritative answer").
             //
-            // This is not the forbidden watchdog: nothing polls, nothing runs on a timer, and it
-            // fires only in response to an explicit typed rejection. It reuses Resubscribe, so it
-            // inherits the in-flight guard, ExpectResubscribeFull (the mirror must accept a
-            // re-snapshot stamped below its cached frame version) and the System impersonation.
-            // The re-ask asks for the CURRENT snapshot — it never re-asserts a cached frame, which
-            // is the #945 shape and the opposite of what this does. Bounded so that an owner stuck
-            // in a recycle LOOP degrades to the pre-existing "orphaned" behaviour instead of
-            // trading a stalled stream for a storm.
+            // 🚨 …but NOT YET, and that "yet" is the whole of issue #1360. This re-ask used to
+            // fire SYNCHRONOUSLY out of the NACK callback, justified by "by the time that verdict
+            // is produced the hub is already at RunLevel Dead — so the re-ask lands on a FRESH
+            // activation". It is not: MessageService NACKs from `RunLevel >= DisposeHostedHubs`,
+            // a phase in which the dying hub is STILL registered in its parent's
+            // HostedHubsCollection (it removes itself in the later ShutDown phase, from
+            // DisposeImpl's `disposables`). So routing resolved every re-ask to the SAME dying
+            // instance, which NACKed it identically and immediately: the whole bounded budget
+            // burned inside one teardown window — measured at FOUR rejections in 11 ms on
+            // MeshWeaver.Plugins run 31645120599 — and the stream was orphaned for good.
+            //
+            // A WARM handle hides that (its replayed snapshot satisfies readers, and the owner's
+            // next write re-converges it through the change-feed latch, ~2.0 s). A COLD handle has
+            // nothing to replay, so the orphaning is terminal: MeshNodeStreamHandle.UpdateRemote's
+            // initial-state wait runs out its full 30 s and aborts with "no initial state arrived
+            // for '…' within 30s" — the abort that failed #1360's install with 0 nodes written.
+            // Pinned by ColdHandleRecycleStarvationTest.
+            //
+            // The cure is to spend each attempt on a state that can actually answer: gate it on
+            // the rejecting instance's own DisposalCompleted. This is NOT a retry, a backoff or a
+            // watchdog — nothing polls, no timer runs, no bound moved, and the budget is the same
+            // MaxRecycleReArms. It is the same event-driven re-ask, fired once the event it was
+            // always waiting for has actually happened. PackageInstaller.RootTeardownSettled
+            // already holds itself to exactly this contract one layer up; the sync stream
+            // underneath it did not.
+            //
+            // It reuses Resubscribe, so it inherits the in-flight guard, ExpectResubscribeFull
+            // (the mirror must accept a re-snapshot stamped below its cached frame version) and
+            // the System impersonation. The re-ask asks for the CURRENT snapshot — it never
+            // re-asserts a cached frame, which is the #945 shape and the opposite of what this
+            // does. Bounded so that an owner stuck in a recycle LOOP degrades to the pre-existing
+            // "orphaned" behaviour instead of trading a stalled stream for a storm.
+            // Concat, not SelectMany: attempt N+1's wait starts only after attempt N's has ended,
+            // so two rejections arriving together can never sit on two teardowns at once and race
+            // into Resubscribe's in-flight guard. One at a time, without a lock.
             var recycleReArms = 0;
             var recycleReArm = rejectedByRecycle
                 .Where(_ => Interlocked.Increment(ref recycleReArms) <= MaxRecycleReArms)
+                .Select(reason => OwnerTeardownSettled().Select(_ => reason))
+                .Concat()
                 .Subscribe(
                     reason => Resubscribe(reason),
                     ex => logger.LogDebug(ex,
                         "Stream {StreamId}: recycle re-arm stream faulted", reduced.StreamId));
             reduced.RegisterForDisposal(recycleReArm);
+
+            // Completes once the teardown that just rejected us has finished, so the re-ask lands
+            // on a fresh activation instead of racing the same dying instance. Event-driven: it
+            // observes that hub instance's DisposalCompleted, a ReplaySubject(1), so a disposal
+            // that finishes between the probe and the subscribe still answers immediately. When
+            // there is nothing to wait for — no local instance (the owner lives on another silo,
+            // or its teardown already completed and it left the collection), or one that is not
+            // disposing — the re-ask proceeds at once, exactly as before.
+            //
+            // No .Timeout here, deliberately: this join must not out-run the answer it joins
+            // (#1317). MessageHub.Dispose arms a disposal watchdog that force-tears-down and
+            // signals DisposalCompleted as its last act, so the leg is already guaranteed
+            // terminal; the caller's own budget (UpdateRemote's initial-state wait) is the
+            // deadline that belongs to the caller.
+            IObservable<Unit> OwnerTeardownSettled()
+            {
+                var live = LocalInstanceOf(owner);
+                if (live is null || !live.IsDisposing)
+                    return Observable.Return(Unit.Default);
+                logger.LogDebug(
+                    "Stream {StreamId}: owner {Owner} is mid-teardown (RunLevel={RunLevel}) — "
+                    + "holding the re-ask until its disposal completes",
+                    reduced.StreamId, owner, live.RunLevel);
+                return live.DisposalCompleted
+                    .Take(1)
+                    .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
+                    .DefaultIfEmpty(Unit.Default);
+            }
+
+            // The local hub instance serving `address`, or null when none does. A pure probe —
+            // HostedHubCreation.Never is a dictionary lookup that must never activate a hub as a
+            // side effect.
+            //
+            // 🚨 It walks UP, because the subscriber is almost never the owner's host: a per-node
+            // hub is hosted by the MESH hub, while `hub` here is whoever opened the stream — a
+            // `cache/{meshId}` or client hub, i.e. a SIBLING under that same mesh. And it cannot
+            // shortcut through DI: every hub registers ITSELF as `IMessageHub` in its own service
+            // collection (MessageHubConfiguration.ConfigureServices), so
+            // `hub.ServiceProvider.GetService<IMessageHub>()` hands back `hub`. The parent link is
+            // `Configuration.ParentHub`, which resolves `IMessageHub` from the PARENT provider.
+            // Depth-capped: the chain is finite by construction (a root hub has no parent), and
+            // the cap only ensures a malformed tree degrades to today's behaviour rather than
+            // spinning. Failures answer `null`, which likewise means "re-ask now", exactly as
+            // before this gate existed.
+            IMessageHub? LocalInstanceOf(Address address)
+            {
+                try
+                {
+                    var h = hub;
+                    for (var depth = 0; h is not null && depth < MaxHostLookupDepth; depth++)
+                    {
+                        if (h.GetHostedHub(address, HostedHubCreation.Never) is { } found)
+                            return found;
+                        h = h.Configuration.ParentHub;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // ParentHub re-resolves from ParentServiceProvider, which can already be
+                    // disposed when a whole tree is going down. Probing must never throw into
+                    // the NACK path.
+                    logger.LogDebug(ex,
+                        "Stream {StreamId}: could not probe the local instance of {Owner}",
+                        reduced.StreamId, address);
+                }
+
+                return null;
+            }
 
             // 🚨 THE LOST INITIAL — and why the first heartbeat comes EARLY.
             //
