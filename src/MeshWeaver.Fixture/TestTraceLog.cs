@@ -83,7 +83,27 @@ public static class TestTraceLog
     // through its own instances (FaultRecordBudget), never through this one.
     private static readonly FaultRecordBudget FaultBudget = new(FaultRecordsPerWindow, FaultWindow);
 
-    private const int MaxExceptionChars = 2500;
+    // 🚨 A record is truncated from the MIDDLE, never from the end — and the reason is a
+    // defect this cap actually caused, not a style preference.
+    //
+    // A .NET stack is printed deepest-frame-first: the framework/library internals where the
+    // throw happened come FIRST, and OUR frames — the ones that say which of our call sites
+    // reached it — come LAST. A head-only cut therefore keeps the least identifying part and
+    // discards the most identifying part, EVERY time, and it does so silently. That is a
+    // diagnostic that cannot fail: it always produces a plausible-looking record.
+    //
+    // Issue #890 is the worked example. A compile abort's stack is ~2500 chars of
+    // Microsoft.Cci/Roslyn emit frames before the first MeshWeaver frame, so every recorded
+    // occurrence was cut at exactly the boundary where the answer started — and the resulting
+    // "no MeshWeaver frame present" was read as EVIDENCE (that the fault had no caller of
+    // ours) rather than as the artifact of the cap that it was. That false premise shaped the
+    // issue's diagnosis for days.
+    //
+    // So: keep the head (the throw site) AND the tail (our call site), elide the middle, and
+    // say in the record how much went. The cap still bounds the artifact — the tail half is
+    // the larger one because that is the half that was being lost.
+    private const int MaxExceptionHeadChars = 3000;
+    private const int MaxExceptionTailChars = 5000;
 
     /// <summary>
     /// Appends one fault record — level, category, message and the exception's full
@@ -147,9 +167,7 @@ public static class TestTraceLog
             return;
         }
 
-        var detail = exception.ToString();
-        if (detail.Length > MaxExceptionChars)
-            detail = detail[..MaxExceptionChars] + "… (truncated)";
+        var detail = Elide(exception.ToString());
 
         // pid on the header line for the same reason the phase trace carries it: every
         // test project in a shard appends to this one file, and a core dump is named
@@ -163,5 +181,27 @@ public static class TestTraceLog
         // N" line stranded from the record that resumed reintroduces exactly the ambiguity this
         // whole change exists to remove.
         Append(notice is null ? record : notice + Environment.NewLine + record);
+    }
+
+    /// <summary>
+    /// Bounds one exception's <c>ToString()</c> by removing the MIDDLE, keeping both the
+    /// deepest frames (where it threw) and the outermost frames (which of OUR call sites
+    /// reached it). See <see cref="MaxExceptionHeadChars"/> for why the end is never the part
+    /// that goes.
+    /// <para>The elision announces itself with the exact number of characters removed, so a
+    /// reader can tell a complete stack from a shortened one — and can tell that the frames
+    /// they are looking at are the real head and the real tail, not a prefix.</para>
+    /// </summary>
+    /// <param name="detail">The exception's full <c>ToString()</c>.</param>
+    /// <returns>The detail unchanged when it fits, otherwise head + notice + tail.</returns>
+    public static string Elide(string detail)
+    {
+        if (detail.Length <= MaxExceptionHeadChars + MaxExceptionTailChars)
+            return detail;
+
+        var elided = detail.Length - MaxExceptionHeadChars - MaxExceptionTailChars;
+        return detail[..MaxExceptionHeadChars]
+            + $"{Environment.NewLine}… ({elided} chars elided from the MIDDLE — head and tail frames both kept){Environment.NewLine}"
+            + detail[^MaxExceptionTailChars..];
     }
 }

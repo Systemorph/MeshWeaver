@@ -208,4 +208,43 @@ public class CompileFailureReportedOnceTest : IDisposable
             .Equal([LogLevel.Warning], "the lost-write self-heal is the emit path's ONLY log — "
                                        + "it is invisible to the funnel, so it must report itself");
     }
+
+    /// <summary>
+    /// The emit canary (issue #890) must ANSWER, not throw. It runs only when Roslyn's
+    /// <c>Emit</c> has already thrown, so a diagnostic that faults there would replace the
+    /// original exception and destroy the evidence it exists to preserve.
+    /// </summary>
+    [Fact]
+    public void The_emit_canary_reports_healthy_shared_state_on_a_healthy_process()
+    {
+        var verdict = MeshNodeCompilationService.ProbeSharedEmitState(ValidCompilation("Demo_Canary"));
+
+        verdict.Should().StartWith("canary=OK",
+            "nothing has poisoned this process, so a trivial nested-generic emit against the "
+            + "same reference set must still succeed — that is the branch that tells triage the "
+            + "fault is specific to the failing compilation's own inputs");
+    }
+
+    /// <summary>
+    /// …and it must still answer when the reference set it is handed is unusable — the case
+    /// where the canary's verdict is the WHOLE point. An empty reference set cannot bind
+    /// <c>object</c>, so this stands in for a poisoned shared reference set without needing to
+    /// corrupt the real one.
+    /// </summary>
+    [Fact]
+    public void The_emit_canary_answers_instead_of_throwing_when_the_reference_set_is_unusable()
+    {
+        var unusable = CSharpCompilation.Create(
+            "Demo_CanaryNoRefs",
+            syntaxTrees: [CSharpSyntaxTree.ParseText("public class X { }")],
+            references: [],
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var verdict = MeshNodeCompilationService.ProbeSharedEmitState(unusable);
+
+        verdict.Should().NotBeNullOrWhiteSpace();
+        verdict.Should().NotStartWith("canary=OK",
+            "a reference set that cannot bind a trivial compilation is exactly the "
+            + "process-wide-breakage branch, and the canary must say so rather than throw");
+    }
 }
