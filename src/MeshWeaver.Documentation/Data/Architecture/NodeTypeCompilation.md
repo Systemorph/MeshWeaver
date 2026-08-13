@@ -541,6 +541,23 @@ a **breaking change to code the compiler cannot see**. Before deleting one:
 2. Search the **live mesh** (`search_chunks`) — catches nodes that drifted from the repo.
 3. Port or delete the callers in the same change, then sweep.
 
+**ADDING a symbol has the same hazard, in reverse.** In-mesh source that references a brand-new
+framework helper compiles only once the image carrying it has actually shipped — and node content
+reaches a portal by a completely different route from the image (a GitSync/plugin sync, or an MCP
+edit, either of which can land first). Merging both halves in one PR does **not** make them arrive
+together.
+
+That is not hypothetical: #1386 moved a copy-pasted Article extractor into compiled framework code
+as `MarkdownBody.Of`, and the in-mesh callers referencing it went out before the image did.
+`ACME/Article`, `Cornerstone/Article` and `Northwind/Article` sat at `CS0103: The name
+'MarkdownBody' does not exist in the current context` on memex-cloud until the portal self-updated
+to the image that contained it, at which point all three returned to `Ok` on their own.
+
+So when a framework change and its in-mesh callers ship together, **the framework half must land
+first**, and the content half is only safe once the target portal reports the image that carries
+it. The failure is invisible to CI in exactly the same way a deletion is, and it reads identically
+to a content defect.
+
 ### The pre-prod sweep
 
 `Search('nodeType:NodeType')` → `LspDiagnosticsForNode('@{path}')` per type (reads the *cached*
@@ -567,5 +584,6 @@ protocol lives in the `/code` skill.
 | Understand why it recompiled | `HasUsableBuild` failed rule 2 (assembly gone) or rule 3 (framework changed) |
 | Understand a "Compile leg '…' did not complete within Ns" error | That stage stopped answering — see [Every stage is bounded](#every-stage-is-bounded--a-compile-can-never-park-at-compiling) |
 | Delete or rename a public framework API | Grep `content` + `samples/*/Data` **and** search the live mesh for callers first — CI never compiles in-mesh source |
+| Add a framework API that in-mesh source will call | Ship the framework half FIRST; the content half is safe only once the portal reports the image carrying it (#1386) |
 | Check the mesh is shippable | `Search('nodeType:NodeType')` → `LspDiagnosticsForNode` per type → every one reads `Ok` |
 | Understand why one bad NodeType took the portal down | `CompileError` → dependents `UpstreamFailed` → readiness refused → 60 s hub-activation faults |

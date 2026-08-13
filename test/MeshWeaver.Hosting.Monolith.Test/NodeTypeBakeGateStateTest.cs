@@ -620,7 +620,8 @@ public class NodeTypeBakeGateStateTest
         DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
         {
             Sources = ["namespace:Source scope:subtree"],
-            CurrentSourceVersions = new Dictionary<string, long>()
+            CurrentSourceVersions = new Dictionary<string, long>(),
+            LastCompileSucceededAt = DateTimeOffset.UtcNow.AddHours(-1)
         }).Should().Be(PreWarmStatus.NoSources);
 
     /// <summary>
@@ -662,8 +663,53 @@ public class NodeTypeBakeGateStateTest
     public void ClassifyCompileFailure_DefaultQueriesWithEmptySnapshot_IsNoSources() =>
         DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
         {
-            CurrentSourceVersions = new Dictionary<string, long>()
+            CurrentSourceVersions = new Dictionary<string, long>(),
+            LastCompileSucceededAt = DateTimeOffset.UtcNow.AddHours(-1)
         }).Should().Be(PreWarmStatus.NoSources);
+
+    /// <summary>
+    /// 🚨 THE SECOND WITNESS, and the boundary that keeps the gate intact. An empty snapshot alone
+    /// is NOT enough: the sources must have been LOST, not merely absent.
+    ///
+    /// <para>This type never built — no <c>LastCompileSucceededAt</c> — so nothing was deleted; its
+    /// own <c>Configuration</c> is simply broken. That is a genuine defect and must gate. It is the
+    /// shape <c>DynamicTypePreWarmerTest</c>'s broken fixtures use
+    /// (<c>Configuration = "config =&gt; this is not valid C# at all (("</c>, no sources), and
+    /// classifying it as content is what downgraded its dependents' cascade from the gating
+    /// <see cref="PreWarmStatus.UpstreamFailed"/> to the non-gating
+    /// <see cref="PreWarmStatus.UpstreamContentBroken"/> — caught by those tests, not by this
+    /// file.</para>
+    /// </summary>
+    [Fact]
+    public void ClassifyCompileFailure_EmptySnapshotButNeverBuilt_StaysCompileError() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            CurrentSourceVersions = new Dictionary<string, long>()
+        }).Should().Be(PreWarmStatus.CompileError);
+
+    /// <summary>
+    /// …and the same boundary end-to-end: a never-built, source-less, broken type must still refuse
+    /// readiness. The direct twin of <c>DeletedDefaultQueryType_DoesNotGateReadiness</c> — the two
+    /// differ ONLY in whether the type ever produced a build.
+    /// </summary>
+    [Fact]
+    public void NeverBuiltSourcelessBrokenType_StillGatesReadiness()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome(
+            "PreWarmTest/BrokenType",
+            DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+            {
+                CurrentSourceVersions = new Dictionary<string, long>()
+            }),
+            "this is not valid C# at all")
+        { WasHealthyBeforeBake = true });
+        state.MarkComplete("done");
+
+        state.Regressions.Keys.Should().Equal("PreWarmTest/BrokenType");
+        state.Phase.Should().Be(BakePhase.Regressed);
+    }
 
     /// <summary>
     /// 🚨 THE REGRESSION GUARD. The fix above must never widen into "compile errors stop gating".
@@ -676,7 +722,10 @@ public class NodeTypeBakeGateStateTest
     public void ClassifyCompileFailure_DefaultQueriesWithSourcesStillPresent_StaysCompileError() =>
         DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
         {
-            CurrentSourceVersions = new Dictionary<string, long> { ["P/Source/A"] = 42 }
+            CurrentSourceVersions = new Dictionary<string, long> { ["P/Source/A"] = 42 },
+            // Even with BOTH the "it once built" witness and a previous success, live sources
+            // outrank them: the code is there and Roslyn rejected it.
+            LastCompileSucceededAt = DateTimeOffset.UtcNow.AddHours(-1)
         }).Should().Be(PreWarmStatus.CompileError);
 
     /// <summary>
@@ -702,7 +751,11 @@ public class NodeTypeBakeGateStateTest
             "Edu/Course",
             DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
             {
-                CurrentSourceVersions = new Dictionary<string, long>()
+                CurrentSourceVersions = new Dictionary<string, long>(),
+                // The real Edu/Course carries lastCompileSucceededAt = 2026-08-12T11:58:39 —
+                // it DID build, before the 2026-07-11 GitSync removed its Source subtree.
+                LastCompileSucceededAt = DateTimeOffset.Parse(
+                    "2026-08-12T11:58:39+00:00", System.Globalization.CultureInfo.InvariantCulture)
             }),
             "0 source nodes matched")
         { WasHealthyBeforeBake = true });
