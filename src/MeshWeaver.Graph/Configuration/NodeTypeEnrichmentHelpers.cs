@@ -1567,12 +1567,17 @@ internal static class NodeTypeEnrichmentHelpers
         IMessageHub instanceHub,
         string nodeType,
         string boundAssemblyPath,
-        ILogger? logger)
+        ILogger? logger,
+        IScheduler? scheduler = null)
         => typeStream
             .Where(t => t?.Content is NodeTypeDefinition d
                 && NodeTypeCompilationHelpers.HasUsableBuild(t, d)
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
                 && !string.Equals(d.LatestAssemblyPath, boundAssemblyPath, StringComparison.Ordinal))
+            // 🚨 Wait for the type to stop publishing — see AssemblySettleWindow. An install
+            // publishes twice (type, then its Source/) while instances are being read, and
+            // recycling on each one disposes hubs mid-read.
+            .Throttle(AssemblySettleWindow, scheduler ?? Scheduler.Default)
             .Take(1)
             .Subscribe(
                 t =>
@@ -1731,6 +1736,22 @@ internal static class NodeTypeEnrichmentHelpers
     /// instance cannot spin, short enough that a deploy heals itself well inside a support call.
     /// </summary>
     private static readonly TimeSpan SelfHealGrace = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// How long a NodeType must stop publishing before <see cref="ArmStaleAssemblySelfHeal"/> acts.
+    ///
+    /// <para>🚨 An INSTALL publishes more than once: the type node lands, compiles, and then its
+    /// <c>Source/</c> lands and it compiles AGAIN, seconds apart — while its instances are being
+    /// activated and read. Recycling on each publication put a <c>DisposeRequest</c> through hubs
+    /// mid-read and broke <c>NodeRepoInstanceOrderingTest</c> 6 runs in 8 (measured; 8/8 green with
+    /// the watcher disabled). Waiting for quiet collapses a burst into ONE recycle, after the burst
+    /// — which is also what the watcher meant all along: "a NEW build superseded mine", not "the
+    /// type is still settling".</para>
+    ///
+    /// <para>A real deploy publishes once and goes quiet, so it heals one window later — the deploy
+    /// case this whole watcher exists for is unaffected in substance.</para>
+    /// </summary>
+    private static readonly TimeSpan AssemblySettleWindow = TimeSpan.FromSeconds(10);
 
     /// <param name="activityPath">
     /// The NodeType's <see cref="NodeTypeDefinition.LastCompilationActivityPath"/>, when
