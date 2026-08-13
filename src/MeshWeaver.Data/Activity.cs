@@ -93,7 +93,7 @@ public class Activity : ILogger, IDisposable
     /// <param name="logLevel">Severity of the message.</param>
     /// <param name="scopes">Optional structured scopes attached to the message.</param>
     public void LogMessage(string message, LogLevel logLevel, IReadOnlyCollection<KeyValuePair<string, object>>? scopes = null)
-        => MutateLog(log => log with { Messages = log.Messages.Add(new LogMessage(message, logLevel) { Scopes = scopes }) });
+        => MutateLog(log => log.Append(new LogMessage(message, logLevel) { Scopes = scopes }));
 
     /// <summary>
     /// Reactive snapshot of the current <see cref="ActivityLog"/>, read on the activity hub's
@@ -126,7 +126,7 @@ public class Activity : ILogger, IDisposable
     /// <param name="exception">Optional exception associated with the entry.</param>
     /// <param name="formatter">Function that renders <paramref name="state"/> and <paramref name="exception"/> to text.</param>
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        => MutateLog(log => log with { Messages = log.Messages.Add(new LogMessage(formatter.Invoke(state, exception), logLevel)) });
+        => MutateLog(log => log.Append(new LogMessage(formatter.Invoke(state, exception), logLevel)));
 
     /// <summary>Returns whether the given log level is enabled on the underlying logger.</summary>
     /// <param name="logLevel">Level to test.</param>

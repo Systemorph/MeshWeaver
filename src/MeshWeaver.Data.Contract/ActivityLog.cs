@@ -25,6 +25,25 @@ public record ActivityLog(string Category)
     public string Id { get; init; } = Guid.NewGuid().AsString();
     /// <summary>The log messages accumulated by this activity, in order.</summary>
     public ImmutableList<LogMessage> Messages { get; init; } = ImmutableList<LogMessage>.Empty;
+
+    /// <summary>
+    /// How many messages this activity has appended in total — <see cref="Messages"/> plus anything
+    /// no longer held there. Maintained incrementally by <see cref="Append(IReadOnlyList{LogMessage})"/>.
+    /// <para>🚨 Read it through <see cref="TotalMessageCount"/>, never directly: a log persisted before
+    /// this field existed carries 0 while <see cref="Messages"/> is non-empty.</para>
+    /// </summary>
+    public int MessageCount { get; init; }
+
+    /// <summary>
+    /// The highest <see cref="LogLevel"/> ever appended to this activity — an incremental roll-up so the
+    /// terminal status is a <b>counter</b>, not a scan of the message list.
+    /// <para>🚨 <see cref="LogLevel.None"/> is never rolled up (it is numerically the largest level but
+    /// means "no logging", not "worse than Critical"). The default is <see cref="LogLevel.Trace"/>, which
+    /// is the identity element for the max — so a log persisted before this field existed rolls up to
+    /// exactly what a scan of its <see cref="Messages"/> yields.</para>
+    /// </summary>
+    public LogLevel MaxSeverity { get; init; } = LogLevel.Trace;
+
     /// <summary>The current status of the activity.</summary>
     public ActivityStatus Status { get; init; }
 
@@ -71,15 +90,51 @@ public record ActivityLog(string Category)
     public string? PrimaryNodePath => HubPath;
 
     /// <summary>
+    /// How many messages this activity has recorded, counting any no longer held in
+    /// <see cref="Messages"/>. Back-compatible with logs persisted before <see cref="MessageCount"/>
+    /// existed (those carry 0, so the in-list count wins).
+    /// </summary>
+    public int TotalMessageCount => Math.Max(MessageCount, Messages.Count);
+
+    /// <summary>
+    /// The ONE way to add messages to an activity log: appends them to <see cref="Messages"/> and rolls
+    /// <see cref="MessageCount"/> and <see cref="MaxSeverity"/> forward in the same step.
+    /// <para>🚨 Never write <c>Messages = Messages.Add(…)</c> directly — the roll-ups are what make the
+    /// terminal status independent of how many messages the list still holds.</para>
+    /// </summary>
+    /// <param name="messages">The messages to append, in order. An empty list is a no-op.</param>
+    /// <returns>The activity log with the messages appended and the roll-ups advanced.</returns>
+    public ActivityLog Append(IReadOnlyList<LogMessage> messages)
+    {
+        if (messages.Count == 0) return this;
+        var severity = MaxSeverity;
+        foreach (var m in messages)
+            if (m.LogLevel > severity && m.LogLevel != LogLevel.None)
+                severity = m.LogLevel;
+        return this with
+        {
+            Messages = Messages.AddRange(messages),
+            MessageCount = TotalMessageCount + messages.Count,
+            MaxSeverity = severity,
+        };
+    }
+
+    /// <summary>
+    /// Convenience overload of <see cref="Append(IReadOnlyList{LogMessage})"/> for a single message.
+    /// </summary>
+    /// <param name="message">The message to append.</param>
+    /// <returns>The activity log with the message appended and the roll-ups advanced.</returns>
+    public ActivityLog Append(LogMessage message) => Append([message]);
+
+    /// <summary>
     /// Returns a copy of this activity marked <see cref="ActivityStatus.Failed"/> with the
     /// given error appended as an error message and <see cref="End"/> set to now.
     /// </summary>
     /// <param name="error">The error message to record.</param>
     /// <returns>The failed activity log.</returns>
     public ActivityLog Fail(string error) =>
-        this with
+        Append(new LogMessage(error, LogLevel.Error)) with
         {
-            Messages = Messages.Add(new LogMessage(error, LogLevel.Error)),
             Status = ActivityStatus.Failed,
             End = DateTime.UtcNow,
         };
@@ -101,6 +156,15 @@ public record ActivityLog(string Category)
             Version = version
         };
 
+    /// <summary>
+    /// The status implied by what has been logged: the worse of the sub-activities' statuses and the
+    /// severity roll-up.
+    /// <para>🚨 Derived from <see cref="MaxSeverity"/> — a counter — <b>not</b> from a scan of
+    /// <see cref="Messages"/>, so it stays correct (and O(1)) when the list is a bounded window rather
+    /// than the whole transcript. The list is still folded in so a log written before
+    /// <see cref="MaxSeverity"/> existed, or one mutated outside <see cref="Append(IReadOnlyList{LogMessage})"/>,
+    /// yields exactly the pre-roll-up answer.</para>
+    /// </summary>
     private ActivityStatus GetFinalStatus()
     {
         var subActivityStatus = SubActivities
@@ -108,11 +172,25 @@ public record ActivityLog(string Category)
             .DefaultIfEmpty(ActivityStatus.Succeeded)
             .Max();
 
-        var maxLevel = Messages.Select(m => m.LogLevel).DefaultIfEmpty(LogLevel.Information).Max();
+        // The roll-up joins the fold as one more element. Its default (Trace) and the old
+        // empty-list default (Information) both land in the `_ => Succeeded` arm below, so seeding
+        // with the roll-up instead of Information cannot change the answer for a log that never
+        // recorded a Warning or worse.
+        // 🚨 LogLevel.None is excluded from BOTH sides of the fold. It is numerically above Critical
+        // but means "no logging", so a single None entry used to become the list's Max and drop the
+        // whole activity into the `_ => Succeeded` arm — swallowing a real Error logged beside it.
+        // Beyond being wrong, agreement here is what makes the message window safe: the status must
+        // come out the same whether a message is still in Messages or has been flushed into
+        // MaxSeverity, and only one of those two paths can see a None entry.
+        var maxLevel = Messages.Select(m => m.LogLevel)
+            .Append(MaxSeverity)
+            .Where(l => l != LogLevel.None)
+            .DefaultIfEmpty(LogLevel.Information)
+            .Max();
         var mapToStatus = maxLevel switch
         {
             LogLevel.Critical or LogLevel.Error => ActivityStatus.Failed,
-            LogLevel.Warning => ActivityStatus.Warning, 
+            LogLevel.Warning => ActivityStatus.Warning,
             _ => ActivityStatus.Succeeded
         };
 
@@ -122,10 +200,15 @@ public record ActivityLog(string Category)
     }
 
     /// <summary>
-    /// Returns true if this activity's own messages contain at least one error.
+    /// Returns true if this activity has recorded at least one error (or critical) message.
+    /// Answered from the <see cref="MaxSeverity"/> roll-up so it does not depend on how much of the
+    /// transcript <see cref="Messages"/> still holds; the list is folded in for logs written before
+    /// the roll-up existed.
     /// </summary>
     /// <returns>True if an error message is present; otherwise false.</returns>
-    public bool HasErrors() => Messages.Any(m => m.LogLevel == LogLevel.Error);
+    public bool HasErrors() =>
+        MaxSeverity is LogLevel.Error or LogLevel.Critical
+        || Messages.Any(m => m.LogLevel == LogLevel.Error);
 
     /// <summary>
     /// This log plus, recursively, every <see cref="SubActivities"/> entry — flattened so a
