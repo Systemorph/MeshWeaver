@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -27,9 +26,10 @@ namespace MeshWeaver.ContentCollections.Indexing.PostgreSql;
 /// There is NO <c>Observable.FromAsync</c> anywhere (forbidden — see ControlledIoPooling.md).</para>
 ///
 /// <para>Provisioning is a promise-cache keyed by SCHEMA: an instance
-/// <see cref="ConcurrentDictionary{TKey,TValue}"/> (never static) holds one eager
+/// <see cref="PromiseCache{TKey,TValue}"/> (never static) holds one eager
 /// <see cref="IoPoolExtensions.Run"/> observable per partition schema, so the CREATE SCHEMA + CREATE
-/// EXTENSION + CREATE TABLE DDL runs at most once per schema, replayed to every later subscriber.</para>
+/// EXTENSION + CREATE TABLE DDL runs at most once per schema, replayed to every later subscriber —
+/// and a FAULTED attempt is evicted rather than replayed forever.</para>
 /// </summary>
 public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorStore, IDisposable
 {
@@ -42,8 +42,13 @@ public sealed class PostgreSqlChunkedContentVectorStore : IChunkedContentVectorS
     /// (never static) so its lifetime is this store's. <see cref="IoPoolExtensions.Run"/> is eager +
     /// <see cref="System.Reactive.Subjects.ReplaySubject{T}"/>-backed: the first subscriber kicks the
     /// DDL off on the pool, every later subscriber replays the cached completion.
+    ///
+    /// <para>🚨 <see cref="PromiseCache{TKey,TValue}"/>, not a bare dictionary: a ReplaySubject
+    /// latches <c>OnError</c> too, so a plain dictionary would replay ONE transient DDL failure to
+    /// every later caller for the life of the process — content indexing for that schema would
+    /// never recover short of a restart (#1369). The cache evicts a faulted entry.</para>
     /// </summary>
-    private readonly ConcurrentDictionary<string, IObservable<Unit>> _provisioned = new(StringComparer.Ordinal);
+    private readonly PromiseCache<string, Unit> _provisioned = new(StringComparer.Ordinal);
 
     /// <param name="meshConnectionString">
     /// Connection string for the MESH database (the same Postgres the mesh storage uses). The content

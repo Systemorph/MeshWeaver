@@ -163,13 +163,44 @@ Every decision about *what the page looks like* happens in a composer that is pu
 
 The browser tests (`HeadlessChromiumRenderTests`, `RendererOutputTests`, `PdfHeaderLogoTests`, `DeckPixelExportScriptRelayTest`) ask the renderer's own probe and then assert **whichever contract applies to the machine**: with a browser, a real PDF — cover, contents and body on separate pages, the running header on every page but the cover, `N / M` in the footer; without one, a loud, actionable refusal. They are never skipped, and a missing browser can neither hide a regression nor redden a build. CI provisions the same browser build the image ships, as an explicit infrastructure step, so a shard cannot pass by taking the "no browser" branch.
 
-### 🚧 The one thing that did not survive: page numbers in the contents list
+## Page numbers in the contents list: measure the print, then print the measurement
 
-The document model could print `Chapter 3 ......... 12`. **The browser cannot**, and the contents list therefore carries clickable links but no page numbers.
+The contents list prints `Chapter 3 …… 12` again. **CSS still cannot produce that number**, so it is not produced in CSS: it is read out of a printed PDF and put into a second print, which is then read back and checked before it is released. `#1230` shipped without the column and `#1309` restored it this way.
 
-The reason is specific: reading a target's page from CSS needs `target-counter()` from CSS Generated Content for Paged Media, and Chromium implements no part of it — verified directly against the browser this image ships, alongside the features that *do* work (`@page` margin boxes, named pages, `counter(page)` / `counter(pages)`), which is what the rest of the furniture is built on.
+### Why nothing in the page can answer the question
 
-The alternative is a two-pass print: print once, read back from the PDF's link annotations which page each anchor landed on, inject the numbers and print again. It was rejected deliberately — it doubles the cost of every export with a contents list, and its failure mode is *silently wrong page numbers* when the inserted digits reflow the list. An honestly absent column beats a confidently wrong one, and in a PDF the clickable entry is the affordance a reader actually uses.
+Reading a target's page from CSS needs `target-counter()` from CSS Generated Content for Paged Media, and Chromium implements **no part of it** — verified directly against the browser this image ships, alongside the features that *do* work (`@page` margin boxes, named pages, `counter(page)` / `counter(pages)`), which is what the rest of the furniture is built on.
+
+Measuring in the page with script cannot be made right either, and it is worth being precise about why, because it is the approach that looks easiest. A heading's `offsetTop` divided by a content height is arithmetic over the *viewport*, and the print box is not the viewport: `break-after: avoid` moves a heading that would be stranded, `orphans`/`widows` move the line before it, a repeated `<thead>` and an unbreakable figure both consume height that no per-page constant accounts for. The result is a number that is plausible, occasionally off by one, and impossible to distinguish from a correct one by looking at it. (It would also need `script-src` in a print document whose CSP is deliberately `default-src 'none'`.)
+
+### What the PDF already knows
+
+Every contents entry is a **link annotation**, and its `GoTo` destination names the page Chromium itself put that heading on. That is not a model of the pagination — it *is* the pagination, recorded by the engine that performed it. `TocPageNumbers` reads it back with PdfPig, which the platform already carries for content indexing, so no dependency is added and the licence gate is untouched.
+
+Entries are matched to annotations positionally, and each assumption that rests on is checked rather than trusted:
+
+| Assumption | Why it holds | Checked by |
+|---|---|---|
+| One annotation per entry | An entry is a block-level (flex) `<a>`, so a title that wraps still emits one rect — an *inline* link would emit one per line and slide every later number by one | The composer test pinning the entry's structure |
+| Entries are the first internal links | The contents list is the only thing between the cover and the body; ordinary body links are `URI` actions and carry no destination page | Count must come out exactly, else refuse |
+| Annotations are in reading order | A contents list is a plain vertical stack of blocks; they are read top-down, then left-to-right | Destinations must be non-decreasing, else refuse |
+| The list precedes what it points at | `.mw-toc { break-after: page }` | Every destination must be after the last page carrying an entry, else refuse |
+
+Reading stops at the page that completes the count — usually page two — so a 500-page export parses three pages, not five hundred.
+
+### Why the second print still matches the first
+
+The number column is emitted on **both** prints and its width is a **constant** (`flex: 0 0 40pt`, the same 40pt column the document model drew). Digits cannot reflow a box whose width does not depend on them, so the measuring print and the published print are the same layout by construction — no rewrapped title, no extra line, nothing after the list moved. Sizing the column to its content (`min-width`, `fit-content`, a width derived from the page count) is precisely how a naive two-pass ends up printing numbers that are quietly wrong.
+
+**And that argument is not trusted either.** `PdfDocumentRenderer` re-reads the *published* PDF and releases it only if every destination still equals the number printed beside it. A mismatch — or a refusal at any earlier step — falls back to the numberless contents list, logs the reason and the two readings, and publishes that instead. "By construction" is exactly the reasoning that produces silently wrong page numbers; a contents list that lies about a page is worse than one that is silent about it.
+
+### What it costs
+
+Two browser invocations instead of one, and only for a document that has a contents list — the read-back is a few pages of PDF parsing and runs on the same `Process` pool as the browser, so a burst of exports bounds its parsing as well as its browsers. Documents without a contents list are printed exactly once, as before.
+
+### How it is verified
+
+The composer contract (column reserved on both prints, constant width, digits the only difference between the two documents, a mismatched list ignored outright) is pinned by `DocumentPrintComposerTests` with no browser installed. The number itself is checked end-to-end in `RendererOutputTests` against an **independent oracle**: the test finds the page whose *glyphs* carry each section's heading and requires that the number the contents list PRINTS, the page the heading is DRAWN on, and the page the link JUMPS to all agree — over a document whose sections deliberately span page boundaries, including the first and last entries. An error in the annotation reading therefore cannot also produce the expectation.
 
 ## See also
 

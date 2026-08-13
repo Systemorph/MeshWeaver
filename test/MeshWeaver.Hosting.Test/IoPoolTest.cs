@@ -334,6 +334,84 @@ public class IoPoolTest
         pool.CurrentInFlight.Should().Be(0);
     }
 
+    /// <summary>
+    /// 🚨 A leg the DRAIN cancels must still TERMINATE — issues #1172 / #1284.
+    ///
+    /// <para>A cancelled subscribe is expected teardown, so it is right not to surface it as a
+    /// fault. It is NOT right to surface nothing at all. Previously the
+    /// <see cref="OperationCanceledException"/> from the gate wait was swallowed outright, and the
+    /// drain's own registration merely DISPOSES the inner subscription — disposal emits nothing. So
+    /// the observable returned by <see cref="IIoPool.SubscribeThroughPool{T}"/> terminated neither
+    /// completed nor errored, and every <c>.Finally(...)</c> hanging off it never ran.</para>
+    ///
+    /// <para>That bookkeeping is not cosmetic: it is what releases a route's in-flight slot
+    /// (<c>RoutingGrain.Dispatch</c>) and what advances the per-destination FIFO
+    /// (<c>OrderedRouteDispatcher.DrainNext</c>). A leg cancelled by the drain therefore leaked its
+    /// slot and stranded its destination's queue for good — a silent non-termination, the one
+    /// failure mode this codebase never accepts.</para>
+    ///
+    /// <para>Deterministic: cap 1, leg A blocks INSIDE its subscribe holding the only permit, so
+    /// leg B is parked on the gate when the drain cancels it. No sleeps — every wait is a condition
+    /// wait.</para>
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task Drain_terminates_a_SubscribeThroughPool_leg_it_cancels()
+    {
+        using var pool = new IoPool(1);
+        var legAEntered = new ManualResetEventSlim();
+        var releaseLegA = new ManualResetEventSlim();
+        // Whether leg A was RELEASED rather than timing out. If the wait ever timed out, leg A would
+        // free the permit on its own and the "leg B is parked on the gate" premise would be false —
+        // the test could then pass for the wrong reason. Asserted on the test thread below.
+        var legAReleasedCleanly = 0;
+
+        var legA = Observable.Create<int>(obs =>
+        {
+            legAEntered.Set();
+            if (releaseLegA.Wait(Timeout10)) Interlocked.Exchange(ref legAReleasedCleanly, 1);
+            obs.OnNext(1);
+            return System.Reactive.Disposables.Disposable.Empty;
+        });
+
+        using var subA = pool.SubscribeThroughPool(legA).Subscribe(_ => { });
+        Assert.True(legAEntered.Wait(Timeout5), "leg A must be inside its subscribe, holding the only permit");
+
+        // Leg B can never acquire the permit — it is parked on the gate when the drain cancels.
+        var legBTerminated = new ManualResetEventSlim();
+        // Written from the pool's subscribe thread, read from the test thread — Interlocked/Volatile,
+        // not a plain bool: a stale read of `false` is the PASSING value here, so an unsynchronised
+        // field could hide a real regression (leg B being subscribed despite the drain).
+        var legBSubscribed = 0;
+        using var subB = pool
+            .SubscribeThroughPool(Observable.Create<int>(obs =>
+            {
+                Interlocked.Exchange(ref legBSubscribed, 1);
+                obs.OnNext(2);
+                return System.Reactive.Disposables.Disposable.Empty;
+            }))
+            .Finally(legBTerminated.Set)
+            .Subscribe(_ => { }, _ => { });
+
+        Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 1, Timeout5),
+            "exactly leg A holds the permit; leg B must still be waiting on the gate");
+
+        var drainDone = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
+        releaseLegA.Set();
+        await drainDone.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
+
+        Volatile.Read(ref legAReleasedCleanly).Should().Be(1,
+            "leg A must have been RELEASED, not timed out — a timed-out wait would free the permit on "
+            + "its own and leg B would no longer be parked on the gate, so the test would prove nothing");
+        Volatile.Read(ref legBSubscribed).Should().Be(0,
+            "the drain cancels before the permit is granted, so leg B's source must never be subscribed");
+
+        // 🚨 THE REGRESSION GUARD. Before the fix this never fired and the test hung to its timeout.
+        Assert.True(legBTerminated.Wait(Timeout5),
+            "a leg the drain cancels MUST terminate (OnCompleted) so its .Finally runs — that callback "
+            + "is what releases RoutingGrain's in-flight route slot and advances OrderedRouteDispatcher's "
+            + "per-destination FIFO; swallowing the cancellation silently leaked both");
+    }
+
     [Fact]
     public void Unbounded_fallback_runs_the_leaf_on_the_threadpool()
     {
