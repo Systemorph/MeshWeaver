@@ -80,36 +80,44 @@ public static class ActivityLogAppender
         var options = hub.JsonSerializerOptions;
         var stream = workspace.GetMeshNodeStream(activityPath);
 
-        // Defer so the settled-node capture below is per SUBSCRIPTION, not shared by every
-        // subscriber of one cold observable.
-        return Observable.Defer(() =>
-        {
-            MeshNode? settled = null;
-            return stream
-                .Update(node =>
+        // 🚨 stream.Update(...) is invoked EAGERLY, here, and it must stay that way — do NOT wrap
+        // this in Observable.Defer. UpdateRemote captures the caller's AccessContext AT THE .Update()
+        // CALL, not at subscribe (MeshNodeStreamExtensions: `LastModifiedBy = capturedContextAtEntry`),
+        // and every activity producer calls Append inside a scope that has deliberately re-established
+        // the activity's OWNER (ActivityRunner + AccessContextScope.FromNode). Deferring construction
+        // moves the capture to whatever ambient identity happens to be on the subscribing thread — a
+        // pooled hop carrying someone else's context in production, which is precisely the
+        // identity-confusion defect ActivityOwnerCredentialTest exists to pin. It caught this.
+        //
+        // `settled` is therefore per Append CALL rather than per subscription, which is what this
+        // method's contract already implies: an Append is one write, subscribed once. Two subscribers
+        // to the same cold Append would each re-run the write against the same path, and the release
+        // reads only Status — so the shared local is harmless even then.
+        MeshNode? settled = null;
+        return stream
+            .Update(node =>
+            {
+                // ContentAs, never `is ActivityLog`: a cross-hub update lambda diffs against a LOCAL
+                // mirror whose Content can be a degraded JsonElement — a plain type test would be
+                // null, the lambda would no-op, and the patch would never be sent.
+                if (node.ContentAs<ActivityLog>(options, logger) is not { } log) return node;
+                var updated = log.Append(messages);
+                if (mutate is not null) updated = mutate(updated);
+                // Claim AFTER the append + mutate so the decision sees the final window size.
+                return node with { Content = updated.ClaimSeal() };
+            })
+            .SelectMany(updated => FlushClaimedSeal(hub, activityPath, stream, updated, options, logger))
+            // 🚨 onCompleted, NOT onNext. Releasing tears the path's upstream sync streams down, and
+            // this write is still in flight when its value is emitted — cutting the stream out from
+            // under it would strand the write's own terminal and leave the per-path queue to advance
+            // on its 5 s backstop instead. After completion there is nothing left to strand, and for
+            // a terminal activity there is no next write by definition.
+            .Do(node => settled = node,
+                () =>
                 {
-                    // ContentAs, never `is ActivityLog`: a cross-hub update lambda diffs against a LOCAL
-                    // mirror whose Content can be a degraded JsonElement — a plain type test would be
-                    // null, the lambda would no-op, and the patch would never be sent.
-                    if (node.ContentAs<ActivityLog>(options, logger) is not { } log) return node;
-                    var updated = log.Append(messages);
-                    if (mutate is not null) updated = mutate(updated);
-                    // Claim AFTER the append + mutate so the decision sees the final window size.
-                    return node with { Content = updated.ClaimSeal() };
-                })
-                .SelectMany(updated => FlushClaimedSeal(hub, activityPath, stream, updated, options, logger))
-                // 🚨 onCompleted, NOT onNext. Releasing tears the path's upstream sync streams down,
-                // and this write is still in flight when its value is emitted — cutting the stream
-                // out from under it would strand the write's own terminal and leave the per-path
-                // queue to advance on its 5 s backstop instead. After completion there is nothing
-                // left to strand, and for a terminal activity there is no next write by definition.
-                .Do(node => settled = node,
-                    () =>
-                    {
-                        if (settled is not null)
-                            ReleaseMirrorWhenFinal(hub, activityPath, settled, options, logger);
-                    });
-        });
+                    if (settled is not null)
+                        ReleaseMirrorWhenFinal(hub, activityPath, settled, options, logger);
+                });
     }
 
     /// <summary>
