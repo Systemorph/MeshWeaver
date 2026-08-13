@@ -28,6 +28,15 @@ public static class AreaProbe
     private const string RenderFailedMarker = "This area failed to render";
     private const string RenderEmergencyMarker = "cannot be rendered";
 
+    // 🚨 The gate probes a node whose type may still be COMPILING — an install is the most likely
+    // moment for that. Such an instance serves the compile-progress page on every area
+    // (NodeTypeEnrichmentHelpers.CreateCompilationInProgressConfiguration), so a frame carrying
+    // this marker is TRANSIENT in exactly the way "Area not found" is: keep waiting, the real
+    // Tests area arrives when the build settles. Matched on the frame's well-known Id — which
+    // AreaFrameClassifier exposes as a plain string precisely so a JSON-only consumer like this
+    // one can use the same constant the typed predicates use — never on the localized prose.
+    private static readonly string CompileProgressMarker = AreaFrameClassifier.CompileProgressId;
+
     private static readonly Regex PassSummary = new(
         @"(\d+)\s*/\s*(\d+)\s+passed", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -58,6 +67,11 @@ public static class AreaProbe
                     {
                         lastTransient = FirstLines(notFound);
                         return null;   // keep waiting — registration may still be catching up
+                    }
+                    if (IsCompiling(strings))
+                    {
+                        lastTransient = "the node's NodeType is still compiling";
+                        return null;   // keep waiting — the build settles into the real area
                     }
                     var error = strings.FirstOrDefault(s =>
                         s.Contains(RenderFailedMarker, StringComparison.Ordinal)
@@ -148,6 +162,12 @@ public static class AreaProbe
             return null;
         }
 
+        if (IsCompiling(strings))
+        {
+            onTransient("the node's NodeType is still compiling");
+            return null;
+        }
+
         var renderError = strings.FirstOrDefault(s =>
             s.Contains(RenderFailedMarker, StringComparison.Ordinal)
             || s.Contains(RenderEmergencyMarker, StringComparison.Ordinal));
@@ -216,6 +236,11 @@ public static class AreaProbe
 
     // Every string VALUE in the frame, unescaped — the classification scans real text, not
     // wire-escaped JSON.
+    // The frame carries the compile-progress marker as a control Id, i.e. as a whole JSON string
+    // value — hence the exact comparison rather than a substring sniff.
+    private static bool IsCompiling(IReadOnlyList<string> strings)
+        => strings.Any(s => string.Equals(s, CompileProgressMarker, StringComparison.Ordinal));
+
     private static IReadOnlyList<string> CollectStrings(JsonElement element)
     {
         var strings = new List<string>();

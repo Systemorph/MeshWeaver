@@ -255,11 +255,20 @@ to settle — but only **briefly** in silence. After a short grace
 delivery and settles onto the **compilation-in-progress overlay**
 (`WithCompilationInProgressOverlay`):
 
-- The instance's **Overview renders the type's live progress page**
+- **Every area of the instance renders the type's live progress page**
   (`NodeTypeLayoutAreas.CompileProgressView`): current status, the streaming compile
   activity log, and — when more types are queued (the framework-bump warm-up recompiles
   every dynamic type) — the whole sweep as an "N of M types compiled" progress bar with the
-  type currently compiling and the queued count. On `Ok` it redirects back to the instance.
+  type currently compiling and the queued count. On `Ok` it redirects back to the area the
+  caller asked for, so a deep link survives the wait.
+
+  The overlay registers `Overview` by name plus a **catch-all** guarded by
+  `LayoutDefinition.HasNamedRenderer` — the type's own areas (`KeyMetrics`, …) do not exist on
+  the overlay hub, and covering only `Overview` did not remove the silent park, it relocated it:
+  every other area answered `"**Area not found** — No renderer is registered for area
+  `KeyMetrics`"`, a terminal-looking verdict for a state that resolves itself in seconds
+  (issue #1411). The guard is what keeps the catch-all off areas the default node configuration
+  already owns — two renderers for one area are last-wins-*destructive*.
 - **Typed requests fail fast** with `ErrorType.CompilationInProgress` naming the NodeType
   (`UnhandledMessageNack`), instead of parking until the caller's own 60 s request timeout.
   Area clients handle that NACK by swapping to the type's `Progress` area
