@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -31,6 +32,21 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
     // under System (Permission.All) — same rule as compile (#2) / user-activity (#3).
     private readonly AccessService? _accessService = hub.ServiceProvider.GetService<AccessService>();
     private ImmutableList<LogMessage> _messages = ImmutableList<LogMessage>.Empty;
+    // Incremental severity roll-up, so the published log's terminal status never depends on how much
+    // of the transcript the head window still holds.
+    private LogLevel _maxSeverity = LogLevel.Trace;
+
+    // 🚨 Window state — read and written ONLY under _publishLock, alongside the publish itself.
+    // This logger is the SINGLE writer of its activity node (it re-asserts whole content on every
+    // flush rather than patching), so it seals its own overflow directly and needs none of
+    // ActivityLogAppender's claim protocol: there is no second appender to race.
+    //
+    // _sealedCount / _sealedSegments advance ONLY in the segment write's success callback. Until
+    // then the messages stay in the published window, so a failed segment write costs a bigger
+    // window and a retry on the next flush — never a lost line, and never a watchdog.
+    private int _sealedCount;
+    private int _sealedSegments;
+    private bool _sealInFlight;
 
     // 🚨 Terminal-settle state — guarded by _publishLock, together with every
     // publish. Once Complete has stored a terminal status here, EVERY subsequent
@@ -108,6 +124,7 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
         lock (_lock)
         {
             _messages = _messages.Add(entry);
+            if (logLevel > _maxSeverity && logLevel != LogLevel.None) _maxSeverity = logLevel;
         }
 
         // Best-effort push, throttled. Failures never surface into the script —
@@ -199,17 +216,28 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
     private void PublishSnapshotLocked()
     {
         ImmutableList<LogMessage> snapshot;
-        lock (_lock) { snapshot = _messages; }
+        LogLevel maxSeverity;
+        lock (_lock) { snapshot = _messages; maxSeverity = _maxSeverity; }
 
         try
         {
+            // 🚨 Seal the overflow BEFORE building the payload. Without this, every 100 ms flush
+            // re-posts the WHOLE transcript — so a script logging N lines serialises O(N²) bytes onto
+            // one node, the shape that burned ~719 MB on a single memex-cloud activity. The window
+            // makes each flush O(1); the sealed lines stay durable in _Log segment satellites.
+            SealOverflowLocked(snapshot);
+            var window = snapshot.GetRange(_sealedCount, snapshot.Count - _sealedCount);
+
             // We don't round-trip the MeshNode through a query — we just post a
             // fresh ActivityLog content payload. The node hub's DataChangeRequest
             // handler merges it (the Content field is a POCO, so Updates([node])
             // replaces Content wholesale — fine for append-only Messages).
             var log = new ActivityLog("ScriptExecution")
             {
-                Messages = snapshot,
+                Messages = window,
+                MessageCount = snapshot.Count,
+                MaxSeverity = maxSeverity,
+                SegmentCount = _sealedSegments,
                 Status = _terminalStatus ?? ActivityStatus.Running,
                 End = _terminalEnd,
                 ReturnValue = _terminalReturnValue
@@ -240,5 +268,71 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
                     o => o.WithTarget(new Address(activityLogPath)));
         }
         catch { /* never let logging break the script */ }
+    }
+
+    /// <summary>
+    /// Moves everything above <see cref="ActivityLog.MessageWindowLimit"/> out of the published window
+    /// and into an <see cref="ActivityLogSegment"/> satellite. MUST be called under
+    /// <see cref="_publishLock"/>, which is also what makes the "one seal at a time" flag sound.
+    ///
+    /// <para>The counters advance in the write's SUCCESS callback, not here — so a failed segment write
+    /// leaves the lines in the window and the next flush retries the same slice with a deterministic
+    /// (re-used) segment index. Nothing is lost, nothing is duplicated, and no timer is involved.</para>
+    /// </summary>
+    private void SealOverflowLocked(ImmutableList<LogMessage> snapshot)
+    {
+        if (_sealInFlight) return;
+        var unsealed = snapshot.Count - _sealedCount;
+        if (unsealed <= ActivityLog.MessageWindowLimit) return;
+
+        var take = unsealed - ActivityLog.MessageWindowKeep;
+        var firstOrdinal = _sealedCount;
+        var index = _sealedSegments;
+        var chunk = snapshot.GetRange(firstOrdinal, take);
+
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null) return;
+
+        var segmentId = index.ToString("D6");
+        var segmentNode = new MeshNode(segmentId, ActivityLogAppender.SegmentNamespace(activityLogPath))
+        {
+            Name = $"Log {firstOrdinal}-{firstOrdinal + take - 1}",
+            NodeType = ActivityLogAppender.SegmentNodeType,
+            // Satellites delegate access to a real main node; the activity's own path carries none.
+            MainNode = SatelliteTableMapping.OwnerOfSatellitePath(activityLogPath),
+            State = MeshNodeState.Active,
+            Content = new ActivityLogSegment
+            {
+                Id = segmentId,
+                FirstOrdinal = firstOrdinal,
+                ActivityPath = activityLogPath,
+                Messages = chunk,
+            },
+        };
+
+        _sealInFlight = true;
+        // CreateOrUpdateNode (not CreateNode): a retried seal re-writes the SAME index with the same
+        // content rather than failing on an existing path.
+        // Observable.Using holds the System scope across the COLD write's Subscribe — a plain `using`
+        // would have lapsed before the subscribe ran and the write would post context-null.
+        Observable.Using<MeshNode, IDisposable>(
+                () => _accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
+                _ => meshService.CreateOrUpdateNode(segmentNode))
+            .Subscribe(
+                _ =>
+                {
+                    lock (_publishLock)
+                    {
+                        _sealedCount = firstOrdinal + take;
+                        _sealedSegments = index + 1;
+                        _sealInFlight = false;
+                    }
+                },
+                _ =>
+                {
+                    // Best-effort, like every other write on this path: the lines stay in the window
+                    // and the next flush retries them.
+                    lock (_publishLock) _sealInFlight = false;
+                });
     }
 }

@@ -61,6 +61,7 @@ public static class GraphConfigurationExtensions
                 .AddTeamsConversationType()
                 .AddGraphSubscriptionType()
                 .AddActivityType()
+                .AddActivityLogSegmentType()
                 .AddUserActivityType()
                 .AddHomeTabType()
                 .AddHomeConfigType()
