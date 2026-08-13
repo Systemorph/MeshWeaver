@@ -74,8 +74,24 @@ spec:
           #     Poll until the pod reports "drained", i.e. its last circuit closed.
           #
           # Bounded by terminationGracePeriodSeconds above: a forgotten open tab delays the pod's
-          # exit, it cannot block the rollout for ever — k8s SIGKILLs at the ceiling. curl is not
-          # in the base image; wget is (Debian aspnet).
+          # exit, it cannot block the rollout for ever — k8s SIGKILLs at the ceiling.
+          #
+          # 🚨 The probe tool is `curl`, and that is MEASURED, not assumed. This block previously
+          # used `wget` on the reasoning "curl is not in the base image; wget is (Debian aspnet)" —
+          # which is false for the image this chart actually deploys (`memex-portal-ai-base`).
+          # Checked inside the running container 2026-08-13: `curl` present, `wget` absent.
+          #
+          # That mattered far more than a swapped binary name. `while ! wget …` with no wget can
+          # never succeed, so the loop would spin until terminationGracePeriodSeconds (1800s) and
+          # then SIGKILL — turning every single pod termination into a 30-minute hang, strictly
+          # worse than the abrupt teardown this block exists to prevent. It was never observed
+          # because the live Deployment still carried the old `sleep 15`: a chart change does not
+          # reach the cluster on an image-tag roll, only on a `helm upgrade`.
+          #
+          # Hence the `command -v` guard: if the probe tool is ever missing again, the drain is
+          # SKIPPED and termination proceeds as it did before. Losing the session drain costs one
+          # rollout's open circuits; hanging every pod to the ceiling costs every rollout. Fail
+          # open here, deliberately.
           lifecycle:
             preStop:
               exec:
@@ -84,7 +100,8 @@ spec:
                   - "-c"
                   - >-
                     sleep 15;
-                    while ! wget -q -T 5 -O /dev/null http://127.0.0.1:8080/drain 2>/dev/null; do
+                    command -v curl >/dev/null 2>&1 || exit 0;
+                    while ! curl -sf -m 5 -o /dev/null http://127.0.0.1:8080/drain; do
                       sleep 5;
                     done
           envFrom:
