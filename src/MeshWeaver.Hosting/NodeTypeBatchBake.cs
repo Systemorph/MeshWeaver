@@ -553,13 +553,19 @@ internal static class NodeTypeBatchBake
                 // DECLARE its source queries. An empty NodeTypeDefinition.Sources means "uses the
                 // DEFAULT {path}/Source query", which is how nearly every NodeType is authored, so
                 // demanding declared queries made NoSources unreachable for almost the whole
-                // population and turned every deleted-source type into a gating image verdict. See
-                // ClassifyCompileFailure for the full reasoning; the two paths must agree, because
-                // the status vocabulary may not depend on WHICH driver ran the compile.
+                // population and turned every deleted-source type into a gating image verdict.
+                //
+                // 🚨 What REPLACES it is LastCompileSucceededAt: the sources must have been LOST,
+                // not merely absent. A type that never built cannot have lost anything — its empty
+                // snapshot is its normal state and a failure is a defect in its own Configuration,
+                // which must keep gating (and must keep cascading UpstreamFailed to its dependents).
+                // See ClassifyCompileFailure for the full reasoning; the two paths must agree,
+                // because the status vocabulary may not depend on WHICH driver ran the compile.
                 var def = typeNode.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions);
                 var status = def is not null
                         && sources.Count == 0
                         && def.CurrentSourceVersions is { Count: 0 }
+                        && def.LastCompileSucceededAt is not null
                     ? PreWarmStatus.NoSources
                     : PreWarmStatus.CompileError;
                 return new PreWarmOutcome(
