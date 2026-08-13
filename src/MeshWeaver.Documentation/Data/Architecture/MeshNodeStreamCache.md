@@ -228,6 +228,52 @@ changes; what changed is that a caller who *knows* the answer no longer has to w
 the heuristic to guess it. Measured on `NodeTypeRecompileAlcLeakTest`: 6.5 → 5.0 retained
 hubs per compile activity, with the `cache/`-side mirror hubs going 3 → 0.
 
+### Once the mirror is released, the retention is BOUNDED — and the ceiling is 15 minutes
+
+Releasing the mirror does not itself reclaim the activity's own node hub; it removes the
+thing that was **stopping** the reclaim. What finishes the job is already there, in the
+monolith as well as on Orleans: an **Activity** node hub is one of the few hub kinds that
+carries an idle reaper of its own —
+
+```
+ActivityNodeType.CreateMeshNode        HubConfiguration = … .AddKernelSubHubHandlers()
+  → KernelHubConfigurationExtensions   ParentHub.GetService<IKernelHubConfigurator>()
+  → KernelContainer.ConfigureSubHub    .WithInitialization(hub => DisposeOnTimeout(hub))
+  → KernelContainer.DisposeOnTimeout   one-shot Timer, KernelHubOptions.IdleDisconnectTimeout
+```
+
+registered by `KernelNodeType.AddKernel()`, which `AddGraph()` includes. The timer is
+**one-shot and re-armed by every inbound message**, which is exactly why the 45 s heartbeat
+above kept it at bay forever — and why, with the terminal release in place, nothing re-arms
+it and the hub disposes one window later, taking its `sync/` sub-hubs with it.
+
+So the per-compile `_Activity/compile-<ts>` residual that `NodeTypeRecompileAlcLeakTest`
+counts is a **transient with a 15-minute ceiling, not a leak** — that test simply runs for
+seconds and cannot watch it expire. Measured unscaled, at production timer values, with the
+real 45 s heartbeat present:
+
+| t | per-compile activity hubs | mesh total hubs |
+|---:|---:|---:|
+| 0 – 885 s | 15 | 51 → 47 |
+| 900 s | 5 | 37 |
+| **915 s** | **0** | **32** |
+
+13 hubs reclaimed in **915 s = 15.25 min** — one idle window plus the 15 s poll granularity.
+(The mesh total's earlier 51 → 47 step near t+660s is the cache's own 10-minute idle sweep,
+a different reaper doing a different job.) `CompileActivityHubRetentionTest` is the
+CI-affordable guard on the same property, and it measures it directly: the activity hubs
+disappear after **exactly one idle window**, with nothing re-arming the timer.
+
+🚨 That test compresses the window **and the heartbeat together**, at production's 1:20
+ratio, and the pairing is load-bearing. Shortening only the window would put the 45 s
+heartbeat *outside* it: the timer would fire between two heartbeats, the test would pass,
+and production — where 45 s sits far inside 15 min — would still reclaim nothing. A guard
+that can only pass is not a guard.
+
+🚨 **Do not shorten `IdleDisconnectTimeout` to make a memory figure look better.** The whole
+lesson of this section is that the clocks were correct and something was resetting them; a
+shorter window would have hidden that defect rather than cured it.
+
 ### The idle sweep is not the only reaper — an evicted upstream dies with its last holder
 
 The idle sweep answers *"this path went quiet"*. It cannot answer *"this write is finished
