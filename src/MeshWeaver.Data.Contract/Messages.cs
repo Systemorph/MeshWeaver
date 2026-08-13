@@ -228,6 +228,36 @@ public record SubscribeRequest(string StreamId, WorkspaceReference Reference)
     /// Used by AccessControlPipeline for permission checks.
     /// </summary>
     public string? Identity { get; init; }
+
+    /// <summary>
+    /// 🚨 THE ONE NEGOTIATED WIRE CAPABILITY of the owner→subscriber fan-out: this subscriber can
+    /// apply a <c>splice</c> operation — a changed string leaf carried as
+    /// <c>{ "$sd": [start, removed, "inserted"], "$sdb": [baseLength, "fingerprint"] }</c> instead
+    /// of the whole new string. Default <c>false</c>, and that default is load-bearing.
+    ///
+    /// <para><b>Why this is negotiated rather than simply emitted.</b> The write direction
+    /// (<c>PatchDataRequest</c>, #1414) could put its splice marker straight on the wire because the
+    /// only consumer is a C# owner, which fails LOUDLY on a shape it does not understand — the
+    /// merged node stops deserialising, the write is NACKed and never commits. The fan-out has no
+    /// such property. Its consumers include four hand-rolled appliers this repo's CI does not build
+    /// — <c>clients/grpc-web</c>, two in <c>clients/react</c>, and <c>clients/python</c> — and every
+    /// one of them fails SILENTLY: the JS appliers treat an unknown <c>op</c> as a no-op (the text
+    /// would simply stop updating mid-stream), and the Python one applies ANY unrecognised op as a
+    /// replace, writing <c>None</c> into the field. A browser also holds whatever bundle it loaded,
+    /// so "upgrade both ends together" is not available here the way it is between two pods.</para>
+    ///
+    /// <para>So the rule is the same one #1414 applied, reached from the other side: <b>never let a
+    /// consumer half-apply a frame</b>. A subscriber that does not say it understands splices gets
+    /// byte-identical bytes to what it gets today — no migration, no flag day, no shape it can
+    /// misread. The marker still rides INSIDE the patch, so a subscriber that claims the capability
+    /// and then cannot honour it still fails loudly (C#: <c>Unknown patch operation</c>).</para>
+    ///
+    /// <para>An unknown property is skipped by the messaging serializer
+    /// (<c>UnmappedMemberHandling.Skip</c>), so this is safe in both rolling-deploy directions: a
+    /// new subscriber against an old owner is simply not spliced to, and an old subscriber against a
+    /// new owner never sets it.</para>
+    /// </summary>
+    public bool AcceptsStringSplice { get; init; }
 }
 
 /// <summary>
