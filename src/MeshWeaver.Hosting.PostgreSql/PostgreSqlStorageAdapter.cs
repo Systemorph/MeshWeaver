@@ -749,25 +749,45 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         //   null  → the ordinary monotonic guard: apply unless the row is already NEWER.
         //   0     → insert-only: exclusive create, the row must not exist.
         //   v     → compare-and-set: apply only while the row still carries exactly v.
-        string conflict;
-        if (expectedVersion == 0)
+        // 🚨 expectedVersion > 0 is a PLAIN UPDATE, never an upsert. "The row still carries exactly
+        // v" is false when there is no row at all, and an INSERT ... ON CONFLICT would have
+        // RESURRECTED a deleted row and reported success — which for the build claim means a
+        // heartbeat racing a release re-creates the lock its holder just dropped and blocks the next
+        // candidate for the whole staleness budget. The in-memory adapter refuses the same case;
+        // the two backends must not disagree about what compare-and-set means.
+        if (expectedVersion is > 0)
         {
-            conflict = "ON CONFLICT (namespace, id) DO NOTHING";
-        }
-        else
-        {
-            string predicate;
-            if (expectedVersion is { } expected)
-            {
-                parameters.Add(expected);
-                predicate = $"WHERE target.version = ${parameters.Count}";
-            }
-            else
-            {
-                predicate = "WHERE target.version <= EXCLUDED.version";
-            }
-            conflict =
+            parameters.Add(expectedVersion.Value);
+            // Mirrors the ON CONFLICT SET list exactly — created_by / created_date stay untouched
+            // (insert-only there, absent here), so authorship survives a compare-and-set too.
+            var casSync = writeSync ? ",\n                sync_behavior = $16" : "";
+            var casAuthor = writeSync ? ",\n                last_modified_by = $18" : "";
+            var casExclude = writeSync ? ",\n                exclude_from_context = $20" : "";
+            return (
                 $"""
+                UPDATE {table} SET
+                    name = $3,
+                    description = $4,
+                    node_type = $5,
+                    category = $6,
+                    icon = $7,
+                    display_order = $8,
+                    last_modified = $9,
+                    version = $10,
+                    state = $11,
+                    content = $12::jsonb,
+                    desired_id = $13,
+                    embedding = $14,
+                    main_node = $15{casSync}{casAuthor}{casExclude}
+                WHERE namespace = $1 AND id = $2 AND version = ${parameters.Count}
+                """,
+                parameters);
+        }
+
+        var conflict = expectedVersion == 0
+            // Insert-only: an exclusive create, and the row must not already exist.
+            ? "ON CONFLICT (namespace, id) DO NOTHING"
+            : $"""
                 ON CONFLICT (namespace, id) DO UPDATE SET
                     name = EXCLUDED.name,
                     description = EXCLUDED.description,
@@ -782,9 +802,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                     desired_id = EXCLUDED.desired_id,
                     embedding = EXCLUDED.embedding,
                     main_node = EXCLUDED.main_node{syncUpdate}{authorUpdate}{excludeUpdate}
-                {predicate}
+                WHERE target.version <= EXCLUDED.version
                 """;
-        }
 
         var sql =
             $"""
