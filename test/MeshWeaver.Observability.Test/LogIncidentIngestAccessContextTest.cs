@@ -142,7 +142,47 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
     private sealed record HopSample(
         bool NodePresent, int SubscribeThread, int SelectorThread,
         double SubscribeMs, double SelectorMs,
-        string? AmbientAtSubscribe, string? AmbientInSelector);
+        string? AmbientAtSubscribe, string? AmbientInSelector,
+        bool RanInline);
+
+    /// <summary>
+    /// Records whether a later stage ran INLINE — synchronously nested inside the Subscribe call,
+    /// on the subscribing thread, with the <c>Observable.Using</c> scope still on that stack.
+    ///
+    /// <para>🚨 This replaces the thread-identity check these probes used to make
+    /// (<c>selectorThread != subscribeThread</c>), which was both WRONG and FLAKY.
+    /// <b>Flaky</b>: a pool thread that has handed its continuation back to the pool can be handed
+    /// the next one, so a genuinely deferred stage routinely lands on the same thread — main,
+    /// 2026-08-12, shard 4 measured <c>subscribeThread=4@0.2ms selectorThread=4@6.2ms</c>: deferred
+    /// by 6 ms and reported as "did not hop". <b>Wrong</b>: this class's own negative control
+    /// already establishes that an <c>AsyncLocal</c> DOES reach a pool hop scheduled from inside the
+    /// scope, so a thread change never told us anything about the identity in the first place. The
+    /// property the probes actually need is "the stage was not run synchronously inside the open
+    /// scope", and that is what this measures.</para>
+    ///
+    /// <para><b>Exact, not sampled.</b> <see cref="Enter"/> and <see cref="Exit"/> run on the
+    /// subscribing thread either side of the Subscribe call, so a stage that reads
+    /// <see cref="Observe"/> on that same thread is ordered against them by program order: nested
+    /// inside ⇒ <c>true</c>, after the call returned ⇒ <c>false</c>. A stage on any OTHER thread
+    /// cannot be nested inside the call by construction, so it reads <c>false</c> regardless of
+    /// what it races with. There is no interleaving that yields a wrong answer.</para>
+    /// </summary>
+    private sealed class InlineDetector
+    {
+        private int _subscribingThread;
+        private bool _inSubscribe;
+
+        public void Enter()
+        {
+            _subscribingThread = Environment.CurrentManagedThreadId;
+            Volatile.Write(ref _inSubscribe, true);
+        }
+
+        public void Exit() => Volatile.Write(ref _inSubscribe, false);
+
+        public bool Observe() =>
+            Environment.CurrentManagedThreadId == _subscribingThread && Volatile.Read(ref _inSubscribe);
+    }
 
     /// <summary>
     /// Subscribes <paramref name="probe"/> and waits for its first emission.
@@ -158,19 +198,31 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
     /// inherits the ambient, so anything the later stage still sees must have been carried
     /// explicitly.</para>
     /// </summary>
-    private static async Task Run<T>(IObservable<T> probe, bool suppressFlow)
+    private static async Task Run<T>(IObservable<T> probe, bool suppressFlow, InlineDetector inline)
     {
         var ct = TestContext.Current.CancellationToken;
-        // ToTask() subscribes eagerly, so the subscription (and everything it schedules) is created
-        // inside the suppression scope; only the await happens outside it.
-        if (!suppressFlow)
-        {
-            await probe.FirstAsync().Timeout(StepTimeout).ToTask(ct);
-            return;
-        }
         Task<T> pending;
-        using (ExecutionContext.SuppressFlow())
-            pending = probe.FirstAsync().Timeout(StepTimeout).ToTask(ct);
+        // Enter/Exit bracket the Subscribe call itself, so any stage that runs nested inside it is
+        // distinguishable from one that runs after it returned. See InlineDetector.
+        inline.Enter();
+        try
+        {
+            // ToTask() subscribes eagerly, so the subscription (and everything it schedules) is
+            // created inside the suppression scope; only the await happens outside it.
+            if (suppressFlow)
+            {
+                using (ExecutionContext.SuppressFlow())
+                    pending = probe.FirstAsync().Timeout(StepTimeout).ToTask(ct);
+            }
+            else
+            {
+                pending = probe.FirstAsync().Timeout(StepTimeout).ToTask(ct);
+            }
+        }
+        finally
+        {
+            inline.Exit();
+        }
         await pending;
     }
 
@@ -186,6 +238,7 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
     {
         var access = Access;
         var clock = Stopwatch.StartNew();
+        var inline = new InlineDetector();
         var subscribeThread = 0;
         var selectorThread = 0;
         var subscribeAt = TimeSpan.Zero;
@@ -193,6 +246,7 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
         string? ambientAtSubscribe = null;
         string? ambientInSelector = null;
         var sawNode = false;
+        var ranInline = false;
 
         // ReadExisting's read, verbatim: a missing node surfaces as an error on the stream, which the
         // catch turns into "absent".
@@ -219,21 +273,23 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
                     selectorAt = clock.Elapsed;
                     ambientInSelector = access.Context?.ObjectId;
                     sawNode = existing is not null;
+                    ranInline = inline.Observe();
                     return Observable.Return(existing);
                 });
             });
 
-        await Run(probe, suppressFlow);
+        await Run(probe, suppressFlow, inline);
 
         var sample = new HopSample(sawNode, subscribeThread, selectorThread,
             subscribeAt.TotalMilliseconds, selectorAt.TotalMilliseconds,
-            ambientAtSubscribe, ambientInSelector);
+            ambientAtSubscribe, ambientInSelector, ranInline);
         Output.WriteLine(
             $"[{label}] nodePresent={sample.NodePresent} "
             + $"subscribeThread={sample.SubscribeThread}@{sample.SubscribeMs:F1}ms "
             + $"selectorThread={sample.SelectorThread}@{sample.SelectorMs:F1}ms "
             + $"ambientAtSubscribe={sample.AmbientAtSubscribe ?? "(null)"} "
-            + $"ambientInSelector={sample.AmbientInSelector ?? "(null)"}");
+            + $"ambientInSelector={sample.AmbientInSelector ?? "(null)"} "
+            + $"ranInline={sample.RanInline}");
         return sample;
     }
 
@@ -257,10 +313,12 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
     private async Task ProbeUnwrappedHop()
     {
         var access = Access;
+        var inline = new InlineDetector();
         var subscribeThread = 0;
         var selectorThread = 0;
         string? ambientAtSubscribe = null;
         string? ambientInSelector = null;
+        var ranInline = false;
 
         var probe = Observable.Using(
             () => access.ImpersonateAsSystem(),
@@ -274,20 +332,26 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
                     {
                         selectorThread = Environment.CurrentManagedThreadId;
                         ambientInSelector = access.Context?.ObjectId;
+                        ranInline = inline.Observe();
                         return Observable.Return(0);
                     });
             });
 
-        await Run(probe, suppressFlow: true);
+        await Run(probe, suppressFlow: true, inline);
 
         Output.WriteLine(
             $"[control/unwrapped-hop/no-ec-flow] subscribeThread={subscribeThread} "
             + $"selectorThread={selectorThread} "
             + $"ambientAtSubscribe={ambientAtSubscribe ?? "(null)"} "
-            + $"ambientInSelector={ambientInSelector ?? "(null)"}");
+            + $"ambientInSelector={ambientInSelector ?? "(null)"} "
+            + $"ranInline={ranInline}");
 
-        selectorThread.Should().NotBe(subscribeThread,
-            "the control must actually hop threads, or it controls for nothing");
+        ranInline.Should().BeFalse(
+            "the control must actually DEFER past the Subscribe call, or it controls for nothing — "
+            + "a stage that ran inside the still-open scope would see the ambient for free and the "
+            + "null below would mean nothing. (This used to compare thread ids, which is a wrong "
+            + "proxy in both directions: the pool routinely reuses the subscribing thread for a "
+            + "deferred continuation.)");
         ambientAtSubscribe.Should().Be(WellKnownUsers.System, "the scope is open at subscribe");
         ambientInSelector.Should().BeNull(
             because: "with the ExecutionContext not flowing, a bare AsyncLocal scope cannot reach a "
@@ -295,6 +359,39 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
                      + "the proof that this probe can SEE a lost identity. If this ever reports the "
                      + "system identity the probe has gone blind and every 'identity survived' result "
                      + "here is worthless");
+    }
+
+    /// <summary>
+    /// 🚨 POSITIVE CONTROL for <see cref="InlineDetector"/>. Every "did not run inline" guard in
+    /// this class is an assertion that something did NOT happen, and such an assertion is worthless
+    /// unless the detector can be shown to report the thing when it DOES happen.
+    ///
+    /// <para>Same measurement path (<see cref="Run"/>), but with nothing between Subscribe and the
+    /// selector: <c>Observable.Return</c> emits on the immediate scheduler, so the selector runs
+    /// nested inside the Subscribe call by construction. This MUST report inline. If it ever stops
+    /// doing so the detector has gone blind and the guards are all vacuously green.</para>
+    /// </summary>
+    private async Task ProbeInlineDetectorSeesInline()
+    {
+        var access = Access;
+        var inline = new InlineDetector();
+        var ranInline = false;
+
+        var probe = Observable.Using(
+            () => access.ImpersonateAsSystem(),
+            _ => Observable.Return(0).SelectMany(_ =>
+            {
+                ranInline = inline.Observe();
+                return Observable.Return(0);
+            }));
+
+        await Run(probe, suppressFlow: false, inline);
+
+        Output.WriteLine($"[control/inline-detector] ranInline={ranInline}");
+        ranInline.Should().BeTrue(
+            "a stage with no scheduler between it and Subscribe runs INSIDE the Subscribe call, so "
+            + "the detector must say so — otherwise every 'did not run inline' guard here is a "
+            + "test that cannot fail");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -325,6 +422,7 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
 
         // Measured AFTER the run, on a path the run never touched, so it cannot have warmed the cache
         // the assertion above depends on.
+        await ProbeInlineDetectorSeesInline();
         await ProbeUnwrappedHop();
         var hop = await ProbeScopeReach("create/cold-absent-node",
             LogIncidentNodeType.IncidentPath("ctx00000000probe1"));
@@ -334,10 +432,31 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
             LogIncidentNodeType.IncidentPath("ctx00000000probe1b"), suppressFlow: true);
 
         hop.NodePresent.Should().BeFalse("the probe path was never created — this is the absent route");
-        hop.SelectorThread.Should().NotBe(hop.SubscribeThread,
-            because: "the absent-node read completes off the subscribing thread, so the second stage "
-                     + "genuinely IS outside the AsyncLocal scope's synchronous reach — the premise of "
-                     + "issue #1314 holds; only the conclusion does not");
+        hopNoFlow.NodePresent.Should().BeFalse("likewise for the suppressed-flow probe's own path");
+
+        // 🚨 The non-vacuity guard for the identity assertion that follows, and it belongs on
+        // hopNoFlow — the probe that MAKES that assertion. It used to be asserted on `hop`, which
+        // carries no identity assertion at all, and it used to be phrased as "the selector ran on a
+        // different thread". Both halves were wrong:
+        //
+        //   • Wrong PROBE. Guarding `hop` guarded nothing; `hopNoFlow` is where a stage that ran
+        //     inside the still-open scope would make "the selector saw system-security" true for
+        //     free and prove nothing about the framework carrying it.
+        //   • Wrong PROPERTY. A deferred continuation is routinely handed back to the very thread
+        //     that subscribed — main, 2026-08-12 shard 4 measured subscribe and selector both on
+        //     thread 4, six milliseconds apart, and the "did not hop" assertion failed on a run
+        //     where the pipeline had behaved perfectly. This class's own negative control already
+        //     records that an AsyncLocal reaches a pool hop scheduled from inside the scope, so a
+        //     thread change was never evidence about the identity either.
+        //
+        // RanInline is exact where the thread comparison was a proxy: it is true only for a stage
+        // nested inside the Subscribe call on the subscribing thread, and ProbeInlineDetectorSeesInline
+        // above proves it reports true when that really happens.
+        hopNoFlow.RanInline.Should().BeFalse(
+            because: "the absent-node read completes AFTER Subscribe returns, so the selector is "
+                     + "genuinely outside the AsyncLocal scope's synchronous reach — the premise of "
+                     + "issue #1314 holds; only the conclusion does not. Without this, the identity "
+                     + "below could simply be the scope still being on the stack");
         hopNoFlow.AmbientInSelector.Should().Be(WellKnownUsers.System,
             because: "with the ExecutionContext suppressed the ambient CANNOT have ridden a captured "
                      + "context, so what the selector sees was carried explicitly: "
@@ -393,10 +512,18 @@ public class LogIncidentIngestAccessContextTest(ITestOutputHelper output) : Mono
             }).Should().Within(StepTimeout).Emit();
         }
 
+        await ProbeInlineDetectorSeesInline();
         await ProbeUnwrappedHop();
         var hop = await ProbeScopeReach("fold/cold-present-node", probePath, suppressFlow: true);
 
         hop.NodePresent.Should().BeTrue("the probe node was created before the read");
+        // The same non-vacuity guard the create path carries, for the same reason: an identity seen
+        // by a stage still running inside the Subscribe call would prove nothing about the read
+        // pipeline carrying it. Exact (see InlineDetector), never a thread-id proxy.
+        hop.RanInline.Should().BeFalse(
+            because: "the present-node read must still DEFER past Subscribe, or the identity below "
+                     + "is just the scope being on the stack rather than CarryAccessContext doing "
+                     + "its job");
         hop.AmbientInSelector.Should().Be(WellKnownUsers.System,
             because: "the present-node read carries the same CarryAccessContext wrap as the absent one "
                      + "— measured with the ExecutionContext suppressed, so nothing could have ridden a "

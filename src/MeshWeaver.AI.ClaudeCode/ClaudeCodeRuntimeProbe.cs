@@ -19,8 +19,12 @@ public sealed class ClaudeCodeRuntimeProbe : IHarnessRuntimeInfo
 {
     private readonly IIoPool pool;
     private readonly ILogger<ClaudeCodeRuntimeProbe>? logger;
-    private readonly object gate = new();
-    private IObservable<HarnessRuntime>? cached;
+
+    // 🚨 PromiseSlot, not `cached ??= …` under a lock: Replay(1).AutoConnect() latches OnError and
+    // never reconnects, so a probe that failed once — the CLI mid-install, a transient spawn error
+    // — reported that same failure to every status bar for the life of the process (#1369). The
+    // slot evicts a faulted probe; the next status bar spawns it again. It never retries on its own.
+    private readonly PromiseSlot<HarnessRuntime> cached = new();
 
     /// <summary>Creates the probe, resolving the Process I/O pool + logger from the service provider.</summary>
     public ClaudeCodeRuntimeProbe(IServiceProvider services)
@@ -38,15 +42,10 @@ public sealed class ClaudeCodeRuntimeProbe : IHarnessRuntimeInfo
         CachedInit().SelectMany(init =>
             pool.InvokeBlocking(_ => init with { Effort = ReadEffortLevel(userConfigDir) }));
 
+    // Replay(1).AutoConnect() = run the probe once (on the first subscribe) and replay the result
+    // to every later subscriber — the promise-cache, without re-spawning the CLI per status bar.
     private IObservable<HarnessRuntime> CachedInit()
-    {
-        if (cached is not null)
-            return cached;
-        lock (gate)
-            // Replay(1).AutoConnect() = run the probe once (on the first subscribe) and replay the result
-            // to every later subscriber — the promise-cache, without re-spawning the CLI per status bar.
-            return cached ??= pool.Invoke(ct => ProbeAsync(ct)).Replay(1).AutoConnect();
-    }
+        => cached.GetOrCreate(() => pool.Invoke(ct => ProbeAsync(ct)).Replay(1).AutoConnect());
 
     /// <summary>
     /// Reads the active effort level from <c>{userConfigDir}/settings.json</c> (<c>effortLevel</c>) — where

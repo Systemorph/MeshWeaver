@@ -21,6 +21,24 @@ public enum BakePhase
     /// regression. The pod must not take traffic.
     /// </summary>
     Regressed,
+    /// <summary>
+    /// The sweep ERRORED before it could establish a verdict — the enumeration query threw or timed
+    /// out, so this pod has verified NOTHING about whether its NodeTypes build on this image.
+    ///
+    /// <para>🚨 Deliberately distinct from both <see cref="Complete"/> and <see cref="NotStarted"/>,
+    /// because it is neither. It is not Complete: nothing was measured, and completion was only ever
+    /// a claim about a sweep that RAN. It is not NotStarted either — that state means the gate is
+    /// switched OFF (a configuration mistake, which must never black-hole a pod), whereas this pod
+    /// was armed, was measuring, and failed to. Conflating it with Complete is what let a pod that
+    /// could not enumerate a single NodeType report Healthy and take traffic.</para>
+    ///
+    /// <para>The retired pre-run bake Job encoded exactly this rule from the outside — <i>"FINDING
+    /// NOTHING IS NOT PASSING … a gate that certifies 'I verified nothing' is worse than no gate,
+    /// because the rollout proceeds with a green light nobody earned"</i> — and #1357 retired the
+    /// Job without porting it. This phase is that guard, moved to the surviving path. The operator
+    /// override is <see cref="NodeTypeBakeGateState.AllowUnprovenBake"/>.</para>
+    /// </summary>
+    Faulted,
 }
 
 /// <summary>
@@ -68,6 +86,17 @@ public sealed class NodeTypeBakeGateState
     private string? completedMessage;
 
     /// <summary>
+    /// The message <see cref="MarkFaulted"/> was given, or <c>null</c> if the sweep did not error.
+    /// Remembered for the same reason as <see cref="completedMessage"/>: a retraction arriving after
+    /// the sweep must land on the terminal the sweep ACTUALLY reached. A faulted sweep whose last
+    /// regression is later retracted goes back to <see cref="BakePhase.Faulted"/>, never to
+    /// <see cref="BakePhase.Complete"/> — retracting a regression removes one piece of bad news, it
+    /// does not retroactively make an errored sweep into a successful one. Guarded by
+    /// <see cref="verdict"/>.
+    /// </summary>
+    private string? faultedMessage;
+
+    /// <summary>
     /// Whether a readiness probe actually CONSUMES this state — i.e. the host registered its
     /// health check. Declared by the host at registration
     /// (<see cref="NodeTypeBakeGateExtensions.AddNodeTypeBakeGate"/>), never re-derived from
@@ -82,6 +111,28 @@ public sealed class NodeTypeBakeGateState
     /// gate nobody had armed. A message that overstates enforcement is worse than no message.</para>
     /// </summary>
     public bool GatesReadiness { get; init; }
+
+    /// <summary>
+    /// Operator override: serve even though the bake could not be PROVEN
+    /// (<see cref="BakePhase.Faulted"/>). Declared by the host at registration from
+    /// <see cref="NodeTypeBakeGateExtensions.AllowUnprovenBakeConfigKey"/>, exactly like
+    /// <see cref="GatesReadiness"/>.
+    ///
+    /// <para>The successor to the retired bake Job's <c>Bake:AllowEmpty</c>, and deliberately
+    /// narrower than it. That flag existed because the Job treated a ZERO-type result as failure and
+    /// a genuinely empty mesh therefore needed a way to say so. Here emptiness is a legitimate
+    /// answer that never gates, so the only condition an operator ever has to override is the one
+    /// that means "I could not find out".</para>
+    ///
+    /// <para>🚨 It does NOT change what is recorded. The phase still reads
+    /// <see cref="BakePhase.Faulted"/> and the health payload still says the bake was not proven —
+    /// only the readiness VERDICT is relaxed. A flag that rewrote the state would recreate the
+    /// original defect one level up, where nothing could see it.</para>
+    ///
+    /// <para>It can never mask a real regression: a directly-measured
+    /// <see cref="BakePhase.Regressed"/> outranks it and keeps gating.</para>
+    /// </summary>
+    public bool AllowUnprovenBake { get; init; }
 
     /// <summary>The current phase.</summary>
     public BakePhase Phase => (BakePhase)Volatile.Read(ref phase);
@@ -285,9 +336,19 @@ public sealed class NodeTypeBakeGateState
                 return true;
             }
 
-            // That was the last one. Where the gate lands depends on whether the sweep has
-            // finished: mid-sweep it goes back to Running (still measuring), afterwards to the
-            // Complete verdict MarkComplete would have produced had this type never failed.
+            // That was the last one. Where the gate lands depends on the terminal the sweep
+            // ACTUALLY reached: mid-sweep it goes back to Running (still measuring); after a
+            // faulted sweep it goes back to Faulted (the sweep still verified nothing — one fewer
+            // regression does not turn an errored sweep into a successful one); after a clean
+            // sweep, to the Complete verdict MarkComplete would have produced had this type never
+            // failed.
+            if (faultedMessage is { } fault)
+            {
+                Interlocked.Exchange(ref phase, (int)BakePhase.Faulted);
+                detail = FaultedDetail(fault);
+                return true;
+            }
+
             if (completedMessage is not { } done)
             {
                 Interlocked.Exchange(ref phase, (int)BakePhase.Running);
@@ -326,6 +387,42 @@ public sealed class NodeTypeBakeGateState
     }
 
     /// <summary>
+    /// 🚨 THE SWEEP ERRORED — it did not finish, and it did not prove anything. Records
+    /// <see cref="BakePhase.Faulted"/>, which a readiness gate treats as NOT ready unless the
+    /// operator has set <see cref="AllowUnprovenBake"/>.
+    ///
+    /// <para>This is the counterpart of <see cref="MarkComplete"/>, and calling THAT one here is
+    /// the defect this method exists to remove: an enumeration that threw used to be reported as a
+    /// clean, empty completion, so a pod that could not read a single NodeType went Complete →
+    /// Healthy and took traffic having verified nothing.</para>
+    ///
+    /// <para>Note it is strictly WORSE-INFORMED than <see cref="BakePhase.Running"/>, which the
+    /// health check already reports Unhealthy. A pod mid-sweep at least knows the sweep is going; a
+    /// pod whose sweep errored knows less than that. Giving the better-informed state the worse
+    /// verdict was internally inconsistent, not a policy.</para>
+    ///
+    /// <para>A standing regression WINS — same rule as <see cref="MarkComplete"/>. Both are
+    /// non-ready, but "these named types regressed" is the more actionable payload, and a fault
+    /// arriving afterwards must not erase evidence the sweep did manage to gather.</para>
+    /// </summary>
+    public void MarkFaulted(string message)
+    {
+        lock (verdict)
+        {
+            faultedMessage = message;
+
+            if (!regressions.IsEmpty)
+            {
+                detail = RegressedDetail();
+                return;
+            }
+
+            Interlocked.Exchange(ref phase, (int)BakePhase.Faulted);
+            detail = FaultedDetail(message);
+        }
+    }
+
+    /// <summary>
     /// The health payload while at least one regression stands. Names any RETRACTED regression
     /// too: on a pod that is still red, "these other types failed and then rebuilt" is exactly the
     /// signal that tells an operator they are looking at a content race rather than a bad image —
@@ -341,6 +438,31 @@ public sealed class NodeTypeBakeGateState
             : $"{head} ({retracted.Count} further regression(s) retracted after the type rebuilt "
                 + "on this image — "
                 + string.Join(", ", retracted.Keys.OrderBy(k => k, StringComparer.Ordinal)) + ")";
+    }
+
+    /// <summary>
+    /// The health payload for a sweep that ERRORED. It must never read like a clean result, so it
+    /// leads with what is missing — the sweep did not finish — and only then reports the partial
+    /// evidence it did collect, which is real and worth naming (a fault at type 200 of 240 still
+    /// measured 199 types). Caller holds <see cref="verdict"/>.
+    /// </summary>
+    private string FaultedDetail(string message)
+    {
+        var head = $"bake NOT PROVEN — the sweep errored before it could verify this image: {message}";
+        var addenda = new List<string>(3);
+        if (!unevaluated.IsEmpty)
+            addenda.Add($"{unevaluated.Count} not evaluated — "
+                + string.Join(", ", unevaluated.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!contentBroken.IsEmpty)
+            addenda.Add($"{contentBroken.Count} content-broken, sources missing — "
+                + string.Join(", ", contentBroken.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        if (!retracted.IsEmpty)
+            addenda.Add($"{retracted.Count} regression(s) retracted after the type rebuilt on this "
+                + "image — "
+                + string.Join(", ", retracted.Keys.OrderBy(k => k, StringComparer.Ordinal)));
+        return addenda.Count == 0
+            ? head
+            : $"{head} ({string.Join("; ", addenda)})";
     }
 
     /// <summary>
@@ -384,6 +506,19 @@ public static class NodeTypeBakeGateExtensions
     public const string EnabledConfigKey = "PreWarm:GateReadiness";
 
     /// <summary>
+    /// Config key for the operator escape hatch: serve even when the bake could not be PROVEN
+    /// (<see cref="BakePhase.Faulted"/> — the sweep errored rather than finding nothing). Default:
+    /// off, i.e. an unproven bake refuses readiness.
+    ///
+    /// <para>The successor to the retired bake Job's <c>Bake:AllowEmpty</c>. Reach for it when a
+    /// deployment must roll forward despite an environment that cannot answer the enumeration and
+    /// you accept lazy compilation instead — never as a way to quiet a recurring fault, which is a
+    /// defect to find. It cannot suppress a real regression; see
+    /// <see cref="NodeTypeBakeGateState.AllowUnprovenBake"/>.</para>
+    /// </summary>
+    public const string AllowUnprovenBakeConfigKey = "PreWarm:AllowUnprovenBake";
+
+    /// <summary>
     /// Registers the shared bake state. Safe and cheap to call unconditionally: the pre-warm hosted
     /// service writes to it whether or not anything gates on it, so the diagnostics are always there.
     ///
@@ -403,10 +538,21 @@ public static class NodeTypeBakeGateExtensions
     /// are always collected, the enforcement is opt-in, and the log never claims the latter from the
     /// former.
     /// </param>
+    /// <param name="allowUnprovenBake">
+    /// Operator override from <see cref="AllowUnprovenBakeConfigKey"/>: serve even when the sweep
+    /// ERRORED and therefore proved nothing (<see cref="BakePhase.Faulted"/>). Defaults to
+    /// <c>false</c> — an unproven bake is not a passed bake. It never relaxes a real regression.
+    /// </param>
     public static IServiceCollection AddNodeTypeBakeGate(
-        this IServiceCollection services, bool gatesReadiness = false)
+        this IServiceCollection services,
+        bool gatesReadiness = false,
+        bool allowUnprovenBake = false)
     {
-        services.AddSingleton(new NodeTypeBakeGateState { GatesReadiness = gatesReadiness });
+        services.AddSingleton(new NodeTypeBakeGateState
+        {
+            GatesReadiness = gatesReadiness,
+            AllowUnprovenBake = allowUnprovenBake,
+        });
         return services;
     }
 }

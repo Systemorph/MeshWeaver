@@ -33,9 +33,12 @@ public sealed class BlobNuGetPackageCache : INuGetPackageCache
     // replays its completion. This replaces the forbidden SemaphoreSlim async gate:
     // there is no WaitAsync to park the action-block thread, and the init body still
     // runs at most once regardless of how many concurrent callers race here.
-    // Lock guards only the reference assignment (synchronous, never blocking on I/O).
-    private readonly object _initGate = new();
-    private IObservable<Unit>? _containerReady;
+    //
+    // 🚨 PromiseSlot, not `_field ??= pool.Run(…)` under a lock: a ReplaySubject latches
+    // OnError too, so the hand-rolled slot cached ONE transient blob failure forever —
+    // every later package hydrate/save failed with the same replayed exception until the
+    // pod restarted (#1369). The slot evicts a faulted promise; the next caller retries.
+    private readonly PromiseSlot<Unit> _containerReady = new();
 
     /// <summary>
     /// Creates a blob-backed NuGet package cache bound to the given container.
@@ -161,24 +164,16 @@ public sealed class BlobNuGetPackageCache : INuGetPackageCache
     /// <summary>
     /// Ensures the backing container exists, running the Exists/Create round-trip at most
     /// once across all concurrent callers via the IoPool promise-cache (replacing the
-    /// former SemaphoreSlim async gate). The cached observable is built under a plain
-    /// synchronous lock that never wraps an await, so the action-block thread is never
-    /// parked; the actual blob round-trip runs inside <see cref="_ioPool"/>.
+    /// former SemaphoreSlim async gate). The slot's own <c>Lazy</c> serialises the build
+    /// without ever wrapping an await, so the action-block thread is never parked; the
+    /// actual blob round-trip runs inside <see cref="_ioPool"/>. A failed attempt is
+    /// evicted, so the next caller re-runs it rather than replaying the old fault.
     /// </summary>
     private Task EnsureContainerReady(CancellationToken ct)
-    {
-        var ready = _containerReady;
-        if (ready is null)
-        {
-            lock (_initGate)
-            {
-                ready = _containerReady ??= _ioPool.Run(InitializeContainerAsync);
-            }
-        }
         // Compose off the shared, replayed completion. ToTask bridges to the external
         // Task contract; the work itself already ran (once) on the pool.
-        return ready.FirstAsync().ToTask(ct);
-    }
+        => _containerReady.GetOrCreate(() => _ioPool.Run(InitializeContainerAsync))
+            .FirstAsync().ToTask(ct);
 
     private async Task<Unit> InitializeContainerAsync(CancellationToken ct)
     {

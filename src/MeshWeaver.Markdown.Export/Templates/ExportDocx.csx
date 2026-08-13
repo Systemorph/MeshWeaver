@@ -51,13 +51,15 @@ if (rootNode is null)
 
 var title = explicitTitle ?? options.Title ?? rootNode.Name ?? rootNode.Id;
 
+var jsonOptions = Mesh.JsonSerializerOptions;
+
 Log.LogInformation("Resolving branding");
 var brandingResolver = Mesh.ServiceProvider.GetRequiredService<BrandingResolver>();
 var branding = await brandingResolver.Resolve(brandPath).FirstAsync().ToTask(Ct);
 
 var chapters = new List<ExportChapter>
 {
-    new ExportChapter(title, ExtractMarkdown(rootNode), sourcePath)
+    new ExportChapter(title, ExportSource.MarkdownOf(rootNode, jsonOptions, Log), sourcePath)
 };
 if (options.IncludeChildren)
 {
@@ -79,7 +81,7 @@ if (options.IncludeChildren)
             var depth = desc.Path.Count(c => c == '/') - rootDepth;
             if (depth > options.MaxDepth) continue;
         }
-        var md = ExtractMarkdown(desc);
+        var md = ExportSource.MarkdownOf(desc, jsonOptions, Log);
         if (!string.IsNullOrWhiteSpace(md))
             chapters.Add(new ExportChapter(desc.Name ?? desc.Id, md, desc.Path));
     }
@@ -107,12 +109,9 @@ return new RenderedDocument(
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     bytes);
 
-static string ExtractMarkdown(MeshNode node)
-{
-    if (node.Content is MarkdownContent mc) return mc.Content ?? "";
-    if (node.Content is string s) return s;
-    return "";
-}
+// 🚨 There is no local ExtractMarkdown — the body extraction is ExportSource.MarkdownOf, in
+// COMPILED framework code. See ExportPdf.csx for why (#1374): a `node.Content is MarkdownContent`
+// test is false for a body stored as plain JSON, and the export silently loses it.
 
 // The portal's public origin — a resolved area's links are dead without one once the file leaves
 // this machine. Same key order as ExportPdf.csx and the HTML export.

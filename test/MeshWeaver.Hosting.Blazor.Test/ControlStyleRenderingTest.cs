@@ -83,6 +83,20 @@ namespace MeshWeaver.Hosting.Blazor.Test;
 /// pointer stream, and <c>MeshNodeRoleEditorView</c> renders a progress ring until its role loads.
 /// <c>NamedAreaView</c> — the audit's one "unclear" — is resolved as deliberately N/A; the reasoning
 /// lives in the view itself.</para>
+///
+/// <para><b>#1333 — the three that never BOUND it.</b> A different defect, and the reason it outlived a
+/// full audit of the other forty-seven: <c>SearchBoxView</c>, <c>MeshSearchView</c> and
+/// <c>Monaco/CodeEditorView</c> were registered as control views but derived from plain
+/// <c>ComponentBase</c>, re-declaring <c>ViewModel</c>/<c>Stream</c>/<c>Area</c> as their own
+/// parameters. <see cref="BlazorView{TViewModel,TView}.BindData"/> never ran for them, so there was no
+/// value in <c>Style</c>/<c>Class</c> to drop — no markup edit could have fixed it. All three are
+/// re-based onto <c>BlazorView</c>; <c>CodeEditorView</c> has no element of its own, so it forwards the
+/// declaration onto the Monaco container rather than wrapping. The registry's
+/// <c>ControlView&lt;TControl, TView&gt;</c> now constrains <c>TView</c> to
+/// <c>BlazorView&lt;TControl, TView&gt;</c>, so a fourth is a compile error at the registration line
+/// (verified: reverting one view's base yields CS0311 there); the two reflection-built registrations
+/// the constraint cannot reach are covered by
+/// <see cref="ReflectionRegisteredViews_AreStillBlazorViewsForTheirControl"/>.</para>
 /// </summary>
 public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -790,6 +804,118 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
 
         html.Should().NotContain("class=\"\"");
         html.Should().NotContain(ClassValue);
+    }
+
+    // ─── #1333: the three views that never BOUND Style/Class, because they were not BlazorViews ────
+    //
+    // A different defect from every case above. Those views bound the values and dropped them in
+    // markup; these three were registered through the same StandardView<,> helper as all 47 others but
+    // derived from plain ComponentBase and re-declared ViewModel/Stream/Area as their own [Parameter]s.
+    // BlazorView.BindData — the only thing that binds Id/Class/Style — therefore never ran for them, so
+    // no markup edit could have fixed it. The fix is the re-base onto BlazorView<TControl, TView>, and
+    // BlazorViewRegistry.ControlView<,> now CONSTRAINS the registration to that base so a fourth cannot
+    // be added silently: registering a non-BlazorView is a compile error at the registry line.
+
+    /// <summary>
+    /// <c>SearchBoxView</c>'s root is the flex row holding the Monaco input and the Search button —
+    /// literal declarations only, and (before the re-base) no bound values to write there anyway.
+    /// </summary>
+    [Fact]
+    public async Task SearchBoxControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<SearchBoxView>(
+            new SearchBoxControl().WithStyle("width: 40%").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"search-box-container {ClassValue}\"");
+        html.Should().Contain("width: 100%; width: 40%",
+            because: "the author's declaration goes last so a declared width overrides the view's own");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task SearchBoxControl_WithoutStyleOrClass_EmitsTheContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<SearchBoxView>(new SearchBoxControl());
+
+        html.Should().Contain("class=\"search-box-container\"");
+        html.Should().Contain("style=\"display: flex; gap: 8px; align-items: center; width: 100%;\"");
+    }
+
+    /// <summary>
+    /// <c>MeshSearchView</c>'s root had a fixed class and no style attribute at all. It is also the
+    /// heaviest of the three — a 1 900-line code-behind with its own subscriptions — so the re-base
+    /// had to keep its disposal working: <c>BlazorView</c> is <c>IAsyncDisposable</c>, and Blazor
+    /// disposes through <c>IAsyncDisposable</c> OR <c>IDisposable</c>, never both, so its cleanup moved
+    /// into a <c>DisposeAsync</c> override rather than staying on a now-unreachable <c>Dispose()</c>.
+    /// </summary>
+    [Fact]
+    public async Task MeshSearchControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<MeshSearchView>(
+            new MeshSearchControl().WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"mesh-search-container {ClassValue}\"");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task MeshSearchControl_WithoutStyleOrClass_EmitsTheContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<MeshSearchView>(new MeshSearchControl());
+
+        html.Should().Contain("class=\"mesh-search-container\"");
+        html.Should().NotContain("style=\"\"");
+        html.Should().NotContain(ClassValue);
+    }
+
+    /// <summary>
+    /// <c>CodeEditorView</c> renders no element of its own — it IS a <c>MonacoEditorView</c>. So the
+    /// declaration is FORWARDED onto the editor's container, the same rule <c>MeshNodeCardView</c>'s
+    /// embedded-area branch follows, rather than introducing the wrapper #1288 ruled out.
+    /// </summary>
+    [Fact]
+    public async Task CodeEditorControl_StyleAndClass_ReachTheEditorContainer()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.Monaco.CodeEditorView>(
+            new CodeEditorControl().WithStyle("min-height: 120px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"monaco-editor-container with-border {ClassValue}\"");
+        html.Should().Contain("min-height: 40px; min-height: 120px",
+            because: "the forwarded declaration goes after the container's own geometry so it wins");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task CodeEditorControl_WithoutStyleOrClass_EmitsTheEditorContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.Monaco.CodeEditorView>(new CodeEditorControl());
+
+        html.Should().Contain("class=\"monaco-editor-container with-border\"");
+        html.Should().Contain("style=\"height: 300px; max-height: none; min-height: 40px;\"");
+    }
+
+    /// <summary>
+    /// The two registrations the <c>ControlView&lt;,&gt;</c> constraint cannot reach. <c>MapControl</c>
+    /// builds these view types by reflection —
+    /// <c>typeof(NumberFieldView&lt;&gt;).MakeGenericType(control.Type)</c> — so they go through the
+    /// UNCONSTRAINED <c>StandardView(instance, viewType, …)</c> overload and no compile error is
+    /// possible. This is the same assertion the constraint makes for the other fifty, made at runtime
+    /// for the two it cannot see, so "a view registered here is a <c>BlazorView</c>" has no silent gap.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(NumberFieldView<>), typeof(NumberFieldControl))]
+    [InlineData(typeof(RadioGroupView<>), typeof(RadioGroupControl))]
+    public void ReflectionRegisteredViews_AreStillBlazorViewsForTheirControl(Type openView, Type controlType)
+    {
+        // TValue is the value the field edits and is unconstrained; decimal is representative.
+        var closedView = openView.MakeGenericType(typeof(decimal));
+        var requiredBase = typeof(MeshWeaver.Blazor.BlazorView<,>).MakeGenericType(controlType, closedView);
+
+        requiredBase.IsAssignableFrom(closedView).Should().BeTrue(
+            because: $"{openView.Name} is registered as a control view for {controlType.Name} through the "
+                   + "reflection path, where the ControlView<,> constraint cannot apply — if it stops being "
+                   + "a BlazorView, Style/Class/Id silently stop being bound, which is #1333");
     }
 
     private sealed class NoopErrorBoundaryLogger : IErrorBoundaryLogger

@@ -30,6 +30,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Markdown.Export;
+using MeshWeaver.Markdown.Export.Ast;
 using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Markdown.Export.Email;
 using MeshWeaver.Markdown.Export.Html;
@@ -72,7 +73,7 @@ var title = explicitTitle
 // One markdown body for the whole export: the node's own, plus each requested descendant as a
 // section. Composing ONCE (rather than per chapter) means the area resolution and the sanitising
 // pass each run a single time over the finished document.
-var markdown = new StringBuilder(ExtractMarkdown(rootNode));
+var markdown = new StringBuilder(ExportSource.MarkdownOf(rootNode, jsonOptions, Log));
 
 if (isDeck)
 {
@@ -113,7 +114,8 @@ if (isDeck)
     Log.LogInformation("Deck email export: {Count} slides", slides.Count);
     foreach (var slide in slides)
     {
-        var slideMarkdown = slide.ContentAs<SlideContent>(jsonOptions)?.Content ?? ExtractMarkdown(slide);
+        var slideMarkdown = slide.ContentAs<SlideContent>(jsonOptions)?.Content
+                            ?? ExportSource.MarkdownOf(slide, jsonOptions, Log);
         if (string.IsNullOrWhiteSpace(slideMarkdown)) continue;
         if (markdown.Length > 0) markdown.AppendLine().AppendLine();
         markdown.Append(slideMarkdown);
@@ -137,7 +139,7 @@ else if (options.IncludeChildren)
             var depth = desc.Path.Count(c => c == '/') - rootDepth;
             if (depth > options.MaxDepth) continue;
         }
-        var body = ExtractMarkdown(desc);
+        var body = ExportSource.MarkdownOf(desc, jsonOptions, Log);
         if (string.IsNullOrWhiteSpace(body)) continue;
         markdown.AppendLine().AppendLine();
         markdown.Append("## ").AppendLine(desc.Name ?? desc.Id);
@@ -177,12 +179,9 @@ return new RenderedDocument(
     "text/html",
     bytes);
 
-static string ExtractMarkdown(MeshNode node)
-{
-    if (node.Content is MarkdownContent mc) return mc.Content ?? "";
-    if (node.Content is string s) return s;
-    return "";
-}
+// 🚨 There is no local ExtractMarkdown — the body extraction is ExportSource.MarkdownOf, in
+// COMPILED framework code. See ExportPdf.csx for why (#1374): a `node.Content is MarkdownContent`
+// test is false for a body stored as plain JSON, and the export silently loses it.
 
 static string Sanitize(string s)
 {

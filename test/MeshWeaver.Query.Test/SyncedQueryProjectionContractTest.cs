@@ -32,7 +32,7 @@ public class SyncedQueryProjectionContractTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
     // Isolated mesh per test method — each test owns its nodes AND its query ids (the
-    // synced-query cache is keyed by id and lives for the mesh's lifetime).
+    // synced-query cache is keyed by (id, query set) and lives for the mesh's lifetime).
     protected override bool ShareMeshAcrossTests => false;
 
     private static readonly string Ns = $"{TestPartition}/ProjectionContract";
@@ -125,17 +125,27 @@ public class SyncedQueryProjectionContractTest(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// 🚨 The cache is keyed by ID ALONE: <c>GetQuery(id, queries)</c> returns the already
-    /// registered stream and IGNORES the queries on a hit. So a second call site that shares
-    /// an id but asks for <c>content</c> does NOT get its own collection — it inherits the
-    /// first registration's shell projection, and its <c>ContentAs&lt;T&gt;()</c> reads null.
+    /// 🚨 A CALLER GETS THE QUERY IT ASKED FOR, even when it shares an id (issue #1311).
     ///
-    /// <para>This is the mechanism behind "content is stale/empty on some loads but not
-    /// others": which projection wins is decided by subscription order. Keep query strings
-    /// byte-identical wherever an id is shared, and scope ids per module.</para>
+    /// <para>The cache used to be keyed by ID ALONE: <c>GetQuery(id, queries)</c> returned the
+    /// already-registered stream and DISCARDED the queries on a hit, so a second call site
+    /// sharing an id inherited the first registration's projection and its
+    /// <c>ContentAs&lt;T&gt;()</c> read null. Which projection won was decided by subscription
+    /// order — the mechanism behind "content is empty on some loads but not others".</para>
+    ///
+    /// <para>The same discard is what let a NodeType's newly declared
+    /// <c>shared=@Other/Type/Source</c> be ignored until the portal restarted: the entry
+    /// materialised before the edit kept answering the OLD source queries, so the compile saw a
+    /// short-but-established source set and Roslyn emitted a <c>CS0103</c> about code that was
+    /// present. The query set is now part of the key, so each distinct set gets its own shared
+    /// collection.</para>
+    ///
+    /// <para>Sharing an id across differently-shaped reads is still poor practice — every
+    /// distinct set keeps a resident subscription for the process's life — but it is no longer
+    /// a silent wrong answer.</para>
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task SharedId_FirstRegistrationWins_EvenWhenTheSecondAsksForContent()
+    public async Task SharedId_WithADifferentProjection_StillHonoursTheQueryItWasAsked()
     {
         var node = Subject("shared-id");
         await NodeFactory.CreateNode(node).Should().Emit();
@@ -147,14 +157,23 @@ public class SyncedQueryProjectionContractTest(ITestOutputHelper output)
             id, $"namespace:{Ns} scope:subtree nodeType:Markdown select:path,id,name,nodeType", node.Path);
         shell.Content.Should().BeNull();
 
-        // SECOND call site, SAME id, explicitly asking for content — and it does not matter.
+        // SECOND call site, SAME id, explicitly asking for content.
         var second = await ReadOne(
             id, $"namespace:{Ns} scope:subtree nodeType:Markdown select:path,id,name,nodeType,content", node.Path);
 
-        second.Content.Should().BeNull(
-            "the synced-query cache is keyed by id alone and ignores the queries on a hit, so the "
-            + "FIRST registration's projection is what every later caller of that id receives — "
-            + "sharing an id across differently-projected reads is a silent-null defect");
+        second.Content.Should().NotBeNull(
+            "the query set is part of the cache key, so a caller that names `content` gets its "
+            + "own collection instead of inheriting the first registration's shell projection");
+        second.ContentAs<MarkdownContent>(Mesh.JsonSerializerOptions)!.Content
+            .Should().Be(Body);
+
+        // …and the first call site is NOT evicted: its narrower registration still answers its
+        // own query, so two callers cannot thrash each other's subscription.
+        var shellAgain = await ReadOne(
+            id, $"namespace:{Ns} scope:subtree nodeType:Markdown select:path,id,name,nodeType", node.Path);
+        shellAgain.Content.Should().BeNull(
+            "each distinct query set keeps its own entry — widening one caller's set must not "
+            + "rewrite another's");
     }
 
     private async Task<MeshNode> ReadOne(object id, string query, string path) =>

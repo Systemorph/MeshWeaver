@@ -33,8 +33,9 @@
 /* Every other page: the running header and footer live in @page margin boxes.
  *
  * Chromium implements margin boxes and the `page`/`pages` counters (verified against the
- * browser this image ships). It does NOT implement `target-counter`, which is why the
- * contents list carries links rather than page numbers — see the doc page. */
+ * browser this image ships). It does NOT implement `target-counter`, so the contents list's
+ * page numbers cannot come from CSS at all — they are read back out of a first print and put
+ * into a second one. See TocPageNumbers and the `.mw-toc-page` rule below. */
 @page mw-doc {
     margin: 2cm;
 
@@ -179,13 +180,59 @@ body {
     margin: 0 0 10pt 0;
 }
 
+/* 🚨 An entry never straddles a page break, and that is a correctness rule, not typography.
+ * A title caught by the break fragments, and Chromium emits one link annotation PER FRAGMENT —
+ * so one entry contributes two rects, the positional match in TocPageNumbers sees more links
+ * than there are entries, and the whole contents list loses its numbers to an avoidable
+ * refusal. Keeping the entry whole keeps the one-annotation-per-entry invariant it rests on.
+ *
+ * Measured, not assumed: sliding a contents list past a page break in 8pt steps, 10 of 15
+ * layouts printed 15 annotations for 14 entries without this rule and exactly 14 with it.
+ *
+ * 🚨 REPRODUCING IT NEEDS A TITLE OF FOUR OR MORE LINES. `orphans` and `widows` both default
+ * to 2, so a two- or three-line entry cannot be split at all — every half would breach one of
+ * them. Anyone who tests this rule with an ordinary wrapped title will see no difference and
+ * conclude it does nothing. It is not decoration; delete it and a long enough heading silently
+ * costs the document its page numbers. (Copilot review, #1372.) */
 .mw-toc-entry {
     margin: 0;
+    break-inside: avoid;
 }
 
+/* Each entry is a row: the title takes the slack, the page number sits in a column at the
+ * right margin — the same shape the document model drew (a relative title item plus a
+ * constant 40pt right-aligned page-number item).
+ *
+ * 🚨 The column's width is a CONSTANT, and that is the load-bearing detail of the whole
+ * feature. Chromium implements no part of `target-counter`, so the numbers can only be read
+ * back out of a first print and put into a second one (see TocPageNumbers). That is only
+ * sound if adding the digits cannot move anything: a box whose width does not depend on its
+ * content reflows nothing, so the second print has the pagination the first one measured.
+ * Sizing this column to the digits — `min-width`, `fit-content`, a width derived from the
+ * page count — would quietly break that and is the reason a naive two-pass prints numbers
+ * that are wrong. `tabular-nums` keeps the digits on a common grid so the column reads as a
+ * column; `baseline` alignment keeps the number on the FIRST line of an entry that wraps.
+ * `width` repeats what `flex-basis` already says, deliberately: it is the size the box falls
+ * back to if the flex context is ever lost (a future stylesheet edit, a different engine), and
+ * a constant width is the one property here that must not silently become content-dependent. */
 .mw-toc-entry a {
     color: inherit;
     text-decoration: none;
+    display: flex;
+    align-items: baseline;
+    gap: 6pt;
+}
+
+.mw-toc-text {
+    flex: 1 1 auto;
+}
+
+.mw-toc-page {
+    flex: 0 0 40pt;
+    width: 40pt;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 .mw-toc-1 { font-size: 12pt; font-weight: 700; padding-left: 0; }

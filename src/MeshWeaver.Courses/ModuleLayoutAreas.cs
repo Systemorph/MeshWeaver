@@ -79,14 +79,13 @@ public static class ModuleLayoutAreas
         var exerciseStream = hub.GetQuery(
             $"module-exercises:{modulePath}",
             $"path:{modulePath}/{ExerciseNodeType.ExerciseSubNamespace} scope:children nodeType:{ExerciseNodeType.NodeType} select:path,id,name,order");
-        // 🚨 SHARED CACHE ID with CourseLayoutAreas' moduleStream — and the synced-query
-        // cache is keyed by ID ALONE (MeshNodeStreamCache.GetQueryRaw returns the existing
-        // entry and IGNORES the queries on a hit). So the two call sites' query strings MUST
-        // stay byte-identical: whichever subscribes first wins, and a `select:` that differs
-        // between them would silently hand the other consumer a null Content. The course
-        // overview DOES read Content off these module nodes (BuildModuleCards →
-        // ContentAs<ModuleConfiguration>), so `content` stays in the projection here even
-        // though this call site only needs the shells.
+        // 🚨 SHARED CACHE ID with CourseLayoutAreas' moduleStream, so keep the two call sites'
+        // query strings byte-identical — that is what makes them share ONE subscription. Since
+        // #1311 the cache is keyed by (id, query set), so a drift no longer hands the other
+        // consumer a null Content; it opens a second synced query that stays resident for the
+        // life of the process instead. The course overview DOES read Content off these module
+        // nodes (BuildModuleCards → ContentAs<ModuleConfiguration>), so `content` stays in the
+        // projection here even though this call site only needs the shells.
         var siblingStream = hub.GetQuery(
             $"course-modules:{coursePath}",
             $"path:{coursePath} scope:children nodeType:{ModuleNodeType.NodeType} select:path,id,name,order,content");

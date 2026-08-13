@@ -253,15 +253,10 @@ public sealed class GitHubWebhookProcessor
     /// <paramref name="headSha"/>: the branch must match, the source must be allowed to import, and
     /// the source must not already sit on that commit.
     /// </summary>
+    /// <remarks>Expressed as "there is no reason to skip it" so the predicate and the log line
+    /// (<see cref="SkipReason"/>) can never disagree about why a Space was left behind.</remarks>
     internal static bool ConfigMatchesBuild(GitHubSyncConfig? cfg, string branch, string headSha)
-    {
-        if (cfg is null || cfg.Direction == SyncDirection.ExportOnly)
-            return false;
-        if (!string.Equals(cfg.Branch, branch, StringComparison.OrdinalIgnoreCase))
-            return false;
-        // Already imported this exact commit — a re-run of the same green build must be a no-op.
-        return !string.Equals(cfg.LastSyncCommitSha, headSha, StringComparison.OrdinalIgnoreCase);
-    }
+        => SkipReason(cfg, branch, headSha) is null;
 
     /// <summary>The distinct sync sources whose config targets <paramref name="repoUrl"/> AND
     /// matches the green build's branch, minus those already at <paramref name="headSha"/>.</summary>
@@ -270,16 +265,59 @@ public sealed class GitHubWebhookProcessor
     {
         var target = ParseSafe(repoUrl);
         return QueryConfigNodesAsSystem()
-            .Select(c => (IReadOnlyList<PushTarget>)c.Items
-                .Where(n => RepoMatches(n, target))
-                .Where(n => ConfigMatchesBuild(
-                    n.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger), branch, headSha))
-                .Select(ToPushTarget)
-                .Where(t => t is not null)
-                .Select(t => t!)
-                .DistinctBy(t => (t.SpacePath, t.SourceId))
-                .ToList());
+            .Select(c =>
+            {
+                // 🚨 Classify EVERY candidate and say what happened to it. A fan-out that reports
+                // only its winners cannot be audited: "updated 34" and "updated 34 of 43" look
+                // identical in the log, which is how #1326 stayed invisible for days. One line per
+                // skipped config, naming the reason, is what makes a future omission findable.
+                var picked = new List<PushTarget>();
+                var skipped = new List<string>();
+                foreach (var node in c.Items)
+                {
+                    if (!RepoMatches(node, target))
+                        continue;   // a different repo entirely — not this build's business
+                    var cfg = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
+                    if (SkipReason(cfg, branch, headSha) is { } reason)
+                    {
+                        skipped.Add($"{node.Path} ({reason})");
+                        continue;
+                    }
+                    if (ToPushTarget(node) is not { } pushTarget)
+                    {
+                        skipped.Add($"{node.Path} (path carries no '{GitHubSyncService.ConfigId}' segment)");
+                        continue;
+                    }
+                    picked.Add(pushTarget);
+                }
+
+                var targets = (IReadOnlyList<PushTarget>)picked
+                    .DistinctBy(t => (t.SpacePath, t.SourceId))
+                    .ToList();
+
+                logger?.LogInformation(
+                    "Green build of {Repo}@{Branch} ({Sha}): {Candidates} sync config(s) in the mesh, "
+                    + "{Selected} selected, {Skipped} skipped{SkipDetail}.",
+                    repoUrl, branch, headSha, c.Items.Count, targets.Count, skipped.Count,
+                    skipped.Count == 0 ? string.Empty : " — " + string.Join("; ", skipped));
+
+                return targets;
+            });
     }
+
+    /// <summary>
+    /// Why a config that DOES target this repo is not being updated, or <c>null</c> when it is.
+    /// The reason strings are log copy — a skipped Space must be traceable to the exact predicate
+    /// that dropped it, never inferred from its absence.
+    /// </summary>
+    private static string? SkipReason(GitHubSyncConfig? cfg, string branch, string headSha)
+        => cfg is null ? "config content could not be read"
+            : cfg.Direction == SyncDirection.ExportOnly ? "direction is ExportOnly"
+            : !string.Equals(cfg.Branch, branch, StringComparison.OrdinalIgnoreCase)
+                ? $"branch '{cfg.Branch}' != built branch '{branch}'"
+            : string.Equals(cfg.LastSyncCommitSha, headSha, StringComparison.OrdinalIgnoreCase)
+                ? "already at this commit"
+            : null;
 
     /// <summary>Maps a config node path (<c>{space}/_GitSync</c> or <c>{space}/_GitSync/{sourceId}</c>)
     /// to the Space + source id it configures.</summary>
@@ -304,13 +342,35 @@ public sealed class GitHubWebhookProcessor
     /// silently matches nothing on an access-gated portal (the DevLogin test fallback masked
     /// exactly this). Same identity model as the write path below.
     /// </summary>
+    /// <remarks>
+    /// 🚨 TWO silent-drop guards, both of which this read shipped without and both of which cost
+    /// spaces their updates (#1326: 9 of 43 permanently stale while every webhook reported success).
+    ///
+    /// <para><b>Complete(), not a page.</b> The query carries no <c>path:</c> and no
+    /// <c>namespace:</c>, so on Postgres it is the UNPINNED shape served by the cross-schema
+    /// fan-out — which answers a request that states no limit with the 50 most recently modified
+    /// rows. This is a fan-out over EVERY configured sync source: a config that falls out of that
+    /// window is not "missing from a list", it is a Space that never syncs again. Worse, it is
+    /// self-reinforcing — a successful sync rewrites the config node (<c>RecordSeenCommit</c>), so
+    /// the spaces that DID update stay in the window and the stragglers sink further out of it,
+    /// which is exactly the "the same 9 every time, each a different number of commits behind"
+    /// signature. Same defect as #1216 one caller over.</para>
+    ///
+    /// <para><b>Initial, not just the first emission.</b> A bare <c>Take(1)</c> can capture a
+    /// pre-Initial emission and export the fan-out as an EMPTY candidate set — observed on a live
+    /// instance and already guarded this way in <c>GitHubSyncService</c>. Filtering on
+    /// <see cref="QueryChangeType.Initial"/> waits for the snapshot the fan-out is asking for.</para>
+    /// </remarks>
     private IObservable<QueryResultChange<MeshNode>> QueryConfigNodesAsSystem()
     {
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         return Observable.Using(
             () => accessService.ImpersonateAsSystem(),
             _ => meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{GitHubSyncService.ConfigNodeType}"))
+                .Query<MeshNode>(MeshQueryRequest
+                    .FromQuery($"nodeType:{GitHubSyncService.ConfigNodeType}")
+                    .Complete())
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
                 .Take(1));
     }
 

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -6,6 +5,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -64,7 +64,12 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
     private readonly Func<string, IObservable<MeshNode?>> parentNodes;
     private readonly Func<JsonSerializerOptions> serializerOptions;
     private readonly Func<AccessService?> accessService;
-    private readonly ConcurrentDictionary<string, IObservable<IReadOnlyList<MeshNode>>> cache =
+    // 🚨 PromiseCache, not a bare dictionary: Replay(1) is one ReplaySubject behind the
+    // connectable and it latches OnError, so a bare dictionary would replay ONE transient query
+    // fault to every later viewer of that deck for the life of the process — the deck simply
+    // never renders again (#1369). The cache evicts a faulted entry so the next view rebuilds the
+    // pipeline; it never re-subscribes on its own.
+    private readonly PromiseCache<string, IReadOnlyList<MeshNode>> cache =
         new(StringComparer.Ordinal);
 
     /// <summary>

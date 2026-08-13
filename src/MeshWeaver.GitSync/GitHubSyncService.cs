@@ -482,6 +482,26 @@ public sealed class GitHubSyncService
     {
         return repoClient.Fetch(repoUrl, commitish, subdirectory, token).SelectMany(snapshot =>
         {
+            // 🚨 A CONFIGURED SUBDIRECTORY THAT MATCHES NOTHING IS A CONFIGURATION ERROR, NOT AN
+            // EMPTY REPO (issue #1326). The tree filter compares the configured prefix against repo
+            // paths with StringComparison.Ordinal — correct, because git paths ARE case-sensitive —
+            // so a casing/typo mismatch yields ZERO files, and an empty snapshot flows on as "the
+            // repo carries nothing": every existing node becomes absent-from-the-source and, under
+            // the default FullReplace, the import MIRRORS THE WHOLE SPACE AWAY. Refuse loudly and
+            // name the subdirectory instead. Only guarded when a subdirectory is configured — a
+            // genuinely empty repo (no subdirectory) is a legitimate first-sync state.
+            if (snapshot.Files.Count == 0 && !string.IsNullOrWhiteSpace(subdirectory))
+            {
+                var message =
+                    $"No files found under subdirectory '{subdirectory.Trim().Trim('/')}' at "
+                    + $"{Short(snapshot.CommitSha)} in {repoUrl}. Refusing to import an empty snapshot — "
+                    + "it would prune the whole Space. Check the subdirectory (including its exact "
+                    + "capitalisation — git paths are case-sensitive) on the sync source.";
+                logger?.LogWarning("[GitSync] {Space}: {Message}", spaceId, message);
+                progress?.Invoke(message, LogLevel.Error);
+                return Observable.Throw<(StaticRepoImportResult, string)>(
+                    new InvalidOperationException(message));
+            }
             // Git-diff scope: when we know the last SUCCESSFULLY-synced commit (a routine
             // webhook/update — not a force, not a first import), ask GitHub what changed between it
             // and the head and import ONLY those nodes. A null answer (no base, force, force-push,
@@ -494,8 +514,10 @@ public sealed class GitHubSyncService
             return diff.SelectMany(changedFiles =>
                 ParseSnapshot(snapshot, spaceId, ignore, progress).SelectMany(parsed =>
                 {
+                    // 🚨 The ignore rules travel WITH the source (issue #1326): the importer's prune
+                    // needs them to tell "the repo dropped this node" from "this node never syncs".
                     var source = new InMemoryStaticRepoSource(
-                        spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs);
+                        spaceId, parsed.Children, parsed.Root, parsed.ContentSyncs, ignore);
                     var changedNodePaths = ChangedNodePaths(changedFiles, spaceId);
                     if (changedNodePaths is not null)
                         logger?.LogInformation(
@@ -560,24 +582,46 @@ public sealed class GitHubSyncService
 
         return classified
             .Where(c => c.Asset is null)
-            .Select(c => ParseFile(c.File, spaceId, progress))
+            .Select(c => ParseFile(c.File, spaceId))
             .Merge(8)
-            .Where(x => x.Node is not null)
             .ToList()
             .Select(list =>
             {
-                var root = list.FirstOrDefault(x => x.IsRoot).Node;
-                var children = list.Where(x => !x.IsRoot).Select(x => x.Node!).ToList();
+                // 🚨 ONE write for every parse problem, not one per failing file. Each progress call
+                // is a stream.Update that re-serialises the whole activity node, so per-file reporting
+                // over n failures is O(n²) — and these parses run concurrently under Merge(8), so the
+                // writes raced on a single node too. Every failing path is still named, so the audit
+                // trail is unchanged; it simply arrives as one entry.
+                var problems = list.Where(x => x.Problem is not null).Select(x => x.Problem!).ToArray();
+                if (problems.Length > 0)
+                    progress?.Invoke(
+                        $"{problems.Length} file(s) could not be parsed and were skipped:{Environment.NewLine}"
+                        + string.Join(Environment.NewLine, problems),
+                        LogLevel.Error);
+
+                var parsedNodes = list.Where(x => x.Node is not null).ToArray();
+                var root = parsedNodes.FirstOrDefault(x => x.IsRoot).Node;
+                var children = parsedNodes.Where(x => !x.IsRoot).Select(x => x.Node!).ToList();
                 return (root, (IReadOnlyList<MeshNode>)children, contentSyncs);
             });
     }
 
-    private IObservable<(MeshNode? Node, bool IsRoot)> ParseFile(
-        RepoFile file, string spaceId, Action<string, LogLevel>? progress = null)
+    /// <summary>
+    /// Parses one repo file into a node. A parse PROBLEM is RETURNED, never written straight to the
+    /// activity: <see cref="ParseSnapshot"/> collects every problem and reports them in ONE write.
+    ///
+    /// <para>🚨 Why it is returned rather than logged here. Each <c>progress</c> call is a
+    /// <c>stream.Update</c> on the activity node, and every such write re-serialises that node's whole
+    /// content to compute its patch — so a line per failing file over n failures costs O(n²) CPU and
+    /// allocation. These parses also run under <c>.Merge(8)</c>, so the per-file writes were
+    /// concurrent on one node as well as quadratic. Same defect class as #1341 / #1172.</para>
+    /// </summary>
+    private IObservable<(MeshNode? Node, bool IsRoot, string? Problem)> ParseFile(
+        RepoFile file, string spaceId)
     {
         // The top-level README.md is a GitHub display file emitted on export — never a node.
         if (string.Equals(file.Path, "README.md", StringComparison.OrdinalIgnoreCase))
-            return Observable.Return(((MeshNode?)null, false));
+            return Observable.Return(((MeshNode?)null, false, (string?)null));
 
         var ext = System.IO.Path.GetExtension(file.Path);
         // file.Content is already an in-memory string — the parse is pure CPU, no pool.
@@ -597,12 +641,13 @@ public sealed class GitHubSyncService
         // namespace is the space itself; prefixing would double it).
         var isRoot = NodeFileMapper.IsRootIndex(file.Path);
         var parseRelativePath = isRoot ? file.Path : $"{spaceId}/{file.Path}";
+        string? problem = null;
         var parsed = parsers.TryParse(ext, file.Path, file.Content, parseRelativePath, (path, ex) =>
         {
             logger?.LogWarning(ex, "Failed to parse {Path} — file skipped on import.", path);
-            progress?.Invoke($"Failed to parse '{path}': {ex.Message} — file skipped.", LogLevel.Error);
+            problem = $"Failed to parse '{path}': {ex.Message} — file skipped.";
         });
-        if (parsed is null) return Observable.Return(((MeshNode?)null, false));
+        if (parsed is null) return Observable.Return(((MeshNode?)null, false, problem));
         if (isRoot)
         {
             var root = parsed with
@@ -612,12 +657,12 @@ public sealed class GitHubSyncService
                 MainNode = spaceId,
                 NodeType = string.IsNullOrEmpty(parsed.NodeType) ? SpaceNodeType : parsed.NodeType,
             };
-            return Observable.Return(((MeshNode?)root, true));
+            return Observable.Return(((MeshNode?)root, true, problem));
         }
         var (id, ns) = NodeFileMapper.FromRelativePath(file.Path);
         var rebasedNs = string.IsNullOrEmpty(ns) ? spaceId : $"{spaceId}/{ns}";
         var node = parsed with { Id = id, Namespace = rebasedNs, MainNode = $"{rebasedNs}/{id}" };
-        return Observable.Return(((MeshNode?)node, false));
+        return Observable.Return(((MeshNode?)node, false, problem));
     }
 
     // ══════════════════════════════════════════════════════════════════════════
