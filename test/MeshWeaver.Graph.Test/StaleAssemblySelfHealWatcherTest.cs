@@ -42,17 +42,36 @@ public class StaleAssemblySelfHealWatcherTest
     private const string InstancePath = "TestData/StaleAssemblyType/instance1";
     private const string BoundAssembly = "TestData_StaleAssemblyType/v10-abc-111111111111.dll";
 
-    private static IMessageHub BuildInstanceHub()
+    private static IMessageHub BuildInstanceHub(out Func<Func<PostOptions, PostOptions>?> capturedOptions)
     {
         var hub = Substitute.For<IMessageHub>();
         hub.Address.Returns(new Address(InstancePath));
+        Func<PostOptions, PostOptions>? captured = null;
         // Configure() records the Post spec WITHOUT running NSubstitute's auto-value provider —
         // IMessageDelivery carries an INTERNAL member (ChangeState), so auto-substituting Post's
         // return type throws TypeLoadException at proxy generation.
         hub.Configure()
-            .Post(Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>())
+            .Post(Arg.Any<DisposeRequest>(),
+                Arg.Do<Func<PostOptions, PostOptions>>(f => captured = f))
             .Returns((IMessageDelivery<DisposeRequest>?)null);
+        capturedOptions = () => captured;
         return hub;
+    }
+
+    /// <summary>
+    /// The recycle must target the instance hub's OWN address — the RecycleLayoutArea idiom. A bare
+    /// "a DisposeRequest was posted" assertion passes just as well when the post carries no options
+    /// or names the wrong hub, which would bounce someone ELSE while leaving this instance stale.
+    /// </summary>
+    private static void AssertTargetsItself(Func<Func<PostOptions, PostOptions>?> capturedOptions)
+    {
+        var options = capturedOptions();
+        options.Should().NotBeNull("the DisposeRequest must be posted with explicit options");
+        // Derive expected from the SAME base options so the auto-generated MessageId does not
+        // perturb record equality.
+        var baseOptions = new PostOptions(new Address("TestData/sender"));
+        options!(baseOptions).Should().Be(baseOptions.WithTarget(new Address(InstancePath)),
+            "the self-heal recycle must target the instance hub's own address");
     }
 
     /// <summary>
@@ -88,7 +107,7 @@ public class StaleAssemblySelfHealWatcherTest
     [Fact]
     public void NewlyPublishedAssembly_RecyclesTheInstance_ExactlyOnce()
     {
-        var hub = BuildInstanceHub();
+        var hub = BuildInstanceHub(out var capturedOptions);
         var typeStream = new Subject<MeshNode>();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
             typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
@@ -106,6 +125,7 @@ public class StaleAssemblySelfHealWatcherTest
         // before the fix, leaving the instance executing the old DLL indefinitely.
         typeStream.OnNext(TypeNode(version: 12, assemblyPath: "TestData_StaleAssemblyType/v12-abc-222222222222.dll"));
         AssertDisposedExactlyOnce(hub);
+        AssertTargetsItself(capturedOptions);
 
         // Take(1): further publications do not re-post. The instance is already tearing down, and
         // re-enrichment will bind the newest assembly.
@@ -121,7 +141,7 @@ public class StaleAssemblySelfHealWatcherTest
     [Fact]
     public void RepublishingTheSameAssembly_DoesNotRecycle_EvenAsTheVersionAdvances()
     {
-        var hub = BuildInstanceHub();
+        var hub = BuildInstanceHub(out _);
         var typeStream = new Subject<MeshNode>();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
             typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
@@ -141,7 +161,7 @@ public class StaleAssemblySelfHealWatcherTest
     [Fact]
     public void NewAssemblyAtTheSameVersion_StillHeals()
     {
-        var hub = BuildInstanceHub();
+        var hub = BuildInstanceHub(out var capturedOptions);
         var typeStream = new Subject<MeshNode>();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
             typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
@@ -149,13 +169,14 @@ public class StaleAssemblySelfHealWatcherTest
         typeStream.OnNext(TypeNode(version: 10, assemblyPath: "TestData_StaleAssemblyType/v10-abc-999999999999.dll"));
 
         AssertDisposedExactlyOnce(hub);
+        AssertTargetsItself(capturedOptions);
     }
 
     /// <summary>Non-definition content and unsettled builds are ignored, never fired on.</summary>
     [Fact]
     public void UnsettledAndForeignContent_AreIgnored()
     {
-        var hub = BuildInstanceHub();
+        var hub = BuildInstanceHub(out _);
         var typeStream = new Subject<MeshNode>();
         using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
             typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
@@ -174,7 +195,7 @@ public class StaleAssemblySelfHealWatcherTest
     [Fact]
     public void Disposing_StopsTheWatcher()
     {
-        var hub = BuildInstanceHub();
+        var hub = BuildInstanceHub(out _);
         var typeStream = new Subject<MeshNode>();
         var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
             typeStream, hub, NodeTypePath, BoundAssembly, logger: null);
