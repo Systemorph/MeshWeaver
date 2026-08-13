@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <Description>Git synchronization for MeshWeaver content: sync mesh node trees with git repositories, including AI-content export and history.</Description>
     <ProjectGuid>{f3a7c2e1-9b4d-4e6a-8c1f-2d5e7a9b0c34}</ProjectGuid>
   </PropertyGroup>
 

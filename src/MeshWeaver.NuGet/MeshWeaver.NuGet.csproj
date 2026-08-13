@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <Description>In-process NuGet package resolution for MeshWeaver: powers `#r \"nuget:...\"` in scripts and dynamically compiled node types.</Description>
     <RootNamespace>MeshWeaver.NuGet</RootNamespace>
   </PropertyGroup>
 

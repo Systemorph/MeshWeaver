@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>Content-to-vector indexing pipeline for MeshWeaver: chunking, document tracking, and chunk-search abstractions, storage- and embedding-agnostic.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="UglyToad.PdfPig" />
     <PackageReference Include="DocSharp.Markdown" />
