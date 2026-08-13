@@ -115,8 +115,8 @@ public class AnonymousCircuitLocaleSeedTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// The portal's Blazor wiring, reduced to the pieces the circuit identity actually needs — the
     /// same registrations <c>AddBlazor()</c> makes, plus the probe. Everything that decides the
-    /// answer (the handler, the accessor, the HTTP-context accessor, the Blazor hub) is the real
-    /// production type.
+    /// answer (the circuit handler, the circuit-context accessor, the connection-language filter,
+    /// the Blazor hub itself) is the real production type.
     /// </summary>
     private WebApplication BuildPortal()
     {
