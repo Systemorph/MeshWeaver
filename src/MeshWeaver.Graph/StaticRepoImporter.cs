@@ -341,6 +341,13 @@ public static class StaticRepoImporter
     /// per-partition policy; the per-node <see cref="SyncBehavior"/> guard above applies in every mode
     /// (a claimed node is never a candidate).
     ///
+    /// <para>🚨 <see cref="IsMeshMintedRelease"/> is the guard for what the MESH generated rather than
+    /// the source: a compile-minted <c>{nodeTypePath}/Release/{version}</c> record cannot exist in any
+    /// repo or embedded assembly, so its absence can never be evidence of a deletion. It is checked
+    /// here — unconditionally, for every source and every mode — because #1326 fixed only the GitSync
+    /// half via <paramref name="isExcludedFromMirror"/> (default <c>false</c>) and left every COMPILED
+    /// source deleting its own release history on each import (issue #1422).</para>
+    ///
     /// <para>🚨 <paramref name="isExcludedFromMirror"/> is the FIFTH guard and the one that stops the
     /// prune from eating what the source never carries BY DESIGN
     /// (<see cref="IStaticRepoSource.IsExcludedFromMirror"/>). "Absent from the source" is only
@@ -372,6 +379,7 @@ public static class StaticRepoImporter
                         && !source.Contains(t.Path)
                         && t.SyncBehavior == SyncBehavior.Include
                         && !IsGovernance(t)
+                        && !IsMeshMintedRelease(t)
                         && isExcludedFromMirror?.Invoke(t.Path) != true
                         && !excluded.Any(root => IsAtOrUnder(t.Path, root))
                         // Additive: only prune what the source PREVIOUSLY owned — a user-added node
@@ -1527,6 +1535,39 @@ public static class StaticRepoImporter
     /// </summary>
     private static bool IsGovernance(MeshNode node) =>
         node.Segments.Skip(1).Any(seg => seg.StartsWith('_'));
+
+    /// <summary>
+    /// 🚨 A MESH-MINTED release record at <c>{nodeTypePath}/Release/{version}</c> — written by the
+    /// compile pipeline (<c>MeshDataSourceExtensions.TryCreateReleaseNode</c>) every time a NodeType
+    /// compiles. Never pruned, in any mode, by any source.
+    ///
+    /// <para><b>Why this is not covered by the existing guards (issue #1422 — the same data loss as
+    /// #1326, on a different set of partitions).</b> The prune's rule is "absent from the source ⇒
+    /// mirror it away". A release record is absent from EVERY source by construction: it does not
+    /// exist until the mesh compiles the type, so no repo and no embedded assembly can ever carry it.
+    /// <see cref="IsGovernance"/> spares <c>_</c>-prefixed segments only, which <c>Release</c> is not.
+    /// #1326 put the protection behind <see cref="IStaticRepoSource.IsExcludedFromMirror"/> — but that
+    /// hook DEFAULTS TO <c>false</c> and only <c>InMemoryStaticRepoSource</c> (GitSync) implements it,
+    /// so every COMPILED source was left unguarded: <c>DocumentationStaticRepoSource</c> overrides
+    /// neither the hook nor <see cref="IStaticRepoSource.SyncMode"/>, so the <c>Doc</c> partition ran
+    /// the default <see cref="PartitionSyncMode.FullReplace"/> and deleted its release records on every
+    /// import (issue #1422: four <c>Doc/…/Release/…</c> deletes minted 20 minutes earlier by the same
+    /// run). The tell in production: source-owned partitions held exactly ONE release per NodeType
+    /// while ordinary partitions accumulated dozens.</para>
+    ///
+    /// <para>The rule belongs HERE, at the one prune decision, rather than in each source's opt-in:
+    /// "the mesh generated it, so its absence from the source is meaningless" is a property of the
+    /// NODE, not of who is importing. It matches <c>SyncIgnore.Default</c>, which already declares
+    /// <c>Release/</c> as the platform-wide never-syncs rule — the two now agree for every source
+    /// instead of only for GitSync.</para>
+    ///
+    /// <para>Matched as a whole path SEGMENT after the partition root and case-insensitively (mesh
+    /// paths do not distinguish case — the #1326 <c>release/</c> vs <c>Release/</c> lesson), so a
+    /// partition or node whose name merely starts with "Release" is unaffected.</para>
+    /// </summary>
+    private static bool IsMeshMintedRelease(MeshNode node) =>
+        node.Segments.Skip(1).Any(seg =>
+            string.Equals(seg, ReleaseNodeType.ReleaseSegment, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Computes prerendered HTML for markdown nodes via the shared <see cref="MarkdownContent.Parse"/>
