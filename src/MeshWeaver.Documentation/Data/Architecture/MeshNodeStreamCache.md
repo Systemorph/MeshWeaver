@@ -151,6 +151,35 @@ NodeType activation, MCP get/search, synced-query grain warming — leaked a
 permanently-connected upstream stream (~1,650 live streams / 37 heartbeats-per-second
 measured on a long-lived portal).
 
+### The idle sweep is not the only reaper — an evicted upstream dies with its last holder
+
+The idle sweep answers *"this path went quiet"*. It cannot answer *"this write is finished
+with its mirror"*, and that is the case a busy path is always in: `Workspace.EvictForPath`
+retires a path's upstream on **every** change event — including the echo of the writer's own
+write — so the next writer diffs against the owner's authoritative state rather than a stale
+snapshot. That eviction is load-bearing; parking the retired stream until the idle sweep
+happened to notice was not, and a continuously-written path never meets the sweep's
+"zero subscribers **and** ten minutes untouched" condition
+([#1324](https://github.com/Systemorph/MeshWeaver/issues/1324)).
+
+Reference counting the stream's Rx subscribers cannot decide it either: the reduce chain
+`JsonSynchronizationStream.CreateExternalClient` builds subscribes to the stream **itself**, so
+a retired mirror sits at 2–3 subscribers forever and a "dispose at zero" rule never fires.
+
+So holders **declare** themselves. Anything keeping a remote stream past the call that resolved
+it takes a lease from `Workspace.AcquireRemoteStreamUnchecked` and disposes it when done:
+
+| holder | lease lifetime |
+|---|---|
+| this cache's per-entry hydration (`CreateEntry` → `handle.Subscribe`) | the entry's whole life — it *is* the path's one live mirror |
+| a cross-hub write (`MeshNodeStreamHandle.UpdateRemote` / `WriteViaSyncStream`) | the write's `Observable.Create` subscription |
+| a reduce callback that hands the stream on (`MeshDataSource`, `SyncedQueryDataSourceExtensions`) | **none** — undeclared, so it keeps the conservative parking |
+
+An **evicted** stream with no remaining declared holder is disposed at once — `UnsubscribeRequest`
+reaches the owner, and both the client and owner `sync/` hubs die. A stream nobody leased is never
+touched by this and is still reclaimed by the idle release above or at workspace disposal. Steady
+state on a hot path is therefore ONE live mirror, not one per write.
+
 ## The storm breaker — absent nodes can't melt the silo
 
 A read whose owner answers *NotFound* is cached as a **negative entry** with exponential backoff (2 s doubling up to 5 min). While the window is open, re-subscribing to that path replays the cached failure instead of re-opening an upstream subscription — so a loop that keeps re-reading an absent node cannot hammer the routing layer. The entry simply **expires** (the next natural read re-probes once; a successful read clears it immediately) — there is no timer that re-subscribes on its own.

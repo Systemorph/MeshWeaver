@@ -67,28 +67,54 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
     /// <c>TypeRegistry</c> and <c>JsonSerializerOptions</c> — about 140 KB — so the two numbers move
     /// together, but only this one says WHERE.</para>
     ///
-    /// <para>Measured on this repro at the time of writing: <b>22 hubs and ~8.7 MB per recompile</b>,
-    /// attributed by walking the hosted-hub tree (see <see cref="HubsByParent"/>, printed below):
-    /// <c>_Activity/compile-state</c> +22 over three recompiles, the shared <c>cache/</c> hub +17, the
-    /// three per-compile <c>_Activity/compile-&lt;ts&gt;</c> node hubs +16, the NodeType's own hub +6.
-    /// Almost all of them are <c>sync/{id}</c> sub-hubs — one per <c>SynchronizationStream</c>.</para>
+    /// <para>Measured on this repro: <b>12 hubs and ~6–7 MB per recompile</b> (12.0 / 12.3 / 12.0
+    /// over three Release runs), down from 22 and ~8 MB. Attributed by walking the hosted-hub tree
+    /// (see <see cref="HubsByParent"/>, printed below): the three per-compile
+    /// <c>_Activity/compile-&lt;ts&gt;</c> node hubs ~+17 over three recompiles (plus the 2 node hubs
+    /// themselves), <c>_Activity/compile-state</c> +12, the NodeType's own hub +3, the shared
+    /// <c>cache/</c> hub +3–4. Almost all of them are <c>sync/{id}</c> sub-hubs — one per
+    /// <c>SynchronizationStream</c>.</para>
     ///
-    /// <para>The remaining retainer is <c>Workspace.EvictForPath</c>: it fires on EVERY mesh change
-    /// event, including the echo of the writer's own write, evicts the mirror that write used and
-    /// PARKS it in <c>_evictedRemoteStreams</c> without disposing. Instrumented over this loop the
-    /// parked set goes 1 → 23 monotonically and is never drained: its only reaper is the shared
-    /// mesh-node cache's idle sweep, which needs zero subscribers AND ten minutes untouched — a
-    /// condition a continuously-written path never meets. The eviction itself is load-bearing (with it
-    /// disabled the next write diffs against a stale snapshot and the owner's MergeGuard refuses it,
-    /// so the compile never settles), and a plain "dispose when the subscriber count hits zero"
-    /// does not fire either: an evicted stream measures 2–3 subscribers because the reduce chain
-    /// built by <c>CreateExternalClient</c> subscribes to itself. Reclaiming it needs the shared cache
-    /// — which knows which mirror is live — to re-bind on eviction. Issue #1324.</para>
+    /// <para><b>What the 22 → 12 change closed (#1324):</b> <c>Workspace.EvictForPath</c> fires on
+    /// EVERY mesh change event — including the echo of the writer's own write — and used to PARK the
+    /// mirror that write had used in <c>_evictedRemoteStreams</c> without disposing it, so a
+    /// continuously-written path minted a fresh client <c>sync/</c> hub (and its owner-side twin) per
+    /// write and never gave one back; instrumented over this loop the parked set grew 1 → 23
+    /// monotonically. The eviction itself is load-bearing (disabled, the next write diffs against a
+    /// stale snapshot and the owner's MergeGuard refuses it, so the compile never settles) and a
+    /// "dispose when the Rx subscriber count hits zero" rule does not fire at all (the reduce chain
+    /// <c>CreateExternalClient</c> builds subscribes to the stream itself, so an evicted stream sits
+    /// at 2–3 subscribers forever). The cure is a DECLARED holder: everything that keeps a remote
+    /// stream past the call that resolved it takes a lease
+    /// (<c>Workspace.AcquireRemoteStreamUnchecked</c>) and an evicted stream is disposed the instant
+    /// its last lease goes. Measured over this loop: 24 mirrors opened, 23 evicted, <b>18 reclaimed</b>
+    /// — the 6 survivors are the one live hydration mirror per path, which is the correct steady
+    /// state.</para>
+    ///
+    /// <para><b>What still retains, and why the bound is 15 rather than single digits</b> — two
+    /// mechanisms, neither of them the parking one:</para>
+    /// <list type="number">
+    ///   <item>The per-compile <c>_Activity/compile-&lt;ts&gt;</c> NODE HUBS (~6 apiece) are created
+    ///     per compile and never reclaimed — a node-lifecycle question, not a stream one. This is now
+    ///     the LARGEST share of the residual.</item>
+    ///   <item>Owner-side intermediate reduced streams. <c>MeshDataSource</c>'s own-node
+    ///     <c>AddWorkspaceReferenceStream&lt;MeshNode&gt;</c> factory builds
+    ///     <c>primary.Reduce&lt;InstanceCollection&gt;(CollectionReference("MeshNode"))</c> and then
+    ///     reduces THAT to the node — and <c>WorkspaceStreams.CreateReducedStream</c> registers each
+    ///     child for disposal ON ITS PARENT, which here is the data source's primary stream (hub
+    ///     lifetime). The factory runs uncached on every call that passes a <c>configuration</c> —
+    ///     i.e. once per inbound <c>SubscribeRequest</c> — so an unsubscribe reaps the subscription's
+    ///     own hub but leaves the intermediates behind. Same defect shape as #1345 (which memoized
+    ///     <c>Workspace.GetStream</c>), one layer down at <c>stream.Reduce</c>. Correlating the
+    ///     surviving hubs against the client stream ids says this is what <c>compile-state</c>'s +12
+    ///     now is: 27 of the 34 surviving <c>sync/</c> hubs match NO client mirror.</item>
+    /// </list>
     ///
     /// <para>So this bound is a RATCHET at the measured value, not an aspiration: it fails the moment
-    /// the residual gets worse, and it must be tightened by whoever fixes the eviction ownership.</para>
+    /// the residual gets worse, and it is to be tightened again by whoever fixes either mechanism
+    /// above.</para>
     /// </summary>
-    private const int MaxHubsPerRecompile = 26;
+    private const int MaxHubsPerRecompile = 15;
 
     /// <summary>
     /// Live collectible contexts for this NodeType. The name is
@@ -232,14 +258,15 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         // Caching local reduced streams the way remote ones were always cached took it to ~9 MB
         // and 22 hubs, and took the mesh's steady-state hub count from 187 to 48.
         //
-        // 16 MB, not single digits, is deliberate: the REMAINING ~9 MB is a second, named retainer —
-        // `Workspace.EvictForPath` parks the evicted remote stream in `_evictedRemoteStreams`
-        // WITHOUT disposing it, so every change event on a subscribed path mints a fresh
-        // client/owner `sync/` pair (6 + 8 hubs per compile here). Tighten this bound to single
-        // digits in the change that fixes THAT — a bound nothing can currently pass is a red test,
-        // not a guard.
+        // 12 MB, not single digits, is deliberate. The eviction-parking retainer is fixed (#1324 —
+        // see MaxHubsPerRecompile), which took this from ~8 to ~6–7 MB per recompile; what is left
+        // belongs to the two mechanisms named there (per-compile activity NODE hubs, and the
+        // owner-side intermediate reduced streams registered on a hub-lifetime parent). Tighten this
+        // bound with whichever of those is fixed next — a bound nothing can currently pass is a red
+        // test, not a guard. Bytes also move with unrelated allocation, which is exactly why the hub
+        // delta below is the primary assertion.
         var perRecompile = managedGrowth / Recompiles;
-        perRecompile.Should().BeLessThan(16 * 1024 * 1024,
+        perRecompile.Should().BeLessThan(12 * 1024 * 1024,
             $"a recompile of a trivial type must return its memory; {perRecompile / (1024 * 1024)} MB "
             + $"retained per recompile ({managedGrowth / (1024 * 1024)} MB over {Recompiles}) means "
             + "compile state survives the context that owned it");

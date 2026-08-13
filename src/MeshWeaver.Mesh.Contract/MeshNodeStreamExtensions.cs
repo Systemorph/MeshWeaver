@@ -133,12 +133,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
         || string.Equals(_path, _workspace.Hub.Address.Path, StringComparison.Ordinal)
         || string.Equals(_path, _workspace.Hub.Address.ToString(), StringComparison.Ordinal);
 
-    private ISynchronizationStream<MeshNode> GetStream()
+    /// <summary>
+    /// Resolves this handle's stream AND — for a REMOTE path — declares this caller as a holder
+    /// of it (see <c>Workspace.AcquireRemoteStreamUnchecked</c>). Dispose the returned lease
+    /// together with whatever subscription/operation used the stream: that declaration is what
+    /// lets a change-feed-evicted stream be reclaimed the moment its last holder leaves, instead
+    /// of being parked for the process lifetime (#1324 — every cross-hub write to a subscribed
+    /// path otherwise left a client `sync/` hub and its owner-side twin behind). Own-hub streams
+    /// are local reductions owned by the data source; they take no lease.
+    /// </summary>
+    private (ISynchronizationStream<MeshNode> Stream, IDisposable Lease) AcquireStream()
     {
         if (IsOwn)
-            return _workspace.GetStream(new MeshNodeReference())
-                ?? throw new InvalidOperationException(
-                    "MeshNode stream is not available â€” the workspace has no MeshNodeReference reducer.");
+            return (_workspace.GetStream(new MeshNodeReference())
+                    ?? throw new InvalidOperationException(
+                        "MeshNode stream is not available â€” the workspace has no MeshNodeReference reducer."),
+                Disposable.Empty);
         // 🚨 Open the remote MeshNode subscription under the system identity.
         // Reading MeshNode content is infrastructure (routing, path resolution,
         // permission probing, NodeType activation, satellite enumeration). The
@@ -158,7 +168,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // discouraged-usage warning. This cache/bypass handle is the sanctioned hot
             // path, so it opens the raw single-node remote reduce via the internal
             // unchecked overload — no warning noise.
-            return ((Workspace)_workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+            return ((Workspace)_workspace).AcquireRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
                 new Address(_path!), new MeshNodeReference());
         }
     }
@@ -226,10 +236,26 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     .Where(n => n is not null)
                     .Subscribe(typedObserver);
 
-            return GetStream()
-                .Where(change => change.Value != null)
-                .Select(change => change.Value!)
-                .Subscribe(typedObserver);
+            // 🚨 The lease lives exactly as long as this subscription. The shared mesh-node
+            // cache's hydration comes through here, so its entry IS the declared holder of the
+            // path's upstream for the entry's whole life — which is what makes every OTHER
+            // (write-scoped) stream for the same path reclaimable on eviction.
+            var (stream, lease) = AcquireStream();
+            try
+            {
+                var subscription = stream
+                    .Where(change => change.Value != null)
+                    .Select(change => change.Value!)
+                    .Subscribe(typedObserver);
+                return new CompositeDisposable(subscription, lease);
+            }
+            catch
+            {
+                // A lease the caller never receives can never be released, and an
+                // unreleased lease pins the mirror against reclamation forever.
+                lease.Dispose();
+                throw;
+            }
         }
         catch (Exception ex)
         {
@@ -873,10 +899,24 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
 
             // 🚨 Sanctioned escape hatch (cache/bypass write path) — route through the
             // internal unchecked overload; the public GetRemoteStream<MeshNode> warns.
-            var remoteStream = ((Workspace)_workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
-                new Address(_path!), new MeshNodeReference());
+            // The LEASE (disposed with this subscription) is what tells the workspace this
+            // write still needs the stream, so an eviction landing mid-write parks it rather
+            // than reclaiming it — and reclaims it the instant the write is done (#1324).
+            //
+            // 🚨 Unlike UpdateRemote — which only READS the initial snapshot off the stream and
+            // then writes with hub.Post — this path writes THROUGH the stream, and EmitOnce
+            // completes the caller inside the stream's own UpdateStreamRequest turn (just before
+            // SetCurrent). So the lease ends a hair before the turn does. Leasing is still
+            // strictly the safer choice: leaving this path undeclared would let an eviction
+            // reclaim the very mirror the overwrite is writing through. Closing the last
+            // microseconds needs an `applied` hook on the value-based SetFull/Update overloads
+            // (SynchronizationStream already runs one post-apply, same turn, for the
+            // ChangeItem-based overload) — worth doing when that API is next touched.
+            var (remoteStream, streamLease) = ((Workspace)_workspace)
+                .AcquireRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+                    new Address(_path!), new MeshNodeReference());
 
-            var composite = new CompositeDisposable();
+            var composite = new CompositeDisposable(streamLease);
             var emitted = 0;
             void EmitOnce(MeshNode value)
             {
@@ -998,10 +1038,14 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
 
             // 🚨 Sanctioned escape hatch (cache/bypass write path) — route through the
             // internal unchecked overload; the public GetRemoteStream<MeshNode> warns.
-            var remoteStream = ((Workspace)_workspace).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
-                new Address(_path!), new MeshNodeReference());
+            // Leased for the life of this subscription — see WriteViaSyncStream's note and
+            // Workspace._remoteStreamLeases (#1324): without the declaration the workspace
+            // cannot tell a write-scoped mirror from one a live reader still needs.
+            var (remoteStream, streamLease) = ((Workspace)_workspace)
+                .AcquireRemoteStreamUnchecked<MeshNode, MeshNodeReference>(
+                    new Address(_path!), new MeshNodeReference());
 
-            var composite = new CompositeDisposable();
+            var composite = new CompositeDisposable(streamLease);
 
             // Wait for the per-node hub's initial SubscribeResponse before
             // running the user lambda — the lambda needs a non-null current
