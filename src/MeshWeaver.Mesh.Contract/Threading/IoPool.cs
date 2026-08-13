@@ -223,8 +223,22 @@ public sealed class IoPool : IIoPool, IDisposable
                     _ => { },
                     ex =>
                     {
-                        // A drain/unsubscribe cancellation is expected teardown — swallow it; surface real faults.
-                        if (ex is not OperationCanceledException)
+                        // A drain/unsubscribe cancellation is expected teardown, so it must not be
+                        // surfaced as a FAULT — but it must still TERMINATE the observer.
+                        //
+                        // 🚨 Swallowing it outright (the previous behaviour) left the subscriber with
+                        // neither OnCompleted nor OnError: the drain registration below disposes
+                        // `inner`, and disposing a subscription emits nothing. The observable then
+                        // never terminated, so every `.Finally(...)` hung off it never ran — which is
+                        // exactly the bookkeeping that releases a route's in-flight slot and advances
+                        // OrderedRouteDispatcher's per-destination FIFO (RoutingGrain.Dispatch,
+                        // OrderedRouteDispatcher.DrainNext). A leg cancelled by the drain therefore
+                        // leaked its slot and stranded its destination's queue permanently. Silent
+                        // non-termination is the one thing this codebase never tolerates: an error
+                        // must reach a graceful sink, never a silent hang.
+                        if (ex is OperationCanceledException)
+                            observer.OnCompleted();
+                        else
                             observer.OnError(ex);
                     });
 
