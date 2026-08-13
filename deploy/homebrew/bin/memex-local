@@ -468,8 +468,13 @@ helm_deploy() {
     i=$((i + 1))
   done
 
+  # Layering: chart defaults < TRACKED local defaults (ship with the brew package, so existing
+  # installs pick up new behaviour like the startup bake on upgrade) < the user's overlay (their
+  # secrets + overrides — generated once, never regenerated, always wins).
+  local share_dir; share_dir="$(resolve_share)"
   helm upgrade --install "$RELEASE" "$chart" \
     -f "$chart/values.yaml" \
+    -f "$share_dir/values.local.defaults.yaml" \
     -f "$OVERLAY" \
     --set persistDataVolume=true \
     --set "config.memex_portal.Bootstrap__Secret=$LOCAL_BOOTSTRAP_SECRET" \
