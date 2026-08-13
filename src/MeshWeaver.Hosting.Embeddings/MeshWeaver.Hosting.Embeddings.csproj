@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>Embedding provider abstraction for MeshWeaver with Azure AI Foundry and Ollama implementations, powering vector search and content indexing.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Azure.AI.Inference" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
