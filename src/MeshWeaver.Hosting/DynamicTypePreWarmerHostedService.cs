@@ -115,7 +115,7 @@ public sealed class DynamicTypePreWarmerHostedService(
             logger.LogInformation(
                 "DynamicTypePreWarmer: disabled ({Key} != true) — dynamic NodeTypes compile lazily on first access",
                 EnabledConfigKey);
-            bake?.MarkSettled();
+            bake?.MarkSettled(PreWarmSettlement.NotApplicable);
             return;
         }
 
@@ -123,7 +123,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         if (mesh is null)
         {
             logger.LogDebug("DynamicTypePreWarmer: no mesh hub resolved — skipping startup warm-up");
-            bake?.MarkSettled();
+            bake?.MarkSettled(PreWarmSettlement.NotApplicable);
             return;
         }
 
@@ -302,15 +302,45 @@ public sealed class DynamicTypePreWarmerHostedService(
                 },
                 ex =>
                 {
-                    logger.LogWarning(ex, "DynamicTypePreWarmer: warm-up stream faulted (best-effort — lazy compile still works)");
-                    // A faulted sweep proved nothing. Release the gate rather than hold the pod out
-                    // of rotation forever on a stream error: the lazy compile path still works, so
-                    // an un-provable bake must not become an outage. A genuine broken type is caught
-                    // by MarkOutcome above, which is what the gate is actually for.
-                    gate?.MarkComplete("warm-up stream faulted — gate released, lazy compile applies");
+                    // 🚨 A FAULTED SWEEP PROVED NOTHING — and must not be recorded as a bake that
+                    // passed. This handler used to call MarkComplete, so a pod that could not
+                    // enumerate a single NodeType went Complete → Healthy and took traffic having
+                    // verified nothing: the one way a pod could clear a gate that otherwise works.
+                    //
+                    // The rationale for releasing it read "an un-provable bake must not become an
+                    // outage", which is the documented fail-OPEN policy — but that policy is about
+                    // the pre-warm being DISABLED (BakePhase.NotStarted: "a configuration mistake
+                    // must never black-hole a pod forever"), not about it ERRORING. The same health
+                    // check already reports BakePhase.Running — a pod that has verified strictly
+                    // MORE than this one — as Unhealthy, so treating a fault as passing was never
+                    // the policy; it was an inconsistency inside it. Nothing here changes what
+                    // happens when the sweep is switched off.
+                    //
+                    // Correctness is unaffected either way: lazy compilation still builds every
+                    // type on first access. What changes is only whether this pod may CLAIM to have
+                    // verified its NodeTypes on this image.
+                    gate?.MarkFaulted("the warm-up stream faulted before the sweep could finish");
+                    if (gate is { GatesReadiness: true, Phase: BakePhase.Faulted })
+                        logger.LogCritical(ex,
+                            "DynamicTypePreWarmer: REFUSING READINESS — the warm-up stream FAULTED, "
+                            + "so this pod has NOT verified that its NodeTypes build on this image. "
+                            + "A sweep that errored is not a sweep that passed. The rollout will "
+                            + "stall with the previous image still serving; a restart re-runs the "
+                            + "sweep, so a transient cause clears itself. Lazy compilation still "
+                            + "works, so if this deployment must roll forward regardless, set "
+                            + "'{Key}'=true — that serves on an UNPROVEN bake and says so in the "
+                            + "health payload.",
+                            NodeTypeBakeGateExtensions.AllowUnprovenBakeConfigKey);
+                    else
+                        logger.LogError(ex,
+                            "DynamicTypePreWarmer: warm-up stream faulted — this pod verified "
+                            + "NOTHING about its NodeTypes (lazy compile still works, so it stays "
+                            + "correct). Nothing gates on this state here; the bake is recorded as "
+                            + "unproven rather than complete.");
                     // A fault is a terminal too: the sweep is over, the compile queue is no longer
-                    // saturated, and whoever sequenced on the bake may proceed (#1114).
-                    bake?.MarkSettled();
+                    // saturated, and whoever sequenced on the bake may proceed (#1114) — now able
+                    // to see THAT it was a fault they proceeded past.
+                    bake?.MarkSettled(PreWarmSettlement.Faulted);
                 },
                 () =>
                 {
@@ -361,7 +391,7 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // flows sequenced on the bake (#1114). On a Regressed+armed pod readiness
                     // stays refused regardless; the default install proceeding is deliberate —
                     // installs repair content, and the broken type is already terminal.
-                    bake?.MarkSettled();
+                    bake?.MarkSettled(PreWarmSettlement.Completed);
                 });
     }
 
