@@ -218,7 +218,7 @@ else
     effectiveOptions = options;
 chapters = new List<ExportChapter>
     {
-        new ExportChapter(title, ExtractMarkdown(rootNode), sourcePath)
+        new ExportChapter(title, ExportSource.MarkdownOf(rootNode, jsonOptions, Log), sourcePath)
     };
     if (options.IncludeChildren)
     {
@@ -238,7 +238,7 @@ chapters = new List<ExportChapter>
                 var depth = desc.Path.Count(c => c == '/') - rootDepth;
                 if (depth > options.MaxDepth) continue;
             }
-            var md = ExtractMarkdown(desc);
+            var md = ExportSource.MarkdownOf(desc, jsonOptions, Log);
             if (!string.IsNullOrWhiteSpace(md))
                 chapters.Add(new ExportChapter(desc.Name ?? desc.Id, md, desc.Path));
         }
@@ -279,12 +279,12 @@ return new RenderedDocument(
     "application/pdf",
     bytes);
 
-static string ExtractMarkdown(MeshNode node)
-{
-    if (node.Content is MarkdownContent mc) return mc.Content ?? "";
-    if (node.Content is string s) return s;
-    return "";
-}
+// 🚨 There is no local ExtractMarkdown any more — the body extraction is
+// ExportSource.MarkdownOf, in COMPILED framework code. `node.Content is MarkdownContent` was the
+// trap-door: a body stored as plain JSON carries no $type, so it stays a raw JsonElement even on
+// its own hub, the test is false, and the export prints a cover page, a contents list and NO body,
+// silently (#1374). Three .csx copies of that test is how it survived — nothing in this file is
+// type-checked by dotnet build, so only a compiled, unit-tested helper can be trusted to stay fixed.
 
 // The portal's public origin. A resolved layout area can carry links, and a link with no origin is
 // dead the moment the PDF leaves this machine — the reader has no page to resolve it against.
@@ -303,7 +303,7 @@ static string ExtractSlideMarkdown(MeshNode node, JsonSerializerOptions options)
 {
     var slide = node.ContentAs<SlideContent>(options);
     if (slide?.Content is { } content) return content;
-    return ExtractMarkdown(node);
+    return ExportSource.MarkdownOf(node, options);
 }
 
 static string Sanitize(string s)
