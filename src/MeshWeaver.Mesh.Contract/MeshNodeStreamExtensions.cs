@@ -1416,6 +1416,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// (e.g. via <c>HandlePatchDataRequest</c>'s recursive merge), reproduces
     /// <paramref name="updated"/>. Keys in current and missing in updated
     /// emit <c>null</c> (RFC 7396 remove). Equal values emit nothing.
+    /// <para>🚨 A changed <b>large string</b> leaf is emitted as a SPLICE
+    /// (<see cref="PatchStringSplice"/>) rather than the whole new value, so a field that
+    /// grows one chunk at a time — an agent response cell streaming tokens — costs
+    /// <c>O(chunk)</c> per write instead of <c>O(length)</c>. Below
+    /// <see cref="PatchStringSplice.MinSpliceLength"/>, or when the splice would not
+    /// actually be smaller, the full value is emitted exactly as before.</para>
     /// </summary>
     private static System.Text.Json.Nodes.JsonObject ComputeMergePatchDiff(
         System.Text.Json.Nodes.JsonObject current,
@@ -1433,8 +1439,22 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     patch[key] = sub;
                 continue;
             }
-            if (!System.Text.Json.Nodes.JsonNode.DeepEquals(currentValue, updatedValue))
-                patch[key] = updatedValue?.DeepClone();
+            if (System.Text.Json.Nodes.JsonNode.DeepEquals(currentValue, updatedValue))
+                continue;
+            // Big string that changed on one side → ship only the splice. The matching base
+            // fingerprint is written by MeshNodePatchMerge.ExtractBaseValues, which recognises
+            // this shape; the owner applies the splice only once that fingerprint proves its
+            // live text is the text this diff was computed against.
+            if (currentValue is System.Text.Json.Nodes.JsonValue cv
+                && cv.TryGetValue<string>(out var oldStr)
+                && updatedValue is System.Text.Json.Nodes.JsonValue uv
+                && uv.TryGetValue<string>(out var newStr)
+                && PatchStringSplice.TryEncode(oldStr, newStr, out var spliced))
+            {
+                patch[key] = spliced;
+                continue;
+            }
+            patch[key] = updatedValue?.DeepClone();
         }
         // Keys removed in updated → emit null per RFC 7396.
         foreach (var (key, _) in current)
