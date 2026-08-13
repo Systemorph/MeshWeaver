@@ -71,6 +71,12 @@ data:
   PreWarm__DynamicTypes: "{{ .Values.config.memex_portal.PreWarm__DynamicTypes }}"
   PreWarm__GateReadiness: "{{ .Values.config.memex_portal.PreWarm__GateReadiness }}"
   PreWarm__AllowUnprovenBake: "{{ .Values.config.memex_portal.PreWarm__AllowUnprovenBake }}"
+  {{- /* PreWarm__BuildProtocol: coordinate the bake through the Build nodes (Admin/Build claim +
+         chunk activities + the per-fingerprint GO) instead of the file lease and the follower's
+         share poll — Doc/Architecture/BuildCoordination. Execution is the same sweep either way.
+         This key must exist HERE or it is silently dropped: the configmap lists keys explicitly
+         rather than iterating .Values.config, so an un-templated key never reaches the pod. */}}
+  PreWarm__BuildProtocol: "{{ .Values.config.memex_portal.PreWarm__BuildProtocol }}"
   # ---- Assembly-cache retention -------------------------------------------
   # The bake writes one WHOLE GENERATION of NodeType assemblies per image, because the store
   # keys every file by the MeshWeaver.Graph MVID and a CI build changes it on every publish.
