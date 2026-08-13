@@ -213,4 +213,45 @@ public class GateSummaryTest
             "Tests host: Store/Catalog/GateProbe — the probe instance the gate created for this check",
             summary, StringComparison.Ordinal);
     }
+
+    // ── counts that were never taken must not be printed as zeros (#1360) ─────────────────────
+
+    [Fact]
+    public void PipelineThrewBeforeTheInstallReported_SummaryDoesNotClaimZeroNodes()
+    {
+        // Systemorph/MeshWeaver#1360: a wait inside the install timed out AFTER the nodes were
+        // written — the identical snapshot wrote 34 nodes on the very next run — and the gate
+        // printed `[FAIL] Essentials (0 node(s), 0 type(s))`. "Its hub vanished mid-install" and
+        // "it legitimately had nothing to install" rendered as the SAME line, which is exactly why
+        // the signature was filed away as harness noise. The failure must still fail; it must not
+        // claim a measurement nobody took.
+        var report = new GateReport([
+            new PackageResult("Essentials")
+            {
+                CountsMeasured = false,
+                InstallError = "[install] TimeoutException: The operation has timed out.",
+            }
+        ]);
+
+        var summary = Summarize(report);
+
+        Assert.Contains("counts unavailable", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("(0 node(s), 0 type(s))", summary, StringComparison.Ordinal);
+        // The stage is part of the verdict: `install:` used to label a fetch failure, a compile
+        // failure and an idempotence re-install failure alike.
+        Assert.Contains("[install] TimeoutException", summary, StringComparison.Ordinal);
+        Assert.False(report.Success, "a package whose pipeline threw is still RED");
+    }
+
+    [Fact]
+    public void MeasuredRun_StillPrintsTheCounts()
+    {
+        // The new flag defaults to true, so every real result keeps its counts — this pins that
+        // the #1360 change did not quietly hide the numbers from healthy runs.
+        var summary = Summarize(Report(Type("Store/Catalog",
+            CheckOutcome.Passed, CheckOutcome.Passed, CheckOutcome.Passed)));
+
+        Assert.Contains("(97 node(s), 1 type(s))", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("counts unavailable", summary, StringComparison.Ordinal);
+    }
 }

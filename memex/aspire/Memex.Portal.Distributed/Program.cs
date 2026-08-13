@@ -312,10 +312,18 @@ var gateBake = bool.TryParse(builder.Configuration[NodeTypeBakeGateExtensions.En
 var bakeSweepEnabled =
     bool.TryParse(builder.Configuration[DynamicTypePreWarmerHostedService.EnabledConfigKey], out var s) && s;
 
+// Operator escape hatch: serve even when the sweep ERRORED and therefore proved nothing
+// (BakePhase.Faulted). Default off — an unproven bake is not a passed bake, which is the guard the
+// retired pre-run bake Job used to enforce from outside as Bake:AllowEmpty. It never relaxes a real
+// regression, and it never rewrites the recorded state; only the readiness verdict.
+var allowUnprovenBake = bool.TryParse(
+    builder.Configuration[NodeTypeBakeGateExtensions.AllowUnprovenBakeConfigKey],
+    out var parsedAllowUnproven) && parsedAllowUnproven;
+
 // Shared bake state the sweep writes and the readiness gate below reads. Always registered — the
 // diagnostics are collected either way; only ENFORCEMENT is opt-in. Passing the flag is what lets
 // the sweep report an UNARMED regression honestly instead of claiming a stall nothing enforces.
-builder.Services.AddNodeTypeBakeGate(gateBake);
+builder.Services.AddNodeTypeBakeGate(gateBake, allowUnprovenBake);
 
 if (gateBake)
     builder.Services.AddHealthChecks()
@@ -339,6 +347,22 @@ if (gateBake && !bakeSweepEnabled)
             + "configuration stops claiming a protection that is not there.",
             NodeTypeBakeGateExtensions.EnabledConfigKey,
             DynamicTypePreWarmerHostedService.EnabledConfigKey);
+
+// The escape hatch is a HOLE in an armed gate — small and deliberate, but a hole. Say so at boot,
+// so "the gate is on" and "the gate still refuses an unproven bake" cannot drift apart silently in
+// an operator's head. A flag that quietly weakens a safety gate is how the unarmed-gate incident
+// happened in the first place.
+if (gateBake && allowUnprovenBake)
+    app.Services.GetRequiredService<ILoggerFactory>()
+        .CreateLogger("MeshWeaver.Hosting.NodeTypeBakeGate")
+        .LogWarning(
+            "NodeType bake gate is ARMED ({GateKey}=true) but {AllowKey}=true, so a sweep that "
+            + "ERRORS will still be served. Real regressions are unaffected and still stall the "
+            + "rollout; what is waived is the refusal to certify a bake that never ran. Clear "
+            + "{AllowKey} once whatever prevents the sweep from completing is fixed.",
+            NodeTypeBakeGateExtensions.EnabledConfigKey,
+            NodeTypeBakeGateExtensions.AllowUnprovenBakeConfigKey,
+            NodeTypeBakeGateExtensions.AllowUnprovenBakeConfigKey);
 
 app.MapDefaultEndpoints();
 app.StartMemexApplication<Memex.Portal.Shared.App>();
