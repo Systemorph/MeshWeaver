@@ -1816,17 +1816,58 @@ internal static class NodeTypeEnrichmentHelpers
             meshHub, nodeType, typeVersionAtOverlay: typeNode.Version, logger));
     }
 
-    private static Func<MessageHubConfiguration, MessageHubConfiguration>
+    /// <summary>
+    /// The overlay's layout: the compile-progress page on the instance's <c>Overview</c> AND on
+    /// every area the hub does not otherwise own.
+    ///
+    /// <para>🚨 The catch-all is the whole point. Registering only <c>Overview</c> did not remove
+    /// the silent park — it MOVED it: every other area of an overlaid instance fell to
+    /// <c>LayoutDefinition.BuildNotFoundControl</c> and told the user
+    /// <c>"No renderer is registered for area `KeyMetrics`"</c>, i.e. a terminal "this area does
+    /// not exist" for a state that resolves itself in seconds (#1411). Anyone deep-linking an
+    /// area during a framework-bump sweep got that answer.</para>
+    ///
+    /// <para>Two details of the sanctioned catch-all shape (<c>KernelContainer</c>) are
+    /// load-bearing here:</para>
+    /// <list type="bullet">
+    ///   <item><c>HasNamedRenderer</c> is evaluated against the definition that ALREADY carries
+    ///     the <c>Overview</c> view — every renderer matching an area first disposes and REMOVES
+    ///     that area's content, so two renderers for one area are last-wins-destructive (the
+    ///     2026-07-03 eternal-spinner RCA). The named areas the mesh default config registers
+    ///     (Data, Schema, Search, …) keep serving their generic views for the same reason.</item>
+    ///   <item><c>StartWith(null)</c> — <c>LayoutDefinition.Render</c> composes an area's
+    ///     renderers SEQUENTIALLY, so a catch-all that stays silent until the cross-hub type
+    ///     stream emits would dam the node menu behind it. A null renders as a pass-through.</item>
+    /// </list>
+    ///
+    /// <para>The redirect target is the area the caller ASKED for, not the instance root: once
+    /// the build settles, a deep link to <c>…/KeyMetrics</c> must land back on
+    /// <c>…/KeyMetrics</c>, not bounce the user to the overview of a page they never requested.</para>
+    /// </summary>
+    internal static Func<MessageHubConfiguration, MessageHubConfiguration>
         CreateCompilationInProgressConfiguration(string nodeType, string instancePath)
         => config => config.AddLayout(layout =>
-            layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, _) =>
+        {
+            var withOverview = layout.WithView(MeshNodeLayoutAreas.OverviewArea,
+                (host, _) => Progress(host, $"/{instancePath}"));
+            return withOverview.WithView(
+                ctx => !withOverview.HasNamedRenderer(ctx.Area),
+                (host, ctx) => Progress(host, RedirectTarget(ctx.Area))
+                    .StartWith((UiControl?)null));
+
+            string RedirectTarget(string? area) => string.IsNullOrEmpty(area)
+                ? $"/{instancePath}"
+                : $"/{instancePath}/{area}";
+
+            IObservable<UiControl?> Progress(LayoutAreaHost host, string redirectOnOk) =>
                 NodeTypeLayoutAreas.CompileProgressView(
                     host,
                     // Cross-hub: the instance overlay observes the TYPE's node through the
                     // shared IMeshNodeStreamCache handle — same stream the enrichment waited on.
                     host.Hub.GetMeshNodeStream(nodeType),
                     nodeTypePath: nodeType,
-                    redirectOnOk: $"/{instancePath}")));
+                    redirectOnOk: redirectOnOk);
+        });
 
     // Default guidance for a genuine Roslyn failure (Status=Error with captured
     // diagnostics). Other overlay callers (e.g. the framework-stale recompile
