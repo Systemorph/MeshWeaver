@@ -55,6 +55,28 @@ internal class VersionWritingStorageAdapter(
             .LastAsync()
             .Select(_ => (MeshNode?)saved);
 
+    /// <summary>
+    /// Explicit forward — the interface default would read-compare-write through <c>this</c> and
+    /// strip the backend's atomic compare-and-set. An APPLIED write gets its version-history
+    /// snapshot exactly like <see cref="Write"/>; a refused one deliberately gets none (nothing
+    /// changed durably, so there is no revision to record).
+    /// </summary>
+    public IObservable<bool?> WriteIfVersion(
+        MeshNode node, long expectedVersion, JsonSerializerOptions options)
+    {
+        var write = inner.WriteIfVersion(node, expectedVersion, options);
+        if (versionQuery is null)
+            return write;
+
+        return write.SelectMany(applied => applied is true
+            ? versionQuery.WriteVersion(node, options)
+                .Catch<MeshNode, Exception>(_ => Observable.Empty<MeshNode>())
+                .DefaultIfEmpty(node)
+                .LastAsync()
+                .Select(_ => applied)
+            : Observable.Return(applied));
+    }
+
     public IObservable<string> Delete(string path) => inner.Delete(path);
 
     /// <inheritdoc />

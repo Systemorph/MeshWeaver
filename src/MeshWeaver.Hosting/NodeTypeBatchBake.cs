@@ -611,16 +611,21 @@ internal static class NodeTypeBatchBake
         return storage
             .Read(typeNode.Path, options)
             .Take(1)
-            .Select(fresh => fresh ?? typeNode)
-            .Select(fresh =>
+            // The durable version the stamp is computed FROM — 0 when there is no row at all, which
+            // the compare-and-set below reads as "insert only if absent". Carried explicitly rather
+            // than derived from stampedNode.Version - 1, which would silently rot if the mint
+            // changed.
+            .Select(stored => (Expected: stored?.Version ?? 0, Fresh: stored ?? typeNode))
+            .Select(read =>
             {
+                var fresh = read.Fresh;
                 var def = fresh.ContentAs<NodeTypeDefinition>(options, logger);
                 if (def is null)
                 {
                     logger?.LogWarning(
                         "BatchBake: {TypePath} content could not be read as NodeTypeDefinition — "
                         + "stamp skipped", typeNode.Path);
-                    return null;
+                    return (Expected: read.Expected, Stamped: (MeshNode?)null);
                 }
                 var stamped = ok
                     // currentNodeVersion = typeNode.Version — the version the compiler's
@@ -630,51 +635,53 @@ internal static class NodeTypeBatchBake
                         def, result!, typeNode.Version, activityPath: null, releasePath)
                     : NodeTypeCompilationHelpers.ApplyCompileFailure(
                         def, result, error, activityPath: null);
-                return fresh with
+                return (Expected: read.Expected, Stamped: (MeshNode?)(fresh with
                 {
                     Content = stamped,
                     Version = MeshNode.NextVersion(fresh.Version)
-                };
+                }));
             })
-            .SelectMany(stampedNode => stampedNode is null
+            .SelectMany(stamp => stamp.Stamped is not { } stampedNode
                 ? Observable.Return(Unit.Default)
                 : storage
-                    .WriteAndPublishUpdated(stampedNode, options, changeFeed)
-                    // 🚨 A REFUSED stamp must not be silent. The monotonic write guard answers a
-                    // backward write by emitting the STORED (winning) node — Version strictly
-                    // above the one we wrote — which here means a LIVE owner hub moved this
-                    // record between our read and our write. The bytes are on the share but the
-                    // record does not name them, so the type simply stays pending and the next
-                    // level-triggered probe re-bakes and re-stamps it. Saying so is the
-                    // difference between a self-healing skip and a stamp that vanished.
+                    // 🚨 COMPARE-AND-SET, not a plain write (#1424). The other writer here is the
+                    // type's OWN per-node hub — not a baker at all: it stamps compile state from the
+                    // activation-driven path, the sources watcher and the release watcher, and it is
+                    // legitimately live while a batch bake runs. So the read-modify-write above stays
+                    // racy by construction, and the single-baker claim does NOT close it (the claim
+                    // excludes second bakers; this writer is not one).
                     //
-                    // 🚨 THE SINGLE-BAKER CLAIM DOES NOT CLOSE THIS, AND IS NOT MEANT TO (#1355).
-                    // It removes one of the two writers that can race here — a SECOND BAKER, which
-                    // the build protocol's claim arbiter excludes, handing a claim on only when
-                    // cluster membership says the holder is gone rather than when a clock expires
-                    // (BuildNodeType.Arbitrate). The
-                    // other writer is the type's OWN per-node hub, which is not a baker at all: it
-                    // stamps compile state from the activation-driven path, the sources watcher and
-                    // the release watcher, and it is legitimately live while a batch bake runs. So
-                    // the read-modify-write at NextVersion stays racy by construction, and the guard
-                    // above stays the thing that makes it safe.
+                    // What the plain write got WRONG is what happened when it lost. Both writers read
+                    // the row at v and both mint v+1, and the store's monotonic condition applies at
+                    // EQUAL versions — re-persisting an unchanged node is a legitimate shape — so both
+                    // writes landed, last-write-wins, and the refusal branch below could never fire
+                    // (saved.Version was equal, never strictly greater). One stamp was silently
+                    // destroyed and the log that was supposed to say so stayed quiet. Conditioning on
+                    // the version we READ makes the loser deterministic and LOUD.
                     //
-                    // It is DEFENDED rather than fixed because the loser's outcome is already the
-                    // correct one: the bytes are durable and content-addressed, the record is left
-                    // pending, and the level-triggered probe re-bakes the type on the next pass
-                    // (NodeTypeBakeStatus.Probe asks the STORE, not the record). Turning it into a
-                    // compare-and-re-apply here would buy one saved recompile at the cost of a
-                    // second write path into the same record from a driver that does not own it —
-                    // which is the shape that produced the racing writers in the first place.
-                    .Do(saved =>
+                    // The loser's outcome is unchanged and still correct: the bytes are durable and
+                    // content-addressed, the record is left pending, and the level-triggered probe
+                    // re-bakes the type on the next pass (NodeTypeBakeStatus.Probe asks the STORE, not
+                    // the record). Deliberately NO compare-and-re-apply loop: that would be a second
+                    // write path into a record this driver does not own, which is the shape that
+                    // produced the racing writers in the first place.
+                    .WriteIfVersion(stampedNode, stamp.Expected, options)
+                    .Do(applied =>
                     {
-                        if (saved is not null && saved.Version > stampedNode.Version)
+                        if (applied is false)
+                        {
                             logger?.LogWarning(
                                 "BatchBake: compile-state stamp for {TypePath} at Version={Written} "
-                                + "was REFUSED — the durable row is already at Version={Stored} (a "
-                                + "live owner hub is writing this record). The assembly is on the "
-                                + "share; the next probe re-bakes the type and re-stamps it.",
-                                typeNode.Path, stampedNode.Version, saved.Version);
+                                + "was REFUSED — the durable row moved past Version={Expected} while "
+                                + "the compile ran (a live owner hub is writing this record). The "
+                                + "assembly is on the share; the next probe re-bakes and re-stamps it.",
+                                typeNode.Path, stampedNode.Version, stamp.Expected);
+                            return;
+                        }
+                        // Post-commit announce, exactly as WriteAndPublishUpdated did — the
+                        // mesh-change feed is what invalidates the resolution / stream caches.
+                        if (applied is true)
+                            changeFeed?.Publish(MeshChangeEvent.Updated(stampedNode));
                     })
                     .Select(_ => Unit.Default))
             .Catch<Unit, Exception>(ex =>

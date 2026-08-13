@@ -207,6 +207,29 @@ public sealed class PersistenceService : IStorageAdapter
                 });
 
     /// <summary>
+    /// Sequential try-then-claim for the compare-and-set write, mirroring
+    /// <see cref="TryWriteFrom"/>: provider <c>i + 1</c> is asked only after provider <c>i</c>
+    /// declined with <c>null</c> ("not my path"). A <c>true</c>/<c>false</c> from a provider is its
+    /// VERDICT on the row and ends the walk — a refusal must never be retried against another
+    /// store, which would be two chances at a claim that is meant to be exclusive.
+    /// Nobody owns the path ⇒ <c>null</c>, which callers read as "no durable arbiter here".
+    /// </summary>
+    public IObservable<bool?> WriteIfVersion(
+        MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => TryWriteIfVersionFrom(node, expectedVersion, options, 0);
+
+    private IObservable<bool?> TryWriteIfVersionFrom(
+        MeshNode node, long expectedVersion, JsonSerializerOptions options, int index)
+        => index >= _writable.Count
+            ? Observable.Return<bool?>(null)
+            : Observable.Defer(() => _writable[index].Adapter.WriteIfVersion(node, expectedVersion, options))
+                .Take(1)
+                .DefaultIfEmpty()
+                .SelectMany(applied => applied is null
+                    ? TryWriteIfVersionFrom(node, expectedVersion, options, index + 1)
+                    : Observable.Return(applied));
+
+    /// <summary>
     /// Fan out across every writable adapter: each self-checks containment
     /// (Read returns non-null) and deletes if owned. Aggregates into the
     /// deleted-path emit. Throws when nothing was actually deleted (every
