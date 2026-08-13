@@ -110,6 +110,23 @@ public class GitModuleReplicaTest(ITestOutputHelper output) : GitHubSyncTestBase
         Output.WriteLine($"c2 {sha2[..8]} → {a2.AbsolutePath}");
     }
 
+    /// <summary>
+    /// The option must bind from configuration, or the dedicated persistent mount cannot be pointed at:
+    /// the default is a temp subdir, which on a pod is ephemeral and would re-clone the repo on every
+    /// restart — exactly the cost the replica exists to remove. Mirrors `GitWorkspace:Root`.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public void RootDirectory_BindsFromConfiguration()
+    {
+        var configured = Mesh.ServiceProvider.GetRequiredService<IOptions<GitModuleReplicaOptions>>();
+
+        configured.Value.RootDirectory.Should().NotBeNullOrWhiteSpace(
+            "an unconfigured deployment still gets a usable default");
+        Mesh.ServiceProvider.GetRequiredService<GitModuleReplica>().Should().NotBeNull(
+            "the replica must be resolvable from DI — a service nothing can resolve cannot be wired "
+            + "to the compiler in the next slice");
+    }
+
     private static string NewTempDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "mw-replica-seed-" + Guid.NewGuid().ToString("N"));
