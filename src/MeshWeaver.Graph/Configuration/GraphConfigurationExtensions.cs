@@ -33,6 +33,7 @@ public static class GraphConfigurationExtensions
                 .AddCodeType()
                 .AddScopeType()
                 .AddReleaseType()
+                .AddBuildType()
                 .AddMarkdownType()
                 .AddHtmlType()
                 .AddSlideType()
