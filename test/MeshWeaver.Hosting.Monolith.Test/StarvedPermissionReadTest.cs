@@ -79,10 +79,12 @@ public class StarvedPermissionReadTest(ITestOutputHelper output) : MonolithMeshT
                 .AddSingleton<StarvedSecurityQueryProvider>()
                 .AddSingleton<IMeshQueryProvider>(sp =>
                     sp.GetRequiredService<StarvedSecurityQueryProvider>())
-                // Short establishment budget so the test spends seconds, not the production
-                // default, proving the property. Same device as #1218's SourceSnapshotTimeout.
-                .Configure<RowLevelSecurityOptions>(o =>
-                    o.PermissionEstablishmentBudget = TimeSpan.FromSeconds(5)));
+                // Short budget so the test spends seconds, not the production default, proving the
+                // property. Same device as #1218's SourceSnapshotTimeout — and note there is only
+                // ONE number to set: the establishment budget is the deepest rung of the ladder
+                // derived from it (#1198), so a test can no longer configure an inner bound that
+                // its own enclosing bound would beat.
+                .AddSingleton(new MeshOperationOptions { Timeout = TimeSpan.FromSeconds(20) }));
 
     /// <summary>
     /// 🚨 THE PIN. Two creates, identical in every way except one: one target's scope has security
