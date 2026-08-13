@@ -97,8 +97,16 @@ public sealed class EventSubscriptionRunner(
                 $"path:{EventSubscriptionNodeType.Namespace} scope:children nodeType:{EventSubscriptionNodeType.NodeType} select:path,id,namespace,name,nodeType,content"))
             .Subscribe(nodes =>
             {
+                // 🚨 ReadSubscription, NEVER `n.Content as EventSubscription` (issue #1392). This
+                // list IS the candidate set for every firing path — change feed, trigger-node
+                // watch, Timer, NodeStatus — so a soft-cast that yields null does not degrade the
+                // runner, it SILENCES it: an empty pending set means nothing can ever fire, with
+                // no error anywhere. That is exactly what ran in production, because the mesh hub
+                // resolving this query had no EventSubscription registration (now fixed in
+                // WithGraphTypes) and handed back untyped JsonElements. The sibling cold-start
+                // path below already read it tolerantly; the two must agree.
                 var list = (nodes ?? [])
-                    .Select(n => n.Content as EventSubscription)
+                    .Select(ReadSubscription)
                     .Where(s => s is { Status: EventSubscriptionStatus.Pending })
                     .Select(s => s!)
                     .ToList();
@@ -274,32 +282,16 @@ public sealed class EventSubscriptionRunner(
     }
 
     /// <summary>
-    /// Deserializes a node's content to <see cref="EventSubscription"/>, tolerating both a typed instance
-    /// (the workspace <c>GetQuery</c> path) and a raw <see cref="System.Text.Json.JsonElement"/> (the
-    /// storage <c>IMeshService.Query</c> path the cold-start seed reads from). Returns null otherwise.
+    /// Reads a node's content as an <see cref="EventSubscription"/> through the sanctioned
+    /// bad-data-tolerant accessor: a typed instance (the workspace <c>GetQuery</c> path) passes
+    /// through, a raw <c>JsonElement</c>/<c>JsonNode</c> (the storage <c>IMeshService.Query</c>
+    /// path the cold-start seed reads from, and the degraded GetQuery shape) is deserialized, and
+    /// anything unconvertible returns null — logged loud with the node path, never swallowed.
+    /// EVERY read of a subscription node goes through here; a bare <c>as</c> is the trap-door that
+    /// emptied the pending set in production (#1392).
     /// </summary>
-    private EventSubscription? ReadSubscription(MeshNode node) => node.Content switch
-    {
-        EventSubscription es => es,
-        System.Text.Json.JsonElement je => TryDeserializeSubscription(je),
-        _ => null,
-    };
-
-    private EventSubscription? TryDeserializeSubscription(System.Text.Json.JsonElement je)
-    {
-        try
-        {
-            // Deserialize straight from the JsonElement — no GetRawText() string round-trip / re-parse.
-            return System.Text.Json.JsonSerializer.Deserialize<EventSubscription>(je, hub.JsonSerializerOptions);
-        }
-        catch (System.Text.Json.JsonException ex)
-        {
-            // A malformed subscription node must not abort the whole cold-start seed — skip it, but SURFACE
-            // it (never a silent swallow) so a genuine data problem is visible.
-            logger?.LogWarning(ex, "Skipping malformed EventSubscription content in the cold-start reconcile");
-            return null;
-        }
-    }
+    private EventSubscription? ReadSubscription(MeshNode node)
+        => node.ContentAs<EventSubscription>(hub.JsonSerializerOptions, logger);
 
     private bool Matches(EventSubscription subscription, MeshNode node)
     {
@@ -459,7 +451,10 @@ public sealed class EventSubscriptionRunner(
             {
                 foreach (var node in nodes ?? [])
                 {
-                    if (node.Content is not ScheduledAction legacy)
+                    // Same rule as ReadSubscription: the tolerant accessor, never `is not X` — the
+                    // legacy node is read on a hub that never writes one, so a soft-cast would
+                    // silently migrate nothing and strand the in-flight invite it exists to save.
+                    if (node.ContentAs<ScheduledAction>(hub.JsonSerializerOptions, logger) is not { } legacy)
                         continue;
                     lock (gate)
                         if (!migratedLegacyIds.Add(legacy.Id))

@@ -91,12 +91,11 @@ else
     var assemblyCache = Path.Combine(dataRoot, "assembly-cache");
     builder.Services.AddFileSystemAssemblyStore(assemblyCache);
 
-    // 🚨 ONE POD BAKES. The compile cache is shared but the decision to rebuild is per-process, so
-    // without a lease every replica on a new image starts the SAME sweep over the SAME NodeTypes
-    // into this SAME directory — concurrent cold compiles of one type, which is the storm the
-    // sequential sweep exists to prevent. Any rollout with maxSurge hits this by default.
-    // The lease lives beside the assemblies it guards, so it is shared exactly when they are.
-    builder.Services.AddSingleton(new BakeCoordination(assemblyCache));
+    // 🚨 ONE POD BAKES — coordinated by the build protocol (Doc/Architecture/BuildCoordination):
+    // the Admin/Build claim decides who runs the sweep and every other pod completes on the
+    // per-fingerprint GO subscription. Nothing to register here — the protocol is the pre-warmer's
+    // default. (A file lease beside the assembly cache used to serialise this; it is deleted, its
+    // one-builder and steal-on-stale properties carried by the claim arbiter.)
 
     // 🚨 …and ONE WHOLE GENERATION of that cache is written per deploy, because the store keys every
     // file by the MeshWeaver.Graph MVID and a CI build stamps a fresh InformationalVersion into

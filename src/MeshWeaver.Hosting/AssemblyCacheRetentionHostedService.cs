@@ -25,11 +25,12 @@ namespace MeshWeaver.Hosting;
 /// keeps a directory listing of a few thousand files on a network share off the same window as the
 /// compiles. Where no pre-warm is registered there is no bake to wait for and it runs straight away.</para>
 ///
-/// <para><b>Deliberately not leased.</b> Every other decision around the bake is serialised by
-/// <see cref="NodeTypeBakeLease"/>, which fails OPEN — so a lease could never be the thing that makes
-/// deletion safe, and pretending otherwise would move the safety argument somewhere it does not hold.
-/// The sweep is safe because its PLAN is safe: it is idempotent, it only ever removes files that no
-/// rule protects, and two pods running it concurrently compute the same answer.</para>
+/// <para><b>Deliberately not serialised.</b> The bake's own coordination (the build protocol's
+/// claim) is not borrowed here, and the file lease that once existed failed OPEN by design — so no
+/// coordination primitive could ever be the thing that makes deletion safe, and pretending
+/// otherwise would move the safety argument somewhere it does not hold. The sweep is safe because
+/// its PLAN is safe: it is idempotent, it only ever removes files that no rule protects, and two
+/// pods running it concurrently compute the same answer.</para>
 /// </summary>
 public sealed class AssemblyCacheRetentionHostedService(
     IServiceProvider services,
