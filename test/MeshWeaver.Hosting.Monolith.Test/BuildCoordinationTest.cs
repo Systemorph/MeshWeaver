@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -152,6 +155,136 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
             .Where(l => l is not null && l.Status.IsTerminal())
             .FirstAsync().Timeout(WaitBudget).ToTask();
         activity!.Status.Should().Be(ActivityStatus.Succeeded);
+    }
+
+    // ---- The follower (#1440): a wait that ends on a real event, never on a notification ----
+    //
+    // Both tests below drive the PUBLIC entry point BuildProtocolDriver.Run, so they compile
+    // unchanged against the pre-fix implementation — and both hang there until their [Fact] timeout.
+    // What they pin is that a follower has TWO doors out, and that it closes them behind it:
+    //
+    //   • the GO becomes VISIBLE — read off the durable witness, not merely awaited on this
+    //     cluster's mirror, which a builder in another process can never reach; and
+    //   • the arbiter hands US the claim, because the builder went away.
+    //
+    // The 15 s each test spends before its trigger is BuildProtocolDriver.GrantWindow — a declared
+    // bound of the protocol that the candidate must run out before it becomes a follower at all,
+    // not a guess at how long some propagation takes. Trigger earlier and the arbiter grants the
+    // candidate during its grant wait, which exercises the master path instead.
+
+    private static readonly IReadOnlyDictionary<string, NodeTypeDefinition?> NoDynamicTypes =
+        new Dictionary<string, NodeTypeDefinition?>();
+
+    private static IObservable<Unit> AfterTheGrantWindow() =>
+        Observable.Timer(BuildProtocolDriver.GrantWindow + TimeSpan.FromSeconds(2))
+            .Select(_ => Unit.Default);
+
+    private IObservable<BuildState> Root() =>
+        Mesh.GetWorkspace().GetMeshNodeStream(BuildNodeType.RootPath)
+            .Select(n => n?.ContentAs<BuildState>(Mesh.JsonSerializerOptions))
+            .Where(s => s is not null)
+            .Select(s => s!);
+
+    /// <summary>
+    /// The builder goes away WITHOUT ever publishing a GO. Nothing will ever emit the event the
+    /// follower was waiting for — the only process that could publish it has stopped — and the
+    /// protocol has already handed the build to the follower, which is the event it should have
+    /// been watching. Before the fix the follower had unsubscribed from its own claim, so the grant
+    /// went to a process that would never act on it and this test runs out its timeout.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Follower_TakesOverTheBake_WhenTheBuildFallsFreeWithoutAGo()
+    {
+        var hub = Mesh;
+        const string fingerprint = "fp-falls-free";
+
+        // A rival wins the build and starts baking.
+        await hub.RequestBuildClaim("rival", fingerprint).FirstAsync().ToTask();
+        await hub.ObserveBuildClaim("rival").FirstAsync().Timeout(WaitBudget).ToTask();
+
+        var baked = 0;
+        var run = BuildProtocolDriver.Run(
+                hub,
+                NodeTypeBakeReport.Empty(fingerprint),
+                NoDynamicTypes,
+                NullAssemblyStore.Instance,
+                () => Observable.Defer(() =>
+                {
+                    Interlocked.Increment(ref baked);
+                    return Observable.Return(
+                        new PreWarmOutcome("Test/FallsFree", PreWarmStatus.Compiled, "baked by the follower"));
+                }),
+                logger: null)
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(45))
+            .ToTask();
+
+        // Past the grant window our candidate is a follower. Now the builder dies: the claim is
+        // dropped and no GO is ever published for this fingerprint.
+        await AfterTheGrantWindow().FirstAsync().ToTask();
+        await hub.FailBuild("rival", "builder process gone").FirstAsync().ToTask();
+
+        var outcomes = await run;
+
+        baked.Should().Be(1, "the follower was handed the build and must run it");
+        outcomes.Should().ContainSingle().Which.TypePath.Should().Be("Test/FallsFree");
+
+        // …and it finished the job properly: the GO it published is what every other silo is waiting on.
+        var final = await Root().Where(s => s.Ready?.ContainsKey(fingerprint) == true)
+            .FirstAsync().Timeout(WaitBudget).ToTask();
+        final.ClaimedBy.Should().BeNull();
+    }
+
+    /// <summary>
+    /// The builder finishes normally. The follower must complete on the GO — and STAND DOWN, which
+    /// is the half that used to be missing: its registration outlived the wait, so the arbiter
+    /// handed it the freed build, it never acted on it, and the claim stuck to a live holder the
+    /// takeover rule defends by design. The next image's fingerprint could then never be claimed.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task Follower_StandsDown_SoTheNextBuildCanStillBeClaimed()
+    {
+        var hub = Mesh;
+        const string fingerprint = "fp-stand-down";
+
+        await hub.RequestBuildClaim("rival", fingerprint).FirstAsync().ToTask();
+        await hub.ObserveBuildClaim("rival").FirstAsync().Timeout(WaitBudget).ToTask();
+
+        var baked = 0;
+        var run = BuildProtocolDriver.Run(
+                hub,
+                NodeTypeBakeReport.Empty(fingerprint),
+                NoDynamicTypes,
+                NullAssemblyStore.Instance,
+                () => Observable.Defer(() =>
+                {
+                    Interlocked.Increment(ref baked);
+                    return Observable.Empty<PreWarmOutcome>();
+                }),
+                logger: null)
+            .ToList()
+            .Timeout(TimeSpan.FromSeconds(45))
+            .ToTask();
+
+        await AfterTheGrantWindow().FirstAsync().ToTask();
+        await hub.CompleteBuild("rival", new BuildGo(fingerprint, DateTime.UtcNow))
+            .FirstAsync().ToTask();
+
+        await run;
+        baked.Should().Be(0, "the build was done — the follower had nothing to bake");
+
+        // The build must be free for the NEXT candidate: no holder, and nobody queued who has
+        // already walked away. A single pending registration here is the wedge.
+        var settled = await Root()
+            .Where(s => s.ClaimedBy is null && s.RequestedClaims is null or { Count: 0 })
+            .FirstAsync().Timeout(WaitBudget).ToTask();
+        settled.Ready.Should().ContainKey(fingerprint);
+
+        // …and it really is claimable: a fresh candidate is granted rather than queued forever.
+        await hub.RequestBuildClaim("next-image", "fp-next").FirstAsync().ToTask();
+        var grantedNext = await hub.ObserveBuildClaim("next-image")
+            .FirstAsync().Timeout(WaitBudget).ToTask();
+        grantedNext.FrameworkVersion.Should().Be("fp-next");
     }
 
     // ---- Arbitrate as a pure decision procedure: the staleness rules without wall-clock ----

@@ -249,20 +249,49 @@ dependency. The subscription itself is a remote-path watch and uses the
 `SubscribeWithReEstablish` fault taxonomy: transient faults re-establish; a poisoned or
 deleted root is terminal and loud, never a silent 1 Hz retry loop.
 
-🚨 **That feed is not running yet.** `PostgreSqlChangeListener` is registered but never started in
+🚨 **That feed is not running.** `PostgreSqlChangeListener` is registered but never started in
 either partitioned-PG overload — `AddPartitionedPostgreSqlPersistence` has the `AddHostedService`
 call commented out, and the Aspire overload the portal actually uses never had one. Within a
 cluster the GO still reaches every silo, because `GetMeshNodeStream` resolves to the ONE per-node
 hub that owns `Admin/Build` there; **across clusters nothing propagates it**, so a follower in the
-bake silo's peer cluster observes only what its own hub read at activation. Two consequences worth
-keeping straight:
+bake silo's peer cluster observes only what its own hub read at activation.
 
-- the claim arbiter must not depend on notification — hence it READS the durable row on every pass
-  (see above) rather than waiting to be told;
-- `BuildProtocolDriver.FollowGo` subscribes to `ObserveBuildGo` with no bound, so a cross-cluster
-  follower can wait indefinitely for a GO it will never be shown. Starting the listener (or giving
-  the follower a bounded fall-back to its own sweep) is the outstanding work here; until then, treat
-  a *separate-cluster* bake host as "publishes the GO earlier", not as "spares its peers the bake".
+**Nothing in the protocol may therefore depend on being notified.** The arbiter never did — it
+READS the durable row on every pass (above). The follower used to, and that is #1440.
+
+### The follower has two doors, and it closes them behind it
+
+`BuildProtocolDriver.FollowGo` used to be a single `ObserveBuildGo(fingerprint).Take(1)`. That is a
+projection of *this cluster's mirror*, so a cross-cluster follower was waiting on an event that
+could not be delivered to it — and it had also stopped observing its own claim, so the one event
+that could still reach it in-process went unheard. It had no door at all. It now ends on either of
+two **real** events:
+
+1. **The GO becomes visible** — `ReadBuildGo` reads it off the durable build root (the same witness
+   the arbiter decides on) *and* `ObserveBuildGo` watches this cluster's mirror, whichever answers
+   first. The read is what lets a peer cluster's GO mean anything at all here.
+2. **The arbiter hands us the claim.** Registering as a candidate outlives the grant wait, and the
+   arbiter grants the moment the build falls free — whether the builder finished or died. On a grant
+   the follower **re-reads the durable witness**: a GO already there means the winner finished and
+   this process stands down without re-baking; no GO means the builder went away mid-build and this
+   process bakes. The grant is the level-trigger; the witness is the verdict.
+
+**Standing down is not bookkeeping.** `RequestBuildClaim`'s registration survives until a grant
+consumes it, so a follower that reached its answer some other way is later handed a build it will
+never run — holding the claim at `Planning`, never heartbeating, and never taken over, because its
+process is alive and [membership defends a live holder](#-when-may-the-claim-be-taken-away--cluster-membership-decides-not-a-clock)
+by design. The *next* image's fingerprint could then never be claimed and never get a GO, holding
+every silo's readiness down. `WithdrawBuildClaim` removes the registration and gives back a claim
+that raced it; both halves are conditional, so they are safe against a concurrent grant.
+
+There is deliberately **no timer and no bound bolted onto the wait**. A bound would end the wait by
+guessing, and a follower that guesses "the build finished" certifies a share it never probed — a
+silent wrong answer, strictly worse than a hang that announces itself. Both doors are level-triggered
+on durable state, exactly like the arbiter (and see #1366 for why the poll clock went).
+
+**Starting the listener is a separate decision.** It would make the GO propagate promptly across
+clusters instead of at the arbiter's next pass, but it changes behaviour for every partitioned-PG
+deployment and wants its own justification and measurement. The follower is correct without it.
 
 The probe semantics of `NodeTypeBakeGateState` are preserved unchanged — fail **closed**
 on a measured regression (the rollout stalls, the old image keeps serving), fail **open**
