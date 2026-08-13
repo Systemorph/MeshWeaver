@@ -281,8 +281,7 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
                 Status = resolution.OverwrittenMembers.IsEmpty
                     ? ActivityStatus.Succeeded
                     : ActivityStatus.Warning,
-                Messages = messages
-            }
+            }.Append(messages)
         };
 
         inner.Write(activity, options).Subscribe(

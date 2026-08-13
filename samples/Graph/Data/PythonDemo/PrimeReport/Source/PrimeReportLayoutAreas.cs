@@ -6,7 +6,6 @@
 using System.Diagnostics;
 using System.IO;
 using System.Reactive.Linq;
-using System.Text.Json;
 using System.Threading;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -44,7 +43,7 @@ public static class PrimeReportLayoutAreas
 
         return nodeStream
             .Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
-            .Select(node => Math.Clamp(ExtractReport(node)?.Count ?? 25, 1, 200))
+            .Select(node => Math.Clamp(ExtractReport(hub, node)?.Count ?? 25, 1, 200))
             .DistinctUntilChanged()
             .Select(count => ProcessPool(hub)
                 // InvokeBlocking = sync-blocking leaf on the pool's limited-concurrency
@@ -61,29 +60,17 @@ public static class PrimeReportLayoutAreas
         ?? IoPool.Unbounded;
 
     /// <summary>
-    /// Extracts the typed content from the MeshNode, handling both the typed record and
-    /// the raw JsonElement shape (content arrives as JSON before the type is bound).
+    /// The node's typed content. <c>ContentAs</c> — never <c>is</c> + a hand-rolled JsonElement
+    /// branch: the accessor covers the already-typed value AND the degraded JsonElement/JsonNode
+    /// (content arrives as JSON before the type is bound, and STAYS that way when it carries no
+    /// resolvable <c>$type</c>) AND a same-short-named <c>PrimeReport</c> from another build — every
+    /// recompile of this NodeType mints a new collectible assembly, so "the same" record has a
+    /// different CLR identity per build, which the hand-rolled version had no round-trip to recover.
+    /// It also reads with the HUB's options rather than a locally-invented
+    /// <c>JsonSerializerOptions</c>, and logs instead of swallowing in a bare <c>catch</c>.
     /// </summary>
-    private static PrimeReport? ExtractReport(MeshNode? node)
-    {
-        if (node?.Content is PrimeReport report)
-            return report;
-
-        if (node?.Content is JsonElement json)
-        {
-            try
-            {
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                return JsonSerializer.Deserialize<PrimeReport>(json.GetRawText(), options);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        return null;
-    }
+    private static PrimeReport? ExtractReport(IMessageHub hub, MeshNode? node) =>
+        node.ContentAs<PrimeReport>(hub.JsonSerializerOptions);
 
     /// <summary>
     /// The Python program: computes the first <paramref name="count"/> primes and formats

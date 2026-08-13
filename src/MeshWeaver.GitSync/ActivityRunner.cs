@@ -248,16 +248,14 @@ public static class ActivityRunner
         // the cross-hub patch posts context-null → the partition's RLS denies → the
         // progress line never lands. The owner can Update the partition (the satellite
         // rule delegates there), so the write succeeds under their identity.
+        // ActivityLogAppender, not a hand-rolled Update: it keeps Messages bounded and flushes the
+        // overflow into _Log segment satellites, so a long-running sync's per-item progress costs
+        // O(items) instead of O(items²) in re-serialisation.
         using (owner is not null && accessService is not null ? accessService.SwitchAccessContext(owner) : null)
         {
-            workspace.GetMeshNodeStream(activityPath).Update(node =>
-            {
-                // Tolerant read (ContentAs), not a bare type test: on a cross-hub update the
-                // content can arrive as a degraded JsonElement — `is ActivityLog` would silently
-                // no-op and the progress line would never land (same read as the cancel watch).
-                if (node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger) is not { } log) return node;
-                return node with { Content = log with { Messages = log.Messages.Add(new LogMessage(message, level)) } };
-            }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Activity log append failed for {Path}", activityPath));
+            ActivityLogAppender
+                .Append(workspace.Hub, activityPath, [new LogMessage(message, level)], mutate: null, logger)
+                .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Activity log append failed for {Path}", activityPath));
         }
     }
 
@@ -271,30 +269,24 @@ public static class ActivityRunner
         // Running forever.
         using (owner is not null && accessService is not null ? accessService.SwitchAccessContext(owner) : null)
         {
-            return workspace.GetMeshNodeStream(activityPath).Update(node =>
-            {
-                // Tolerant read (ContentAs), not a bare type test: on a cross-hub update the
-                // content can arrive as a degraded JsonElement — `is ActivityLog` would silently
-                // no-op and the activity would hang Running forever (same read as the cancel watch).
-                if (node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger) is not { } log) return node;
-                var messages = string.IsNullOrEmpty(finalMessage)
-                    ? log.Messages
-                    : log.Messages.Add(new LogMessage(finalMessage,
-                        status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information));
-                // Honour what the command reported via ctx.Log: ActivityLog.Finish computes
-                // MAX(status, roll-up from Messages) — an Error line a command appended flips
-                // a would-be Succeeded terminal to Failed, a Warning line to Warning; explicit
-                // Failed / Cancelled always stand (they are more severe in the enum order).
-                // Without this, a command that reports per-item errors but completes without
-                // throwing would end "Succeeded" with errors in its own log.
-                // The hub's current version stamps the finished log — the same
-                // `(int)hub.Version` every other Finish caller records.
-                var finished = (log with { Messages = messages }).Finish((int)workspace.Hub.Version, status);
-                return node with
-                {
-                    Content = finished with { RequestedStatus = null }
-                };
-            }).Select(_ => Unit.Default);
+            return ActivityLogAppender.Append(
+                    workspace.Hub, activityPath,
+                    string.IsNullOrEmpty(finalMessage)
+                        ? []
+                        : [new LogMessage(finalMessage,
+                            status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information)],
+                    // Honour what the command reported via ctx.Log: ActivityLog.Finish computes
+                    // MAX(status, severity roll-up) — an Error line a command appended flips a
+                    // would-be Succeeded terminal to Failed, a Warning line to Warning; explicit
+                    // Failed / Cancelled always stand (they are more severe in the enum order).
+                    // Without this, a command that reports per-item errors but completes without
+                    // throwing would end "Succeeded" with errors in its own log. The roll-up is a
+                    // counter, so this stays correct once older lines have left the window.
+                    // The hub's current version stamps the finished log — the same
+                    // `(int)hub.Version` every other Finish caller records.
+                    log => log.Finish((int)workspace.Hub.Version, status) with { RequestedStatus = null },
+                    logger)
+                .Select(_ => Unit.Default);
         }
     }
 }

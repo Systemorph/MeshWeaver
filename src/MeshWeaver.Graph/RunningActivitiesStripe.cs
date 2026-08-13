@@ -103,7 +103,9 @@ public static class RunningActivitiesStripe
 
     private static UiControl BuildRow(MeshNode activity, ActivityLog log, string? locale = null)
     {
-        var label = $"{System.Net.WebUtility.HtmlEncode(log.Category)} · {log.Messages.Count} msg";
+        // TotalMessageCount, not Messages.Count: Messages is a bounded WINDOW — the caption must
+        // report how many lines the activity has produced, not how many it still holds.
+        var label = $"{System.Net.WebUtility.HtmlEncode(log.Category)} · {log.TotalMessageCount} msg";
         var elapsed = log.End is null
             ? FormatElapsed(DateTime.UtcNow - log.Start)
             : FormatElapsed(log.End.Value - log.Start);
@@ -162,8 +164,12 @@ public static class RunningActivitiesStripe
                 // ContentAs (deserialize), not `as ActivityLog`: on JsonElement frames `as` → null →
                 // both counts collapse to 0 → the comparer reports "equal" while message counts actually
                 // diverge (or vice-versa), so the stripe both misses real updates AND churns spuriously.
-                var lx = x[i].ContentAs<ActivityLog>(options)?.Messages.Count ?? 0;
-                var ly = y[i].ContentAs<ActivityLog>(options)?.Messages.Count ?? 0;
+                // 🚨 TotalMessageCount, NOT Messages.Count. Messages is a bounded window that stops
+                // growing once an activity passes the window size — keying the DistinctUntilChanged on
+                // it would silently FREEZE the stripe for exactly the long-running activities it exists
+                // to show. The monotonic total is the progress signal.
+                var lx = x[i].ContentAs<ActivityLog>(options)?.TotalMessageCount ?? 0;
+                var ly = y[i].ContentAs<ActivityLog>(options)?.TotalMessageCount ?? 0;
                 if (lx != ly) return false;
             }
             return true;

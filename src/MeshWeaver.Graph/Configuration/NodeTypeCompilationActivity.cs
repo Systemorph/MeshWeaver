@@ -98,47 +98,39 @@ internal static class NodeTypeCompilationActivity
     }
 
     /// <summary>
-    /// Append an Information-level <see cref="LogMessage"/> to the activity
+    /// Append a single <see cref="LogMessage"/> (Information-level by default) to the activity
     /// log so callers can see progress in real time. No-op when
     /// <paramref name="activityPath"/> is null. Best-effort: failures log and
     /// swallow — observability must never break a compile.
+    ///
+    /// <para>🚨 ONE write per call, and a write is <b>O(size of the whole activity node)</b>: the
+    /// patcher <c>SerializeToNode</c>s the entire content and diffs every element on EVERY update.
+    /// So N appends to one activity cost <b>O(N²)</b> CPU + allocation. Never call this in a loop —
+    /// collect the messages and use <see cref="AppendLogs"/> (per phase) or <see cref="Complete"/>
+    /// (terminal). The per-item shape burned 719 MB of serialisation on a single memex-cloud import
+    /// activity (5,239 writes over a 141 kB node) and was half of the CFS throttling on that pod.</para>
     /// </summary>
     public static void AppendLog(IMessageHub hub, string? activityPath, string message, ILogger logger,
-        Microsoft.Extensions.Logging.LogLevel level = Microsoft.Extensions.Logging.LogLevel.Information)
+        Microsoft.Extensions.Logging.LogLevel level = Microsoft.Extensions.Logging.LogLevel.Information) =>
+        AppendLogs(hub, activityPath, [new LogMessage(message, level)], logger);
+
+    /// <summary>
+    /// Append MANY <see cref="LogMessage"/>s to the activity log in a <b>SINGLE</b>
+    /// <c>stream.Update</c> — the batched form of <see cref="AppendLog"/>, and the one to use for
+    /// anything that produces a line PER ITEM (per imported file, per pruned node, per diagnostic).
+    /// No-op when <paramref name="activityPath"/> is null or there is nothing to append.
+    /// Best-effort: failures log and swallow — observability must never break the work it observes.
+    ///
+    /// <para>Why batching is not a micro-optimisation: each <c>Update</c> re-serialises the WHOLE
+    /// activity node to compute its patch, so appending N lines one at a time is O(N²) in CPU and
+    /// allocation while appending them together is O(N). Emitting one line per phase instead of one
+    /// per item is the deliberate trade — coarser live progress, bounded cost.</para>
+    /// </summary>
+    public static void AppendLogs(
+        IMessageHub hub, string? activityPath, IReadOnlyList<LogMessage> messages, ILogger logger)
     {
-        if (string.IsNullOrEmpty(activityPath)) return;
-        try
-        {
-            // Set the property on the activity's stream — GetMeshNodeStream
-            // auto-detects own vs remote (the compile-activity handler runs ON
-            // the activity hub, so this is its OWN stream — GetRemoteStream
-            // would throw "Owner cannot be the same as the subscriber"). The
-            // Update rides the synchronization protocol; no message post.
-            // Impersonate System: an infrastructure activity-log write must not fail closed when the
-            // calling thread carries no user (see Start).
-            var accessService = hub.ServiceProvider.GetService<AccessService>();
-            using (accessService?.ImpersonateAsSystem())
-                hub.GetWorkspace().GetMeshNodeStream(activityPath!)
-                    .Update(current =>
-                        current?.Content is ActivityLog log
-                            ? current with
-                            {
-                                Content = log with
-                                {
-                                    Messages = log.Messages.Add(new LogMessage(message, level))
-                                }
-                            }
-                            : current!)
-                    .Subscribe(
-                        _ => { },
-                        ex => logger.LogDebug(ex,
-                            "Compile-activity AppendLog failed for {Path} (best-effort, ignored)", activityPath));
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex,
-                "Compile-activity AppendLog threw for {Path} (best-effort, ignored)", activityPath);
-        }
+        if (string.IsNullOrEmpty(activityPath) || messages.Count == 0) return;
+        Write(hub, activityPath, messages, mutate: null, logger, "AppendLog");
     }
 
     /// <summary>
@@ -155,34 +147,9 @@ internal static class NodeTypeCompilationActivity
         IReadOnlyList<LogMessage> messages, ILogger logger)
     {
         if (string.IsNullOrEmpty(activityPath)) return;
-        try
-        {
-            // Impersonate System: terminal activity-log write must not fail closed (see Start).
-            var accessService = hub.ServiceProvider.GetService<AccessService>();
-            using (accessService?.ImpersonateAsSystem())
-                hub.GetWorkspace().GetMeshNodeStream(activityPath!)
-                    .Update(current =>
-                        current?.Content is ActivityLog log
-                            ? current with
-                            {
-                                Content = log with
-                                {
-                                    Status = status,
-                                    End = DateTime.UtcNow,
-                                    Messages = log.Messages.AddRange(messages)
-                                }
-                            }
-                            : current!)
-                    .Subscribe(
-                        _ => { },
-                        ex => logger.LogDebug(ex,
-                            "Compile-activity Complete failed for {Path} (best-effort, ignored)", activityPath));
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex,
-                "Compile-activity Complete threw for {Path} (best-effort, ignored)", activityPath);
-        }
+        Write(hub, activityPath, messages,
+            log => log with { Status = status, End = DateTime.UtcNow },
+            logger, "Complete");
     }
 
     /// <summary>
@@ -205,48 +172,46 @@ internal static class NodeTypeCompilationActivity
         IMessageHub hub, string? activityPath, ActivityStatus status, string? error, ILogger logger)
     {
         if (string.IsNullOrEmpty(activityPath)) return;
+        Write(hub, activityPath,
+            error is { Length: > 0 }
+                ? [new LogMessage(error, Microsoft.Extensions.Logging.LogLevel.Error)]
+                : [],
+            log => log with { Status = status, End = DateTime.UtcNow },
+            logger, "Update");
+    }
 
+    /// <summary>
+    /// The one write path behind <see cref="AppendLogs"/>, <see cref="Complete"/> and
+    /// <see cref="Update"/>: hands the messages + the log change to
+    /// <see cref="ActivityLogAppender.Append"/>, which appends through the activity's own stream,
+    /// keeps <c>Messages</c> bounded, and flushes the overflow into a segment satellite.
+    ///
+    /// <para>Impersonate System: a compile-activity write is INFRASTRUCTURE observability — it must not
+    /// fail closed when the calling thread carries no user (background recompile, grain activation) or a
+    /// non-writer user (a compile on a read-only partition). <c>Observable.Using</c> holds the scope
+    /// across the COLD Append's Subscribe; a plain <c>using</c> would have lapsed before the subscribe
+    /// ran, and the write would post context-null.</para>
+    /// </summary>
+    private static void Write(
+        IMessageHub hub, string? activityPath, IReadOnlyList<LogMessage> messages,
+        Func<ActivityLog, ActivityLog>? mutate, ILogger logger, string what)
+    {
         try
         {
-            // Set the terminal status property on the activity's stream.
-            // GetMeshNodeStream auto-detects own vs remote — the compile-activity
-            // handler runs ON the activity hub, so this writes through its OWN
-            // stream (GetRemoteStream would throw "Owner cannot be the same as
-            // the subscriber"). The Update rides the synchronization protocol;
-            // no UpdateNodeRequest message post.
-            // Impersonate System: a terminal compile-activity write is INFRASTRUCTURE
-            // observability — it must not fail closed when the calling thread carries no
-            // user (background recompile, grain activation) or a non-writer user (a compile
-            // on a read-only partition). MarkSucceeded/MarkFailed route through here, so
-            // this is the one place the System scope was missing from its Start/AppendLog/
-            // Complete siblings (prod 2026-06-18 phantom-activity storm class).
             var accessService = hub.ServiceProvider.GetService<AccessService>();
-            using (accessService?.ImpersonateAsSystem())
-                hub.GetWorkspace().GetMeshNodeStream(activityPath!)
-                    .Update(current =>
-                        current?.Content is ActivityLog log
-                            ? current with
-                            {
-                                Content = log with
-                                {
-                                    Status = status,
-                                    End = DateTime.UtcNow,
-                                    Messages = error is { Length: > 0 }
-                                        ? log.Messages.Add(new LogMessage(error,
-                                            Microsoft.Extensions.Logging.LogLevel.Error))
-                                        : log.Messages
-                                }
-                            }
-                            : current!)
-                    .Subscribe(
-                        _ => { },
-                        ex => logger.LogDebug(ex,
-                            "Compile-activity Update failed for {Path} (best-effort, ignored)", activityPath));
+            Observable.Using<MeshNode, IDisposable>(
+                    () => accessService?.ImpersonateAsSystem()
+                          ?? System.Reactive.Disposables.Disposable.Empty,
+                    _ => ActivityLogAppender.Append(hub, activityPath!, messages, mutate, logger))
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogDebug(ex,
+                        "Compile-activity {What} failed for {Path} (best-effort, ignored)", what, activityPath));
         }
         catch (Exception ex)
         {
             logger.LogDebug(ex,
-                "Compile-activity Update threw for {Path} (best-effort, ignored)", activityPath);
+                "Compile-activity {What} threw for {Path} (best-effort, ignored)", what, activityPath);
         }
     }
 

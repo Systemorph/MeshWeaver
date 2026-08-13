@@ -340,13 +340,23 @@ public static class StaticRepoImporter
     /// Pure + case-insensitive so the prune DECISION is unit-testable without a database. This is the
     /// per-partition policy; the per-node <see cref="SyncBehavior"/> guard above applies in every mode
     /// (a claimed node is never a candidate).
+    ///
+    /// <para>🚨 <paramref name="isExcludedFromMirror"/> is the FIFTH guard and the one that stops the
+    /// prune from eating what the source never carries BY DESIGN
+    /// (<see cref="IStaticRepoSource.IsExcludedFromMirror"/>). "Absent from the source" is only
+    /// evidence of a deletion for nodes the source WOULD have carried; for an ignored subtree
+    /// (GitSync's <c>SyncIgnore</c>, default <c>Release/</c>) absence is the normal state, and
+    /// treating it as a deletion destroyed 47 mesh-minted release records on memex-cloud
+    /// (issue #1326). Governance spares <c>_</c>-prefixed segments only, which <c>Release/</c> is
+    /// not — hence a guard of its own rather than a widened governance rule.</para>
     /// </summary>
     public static IReadOnlyList<MeshNode> ComputePrunableNodes(
         IEnumerable<MeshNode> existing,
         IEnumerable<string> sourcePaths,
         IEnumerable<string> previouslyOwnedPaths,
         IEnumerable<string> excludedRoots,
-        PartitionSyncMode mode)
+        PartitionSyncMode mode,
+        Func<string, bool>? isExcludedFromMirror = null)
     {
         if (mode == PartitionSyncMode.UpsertOnly)
             return Array.Empty<MeshNode>();
@@ -362,6 +372,7 @@ public static class StaticRepoImporter
                         && !source.Contains(t.Path)
                         && t.SyncBehavior == SyncBehavior.Include
                         && !IsGovernance(t)
+                        && isExcludedFromMirror?.Invoke(t.Path) != true
                         && !excluded.Any(root => IsAtOrUnder(t.Path, root))
                         // Additive: only prune what the source PREVIOUSLY owned — a user-added node
                         // (never in a manifest) survives. FullReplace prunes every extra.
@@ -618,12 +629,37 @@ public static class StaticRepoImporter
 
                 var lockName = $"Import {source.Partition} ({nodes.Count} nodes)";
 
+                // 🚨 THE MARKER IS A CLAIM ABOUT THE **FULL** CONTENT — so only a run that
+                // evaluated the full content may write it (issue #1326).
+                //
+                // `fingerprint` hashes EVERY source node. `changedNodePaths` scopes the run to the
+                // handful a git diff says moved; the rest are not even looked at. A scoped run that
+                // stamped `import-{fingerprint}` Succeeded therefore asserted "this partition holds
+                // exactly content F" on the evidence of a partial pass — and once written, that
+                // marker is permanent: every later import of the same repo content computes the same
+                // F, hits the short-circuit, and returns "Skipped" with 0 nodes WITHOUT EVER READING
+                // THE PARTITION. GitHubSyncService then reads "Skipped" as "the mesh already has this
+                // commit" and advances LastSyncCommitSha to the head, so the next diff base is the
+                // head and the diff is empty forever. A Space that under-imported once could never
+                // converge again — a manual update reported "Imported Skipped (0 node(s))" while
+                // genuinely behind, and only `force` (which bypasses both the diff and the marker)
+                // fixed it. That is the memex-cloud report of 2026-08-12, end to end.
+                //
+                // A scoped run therefore records its verdict on the ATTEMPT only. Nothing is lost:
+                // the attempt node carries the full log, and the next unscoped import re-evaluates
+                // the content instead of trusting a claim nobody checked. The routine webhook path
+                // is unaffected — it is scoped, so it never reached the short-circuit anyway.
+                var isScopedRun = changedNodePaths is not null;
+
                 // Terminal stamp on the LOCK — through Upsert, the repair-capable verb, so it lands on a
                 // node that may not exist yet (the early-failure path) AND on one left forked by a prior
                 // half-write. The human-readable log lives on the attempt; the lock carries the verdict
                 // plus a pointer to the attempt that produced it.
                 IObservable<int> StampLock(ActivityStatus status, string summary) =>
-                    Upsert(hub, BookkeepingNode(activityId, lockName, status,
+                    // A scoped run never touches the content-addressed marker — see isScopedRun.
+                    isScopedRun
+                    ? Observable.Return(0)
+                    : Upsert(hub, BookkeepingNode(activityId, lockName, status,
                             new LogMessage(summary, status is ActivityStatus.Succeeded
                                 ? Microsoft.Extensions.Logging.LogLevel.Information
                                 : status is ActivityStatus.Warning
@@ -694,7 +730,12 @@ public static class StaticRepoImporter
                 IObservable<StaticRepoImportResult> Reimport() =>
                     // 1. Stamp the MARKER Running (deterministic id, repair-capable Upsert). This
                     //    records that an import is under way; it does not exclude a concurrent one.
-                    Upsert(hub, BookkeepingNode(activityId, lockName, ActivityStatus.Running))
+                    //    Skipped for a scoped run, which may not write the full-content marker at
+                    //    all (see isScopedRun) — a Running stamp it never resolves would leave a
+                    //    reclaimable-but-pointless row at an id no run will ever complete.
+                    (isScopedRun
+                        ? Observable.Return(0)
+                        : Upsert(hub, BookkeepingNode(activityId, lockName, ActivityStatus.Running)))
                         // 2. Open a FRESH attempt node — the only node this run logs progress to (#919).
                         .SelectMany(_ => Upsert(hub, BookkeepingNode(
                             attemptId, $"{lockName} — attempt {DateTime.UtcNow:u}", ActivityStatus.Running)))
@@ -896,7 +937,8 @@ public static class StaticRepoImporter
                         {
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: skip claimed {Path}", source.Partition, path);
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null));
+                            return Observable.Return(
+                                (Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null, Log: (LogMessage?)null));
                         }
 
                         // 🅶 Git-diff scope: when the caller supplied the changed-path set (a webhook /
@@ -923,12 +965,14 @@ public static class StaticRepoImporter
                                 logger?.LogDebug(
                                     "[StaticRepoImport] {Partition}: outside git-diff scope, {Path} is server-newer — counted preserved.",
                                     source.Partition, path);
-                                return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null));
+                                return Observable.Return(
+                                    (Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null, Log: (LogMessage?)null));
                             }
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: outside git-diff scope, skipping {Path}",
                                 source.Partition, path);
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null));
+                            return Observable.Return(
+                                (Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null, Log: (LogMessage?)null));
                         }
 
                         // Incremental skip: unchanged since the last import (same source token) AND the
@@ -950,11 +994,13 @@ public static class StaticRepoImporter
                                 logger?.LogDebug(
                                     "[StaticRepoImport] {Partition}: unchanged in repo, {Path} is server-newer — counted preserved.",
                                     source.Partition, path);
-                                return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null));
+                                return Observable.Return(
+                                    (Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null, Log: (LogMessage?)null));
                             }
                             logger?.LogDebug(
                                 "[StaticRepoImport] {Partition}: unchanged, skipping {Path}", source.Partition, path);
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null));
+                            return Observable.Return(
+                                (Imported: 0, Failed: 0, Preserved: 0, Written: (string?)null, Log: (LogMessage?)null));
                         }
 
                         // Two-way conflict resolution: a node changed on the SERVER since the last sync
@@ -967,9 +1013,14 @@ public static class StaticRepoImporter
                             logger?.LogInformation(
                                 "[StaticRepoImport] {Partition}: two-way — preserving server-newer {Path} (not overwritten).",
                                 source.Partition, path);
-                            NodeTypeCompilationActivity.AppendLog(hub, activityPath,
-                                $"↩ Kept local change to {path} (newer on the server — commit to sync it back).", logger!);
-                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null));
+                            // 🚨 The activity line RIDES ALONG with the result instead of being written
+                            // here. A per-item stream.Update re-serialises the whole activity node, so
+                            // one write per kept/failed file is O(n²) — see the phase-level AppendLogs
+                            // below and NodeTypeCompilationActivity.AppendLogs.
+                            return Observable.Return((Imported: 0, Failed: 0, Preserved: 1, Written: (string?)null,
+                                Log: (LogMessage?)new LogMessage(
+                                    $"↩ Kept local change to {path} (newer on the server — commit to sync it back).",
+                                    Microsoft.Extensions.Logging.LogLevel.Information)));
                         }
 
                         var materialized = Materialize(sourceNode);
@@ -1001,16 +1052,17 @@ public static class StaticRepoImporter
                         // Failed and continue. The Failed tally drives the terminal Warning status
                         // below — the activity never reports a green Succeeded while hiding failures.
                         return Upsert(hub, materialized)
-                            .Select(_ => (Imported: 1, Failed: 0, Preserved: 0, Written: (string?)path))
-                            .Catch<(int Imported, int Failed, int Preserved, string? Written), Exception>(ex =>
+                            .Select(_ => (Imported: 1, Failed: 0, Preserved: 0, Written: (string?)path,
+                                Log: (LogMessage?)null))
+                            .Catch<(int Imported, int Failed, int Preserved, string? Written, LogMessage? Log), Exception>(ex =>
                             {
                                 logger?.LogWarning(ex,
                                     "[StaticRepoImport] {Partition}: upsert of {Path} failed (continuing).",
                                     source.Partition, path);
-                                NodeTypeCompilationActivity.AppendLog(hub, activityPath,
-                                    $"⚠ Failed to import {path}: {ex.Message}", logger!,
-                                    Microsoft.Extensions.Logging.LogLevel.Warning);
-                                return Observable.Return((Imported: 0, Failed: 1, Preserved: 0, Written: (string?)null));
+                                return Observable.Return((Imported: 0, Failed: 1, Preserved: 0, Written: (string?)null,
+                                    Log: (LogMessage?)new LogMessage(
+                                        $"⚠ Failed to import {path}: {ex.Message}",
+                                        Microsoft.Extensions.Logging.LogLevel.Warning)));
                             });
                     })
                     .ToObservable()
@@ -1020,6 +1072,9 @@ public static class StaticRepoImporter
                     // (GitHubSyncService → ReleaseAffectedNodeTypes) keys off exactly this list.
                     // Collected in ONE materialization pass (not per-element immutable Adds), so a
                     // large first import stays linear.
+                    // The per-file activity LINES ride along the same way, for the same reason plus a
+                    // sharper one: written one at a time they cost O(n²) (every stream.Update
+                    // re-serialises the whole activity node), so the phase writes them together below.
                     .ToList()
                     .Select(results => (
                         Imported: results.Sum(x => x.Imported),
@@ -1028,10 +1083,23 @@ public static class StaticRepoImporter
                         Written: results
                             .Where(x => x.Written is not null)
                             .Select(x => x.Written!)
-                            .ToImmutableList()));
+                            .ToImmutableList(),
+                        Logs: results
+                            .Where(x => x.Log is not null)
+                            .Select(x => x.Log!)
+                            .ToArray()));
 
                 return upserted.SelectMany(count =>
                 {
+                    // 🚨 PHASE LOG, not per item. Every per-file line the upsert phase produced (the
+                    // "↩ Kept local change" conflicts and the "⚠ Failed to import" diagnostics) lands
+                    // in ONE stream.Update. Written per item this was the portal's biggest CPU burner:
+                    // an Update re-serialises the WHOLE activity node to diff it, so n appends cost
+                    // O(n²) — 5,239 writes over a 141 kB node = 719 MB serialised on ONE memex-cloud
+                    // import, and 51% CFS throttling on the pod. Batching makes it O(n). The accepted
+                    // cost is coarser live progress: you see the phase, not each file.
+                    NodeTypeCompilationActivity.AppendLogs(hub, activityPath, count.Logs, logger!);
+
                     // Prune per the partition's PartitionSyncMode. In every mode the guards hold: a
                     // pruned node is absent from the source AND still Include AND not governance
                     // (_Policy/_Access/_Activity) AND not under a claimed subtree. The MODE narrows the
@@ -1039,7 +1107,8 @@ public static class StaticRepoImporter
                     // repo); Additive prunes ONLY nodes the source PREVIOUSLY owned (the prior manifest's
                     // keys) so user-added nodes survive; UpsertOnly prunes nothing. See ComputePrunableNodes.
                     var toPrune = ComputePrunableNodes(
-                        existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode);
+                        existing.Values, nodes.Select(n => n.Path), manifest.Keys, excludedRoots, syncMode,
+                        source.IsExcludedFromMirror);
 
                     // Never prune a node CREATED/changed on the server since the last sync when the
                     // policy protects it (two-way, OR prune-only protection for bidirectional spaces —
@@ -1059,13 +1128,9 @@ public static class StaticRepoImporter
                         if (keptFromPrune.Length > 0)
                             toPrune = toPrune.Where(n => !policy.PreservesFromPruneOf(n)).ToArray();
                         foreach (var kept in keptFromPrune)
-                        {
                             logger?.LogInformation(
                                 "[StaticRepoImport] {Partition}: keeping server-added {Path} (not pruned).",
                                 source.Partition, kept.Path);
-                            NodeTypeCompilationActivity.AppendLog(hub, activityPath,
-                                $"↩ Kept {kept.Path} (added on the server — commit to sync it back).", logger!);
-                        }
                     }
 
                     // Collect the actually-pruned PATHS (not just a count): a pruned Source/Test
@@ -1075,7 +1140,9 @@ public static class StaticRepoImporter
                     // #604): a prune is a destructive act on user data, and an aggregate count alone
                     // made a deleted node indistinguishable from a bug ("my page vanished and nothing
                     // says why"). The activity log is the diagnosis surface, so the deletion must be
-                    // as auditable as the "⚠ Failed to import …" lines already are.
+                    // as auditable as the "⚠ Failed to import …" lines already are. It is named ONCE
+                    // PER PHASE, not once per node: the pruned paths are collected here and appended
+                    // in a single Update below (a per-node append is O(n²) — see the upsert phase).
                     var pruned = toPrune.Count == 0
                         ? Observable.Return(ImmutableList<string>.Empty)
                         : toPrune
@@ -1085,8 +1152,6 @@ public static class StaticRepoImporter
                                     logger?.LogInformation(
                                         "[StaticRepoImport] {Partition}: pruned {Path} (absent from the source).",
                                         source.Partition, t.Path);
-                                    NodeTypeCompilationActivity.AppendLog(hub, activityPath,
-                                        $"🗑 Pruned {t.Path} (absent from the repo).", logger!);
                                     return (string?)t.Path;
                                 })
                                 .Catch<string?, Exception>(ex =>
@@ -1104,9 +1169,23 @@ public static class StaticRepoImporter
                             .Select(list => list.ToImmutableList());
 
                     return pruned.SelectMany(prunedPaths =>
+                    {
+                        // 🚨 PHASE LOG #2 — the prune phase's whole audit trail (every kept server
+                        // addition + every pruned path) in ONE Update, same O(n) reason as above.
+                        NodeTypeCompilationActivity.AppendLogs(hub, activityPath,
+                            keptFromPrune
+                                .Select(kept => new LogMessage(
+                                    $"↩ Kept {kept.Path} (added on the server — commit to sync it back).",
+                                    Microsoft.Extensions.Logging.LogLevel.Information))
+                                .Concat(prunedPaths.Select(p => new LogMessage(
+                                    $"🗑 Pruned {p} (absent from the repo).",
+                                    Microsoft.Extensions.Logging.LogLevel.Information)))
+                                .ToArray(),
+                            logger!);
+
                         // Sync content-collection files (the assets behind @@content/<file> embeds)
                         // collection→collection into each owning node — AFTER the node upsert.
-                        SyncContentImports(hub, source, logger).SelectMany(embedCount =>
+                        return SyncContentImports(hub, source, logger).SelectMany(embedCount =>
                         // Mirror inline (byte-carrying) content into each owning node's content
                         // collection — the git-committed {Space}/content/** binaries a GitSync import
                         // supplies. Binary-safe + mirroring (writes what the repo has, prunes what the
@@ -1117,7 +1196,8 @@ public static class StaticRepoImporter
                         var contentCount = embedCount + inlineCount;
                         // Persist the per-node manifest LAST (after upserts + prune) so the NEXT import's
                         // diff sees exactly what's now in the partition. One write; survives prune (_Activity).
-                        return WriteManifest(hub, source.Partition, nodes, hub.JsonSerializerOptions, logger).Select(_ =>
+                        return WriteManifest(hub, source.Partition, nodes, manifest, changedNodePaths,
+                            hub.JsonSerializerOptions, logger).Select(_ =>
                         {
                             // 🚨 Terminal status reflects per-file outcomes: ANY failed upsert →
                             // Warning (the ⚠ lines above pinpoint which files), all-clear →
@@ -1157,7 +1237,8 @@ public static class StaticRepoImporter
                                 PrunedPaths = prunedPaths,
                             };
                         });
-                        })));
+                        }));
+                    });
                 });
             })
             .Catch<StaticRepoImportResult, Exception>(ex =>
@@ -1650,9 +1731,25 @@ public static class StaticRepoImporter
     /// <see cref="ActivityLog.ReturnValue"/> is the <c>{path → source-token}</c> map for the CURRENT source
     /// set. Read back on the next import to upsert only the delta. Best-effort: a failed manifest write only
     /// makes the next import non-incremental, never incorrect.
+    ///
+    /// <para>🚨 A SCOPED RUN MAY ONLY CLAIM WHAT IT EVALUATED (issue #1326). The map is built from the
+    /// SOURCE, but a run scoped by a git diff (<paramref name="evaluatedPaths"/>) skipped the upsert of
+    /// every existing node outside that set — so recording the source token for those nodes tells the
+    /// NEXT import "already at this content" about content that was never written. The node then stays
+    /// stale forever: each subsequent import compares it to the manifest, finds a match, and skips it.
+    /// This is the same false claim as the content-addressed marker, one layer down, and it is the one
+    /// that actually pinned the memex-cloud Spaces — a full re-import ran and still wrote 0 nodes.
+    /// Out-of-scope nodes therefore keep their PREVIOUS token (or none at all), which is exactly the
+    /// state that makes the next import look at them again.</para>
     /// </summary>
+    /// <param name="previous">The manifest this run read at its start — the tokens that are still the
+    /// only evidence about nodes this run did not evaluate.</param>
+    /// <param name="evaluatedPaths">The git-diff scope; <see langword="null"/> means the run evaluated
+    /// every source node and may claim the whole map.</param>
     private static IObservable<int> WriteManifest(
-        IMessageHub hub, string partition, IReadOnlyList<MeshNode> nodes, JsonSerializerOptions opts, ILogger? logger)
+        IMessageHub hub, string partition, IReadOnlyList<MeshNode> nodes,
+        IReadOnlyDictionary<string, string> previous, IReadOnlySet<string>? evaluatedPaths,
+        JsonSerializerOptions opts, ILogger? logger)
     {
         var map = nodes
             .Where(n => !string.IsNullOrEmpty(n.Path))
@@ -1661,6 +1758,23 @@ public static class StaticRepoImporter
                 g => g.Key,
                 g => PartitionSourceFingerprint.ComputeNodeToken(g.First(), opts),
                 StringComparer.OrdinalIgnoreCase);
+
+        if (evaluatedPaths is not null)
+        {
+            var builder = map.ToBuilder();
+            foreach (var path in map.Keys)
+            {
+                if (evaluatedPaths.Contains(path))
+                    continue;
+                // Not evaluated: report what we actually know, which is whatever the last run that
+                // DID look at this node recorded — nothing, if none ever did.
+                if (previous.TryGetValue(path, out var prior))
+                    builder[path] = prior;
+                else
+                    builder.Remove(path);
+            }
+            map = builder.ToImmutable();
+        }
 
         var node = new MeshNode(ManifestId, $"{partition}/_Activity")
         {
