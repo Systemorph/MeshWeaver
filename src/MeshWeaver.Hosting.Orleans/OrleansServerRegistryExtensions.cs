@@ -76,6 +76,14 @@ public static class OrleansServerRegistryExtensions
     /// <returns>The same silo builder for further chaining.</returns>
     public static ISiloBuilder ConfigureMeshWeaverServer(this ISiloBuilder silo)
     {
+        // 🚨 SILO-ONLY, deliberately not in AddOrleansMeshServices. IClusterMembershipService and
+        // ILocalSiloDetails exist only in a silo's container, and AddOrleansMeshServices also runs on
+        // the Orleans CLIENT host — registering there would produce a service that throws on
+        // resolution. Consumers treat "not registered" as "no cluster" (ClusterMemberState.Unknown),
+        // which is exactly right for a client, a monolith, or a test.
+        silo.ConfigureServices(services =>
+            services.TryAddSingleton<IClusterMembership, OrleansClusterMembership>());
+
         return silo.AddMemoryStreams(StreamProviders.Memory)
             .AddMemoryGrainStorage("PubSubStore")
             .AddIncomingGrainCallFilter<AccessContextGrainCallFilter>();

@@ -30,7 +30,14 @@ public enum BuildStatus
 /// </summary>
 /// <param name="FrameworkVersion">The framework fingerprint (Graph assembly MVID) the candidate would build for.</param>
 /// <param name="RequestedAt">When the candidate registered — the arbiter grants the earliest request first.</param>
-public sealed record BuildClaimRequest(string FrameworkVersion, DateTime RequestedAt);
+/// <param name="ClusterIdentity">
+/// The candidate's <c>IClusterMembership.LocalIdentity</c>, or <c>null</c> where there is no cluster
+/// (monolith, test, dev box). The arbiter copies it onto
+/// <see cref="BuildState.ClaimedByIdentity"/> when it grants, which is what lets a later takeover
+/// decision ask membership instead of a clock.
+/// </param>
+public sealed record BuildClaimRequest(
+    string FrameworkVersion, DateTime RequestedAt, string? ClusterIdentity = null);
 
 /// <summary>
 /// One completed build — the GO record for a framework fingerprint, kept as history on the root's
@@ -78,13 +85,25 @@ public sealed record BuildState
     /// <summary>The holder currently granted this node, or <c>null</c> when unclaimed.</summary>
     public string? ClaimedBy { get; init; }
 
+    /// <summary>
+    /// The holder's cluster-membership identity, copied from its
+    /// <see cref="BuildClaimRequest.ClusterIdentity"/> at grant time. This — not
+    /// <see cref="ClaimedBy"/> — is what the arbiter hands to
+    /// <c>IClusterMembership.StateOf</c>, because it is the implementation's own opaque
+    /// identity and round-trips exactly, while a holder id is a human-facing label.
+    /// <c>null</c> means "no cluster said anything", which resolves to
+    /// <c>ClusterMemberState.Unknown</c> and leaves the heartbeat clock in charge.
+    /// </summary>
+    public string? ClaimedByIdentity { get; init; }
+
     /// <summary>When the current claim was granted.</summary>
     public DateTime? ClaimedAt { get; init; }
 
     /// <summary>
-    /// The holder's liveness stamp. A claim whose heartbeat is older than the staleness bound is
-    /// stolen by the arbiter for the next candidate — a builder that died mid-build must not wedge
-    /// the fleet.
+    /// The holder's liveness stamp — the FALLBACK liveness signal, not the primary one. Where the
+    /// cluster can resolve <see cref="ClaimedByIdentity"/> its verdict decides takeover outright
+    /// (gone → steal now, alive → never steal); the heartbeat clock governs only when membership
+    /// has no opinion. See <c>BuildNodeType.Arbitrate</c>.
     /// </summary>
     public DateTime? HeartbeatAt { get; init; }
 

@@ -370,6 +370,33 @@ On a framework-version mismatch the NodeType recompiles and **mints a new releas
 for the new framework. The old release is left intact as history so instances still
 loaded on it keep running until they cycle.
 
+### 🚨 ONE POD BAKES — and cluster membership, not a clock, decides when another may take over
+
+Rule 3 makes every pod on a new image discover the same framework-stale cache at once. The cache is
+shared but the *decision* to rebuild is per-process, so with `maxSurge` during a rollout — or any
+`replicas > 1` — every replica independently starts the same sweep over the same NodeTypes into the
+same volume. That is not merely duplicated work: it is concurrent cold Roslyn compiles of the SAME
+type, which is precisely the storm the sequential, dependency-ordered sweep exists to prevent (four
+of them on memex, 2026-07-28 04:05, dropped six plugin roots to the "did not settle" overlay and
+needed a scale-to-zero).
+
+Coordination is the **build protocol**: candidates register a claim on the `Admin/Build` node and its
+own hub grants exactly one, while everyone else waits on the per-fingerprint GO. There is no lease
+file any more — [BuildCoordination](/Doc/Architecture/BuildCoordination) is the mechanism, and its
+"[Who becomes the build master](/Doc/Architecture/BuildCoordination#who-becomes-the-build-master)" section carries the
+takeover rule: **cluster membership decides, not a clock** — gone → take over immediately, alive →
+never take over however old the heartbeat looks, unknown → the `ClaimStaleAfter` fallback for hosts
+with no cluster.
+
+**What the claim does NOT fix.** `NodeTypeBatchBake.WriteStamp` is a read-modify-write at
+`NextVersion`, and the monotonic write guard bounces the loser (`compile-state stamp … was REFUSED`),
+so the bytes land on the share while the record does not name them. The claim removes one of the
+two writers that can race there — a second baker — but the other is the type's OWN per-node hub,
+which stamps compile state from the activation path, the sources watcher and the release watcher, and
+is legitimately live while a batch bake runs. The loser's outcome is already correct: the bytes are
+durable and content-addressed, the record stays pending, and the level-triggered probe (which asks
+the STORE, not the record) re-bakes and re-stamps on the next pass.
+
 ### 🚨 That means one whole GENERATION of assemblies per deploy — and the store never removed one
 
 `FileSystemAssemblyStore` keys every file `v{version}-{frameworkTag}-{contentHash}.dll`, where the
@@ -414,12 +441,11 @@ Every rule is a KEEP rule and they are ORed — a generation survives if **any**
 | it is among the `KeepGenerations` (3) most recently written | rollback headroom — and the rollout that first introduces claims, where the outgoing image is not asserting one yet |
 | its newest file is younger than `MinimumAge` (7 d) | a backstop bounding what a wrong answer from either of the above can do |
 
-Anything the sweep cannot attribute to a generation — the bake-lease files, the claim files, an
-untagged pre-2026-06 DLL, any foreign file — is counted and **never deleted**, and any error reading
-the tree or the claims **aborts the sweep with nothing collected**. Note the polarity: every other
-coordination path around the bake (`NodeTypeBakeLease`) fails **open**, because being wrong there
-costs duplicated work; this one fails **closed**, because being wrong here deletes an assembly a live
-pod is about to load.
+Anything the sweep cannot attribute to a generation — the claim files, an untagged pre-2026-06 DLL,
+any foreign file — is counted and **never deleted**, and any error reading the tree or the claims
+**aborts the sweep with nothing collected**. Note the polarity: the coordination path around the bake
+(the build-protocol claim) fails **open**, because being wrong there costs duplicated work; this one
+fails **closed**, because being wrong here deletes an assembly a live pod is about to load.
 
 Deletion is **off by default** (`AssemblyCache:Retention:Delete`). Until it is armed the sweep
 measures the cache and logs exactly what it would remove — which is the evidence a deployment should
