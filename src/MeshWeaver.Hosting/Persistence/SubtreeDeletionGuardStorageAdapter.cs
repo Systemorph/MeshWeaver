@@ -135,6 +135,12 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
         => inner.ListDescendantPaths(rootPath);
 
     /// <inheritdoc />
+    /// <remarks>Pure delegation — only the composite below knows its providers, and the
+    /// interface default (<c>null</c>) would silently drop the delete pre-flight (#1433).</remarks>
+    public IObservable<string?> FindDeleteBlockingProvider(string path)
+        => inner.FindDeleteBlockingProvider(path);
+
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path) => inner.Exists(path);
 
     /// <inheritdoc />
