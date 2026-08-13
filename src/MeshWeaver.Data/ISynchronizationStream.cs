@@ -55,6 +55,35 @@ public interface ISynchronizationStream : IDisposable
         Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>? config
     );
 
+    /// <summary>
+    /// 🚨 The SHARED, parent-owned reduce — for an INTERMEDIATE stream in a reduce chain, which
+    /// nobody owns and therefore nobody will ever dispose.
+    ///
+    /// <para><see cref="Reduce{TReduced}(WorkspaceReference{TReduced})"/> builds a NEW stream on
+    /// every call, and <c>WorkspaceStreams.CreateReducedStream</c> registers each one for disposal
+    /// on its PARENT. When the parent is a hub-lifetime stream (a data source's primary
+    /// <c>EntityStore</c>), a reduce on a hot path therefore mints a <c>sync/{id}</c> sub-hub — its
+    /// own Autofac scope, <c>TypeRegistry</c> and <c>JsonSerializerOptions</c>, about 140 KB — that
+    /// is reclaimed only when the whole hub dies. That is the #1345 defect (an unmemoized
+    /// <c>Workspace.GetStream</c>) one layer down, and it is what
+    /// <c>MeshDataSource</c>'s own-node factory was paying once per inbound
+    /// <c>SubscribeRequest</c> (Systemorph/MeshWeaver#1324).</para>
+    ///
+    /// <para><b>Use this ONLY for a stream the caller does not own</b> — a nameless intermediate
+    /// whose lifetime is deliberately the parent's. The result is SHARED with every other caller
+    /// asking for the same reference on this stream, so <b>the caller must never dispose it</b>;
+    /// it dies with the parent. A stream a caller owns and disposes (e.g. the Blazor
+    /// <c>LayoutAreaView</c>'s dialog / progress reduces, which it explicitly <c>Dispose()</c>s)
+    /// must keep using <see cref="Reduce{TReduced}(WorkspaceReference{TReduced})"/> — sharing one
+    /// of those would let one holder's teardown kill another holder's live stream, which is
+    /// exactly why this is an opt-in method and not a change to <c>Reduce</c>.</para>
+    /// </summary>
+    /// <typeparam name="TReduced">The reduced state type.</typeparam>
+    /// <param name="reference">Reference describing the reduced view.</param>
+    /// <returns>The shared reduced stream for <paramref name="reference"/>, or null if the
+    /// reference cannot be reduced.</returns>
+    ISynchronizationStream<TReduced>? ReduceShared<TReduced>(WorkspaceReference<TReduced> reference);
+
     /// <summary>The message hub associated with this stream.</summary>
     IMessageHub Hub { get; }
     /// <summary>The hub that hosts the underlying data source backing this stream.</summary>

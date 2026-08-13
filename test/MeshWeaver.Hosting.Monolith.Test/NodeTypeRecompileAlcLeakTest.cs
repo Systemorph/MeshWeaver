@@ -67,13 +67,14 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
     /// <c>TypeRegistry</c> and <c>JsonSerializerOptions</c> — about 140 KB — so the two numbers move
     /// together, but only this one says WHERE.</para>
     ///
-    /// <para>Measured on this repro: <b>12 hubs and ~6–7 MB per recompile</b> (12.0 / 12.3 / 12.0
-    /// over three Release runs), down from 22 and ~8 MB. Attributed by walking the hosted-hub tree
-    /// (see <see cref="HubsByParent"/>, printed below): the three per-compile
-    /// <c>_Activity/compile-&lt;ts&gt;</c> node hubs ~+17 over three recompiles (plus the 2 node hubs
-    /// themselves), <c>_Activity/compile-state</c> +12, the NodeType's own hub +3, the shared
-    /// <c>cache/</c> hub +3–4. Almost all of them are <c>sync/{id}</c> sub-hubs — one per
-    /// <c>SynchronizationStream</c>.</para>
+    /// <para>Measured on this repro: <b>6.2 hubs and 3–5 MB per recompile</b> (5.3 / 7.0 / 6.3 over
+    /// three Release runs), down from 12.7 and 7 MB, and from 22 / ~8 MB before that. Attributed by
+    /// walking the hosted-hub tree (see <see cref="HubsByParent"/>, printed below), the residual is
+    /// now ALMOST ENTIRELY the per-compile activity nodes: the <c>_Activity/compile-&lt;ts&gt;</c>
+    /// node hubs +3–5 <c>sync/</c> apiece plus the 2–3 node hubs themselves, and the shared
+    /// <c>cache/</c> hub +3. <c>_Activity/compile-state</c> and the NodeType's own hub, which used
+    /// to contribute +13 and +3, now contribute <b>nothing</b>. Almost all retained hubs are
+    /// <c>sync/{id}</c> sub-hubs — one per <c>SynchronizationStream</c>.</para>
     ///
     /// <para><b>What the 22 → 12 change closed (#1324):</b> <c>Workspace.EvictForPath</c> fires on
     /// EVERY mesh change event — including the echo of the writer's own write — and used to PARK the
@@ -91,30 +92,45 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
     /// — the 6 survivors are the one live hydration mirror per path, which is the correct steady
     /// state.</para>
     ///
-    /// <para><b>What still retains, and why the bound is 15 rather than single digits</b> — two
-    /// mechanisms, neither of them the parking one:</para>
-    /// <list type="number">
-    ///   <item>The per-compile <c>_Activity/compile-&lt;ts&gt;</c> NODE HUBS (~6 apiece) are created
-    ///     per compile and never reclaimed — a node-lifecycle question, not a stream one. This is now
-    ///     the LARGEST share of the residual.</item>
-    ///   <item>Owner-side intermediate reduced streams. <c>MeshDataSource</c>'s own-node
-    ///     <c>AddWorkspaceReferenceStream&lt;MeshNode&gt;</c> factory builds
-    ///     <c>primary.Reduce&lt;InstanceCollection&gt;(CollectionReference("MeshNode"))</c> and then
-    ///     reduces THAT to the node — and <c>WorkspaceStreams.CreateReducedStream</c> registers each
-    ///     child for disposal ON ITS PARENT, which here is the data source's primary stream (hub
-    ///     lifetime). The factory runs uncached on every call that passes a <c>configuration</c> —
-    ///     i.e. once per inbound <c>SubscribeRequest</c> — so an unsubscribe reaps the subscription's
-    ///     own hub but leaves the intermediates behind. Same defect shape as #1345 (which memoized
-    ///     <c>Workspace.GetStream</c>), one layer down at <c>stream.Reduce</c>. Correlating the
-    ///     surviving hubs against the client stream ids says this is what <c>compile-state</c>'s +12
-    ///     now is: 27 of the 34 surviving <c>sync/</c> hubs match NO client mirror.</item>
-    /// </list>
+    /// <para><b>What the 12.7 → 6.2 change closed (#1324): the owner-side INTERMEDIATE reduce.</b>
+    /// <c>MeshDataSource</c>'s own-node <c>AddWorkspaceReferenceStream&lt;MeshNode&gt;</c> factory
+    /// builds <c>primary.Reduce&lt;InstanceCollection&gt;(CollectionReference("MeshNode"))</c> and
+    /// then reduces THAT to the node — and <c>WorkspaceStreams.CreateReducedStream</c> registers each
+    /// child for disposal ON ITS PARENT, which here is the data source's primary stream (hub
+    /// lifetime). The factory runs uncached on every call that passes a <c>configuration</c> — i.e.
+    /// once per inbound <c>SubscribeRequest</c> — so an unsubscribe reaped the subscription's own hub
+    /// and left the nameless intermediate behind forever. Same defect shape as #1345 (which memoized
+    /// <c>Workspace.GetStream</c>), one layer down at <c>stream.Reduce</c>. The cure is
+    /// <c>ISynchronizationStream.ReduceShared</c>: an OPT-IN memoized reduce for an intermediate
+    /// nobody owns. Opt-in, not a change to <c>Reduce</c>, because a reduced stream a caller DOES own
+    /// and disposes (the Blazor <c>LayoutAreaView</c>'s dialog / progress reduces) must not be shared
+    /// — one holder's teardown would kill another's. Measured: <c>compile-state</c> +13 → <b>0</b>
+    /// and the NodeType's own hub +3 → <b>0</b>.</para>
+    ///
+    /// <para><b>What still retains, and why the bound is 9 rather than ~2</b> — one mechanism, and it
+    /// is a NODE-LIFECYCLE question rather than a stream one. Every compile creates
+    /// <c>{typePath}/_Activity/compile-&lt;ts&gt;</c> (<c>NodeTypeCompilationHelpers.RunCompile</c>),
+    /// whose hub is activated by the first activity-log write's <c>SubscribeRequest</c> and which now
+    /// accounts for essentially the whole residual (+3–5 <c>sync/</c> apiece, plus the node hub).
+    /// Nothing in the compile path releases it at terminal status: <c>Complete(...)</c> is the last
+    /// touch, and there is no hook that drops the mirror, prunes the node, or disposes the hub.</para>
+    ///
+    /// <para>🚨 The two reclamation mechanisms that EXIST are both time-based and therefore invisible
+    /// to this test, which measures seconds: the shared mesh-node cache's idle sweep needs zero
+    /// subscribers AND ten minutes untouched (<c>MeshNodeStreamCacheOptions.ReadStreamIdleExpiration</c>),
+    /// and <c>KernelContainer.DisposeOnTimeout</c> disposes an idle node hub after fifteen — but its
+    /// timer is reset by EVERY message, and a surviving mirror heart-beats the owner every 45 s
+    /// (<c>SyncStreamOptions.HeartbeatInterval</c>), which also holds the Orleans grain up via
+    /// <c>TryDelayDeactivation</c>. So whether the residual is a permanent leak or a ~25-minute
+    /// bounded retention turns entirely on whether the activity's mirror is actually released once
+    /// the compile ends — that is the question for the next pass, and it needs a longer-horizon
+    /// measurement than this one. Do NOT "fix" it by shortening a timer.</para>
     ///
     /// <para>So this bound is a RATCHET at the measured value, not an aspiration: it fails the moment
-    /// the residual gets worse, and it is to be tightened again by whoever fixes either mechanism
-    /// above.</para>
+    /// the residual gets worse, and it is to be tightened again by whoever closes the activity-hub
+    /// mechanism above.</para>
     /// </summary>
-    private const int MaxHubsPerRecompile = 15;
+    private const int MaxHubsPerRecompile = 9;
 
     /// <summary>
     /// Live collectible contexts for this NodeType. The name is
@@ -258,15 +274,14 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         // Caching local reduced streams the way remote ones were always cached took it to ~9 MB
         // and 22 hubs, and took the mesh's steady-state hub count from 187 to 48.
         //
-        // 12 MB, not single digits, is deliberate. The eviction-parking retainer is fixed (#1324 —
-        // see MaxHubsPerRecompile), which took this from ~8 to ~6–7 MB per recompile; what is left
-        // belongs to the two mechanisms named there (per-compile activity NODE hubs, and the
-        // owner-side intermediate reduced streams registered on a hub-lifetime parent). Tighten this
-        // bound with whichever of those is fixed next — a bound nothing can currently pass is a red
-        // test, not a guard. Bytes also move with unrelated allocation, which is exactly why the hub
-        // delta below is the primary assertion.
+        // 8 MB, not single digits, is deliberate. Both stream-side retainers are now fixed (#1324 —
+        // see MaxHubsPerRecompile): the eviction parking took this from ~8 to ~6–7 MB, and sharing
+        // the owner-side intermediate reduce took it to 3–5 MB. What is left belongs to the
+        // per-compile activity NODE hubs named there. Tighten this bound when that is fixed — a
+        // bound nothing can currently pass is a red test, not a guard. Bytes also move with
+        // unrelated allocation, which is exactly why the hub delta below is the primary assertion.
         var perRecompile = managedGrowth / Recompiles;
-        perRecompile.Should().BeLessThan(12 * 1024 * 1024,
+        perRecompile.Should().BeLessThan(8 * 1024 * 1024,
             $"a recompile of a trivial type must return its memory; {perRecompile / (1024 * 1024)} MB "
             + $"retained per recompile ({managedGrowth / (1024 * 1024)} MB over {Recompiles}) means "
             + "compile state survives the context that owned it");
