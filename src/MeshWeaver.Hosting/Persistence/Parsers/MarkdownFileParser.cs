@@ -29,6 +29,16 @@ public partial class MarkdownFileParser : IFileFormatParser
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
         .Build();
 
+    /// <summary>
+    /// Options for reading a node's own content as <see cref="MarkdownContent"/> in
+    /// <see cref="Serialize"/>. A hub's options exist to resolve a <c>$type</c> against its
+    /// TypeRegistry; here the target type is fixed and non-polymorphic, so only camelCase-
+    /// insensitive property matching is needed — which is exactly what the Web defaults give.
+    /// Immutable and never written after construction, so it is a constant rather than state.
+    /// </summary>
+    private static readonly System.Text.Json.JsonSerializerOptions ContentReadOptions =
+        new(System.Text.Json.JsonSerializerDefaults.Web);
+
     /// <inheritdoc />
     public IReadOnlyList<string> SupportedExtensions => [".md"];
 
@@ -244,8 +254,16 @@ public partial class MarkdownFileParser : IFileFormatParser
     {
         var sb = new StringBuilder();
 
-        // Extract MarkdownContent if available
-        var mdContent = node.Content as MarkdownContent;
+        // 🚨 ContentAs<T>, NEVER `node.Content as MarkdownContent` (issue #1388). On the CREATE
+        // path the content has not been through this parser yet: an agent / MCP / API create
+        // supplies plain JSON, so it is still a JsonElement here. The soft-cast yielded null, every
+        // metadata field below silently became null, and the front matter was written WITHOUT
+        // them — so `authors`, `tags`, `abstract` and `thumbnail` never reached the file. Reading
+        // the node back re-derives those four from front matter that no longer had them, which is
+        // why the loss looked like it happened on read: the values were gone at write time, with
+        // nothing logged. The body survived only because `markdownText` below already handled the
+        // JsonElement shape — the metadata was the half nobody extended.
+        var mdContent = node.ContentAs<MarkdownContent>(ContentReadOptions);
 
         // Slide metadata: presenter notes + stage background live on SlideContent.
         // On a hub with the Graph types registered the content is typed; on a hub
