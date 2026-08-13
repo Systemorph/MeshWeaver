@@ -231,4 +231,115 @@ public class BuildCoordinationTest(ITestOutputHelper output) : MonolithMeshTestB
         var node = BuildNode(new BuildState { Status = BuildStatus.Ready });
         BuildNodeType.Arbitrate(node, Options, DateTime.UtcNow).Should().BeSameAs(node);
     }
+
+    // ---- Takeover by cluster MEMBERSHIP rather than by the clock (#1355) ----
+    //
+    // The four tests above pass no membership at all — the no-cluster host — so they pin the
+    // FALLBACK rule and must keep passing verbatim. These pin the rule that supersedes it, and
+    // each one is written so it FAILS if the verdict is ignored and the clock is consulted:
+    // the dead holder's heartbeat is fresh, and the live holder's is ancient.
+
+    private static readonly DateTime T0 = new(2026, 8, 13, 12, 0, 0, DateTimeKind.Utc);
+
+    private static MeshNode ClaimHeldBy(string holder, string? identity, DateTime beat) =>
+        BuildNode(new BuildState
+        {
+            ClaimedBy = holder,
+            ClaimedByIdentity = identity,
+            ClaimedAt = beat,
+            HeartbeatAt = beat,
+            Status = BuildStatus.Building,
+            RequestedClaims = ImmutableDictionary<string, BuildClaimRequest>.Empty
+                .Add("successor", new BuildClaimRequest("fp-next", T0.AddMinutes(1), "silo-b")),
+        });
+
+    /// <summary>
+    /// The point of #1355: a holder the cluster has positively recorded as departed is replaced at
+    /// once. Its heartbeat here is ONE SECOND old — so if the staleness clock still had any say,
+    /// the claim would be defended and this test would fail.
+    /// </summary>
+    [Fact]
+    public void Arbitrate_TakesOverAGoneHolderImmediately_WithoutWaitingOutTheClock()
+    {
+        var node = ClaimHeldBy("dead-builder", "silo-a", T0);
+        var cluster = new FakeCluster("silo-b", gone: ["silo-a"]);
+
+        var result = BuildNodeType.Arbitrate(node, Options, T0.AddSeconds(1), cluster)
+            .ContentAs<BuildState>(Options)!;
+
+        result.ClaimedBy.Should().Be("successor");
+        result.ClaimedByIdentity.Should().Be("silo-b",
+            "the successor's own identity must be stamped, or the NEXT takeover decision is blind");
+        result.FrameworkVersion.Should().Be("fp-next");
+    }
+
+    /// <summary>
+    /// The other half, and the one that prevents the storm: a holder the cluster still sees running
+    /// is never taken over, however old its heartbeat looks. A stopped heartbeat on a live process
+    /// means busy, starved or descheduled — not dead — and evicting it puts two builders on one
+    /// compile. The heartbeat here is an hour past <c>ClaimStaleAfter</c>.
+    /// </summary>
+    [Fact]
+    public void Arbitrate_NeverTakesOverALiveHolder_EvenWhenTheHeartbeatLooksAncient()
+    {
+        var node = ClaimHeldBy("slow-builder", "silo-a", T0);
+        var cluster = new FakeCluster("silo-b", live: ["silo-a"]);
+
+        var result = BuildNodeType.Arbitrate(
+            node, Options, T0 + BuildNodeType.ClaimStaleAfter + TimeSpan.FromHours(1), cluster);
+
+        result.Should().BeSameAs(node);
+    }
+
+    /// <summary>
+    /// A claim written before identities were stamped — and equally, one whose identity this cluster
+    /// cannot resolve — carries no verdict, so the clock governs it exactly as before. Upgrade
+    /// safety: the first pod on the new image must not treat an old-format claim as abandoned.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]           // pre-membership claim: no identity was ever written
+    [InlineData("silo-unknown")] // an identity this cluster has no record of — absence is not death
+    public void Arbitrate_WithNoMembershipVerdict_IsGovernedByTheClock(string? identity)
+    {
+        var cluster = new FakeCluster("silo-b");
+
+        BuildNodeType.Arbitrate(
+                ClaimHeldBy("builder", identity, T0),
+                Options,
+                T0 + BuildNodeType.ClaimStaleAfter - TimeSpan.FromSeconds(1),
+                cluster)
+            .ContentAs<BuildState>(Options)!.ClaimedBy
+            .Should().Be("builder", "inside the budget the claim still stands");
+
+        BuildNodeType.Arbitrate(
+                ClaimHeldBy("builder", identity, T0),
+                Options,
+                T0 + BuildNodeType.ClaimStaleAfter + TimeSpan.FromSeconds(1),
+                cluster)
+            .ContentAs<BuildState>(Options)!.ClaimedBy
+            .Should().Be("successor", "past it, the clock is all we have and it hands the claim on");
+    }
+
+    /// <summary>
+    /// One pod's VIEW of the cluster: the members it can see running, the ones it has seen depart,
+    /// and anything else — which is <see cref="ClusterMemberState.Unknown"/>, exactly as an
+    /// un-hydrated Orleans snapshot answers for a silo it does not list.
+    /// </summary>
+    private sealed class FakeCluster(
+        string localIdentity,
+        IEnumerable<string>? live = null,
+        IEnumerable<string>? gone = null) : IClusterMembership
+    {
+        private readonly ImmutableHashSet<string> live =
+            (live ?? []).ToImmutableHashSet().Add(localIdentity);
+
+        private readonly ImmutableHashSet<string> gone = (gone ?? []).ToImmutableHashSet();
+
+        public string LocalIdentity { get; } = localIdentity;
+
+        public ClusterMemberState StateOf(string identity) =>
+            gone.Contains(identity) ? ClusterMemberState.Gone
+            : this.live.Contains(identity) ? ClusterMemberState.Alive
+            : ClusterMemberState.Unknown;
+    }
 }
