@@ -4,6 +4,7 @@ using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -140,5 +141,72 @@ public class NodeTypePathRegistrationTest(ITestOutputHelper output) : MonolithMe
 
         node.ContentAs<StampedProduct>(Mesh.JsonSerializerOptions)?.Name.Should().Be("Gadget",
             "a cross-hub read must yield the real content, not a blank record");
+    }
+
+    /// <summary>
+    /// 🚨 A NodeType DEFINITION node must never claim its OWN path in the content-type registry.
+    ///
+    /// <para><b>The key belongs to the instances, not to the definition.</b> Every read seam
+    /// resolves by <c>node.NodeType</c>, so the entry at path <c>P</c> answers the question "what
+    /// CLR type is the content of a node whose NodeType is <c>P</c>?". For a definition node at
+    /// <c>P</c> the answer that its own activation can supply is <see cref="NodeTypeDefinition"/> —
+    /// the content type of the <c>NodeType</c> configuration it is running — and that is the answer
+    /// to a DIFFERENT question. Instances of <c>P</c> carry the type <c>P</c> declares
+    /// (<c>PluginContent</c>, <c>StampedProduct</c>, …), which the definition node's hub never even
+    /// loads: it applies <see cref="NodeTypeNodeType"/>'s configuration, not the compiled one.</para>
+    ///
+    /// <para><b>Why the wrong entry is silent and not merely absent.</b>
+    /// <c>MeshContentTypeRegistry.Register</c> is last-writer-wins per key, so a definition node
+    /// activating AFTER an instance overwrites the instance's correct entry. The degrade seams
+    /// (<c>MeshNodeStreamCache.ConvertContentJsonElementToTyped</c>,
+    /// <c>MeshNodeTypeSource.ResolveJsonElementContent</c>) then hand
+    /// <c>TryRecoverForNodeType(node.NodeType, …)</c> an instance's JSON and get
+    /// <see cref="NodeTypeDefinition"/> back — System.Text.Json ignores the members it does not
+    /// know and materialises defaults for the rest, so the recovery SUCCEEDS and the instance
+    /// serves its type's definition as its own content, at its unchanged Version, on every read.
+    /// That is Systemorph/MeshWeaver#1379: a paid Store package whose fulfilment read the
+    /// declaration, found a <see cref="NodeTypeDefinition"/>, and reported "nothing to install".</para>
+    ///
+    /// <para>The ordering here is FIXED, not raced: the definition node activates second, which is
+    /// the order that exposes the overwrite. In production the order is whichever hub cold-activates
+    /// last, which is why the symptom was intermittent (~1 gate run in 20) rather than constant.</para>
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ActivatingANodeTypeDefinition_DoesNotClaimItsOwnPathForItsInstances()
+    {
+        var registry = Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>();
+
+        var id = $"declared-{Guid.NewGuid():N}";
+        var definitionPath = $"{TestPartition}/{id}";
+
+        // A NodeType definition node exactly as a dynamic type is persisted: NodeType is the
+        // literal "NodeType", Content is a NodeTypeDefinition. No sources / configuration, so no
+        // compile is kicked off — this test is about the registration, not about Roslyn.
+        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
+        {
+            Name = "Declared Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition { Description = "a type whose instances are not definitions" },
+        }).Should().Emit();
+
+        // Activate the definition node's own hub — this applies NodeTypeNodeType's configuration
+        // and therefore runs its WithContentType<NodeTypeDefinition>().
+        await Mesh.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(new Address(definitionPath)))
+            .Should().Emit();
+
+        // THE ASSERTION: the definition's own path is the key its INSTANCES read. Nothing the
+        // definition node's hub knows may be published under it.
+        registry.TryResolveByNodeType(definitionPath, out var claimed).Should().BeFalse(
+            $"the definition node's activation must not claim '{definitionPath}' — that key answers "
+            + "'what is the content type of a node whose NodeType is this?', and the only answer this "
+            + "hub can give is NodeTypeDefinition, which is the content type of the DEFINITION, not of "
+            + $"its instances. Claimed: {claimed?.FullName ?? "(none)"}");
+
+        // …and the entry that IS correct must still be written: a definition node read through a
+        // degrade seam resolves by its own NodeType, the literal "NodeType".
+        registry.TryResolveByNodeType(MeshNode.NodeTypePath, out var forDefinitions).Should().BeTrue(
+            "a node whose NodeType is the literal 'NodeType' does carry NodeTypeDefinition content — "
+            + "that entry is the correct one and must not be lost by fixing the wrong one");
+        forDefinitions.Should().Be(typeof(NodeTypeDefinition));
     }
 }
