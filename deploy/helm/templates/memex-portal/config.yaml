@@ -77,6 +77,18 @@ data:
          This key must exist HERE or it is silently dropped: the configmap lists keys explicitly
          rather than iterating .Values.config, so an un-templated key never reaches the pod. */}}
   PreWarm__BuildProtocol: "{{ .Values.config.memex_portal.PreWarm__BuildProtocol }}"
+  {{- /* PreWarm__BatchBake: one linked batch build instead of per-type hub activations. Gated
+         pods batch by default in code; this key is the explicit override — and it was declared
+         in the AKS gate values for months while NOT templated here, i.e. silently dropped
+         (it only "worked" because the gate made batch the code default). Ungated hosts that
+         want the fast path (memex-local) need it to actually render. */}}
+  PreWarm__BatchBake: "{{ .Values.config.memex_portal.PreWarm__BatchBake }}"
+  {{- /* PreWarm__BetweenTypes: pacing between types on the activation path. Gated pods sweep at
+         full speed by default; ungated pods keep a serving-friendly trickle unless this says
+         otherwise ("00:00:00" = full speed — right for a single-replica local install where
+         nothing is serving during startup anyway). Empty renders harmlessly: the host skips
+         blank values without a warning. */}}
+  PreWarm__BetweenTypes: "{{ .Values.config.memex_portal.PreWarm__BetweenTypes }}"
   # ---- Assembly-cache retention -------------------------------------------
   # The bake writes one WHOLE GENERATION of NodeType assemblies per image, because the store
   # keys every file by the MeshWeaver.Graph MVID and a CI build changes it on every publish.
