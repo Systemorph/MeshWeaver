@@ -214,9 +214,34 @@ public static class DynamicTypePreWarmer
     /// <summary>
     /// Enumerate the dynamic NodeTypes on the mesh and activate each one's hub, waiting
     /// (best-effort, bounded) for its compile to settle. Emits one
-    /// <see cref="PreWarmOutcome"/> per type and completes when all have settled or timed
-    /// out. Never throws — enumeration/activation failures fold into an outcome or an empty
-    /// completion so a subscriber can simply log the summary.
+    /// <see cref="PreWarmOutcome"/> per type and completes when all have settled or timed out.
+    ///
+    /// <para>🚨 <b>A FAILED ENUMERATION FAULTS THE STREAM — it is never laundered into an empty
+    /// completion.</b> Per-TYPE trouble still folds into an outcome
+    /// (<see cref="PreWarmStatus.CompileError"/>, <see cref="PreWarmStatus.TimedOut"/>,
+    /// <see cref="PreWarmStatus.Faulted"/>), because that is a measurement. But if the ENUMERATION
+    /// itself errors or times out, the sweep measured NOTHING, and the two states a subscriber has
+    /// to tell apart are:</para>
+    /// <list type="bullet">
+    ///   <item><b>Zero types because none exist</b> — a fresh or genuinely empty mesh. Legitimate:
+    ///     the stream completes normally with no emissions, and a readiness gate may serve.</item>
+    ///   <item><b>Zero types because enumeration threw</b> — the pod has learned nothing. The
+    ///     stream FAULTS, so a readiness gate can refuse rather than certify an unmeasured
+    ///     bake.</item>
+    /// </list>
+    /// <para>These used to be indistinguishable here: a <c>Catch</c> swallowed the enumeration
+    /// fault and returned <c>Observable.Empty</c>, so both arrived at the subscriber as "completed,
+    /// zero outcomes" and <c>DynamicTypePreWarmerHostedService</c> marked the gate Complete →
+    /// Healthy. The pre-run bake Job used to catch that from the outside — <i>"FINDING NOTHING IS
+    /// NOT PASSING … a gate that certifies 'I verified nothing' is worse than no gate"</i>, exit 3,
+    /// with a <c>Bake:AllowEmpty</c> escape — and it named THIS <c>Catch</c> as the reason it had
+    /// to. Retiring that Job (#1357) removed the counterpart guard and left the hole live on the
+    /// only remaining path. The distinction now lives at the source instead, which is the one place
+    /// it can be made honestly.</para>
+    ///
+    /// <para>Note what did NOT change: an empty result is NOT an error. Emptiness is a legitimate
+    /// answer, and refusing readiness for it would black-hole a genuinely empty mesh. Only the
+    /// inability to obtain an answer gates.</para>
     ///
     /// <para>Types are warmed STRICTLY SEQUENTIALLY in
     /// <see cref="NodeTypeDependencyGraph.TopologicalOrder(IReadOnlyDictionary{string, ImmutableHashSet{string}}, out ImmutableList{string})"/>
@@ -294,12 +319,20 @@ public static class DynamicTypePreWarmer
                             mesh, workspace, accessService, definitions, nodes, store, report,
                             budget, pacing, batchBake, logger));
                 })
-                .Catch<PreWarmOutcome, Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "DynamicTypePreWarmer: enumeration of dynamic NodeTypes failed — pre-warm skipped (Part 2 still compiles lazily on first access)");
-                    return Observable.Empty<PreWarmOutcome>();
-                }));
+                // 🚨 NO Catch HERE, AND NO LOG-AND-SWALLOW — DELIBERATELY.
+                //
+                // The fault must reach the subscriber, because it is the ONLY thing that
+                // distinguishes "this mesh has no dynamic types" from "this pod could not find
+                // out". What used to stand here logged a warning and returned Observable.Empty,
+                // which handed both cases to the caller as the identical terminal — and the
+                // readiness gate then certified a bake that never happened.
+                //
+                // Nor is a log added here to compensate: the subscriber
+                // (DynamicTypePreWarmerHostedService) already logs THIS exception, with the
+                // severity that depends on whether the gate is armed — something only it knows.
+                // A second Error line at the source would say the same thing worse and pay twice
+                // for it in Loki.
+                );
     }
 
     /// <summary>
