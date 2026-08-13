@@ -70,6 +70,13 @@ config:
     # Read as a Boolean — must be "true"/"false", never left empty (issue #352).
     OpenAICompatible__DiscoverModels: "false"
 
+    # NOTE: behaviour defaults that should FOLLOW the product (e.g. the startup
+    # bake) are NOT in this template — they live in the tracked layer
+    # share/values.local.defaults.yaml, which `memex-local up` passes before
+    # this overlay, so existing installs pick them up on `brew upgrade` without
+    # regenerating this file. Override any of them here the normal helm way
+    # (this file wins — it is passed last).
+
     # ---- Full logging (verbose) — see header note. Declared here for
     # visibility; ALSO applied by `memex-local up` via `kubectl set env`
     # because the chart's ConfigMap is a fixed allow-list. Set to Trace for
