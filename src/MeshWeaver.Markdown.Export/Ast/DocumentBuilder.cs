@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using Markdig;
 using Markdig.Extensions.Tables;
 using Markdig.Syntax;
@@ -103,6 +104,10 @@ public class DocumentBuilder
         var mathIndex = 0;
         var elements = ImmutableArray.CreateBuilder<DocumentElement>();
         var tocHeadings = ImmutableArray.CreateBuilder<HeadingElement>();
+        // Anchor ids must be unique across the WHOLE document, chapters included — two chapters
+        // each opening with "Overview" is the ordinary case, not a corner one. Scoped to this
+        // call, never to the instance, so two Build()s cannot suffix each other's ids.
+        var anchors = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
 
         var first = true;
         foreach (var chapter in chapters)
@@ -120,7 +125,7 @@ public class DocumentBuilder
 
             _currentNodePath = chapter.NodePath ?? _defaultNodePath;
             var doc = Markdig.Markdown.Parse(chapter.Markdown, PipelineFor(_currentNodePath));
-            WalkBlocks(doc, options, elements, tocHeadings, ref mermaidIndex, ref mathIndex);
+            WalkBlocks(doc, options, elements, tocHeadings, anchors, ref mermaidIndex, ref mathIndex);
         }
 
         return new Document(
@@ -136,6 +141,7 @@ public class DocumentBuilder
         DocumentExportOptions options,
         ImmutableArray<DocumentElement>.Builder elements,
         ImmutableArray<HeadingElement>.Builder tocHeadings,
+        ImmutableHashSet<string>.Builder anchors,
         ref int mermaidIndex,
         ref int mathIndex)
     {
@@ -152,7 +158,7 @@ public class DocumentBuilder
                         elements.Add(new PageBreakElement());
 
                     var content = ReadInlines(h.Inline);
-                    var anchor = AnchorFromInlines(content);
+                    var anchor = AnchorFromInlines(content, anchors);
                     var heading = new HeadingElement(h.Level, anchor, content);
                     elements.Add(heading);
                     if (h.Level is >= 1 and <= 3) tocHeadings.Add(heading);
@@ -196,7 +202,7 @@ public class DocumentBuilder
                 case QuoteBlock q:
                 {
                     var inner = ImmutableArray.CreateBuilder<DocumentElement>();
-                    WalkBlocks(q, options, inner, tocHeadings, ref mermaidIndex, ref mathIndex);
+                    WalkBlocks(q, options, inner, tocHeadings, anchors, ref mermaidIndex, ref mathIndex);
                     elements.Add(new BlockQuoteElement(inner.ToImmutable()));
                     break;
                 }
@@ -208,7 +214,7 @@ public class DocumentBuilder
                         if (child is ListItemBlock li)
                         {
                             var content = ImmutableArray.CreateBuilder<DocumentElement>();
-                            WalkBlocks(li, options, content, tocHeadings, ref mermaidIndex, ref mathIndex);
+                            WalkBlocks(li, options, content, tocHeadings, anchors, ref mermaidIndex, ref mathIndex);
                             items.Add(new ListItemElement(content.ToImmutable()));
                         }
                     }
@@ -229,7 +235,7 @@ public class DocumentBuilder
                     elements.AddRange(ResolveArea(areaInfo));
                     break;
                 case ContainerBlock container2:
-                    WalkBlocks(container2, options, elements, tocHeadings, ref mermaidIndex, ref mathIndex);
+                    WalkBlocks(container2, options, elements, tocHeadings, anchors, ref mermaidIndex, ref mathIndex);
                     break;
             }
         }
@@ -362,7 +368,21 @@ public class DocumentBuilder
         return sb.ToString();
     }
 
-    private static string AnchorFromInlines(ImmutableArray<InlineElement> inlines)
+    /// <summary>
+    /// The id a heading carries and its contents entry links to — slugified from the heading text
+    /// and then made UNIQUE within the document.
+    ///
+    /// <para>🚨 Uniqueness is not cosmetic. Two sections legitimately called "Overview" slugify to
+    /// the same <c>overview</c>, and an HTML fragment reference resolves to the FIRST element with
+    /// that id — so the second entry's link jumped to the first section, and the PDF link
+    /// annotation recorded that wrong destination too. It was invisible while the contents list
+    /// printed no page numbers; the page-number read-back (#1309) refuses a document whose
+    /// destinations run backwards, which is how it surfaced. Disambiguating with a numeric suffix
+    /// is what every markdown renderer does, so an author's expectation is unchanged.</para>
+    /// </summary>
+    private static string AnchorFromInlines(
+        ImmutableArray<InlineElement> inlines,
+        ImmutableHashSet<string>.Builder taken)
     {
         var sb = new System.Text.StringBuilder();
         foreach (var i in inlines)
@@ -372,7 +392,18 @@ public class DocumentBuilder
                 foreach (var c in l.Content)
                     if (c is TextInline tt) sb.Append(tt.Text);
         }
-        return Slugify(sb.ToString());
+
+        var slug = Slugify(sb.ToString());
+        // An empty heading (or one made only of punctuation) has no slug to make unique; give it
+        // a stable generated one rather than an id of "" that nothing can link to.
+        if (slug.Length == 0)
+            slug = "section";
+
+        var candidate = slug;
+        for (var suffix = 2; !taken.Add(candidate); suffix++)
+            candidate = slug + "-" + suffix.ToString(CultureInfo.InvariantCulture);
+
+        return candidate;
     }
 
     private static string Slugify(string s)
