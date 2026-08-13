@@ -21,8 +21,14 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// <c>node.Content as TContent ?? new TContent()</c>. That is a silent data-loss bug: when content
 /// arrives as JSON (file-system / Postgres / any cross-hub read) the cast is <c>null</c>, the
 /// <c>?? new()</c> materialises a DEFAULT record, and the write persists those defaults over every
-/// field the caller never touched. <see cref="UntypedUpdate_WithTheAsOrDefaultIdiom_SilentlyWritesDefaultsOverRealFields"/>
-/// reproduces exactly that; the two <c>Update&lt;TContent&gt;</c> tests pin the cure.</para>
+/// field the caller never touched. The <c>Update&lt;TContent&gt;</c> tests here pin the cure.</para>
+///
+/// <para>🚨 <c>UntypedUpdate_WithTheAsOrDefaultIdiom_IsRescuedByTheExactContentTypeRoute</c> used to
+/// REPRODUCE that loss and now asserts the opposite: wiring the exact content-type route
+/// (<c>NodeTypePathHolder</c>) made the read seam resolve content from the node's own
+/// <c>NodeType</c>, so this fixture's idiom survives. That narrows the window in which the idiom
+/// misfires — it does not close it (no NodeType, an unactivated type, a satellite), which is why
+/// naming the type at the write remains the fix rather than the belt.</para>
 ///
 /// <para>And the cure must not trade one silent failure for another: a node whose content is
 /// PRESENT but unreadable as <typeparamref name="TContent"/> must <b>fail the write loudly</b>,
@@ -71,14 +77,28 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
         """{"content":"# real","prerenderedHtml":"<h1>real</h1>"}""";
 
     /// <summary>
-    /// 🚨 THE DEFECT, reproduced with no mocks and no Roslyn: unresolvable JSON content, the
-    /// <c>as T ?? new T()</c> idiom, and a write that destroys a field the caller never named.
-    /// Passes before and after — it documents WHY the typed overload exists, and it is the exact
-    /// input <see cref="TypedUpdate_UnresolvableJsonContent_ConvertsAndPreservesUntouchedFields"/>
-    /// survives.
+    /// 🚨 <b>End-to-end proof that identifying content by its NodeType repairs the blank-record
+    /// class.</b> This test used to assert the opposite — that the <c>as T ?? new T()</c> idiom
+    /// silently wrote a DEFAULT record over <c>PrerenderedHtml</c> — and it passed, because the
+    /// read seam handed back an untyped <see cref="JsonElement"/> and the cast went null. Wiring
+    /// the exact content-type route (<c>NodeTypePathHolder</c> → <c>WithContentType</c> →
+    /// <c>TryRecoverForNodeType</c>) flipped it: the seam now resolves the content from the node's
+    /// own <c>NodeType</c>, so the idiom receives a real record and the untouched field survives.
+    ///
+    /// <para><b>Only the exact route can do this.</b> The fixture carries NO <c>$type</c> at all
+    /// (see <see cref="UnresolvableContentJson"/>), so the bare-name map has nothing to look up —
+    /// this is not the name route succeeding. It is the same symptom class as
+    /// <c>UWDeepfieldHome/Source/UWDeepfieldHomeLayoutAreas.cs:76</c>, where
+    /// <c>node?.Content as UWDeepfieldHome ?? new UWDeepfieldHome()</c> renders a blank page today.</para>
+    ///
+    /// <para>🚨 It does NOT make the idiom safe. The exact route reaches content whose node has a
+    /// NodeType with a registered content type; where it cannot — no NodeType, a type whose hub has
+    /// not activated, a satellite — the cast still goes null and the write still persists defaults.
+    /// That is why <c>Update&lt;TContent&gt;</c> exists: it removes the guess instead of narrowing
+    /// the window in which the guess happens to be right.</para>
     /// </summary>
     [Fact(Timeout = 30_000)]
-    public async Task UntypedUpdate_WithTheAsOrDefaultIdiom_SilentlyWritesDefaultsOverRealFields()
+    public async Task UntypedUpdate_WithTheAsOrDefaultIdiom_IsRescuedByTheExactContentTypeRoute()
     {
         var options = Mesh.JsonSerializerOptions;
         var stored = JsonSerializer.Deserialize<JsonElement>(UnresolvableContentJson);
@@ -97,10 +117,11 @@ public class TypedContentUpdateTest(ITestOutputHelper output) : MonolithMeshTest
             .Where(n => n.ContentAs<MarkdownContent>(options)?.Content == "# edited")
             .FirstAsync().Timeout(10.Seconds()).ToTask();
 
-        after.ContentAs<MarkdownContent>(options)!.PrerenderedHtml.Should().BeNull(
-            "this is the defect: `as T` was null on unresolvable JSON content, `?? new T()` "
-            + "supplied a DEFAULT record, and the write persisted that default over "
-            + "PrerenderedHtml — a field the caller never mentioned.");
+        after.ContentAs<MarkdownContent>(options)!.PrerenderedHtml.Should().Be("<h1>real</h1>",
+            "the read seam resolved the content from the node's own NodeType, so `as T` returned a "
+            + "REAL record and the untouched field survived. Before the exact route was wired this "
+            + "was null — the `?? new T()` default written over a field the caller never mentioned. "
+            + "The fixture carries no $type, so the bare-name map cannot be what rescued it.");
     }
 
     /// <summary>

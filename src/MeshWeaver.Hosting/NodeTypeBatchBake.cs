@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Diagnostics;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -451,6 +452,13 @@ internal static class NodeTypeBatchBake
         ILogger? logger)
     {
         var typePath = typeNode.Path;
+        // PER-COMPILE cost, appended to the per-type line that already exists — no new log volume.
+        // This is the measurement that answers "is compilation what eats the memory?" directly rather
+        // than by elimination: one linked bake of 279 types left the pod at 2.5 GB, so the fleet is
+        // cheap in aggregate, but nothing reported what an INDIVIDUAL compile cost or whether it was
+        // returned. A type that repeatedly costs tens of MB and never gives them back is visible here
+        // and nowhere else. See MemoryDelta.
+        var compileMemory = MemoryDelta.Start();
         var compiler = mesh.ServiceProvider.GetService<IMeshNodeCompilationService>();
         if (compiler is null)
             return Observable.Return(new PreWarmOutcome(
@@ -482,9 +490,10 @@ internal static class NodeTypeBatchBake
                         "batch compile did not settle within the per-type budget")
                     : new PreWarmOutcome(typePath, PreWarmStatus.Faulted, ex.Message)))
             .Do(o => logger?.LogInformation(
-                "BatchBake: {TypePath} → {Status}{Detail}",
+                "BatchBake: {TypePath} → {Status}{Detail} — {Memory}",
                 o.TypePath, o.Status,
-                string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})"));
+                string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})",
+                compileMemory));
     }
 
     private static IObservable<PreWarmOutcome> StampAndReport(

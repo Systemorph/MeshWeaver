@@ -4,14 +4,19 @@
 @using MeshWeaver.Blazor.Components.Monaco
 @using MeshWeaver.Mesh.Services.LanguageServer
 @using System.Text.Json
+@using System.Reactive.Disposables
 @using System.Reactive.Linq
 @using Microsoft.Extensions.Logging
 @using Microsoft.Extensions.DependencyInjection
 @using MeshWeaver.Blazor.Infrastructure
-@implements IDisposable
-@inject IServiceProvider Services
+@inherits BlazorView<CodeEditorControl, CodeEditorView>
 
+@* This view has no element of its own — it IS a Monaco editor. The author's Style/Class are
+   therefore FORWARDED onto the editor's container rather than wrapped in a new box (#1333),
+   the same rule PropertyView/EditFormView follow for the control they delegate to. *@
 <MonacoEditorView @ref="editorRef"
+                  Class="@Class"
+                  Style="@Style"
                   Value="@BoundValue"
                   Language="@BoundLanguage"
                   Height="@BoundHeight"
@@ -29,7 +34,10 @@
 
 @code {
     private MonacoEditorView? editorRef;
-    private List<IDisposable> subscriptions = new();
+    // The local accumulator is gone: the value binding below now goes through the base's
+    // AddBinding. #1308's property is preserved rather than dropped — BlazorView.bindings is
+    // itself a CompositeDisposable, so an emission that registers while a re-bind or a teardown
+    // is draining is still thread-safe, and an Add after disposal still releases its argument.
     private bool isUpdatingFromStream = false;
 
     private string BoundValue = "";
@@ -49,53 +57,20 @@
     // Store the data pointer for two-way binding
     private JsonPointerReference? ValuePointer;
 
-    /// <summary>
-    /// The view model for this code editor.
-    /// </summary>
-    [Parameter]
-    public CodeEditorControl? ViewModel { get; set; }
+    // ViewModel / Stream / Area / DataContext now come from BlazorView, which is also what binds
+    // Id / Class / Style. Re-declaring them as local [Parameter]s is exactly what kept this view
+    // outside the contract the registry types it into (#1333) — BindData never ran for it, so the
+    // author's Style and Class were not dropped in markup, they were never bound at all. The base's
+    // OnParametersSet → DisposeBindings → BindData replaces the hand-rolled lifecycle below, and
+    // AddBinding replaces the hand-rolled subscription list (the base disposes them on re-bind and
+    // on DisposeAsync).
 
-    /// <summary>
-    /// The synchronization stream (required by the view infrastructure).
-    /// </summary>
-    [Parameter]
-    public ISynchronizationStream<JsonElement>? Stream { get; set; }
-
-    /// <summary>
-    /// The area name (required by the view infrastructure).
-    /// </summary>
-    [Parameter]
-    public string? Area { get; set; }
-
-    /// <summary>
-    /// The data context for resolving data bindings.
-    /// </summary>
-    [CascadingParameter(Name = "DataContext")]
-    public string? DataContext { get; set; }
-
-    protected override void OnParametersSet()
+    /// <inheritdoc />
+    protected override void BindData()
     {
-        base.OnParametersSet();
-        DisposeSubscriptions();
-        BindData();
-    }
+        // Binds Id / Class / Style — the whole point of the re-base.
+        base.BindData();
 
-    private void DisposeSubscriptions()
-    {
-        foreach (var sub in subscriptions)
-        {
-            sub.Dispose();
-        }
-        subscriptions.Clear();
-    }
-
-    public void Dispose()
-    {
-        DisposeSubscriptions();
-    }
-
-    private void BindData()
-    {
         if (ViewModel == null)
             return;
 
@@ -108,7 +83,7 @@
         // Then set up reactive subscription for Value changes if it's a pointer reference
         if (Stream != null && ValuePointer != null)
         {
-            var subscription = Stream
+            AddBinding(Stream
                 .DataBind<string>(ValuePointer, GetEffectiveDataContext())
                 .Subscribe(value =>
                 {
@@ -120,16 +95,10 @@
                         isUpdatingFromStream = false;
                     }
                 },
-                // No onError used to leave a faulted value stream silently un-updating the editor. This
-                // component is a plain ComponentBase (not BlazorView), so surface via the resolved logger +
-                // the circuit's PortalErrorSink modal (when present).
-                ex =>
-                {
-                    Services.GetService<ILoggerFactory>()?.CreateLogger<CodeEditorView>()
-                        .LogWarning(ex, "Editor value binding faulted");
-                    Services.GetService<PortalErrorSink>()?.Report($"Editor value: {ex.Message}");
-                });
-            subscriptions.Add(subscription);
+                // No onError used to leave a faulted value stream silently un-updating the editor.
+                // SurfaceError is the base's canonical handler: it logs, pops the circuit's
+                // PortalErrorSink modal when one is registered, and suppresses teardown faults.
+                ex => SurfaceError(ex, "Editor value")));
         }
 
         // Bind other properties (one-time, not reactive)
@@ -235,8 +204,7 @@
             {
                 // Was a fully-silent `catch { return default; }`. This is a best-effort fallback
                 // conversion, so a failure is non-fatal — but log it (Debug) so it isn't invisible.
-                Services.GetService<ILoggerFactory>()?.CreateLogger<CodeEditorView>()
-                    .LogDebug(ex, "ResolveValue<{Type}> could not deserialize; using default", typeof(T).Name);
+                Logger.LogDebug(ex, "ResolveValue<{Type}> could not deserialize; using default", typeof(T).Name);
                 return default;
             }
         }

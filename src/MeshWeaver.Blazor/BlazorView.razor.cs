@@ -1,4 +1,5 @@
 ﻿using System.Linq.Expressions;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Text.Json;
@@ -86,6 +87,19 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     /// <summary>Inline CSS style string bound from <c>ViewModel.Style</c>; applied to the root element.</summary>
     protected string? Style { get; set; }
 
+    /// <summary>
+    /// <see cref="Style"/> rendered as a space-prefixed suffix, for views whose root element already
+    /// carries FIXED declarations of its own (<c>style="max-width: 720px;@StyleSuffix"</c>). It goes
+    /// LAST so the author's declarations win the cascade over the view's defaults, and it is the empty
+    /// string when nothing was declared, so an unstyled control's markup stays byte-identical.
+    /// </summary>
+    /// <remarks>
+    /// Views whose root has no style of its own use <c>style="@Style"</c> directly, and views that
+    /// forward to a Fluent component pass <c>Style="@Style"</c>. Form views fold Style with Width and
+    /// Height through <c>FormComponentBase.ComputedStyle</c> instead.
+    /// </remarks>
+    protected string StyleSuffix => string.IsNullOrWhiteSpace(Style) ? string.Empty : " " + Style;
+
     // Snapshot of the binding-relevant parameters at the last actual bind — OnParametersSet compares
     // against these to skip redundant re-binds (see the guard there).
     private TViewModel? _boundViewModel;
@@ -141,11 +155,39 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
 
     /// <summary>CSS class string bound from <c>ViewModel.Class</c>; applied to the root element.</summary>
     protected string? Class { get; set; }
+
+    /// <summary>
+    /// <see cref="Class"/> rendered as a space-prefixed suffix, for views whose root element already
+    /// carries a FIXED class list of its own. 🚨 The Razor form is the PARENTHESISED one —
+    /// <c>class="markdown-body@(ClassSuffix)"</c>: written bare as <c>markdown-body@ClassSuffix</c> it
+    /// hits Razor's email-address heuristic (<c>word@word</c>) and is emitted as LITERAL TEXT, with no
+    /// error. Emits the empty
+    /// string when the author declared no class, so an unstyled control's markup stays byte-identical to
+    /// what it was before the class was honoured — appending <c> @Class</c> literally instead would leave
+    /// a trailing space in every such attribute.
+    /// </summary>
+    /// <remarks>
+    /// Views whose root has NO class of its own use <c>class="@Class"</c> directly (Blazor omits a null
+    /// attribute entirely), and views that forward to a Fluent component pass <c>Class="@Class"</c>.
+    /// </remarks>
+    protected string ClassSuffix => string.IsNullOrWhiteSpace(Class) ? string.Empty : " " + Class;
     /// <summary>HTML element id bound from <c>ViewModel.Id</c>.</summary>
     protected string? Id { get; set; }
 
-    /// <summary>Component-lifetime disposables released in <c>DisposeAsync</c>, in addition to data-binding subscriptions.</summary>
-    protected List<IDisposable> Disposables { get; } = new();
+    /// <summary>
+    /// Component-lifetime disposables released in <c>DisposeAsync</c>, in addition to data-binding
+    /// subscriptions.
+    ///
+    /// <para>🚨 A <see cref="CompositeDisposable"/>, not a <c>List&lt;IDisposable&gt;</c>, and both
+    /// halves of that matter (issue #1308). Its <c>Add</c> is thread-safe, so a subscription
+    /// registered from a query-change callback — which arrives on a hub/pool thread, NOT the
+    /// renderer — can no longer race the enumeration in <see cref="DisposeAsync"/> that runs on the
+    /// renderer's disposal queue ("Collection was modified; enumeration operation may not
+    /// execute", which failed the whole Blazor circuit). And an <c>Add</c> that lands AFTER
+    /// disposal disposes its argument immediately instead of parking it in a list nobody will ever
+    /// drain again — the unowned-work-outliving-its-owner leak that the same race hides.</para>
+    /// </summary>
+    protected CompositeDisposable Disposables { get; } = new();
 
     private bool _viewDisposed;
 
@@ -165,9 +207,10 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         _viewDisposed = true;
         Logger.LogDebug("Disposing area {Area}", Area);
         DisposeBindings();
-        foreach (var d in Disposables)
-            d.Dispose();
-        Disposables.Clear();
+        // Dispose (not Clear) BOTH composites: this is component teardown, not a re-bind, so the
+        // accumulators must become terminal. A late Add then disposes its argument on the spot.
+        bindings.Dispose();
+        Disposables.Dispose();
         return default;
     }
 
@@ -495,15 +538,18 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
         DataBind(ViewModel.Class, x => x.Class);
         DataBind(ViewModel.Style, x => x.Style);
     }
-    private readonly List<IDisposable> bindings = new();
+    // CompositeDisposable for the same reason as Disposables above: DataBind subscribes streams
+    // whose emissions land off the renderer, and a re-bind (BindDataAfterParameterReset) can run
+    // concurrently with one of those callbacks registering a binding.
+    private readonly CompositeDisposable bindings = new();
 
-    /// <summary>Disposes all active data-binding subscriptions registered via <c>AddBinding</c> and <c>DataBind</c>.</summary>
-    protected virtual void DisposeBindings()
-    {
-        foreach (var d in bindings)
-            d.Dispose();
-        bindings.Clear();
-    }
+    /// <summary>
+    /// Disposes all active data-binding subscriptions registered via <c>AddBinding</c> and
+    /// <c>DataBind</c>. <c>Clear</c>, not <c>Dispose</c>: this also runs on a parameter-driven
+    /// RE-BIND, after which the accumulator must still accept the new bindings. Component teardown
+    /// makes it terminal — see <see cref="DisposeAsync"/>.
+    /// </summary>
+    protected virtual void DisposeBindings() => bindings.Clear();
 
     /// <summary>
     /// Posts a <c>ClickedEvent</c> for the current area to the stream owner, stamping the circuit

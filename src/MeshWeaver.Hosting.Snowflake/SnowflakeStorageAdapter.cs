@@ -351,7 +351,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => _ioPool.Invoke(ct => ReadAsyncCore(path, options, ct));
+        => _readPool.Invoke(ct => ReadAsyncCore(path, options, ct));
 
     /// <summary>Single-node read leaf — mirrors PG's <c>ReadAsyncCore</c> including the undefined-table tolerance.</summary>
     private async Task<MeshNode?> ReadAsyncCore(string path, JsonSerializerOptions options, CancellationToken ct)
@@ -399,7 +399,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     /// SUBSCRIBER's thread (the grain-wedge / dropped-initial-emission defect).
     /// </summary>
     public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-        => _ioPool.InvokeStream(ct => ReadManyAsyncCore(paths, options, ct));
+        => _readPool.InvokeStream(ct => ReadManyAsyncCore(paths, options, ct));
 
     /// <summary>ReadMany leaf: one connection, one query per (table, namespace) group; absent tables skip the group.</summary>
     private async IAsyncEnumerable<MeshNode> ReadManyAsyncCore(
@@ -1114,7 +1114,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
 
     /// <inheritdoc />
     public IObservable<bool> Exists(string path)
-        => _ioPool.Invoke(ct => ExistsAsyncCore(path, ct))
+        => _readPool.Invoke(ct => ExistsAsyncCore(path, ct))
             .Catch<bool, Exception>(ex => IsUndefinedObject(ex)
                 ? Observable.Return(false)
                 : Observable.Throw<bool>(ex));
@@ -1142,7 +1142,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
         string fullPath, JsonSerializerOptions options)
-        => _ioPool.Invoke(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct))
+        => _readPool.Invoke(ct => FindBestPrefixMatchAsyncCore(fullPath, options, ct))
             .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedObject(ex)
                 ? Observable.Return<(MeshNode?, int)>((null, 0))
                 : Observable.Throw<(MeshNode?, int)>(ex));
@@ -1188,7 +1188,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     /// </summary>
     public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
         string fullPath, JsonSerializerOptions options)
-        => _ioPool.Invoke(ct => ResolvePathAsyncCore(fullPath, options, ct))
+        => _readPool.Invoke(ct => ResolvePathAsyncCore(fullPath, options, ct))
             .Catch<(MeshNode?, int), Exception>(ex => IsUndefinedObject(ex)
                 ? Observable.Return<(MeshNode?, int)>((null, 0))
                 : Observable.Throw<(MeshNode?, int)>(ex));
@@ -1248,7 +1248,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
     /// <inheritdoc />
     public IObservable<object> GetPartitionObjects(
         string nodePath, string? subPath, JsonSerializerOptions options)
-        => _ioPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
+        => _readPool.InvokeStream(ct => GetPartitionObjectsAsyncCore(nodePath, subPath, options, ct))
             .Catch<object, Exception>(ex => IsUndefinedObject(ex)
                 // Absent schema (router resolved synchronously, schema never created) →
                 // nothing to read. Complete empty, don't fault.
@@ -1391,7 +1391,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
 
     /// <inheritdoc />
     public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => _ioPool.Invoke(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct))
+        => _readPool.Invoke(ct => GetPartitionMaxTimestampAsyncCore(nodePath, subPath, ct))
             .Catch<DateTimeOffset?, Exception>(ex => IsUndefinedObject(ex)
                 ? Observable.Return<DateTimeOffset?>(null)
                 : Observable.Throw<DateTimeOffset?>(ex));
@@ -1420,7 +1420,7 @@ public class SnowflakeStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposa
 
     /// <inheritdoc />
     public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-        => _ioPool.Invoke(ct => ListPartitionSubPathsAsyncCore(nodePath, ct))
+        => _readPool.Invoke(ct => ListPartitionSubPathsAsyncCore(nodePath, ct))
             .Catch<IEnumerable<string>, Exception>(ex => IsUndefinedObject(ex)
                 ? Observable.Return(Enumerable.Empty<string>())
                 : Observable.Throw<IEnumerable<string>>(ex));

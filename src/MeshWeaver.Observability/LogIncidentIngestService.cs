@@ -58,8 +58,29 @@ public sealed class LogIncidentIngestService(
 
         // 🚨 Observable.Using, not a `using` block: the identity has to be live when the write is
         // DISPATCHED (at subscribe), and a `using` around the chain's construction would already
-        // have disposed by then. This is the canonical system-write shape (PackageInstaller,
-        // CatalogLayoutAreas) — see Doc/Architecture/AccessContextPropagation.md.
+        // have disposed by then. See Doc/Architecture/AccessContextPropagation.md.
+        //
+        // 🚨 This wraps a TWO-STAGE chain, which normally does NOT work and was reported as a defect
+        // (issue #1314). An AsyncLocal scope opened at Subscribe covers only what runs synchronously
+        // on the subscribing thread, and the SelectMany selector below — where Create posts and Fold
+        // calls UpdateIncident, both snapshotting the identity EAGERLY at the call — runs wherever
+        // ReadExisting emits. That is exactly how MeshWeaver.Reinsurance#46 lost the identity for
+        // every stage after its first, so the shape is NOT self-evidently safe and the earlier
+        // reference to the single-post-per-Using precedents (PackageInstaller, CatalogLayoutAreas)
+        // did not cover it.
+        //
+        // It holds here for a specific, MEASURED reason: the first stage is a mesh-node READ, and
+        // MeshNodeStreamCache.GetStreamRaw captures AccessService.Context synchronously at the
+        // GetMeshNodeStream(path) call — inside this scope, on the subscribing thread — then
+        // re-stamps it around every emission via CarryAccessContext. The selector runs inside that
+        // per-callback scope, so both writes are built under system-security even though the emission
+        // lands on another thread tens of milliseconds later (measured with the ExecutionContext
+        // suppressed, so nothing could have ridden a captured context instead).
+        //
+        // 🚨 The guarantee therefore belongs to the READ, not to this method. Insert an unwrapped
+        // stage between the read and the writes, or move a write out of the selector's callback, and
+        // the identity silently reverts to the emission thread's ambient — a wrong attribution, not
+        // an error. LogIncidentIngestAccessContextTest pins it end-to-end on CreatedBy/LastModifiedBy.
         return Observable.Using(
             () => accessService?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
             _ => ReadExisting(path).SelectMany(existing => existing is null

@@ -452,7 +452,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
         // explicit `limit:N`. Smaller wins so a request-level cap can't be
         // bypassed by a higher in-query limit, and an explicit in-query limit
         // still applies when no request cap is set.
-        var effectiveLimit = MinLimit(request.Limit, firstParsed.Limit);
+        // Non-positive means "no clip" (MeshQueryRequest.NoLimit) — NOT "stop after zero rows".
+        // Folded away here so the row loop below only ever sees a real cap; without it a
+        // Complete() request returned exactly one row (`count >= -1` is true immediately).
+        var effectiveLimit = MinLimit(Positive(request.Limit), Positive(firstParsed.Limit));
         var effectiveUserId = GetEffectiveUserId(request);
         await foreach (var node in _adapter.QueryNodesAsync(
             parsedList, options, effectiveUserId, activityUserId: activityUserId,
@@ -481,6 +484,14 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider, IVectorSearchProvider
             (var v, null) => v,
             ({ } x, { } y) => Math.Min(x, y)
         };
+
+    /// <summary>
+    /// A stated limit only counts when it is a real cap. Non-positive is the framework's "return
+    /// every match" encoding (<see cref="MeshQueryRequest.NoLimit"/>), which is the SAME thing as
+    /// "no limit stated" for a row-count guard — collapsing them here keeps every downstream
+    /// comparison honest.
+    /// </summary>
+    private static int? Positive(int? limit) => limit is > 0 ? limit : null;
 
     /// <summary>
     /// Native reactive autocomplete. The PG execute-query (<c>_adapter.QueryNodesAsync</c> — the

@@ -2,7 +2,7 @@
 @inherits BlazorView<LayoutAreaControl, LayoutAreaView>
 @inject AccessService Access
 
-<div class="layout-area-container @(IsContentLoaded ? "content-loaded" : "content-loading") @((Top || Fill) ? "fill-area" : "")" style="@Style">
+<div class="@ContainerClass" style="@Style">
     @* Surface NodeType compile progress when the stream hasn't emitted yet so the
        user sees "Compiling <path> (Ns)…" instead of an indefinite spinner. *@
     @if (!IsContentLoaded)
@@ -77,6 +77,25 @@
 
 @code
 {
+    /// <summary>
+    /// The container's own state classes plus the author-declared <c>Class</c>, joined as a token list.
+    /// Composed here rather than inline because Razor cannot parse two adjacent explicit expressions in
+    /// one attribute value.
+    /// <para>The tokens are exactly the ones emitted before. The only difference is that the trailing
+    /// space left behind when the area is neither <c>Top</c> nor <c>Fill</c> is no longer emitted —
+    /// interpolating the empty conditional plus a space-prefixed class would otherwise produce a double
+    /// space and an empty token. A class attribute is a whitespace-separated token list, so neither the
+    /// old trailing space nor its removal participates in any selector match.</para>
+    /// </summary>
+    private string ContainerClass =>
+        string.Join(" ", new[]
+        {
+            "layout-area-container",
+            IsContentLoaded ? "content-loaded" : "content-loading",
+            (Top || Fill) ? "fill-area" : null,
+            Class
+        }.Where(token => !string.IsNullOrWhiteSpace(token)));
+
     [Parameter] public bool Top { get; set; }
 
     /// <summary>

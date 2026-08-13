@@ -156,11 +156,36 @@ public class OrphanedStartingExecutionRecoveryTest(ITestOutputHelper output) : M
         // First: the loaded state must surface (proof the hub activated cold and
         // read the persisted orphaned claim).
         var loaded = await workspace.GetMeshNodeStream(threadPath)
-            .Select(n => n.Content as MeshThread)
+            .Select(n => n.ContentAs<MeshThread>(client.JsonSerializerOptions))
             .Should().Within(30.Seconds()).Match(t => t is not null);
-        loaded!.PendingUserMessages.Should().ContainKey(userMsgId,
-            "the queued message must still be present on the orphaned claim");
-        Output.WriteLine($"Thread hub activated cold; status={loaded.Status}.");
+
+        // 🚨 Assert the DURABLE fact, never the transient one. Subscribing is what ACTIVATES
+        // this hub, so the recovery below (roll back to Idle → the submission watcher drains
+        // PendingUserMessages into the round) is racing the very snapshot this read is waiting
+        // for — both run on the hub that the SubscribeRequest just woke. Which one lands first
+        // is not specified by anything in the product, and it moves with activation cost: an
+        // earlier cut of this test asserted `PendingUserMessages.ContainKey(userMsgId)` here and
+        // went red the moment activation got FASTER (fewer streams built per activation), because
+        // the drain then beat the snapshot. Pinning an intermediate state that the fix under test
+        // is designed to consume is not a specification.
+        //
+        // UserMessageIds is preserved across the drain by construction — the drain moves entries
+        // out of PendingUserMessages into IngestedMessageIds and CommitRoundAndExecute /
+        // FoldConsumedInbox explicitly RESTORE UserMessageIds ⊇ IngestedMessageIds — so it proves
+        // what this checkpoint is actually for: the cold activation read the SEEDED node rather
+        // than a fresh or default-valued one. It is also strictly stronger against the failure
+        // mode that matters (content materialising as a defaulted record), which the old
+        // assertion could not distinguish from a won race.
+        //
+        // Nothing is weakened: that the queued message is really drained INTO a round is asserted
+        // below — PendingUserMessages empty, Status back to Idle, and the Echo agent's reply
+        // actually present in the response cell.
+        loaded!.UserMessageIds.Should().Contain(userMsgId,
+            "the cold activation must have loaded the SEEDED thread — the orphaned claim's user "
+            + "message id survives the round drain, so it is the race-free proof of that");
+        Output.WriteLine(
+            $"Thread hub activated cold; status={loaded.Status}, "
+            + $"pending={loaded.PendingUserMessages.Count} (0 means the recovery already drained it).");
 
         // ── The round must run to completion ─────────────────────────────────
         // Recovery rolls the orphaned StartingExecution claim back to Idle; the

@@ -1,5 +1,5 @@
 @inherits BlazorView<MarkdownControl, MarkdownView>
 
-<article class="markdown-body" data-theme="@Mode.ToString().ToLower()" style="background-color: var(--neutral-layer-1); @Style">
+<article class="markdown-body@(ClassSuffix)" data-theme="@Mode.ToString().ToLower()" style="background-color: var(--neutral-layer-1); @Style">
     @((RenderFragment)RenderHtml)
 </article>

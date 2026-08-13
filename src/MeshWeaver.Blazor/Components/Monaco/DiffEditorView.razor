@@ -5,7 +5,7 @@
 @using System.Text.Json
 @inherits BlazorView<DiffEditorControl, DiffEditorView>
 
-<div style="height: @(ViewModel?.Height ?? "500px"); width: 100%;">
+<div class="@Class" style="@HostStyle">
     <StandaloneDiffEditor @ref="diffEditor"
                           ConstructionOptions="GetDiffEditorOptions"
                           OnDidInit="OnEditorInit"
@@ -15,6 +15,14 @@
 @code {
     private StandaloneDiffEditor? diffEditor;
     private bool isDarkMode = false;
+
+    /// <summary>
+    /// The host box's own sizing plus the author-declared <c>Style</c> LAST, so a declared height
+    /// overrides <c>DiffEditorControl.Height</c> rather than being dropped. Composed here because
+    /// Razor cannot parse two adjacent explicit expressions in one attribute value; the literal text
+    /// is unchanged and <c>StyleSuffix</c> is empty when nothing was declared.
+    /// </summary>
+    private string HostStyle => $"height: {ViewModel?.Height ?? "500px"}; width: 100%;{StyleSuffix}";
 
     private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
 

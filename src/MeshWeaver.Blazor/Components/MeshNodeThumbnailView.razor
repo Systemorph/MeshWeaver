@@ -1,7 +1,7 @@
 @inherits BlazorView<MeshNodeThumbnailControl, MeshNodeThumbnailView>
 @using MeshWeaver.Graph
 
-<FluentCard Class="mesh-node-thumbnail" Style="min-width: 320px; cursor: pointer; margin: 8px;" @onclick="Navigate">
+<FluentCard Class="@CardClass" Style="@CardStyle" @onclick="Navigate">
     <div class="mesh-node-thumbnail-content">
         @if (!string.IsNullOrEmpty(ImageUrl))
         {

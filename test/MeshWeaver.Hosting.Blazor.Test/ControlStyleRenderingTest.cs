@@ -1,9 +1,13 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Catalog;
+using MeshWeaver.Layout.Views;
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Routing;
@@ -45,6 +49,54 @@ namespace MeshWeaver.Hosting.Blazor.Test;
 /// live pointer stream. <c>SpacerView</c> is deliberately NOT fixed: <c>FluentSpacer</c> exposes no
 /// Style/Class parameter at all, so honouring the contract there would mean wrapping it in an element
 /// and changing its flex behaviour.</para>
+///
+/// <para><b>#1297 — the <c>Class</c>-only drops.</b> The audit that came out of #1288 found eight further
+/// views that bind <c>Style</c> onto a real root element of their own and never wrote the class beside it.
+/// Five are rendered here (<c>MarkdownView</c>, <c>MeshNodeCollectionView</c>, <c>Label</c>,
+/// <c>EditorView</c>, <c>TabsView</c>); the other three are fixed the same way but are not renderable in
+/// this harness and are covered by the same reasoning rather than by a render: <c>NumberFieldView</c> is a
+/// form input needing a live pointer stream (as above), <c>LayoutAreaView</c> needs a real area stream and
+/// <c>ThreadMessageBubbleView</c> a live thread node. Each of the five positive tests was verified by
+/// falsification — reverting its view makes exactly that test fail — while the four
+/// backwards-compatibility guards pass with AND without the fix, which is what makes them guards.</para>
+///
+/// <para><b>#1297 — the literal-root drops.</b> The next bucket is the views that dropped BOTH, because
+/// their single root element carries only hard-coded declarations. That root IS the control's box, so
+/// that is where the author's Style and Class go — no wrapper is introduced, and the author's Style goes
+/// LAST so a declared width/height overrides the view's default instead of losing to it. Nine of the ten
+/// are rendered here (<c>NodeExportView</c>, <c>NodeImportView</c>, <c>ExportDocumentView</c>,
+/// <c>AppearanceView</c>, <c>CatalogView</c>, <c>CommentableView</c>, <c>MarkdownEditorView</c>,
+/// <c>CollaborativeMarkdownView</c>, <c>Monaco/DiffEditorView</c>), each verified by falsification.
+/// <c>MeshNodeContentEditorView</c> is not: its first render is a progress ring, and the styled root
+/// appears only once the node's editable fields have loaded from the mesh.</para>
+///
+/// <para><b>#1297 — the "which element" cases.</b> The last seven are the ones where the box was NOT
+/// simply the one root the view already had. <c>MeshNodeCardView</c> renders the card inside a
+/// navigation anchor, so the declaration goes on the CARD (applying it to both would double a declared
+/// margin) — and in the branch where the card delegates to an embedded area it is FORWARDED onto that
+/// area's control rather than wrapped, the way <c>PropertyView</c>/<c>EditFormView</c> already let the
+/// terminal view apply it. <c>MeshNodeThumbnailView</c> and <c>LayoutAreaDefinitionView</c> had literals
+/// SHADOWING the bound values (not merely missing them); <c>NavLink</c>'s <c>Class</c> was OVERWRITTEN by
+/// the active-state token; <c>DialogView</c>'s style slot composes <c>--dialog-*</c> variables from
+/// <c>Size</c>. Five of the seven are rendered here. <c>MeshNodePickerView</c> (a <c>FormComponentBase</c>
+/// that now emits <c>ComputedStyle</c>, so it stops dropping <c>Width</c>/<c>Height</c> too) needs a live
+/// pointer stream, and <c>MeshNodeRoleEditorView</c> renders a progress ring until its role loads.
+/// <c>NamedAreaView</c> — the audit's one "unclear" — is resolved as deliberately N/A; the reasoning
+/// lives in the view itself.</para>
+///
+/// <para><b>#1333 — the three that never BOUND it.</b> A different defect, and the reason it outlived a
+/// full audit of the other forty-seven: <c>SearchBoxView</c>, <c>MeshSearchView</c> and
+/// <c>Monaco/CodeEditorView</c> were registered as control views but derived from plain
+/// <c>ComponentBase</c>, re-declaring <c>ViewModel</c>/<c>Stream</c>/<c>Area</c> as their own
+/// parameters. <see cref="BlazorView{TViewModel,TView}.BindData"/> never ran for them, so there was no
+/// value in <c>Style</c>/<c>Class</c> to drop — no markup edit could have fixed it. All three are
+/// re-based onto <c>BlazorView</c>; <c>CodeEditorView</c> has no element of its own, so it forwards the
+/// declaration onto the Monaco container rather than wrapping. The registry's
+/// <c>ControlView&lt;TControl, TView&gt;</c> now constrains <c>TView</c> to
+/// <c>BlazorView&lt;TControl, TView&gt;</c>, so a fourth is a compile error at the registration line
+/// (verified: reverting one view's base yields CS0311 there); the two reflection-built registrations
+/// the constraint cannot reach are covered by
+/// <see cref="ReflectionRegisteredViews_AreStillBlazorViewsForTheirControl"/>.</para>
 /// </summary>
 public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -63,6 +115,10 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
                 // than dropping AddBlazor (which owns PortalApplication).
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostApplicationLifetime, StaticHostLifetime>()
                 .AddSingleton<IJSRuntime, NoopJsRuntime>()
+                // Views that re-dispatch through DispatchView (EditorView, TabsView) mount its
+                // per-control ErrorBoundary, whose [Inject] needs this. Blazor's hosting extensions
+                // register it; a bare test mesh does not.
+                .AddSingleton<IErrorBoundaryLogger, NoopErrorBoundaryLogger>()
                 .AddSingleton<NavigationManager>(new StaticNavigationManager())
                 .AddSingleton<INavigationInterception, NoopNavigationInterception>()
                 .AddSingleton<IScrollToLocationHash, NoopScrollToLocationHash>());
@@ -71,7 +127,7 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
     /// Renders <typeparamref name="TView"/> for <paramref name="control"/> through the real Blazor
     /// renderer and returns the emitted HTML.
     /// </summary>
-    private async Task<string> RenderAsync<TView>(UiControl control)
+    private async Task<string> RenderAsync<TView>(UiControl control, params (string Name, object? Value)[] extra)
         where TView : IComponent
     {
         using var scope = Mesh.ServiceProvider.CreateScope();
@@ -81,11 +137,14 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
         {
             return await renderer.Dispatcher.InvokeAsync(async () =>
             {
-                var parameters = ParameterView.FromDictionary(new Dictionary<string, object?>
+                var arguments = new Dictionary<string, object?>
                 {
                     ["ViewModel"] = control,
                     ["Area"] = "style-probe",
-                });
+                };
+                foreach (var (name, value) in extra)
+                    arguments[name] = value;
+                var parameters = ParameterView.FromDictionary(arguments);
                 var rendered = await renderer.RenderComponentAsync<TView>(parameters);
                 var html = rendered.ToHtmlString();
                 Output.WriteLine($"{typeof(TView).Name}: {html}");
@@ -299,12 +358,569 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
             because: "Controls.Title emits raw <hN> markup and is the one heading factory this view sees");
     }
 
+    // ─── #1297: the eight views that bound Style correctly and dropped Class ──────────────────────
+    //
+    // A separate bucket from the drops above, and a cheaper one. These views DO write Style="@Style"
+    // onto a real root element of their own — they simply never wrote the class beside it. So there is
+    // no "where should the box go" question and no wrapper to introduce: the element that already
+    // carries the author's Style is by definition the element that must carry the author's Class.
+    //
+    // Two mechanical shapes, and the reason both matter for backwards compatibility:
+    //   • root has NO class of its own  → class="@Class" (Blazor omits a null attribute entirely)
+    //   • root has a FIXED class list   → "fixed@(ClassSuffix)", where BlazorView.ClassSuffix is "" unless
+    //     a class was declared. Writing " @Class" instead would leave a TRAILING SPACE in every such
+    //     attribute on every page — hence the exact-attribute assertions below rather than Contain().
+    //
+    // Unlike HtmlView above, nothing here is conditional on the DECLARATION (ViewModel.Class): no element
+    // is created or removed, so a JsonPointerReference that lands a frame later just updates an attribute
+    // — it cannot restructure the DOM mid-flight.
+
+    /// <summary>
+    /// <c>MarkdownView</c>'s <c>&lt;article&gt;</c> carried <c>class="markdown-body"</c> and
+    /// <c>style="…; @Style"</c> — the author's Style landed, the author's Class did not.
+    /// </summary>
+    [Fact]
+    public async Task MarkdownControl_Class_JoinsTheFixedClassList()
+    {
+        var html = await RenderAsync<MarkdownView>(Controls.Markdown("# Title").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"markdown-body {ClassValue}\"",
+            because: "the declared class must join markdown-body on the article, not replace or miss it");
+    }
+
+    /// <summary>
+    /// 🚨 BACKWARDS COMPATIBILITY. The fixed class list of an unstyled control must be emitted exactly as
+    /// before — no trailing space, no empty token. <c>.markdown-body</c> is the hook for the whole
+    /// markdown stylesheet, so a mangled attribute here restyles every rendered document in the portal.
+    /// </summary>
+    [Fact]
+    public async Task MarkdownControl_WithoutClass_KeepsTheExactFixedClassList()
+    {
+        var html = await RenderAsync<MarkdownView>(Controls.Markdown("# Title"));
+
+        html.Should().Contain("class=\"markdown-body\"",
+            because: "ClassSuffix contributes nothing when no class was declared — the attribute is byte-identical");
+    }
+
+    /// <summary>Same shape on <c>MeshNodeCollectionView</c>'s container.</summary>
+    [Fact]
+    public async Task MeshNodeCollectionControl_Class_JoinsTheFixedClassList()
+    {
+        var html = await RenderAsync<MeshNodeCollectionView>(
+            new MeshNodeCollectionControl().WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"mesh-node-collection {ClassValue}\"",
+            because: "MeshNodeCollectionView bound Style onto its container and dropped Class");
+    }
+
+    /// <inheritdoc cref="MarkdownControl_WithoutClass_KeepsTheExactFixedClassList"/>
+    [Fact]
+    public async Task MeshNodeCollectionControl_WithoutClass_KeepsTheExactFixedClassList()
+    {
+        var html = await RenderAsync<MeshNodeCollectionView>(new MeshNodeCollectionControl());
+
+        html.Should().Contain("class=\"mesh-node-collection\"",
+            because: "an undeclared class must not widen the attribute the collection stylesheet matches on");
+    }
+
+    /// <summary>
+    /// <c>Label</c> forwards to <c>FluentLabel</c>, which accepts both parameters — the view passed only
+    /// <c>Style</c>. Covers the non-clickable branch; the clickable branch got the same parameter.
+    /// </summary>
+    [Fact]
+    public async Task LabelControl_Class_ReachesTheDom()
+    {
+        var html = await RenderAsync<Label>(Controls.Label("Text").WithClass(ClassValue));
+
+        html.Should().Contain(ClassValue,
+            because: "FluentLabel takes a Class parameter and the view simply never passed it");
+    }
+
+    /// <summary>An unstyled label must not gain a class attribute it never had.</summary>
+    [Fact]
+    public async Task LabelControl_WithoutClass_GainsNoClassAttribute()
+    {
+        var html = await RenderAsync<Label>(Controls.Label("Text"));
+
+        html.Should().NotContain(ClassValue);
+        html.Should().NotContain("class=\"\"",
+            because: "a null Class must leave the attribute out entirely, not emit an empty one");
+    }
+
+    /// <summary>
+    /// <c>EditorView</c>'s wrapper was <c>&lt;div style="@Style"&gt;</c> with no class attribute at all,
+    /// so the class had nowhere to land. It is a <c>SkinnedView</c>, hence the explicit skin parameter.
+    /// </summary>
+    [Fact]
+    public async Task EditorControl_Class_ReachesTheDom()
+    {
+        var html = await RenderAsync<EditorView>(
+            new EditorControl().WithClass(ClassValue), ("Skin", new EditorSkin()));
+
+        html.Should().Contain($"class=\"{ClassValue}\"",
+            because: "the editor wrapper honoured Style and had no slot at all for Class");
+    }
+
+    /// <inheritdoc cref="LabelControl_WithoutClass_GainsNoClassAttribute"/>
+    [Fact]
+    public async Task EditorControl_WithoutClass_GainsNoClassAttribute()
+    {
+        var html = await RenderAsync<EditorView>(new EditorControl(), ("Skin", new EditorSkin()));
+
+        html.Should().NotContain("class=\"\"",
+            because: "Blazor omits a null attribute — the unstyled wrapper stays <div> exactly as before");
+    }
+
+    /// <summary><c>FluentTabs</c> accepts <c>Class</c>; <c>TabsView</c> passed only <c>Style</c>.</summary>
+    [Fact]
+    public async Task TabsControl_Class_ReachesTheDom()
+    {
+        var html = await RenderAsync<TabsView>(
+            Controls.Tabs.WithClass(ClassValue), ("Skin", new TabsSkin()));
+
+        html.Should().Contain(ClassValue,
+            because: "TabsControl.WithClass must reach the fluent-tabs element");
+    }
+
     private sealed class StaticHostLifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime
     {
         public CancellationToken ApplicationStarted { get; } = new(canceled: true);
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
         public void StopApplication() { }
+    }
+
+    // ─── #1297: views whose LITERAL root element dropped both Style and Class ─────────────────────
+    //
+    // These render a panel/page/editor with ONE root element of their own carrying hard-coded
+    // declarations (`style="max-width: 720px;"`, `class="node-export-view"`) and no author input at
+    // all. That root IS the control's box, so it is where the author's Style and Class belong — no
+    // wrapper is introduced anywhere in this bucket, which is the whole point: #1288 showed a blanket
+    // wrapper breaks call sites that depend on the fragment's own root being the flex child.
+    //
+    // The author's Style goes LAST in the attribute (BlazorView.StyleSuffix) so a declared max-width or
+    // height WINS over the view's default rather than losing to it — dropping it was the bug; losing
+    // the cascade would be the same bug with extra steps.
+
+    /// <summary>
+    /// <c>NodeExportView</c>'s root was <c>class="node-export-view" style="max-width: 800px;"</c> —
+    /// both attributes present, neither carrying anything the author asked for.
+    /// </summary>
+    [Fact]
+    public async Task NodeExportControl_StyleAndClass_ReachTheLiteralRoot()
+    {
+        var html = await RenderAsync<NodeExportView>(
+            new NodeExportControl().WithStyle("max-width: 400px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"node-export-view {ClassValue}\"");
+        html.Should().Contain("max-width: 800px; max-width: 400px",
+            because: "the author's declaration must come LAST so it wins the cascade over the default");
+    }
+
+    /// <summary>
+    /// 🚨 BACKWARDS COMPATIBILITY for the whole bucket: with nothing declared, the root's attributes are
+    /// byte-identical to before — no trailing space in the class, no dangling space in the style.
+    /// </summary>
+    [Fact]
+    public async Task NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore()
+    {
+        var html = await RenderAsync<NodeExportView>(new NodeExportControl());
+
+        html.Should().Contain("class=\"node-export-view\" style=\"max-width: 800px;\"",
+            because: "ClassSuffix and StyleSuffix both contribute nothing when nothing was declared");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_StyleAndClass_ReachTheLiteralRoot"/>
+    [Fact]
+    public async Task NodeImportControl_StyleAndClass_ReachTheLiteralRoot()
+    {
+        var html = await RenderAsync<NodeImportView>(
+            new NodeImportControl().WithStyle("max-width: 400px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"node-import-view {ClassValue}\"");
+        html.Should().Contain("max-width: 800px; max-width: 400px");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_StyleAndClass_ReachTheLiteralRoot"/>
+    [Fact]
+    public async Task ExportDocumentControl_StyleAndClass_ReachTheLiteralRoot()
+    {
+        var html = await RenderAsync<ExportDocumentView>(
+            new ExportDocumentControl().WithStyle("max-width: 400px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"export-document-view {ClassValue}\"");
+        html.Should().Contain("max-width: 720px; max-width: 400px");
+    }
+
+    /// <summary>
+    /// <c>AppearanceView</c>'s root had a literal style and NO class attribute, so the class had nowhere
+    /// to land at all.
+    /// </summary>
+    [Fact]
+    public async Task AppearanceControl_StyleAndClass_ReachTheLiteralRoot()
+    {
+        var html = await RenderAsync<AppearanceView>(
+            new AppearanceControl().WithStyle("max-width: 300px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"{ClassValue}\"");
+        html.Should().Contain("max-width: 500px; max-width: 300px");
+    }
+
+    /// <summary>
+    /// <c>CatalogView</c> composes its root style in the code-behind (<c>ContainerStyle</c>), which was a
+    /// pure literal — so the fix belongs there rather than in the markup.
+    /// </summary>
+    [Fact]
+    public async Task CatalogControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<CatalogView>(
+            new CatalogControl().WithStyle("gap: 4px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"catalog-container {ClassValue}\"");
+        html.Should().Contain("flex-direction: column; gap: 4px");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task CatalogControl_WithoutStyleOrClass_EmitsTheContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<CatalogView>(new CatalogControl());
+
+        html.Should().Contain("class=\"catalog-container\" style=\"display: flex; flex-direction: column;\"");
+    }
+
+    /// <summary>
+    /// <c>CommentableView</c> is a container: it renders its child areas inside a positioning wrapper and
+    /// has no other element of its own, so the wrapper is the only place its own Style can live.
+    /// </summary>
+    [Fact]
+    public async Task CommentableControl_StyleAndClass_ReachTheWrapper()
+    {
+        var html = await RenderAsync<CommentableView>(
+            new CommentableControl().WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"commentable-wrapper {ClassValue}\"");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <summary>
+    /// The wrapper had NO style attribute before, so an unstyled commentable must still emit none —
+    /// Blazor omits a null attribute, and this pins that it stays omitted.
+    /// </summary>
+    [Fact]
+    public async Task CommentableControl_WithoutStyleOrClass_EmitsTheWrapperExactlyAsBefore()
+    {
+        var html = await RenderAsync<CommentableView>(new CommentableControl());
+
+        html.Should().Contain("class=\"commentable-wrapper\"");
+        html.Should().NotContain("style=\"\"",
+            because: "an undeclared Style must leave the attribute out, not emit an empty one");
+    }
+
+    /// <summary>
+    /// <c>DiffEditorView</c> read <c>ViewModel.Height</c> straight into its host box and ignored Style
+    /// entirely; the author's declaration now comes after it, so a declared height wins.
+    /// </summary>
+    [Fact]
+    public async Task DiffEditorControl_StyleAndClass_ReachTheHostBox()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.Monaco.DiffEditorView>(
+            new DiffEditorControl().WithStyle("height: 200px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"{ClassValue}\"");
+        html.Should().Contain("height: 500px; width: 100%; height: 200px",
+            because: "the control's own Height stays the default and the declared Style overrides it");
+    }
+
+    /// <summary>The collaborative editor's container had a class list and no style attribute at all.</summary>
+    [Fact]
+    public async Task MarkdownEditorControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<MarkdownEditorView>(
+            new MarkdownEditorControl().WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"collaborative-editor-container {ClassValue}\"");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task MarkdownEditorControl_WithoutStyleOrClass_EmitsTheContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<MarkdownEditorView>(new MarkdownEditorControl());
+
+        html.Should().Contain("class=\"collaborative-editor-container\"");
+        html.Should().NotContain("style=\"\"");
+    }
+
+    /// <summary>
+    /// <c>CollaborativeMarkdownView</c>'s container carries a private computed view-mode class; the
+    /// author's class joins it rather than replacing it.
+    /// </summary>
+    [Fact]
+    public async Task CollaborativeMarkdownControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<CollaborativeMarkdownView>(
+            new CollaborativeMarkdownControl().WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"collab-md-container {ClassValue}",
+            because: "the view-mode class is empty in the default mode, so the author's class follows it");
+        html.Should().Contain(StyleValue);
+    }
+
+    // ─── #1297: the views with a genuine "WHICH element" question ─────────────────────────────────
+    //
+    // The last of the both-drop bucket, and the only ones where the answer was not "the one root it
+    // already has". Each is decided on its own below; the shared conclusion is that the box is the
+    // element the user perceives as the control, which is not always the outermost element the view
+    // renders — and that where the view has NO element of its own, the declaration is FORWARDED to the
+    // control it delegates to rather than wrapped in a new box.
+
+    /// <summary>
+    /// <c>MeshNodeCardView</c> renders the card inside an <c>&lt;a&gt;</c> that exists only to make it
+    /// navigable (<c>display: block; width: 100%</c> — a transparent pass-through). The CARD is the box
+    /// the user sees and sizes, so that is where the declaration goes; putting it on the anchor as well
+    /// would apply a declared margin twice.
+    /// </summary>
+    [Fact]
+    public async Task MeshNodeCardControl_StyleAndClass_ReachTheCardNotTheAnchor()
+    {
+        var html = await RenderAsync<MeshNodeCardView>(
+            new MeshNodeCardControl("Some/Node", Title: "Node").WithStyle("margin: 12px").WithClass(ClassValue));
+
+        html.Should().Contain($"mesh-node-card {ClassValue}");
+        html.Should().Contain("box-sizing: border-box; margin: 12px",
+            because: "the author's declaration goes last so it wins over the card's own");
+        // Anchored on "color: inherit", which appears ONLY in the anchor's style — the card's own
+        // literal also ends in "box-sizing: border-box;", so a shorter needle would match the card and
+        // the guard could never fail. Verified by temporarily appending StyleSuffix to the anchor:
+        // this assertion fails, the two above still pass.
+        html.Should().NotContain("color: inherit; display: block; width: 100%; box-sizing: border-box; margin: 12px",
+            because: "the navigation anchor must NOT also carry it — that would apply the margin twice");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task MeshNodeCardControl_WithoutStyleOrClass_EmitsTheCardExactlyAsBefore()
+    {
+        var html = await RenderAsync<MeshNodeCardView>(new MeshNodeCardControl("Some/Node", Title: "Node"));
+
+        html.Should().Contain("class=\"mesh-node-card\"");
+        html.Should().Contain("style=\"cursor: pointer; width: 100%; display: block; box-sizing: border-box;\"");
+    }
+
+    /// <summary>
+    /// <c>MeshNodeThumbnailView</c> passed BOTH parameters to its <c>FluentCard</c> — hard-coded. The
+    /// bound values were not merely forgotten, they were shadowed by literals, which is why the audit
+    /// flagged this one as easy to misread as already-correct.
+    /// </summary>
+    [Fact]
+    public async Task MeshNodeThumbnailControl_StyleAndClass_AreNoLongerShadowedByLiterals()
+    {
+        var html = await RenderAsync<MeshNodeThumbnailView>(
+            new MeshNodeThumbnailControl("Some/Node", "Node").WithStyle("min-width: 100px").WithClass(ClassValue));
+
+        html.Should().Contain($"mesh-node-thumbnail {ClassValue}");
+        html.Should().Contain("margin: 8px; min-width: 100px",
+            because: "a declared min-width must override the hard-coded 320px, not lose to it");
+    }
+
+    /// <summary>
+    /// <c>LayoutAreaDefinitionView</c>'s root is the catalog card's anchor: fixed classes, no style
+    /// attribute at all.
+    /// </summary>
+    [Fact]
+    public async Task LayoutAreaDefinitionControl_StyleAndClass_ReachTheCardAnchor()
+    {
+        var html = await RenderAsync<LayoutAreaDefinitionView>(
+            new LayoutAreaDefinitionControl(new LayoutAreaDefinition("Sample", "/Sample"))
+                .WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"card layout-area-card text-decoration-none {ClassValue}\"");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task LayoutAreaDefinitionControl_WithoutStyleOrClass_EmitsTheAnchorExactlyAsBefore()
+    {
+        var html = await RenderAsync<LayoutAreaDefinitionView>(
+            new LayoutAreaDefinitionControl(new LayoutAreaDefinition("Sample", "/Sample")));
+
+        html.Should().Contain("class=\"card layout-area-card text-decoration-none\"");
+        html.Should().NotContain("style=\"\"");
+    }
+
+    /// <summary>
+    /// <c>NavLink</c> is the one case where <c>Class</c> was not forgotten but OVERWRITTEN: the
+    /// nav-menu branch wrote <c>Class="@(IsActive ? "active" : null)"</c>, so the active-state token was
+    /// the whole value. Both tokens are now joined.
+    /// </summary>
+    [Fact]
+    public async Task NavLinkControl_Class_JoinsTheActiveStateToken()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.NavLink>(
+            new NavLinkControl("Home", null, "/").WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain(ClassValue,
+            because: "the declared class was overwritten by the active-state token, not merely dropped");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <summary>
+    /// 🚨 The value must stay <c>null</c>, not <c>""</c>, when there is nothing to say — an inactive,
+    /// unstyled nav link emitted NO class attribute and must keep emitting none.
+    /// </summary>
+    [Fact]
+    public async Task NavLinkControl_WithoutClass_EmitsNoClassAttribute()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.NavLink>(new NavLinkControl("Home", null, "/"));
+
+        html.Should().NotContain("class=\"\"");
+        html.Should().NotContain(ClassValue);
+    }
+
+    /// <summary>
+    /// <c>DialogView</c>'s style slot is not free space: it composes <c>--dialog-width</c> /
+    /// <c>--dialog-height</c> from <c>Size</c>. The author's declaration therefore goes after those
+    /// variables — a declared width overrides the size preset instead of being dropped.
+    /// </summary>
+    [Fact]
+    public async Task DialogControl_StyleAndClass_FollowTheSizeVariables()
+    {
+        var html = await RenderAsync<DialogView>(
+            Controls.Dialog("Body", "Title").WithStyle("--dialog-width: 200px").WithClass(ClassValue));
+
+        html.Should().Contain(ClassValue);
+        html.Should().Contain("--dialog-width: 200px",
+            because: "the declared value must come after the Size-derived one so it wins");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task DialogControl_WithoutStyleOrClass_EmitsTheDialogExactlyAsBefore()
+    {
+        var html = await RenderAsync<DialogView>(Controls.Dialog("Body", "Title"));
+
+        html.Should().NotContain("class=\"\"");
+        html.Should().NotContain(ClassValue);
+    }
+
+    // ─── #1333: the three views that never BOUND Style/Class, because they were not BlazorViews ────
+    //
+    // A different defect from every case above. Those views bound the values and dropped them in
+    // markup; these three were registered through the same StandardView<,> helper as all 47 others but
+    // derived from plain ComponentBase and re-declared ViewModel/Stream/Area as their own [Parameter]s.
+    // BlazorView.BindData — the only thing that binds Id/Class/Style — therefore never ran for them, so
+    // no markup edit could have fixed it. The fix is the re-base onto BlazorView<TControl, TView>, and
+    // BlazorViewRegistry.ControlView<,> now CONSTRAINS the registration to that base so a fourth cannot
+    // be added silently: registering a non-BlazorView is a compile error at the registry line.
+
+    /// <summary>
+    /// <c>SearchBoxView</c>'s root is the flex row holding the Monaco input and the Search button —
+    /// literal declarations only, and (before the re-base) no bound values to write there anyway.
+    /// </summary>
+    [Fact]
+    public async Task SearchBoxControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<SearchBoxView>(
+            new SearchBoxControl().WithStyle("width: 40%").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"search-box-container {ClassValue}\"");
+        html.Should().Contain("width: 100%; width: 40%",
+            because: "the author's declaration goes last so a declared width overrides the view's own");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task SearchBoxControl_WithoutStyleOrClass_EmitsTheContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<SearchBoxView>(new SearchBoxControl());
+
+        html.Should().Contain("class=\"search-box-container\"");
+        html.Should().Contain("style=\"display: flex; gap: 8px; align-items: center; width: 100%;\"");
+    }
+
+    /// <summary>
+    /// <c>MeshSearchView</c>'s root had a fixed class and no style attribute at all. It is also the
+    /// heaviest of the three — a 1 900-line code-behind with its own subscriptions — so the re-base
+    /// had to keep its disposal working: <c>BlazorView</c> is <c>IAsyncDisposable</c>, and Blazor
+    /// disposes through <c>IAsyncDisposable</c> OR <c>IDisposable</c>, never both, so its cleanup moved
+    /// into a <c>DisposeAsync</c> override rather than staying on a now-unreachable <c>Dispose()</c>.
+    /// </summary>
+    [Fact]
+    public async Task MeshSearchControl_StyleAndClass_ReachTheContainer()
+    {
+        var html = await RenderAsync<MeshSearchView>(
+            new MeshSearchControl().WithStyle(StyleValue).WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"mesh-search-container {ClassValue}\"");
+        html.Should().Contain(StyleValue);
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task MeshSearchControl_WithoutStyleOrClass_EmitsTheContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<MeshSearchView>(new MeshSearchControl());
+
+        html.Should().Contain("class=\"mesh-search-container\"");
+        html.Should().NotContain("style=\"\"");
+        html.Should().NotContain(ClassValue);
+    }
+
+    /// <summary>
+    /// <c>CodeEditorView</c> renders no element of its own — it IS a <c>MonacoEditorView</c>. So the
+    /// declaration is FORWARDED onto the editor's container, the same rule <c>MeshNodeCardView</c>'s
+    /// embedded-area branch follows, rather than introducing the wrapper #1288 ruled out.
+    /// </summary>
+    [Fact]
+    public async Task CodeEditorControl_StyleAndClass_ReachTheEditorContainer()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.Monaco.CodeEditorView>(
+            new CodeEditorControl().WithStyle("min-height: 120px").WithClass(ClassValue));
+
+        html.Should().Contain($"class=\"monaco-editor-container with-border {ClassValue}\"");
+        html.Should().Contain("min-height: 40px; min-height: 120px",
+            because: "the forwarded declaration goes after the container's own geometry so it wins");
+    }
+
+    /// <inheritdoc cref="NodeExportControl_WithoutStyleOrClass_EmitsTheRootExactlyAsBefore"/>
+    [Fact]
+    public async Task CodeEditorControl_WithoutStyleOrClass_EmitsTheEditorContainerExactlyAsBefore()
+    {
+        var html = await RenderAsync<MeshWeaver.Blazor.Components.Monaco.CodeEditorView>(new CodeEditorControl());
+
+        html.Should().Contain("class=\"monaco-editor-container with-border\"");
+        html.Should().Contain("style=\"height: 300px; max-height: none; min-height: 40px;\"");
+    }
+
+    /// <summary>
+    /// The two registrations the <c>ControlView&lt;,&gt;</c> constraint cannot reach. <c>MapControl</c>
+    /// builds these view types by reflection —
+    /// <c>typeof(NumberFieldView&lt;&gt;).MakeGenericType(control.Type)</c> — so they go through the
+    /// UNCONSTRAINED <c>StandardView(instance, viewType, …)</c> overload and no compile error is
+    /// possible. This is the same assertion the constraint makes for the other fifty, made at runtime
+    /// for the two it cannot see, so "a view registered here is a <c>BlazorView</c>" has no silent gap.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(NumberFieldView<>), typeof(NumberFieldControl))]
+    [InlineData(typeof(RadioGroupView<>), typeof(RadioGroupControl))]
+    public void ReflectionRegisteredViews_AreStillBlazorViewsForTheirControl(Type openView, Type controlType)
+    {
+        // TValue is the value the field edits and is unconstrained; decimal is representative.
+        var closedView = openView.MakeGenericType(typeof(decimal));
+        var requiredBase = typeof(MeshWeaver.Blazor.BlazorView<,>).MakeGenericType(controlType, closedView);
+
+        requiredBase.IsAssignableFrom(closedView).Should().BeTrue(
+            because: $"{openView.Name} is registered as a control view for {controlType.Name} through the "
+                   + "reflection path, where the ControlView<,> constraint cannot apply — if it stops being "
+                   + "a BlazorView, Style/Class/Id silently stop being bound, which is #1333");
+    }
+
+    private sealed class NoopErrorBoundaryLogger : IErrorBoundaryLogger
+    {
+        public ValueTask LogErrorAsync(Exception exception) => ValueTask.CompletedTask;
     }
 
     private sealed class NoopJsRuntime : IJSRuntime

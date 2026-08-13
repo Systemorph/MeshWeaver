@@ -3,7 +3,7 @@
 @inherits BlazorView<AppearanceControl, AppearanceView>
 @inject AccessService Access
 
-<div style="max-width: 500px;">
+<div class="@Class" style="max-width: 500px;@StyleSuffix">
     <FluentDesignTheme @ref="theme"
                        @bind-Mode="@ThemeMode"
                        @bind-OfficeColor="@OfficeColor"

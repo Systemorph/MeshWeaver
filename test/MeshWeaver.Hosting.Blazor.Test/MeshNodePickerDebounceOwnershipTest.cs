@@ -52,7 +52,9 @@ public class MeshNodePickerDebounceOwnershipTest
 
         public void Initialize() => OnInitialized();
 
-        public IReadOnlyList<IDisposable> Owned => Disposables;
+        // IEnumerable, not IReadOnlyList: BlazorView.Disposables is a CompositeDisposable (#1308),
+        // which is an ICollection<IDisposable>. The assertions below only enumerate.
+        public IEnumerable<IDisposable> Owned => Disposables;
     }
 
     /// <summary>
