@@ -195,12 +195,12 @@ public class CompileFailureReportedOnceTest : IDisposable
             releaseDir =>
             {
                 emits++;
-                var path = MeshNodeCompilationService.EmitCompilationToDirectory(
+                var emitted = MeshNodeCompilationService.EmitCompilationToDirectory(
                     ValidCompilation(nodeName), nodeName, "Acme/LostWrite", releaseDir,
                     CancellationToken.None);
                 if (emits == 1)
-                    File.Delete(path); // the ephemeral-/tmp eviction
-                return path;
+                    File.Delete(emitted.DllPath); // the ephemeral-/tmp eviction
+                return emitted;
             });
 
         emits.Should().Be(2);
