@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.ShortGuid;
 
@@ -20,11 +21,57 @@ public record ActivityLog(string Category)
     /// <summary>The workspace version recorded when the activity finished.</summary>
     public int Version { get; init; }
 
+    /// <summary>
+    /// How many messages the head keeps before sealing the oldest ones into an
+    /// <see cref="ActivityLogSegment"/> satellite. An activity that never exceeds this behaves
+    /// exactly as it did before segments existed — same single write per append, same bytes.
+    /// </summary>
+    public const int MessageWindowLimit = 500;
+
+    /// <summary>
+    /// How many messages stay on the head after a seal. The gap to
+    /// <see cref="MessageWindowLimit"/> is what amortises the seal: one extra write and one segment
+    /// create per <c>Limit - Keep</c> appends. Every live reader wants far less than this — the
+    /// widest is a 12-line preview — so nothing on screen notices the trim.
+    /// </summary>
+    public const int MessageWindowKeep = 100;
+
     /// <summary>Unique identifier of this activity.</summary>
     [property: Key]
     public string Id { get; init; } = Guid.NewGuid().AsString();
-    /// <summary>The log messages accumulated by this activity, in order.</summary>
+
+    /// <summary>
+    /// The activity's log messages, most recent last — a bounded WINDOW, not necessarily the whole
+    /// transcript. Once an activity exceeds <see cref="MessageWindowLimit"/> the oldest lines are
+    /// sealed into <see cref="ActivityLogSegment"/> satellites under <c>{activityPath}/_Log</c> and
+    /// drop out of here, so a write stays O(1) instead of O(transcript).
+    ///
+    /// <para>🚨 This is the reason nothing may derive a total, a severity, or a progress signal from
+    /// <c>Messages.Count</c> — use <see cref="TotalMessageCount"/> and <see cref="MaxSeverity"/>.
+    /// The window still holds the LAST messages, so tail readers (<c>[^1]</c>, <c>TakeLast(n)</c>)
+    /// are unaffected.</para>
+    /// </summary>
     public ImmutableList<LogMessage> Messages { get; init; } = ImmutableList<LogMessage>.Empty;
+
+    /// <summary>
+    /// How many <see cref="ActivityLogSegment"/> satellites this activity has sealed — also the index
+    /// of the next one. A reader enumerates the segments with a children query rather than trusting
+    /// this count, so a seal whose satellite write failed leaves a harmless gap, never a dangling
+    /// point-read.
+    /// </summary>
+    public int SegmentCount { get; init; }
+
+    /// <summary>
+    /// How many LEADING entries of <see cref="Messages"/> a seal has claimed but not yet trimmed —
+    /// the flush's claim marker, written atomically with the append that made it.
+    ///
+    /// <para>🚨 This is what makes a flush safe without a lock. Writes to one node are serialised by
+    /// the owning hub, so exactly one appender can move this 0 → n; every other appender sees it
+    /// non-zero and does not claim a second, overlapping slice. The claimed messages stay in
+    /// <see cref="Messages"/> until the segment is durable, so a crash or a failed segment write
+    /// loses nothing — the next append simply retries the same slice.</para>
+    /// </summary>
+    public int SealingCount { get; init; }
 
     /// <summary>
     /// How many messages this activity has appended in total — <see cref="Messages"/> plus anything
@@ -93,7 +140,12 @@ public record ActivityLog(string Category)
     /// How many messages this activity has recorded, counting any no longer held in
     /// <see cref="Messages"/>. Back-compatible with logs persisted before <see cref="MessageCount"/>
     /// existed (those carry 0, so the in-list count wins).
+    /// <para>🚨 <c>[JsonIgnore]</c>, like every computed property here. System.Text.Json serialises
+    /// get-only properties by default, and anything that reaches the JSON reaches the RFC 7396 merge
+    /// patch — where a derived field the writer never set becomes a phantom conflict the merge guard
+    /// refuses ("changed since the writer's base"), taking the real fields in that patch down with it.</para>
     /// </summary>
+    [JsonIgnore]
     public int TotalMessageCount => Math.Max(MessageCount, Messages.Count);
 
     /// <summary>
@@ -125,6 +177,58 @@ public record ActivityLog(string Category)
     /// <param name="message">The message to append.</param>
     /// <returns>The activity log with the message appended and the roll-ups advanced.</returns>
     public ActivityLog Append(LogMessage message) => Append([message]);
+
+    /// <summary>
+    /// Claims the oldest messages for sealing into an <see cref="ActivityLogSegment"/> when the window
+    /// has overflowed — a no-op below <see cref="MessageWindowLimit"/> and while another seal is still
+    /// in flight. Nothing is removed here: the claim only marks how many LEADING entries of
+    /// <see cref="Messages"/> the next segment will carry, so the messages remain readable on the head
+    /// until the satellite is durable.
+    /// <para>Called inside the head's update lambda, which the owning hub serialises — that is what
+    /// makes "exactly one appender claims each slice" true without a lock.</para>
+    /// </summary>
+    /// <returns>The activity log with the claim recorded, or the same instance when nothing to claim.</returns>
+    public ActivityLog ClaimSeal() =>
+        SealingCount == 0 && Messages.Count > MessageWindowLimit
+            ? this with { SealingCount = Messages.Count - MessageWindowKeep }
+            : this;
+
+    /// <summary>
+    /// The messages a claimed seal must write into its segment — the leading
+    /// <see cref="SealingCount"/> entries of <see cref="Messages"/>. Empty when no seal is claimed.
+    /// </summary>
+    /// <remarks>🚨 <c>[JsonIgnore]</c> — without it this list would be serialised into every patch
+    /// alongside <see cref="Messages"/>, doubling the payload of exactly the write the window exists
+    /// to shrink.</remarks>
+    [JsonIgnore]
+    public ImmutableList<LogMessage> SealedMessages =>
+        SealingCount <= 0 ? ImmutableList<LogMessage>.Empty : Messages.GetRange(0, Math.Min(SealingCount, Messages.Count));
+
+    /// <summary>
+    /// The activity-wide ordinal of the first message in the currently claimed seal — what the segment
+    /// records as its <see cref="ActivityLogSegment.FirstOrdinal"/>.
+    /// </summary>
+    [JsonIgnore]
+    public int SealedFirstOrdinal => TotalMessageCount - Messages.Count;
+
+    /// <summary>
+    /// Drops the claimed messages from the window now that their segment is durable, and advances
+    /// <see cref="SegmentCount"/>. Idempotent: a no-op when no seal is claimed, so a retried completion
+    /// cannot trim a second, unrelated slice.
+    /// <para>Trimming from the FRONT is what makes this order-independent: messages only ever arrive at
+    /// the end, so the leading <see cref="SealingCount"/> entries are still exactly the ones the claim
+    /// captured, however many appends landed in between.</para>
+    /// </summary>
+    /// <returns>The activity log with the sealed slice removed.</returns>
+    public ActivityLog CompleteSeal() =>
+        SealingCount <= 0
+            ? this
+            : this with
+            {
+                Messages = Messages.RemoveRange(0, Math.Min(SealingCount, Messages.Count)),
+                SegmentCount = SegmentCount + 1,
+                SealingCount = 0,
+            };
 
     /// <summary>
     /// Returns a copy of this activity marked <see cref="ActivityStatus.Failed"/> with the
