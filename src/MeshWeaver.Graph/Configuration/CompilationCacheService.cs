@@ -277,6 +277,29 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     // here: a live context roots its own assemblies natively, so the target only dies when the
     // whole context does.
     private WeakReference<Assembly>? _loadedAssembly;
+    // 🚨 TWO states, not one, and the difference is load-bearing.
+    //
+    //   _unloading — Dispose has STARTED. New scans are refused from here (Pin), but the
+    //                LoaderAllocator is still fully alive: Dispose drains the in-flight pins
+    //                BEFORE it calls Unload(), so anything already pinned is still loadable.
+    //   _disposed  — the drain is over and Unload() is imminent/underway. Now a load is
+    //                genuinely unsafe.
+    //
+    // Collapsing the two into `_disposed` is what made a pin worthless at the one moment it
+    // mattered. Pin() re-checks the flag after incrementing, so a pin that was HANDED OUT proves
+    // the context was live — and then Dispose could set the flag one instruction later and
+    // LoadNodeAssembly, which guards on the same flag, threw ObjectDisposedException into a
+    // scan that Dispose was at that very moment WAITING for. Nothing was wrong with the
+    // assembly; the teardown had simply been requested.
+    //
+    // That throw is not survivable downstream. CompileResultFromAssembly catches it, records
+    // CompilationStatus.Error, and the compile watcher PARKS the NodeType — "further activations
+    // serve the cached error without recompiling" — so a millisecond-wide teardown race
+    // permanently kills a type until someone rebuilds it by hand (StaleStampRootBindingTest,
+    // 6× on 08-10 and twice on 08-13 including on main). Same "one mis-read is not transient"
+    // shape as #1387, reached from the opposite side: there the bytes were incomplete, here the
+    // bytes were perfect and we refused to read them.
+    private volatile bool _unloading;
     private volatile bool _disposed;
     // In-flight SCANS of this context's loaded assembly (the GetTypes / MeshNodeProviderAttribute
     // reflection / Activator block in MeshNodeCompilationService). Dispose() drains these before
@@ -329,13 +352,13 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     /// </summary>
     public IDisposable Pin()
     {
-        if (_disposed)
+        if (_unloading || _disposed)
             throw new ObjectDisposedException(Name, "Cannot scan an assembly whose context is unloading");
         Interlocked.Increment(ref _pins);
-        // Re-check after the increment: Dispose sets _disposed then drains _pins, so a pin taken
+        // Re-check after the increment: Dispose sets _unloading then drains _pins, so a pin taken
         // concurrently with Dispose must not slip past the drain. If Dispose already started, back
         // out and throw — Dispose's drain will observe the decrement and proceed.
-        if (_disposed)
+        if (_unloading || _disposed)
         {
             Interlocked.Decrement(ref _pins);
             throw new ObjectDisposedException(Name, "Cannot scan an assembly whose context is unloading");
@@ -387,7 +410,10 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     {
         lock (_loadLock)
         {
-            if (_disposed)
+            // Both flags: once Dispose has passed its lease check it is committed to unloading
+            // (draining scans, then Unload), so a new lease could not keep the context alive.
+            // This is the pre-split behaviour — Dispose used to set _disposed at that same point.
+            if (_disposed || _unloading)
                 return NullLease.Instance;
             _leases++;
             return new LeaseScope(this);
@@ -398,7 +424,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     {
         bool unloadNow;
         lock (_loadLock)
-            unloadNow = --_leases == 0 && _unloadRequested && !_disposed;
+            unloadNow = --_leases == 0 && _unloadRequested && !_disposed && !_unloading;
 
         if (unloadNow)
             Dispose();
@@ -438,11 +464,33 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     }
 
     /// <summary>
+    /// True when a load must be refused. Deliberately NOT just <c>_disposed</c>, and deliberately
+    /// NOT just "teardown started" either:
+    ///
+    /// <list type="bullet">
+    ///   <item><c>_disposed</c> — the pin drain is over and <c>Unload()</c> is imminent/underway.
+    ///     Always refuse.</item>
+    ///   <item><c>_unloading</c> with NO pin outstanding — teardown has begun and nobody is holding
+    ///     the context open, so an <c>Unload()</c> can land between this load and the caller's
+    ///     <c>GetTypes()</c>. That is the "…format is invalid" corruption the pin exists to prevent,
+    ///     so an UNPINNED caller keeps the old, strict behaviour.</item>
+    ///   <item><c>_unloading</c> WITH a pin outstanding — allow it. Dispose drains pins BEFORE
+    ///     <c>Unload()</c>, so the LoaderAllocator is provably still alive and the assembly is
+    ///     perfectly loadable. This is the case that used to throw
+    ///     <c>ObjectDisposedException</c> into a scan the teardown was standing there waiting for,
+    ///     which <c>CompileResultFromAssembly</c> then recorded as a compile error and the watcher
+    ///     turned into a PARKED NodeType — permanent damage from a millisecond-wide race.</item>
+    /// </list>
+    /// </summary>
+    private bool IsClosedToLoads()
+        => _disposed || (_unloading && Volatile.Read(ref _pins) == 0);
+
+    /// <summary>
     /// Loads the node's assembly from disk.
     /// </summary>
     public Assembly? LoadNodeAssembly()
     {
-        if (_disposed)
+        if (IsClosedToLoads())
             throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
 
         // Fast path: already loaded
@@ -452,7 +500,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         lock (_loadLock)
         {
             // Double-check after acquiring lock
-            if (_disposed)
+            if (IsClosedToLoads())
                 throw new ObjectDisposedException(Name, "Cannot load assembly from disposed context");
 
             if (LoadedAssembly is { } loaded)
@@ -581,7 +629,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
     {
         lock (_loadLock)
         {
-            if (_disposed)
+            if (_disposed || _unloading)
                 return;
 
             // A hub is still executing this assembly (see Lease()). Unloading now would reclaim
@@ -596,13 +644,16 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
                 return;
             }
 
-            _disposed = true;
-            _loadedAssembly = null;
+            // 🚨 _unloading, NOT _disposed — and _loadedAssembly stays put. This closes Pin() to
+            // NEW scans while leaving the ones we are about to WAIT for able to finish their load.
+            // Flipping _disposed here instead made LoadNodeAssembly throw into a pinned scan and
+            // permanently park the NodeType; see the field comments.
+            _unloading = true;
 
             _logger?.LogDebug("Unloading AssemblyLoadContext {ContextName}", Name);
         }
 
-        // Drain in-flight assembly SCANS before tearing down the LoaderAllocator. _disposed is set
+        // Drain in-flight assembly SCANS before tearing down the LoaderAllocator. _unloading is set
         // above, so Pin() now rejects NEW scans; wait (time-bounded) for the ones already running to
         // release. Unloading mid-GetTypes/attribute-resolution corrupts the assembly the scanner is
         // holding (TypeLoadException '…format is invalid'), the race that flakes the concurrent
@@ -613,6 +664,13 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         var spin = new SpinWait();
         while (Volatile.Read(ref _pins) > 0 && Environment.TickCount64 < drainDeadline)
             spin.SpinOnce();
+
+        // The drain is over: from here a load really is unsafe, so close the door for good. Plain
+        // field writes, deliberately NOT under _loadLock — a scanner that overran the 5 s ceiling
+        // still holds that lock inside LoadNodeAssembly, and taking it here would block teardown
+        // behind the very scan the ceiling exists to stop waiting for.
+        _disposed = true;
+        _loadedAssembly = null;
 
         // Initiate unload outside the lock - the context will be collected when all references are released
         Unload();
