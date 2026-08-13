@@ -210,17 +210,12 @@ internal static class ContentIndexingActivity
         // context-null → the partition RLS denies → the progress line never lands.
         using (owner is not null && accessService is not null ? accessService.SwitchAccessContext(owner) : null)
         {
-            workspace.GetMeshNodeStream(activityPath).Update(node =>
-            {
-                // ContentAs<T>, NOT `Content as ActivityLog`: the activity node is owned by the partition's
-                // _Activity hub, so this cross-hub Update lambda diffs against a LOCAL mirror whose Content
-                // can be a JsonElement (not strongly-typed). A plain cast would be null → the update no-ops →
-                // the RFC 7396 patch is never sent. ContentAs deserializes the JsonElement so the write lands.
-                // (project_baddata_contentas_pattern.)
-                var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
-                if (log is null) return node;
-                return node with { Content = log.Append(messages) };
-            }).Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Indexing activity log append failed for {Path}", activityPath));
+            // ActivityLogAppender, not a hand-rolled Update: it keeps Messages bounded and flushes the
+            // overflow into _Log segment satellites, so a full reindex's per-batch progress costs
+            // O(batches) instead of O(batches²) in re-serialisation.
+            ActivityLogAppender
+                .Append(workspace.Hub, activityPath, messages, mutate: null, logger)
+                .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Indexing activity log append failed for {Path}", activityPath));
         }
     }
 
@@ -233,23 +228,15 @@ internal static class ContentIndexingActivity
         // RLS lets the write land — otherwise the activity hangs Running forever.
         using (owner is not null && accessService is not null ? accessService.SwitchAccessContext(owner) : null)
         {
-            return workspace.GetMeshNodeStream(activityPath).Update(node =>
-            {
-                // ContentAs<T>, NOT `Content as ActivityLog`: the cross-hub Update lambda diffs against a
-                // local mirror whose Content may be a JsonElement; a plain cast would no-op and the terminal
-                // Status would never be written → the activity hangs Running forever (the ReindexAll / Upload
-                // indexing-activity timeout). See project_baddata_contentas_pattern.
-                var log = node.ContentAs<ActivityLog>(workspace.Hub.JsonSerializerOptions, logger);
-                if (log is null) return node;
-                var withFinal = string.IsNullOrEmpty(finalMessage)
-                    ? log
-                    : log.Append(new LogMessage(finalMessage,
-                        status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information));
-                return node with
-                {
-                    Content = withFinal with { Status = status, End = DateTime.UtcNow, RequestedStatus = null }
-                };
-            }).Select(_ => Unit.Default);
+            return ActivityLogAppender.Append(
+                    workspace.Hub, activityPath,
+                    string.IsNullOrEmpty(finalMessage)
+                        ? []
+                        : [new LogMessage(finalMessage,
+                            status == ActivityStatus.Failed ? LogLevel.Error : LogLevel.Information)],
+                    log => log with { Status = status, End = DateTime.UtcNow, RequestedStatus = null },
+                    logger)
+                .Select(_ => Unit.Default);
         }
     }
 
