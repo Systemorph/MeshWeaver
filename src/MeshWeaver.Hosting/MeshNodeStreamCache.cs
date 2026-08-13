@@ -1996,24 +1996,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         System.Collections.Immutable.ImmutableDictionary<object, QueryCacheEntry>.Empty;
 
     /// <summary>
-    /// The canonical form of a query SET: de-duplicated and ordered. Order- and
-    /// duplicate-insensitive, because the synced collection is the UNION of its queries — two
-    /// callers that ask for the same set written in a different order must share one
-    /// subscription rather than open two.
-    ///
-    /// <para>🚨 The CACHED STREAM IS BUILT FROM THIS, not from the caller’s array, so the
-    /// stream actually behaves the way its signature claims. <c>SyncedQueryMeshNodes</c> opens an
-    /// INDEPENDENT upstream subscription per query entry — it de-duplicates the resulting PATHS,
-    /// not the queries — so a caller that repeated a query would open a redundant upstream. And
-    /// because one entry is now shared by every caller of the set, which redundancy you got would
-    /// depend on whose array happened to materialise the entry first.</para>
+    /// The identity of a query SET. Order- and duplicate-insensitive, because the synced
+    /// collection is the UNION of its queries — two callers that ask for the same set written in
+    /// a different order must share one subscription rather than open two.
     /// </summary>
-    private static string[] CanonicalQuerySet(IReadOnlyList<string> queries) =>
-        [.. queries.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
-
-    /// <summary>The identity of a query set — see <see cref="CanonicalQuerySet"/>.</summary>
-    private static string QuerySetSignature(IReadOnlyList<string> canonicalQueries) =>
-        string.Join('\u001f', canonicalQueries);
+    private static string QuerySetSignature(IReadOnlyList<string> queries) =>
+        string.Join('\u001f', queries.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
 
     // Memoised options-wrapped observables, keyed by (id, query-set signature, options). The
     // options overload wraps the raw cached stream in a content-deserialising
@@ -2051,12 +2039,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         if (queries is null || queries.Length == 0)
             throw new ArgumentException("At least one query string is required.", nameof(queries));
 
-        // Canonicalise ONCE and build everything from it — the signature, the cache lookup, and
-        // the SyncedQueryMeshNodes below. See CanonicalQuerySet: building the stream from the
-        // caller's raw array instead would let the shared entry's upstream subscriptions depend
-        // on which caller materialised it.
-        var canonicalQueries = CanonicalQuerySet(queries);
-        var signature = QuerySetSignature(canonicalQueries);
+        var signature = QuerySetSignature(queries);
         while (true)
         {
             var current = _queries;
@@ -2072,7 +2055,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             var stream = Observable.Defer(() =>
                 {
                     var typeSource = new global::MeshWeaver.Graph.SyncedQueryMeshNodes(
-                        cacheHub.GetWorkspace(), id, canonicalQueries);
+                        cacheHub.GetWorkspace(), id, queries);
                     var updates = typeSource.StreamUpdates();
                     // 🚨 Hold SYSTEM identity across this synced-query subscription — the SAME
                     // pattern (and for the SAME reason) as ChatClientCredentialResolver
