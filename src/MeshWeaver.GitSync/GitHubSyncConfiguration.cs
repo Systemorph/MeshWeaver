@@ -81,6 +81,19 @@ public static class GitHubSyncConfiguration
             });
         services.AddSingleton<GitCli>();
         services.AddSingleton<GitWorkingTreeService>();
+        // Commit-pinned source replica (GitModuleReplica): `SourceReplica:Root` points it at the
+        // DEDICATED persistent mount. Absent, it defaults to a temp subdir — usable for dev and tests
+        // but pointless on a pod, where temp is ephemeral and the replica would be re-cloned on every
+        // restart, which is the cost it exists to remove. Same binding shape as GitWorkspace:Root above.
+        services.AddOptions<GitModuleReplicaOptions>()
+            .Configure<IConfiguration>((o, cfg) =>
+            {
+                var root = cfg["SourceReplica:Root"];
+                if (!string.IsNullOrWhiteSpace(root)) o.RootDirectory = root;
+                if (int.TryParse(cfg["SourceReplica:KeepCommitsPerRepo"], out var keep) && keep > 0)
+                    o.KeepCommitsPerRepo = keep;
+            });
+        services.AddSingleton<GitModuleReplica>();
         // Writes the live Agent + Skill partitions back to the repo's content/ai section — the inverse
         // of the built-in providers that READ that section. Dev-time (source checkout) only.
         services.AddSingleton<AiContentDiskWriter>();
