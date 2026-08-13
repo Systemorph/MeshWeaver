@@ -41,7 +41,13 @@ public static class NodeFileMapper
     public static bool HasChildren(string nodePath, IEnumerable<string> allPaths)
     {
         var prefix = nodePath + "/";
-        return allPaths.Any(p => p.StartsWith(prefix, StringComparison.Ordinal));
+        // OrdinalIgnoreCase: these are MESH paths, where case is not a distinction (the importer's
+        // prune, the changed-path set and IsAtOrUnder all fold case). An Ordinal compare here made a
+        // child whose stored casing differed from its parent's invisible, so the parent exported as a
+        // leaf `Foo.md` while its children went to `foo/Bar.md` — the subtree lost its index on the
+        // next import. Same comparison class as the SyncIgnore matcher (issue #1326). Git-tree
+        // comparisons in the export stay Ordinal on purpose: THOSE paths really are case-sensitive.
+        return allPaths.Any(p => p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>True when a repo-relative path is the top-level <c>index.*</c> (i.e. the partition root).</summary>

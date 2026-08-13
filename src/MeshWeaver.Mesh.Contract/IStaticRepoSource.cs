@@ -65,6 +65,27 @@ public interface IStaticRepoSource
     MeshNode? PartitionRoot => null;
 
     /// <summary>
+    /// 🚨 <b>The source does not mirror this node in EITHER direction</b> — it is never exported to
+    /// the repo and never imported from it. Its absence from
+    /// <see cref="EnumerateSourceNodes"/> is therefore <b>not evidence that it was deleted</b>, and
+    /// the prune MUST skip it. Path is the node's full mesh path. Default: nothing is excluded.
+    ///
+    /// <para><b>Why this exists (issue #1326 — data loss).</b> The prune's rule was "absent from the
+    /// source ⇒ mirror it away", guarded only by governance (<c>_</c>-prefixed segments), the
+    /// per-node <see cref="SyncBehavior"/> and claimed roots. A GitSync source additionally applies
+    /// the Space's gitignore-style rules (<c>SyncIgnore</c>, default <c>Release/</c>) on BOTH the
+    /// export and the import — so an ignored subtree is absent from the repo <b>by construction</b>,
+    /// which made every such node a permanent prune candidate. Under the default
+    /// <see cref="PartitionSyncMode.FullReplace"/> a forced import duly deleted them: 47 mesh-minted
+    /// <c>Release/</c> bookkeeping records were destroyed on memex-cloud on 2026-08-12 as "absent
+    /// from the repo". The ignore rule set is the single declaration of what does not sync; the
+    /// prune was the one direction it was never applied to.</para>
+    /// </summary>
+    /// <param name="nodePath">Full mesh path of an existing node in the target partition.</param>
+    /// <returns><c>true</c> when this source deliberately never carries the node.</returns>
+    bool IsExcludedFromMirror(string nodePath) => false;
+
+    /// <summary>
     /// Optional content-collection <b>imports</b> — assets a node references through its content
     /// collection (e.g. an <c>@@content/logo.svg</c> embed) that ship in an embedded source
     /// collection (e.g. <c>DocContent</c>) and must be copied into the owning node's runtime content
