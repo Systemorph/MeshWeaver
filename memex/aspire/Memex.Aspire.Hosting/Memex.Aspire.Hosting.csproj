@@ -5,7 +5,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>true</IsPackable>
-    <PackageId>Aspire.Hosting.Memex</PackageId>
+    <!-- 🚨 NOT `Aspire.Hosting.Memex`: nuget.org reserves the `Aspire.*` prefix for Microsoft
+         and its partners (every one of the 100+ published Aspire.* ids is prefix-verified), so a
+         push of a NEW id under it from this account is rejected — and since that nupkg sorts
+         first in the publish glob, it would fail the whole release-packages run. Vendor-prefixed
+         is the sanctioned shape for third-party Aspire integrations. -->
+    <PackageId>MeshWeaver.Aspire.Hosting.Memex</PackageId>
     <Description>Aspire hosting integration for the MeshWeaver Memex portal. builder.AddMemex() wires Postgres (pgvector) + a one-shot DB migration + the portal from published GHCR images; publish to Docker Compose, Kubernetes/Helm, or Azure Container Apps with the standard Aspire publishers.</Description>
     <Authors>Systemorph</Authors>
     <PackageTags>aspire;hosting;meshweaver;memex;mesh</PackageTags>

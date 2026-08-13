@@ -1,7 +1,7 @@
 // Dedicated, image-based deployment AppHost for the MeshWeaver Memex portal.
 //
 // Mirrors the conventions of the main memex/aspire/Memex.AppHost, but deploys the PUBLISHED
-// GHCR images via the Aspire.Hosting.Memex integration (builder.AddMemex → AddContainer) rather
+// GHCR images via the MeshWeaver.Aspire.Hosting.Memex integration (builder.AddMemex → AddContainer) rather
 // than building the portal from source. One model → many artifacts via the Aspire publishers:
 //
 //   aspire publish --apphost deploy/aspire/Memex.Deploy.AppHost/Memex.Deploy.AppHost.csproj \
