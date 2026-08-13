@@ -85,9 +85,15 @@ public static class BuildProtocolDriver
             .SelectMany(_ => mesh.ObserveBuildClaim(holder)
                 .Take(1)
                 .Timeout(GrantWindow)
-                .SelectMany(__ => BakeAsMaster(mesh, holder, fingerprint, definitions, bake, logger))
-                .Catch((TimeoutException _) =>
-                    FollowGo(mesh, holder, fingerprint, definitions, store, logger)));
+                .Select(__ => true)
+                // The Catch bounds the GRANT WAIT and nothing else. It used to wrap the bake as
+                // well, so a TimeoutException raised anywhere inside the sweep demoted the winner
+                // to a follower — still holding its claim, now waiting for a GO only it could ever
+                // publish.
+                .Catch((TimeoutException _) => Observable.Return(false))
+                .SelectMany(granted => granted
+                    ? BakeAsMaster(mesh, holder, fingerprint, definitions, bake, logger)
+                    : FollowGo(mesh, holder, fingerprint, definitions, store, bake, logger)));
     }
 
     // ── the winner ──────────────────────────────────────────────────────────────────────────────
@@ -312,41 +318,140 @@ public static class BuildProtocolDriver
 
     // ── the follower ────────────────────────────────────────────────────────────────────────────
 
-    private static IObservable<PreWarmOutcome> FollowGo(
+    /// <summary>
+    /// The path taken when the claim is held elsewhere. It ends on one of TWO real events, and the
+    /// point of #1440 is that it used to have neither reliably:
+    ///
+    /// <list type="number">
+    /// <item><b>The GO becomes visible.</b> Not "is announced" — <em>visible</em>. The old code
+    /// subscribed to <c>ObserveBuildGo</c> alone, which is a projection of THIS cluster's mirror of
+    /// <c>Admin/Build</c>. A builder in another process writes the same durable row, but no change
+    /// feed crosses the process boundary (<c>PostgreSqlChangeListener</c> is registered and never
+    /// started in either partitioned-PG overload), so a mirror that activated before that write is
+    /// never told and the wait was for an event that could not be delivered. So the GO is now also
+    /// READ off the durable witness — the same record, and for the same reason, the claim arbiter
+    /// decides on (<c>BuildNodeType.ArbitrateDurably</c>).</item>
+    /// <item><b>The arbiter hands US the claim.</b> Registering as a candidate is not free to
+    /// abandon: the registration outlives the grant wait, and the arbiter grants it the moment the
+    /// build falls free — whether the builder finished or died. The old follower had stopped
+    /// listening, so that grant went to a process that would never act on it, leaving the build
+    /// locked to a live holder the takeover rule then defends forever. Observing it instead turns
+    /// "the builder went away" into a real event that ends the wait, and turns the grant into the
+    /// level-trigger on which the durable witness is re-read.</item>
+    /// </list>
+    ///
+    /// <para>🚨 No timer, and no bound bolted onto the wait. A bound would end the wait by GUESSING,
+    /// and a follower that guesses "the build finished" certifies a share it never saw — a silent
+    /// wrong answer where the hang at least announced itself. Both doors above are level-triggered
+    /// on durable state, exactly like the arbiter (#1437, and #1366 for why the poll clock went).</para>
+    /// </summary>
+    internal static IObservable<PreWarmOutcome> FollowGo(
         IMessageHub mesh,
         string holder,
         string fingerprint,
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         IAssemblyStore store,
+        Func<IObservable<PreWarmOutcome>> bake,
         ILogger? logger)
     {
         logger?.LogInformation(
-            "BuildProtocol: claim held elsewhere — {Holder} subscribes to the GO for framework {Fingerprint}",
+            "BuildProtocol: claim held elsewhere — {Holder} follows the build for framework "
+            + "{Fingerprint} (durable witness + this cluster's GO + its own claim candidacy)",
             holder, fingerprint);
 
-        return mesh.ObserveBuildGo(fingerprint)
+        // Door 1 — the GO is visible: on the durable row (the witness a peer cluster shares with
+        // the builder) or on this cluster's mirror, whichever answers first.
+        var go = mesh.ReadBuildGo(fingerprint, logger)
+            .Where(g => g is not null)
+            .Select(g => g!)
+            .Merge(mesh.ObserveBuildGo(fingerprint))
+            .Select(g => (Go: (BuildGo?)g, Granted: false));
+
+        // Door 2 — the build fell free and the arbiter granted it to us. Re-subscribing here also
+        // closes the race where the grant landed microseconds after the GrantWindow expired.
+        var granted = mesh.ObserveBuildClaim(holder)
             .Take(1)
+            .Select(_ => (Go: (BuildGo?)null, Granted: true));
+
+        return go.Merge(granted)
+            .Take(1)
+            .SelectMany(end => end.Granted
+                ? OnGranted(mesh, holder, fingerprint, definitions, store, bake, logger)
+                : ProbeAfterGo(mesh, holder, fingerprint, end.Go!, definitions, store, logger));
+    }
+
+    /// <summary>
+    /// The follower was handed the claim. That means the build fell free — but NOT which way: the
+    /// builder may have finished (published its GO and released) or gone away mid-bake. Only the
+    /// durable witness distinguishes them, and asking it here is what makes a peer cluster's GO
+    /// actually spare this process the bake instead of merely arriving too late to matter.
+    /// </summary>
+    private static IObservable<PreWarmOutcome> OnGranted(
+        IMessageHub mesh,
+        string holder,
+        string fingerprint,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        Func<IObservable<PreWarmOutcome>> bake,
+        ILogger? logger)
+        => mesh.ReadBuildGo(fingerprint, logger)
             .SelectMany(go =>
             {
+                if (go is not null)
+                {
+                    logger?.LogInformation(
+                        "BuildProtocol: {Holder} was granted the claim, but the durable witness "
+                        + "already carries the GO for framework {Fingerprint} (ready at {ReadyAt:O}) "
+                        + "— standing down instead of re-baking",
+                        holder, fingerprint, go.ReadyAt);
+                    return ProbeAfterGo(mesh, holder, fingerprint, go, definitions, store, logger);
+                }
+
                 logger?.LogInformation(
-                    "BuildProtocol: GO received for framework {Fingerprint} (ready at {ReadyAt:O}) — probing the share",
-                    fingerprint, go.ReadyAt);
-                // The GO says the build finished; the share says what actually landed. Probing
-                // (rather than trusting) keeps the follower level-triggered on reality — the same
-                // property the sweep itself has. A type still pending after GO is reported as
-                // not-evaluated (non-gating): the follower has no verdict about it.
-                return NodeTypeBakeStatus.Probe(definitions, store, logger: logger)
-                    .SelectMany(fresh => fresh.Entries
-                        .Select(e => new PreWarmOutcome(
-                            e.TypePath,
-                            e.NeedsBake ? PreWarmStatus.TimedOut : PreWarmStatus.AlreadyBaked,
-                            e.NeedsBake
-                                ? "still pending on the share after the build published GO"
-                                : "on the share after GO")
-                        {
-                            WasHealthyBeforeBake = e.WasHealthy,
-                        }));
+                    "BuildProtocol: {Holder} was granted the claim while following framework "
+                    + "{Fingerprint} — the previous builder released it without a GO, so this "
+                    + "process bakes",
+                    holder, fingerprint);
+                return BakeAsMaster(mesh, holder, fingerprint, definitions, bake, logger);
             });
+
+    /// <summary>
+    /// The GO says the build finished; the share says what actually landed. Probing (rather than
+    /// trusting) keeps the follower level-triggered on reality — the same property the sweep itself
+    /// has. A type still pending after GO is reported as not-evaluated (non-gating): the follower
+    /// has no verdict about it.
+    ///
+    /// <para>Standing down FIRST is not bookkeeping. A candidate that reached its answer without a
+    /// grant still has a live registration, and the arbiter will hand it the next free build — a
+    /// build this process has already finished with and will never run. See
+    /// <c>WithdrawBuildClaim</c> for why that wedges the following image's rollout.</para>
+    /// </summary>
+    private static IObservable<PreWarmOutcome> ProbeAfterGo(
+        IMessageHub mesh,
+        string holder,
+        string fingerprint,
+        BuildGo go,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IAssemblyStore store,
+        ILogger? logger)
+    {
+        logger?.LogInformation(
+            "BuildProtocol: GO visible for framework {Fingerprint} (ready at {ReadyAt:O}) — "
+            + "{Holder} stands down and probes the share",
+            fingerprint, go.ReadyAt, holder);
+
+        return mesh.WithdrawBuildClaim(holder)
+            .SelectMany(_ => NodeTypeBakeStatus.Probe(definitions, store, logger: logger))
+            .SelectMany(fresh => fresh.Entries
+                .Select(e => new PreWarmOutcome(
+                    e.TypePath,
+                    e.NeedsBake ? PreWarmStatus.TimedOut : PreWarmStatus.AlreadyBaked,
+                    e.NeedsBake
+                        ? "still pending on the share after the build published GO"
+                        : "on the share after GO")
+                {
+                    WasHealthyBeforeBake = e.WasHealthy,
+                }));
     }
 
     // ── shared ──────────────────────────────────────────────────────────────────────────────────
