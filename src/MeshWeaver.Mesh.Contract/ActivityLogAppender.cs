@@ -80,6 +80,20 @@ public static class ActivityLogAppender
         var options = hub.JsonSerializerOptions;
         var stream = workspace.GetMeshNodeStream(activityPath);
 
+        // 🚨 stream.Update(...) is invoked EAGERLY, here, and it must stay that way — do NOT wrap
+        // this in Observable.Defer. UpdateRemote captures the caller's AccessContext AT THE .Update()
+        // CALL, not at subscribe (MeshNodeStreamExtensions: `LastModifiedBy = capturedContextAtEntry`),
+        // and every activity producer calls Append inside a scope that has deliberately re-established
+        // the activity's OWNER (ActivityRunner + AccessContextScope.FromNode). Deferring construction
+        // moves the capture to whatever ambient identity happens to be on the subscribing thread — a
+        // pooled hop carrying someone else's context in production, which is precisely the
+        // identity-confusion defect ActivityOwnerCredentialTest exists to pin. It caught this.
+        //
+        // `settled` is therefore per Append CALL rather than per subscription, which is what this
+        // method's contract already implies: an Append is one write, subscribed once. Two subscribers
+        // to the same cold Append would each re-run the write against the same path, and the release
+        // reads only Status — so the shared local is harmless even then.
+        MeshNode? settled = null;
         return stream
             .Update(node =>
             {
@@ -92,7 +106,58 @@ public static class ActivityLogAppender
                 // Claim AFTER the append + mutate so the decision sees the final window size.
                 return node with { Content = updated.ClaimSeal() };
             })
-            .SelectMany(updated => FlushClaimedSeal(hub, activityPath, stream, updated, options, logger));
+            .SelectMany(updated => FlushClaimedSeal(hub, activityPath, stream, updated, options, logger))
+            // 🚨 onCompleted, NOT onNext. Releasing tears the path's upstream sync streams down, and
+            // this write is still in flight when its value is emitted — cutting the stream out from
+            // under it would strand the write's own terminal and leave the per-path queue to advance
+            // on its 5 s backstop instead. After completion there is nothing left to strand, and for
+            // a terminal activity there is no next write by definition.
+            .Do(node => settled = node,
+                () =>
+                {
+                    if (settled is not null)
+                        ReleaseMirrorWhenFinal(hub, activityPath, settled, options, logger);
+                });
+    }
+
+    /// <summary>
+    /// An activity that has reached a terminal status will never be written again — so the warm
+    /// mirror the write path opened for it is not a cache, it is a leak with a keep-alive attached.
+    ///
+    /// <para><b>The mechanism, and why "nothing reclaims it" was the wrong diagnosis (#1324).</b>
+    /// A cross-hub write resolves a shared <c>IMeshNodeStreamCache</c> entry for the path, and that
+    /// entry's mirror posts a <c>HeartBeatEvent</c> to the owning hub every 45 s for the express
+    /// purpose of keeping its grain alive. Two reclaimers exist and BOTH are defeated by it: the
+    /// cache's own idle sweep needs the entry untouched for ten minutes, and Orleans' idle
+    /// collection (like <c>KernelContainer.DisposeOnTimeout</c>) is re-armed by every inbound
+    /// message. So a finished compile or import does not merely wait to be collected — it actively
+    /// prevents its own collection, pinning its <c>_Activity/…</c> node hub and the sync sub-hubs on
+    /// both sides of the mirror. Measured on <c>NodeTypeRecompileAlcLeakTest</c>, matched runs from
+    /// an identical baseline: <b>6.5 → 5.0 retained hubs per compile activity</b> (8.7 → 6.0 per
+    /// recompile overall), with the mirror-side hubs going <b>3 → 0</b>.</para>
+    ///
+    /// <para>Releasing here is an EVENT, not a shorter timer: the terminal status is proof, supplied
+    /// by the writer, that the heuristic the sweep is waiting out has already been decided. A reader
+    /// still watching the finished activity keeps it — <c>ReleaseIfUnwatched</c> makes the same
+    /// atomic zero-subscriber check the sweep makes, and simply declines when someone is attached.
+    /// Best-effort by construction: if the release does not happen the idle sweep still gets there,
+    /// so nothing here may fail the write that reported the status.</para>
+    /// </summary>
+    private static void ReleaseMirrorWhenFinal(
+        IMessageHub hub,
+        string activityPath,
+        MeshNode final,
+        System.Text.Json.JsonSerializerOptions options,
+        ILogger? logger)
+    {
+        if (final.ContentAs<ActivityLog>(options, logger) is not { } log || !log.Status.IsTerminal())
+            return;
+        var cache = hub.ServiceProvider.GetService<IMeshNodeStreamCache>();
+        if (cache is null)
+            return;
+        if (cache.ReleaseIfUnwatched(activityPath))
+            logger?.LogDebug(
+                "Activity {Path}: reached {Status} — released its shared mirror", activityPath, log.Status);
     }
 
     /// <summary>
