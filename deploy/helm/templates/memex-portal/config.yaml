@@ -90,6 +90,13 @@ data:
   # 7 days old. Nothing outside the per-NodeType directories is ever touched, and any error
   # reading the cache aborts the sweep with nothing collected.
   AssemblyCache__Retention__Delete: "{{ .Values.config.memex_portal.AssemblyCache__Retention__Delete | default "false" }}"
+  {{- /* Commit-pinned source replica (GitModuleReplica). Point Root at a DEDICATED persistent mount —
+         see .Values.persistence for the volume. Empty means "unset": the option then falls back to a
+         temp subdir, which on a pod is ephemeral and re-clones the repo on every restart. This key
+         must exist HERE or it is silently dropped: this configmap lists keys explicitly rather than
+         iterating .Values.config, so an un-templated key never reaches the pod. */}}
+  SourceReplica__Root: "{{ .Values.config.memex_portal.SourceReplica__Root }}"
+  SourceReplica__KeepCommitsPerRepo: "{{ .Values.config.memex_portal.SourceReplica__KeepCommitsPerRepo }}"
   Deployment__Orleans__Clustering: "{{ .Values.config.memex_portal.Deployment__Orleans__Clustering }}"
   Storage__Name: "{{ .Values.config.memex_portal.Storage__Name }}"
   Storage__SourceType: "{{ .Values.config.memex_portal.Storage__SourceType }}"
