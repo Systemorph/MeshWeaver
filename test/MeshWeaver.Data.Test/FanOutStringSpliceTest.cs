@@ -195,6 +195,33 @@ public class FanOutStringSpliceTest(ITestOutputHelper output)
             + "reach the resync path rather than escape as an ArgumentOutOfRangeException");
     }
 
+    [Theory]
+    [InlineData("splice")]
+    [InlineData("replace")]
+    [InlineData("add")]
+    public void AStaleINTERMEDIATEArrayIndex_TakesTheResyncPathForEveryOp(string op)
+    {
+        // The parent walk is shared by add / replace / splice, so a stale intermediate index
+        // (`/lines/7/text` against a two-element array) has to recover the same way for all three —
+        // otherwise the op that happens to be in flight decides whether the stream resyncs or faults.
+        var value = op == "splice"
+            ? (JsonNode)new JsonObject
+            {
+                [PatchStringSplice.Marker] = new JsonArray(0, 0, "x"),
+                [PatchStringSplice.BaseMarker] = new JsonArray(0, PatchStringSplice.Fingerprint(string.Empty)),
+            }
+            : JsonValue.Create("x")!;
+        var json = $$"""[{"op":"{{op}}","path":"/lines/7/text","value":{{value.ToJsonString()}}}]""";
+        var frame = new DataChangedEvent("stream", 1, new RawJson(json), ChangeType.Patch, null);
+        var live = Element(new JsonObject { ["lines"] = new JsonArray("a", "b") });
+
+        Action apply = () => frame.UpdateJsonElement(live, Wire);
+
+        apply.Should().Throw<StaleStreamStateException>(
+            "a stale intermediate index must reach RequestFreshSnapshot, not escape the applier as "
+            + "an ArgumentOutOfRangeException that faults the stream");
+    }
+
     [Fact]
     public void AMalformedSplice_IsRefusedLoudly_NeverWrittenIntoTheText()
     {
