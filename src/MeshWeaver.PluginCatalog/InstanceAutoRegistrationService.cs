@@ -213,14 +213,48 @@ public sealed class InstanceAutoRegistrationService(
         // identical race. Waiting on the bake's one-shot completion signal is ordering on the
         // actual precondition — no timer, no retry, replayed to late subscribers; a host without
         // the pre-warm has no PreWarmCompletion registered and proceeds exactly as before.
-        var bakeSettled = hub.ServiceProvider.GetService<PreWarmCompletion>()?.Completed
-            ?? Observable.Return(Unit.Default);
+        //
+        // 🚨 The signal now carries HOW the bake settled, and this consumer deliberately does NOT
+        // branch its BEHAVIOUR on it — it proceeds on all three outcomes, and says which one it
+        // proceeded on. The reasoning, outcome by outcome:
+        //
+        //   Completed      — the precondition this ordering exists for is met; install.
+        //   NotApplicable  — there is no bake on this host, so there is nothing to be behind; the
+        //                    per-node hubs are not parked and the install runs as it always did.
+        //   Faulted        — the sweep errored, so it never saturated the compile queue either;
+        //                    there is nothing left to wait FOR, and the types compile lazily. More
+        //                    importantly, withholding the install here would be backwards: installs
+        //                    REPAIR content, and a boot where the bake could not run is exactly the
+        //                    boot where the instance is most likely to need its defaults. That is
+        //                    the same call the pre-warmer already documents for a Regressed+armed
+        //                    pod ("the default install proceeding is deliberate — installs repair
+        //                    content"). Readiness is refused by the bake gate, which is the surface
+        //                    that owns that decision; the installer is not a second gate.
+        //
+        // What the outcome DOES buy is that a boot whose bake errored is no longer indistinguishable
+        // from one that verified ~240 types in every downstream log — previously this waited on an
+        // IObservable<Unit> that fired identically in all three cases.
+        var bakeSettled = hub.ServiceProvider.GetService<PreWarmCompletion>()?.Settled
+            ?? Observable.Return(PreWarmSettlement.NotApplicable);
 
         subscriptions.Add(bakeSettled
             .Take(1)
             // Hop off whatever thread settled the bake (the sweep's completion callback, or the
             // ApplicationStarted callback on a no-bake host) before the install chain runs.
             .ObserveOn(TaskPoolScheduler.Default)
+            .Do(settlement =>
+            {
+                if (settlement is PreWarmSettlement.Faulted)
+                    logger.LogWarning(
+                        "[DefaultInstall] proceeding after a bake that FAULTED — this host verified "
+                        + "nothing about its NodeTypes, so package roots may compile lazily as they "
+                        + "are touched. Installing anyway: installs repair content, and readiness "
+                        + "is the bake gate's call, not this service's.");
+                else
+                    logger.LogInformation(
+                        "[DefaultInstall] bake settled as {Settlement} — starting provisioning",
+                        settlement);
+            })
             .SelectMany(_ => registered)
             .SelectMany(_ => InstallDefaults(options))
             // 🚨 SubscribeOn the thread pool, NOT the host-startup thread. The chain is synchronous
