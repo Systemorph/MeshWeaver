@@ -172,6 +172,30 @@ public class FanOutStringSpliceTest(ITestOutputHelper output)
     }
 
     [Fact]
+    public void ASpliceAddressingAnIndexPastTheEndOfAnArray_TakesTheResyncPath()
+    {
+        // Bounds have to raise the SAME exception a stale replace/remove does. An
+        // ArgumentOutOfRangeException escaping the indexer would skip the caller's stale-snapshot
+        // recovery entirely (UpdateStream catches StaleStreamStateException, not that), turning a
+        // recoverable divergence into a faulted stream.
+        var value = new JsonObject
+        {
+            [PatchStringSplice.Marker] = new JsonArray(0, 0, "x"),
+            [PatchStringSplice.BaseMarker] = new JsonArray(0, PatchStringSplice.Fingerprint(string.Empty)),
+        };
+        var patch = new JsonPatch(PatchOperation.Splice(JsonPointer.Parse("/lines/7"), value));
+        var frame = new DataChangedEvent(
+            "stream", 1, new RawJson(JsonSerializer.Serialize(patch, Wire)), ChangeType.Patch, null);
+        var live = Element(new JsonObject { ["lines"] = new JsonArray("a", "b") });
+
+        Action apply = () => frame.UpdateJsonElement(live, Wire);
+
+        apply.Should().Throw<StaleStreamStateException>(
+            "an index past the end of the array is a stale-snapshot symptom like any other, and must "
+            + "reach the resync path rather than escape as an ArgumentOutOfRangeException");
+    }
+
+    [Fact]
     public void AMalformedSplice_IsRefusedLoudly_NeverWrittenIntoTheText()
     {
         var patch = new JsonPatch(PatchOperation.Splice(

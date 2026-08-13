@@ -1436,10 +1436,24 @@ public static class JsonSynchronizationStream
 
         var parent = EnsureParentPath(root, segments);
         var key = segments[^1];
+
+        // Bounds are checked HERE, with the same StaleStreamStateException ApplyReplace/ApplyRemove
+        // raise — not left to the indexer. A splice arrives off the wire, so an index past the end
+        // is a stale-snapshot symptom like any other, and it has to reach the resync path rather
+        // than escape as an ArgumentOutOfRangeException the caller does not catch.
+        var index = -1;
+        if (parent is JsonArray bounds)
+        {
+            if (!int.TryParse(key, out index) || index < 0 || index >= bounds.Count)
+                throw new StaleStreamStateException(
+                    $"Stale patch: splice at {pathString} addresses index {key} but the array has "
+                    + $"{bounds.Count} elements.");
+        }
+
         var live = parent switch
         {
             JsonObject obj => obj[key] as JsonValue,
-            JsonArray arr when int.TryParse(key, out var i) && i >= 0 && i < arr.Count => arr[i] as JsonValue,
+            JsonArray arr => arr[index] as JsonValue,
             _ => null,
         };
         var current = live is not null && live.TryGetValue<string>(out var s) ? s : null;
@@ -1451,7 +1465,7 @@ public static class JsonSynchronizationStream
         var spliced = JsonValue.Create(delta.Apply(current));
         if (parent is JsonObject target)
             target[key] = spliced;
-        else if (parent is JsonArray array && int.TryParse(key, out var index))
+        else if (parent is JsonArray array)
             array[index] = spliced;
     }
 
