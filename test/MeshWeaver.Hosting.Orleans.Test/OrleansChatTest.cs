@@ -121,20 +121,29 @@ public class OrleansChatTest(ITestOutputHelper output) : OrleansTestBase<ChatSil
         userContent.Text.Should().Be("Hello from Orleans");
         Output.WriteLine($"User message verified: '{userContent.Text}'");
 
-        // 7. Verify response message â€” poll until streaming completes
-        ThreadMessage? responseContent = null;
-        var prevLen = 0;
-        var stable = 0;
-        for (var i = 0; i < 50; i++)
-        {
-            responseContent = await GetHubContentAsync<ThreadMessage>(
-                client, $"{threadPath}/{msgIds[1]}", ct);
-            var len = responseContent?.Text?.Length ?? 0;
-            if (len > 0 && len == prevLen && ++stable >= 2) break;
-            else stable = 0;
-            prevLen = len;
-            await Task.Delay(200, ct);
-        }
+        // 7. Verify the response cell — wait for its TERMINAL status.
+        //
+        //    🚨 This used to be a hand-rolled `for (50) { read; if (text length unchanged
+        //    twice) break; await Task.Delay(200) }` loop. Three things wrong with it, and
+        //    together they made this one of #1384's recurring unrelated CI reds (three
+        //    failures across three unrelated branches, 08-10 → 08-12):
+        //      • "the text stopped growing for 400 ms" is a SLEEP-based guess at "streaming
+        //        finished". ThreadExecution pushes through Sample(100 ms), so any scheduling
+        //        hiccup on a loaded runner produces two equal-length reads mid-stream — the
+        //        loop breaks early — or never two in a row, and it runs the full 50 rounds.
+        //      • 50 iterations × (a GetDataRequest round-trip + 200 ms) blows past the
+        //        test's own 50 s CancellationToken, which surfaces as a bare
+        //        `TaskCanceledException` from the helper rather than a useful assertion.
+        //      • Hand-rolled `while + Task.Delay` poll loops are forbidden outright
+        //        (AGENTS.md → Testing Guidelines).
+        //    The cell is created at Streaming and reaches Completed exactly when the
+        //    streaming loop exits, so the terminal status IS the condition — no heuristic,
+        //    no sleep, and it cannot pass before the round is genuinely done.
+        var responseContent = await client.GetWorkspace()
+            .GetMeshNodeStream($"{threadPath}/{msgIds[1]}")
+            .Select(node => node.ContentAs<ThreadMessage>(client.JsonSerializerOptions))
+            .Should().Within(40.Seconds())
+            .Match(m => m is { Status: ThreadMessageStatus.Completed });
 
         responseContent.Should().NotBeNull("response message hub should return ThreadMessage");
         responseContent!.Role.Should().Be("assistant");
