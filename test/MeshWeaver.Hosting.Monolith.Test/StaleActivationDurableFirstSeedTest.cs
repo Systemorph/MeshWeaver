@@ -217,12 +217,27 @@ public class StaleActivationDurableFirstSeedTest(ITestOutputHelper output) : Mon
         // 200 ms windows to write anything at all, then assert nothing reached the store.
         await Observable.Timer(TimeSpan.FromSeconds(2)).Should().Within(20.Seconds()).Emit();
 
+        // 🚨 Read the durable row BEFORE sampling the write count — the same read that already
+        // ran two lines below, just moved ahead of the assertion that fails. "found 3" is
+        // unattributable; the durable row IS the last write that reached storage, so its
+        // version+name discriminate the candidates for free:
+        //   v7000/'durable-advance' → an unchanged re-persist (a lossless echo)
+        //   v7001/'durable-advance' → a genuine content change arriving AT the held version
+        //   v7001/'created'         → a STALE pre-recycle snapshot reached the commit path and
+        //                             was re-stamped above durable truth (a #590 write-back)
+        // This must stay a pure READ. #1384's window is narrow enough that instrumenting the
+        // WRITE path closes it — a ConcurrentQueue.Enqueue added there went 259 iterations clean
+        // against a measured 1-in-60 without it — so a per-write trace would buy the answer by
+        // destroying the question. A read cannot perturb the race, and taking it before the count
+        // is sampled only ever WIDENS the window for a late write to be caught.
+        var after = await ReadDurable(path).Should().Within(20.Seconds()).Emit();
+
         Gated.WriteCount(path).Should().Be(writesBefore,
             "activation is a READ — persisting the just-loaded state back is the #590 "
             + "activation write-back (v979: stale content re-persisted by system-security "
-            + "during activation)");
-        var after = await ReadDurable(path).Should().Within(20.Seconds()).Emit();
-        after!.Version.Should().Be(durableVersion, "the durable row must be untouched by the reactivation");
+            + $"during activation). The durable row now reads v{after!.Version}/'{after.Name}' "
+            + $"(seeded v{durableVersion}/'durable-advance')");
+        after.Version.Should().Be(durableVersion, "the durable row must be untouched by the reactivation");
         after.Name.Should().Be("durable-advance");
     }
 }
