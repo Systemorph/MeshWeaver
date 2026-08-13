@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -1743,8 +1744,47 @@ public static class DataExtensions
         return request.Processed();
     }
 
+    /// <summary>
+    /// Serves a <see cref="GetDataRequest"/> off the referenced workspace stream.
+    ///
+    /// <para>🚨 <b>A read that is owed a reply ALWAYS produces one — including when the source
+    /// never emits.</b> The observable below is a LIVE workspace stream (deliberately no
+    /// <c>Take(1)</c>: every change ships to the consumer), so its only terminal signals are a
+    /// fault — handled by the <c>Catch</c> — and COMPLETION. And completion-without-a-value is
+    /// not hypothetical: <see cref="SynchronizationStream{TStream}.Dispose"/> completes its
+    /// store <em>without</em> publishing anything when the owning hub's data plane is torn down
+    /// before the initial state landed, and a reduced stream built over an already-disposed
+    /// parent completes on its very first subscribe. The old
+    /// <c>.Subscribe(response =&gt; hub.Post(...))</c> had no completion arm, so that terminal
+    /// signal was discarded: the delivery was marked <c>Processed</c>, the subscription died
+    /// silently with the hub, and the caller's callback sat registered for its entire budget.
+    /// That is #1362 — <c>GetMeshNode('ACME/ProductLaunch') timed out after 60.0s … the owning
+    /// per-node hub never answered</c>, whose trace shows <c>HANDLER_ENTER</c> /
+    /// <c>HANDLER_EXIT state=Processed</c> and then 53 s of nothing, with four
+    /// <c>[SYNC_STREAM] Not setting … — stream is disposed</c> warnings 30 ms after the
+    /// handler exited.</para>
+    ///
+    /// <para>Both silent arms now answer exactly once: an empty completion, and this hub being
+    /// disposed with nothing emitted yet (the subscription is <c>RegisterForDisposal</c>'d, so
+    /// teardown can dispose it before the completion is delivered). The answer is a transient
+    /// <see cref="ErrorType.ShuttingDown"/> NACK — the same classification routing already mints
+    /// for a delivery that raced a hub's disposal, which <c>MeshNodeStreamExtensions.GetMeshNode</c>
+    /// re-probes ONCE against a fresh activation and <c>MeshNodeStreamCache</c> rides out. NOT a
+    /// timeout and NOT a default-empty <c>GetDataResponse</c>: "the owner went away, ask again" and
+    /// "the node does not exist" are different facts, and collapsing them is what made the failure
+    /// name the wrong thing. Mirrors <see cref="RegisterOwnerDisposingNack"/>, which closed the
+    /// identical hole on the WRITE path (<c>PatchDataRequest</c>).</para>
+    /// </summary>
     private static IMessageDelivery HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request)
     {
+        // ONE request, ONE answer — enforced by a single CAS'd state rather than two flags, so a
+        // disposal landing concurrently with an emission can never produce both a response and a
+        // NACK (the "two failure answers, one request" class).
+        //   0 = nothing shipped yet · 1 = a GetDataResponse was posted · 2 = a silent terminal
+        //       was NACKed.
+        var state = 0;
+        bool TryClaimSilentTerminal() => Interlocked.CompareExchange(ref state, 2, 0) == 0;
+
         var subscription = RunReadValidators(hub, request.Message.Reference)
             .SelectMany(validationResult =>
             {
@@ -1760,10 +1800,101 @@ public static class DataExtensions
             })
             .Catch<GetDataResponse, Exception>(ex =>
                 Observable.Return(new GetDataResponse(null, 0) { Error = ex.Message }))
-            .Subscribe(response => hub.Post(response, o => o.ResponseFor(request)));
+            .Subscribe(
+                response =>
+                {
+                    // Claim on the FIRST emission; later emissions of this live stream leave the
+                    // state at 1 and keep shipping, exactly as before.
+                    Interlocked.CompareExchange(ref state, 1, 0);
+                    hub.Post(response, o => o.ResponseFor(request));
+                },
+                () =>
+                {
+                    if (TryClaimSilentTerminal())
+                        NackSilentRead(hub, request,
+                            "the data stream for this reference completed without ever producing a value — "
+                            + "its owner is shutting down (the stream was disposed before the initial state "
+                            + "landed). Retry against the fresh activation.");
+                });
 
-        hub.RegisterForDisposal(subscription);
+        // Second arm, folded into the SAME single registration the subscription already needed
+        // (one disposable per read, exactly as before — never two): teardown can dispose the
+        // subscription BEFORE the stream's completion reaches it, in which case no completion is
+        // ever delivered and the caller is owed the same answer. Disposal runs in the ShutDown
+        // phase, where this hub's own Post is gated closed — NackSilentRead falls back to the
+        // parent, exactly as RegisterOwnerDisposingNack does.
+        hub.RegisterForDisposal(Disposable.Create(() =>
+        {
+            subscription.Dispose();
+            if (TryClaimSilentTerminal())
+                NackSilentRead(hub, request,
+                    "the owning hub was disposed while this read was still outstanding — it is "
+                    + "shutting down and never produced a value. Retry against the fresh activation.");
+        }));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Posts the once-only transient NACK for a <see cref="GetDataRequest"/> whose source went
+    /// silent (see <see cref="HandleGetDataRequest"/>).
+    ///
+    /// <para>🚨 The MESSAGE TEXT is contract, the same way
+    /// <c>MessageService.NackThroughParent</c>'s is. It MUST carry a marker
+    /// <c>MeshNodeStreamCache.IsTransientOwnerFailure</c> matches — "shutting down" — so
+    /// long-lived stream consumers ride it out instead of tearing down, and it MUST NOT contain
+    /// "No node found", which would turn a retryable stall into a provable absence.</para>
+    ///
+    /// <para>Posts through this hub while it can still post, and through the PARENT once
+    /// <c>RunLevel &gt;= DisposeHostedHubs</c> closes its own gate — response correlation rides
+    /// <c>ResponseFor</c>'s RequestId, never the posting hub's identity. During a whole-mesh
+    /// teardown the parent is past that mark too, the post is skipped, and nobody is waiting.</para>
+    /// </summary>
+    private static void NackSilentRead(
+        IMessageHub hub, IMessageDelivery<GetDataRequest> request, string reason)
+    {
+        var message =
+            $"GetDataRequest({request.Message.Reference}) at '{hub.Address}': {reason}";
+        // 🚨 Everything here runs on a teardown path, where this hub's ServiceProvider may
+        // already be gone — resolving a logger can itself throw ObjectDisposedException. Logging
+        // must never mask (or replace) the NACK it is reporting, so it gets its own guard and the
+        // post below happens regardless. Same rule as GetMeshNode's timeout diagnostics.
+        try
+        {
+            hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Data.GetDataRequest")
+                ?.LogWarning("{Message}", message);
+        }
+        catch
+        {
+            // Deliberate: a dead ServiceProvider must not suppress the answer the caller is owed.
+        }
+        var failure = new DeliveryFailure(request) { ErrorType = ErrorType.ShuttingDown, Message = message };
+        try
+        {
+            if (hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                hub.Post(failure, o => o.ResponseFor(request));
+                return;
+            }
+            var parent = hub.Configuration.ParentHub;
+            if (parent is not null && parent.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+                parent.Post(failure, o => o.ResponseFor(request));
+        }
+        catch (Exception ex)
+        {
+            // The post itself failed — nothing else can carry the answer, so record why. Guarded
+            // for the same reason as above.
+            try
+            {
+                hub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger("MeshWeaver.Data.GetDataRequest")
+                    ?.LogDebug(ex, "Failed to NACK a silent GetDataRequest at {Address}", hub.Address);
+            }
+            catch
+            {
+                // As above.
+            }
+        }
     }
 
     /// <summary>
