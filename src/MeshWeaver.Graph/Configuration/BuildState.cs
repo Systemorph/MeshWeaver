@@ -36,8 +36,18 @@ public enum BuildStatus
 /// <see cref="BuildState.ClaimedByIdentity"/> when it grants, which is what lets a later takeover
 /// decision ask membership instead of a clock.
 /// </param>
+/// <param name="Priority">
+/// Election precedence — HIGHER wins before any timestamp is compared (#1424). A dedicated bake
+/// process registers at <see cref="BakePriority"/> so it beats every serving pod whenever both
+/// are candidates; serving pods register at the default 0 and thereby stand down exactly when a
+/// dedicated builder is present, while remaining the fallback when none is.
+/// </param>
 public sealed record BuildClaimRequest(
-    string FrameworkVersion, DateTime RequestedAt, string? ClusterIdentity = null);
+    string FrameworkVersion, DateTime RequestedAt, string? ClusterIdentity = null, int Priority = 0)
+{
+    /// <summary>The election precedence a dedicated bake process registers with.</summary>
+    public const int BakePriority = 1;
+}
 
 /// <summary>
 /// One completed build — the GO record for a framework fingerprint, kept as history on the root's

@@ -21,7 +21,19 @@ public enum OperationType
     /// <summary><c>copy</c>.</summary>
     Copy,
     /// <summary><c>test</c>.</summary>
-    Test
+    Test,
+    /// <summary>
+    /// <c>splice</c> — MeshWeaver's ONE extension beyond RFC 6902. Replaces a string leaf by
+    /// carrying only the changed span plus a fingerprint of the text it was computed against, so a
+    /// field that grows one chunk at a time (a streaming agent response) costs <c>O(chunk)</c> per
+    /// frame instead of <c>O(length)</c> per frame per subscriber.
+    ///
+    /// <para>🚨 It is emitted ONLY to a subscriber that asked for it
+    /// (<c>SubscribeRequest.AcceptsStringSplice</c>) — see that property for why the fan-out must
+    /// negotiate where the write path could simply announce. Every consumer that has not opted in
+    /// keeps receiving a plain <see cref="Replace"/> with the whole value, byte for byte.</para>
+    /// </summary>
+    Splice
 }
 
 /// <summary>Reads/writes <see cref="OperationType"/> as its lowercase RFC 6902 verb.</summary>
@@ -40,6 +52,7 @@ public sealed class OperationTypeJsonConverter : JsonConverter<OperationType>
         "move" => OperationType.Move,
         "copy" => OperationType.Copy,
         "test" => OperationType.Test,
+        "splice" => OperationType.Splice,
         _ => OperationType.Unknown
     };
 
@@ -52,6 +65,7 @@ public sealed class OperationTypeJsonConverter : JsonConverter<OperationType>
         OperationType.Move => "move",
         OperationType.Copy => "copy",
         OperationType.Test => "test",
+        OperationType.Splice => "splice",
         _ => "unknown"
     };
 
@@ -113,6 +127,15 @@ public sealed class PatchOperation : IEquatable<PatchOperation>
     /// <summary>Creates a <c>test</c> operation.</summary>
     public static PatchOperation Test(JsonPointer path, JsonNode? value)
         => new(OperationType.Test, JsonPointer.Empty, path, value);
+
+    /// <summary>
+    /// Creates a <c>splice</c> operation — see <see cref="OperationType.Splice"/>. The
+    /// <paramref name="value"/> is the encoded splice + base fingerprint; the codec that builds and
+    /// reads it lives with the rest of the string-splice machinery in <c>MeshWeaver.Data</c>, so this
+    /// type stays a pure wire shape and knows nothing about the encoding.
+    /// </summary>
+    public static PatchOperation Splice(JsonPointer path, JsonNode? value)
+        => new(OperationType.Splice, JsonPointer.Empty, path, value);
 
     /// <inheritdoc />
     public bool Equals(PatchOperation? other) =>
@@ -207,6 +230,9 @@ public sealed class PatchOperationJsonConverter : JsonConverter<PatchOperation>
             case OperationType.Test:
                 if (!hasValue) throw new JsonException("`test` operation requires `value`");
                 return PatchOperation.Test(path.Value, value);
+            case OperationType.Splice:
+                if (!hasValue) throw new JsonException("`splice` operation requires `value`");
+                return PatchOperation.Splice(path.Value, value);
             default:
                 throw new JsonException($"Unknown JSON Patch operation `{op}`");
         }
@@ -233,6 +259,7 @@ public sealed class PatchOperationJsonConverter : JsonConverter<PatchOperation>
             case OperationType.Add:
             case OperationType.Replace:
             case OperationType.Test:
+            case OperationType.Splice:
                 writer.WritePropertyName("value"u8);
                 if (value.Value is null) writer.WriteNullValue();
                 else value.Value.WriteTo(writer, options);

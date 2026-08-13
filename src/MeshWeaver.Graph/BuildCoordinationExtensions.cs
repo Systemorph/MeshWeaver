@@ -70,7 +70,7 @@ public static class BuildCoordinationExtensions
     /// <returns>Cold observable emitting the node after the registration write.</returns>
     public static IObservable<MeshNode> RequestBuildClaim(
         this IMessageHub hub, string holder, string frameworkVersion,
-        string path = BuildNodeType.RootPath)
+        string path = BuildNodeType.RootPath, int priority = 0)
     {
         var identity = hub.ServiceProvider.GetService<IClusterMembership>()?.LocalIdentity;
         return hub.EnsureBuildNode(path)
@@ -87,7 +87,7 @@ public static class BuildCoordinationExtensions
                         RequestedClaims = (state.RequestedClaims
                             ?? ImmutableDictionary<string, BuildClaimRequest>.Empty)
                             .SetItem(holder, new BuildClaimRequest(
-                                frameworkVersion, DateTime.UtcNow, identity)),
+                                frameworkVersion, DateTime.UtcNow, identity, priority)),
                     }
                 };
             }));

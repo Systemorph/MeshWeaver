@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using MeshWeaver.Json;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -149,6 +151,100 @@ public static class PatchStringSplice
         live ??= string.Empty;
         return live.Length == length
                && string.Equals(Fingerprint(live), fingerprint, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same splice, in the shape the OWNER→SUBSCRIBER fan-out needs: one object carrying BOTH
+    /// markers, since an RFC 6902 operation has a single <c>value</c> slot and no sibling
+    /// <c>BaseValues</c> document to put the fingerprint in.
+    ///
+    /// <para>Shape: <c>{ "$sd": [start, removed, "inserted"], "$sdb": [baseLength, "fingerprint"] }</c>
+    /// — carried as the <c>value</c> of a <see cref="OperationType.Splice"/> operation. Same markers
+    /// as the write path on purpose: one shape, one meaning.</para>
+    /// </summary>
+    public static bool TryEncodeOperation(string? baseValue, string? newValue, out JsonObject? encoded)
+    {
+        encoded = null;
+        if (!TryEncode(baseValue, newValue, out var splice) || splice is null)
+            return false;
+        // The fingerprint is a fixed ~40 bytes, so the size check TryEncode already made still holds
+        // with room to spare for anything at or above MinSpliceLength (1 kB).
+        encoded = new JsonObject
+        {
+            [Marker] = splice[Marker]!.DeepClone(),
+            [BaseMarker] = EncodeBase(baseValue)[BaseMarker]!.DeepClone(),
+        };
+        return true;
+    }
+
+    /// <summary>
+    /// Reads the combined shape written by <see cref="TryEncodeOperation"/>. Deliberately strict —
+    /// exactly the two markers, exactly their expected payloads — so an ordinary content object can
+    /// never be mistaken for one.
+    /// </summary>
+    public static bool TryDecodeOperation(
+        JsonNode? node, out StringDelta delta, out int baseLength, out string fingerprint)
+    {
+        delta = default;
+        baseLength = 0;
+        fingerprint = string.Empty;
+        if (node is not JsonObject obj || obj.Count != 2)
+            return false;
+        if (!obj.TryGetPropertyValue(Marker, out var spliceNode)
+            || !obj.TryGetPropertyValue(BaseMarker, out var baseNode))
+            return false;
+        return TryDecode(new JsonObject { [Marker] = spliceNode?.DeepClone() }, out delta)
+               && TryDecodeBase(
+                   new JsonObject { [BaseMarker] = baseNode?.DeepClone() }, out baseLength, out fingerprint);
+    }
+
+    /// <summary>
+    /// Rewrites every <c>replace</c> of a big string leaf in <paramref name="patch"/> as a
+    /// <see cref="OperationType.Splice"/>, using <paramref name="basis"/> — the producer's OWN cached
+    /// JSON for this subscription, which IS the document the subscriber currently holds — as the base.
+    /// Anything else in the patch is passed through untouched, and a leaf whose base is not a string,
+    /// is absent, or would not shrink is left as the plain <c>replace</c> it already was.
+    ///
+    /// <para>Diffing against the producer's applied cache rather than against the update's
+    /// <c>OldValue</c> is what makes the fingerprint check on the far side a formality rather than a
+    /// gamble: the two ends are kept in lockstep by the frame chain (<c>BasedOnVersion</c>), which
+    /// resyncs BEFORE applying whenever a frame was lost. So a mismatch means genuine divergence, and
+    /// the subscriber's only sound reaction — a fresh snapshot — is exactly what it already does for
+    /// a stale patch.</para>
+    ///
+    /// <para>🚨 Called ONLY for a subscriber that set <c>SubscribeRequest.AcceptsStringSplice</c>.
+    /// Every other subscriber gets <paramref name="patch"/> unmodified, byte for byte.</para>
+    /// </summary>
+    public static JsonPatch Compress(JsonPatch patch, JsonElement basis)
+    {
+        List<PatchOperation>? rewritten = null;
+        for (var i = 0; i < patch.Operations.Count; i++)
+        {
+            var op = patch.Operations[i];
+            var spliced = TryCompressOperation(op, basis);
+            if (spliced is null)
+            {
+                rewritten?.Add(op);
+                continue;
+            }
+            rewritten ??= [.. patch.Operations.Take(i)];
+            rewritten.Add(spliced);
+        }
+        return rewritten is null ? patch : new JsonPatch(rewritten);
+    }
+
+    private static PatchOperation? TryCompressOperation(PatchOperation op, JsonElement basis)
+    {
+        if (op.Op != OperationType.Replace
+            || op.Value is not JsonValue newNode
+            || !newNode.TryGetValue<string>(out var newValue)
+            || newValue.Length < MinSpliceLength)
+            return null;
+        if (op.Path.Evaluate(basis) is not { ValueKind: JsonValueKind.String } baseElement)
+            return null;
+        return TryEncodeOperation(baseElement.GetString(), newValue, out var encoded) && encoded is not null
+            ? PatchOperation.Splice(op.Path, encoded)
+            : null;
     }
 
     /// <summary>Stable content fingerprint of a string (truncated SHA-256 over its UTF-16 bytes).</summary>
