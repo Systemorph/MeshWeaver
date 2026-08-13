@@ -536,10 +536,10 @@ internal static class NodeTypeBatchBake
                 if (error is SourceDiscoveryUnavailableException)
                     return new PreWarmOutcome(typePath, PreWarmStatus.TimedOut, error.Message);
 
-                // Same classification the activation path applies (ClassifyCompileFailure): a
-                // type that DECLARES source queries whose resolution is EXPLICITLY empty is
-                // broken by CONTENT (its sources were deleted from the mesh) — NoSources, which
-                // must never gate a rollout.
+                // Same classification the activation path applies
+                // (DynamicTypePreWarmer.ClassifyCompileFailure): a compile whose source set
+                // resolved EMPTY is broken by CONTENT (its sources were deleted from the mesh) —
+                // NoSources, which must never gate a rollout.
                 //
                 // 🚨 BOTH witnesses are required (#1216). The batch's own resolved snapshot alone is
                 // NOT sufficient authority: when discovery is starved or truncated it also reports
@@ -548,10 +548,24 @@ internal static class NodeTypeBatchBake
                 // The type's persisted CurrentSourceVersions is the independent corroboration, and
                 // ResolveSources already refuses to produce a set at all when it is missing; this
                 // check keeps the classification honest even if a future caller bypasses that.
+                //
+                // 🚨 What is NOT required — and its removal is the fix for #1391 — is that the type
+                // DECLARE its source queries. An empty NodeTypeDefinition.Sources means "uses the
+                // DEFAULT {path}/Source query", which is how nearly every NodeType is authored, so
+                // demanding declared queries made NoSources unreachable for almost the whole
+                // population and turned every deleted-source type into a gating image verdict.
+                //
+                // 🚨 What REPLACES it is LastCompileSucceededAt: the sources must have been LOST,
+                // not merely absent. A type that never built cannot have lost anything — its empty
+                // snapshot is its normal state and a failure is a defect in its own Configuration,
+                // which must keep gating (and must keep cascading UpstreamFailed to its dependents).
+                // See ClassifyCompileFailure for the full reasoning; the two paths must agree,
+                // because the status vocabulary may not depend on WHICH driver ran the compile.
                 var def = typeNode.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions);
-                var status = def?.Sources is { Count: > 0 }
+                var status = def is not null
                         && sources.Count == 0
                         && def.CurrentSourceVersions is { Count: 0 }
+                        && def.LastCompileSucceededAt is not null
                     ? PreWarmStatus.NoSources
                     : PreWarmStatus.CompileError;
                 return new PreWarmOutcome(

@@ -54,11 +54,20 @@ public enum PreWarmStatus
     /// </summary>
     UpstreamUnevaluated,
     /// <summary>
-    /// The compile settled at Error AND the type's declared source queries currently match ZERO
-    /// Code nodes (<see cref="NodeTypeDefinition.CurrentSourceVersions"/> is EXPLICITLY empty) —
-    /// the sources were deleted or moved out from under the type. This is a CONTENT verdict, not
-    /// an image verdict: which nodes a mesh query matches is a property of the mesh, not of the
-    /// framework being rolled out, so no image caused it and no rollout can fix it.
+    /// The compile settled at Error AND the type's source queries currently match ZERO Code nodes
+    /// (<see cref="NodeTypeDefinition.CurrentSourceVersions"/> is EXPLICITLY empty) — the sources
+    /// were deleted or moved out from under the type. This is a CONTENT verdict, not an image
+    /// verdict: which nodes a mesh query matches is a property of the mesh, not of the framework
+    /// being rolled out, so no image caused it and no rollout can fix it.
+    ///
+    /// <para>🚨 "Source queries" here means the type's EFFECTIVE queries — the ones it DECLARES in
+    /// <see cref="NodeTypeDefinition.Sources"/> or, far more commonly, the DEFAULT
+    /// <c>namespace:{path}/Source scope:subtree</c> pair it gets when it declares none. The
+    /// classifier used to additionally require declared queries, which made this member
+    /// unreachable for nearly every NodeType in a real mesh and is what let a DELETED type gate
+    /// readiness on every boot (#1391). Do not reintroduce that condition: an empty
+    /// <see cref="NodeTypeDefinition.Sources"/> means "uses the defaults", not
+    /// "configuration-only".</para>
     ///
     /// <para>🚨 This member exists because on 2026-08-10 four such types (KmuBasics/* — their
     /// Source subtrees removed when the course was re-installed under a new id, the type nodes
@@ -784,16 +793,87 @@ public static class DynamicTypePreWarmer
         succeeded is { } s && (baseline is not { } b || s > b);
 
     /// <summary>
-    /// Classify a compile that settled at Error. A type that DECLARES source queries whose live
-    /// snapshot (<see cref="NodeTypeDefinition.CurrentSourceVersions"/>, maintained by the
-    /// per-NodeType sources watcher) is EXPLICITLY empty is broken by CONTENT — its sources were
-    /// deleted from the mesh — and reports <see cref="PreWarmStatus.NoSources"/>; see that member
-    /// for why it must not gate a rollout. Anything else is
-    /// <see cref="PreWarmStatus.CompileError"/>: in particular a NULL snapshot (watcher never
-    /// seeded) stays a gating compile error, so a real regression cannot hide behind "not seeded".
+    /// Classify a compile that settled at Error. The discriminator is one sentence:
+    /// <b>"no sources matched" is not the same as "sources matched and did not compile."</b> The
+    /// first is a CONTENT fact and must not gate readiness; the second is a verdict about this
+    /// image and must.
+    ///
+    /// <para>The evidence is the live snapshot
+    /// (<see cref="NodeTypeDefinition.CurrentSourceVersions"/>, maintained by the per-NodeType
+    /// sources watcher over the type's resolved source set). EXPLICITLY empty ⇒
+    /// <see cref="PreWarmStatus.NoSources"/>; see that member for why it must not gate. Anything
+    /// else is <see cref="PreWarmStatus.CompileError"/> — in particular a NULL snapshot (watcher
+    /// never seeded) stays gating, so a real regression cannot hide behind "not seeded".</para>
+    ///
+    /// <para>🚨 It deliberately does NOT also require <c>d.Sources is { Count: &gt; 0 }</c>, and
+    /// that removal is the fix for issue #1391. An empty <see cref="NodeTypeDefinition.Sources"/>
+    /// does not mean "configuration-only" — it means <b>"uses the DEFAULT queries"</b>
+    /// (<c>namespace:{path}/Source scope:subtree</c>, see
+    /// <see cref="Graph.Configuration.CodeQueryResolver.DefaultSources"/>), which is how very
+    /// nearly every NodeType in a real mesh is authored. Requiring declared queries therefore made
+    /// <see cref="PreWarmStatus.NoSources"/> unreachable for almost the entire population: a type
+    /// whose <c>Source/</c> subtree had been DELETED was compiled against nothing, its
+    /// configuration lambda's resulting <c>CS0246</c>/<c>CS1061</c> were recorded as an image
+    /// verdict, and a node that no longer exists held portal readiness hostage on every pod boot.
+    /// That is exactly what <c>Edu/Course</c> was doing to <c>memex</c>.</para>
+    ///
+    /// <para>This restores the three-outcome contract <see cref="Graph.Configuration.SourceSnapshot"/>
+    /// already documents — an established-but-EMPTY snapshot is a content fact "(the sources were
+    /// deleted, or the type is configuration-only)" and classifies as <c>NoSources</c> — from which
+    /// the extra conjunct had silently drifted. A genuinely configuration-only type is folded in on
+    /// purpose: with no Code nodes at all there is nothing for an image to regress, so a failure in
+    /// its configuration lambda is content drift for its owner to fix, not a reason to stall
+    /// everyone else's rollout.</para>
+    ///
+    /// <para>🚨 An empty snapshot is NOT sufficient on its own, and the second witness —
+    /// <see cref="NodeTypeDefinition.LastCompileSucceededAt"/> — is what keeps the gate intact.
+    /// Two very different types both present an empty snapshot:</para>
+    /// <list type="bullet">
+    ///   <item><b>Sources were DELETED</b> (<c>Edu/Course</c>): the type built successfully at some
+    ///   point, so its sources demonstrably existed then, and their absence now is a content
+    ///   change. Content verdict — must not gate.</item>
+    ///   <item><b>Never had sources, and its own <c>Configuration</c> is broken</b>: nothing was
+    ///   deleted; the type is defective as authored. That is a real defect and MUST gate — it is
+    ///   what <c>DynamicTypePreWarmerTest</c>'s broken fixtures
+    ///   (<c>Configuration = "config =&gt; this is not valid C# at all (("</c>, no sources) pin, and
+    ///   reclassifying it also downgraded its dependents' cascade from the gating
+    ///   <see cref="PreWarmStatus.UpstreamFailed"/> to the non-gating
+    ///   <see cref="PreWarmStatus.UpstreamContentBroken"/>.</item>
+    /// </list>
+    /// <para>"It once produced a working build" is the durable evidence that separates them, and it
+    /// survives a failure — <c>ApplyCompileFailure</c> clears <c>CompiledSources</c> but never
+    /// <c>LastCompileSucceededAt</c>. A type that has NEVER built cannot have lost anything.</para>
+    ///
+    /// <para>🚨 THREE shapes of <see cref="NodeTypeDefinition.CurrentSourceVersions"/> exist in
+    /// production, not two — populated, explicitly <c>{}</c>, and ABSENT (SQL NULL; observed on
+    /// <c>public.mesh_nodes</c> rows). Only the middle one may reclassify. The pattern
+    /// <c>is { Count: 0 }</c> gets this right BY CONSTRUCTION — a C# property pattern never matches
+    /// null — so absent falls through to <see cref="PreWarmStatus.CompileError"/> and gates. Do not
+    /// "simplify" it to <c>d.CurrentSourceVersions?.Count == 0</c> or a bare <c>.Count == 0</c>:
+    /// the first is equivalent but easy to misread, the second throws. Pinned by
+    /// <c>ClassifyCompileFailure_DefaultQueriesWithNullSnapshot_StaysCompileError</c>.</para>
+    ///
+    /// <para><b>Why not <see cref="NodeTypeDefinition.CompiledSources"/></b>, which would be the
+    /// more precise evidence ("the last successful build CONSUMED sources"): it is written only on
+    /// SUCCESS, and <c>ApplyCompileFailure</c> nulls it. Every currently-failing type in production
+    /// therefore lacks it — including the three that demonstrably compiled in June — so it carries
+    /// no history at all. A new field stamped on success would be no better: it could only populate
+    /// after a future successful compile, which is precisely what a source-less type can no longer
+    /// do.</para>
+    ///
+    /// <para>The one case this deliberately concedes: a genuinely configuration-only type that once
+    /// built and is later broken by an IMAGE change reads as content-broken and does not gate.
+    /// Accepted knowingly — it is far rarer than the population the old rule broke (every
+    /// default-query type with deleted sources, gating forever), and no such type appears in the
+    /// observed failures on either portal.</para>
+    ///
+    /// <para>🚨 What this must NEVER become is "compile errors stop gating". The gate is right; only
+    /// the classification was wrong. A type whose sources are still there and do not compile keeps
+    /// a non-empty snapshot and keeps gating — pinned by
+    /// <c>ClassifyCompileFailure_MatchedSources_StaysCompileError</c>.</para>
     /// </summary>
     public static PreWarmStatus ClassifyCompileFailure(NodeTypeDefinition d) =>
-        d.Sources is { Count: > 0 } && d.CurrentSourceVersions is { Count: 0 }
+        d.CurrentSourceVersions is { Count: 0 } && d.LastCompileSucceededAt is not null
             ? PreWarmStatus.NoSources
             : PreWarmStatus.CompileError;
 
