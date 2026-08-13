@@ -58,8 +58,19 @@ data:
   #       gate: a namespace probing /alive or /healthz ignores it entirely.
   #    3. strategy.maxUnavailable: 0 — the gate works by making the NEW pod refuse
   #       readiness, which protects nothing if the serving pod was already deleted.
+  # PreWarm__AllowUnprovenBake: the escape hatch for the one condition that is NOT a verdict —
+  #   the sweep ERRORED (enumeration threw or timed out) and so verified nothing. That refuses
+  #   readiness by default, because a gate that certifies "I verified nothing" is worse than no
+  #   gate: it was the retired pre-run bake Job's Bake__AllowEmpty guard ("FINDING NOTHING IS NOT
+  #   PASSING", exit 3), lost when #1357 retired the Job and now enforced on the surviving path.
+  #   Set true only to roll forward despite an environment that cannot answer the enumeration,
+  #   accepting lazy compilation — never to quiet a recurring fault, which is a defect to find.
+  #   It can NEVER waive a real regression, and /health keeps reporting the bake as unproven.
+  #   ⚠️ Note "empty" is NOT "unproven": a mesh that genuinely has no dynamic NodeTypes enumerates
+  #   successfully, completes, and serves. Only the inability to obtain an answer gates.
   PreWarm__DynamicTypes: "{{ .Values.config.memex_portal.PreWarm__DynamicTypes }}"
   PreWarm__GateReadiness: "{{ .Values.config.memex_portal.PreWarm__GateReadiness }}"
+  PreWarm__AllowUnprovenBake: "{{ .Values.config.memex_portal.PreWarm__AllowUnprovenBake }}"
   # ---- Assembly-cache retention -------------------------------------------
   # The bake writes one WHOLE GENERATION of NodeType assemblies per image, because the store
   # keys every file by the MeshWeaver.Graph MVID and a CI build changes it on every publish.

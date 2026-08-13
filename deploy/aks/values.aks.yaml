@@ -175,6 +175,13 @@ config:
     # advancing, so a stalled roll must be investigated, not waited out.
     PreWarm__DynamicTypes: "true"
     PreWarm__GateReadiness: "true"
+    # A sweep that ERRORED verified nothing, so it refuses readiness like a regression does —
+    # the guard the retired pre-run bake Job enforced from outside ("FINDING NOTHING IS NOT
+    # PASSING"), restored on the surviving path. Note "empty" is NOT "unproven": a mesh with no
+    # dynamic NodeTypes enumerates fine and serves. Flip to "true" ONLY to roll forward past an
+    # environment that cannot answer the enumeration, accepting lazy compilation; it can never
+    # waive a real regression, and /health keeps reporting the bake as unproven.
+    PreWarm__AllowUnprovenBake: "false"
     # ---- Assembly-cache retention ------------------------------------------
     # Every roll above writes a WHOLE NEW GENERATION of NodeType assemblies into
     # /data/assembly-cache (the framework MVID changes per image, by design), and
