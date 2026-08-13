@@ -253,6 +253,23 @@ data:
   Authentication__Apple__TeamId: "{{ .Values.config.memex_portal.Authentication__Apple__TeamId | default "" }}"
   Authentication__Apple__KeyId: "{{ .Values.config.memex_portal.Authentication__Apple__KeyId | default "" }}"
   Social__LinkedIn__ClientId: "{{ .Values.config.memex_portal.Social__LinkedIn__ClientId | default "" }}"
+  # ---- GitHub App identity (the MACHINE credential, not the sign-in OAuth app) ----
+  # GitHub__OAuth__* above signs USERS in. This is the separate GitHub APP whose installation
+  # token every SERVER-SIDE GitHub read uses: the store's package feed (StoreManifestSource),
+  # the Store card's Provision → Import phase (UpdateToLatestFromGitHub), module discovery and
+  # _GitSync. The PEM key is the secret half, in secrets.yaml / the Key Vault CSI mount.
+  #
+  # These were un-templated, so an env overlay that set them was SILENTLY DROPPED and the only
+  # way to wire them was a hand-applied `kubectl set env` that no redeploy reproduces — and that
+  # a `helm upgrade` then reverts. Same defect the plugin-catalog keys below carried, with a
+  # nastier symptom: a missing App identity does not error, it makes every GitHub read fall back
+  # to ANONYMOUS, and anonymous against a PRIVATE repo is a 404 — which renders as an EMPTY
+  # STORE. atioz sat exactly there (private Systemorph/MeshWeaver.Plugins, no App identity):
+  # zero catalog entries, and every Provision click failing at the Import phase, leaving a
+  # content-less stub root behind.
+  GitHub__App__ClientId: "{{ .Values.config.memex_portal.GitHub__App__ClientId | default "" }}"
+  GitHub__App__InstallationOwner: "{{ .Values.config.memex_portal.GitHub__App__InstallationOwner | default "" }}"
+  GitHub__App__InstallationId: "{{ .Values.config.memex_portal.GitHub__App__InstallationId | default "" }}"
   # ---- Onboarding: invitation-only gate (first user always bootstraps) ------
   Features__Onboarding__InvitationOnly: "{{ .Values.config.memex_portal.Features__Onboarding__InvitationOnly | default "false" }}"
   # One-shot first-admin bootstrap secret. Empty = endpoint disabled. Set it, POST
