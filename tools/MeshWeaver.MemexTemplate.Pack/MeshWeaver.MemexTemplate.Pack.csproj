@@ -19,19 +19,34 @@
     <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</RepoRoot>
     <TemplateRoot>$(RepoRoot)\dist\templates\</TemplateRoot>
     <GeneratorScript>$(MSBuildThisFileDirectory)..\generate-memex-template.cs</GeneratorScript>
+
+    <!-- 🚨 The template payload is GENERATED (dist/templates does not exist on a clean checkout),
+         so it must enter the package through the TargetsForTfmSpecificContentInPackage extension
+         point, whose target runs — and evaluates its ItemGroup — during pack, AFTER generation.
+         A static <Content> item with a BeforeTargets="Pack" generator is evaluated at project
+         load, when the glob matches NOTHING: pack then fails NU5017 ("no dependencies nor
+         content") on every clean machine, which is exactly how the v3.0.0-rc1 release run went
+         red. (BeforeTargets="Pack" is also too late: GenerateNuspec is a DEPENDENCY of Pack, so
+         it collects package files before any BeforeTargets="Pack" hook fires.) -->
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);GenerateMemexTemplate</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
 
-  <Target Name="GenerateMemexTemplate" BeforeTargets="Pack">
+  <Target Name="GenerateMemexTemplate">
     <Message Text="Regenerating Memex template (v$(Version)) from memex/ source..." Importance="high" />
     <Exec Command="dotnet run &quot;$(GeneratorScript)&quot; -- &quot;$(Version)&quot; &quot;$(RepoRoot)&quot;"
           WorkingDirectory="$(RepoRoot)" />
+    <ItemGroup>
+      <_MemexTemplateFile Include="$(TemplateRoot)**\*"
+                          Exclude="$(TemplateRoot)**\bin\**;$(TemplateRoot)**\obj\**" />
+      <TfmSpecificPackageFile Include="@(_MemexTemplateFile)"
+                              PackagePath="content\%(_MemexTemplateFile.RecursiveDir)%(_MemexTemplateFile.Filename)%(_MemexTemplateFile.Extension)" />
+    </ItemGroup>
+    <Error Condition="'@(_MemexTemplateFile)' == ''"
+           Text="Template generation produced no files under $(TemplateRoot) — the package would be empty." />
   </Target>
 
   <ItemGroup>
     <None Remove="README.md" />
-    <Content Include="$(TemplateRoot)**\*"
-             Exclude="$(TemplateRoot)**\bin\**;$(TemplateRoot)**\obj\**"
-             PackagePath="content" />
   </ItemGroup>
 
 </Project>

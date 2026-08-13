@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <Description>Cross-instance synchronization for MeshWeaver portals: OAuth-paired portals exchanging partition content.</Description>
     <ProjectGuid>{a2e5d7c9-4f1b-4a8e-9c3d-7b6a0e2f8d15}</ProjectGuid>
   </PropertyGroup>
 

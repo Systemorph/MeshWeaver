@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <Description>Azure Blob Storage package cache for MeshWeaver's in-process NuGet resolver.</Description>
     <RootNamespace>MeshWeaver.NuGet.AzureBlob</RootNamespace>
   </PropertyGroup>
 
