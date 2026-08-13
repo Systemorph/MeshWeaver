@@ -597,9 +597,23 @@ public class NodeTypeBakeGateStateTest
         state.Regressions.Keys.Should().Equal("Broken/Type");
     }
 
+    // =============================================================================================
+    // ClassifyCompileFailure — "no sources matched" is NOT "sources matched and did not compile".
+    //
+    // The first is a CONTENT fact and must not gate readiness; the second is a verdict about this
+    // image and must. The ONLY evidence is CurrentSourceVersions: explicitly empty ⇒ NoSources,
+    // anything else ⇒ CompileError.
+    //
+    // 🚨 The classifier used to ALSO require d.Sources is { Count: > 0 }. That is issue #1391: an
+    // empty Sources does not mean "configuration-only", it means "uses the DEFAULT {path}/Source
+    // query" — how nearly every NodeType in a real mesh is authored — so NoSources was unreachable
+    // for almost the entire population and a DELETED type gated readiness forever. This block is
+    // the boundary; none of it may be relaxed into "compile errors stop gating".
+    // =============================================================================================
+
     /// <summary>
-    /// The classifier that feeds the buckets above: declared source queries + an EXPLICITLY empty
-    /// live snapshot = the sources are gone = <see cref="PreWarmStatus.NoSources"/>.
+    /// Declared source queries + an EXPLICITLY empty live snapshot = the sources are gone =
+    /// <see cref="PreWarmStatus.NoSources"/>.
     /// </summary>
     [Fact]
     public void ClassifyCompileFailure_DeclaredSourcesWithEmptySnapshot_IsNoSources() =>
@@ -631,15 +645,99 @@ public class NodeTypeBakeGateStateTest
         }).Should().Be(PreWarmStatus.CompileError);
 
     /// <summary>
-    /// A type that declares NO source queries compiles from its Configuration alone — an empty
-    /// snapshot is its normal state, so a failure is a verdict about this image and gates.
+    /// 🚨 #1391, and the reason the extra <c>Sources is { Count: &gt; 0 }</c> conjunct had to go.
+    /// This type declares no source queries, so it uses the DEFAULT <c>{path}/Source</c> subtree
+    /// query — which is how nearly every NodeType in a real mesh is authored, NOT a marker for
+    /// "configuration-only". Its <c>Source/</c> subtree was deleted, so the live snapshot is
+    /// explicitly empty and the configuration lambda no longer compiles.
+    ///
+    /// <para>This previously asserted <c>CompileError</c> on the premise that an empty
+    /// <c>Sources</c> means the type "compiles from its Configuration alone". That premise is
+    /// wrong about the domain, and the cost of it was concrete: <c>Edu/Course</c> — a node deleted
+    /// in the 2026-08-12 Edu rework — held <c>memex</c>'s portal readiness on 100% of pod boots,
+    /// reported as an image regression, with a diagnostic pointing at code that no longer
+    /// existed.</para>
     /// </summary>
     [Fact]
-    public void ClassifyCompileFailure_NoDeclaredSources_StaysCompileError() =>
+    public void ClassifyCompileFailure_DefaultQueriesWithEmptySnapshot_IsNoSources() =>
         DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
         {
             CurrentSourceVersions = new Dictionary<string, long>()
+        }).Should().Be(PreWarmStatus.NoSources);
+
+    /// <summary>
+    /// 🚨 THE REGRESSION GUARD. The fix above must never widen into "compile errors stop gating".
+    /// A type on the DEFAULT queries whose sources are still present and simply do not compile is
+    /// a verdict about this image, and it gates — exactly as it did before #1391. This is the
+    /// default-query twin of <c>ClassifyCompileFailure_MatchedSources_StaysCompileError</c>: the
+    /// two differ only in whether the queries were declared, which is now correctly irrelevant.
+    /// </summary>
+    [Fact]
+    public void ClassifyCompileFailure_DefaultQueriesWithSourcesStillPresent_StaysCompileError() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+        {
+            CurrentSourceVersions = new Dictionary<string, long> { ["P/Source/A"] = 42 }
         }).Should().Be(PreWarmStatus.CompileError);
+
+    /// <summary>
+    /// The same "not seeded is not gone" rule, on the default queries: a NULL snapshot means the
+    /// watcher never ran, so the sweep does not know, so the failure keeps gating.
+    /// </summary>
+    [Fact]
+    public void ClassifyCompileFailure_DefaultQueriesWithNullSnapshot_StaysCompileError() =>
+        DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition())
+            .Should().Be(PreWarmStatus.CompileError);
+
+    /// <summary>
+    /// End-to-end through the gate, not just the classifier: the deleted default-query type must
+    /// leave the pod READY. This is the property #1391 is actually about — the classification only
+    /// matters because of what the gate does with it.
+    /// </summary>
+    [Fact]
+    public void DeletedDefaultQueryType_DoesNotGateReadiness()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome(
+            "Edu/Course",
+            DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+            {
+                CurrentSourceVersions = new Dictionary<string, long>()
+            }),
+            "0 source nodes matched")
+        { WasHealthyBeforeBake = true });
+        state.MarkComplete("done");
+
+        state.Regressions.Should().BeEmpty(
+            "a node that no longer exists is content, not an image regression");
+        state.Phase.Should().Be(BakePhase.Complete);
+    }
+
+    /// <summary>
+    /// …and the converse, end-to-end: a default-query type whose sources are still there and break
+    /// on THIS image must still refuse readiness. Same shape as the test above, one field apart.
+    /// </summary>
+    [Fact]
+    public void BrokenDefaultQueryTypeWithLiveSources_StillGatesReadiness()
+    {
+        var state = new NodeTypeBakeGateState();
+        state.MarkRunning("go");
+        state.MarkOutcome(new PreWarmOutcome(
+            "Edu/Exercise",
+            DynamicTypePreWarmer.ClassifyCompileFailure(new NodeTypeDefinition
+            {
+                CurrentSourceVersions = new Dictionary<string, long>
+                {
+                    ["Edu/Exercise/Source/ExerciseContent"] = 42
+                }
+            }),
+            "CS0246")
+        { WasHealthyBeforeBake = true });
+        state.MarkComplete("done");
+
+        state.Regressions.Keys.Should().Equal("Edu/Exercise");
+        state.Phase.Should().Be(BakePhase.Regressed);
+    }
 
     // =============================================================================================
     // A SWEEP THAT ERRORED IS NOT A SWEEP THAT PASSED (BakePhase.Faulted).
