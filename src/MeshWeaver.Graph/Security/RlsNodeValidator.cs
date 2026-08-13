@@ -3,7 +3,9 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Graph.Security;
 
@@ -16,6 +18,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
     private readonly IMessageHub _hub;
     private readonly ILogger<RlsNodeValidator> _logger;
     private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
+    private readonly TimeSpan _establishmentBudget;
 
     /// <summary>
     /// Initializes a new instance of the row-level-security node validator.
@@ -33,6 +36,10 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
         _accessRules = accessRules
             .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+        // Genuinely optional configuration — a host that sets nothing gets the production default.
+        _establishmentBudget =
+            (hub.ServiceProvider.GetService<IOptions<RowLevelSecurityOptions>>()?.Value
+                ?? new RowLevelSecurityOptions()).PermissionEstablishmentBudget;
     }
 
     /// <summary>
@@ -115,14 +122,76 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
         // (synchronous, by contract) change-feed fan-out run inside that lock, which is one
         // half of the two-hub lock-order inversion. Placing it here rather than inside
         // CheckPermission covers the custom-rule path too.
+        var pathToCheck = PathToCheck(context);
+
         return CheckHubRule(context, userId)
             .SelectMany(hubResult => hubResult != null
                 ? Observable.Return<NodeValidationResult?>(hubResult)
                 : CheckCustomRule(context, userId))
             .SelectMany(customResult => customResult != null
                 ? Observable.Return(customResult)
-                : CheckPermission(context, userId, requiredPermission))
-            .TakeDecisionOutsideGate();
+                : CheckPermission(context, userId, requiredPermission, pathToCheck))
+            .TakeDecisionOutsideGate()
+            // 🚨 THE TERMINAL. Placed here rather than inside CheckPermission so it covers EVERY
+            // branch: CheckCustomRule's INodeTypeAccessRule implementations reach the same
+            // permission fold, and the denial path's ownerless-partition probe is a mesh read too.
+            // See UnestablishedCheck for why this chain otherwise has no terminal at all (#1446).
+            .Timeout(_establishmentBudget)
+            .Catch((Exception ex) =>
+                Observable.Return(UnestablishedCheck(context, userId, pathToCheck, ex)));
+    }
+
+    /// <summary>
+    /// The scope a decision is taken on: for a CREATE that is the PARENT (the node itself does not
+    /// exist yet and carries no grants), for everything else the node's own path.
+    /// </summary>
+    private static string PathToCheck(NodeValidationContext context)
+        => context.Operation == NodeOperation.Create
+            ? context.Node.GetParentPath() ?? context.Node.Path
+            : context.Node.Path;
+
+    /// <summary>
+    /// 🚨 The result when this validator reached NO decision — #1446, and the ONLY terminal the
+    /// chain above is guaranteed to have.
+    ///
+    /// <para>Everything on the way to a verdict can fail to produce ANY outcome. The fold behind
+    /// <c>GetEffectivePermissions</c> is a <c>CombineLatest</c> over the grant and policy reads of
+    /// the target's scope and every ancestor scope — and, through its <c>Zip</c> against the
+    /// <c>Public</c> evaluation of the same path, a second copy of that fold. A leg that STARVES
+    /// (the cross-silo case: the owning activation lives on a peer silo that never answers) never
+    /// emits, never completes and never errors — <c>SyncedQueryMeshNodes</c> gates on
+    /// <c>SeenInitial</c> over a merge containing a Subject that is never completed, so the leg can
+    /// only stall. <c>TakeDecisionOutsideGate</c>'s <c>Take(1)</c> bounds the number of EMISSIONS,
+    /// not the wait, so <c>RunCreationValidatorsObs</c>'s <c>Concat</c> then blocked on validator #1
+    /// with nothing left to end it: <c>CreateNodeRequest</c> sat <c>Executing</c> for 33 s until its
+    /// CALLER's <c>RequestTimeout</c> gave up — which reports the caller's impatience rather than
+    /// the read that starved.</para>
+    ///
+    /// <para>🚨 <b>This is not a ceiling that turns a slow check into a denial.</b> The answer past
+    /// the budget is UNAVAILABLE — neither a grant (unsafe) nor a denial (a lie that sends a
+    /// correctly-entitled caller to request permissions they already hold, and files an availability
+    /// incident as a policy decision so nobody looks for the read that starved). Same vocabulary and
+    /// the same reasoning as <c>CompilationStatus.Unavailable</c> for a starved SOURCE read (#1218),
+    /// and as <c>PermissionCheckOutcome.Undetermined</c>, which already gives the message GATE this
+    /// distinction for a FAULTED fold. A fault is folded in here for the same reason: it says the
+    /// check could not be established, not that access is refused. Still fail-CLOSED — the operation
+    /// does not proceed; it just stops claiming to know why.</para>
+    /// </summary>
+    private NodeValidationResult UnestablishedCheck(
+        NodeValidationContext context, string? userId, string pathToCheck, Exception cause)
+    {
+        _logger.LogWarning(cause,
+            "RLS: the {Operation} permission check on {Path} could NOT be established — the "
+            + "effective-permission read of {CheckedPath} for {UserId} did not answer within "
+            + "{Budget}. Reporting an availability failure, not a decision",
+            context.Operation, context.Node.Path, pathToCheck, userId ?? "(anonymous)",
+            _establishmentBudget);
+
+        return NodeValidationResult.Unavailable(
+            $"The {context.Operation} permission check for node '{context.Node.Path}' could not be "
+            + $"established: the effective-permission read of '{pathToCheck}' did not answer within "
+            + $"{_establishmentBudget.TotalSeconds:0}s. This is an availability failure, NOT a "
+            + "decision about your access — the operation was not evaluated and may be retried.");
     }
 
     private IObservable<NodeValidationResult?> CheckHubRule(NodeValidationContext context, string? userId)
@@ -164,11 +233,9 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
     }
 
     private IObservable<NodeValidationResult> CheckPermission(
-        NodeValidationContext context, string? userId, Permission requiredPermission)
+        NodeValidationContext context, string? userId, Permission requiredPermission,
+        string pathToCheck)
     {
-        var pathToCheck = context.Operation == NodeOperation.Create
-            ? context.Node.GetParentPath() ?? context.Node.Path
-            : context.Node.Path;
         var effectiveUserId = userId ?? WellKnownUsers.Anonymous;
 
         // 🚨 Permission.Sync is a write-authoriser that bypasses the content read-only cap: a

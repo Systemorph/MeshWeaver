@@ -408,14 +408,33 @@ public static class AccessControlPipeline
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var userId = ResolveIdentity(request, accessService) ?? WellKnownUsers.Anonymous;
 
+        // 🚨 EVERY terminal answers — #1362/#1364's rule, applied here too (#1446). The fold can
+        // complete WITHOUT emitting (an empty static seed plus an `enriched` leg that completes
+        // having produced nothing), and a Subscribe with no completion arm discards that terminal
+        // silently: the request is then owed a reply that nobody will ever post, and the caller
+        // learns about it only when its own RequestTimeout fires — naming the caller's impatience
+        // rather than the fold that produced nothing. DefaultIfEmpty turns "completed with no
+        // verdict" into an explicit one, so all three arms lead to exactly one Post.
         hub.GetEffectivePermissions(ownPath, userId)
             .Take(1)
+            .Select(perms => (Permission?)perms)
+            .DefaultIfEmpty(null)
             .Subscribe(perms =>
             {
-                logger?.LogDebug("[GP] reply hub={Hub} user={User} perms={Perms}", ownPath, userId, perms);
-                hub.Post(new GetPermissionResponse(perms), o => o.ResponseFor(request));
+                if (perms is null)
+                    logger?.LogWarning(
+                        "[GP] the permission fold for hub={Hub} user={User} COMPLETED without a "
+                        + "verdict — answering None rather than leaving the request unanswered",
+                        ownPath, userId);
+                else
+                    logger?.LogDebug("[GP] reply hub={Hub} user={User} perms={Perms}", ownPath, userId, perms);
+                hub.Post(new GetPermissionResponse(perms ?? Permission.None), o => o.ResponseFor(request));
             },
-            ex => logger?.LogWarning(ex, "[GP] stream error hub={Hub}", ownPath));
+            ex =>
+            {
+                logger?.LogWarning(ex, "[GP] stream error hub={Hub}", ownPath);
+                hub.Post(new GetPermissionResponse(Permission.None), o => o.ResponseFor(request));
+            });
 
         return request.Processed();
     }

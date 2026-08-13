@@ -3254,6 +3254,9 @@ public static class MeshExtensions
                     NodeRejectionReason.InvalidNodeType => NodeCreationRejectionReason.InvalidNodeType,
                     NodeRejectionReason.InvalidPath => NodeCreationRejectionReason.InvalidPath,
                     NodeRejectionReason.Unauthorized => NodeCreationRejectionReason.ValidationFailed,
+                    // 🚨 An unestablished check must NOT arrive as ValidationFailed (#1446) — that
+                    // is the collapse the distinction exists to prevent.
+                    NodeRejectionReason.Unavailable => NodeCreationRejectionReason.Unavailable,
                     _ => NodeCreationRejectionReason.ValidationFailed
                 };
                 return ((string?, NodeCreationRejectionReason)?)(result.ErrorMessage, reason);
@@ -3455,6 +3458,7 @@ public static class MeshExtensions
                     NodeRejectionReason.NodeNotFound => NodeDeletionRejectionReason.NodeNotFound,
                     NodeRejectionReason.HasChildren => NodeDeletionRejectionReason.HasChildren,
                     NodeRejectionReason.Unauthorized => NodeDeletionRejectionReason.ValidationFailed,
+                    NodeRejectionReason.Unavailable => NodeDeletionRejectionReason.Unavailable,
                     _ => NodeDeletionRejectionReason.ValidationFailed
                 };
                 return ((string?, NodeDeletionRejectionReason)?)(result.ErrorMessage, reason);
@@ -4293,6 +4297,7 @@ public static class MeshExtensions
                 {
                     NodeRejectionReason.NodeNotFound => NodeMoveRejectionReason.SourceNotFound,
                     NodeRejectionReason.Unauthorized => NodeMoveRejectionReason.ValidationFailed,
+                    NodeRejectionReason.Unavailable => NodeMoveRejectionReason.Unavailable,
                     _ => NodeMoveRejectionReason.ValidationFailed
                 };
                 return ((string?, NodeMoveRejectionReason)?)(result.ErrorMessage, reason);

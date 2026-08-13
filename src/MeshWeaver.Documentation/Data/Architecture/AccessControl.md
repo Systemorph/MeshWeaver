@@ -396,6 +396,48 @@ The user identity rides on the in-flight delivery's `AccessContext.ObjectId`; `R
 
 Two — and only two — blanket short-circuits exist before the fold: `WellKnownUsers.System` (→ `All | Sync | Compile`) and the mesh-node cache's hydrator identity `cache/mesh-node-cache` (→ `Read` only). **There is deliberately no global-admin short-circuit** — see "The Admin partition" above.
 
+### 🚨 The fold can produce NO answer, and that is a third outcome
+
+`GetEffectivePermissions` is a `CombineLatest` over the grant and policy reads of the target's scope
+and *every ancestor scope* — plus, through its `Zip` against the `Public` evaluation of the same
+path, a second copy of that same fold. `CombineLatest` emits only once **every** leg has emitted.
+
+A leg that **starves** never emits, never completes and never errors: `SyncedQueryMeshNodes` gates on
+`SeenInitial` over a merge containing a `Subject` that is never completed, so it can only stall. The
+fold therefore has **no terminal at all**, and a `.Take(1)` around it bounds the number of emissions
+rather than the wait. This is not hypothetical — it is the ordinary cross-silo shape, where the
+owning activation lives on a peer silo that is busy or has just gone away.
+
+Not every leg is like that, and the difference is deliberate. `ObserveGatedNodes` starts with
+`.StartWith(empty)` precisely so a slow leg cannot stall the fold — safe because a gate only ever
+*adds* `Read`. The grant and policy legs **must not** be seeded: "no grants yet" reads as a denial,
+which would be a silent wrong answer. So an unanswerable read cannot be projected onto the yes/no
+axis at all. It needs a third outcome:
+
+| Outcome | Means | Reported as |
+|---|---|---|
+| granted | the fold decided yes | operation proceeds |
+| denied | the fold decided no | `Unauthorized` — a statement about the caller's entitlements |
+| **could not be established** | the fold reached **no decision** | `NodeRejectionReason.Unavailable` → `Node{Creation,Deletion,Move}RejectionReason.Unavailable`, and `ErrorType.Unavailable` on the message gate |
+
+**Decision callers give the check a terminal; live subscribers do not.** `RlsNodeValidator` bounds
+its whole chain with `RowLevelSecurityOptions.PermissionEstablishmentBudget` (default 30 s —
+comfortably above any healthy cold fold, strictly below the 60 s hub `RequestTimeout`) and answers
+`Unavailable` past it. That is *not* a ceiling that turns a slow check into a denial: reporting a
+stalled read as a refusal sends a correctly-entitled caller to request permissions they already
+hold, and files an availability incident as a policy decision so nobody goes looking for the read
+that starved. It is still fail-**closed** — the operation does not proceed; it simply stops claiming
+to know why. Same vocabulary and the same reasoning as `CompilationStatus.Unavailable` for a starved
+*source* read, and as `PermissionCheckOutcome.Undetermined`, which already gives the message gate
+this distinction for a *faulted* fold.
+
+A live UI subscription is the opposite case and keeps no bound: it is not owed an answer by a
+deadline, and it must re-emit when the grants finally land.
+
+Before this existed, `CreateNodeRequest` simply sat `Executing` — 33 s in the reported case — until
+its *caller's* `RequestTimeout` ended it, which names the caller's impatience rather than the read
+that starved (#1446).
+
 ## Reactive update semantics
 
 When an `AccessAssignment` is created at scope `S`:
