@@ -256,6 +256,20 @@ internal sealed class SnowflakePathRoutingAdapter : IStorageAdapter
         // route (invalid partition segments). Still NEVER creates a schema.
         => RouteWrite<MeshNode?>(node.Path, a => a.Write(node, options), null);
 
+    /// <summary>
+    /// Routes the atomic compare-and-set to the owning schema's adapter, declining with <c>null</c>
+    /// for a path Snowflake does not route — the same try-then-claim signal <see cref="Write"/>
+    /// gives. Explicit so the routing survives; the per-schema adapter decides whether it can honour
+    /// the condition atomically or falls back to the interface's read-compare-write.
+    /// </summary>
+    public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => RouteWrite<bool?>(
+            node.Path,
+            // Through the interface: SnowflakeStorageAdapter takes the DEFAULT implementation, which
+            // is only reachable as an IStorageAdapter member.
+            a => ((IStorageAdapter)a).WriteIfVersion(node, expectedVersion, options),
+            null);
+
     /// <inheritdoc/>
     public IObservable<string> Delete(string path)
         => AdapterForRead(path) is { } a

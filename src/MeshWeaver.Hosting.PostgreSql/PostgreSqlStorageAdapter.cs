@@ -621,14 +621,37 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// (see <see cref="BuildUpsertAsync"/>), so a row count of zero is not an error — it is the store
     /// refusing a write whose <see cref="MeshNode.Version"/> is below the durable row's (#971).
     /// </summary>
-    private async Task<bool> WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
+    private async Task<bool> WriteAsyncCore(
+        MeshNode node, JsonSerializerOptions options, CancellationToken ct, long? expectedVersion = null)
     {
-        var (sql, parameters) = await BuildUpsertAsync(node, options).ConfigureAwait(false);
+        var (sql, parameters) = await BuildUpsertAsync(node, options, expectedVersion).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var value in parameters)
             cmd.Parameters.AddWithValue(value);
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
     }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The atomic cross-replica compare-and-set: ONE statement whose row count is the verdict.
+    /// Row-level locking serialises concurrent upserts on the same key, so of N callers that each
+    /// read the row at <c>expectedVersion</c> exactly one sees a row count of 1 — that is the whole
+    /// exclusivity guarantee, and it holds across processes, silos and Orleans clusters because it
+    /// is the database, not any in-process gate, that decides. <c>expectedVersion == 0</c> compiles
+    /// to <c>ON CONFLICT … DO NOTHING</c> ("insert only if absent"); anything else adds
+    /// <c>WHERE target.version = @expected</c>. The change feed fires only for the winner.
+    /// </remarks>
+    public IObservable<bool?> WriteIfVersion(
+        MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => _ioPool.Invoke<bool?>(async ct =>
+        {
+            var applied = await WriteAsyncCore(node, options, ct, expectedVersion).ConfigureAwait(false);
+            if (!applied)
+                return false;
+            _changes.OnNext(DataChangeNotification.Updated(
+                string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
+            return true;
+        });
 
     /// <summary>
     /// The upsert for ONE node: its SQL text and its positional parameters, in order.
@@ -637,8 +660,19 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// in particular the ON CONFLICT set, which deliberately omits created_by/created_date
     /// so an update preserves the original author.
     /// </summary>
+    /// <param name="node">The node to upsert.</param>
+    /// <param name="options">Serializer options for the content payload.</param>
+    /// <param name="expectedVersion">
+    /// <c>null</c> — the ordinary monotonic condition (<c>target.version &lt;= EXCLUDED.version</c>),
+    /// which APPLIES at equal versions because re-persisting an unchanged node is legitimate.
+    /// Non-null switches the statement to compare-and-set for
+    /// <see cref="WriteIfVersion"/>: <c>0</c> means "only if no row exists"
+    /// (<c>ON CONFLICT … DO NOTHING</c>), anything else means "only while the row still carries
+    /// exactly this version". The equality is what makes the write EXCLUSIVE rather than merely
+    /// non-regressing — see the contract note on <see cref="IStorageAdapter.WriteIfVersion"/>.
+    /// </param>
     private async Task<(string Sql, IReadOnlyList<object> Parameters)> BuildUpsertAsync(
-        MeshNode node, JsonSerializerOptions options)
+        MeshNode node, JsonSerializerOptions options, long? expectedVersion = null)
     {
         var ns = node.Namespace ?? "";
 
@@ -679,29 +713,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         // still apply — re-persisting an unchanged node is a legitimate, common shape. The alias is
         // required: inside ON CONFLICT DO UPDATE the target row is referenced by its range-table name,
         // and `{table}` is schema-qualified.
-        var sql =
-            $"""
-            INSERT INTO {table} AS target (namespace, id, name, description, node_type, category, icon, display_order,
-                                    last_modified, version, state, content, desired_id, embedding, main_node{syncInsertCol}{authorInsertCol}{excludeInsertCol})
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15{syncInsertVal}{authorInsertVal}{excludeInsertVal})
-            ON CONFLICT (namespace, id) DO UPDATE SET
-                name = EXCLUDED.name,
-                description = EXCLUDED.description,
-                node_type = EXCLUDED.node_type,
-                category = EXCLUDED.category,
-                icon = EXCLUDED.icon,
-                display_order = EXCLUDED.display_order,
-                last_modified = EXCLUDED.last_modified,
-                version = EXCLUDED.version,
-                state = EXCLUDED.state,
-                content = EXCLUDED.content,
-                desired_id = EXCLUDED.desired_id,
-                embedding = EXCLUDED.embedding,
-                main_node = EXCLUDED.main_node{syncUpdate}{authorUpdate}{excludeUpdate}
-            WHERE target.version <= EXCLUDED.version
-            """;
-
-        var parameters = new List<object>(20)
+        var parameters = new List<object>(21)
         {
             ns,
             node.Id,
@@ -731,6 +743,75 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                 ? efc.ToArray()
                 : (object)DBNull.Value);
         }
+
+        // The conflict action. Built AFTER the parameter list so the compare-and-set predicate can
+        // bind the next free positional slot ($16 or $21, depending on writeSync).
+        //   null  → the ordinary monotonic guard: apply unless the row is already NEWER.
+        //   0     → insert-only: exclusive create, the row must not exist.
+        //   v     → compare-and-set: apply only while the row still carries exactly v.
+        // 🚨 expectedVersion > 0 is a PLAIN UPDATE, never an upsert. "The row still carries exactly
+        // v" is false when there is no row at all, and an INSERT ... ON CONFLICT would have
+        // RESURRECTED a deleted row and reported success — which for the build claim means a
+        // heartbeat racing a release re-creates the lock its holder just dropped and blocks the next
+        // candidate for the whole staleness budget. The in-memory adapter refuses the same case;
+        // the two backends must not disagree about what compare-and-set means.
+        if (expectedVersion is > 0)
+        {
+            parameters.Add(expectedVersion.Value);
+            // Mirrors the ON CONFLICT SET list exactly — created_by / created_date stay untouched
+            // (insert-only there, absent here), so authorship survives a compare-and-set too.
+            var casSync = writeSync ? ",\n                sync_behavior = $16" : "";
+            var casAuthor = writeSync ? ",\n                last_modified_by = $18" : "";
+            var casExclude = writeSync ? ",\n                exclude_from_context = $20" : "";
+            return (
+                $"""
+                UPDATE {table} SET
+                    name = $3,
+                    description = $4,
+                    node_type = $5,
+                    category = $6,
+                    icon = $7,
+                    display_order = $8,
+                    last_modified = $9,
+                    version = $10,
+                    state = $11,
+                    content = $12::jsonb,
+                    desired_id = $13,
+                    embedding = $14,
+                    main_node = $15{casSync}{casAuthor}{casExclude}
+                WHERE namespace = $1 AND id = $2 AND version = ${parameters.Count}
+                """,
+                parameters);
+        }
+
+        var conflict = expectedVersion == 0
+            // Insert-only: an exclusive create, and the row must not already exist.
+            ? "ON CONFLICT (namespace, id) DO NOTHING"
+            : $"""
+                ON CONFLICT (namespace, id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    description = EXCLUDED.description,
+                    node_type = EXCLUDED.node_type,
+                    category = EXCLUDED.category,
+                    icon = EXCLUDED.icon,
+                    display_order = EXCLUDED.display_order,
+                    last_modified = EXCLUDED.last_modified,
+                    version = EXCLUDED.version,
+                    state = EXCLUDED.state,
+                    content = EXCLUDED.content,
+                    desired_id = EXCLUDED.desired_id,
+                    embedding = EXCLUDED.embedding,
+                    main_node = EXCLUDED.main_node{syncUpdate}{authorUpdate}{excludeUpdate}
+                WHERE target.version <= EXCLUDED.version
+                """;
+
+        var sql =
+            $"""
+            INSERT INTO {table} AS target (namespace, id, name, description, node_type, category, icon, display_order,
+                                    last_modified, version, state, content, desired_id, embedding, main_node{syncInsertCol}{authorInsertCol}{excludeInsertCol})
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15{syncInsertVal}{authorInsertVal}{excludeInsertVal})
+            {conflict}
+            """;
 
         return (sql, parameters);
     }

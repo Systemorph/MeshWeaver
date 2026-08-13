@@ -88,6 +88,31 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
             });
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Guarded exactly like <see cref="Write"/> — a compare-and-set into a subtree being deleted is
+    /// still a write — and otherwise forwarded, because the interface default would fall back to a
+    /// non-atomic read-compare-write and silently strip the backend's atomicity at the OUTERMOST
+    /// decorator, which is this one.
+    /// </remarks>
+    public IObservable<bool?> WriteIfVersion(
+        MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => registry is null
+            ? inner.WriteIfVersion(node, expectedVersion, options)
+            : Observable.Defer(() =>
+            {
+                if (registry.IsUnderActiveDeletion(node.Path, out var root))
+                {
+                    logger?.LogWarning(
+                        "[SubtreeDeletionGuard] REFUSED compare-and-set write to {Path}: the subtree "
+                        + "'{Root}' is being deleted.",
+                        node.Path, root);
+                    return Observable.Throw<bool?>(new InvalidOperationException(
+                        $"Cannot write '{node.Path}': the subtree '{root}' is currently being deleted."));
+                }
+                return inner.WriteIfVersion(node, expectedVersion, options);
+            });
+
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => inner.Read(path, options);
 
