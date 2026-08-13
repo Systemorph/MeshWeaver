@@ -4,7 +4,6 @@
 // </meshweaver>
 
 using System.Reactive.Linq;
-using System.Text.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 
@@ -20,32 +19,16 @@ public static class CustomerNodeLayoutAreas
             .WithView("CustomerOverview", CustomerOverview)
             .WithView("ContactInfo", ContactInfo);
 
-    private static CustomerContent? ExtractCustomerContent(MeshNode? node)
-    {
-        if (node?.Content == null)
-            return null;
-
-        if (node.Content is CustomerContent cc)
-            return cc;
-
-        if (node.Content is JsonElement json)
-        {
-            return new CustomerContent
-            {
-                CustomerId = json.TryGetProperty("customerId", out var cid) ? cid.GetString() ?? "" : "",
-                CompanyName = json.TryGetProperty("companyName", out var cn) ? cn.GetString() ?? "" : "",
-                ContactName = json.TryGetProperty("contactName", out var ctn) ? ctn.GetString() ?? "" : "",
-                ContactTitle = json.TryGetProperty("contactTitle", out var ct) ? ct.GetString() ?? "" : "",
-                City = json.TryGetProperty("city", out var city) ? city.GetString() ?? "" : "",
-                Region = json.TryGetProperty("region", out var region) ? region.GetString() ?? "" : "",
-                PostalCode = json.TryGetProperty("postalCode", out var pc) ? pc.GetString() ?? "" : "",
-                Country = json.TryGetProperty("country", out var country) ? country.GetString() ?? "" : "",
-                Phone = json.TryGetProperty("phone", out var phone) ? phone.GetString() ?? "" : "",
-                Fax = json.TryGetProperty("fax", out var fax) ? fax.GetString() ?? "" : ""
-            };
-        }
-        return null;
-    }
+    /// <summary>
+    /// The node's customer content. <c>ContentAs</c> — never <c>is</c> + a hand-rolled JSON branch:
+    /// the accessor covers the already-typed value AND the degraded JsonElement/JsonNode AND a
+    /// same-short-named <c>CustomerContent</c> from another build (every recompile of a dynamic
+    /// NodeType mints a new collectible assembly, so "the same" record has a different CLR identity
+    /// per build — the case the hand-rolled version had no round-trip to recover, leaving the view
+    /// blank after a recompile with nothing to grep).
+    /// </summary>
+    private static CustomerContent? ExtractCustomerContent(LayoutAreaHost host, MeshNode? node) =>
+        node.ContentAs<CustomerContent>(host.Hub.JsonSerializerOptions);
 
     /// <summary>Customer overview with company details.</summary>
     [Display(GroupName = "Overview", Order = 0)]
@@ -59,7 +42,7 @@ public static class CustomerNodeLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var customer = ExtractCustomerContent(node);
+            var customer = ExtractCustomerContent(host, node);
 
             if (customer == null)
                 return (UiControl?)Controls.Markdown("*Customer data not available*");
@@ -127,7 +110,7 @@ public static class CustomerNodeLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var customer = ExtractCustomerContent(node);
+            var customer = ExtractCustomerContent(host, node);
 
             if (customer == null)
                 return (UiControl?)Controls.Markdown("*Customer data not available*");

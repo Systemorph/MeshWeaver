@@ -35,38 +35,24 @@ public static class FutuReDataLoader
         var buPath = segments.Length > 1 ? $"{segments[0]}/{segments[1]}" : segments[0];
 
         // BU node lookup goes through the per-node MeshNodeReference reducer (authoritative,
-        // no read-side index lag). CSV I/O stays on a separate Observable.FromAsync at the
-        // file boundary. Both compose into the final tuple.
+        // no read-side index lag). CSV I/O stays on the bounded FileSystem IoPool at the file
+        // boundary. Both compose into the final tuple.
         //
         // Cross-ALC type-identity is fragile here: BusinessUnit gets compiled into
         // FutuRe_BusinessUnit's NodeAssemblyLoadContext while this loader lives in
-        // FutuRe_LocalAnalysis's ALC, so `Content is BusinessUnit` returns false even
-        // though the runtime types match by full name. We probe by JsonElement first
-        // (the deserialized-to-JSON path), then by reflection (`Currency` property)
-        // for the cross-ALC custom-type case, before falling back to CHF.
+        // FutuRe_LocalAnalysis's ALC, so `Content is BusinessUnit` returns false even though the
+        // runtime types match by full name. ContentAs<T> is precisely the accessor for that: it
+        // covers the already-typed value, the degraded JsonElement/JsonNode (the
+        // deserialized-to-JSON path), AND the same-short-named foreign type by JSON round-trip —
+        // which is what the hand-rolled casing probe plus a reflected `Currency` property were
+        // approximating, one shape at a time and with no diagnosis when all of them missed.
+        var buOptions = hub.JsonSerializerOptions;
         var buCurrencyObs = hub.GetMeshNode(buPath, TimeSpan.FromSeconds(10))
             .Select(buNode =>
             {
-                if (buNode?.Content is JsonElement json
-                    && json.ValueKind == JsonValueKind.Object)
-                {
-                    // Mesh stream serialisation may emit either casing depending on
-                    // JsonSerializerOptions; probe both.
-                    if (json.TryGetProperty("currency", out var val)
-                        && val.ValueKind == JsonValueKind.String)
-                        return val.GetString() ?? "CHF";
-                    if (json.TryGetProperty("Currency", out var val2)
-                        && val2.ValueKind == JsonValueKind.String)
-                        return val2.GetString() ?? "CHF";
-                }
-                if (buNode?.Content is BusinessUnit bu)
-                    return bu.Currency;
-                if (buNode?.Content is { } content)
-                {
-                    var prop = content.GetType().GetProperty("Currency");
-                    if (prop?.GetValue(content) is string s && !string.IsNullOrEmpty(s))
-                        return s;
-                }
+                if (buNode.ContentAs<BusinessUnit>(buOptions)?.Currency is { Length: > 0 } currency)
+                    return currency;
+
                 // Fallback by hub address — every BU's local currency is known statically;
                 // this keeps the local Analysis dashboard labelling correct when the
                 // cross-hub MeshNode lookup fails (e.g. BU hub not yet activated, or
@@ -274,12 +260,13 @@ public static class FutuReDataLoader
             : segments[0];
 
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = workspace.Hub.JsonSerializerOptions;
         return meshQuery
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery(
                     $"nodeType:FutuRe/LineOfBusiness namespace:{buNamespace}/LineOfBusiness state:Active"))
             .Select(change => change.Items
-                .Select(ConvertToLineOfBusiness)
+                .Select(node => ConvertToLineOfBusiness(node, options))
                 .Where(lob => lob != null)
                 .Cast<LineOfBusiness>()
                 .OrderBy(lob => lob.Order));
@@ -295,11 +282,12 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<AmountType>> LoadAmountTypes(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = workspace.Hub.JsonSerializerOptions;
         return meshQuery
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active"))
             .Select(change => change.Items
-                .Select(ConvertToAmountType)
+                .Select(node => ConvertToAmountType(node, options))
                 .Where(a => a != null)
                 .Cast<AmountType>()
                 .OrderBy(a => a.Order));
@@ -311,11 +299,12 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<Currency>> LoadCurrencies(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = workspace.Hub.JsonSerializerOptions;
         return meshQuery
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active"))
             .Select(change => change.Items
-                .Select(ConvertToCurrency)
+                .Select(node => ConvertToCurrency(node, options))
                 .Where(c => c != null)
                 .Cast<Currency>()
                 .OrderBy(c => c.Order));
@@ -327,11 +316,12 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<Country>> LoadCountries(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = workspace.Hub.JsonSerializerOptions;
         return meshQuery
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/Country namespace:FutuRe/Country state:Active"))
             .Select(change => change.Items
-                .Select(ConvertToCountry)
+                .Select(node => ConvertToCountry(node, options))
                 .Where(c => c != null)
                 .Cast<Country>()
                 .OrderBy(c => c.Order));
@@ -343,12 +333,13 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<TransactionMapping>> LoadTransactionMappingsFromNodes(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = workspace.Hub.JsonSerializerOptions;
 
         return meshQuery
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants"))
             .Select(change => change.Items
-                .Select(ConvertToTransactionMapping)
+                .Select(node => ConvertToTransactionMapping(node, options))
                 .Where(m => m != null)
                 .Cast<TransactionMapping>());
     }
@@ -359,11 +350,12 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<ExchangeRate>> LoadExchangeRates(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = workspace.Hub.JsonSerializerOptions;
         return meshQuery
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/ExchangeRate namespace:FutuRe/ExchangeRate state:Active"))
             .Select(change => change.Items
-                .Select(ConvertToExchangeRate)
+                .Select(node => ConvertToExchangeRate(node, options))
                 .Where(fx => fx != null)
                 .Cast<ExchangeRate>()
                 .OrderBy(fx => fx.Order));
@@ -375,11 +367,12 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<BusinessUnit>> LoadBusinessUnits(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = workspace.Hub.JsonSerializerOptions;
         return meshQuery
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/BusinessUnit namespace:FutuRe state:Active"))
             .Select(change => change.Items
-                .Select(ConvertToBusinessUnit)
+                .Select(node => ConvertToBusinessUnit(node, options))
                 .Where(bu => bu != null)
                 .Cast<BusinessUnit>());
     }
@@ -390,12 +383,13 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<LineOfBusiness>> LoadLinesOfBusinessFromNodes(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var options = workspace.Hub.JsonSerializerOptions;
 
         return meshQuery
             .Query<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness state:Active"))
             .Select(change => change.Items
-                .Select(ConvertToLineOfBusiness)
+                .Select(node => ConvertToLineOfBusiness(node, options))
                 .Where(lob => lob != null)
                 .Cast<LineOfBusiness>()
                 .OrderBy(lob => lob.Order));
@@ -404,152 +398,110 @@ public static class FutuReDataLoader
     // ---------------------------------------------------------------
     // MeshNode → Record Converters
     // ---------------------------------------------------------------
+    //
+    // 🚨 Every one of these reads the node's content through ContentAs<T>(hub options) — NEVER
+    // `Content is T` plus a hand-rolled JsonElement branch. That hand-rolled shape was correct for
+    // the two cases it enumerated and silently wrong for the one that bites hardest HERE: a
+    // same-short-named record from another build. These converters run in FutuRe/GroupAnalysis's
+    // NodeAssemblyLoadContext while BusinessUnit, LineOfBusiness et al. are compiled into their OWN
+    // NodeTypes' ALCs, and every recompile mints a fresh collectible assembly — so a content value
+    // the owning hub's registry DID resolve arrives typed as a foreign CLR identity, fails
+    // `Content is T`, is not a JsonElement either, and fell through to `null`. The row then simply
+    // vanished from the cube with no exception and no log line. ContentAs recovers exactly that by
+    // JSON round-trip (and the degraded JsonElement/JsonNode, and the already-typed value).
+    //
+    // The node-level overlays below are NOT fallbacks for a failed cast — they are the node's own
+    // identity (Id / Name / Order) taking precedence over, or standing in for, what the content
+    // carries, exactly as the JSON branch did.
 
-    private static TransactionMapping? ConvertToTransactionMapping(MeshNode node)
+    private static TransactionMapping? ConvertToTransactionMapping(MeshNode node, JsonSerializerOptions options)
     {
-        if (node.Content is TransactionMapping tm)
-            return tm;
-        if (node.Content is not JsonElement json)
+        var mapping = node.ContentAs<TransactionMapping>(options);
+        if (mapping is null)
             return null;
 
-        return new TransactionMapping
-        {
-            Id = GetString(json, "id") ?? node.Id,
-            BusinessUnit = GetString(json, "businessUnit") ?? string.Empty,
-            LocalLineOfBusiness = GetString(json, "localLineOfBusiness") ?? string.Empty,
-            LocalLineOfBusinessName = GetString(json, "localLineOfBusinessName") ?? string.Empty,
-            GroupLineOfBusiness = GetString(json, "groupLineOfBusiness") ?? string.Empty,
-            GroupLineOfBusinessName = GetString(json, "groupLineOfBusinessName") ?? string.Empty,
-            Percentage = GetDouble(json, "percentage")
-        };
+        return string.IsNullOrEmpty(mapping.Id) ? mapping with { Id = node.Id } : mapping;
     }
 
-    private static LineOfBusiness? ConvertToLineOfBusiness(MeshNode node)
+    private static LineOfBusiness? ConvertToLineOfBusiness(MeshNode node, JsonSerializerOptions options)
     {
-        if (node.Content is LineOfBusiness lob)
-            return lob;
-        if (node.Content is not JsonElement json)
+        var lob = node.ContentAs<LineOfBusiness>(options);
+        if (lob is null)
             return null;
 
-        return new LineOfBusiness
-        {
-            SystemName = node.Id,
-            DisplayName = node.Name ?? node.Id,
-            Description = GetString(json, "description"),
-            Order = node.Order ?? GetInt(json, "order"),
-            ProductExamples = GetString(json, "productExamples")
-        };
-    }
-
-    private static AmountType? ConvertToAmountType(MeshNode node)
-    {
-        if (node.Content is AmountType at)
-            return at;
-        if (node.Content is not JsonElement json)
-            return null;
-
-        return new AmountType
-        {
-            SystemName = GetString(json, "systemName") ?? node.Id,
-            DisplayName = GetString(json, "displayName") ?? node.Name ?? node.Id,
-            Order = GetInt(json, "order"),
-            Sign = GetInt(json, "sign"),
-            HasActuals = GetBool(json, "hasActuals")
-        };
-    }
-
-    private static Currency? ConvertToCurrency(MeshNode node)
-    {
-        if (node.Content is Currency c)
-            return c;
-        if (node.Content is not JsonElement json)
-            return null;
-
-        return new Currency
-        {
-            Id = GetString(json, "id") ?? node.Id,
-            Name = GetString(json, "name") ?? node.Name ?? node.Id,
-            Symbol = GetString(json, "symbol"),
-            DecimalPlaces = GetInt(json, "decimalPlaces"),
-            Order = GetInt(json, "order")
-        };
-    }
-
-    private static Country? ConvertToCountry(MeshNode node)
-    {
-        if (node.Content is Country co)
-            return co;
-        if (node.Content is not JsonElement json)
-            return null;
-
-        return new Country
-        {
-            Id = GetString(json, "id") ?? node.Id,
-            Name = GetString(json, "name") ?? node.Name ?? node.Id,
-            Alpha3Code = GetString(json, "alpha3Code"),
-            Region = GetString(json, "region"),
-            Order = GetInt(json, "order")
-        };
-    }
-
-    private static ExchangeRate? ConvertToExchangeRate(MeshNode node)
-    {
-        if (node.Content is ExchangeRate fx)
-            return fx;
-        if (node.Content is not JsonElement json)
-            return null;
-
-        return new ExchangeRate
+        return lob with
         {
             SystemName = node.Id,
             DisplayName = node.Name ?? node.Id,
-            FromCurrency = GetString(json, "fromCurrency") ?? string.Empty,
-            ToCurrency = GetString(json, "toCurrency") ?? string.Empty,
-            PlanRate = GetDouble(json, "planRate"),
-            ActualRate = GetDouble(json, "actualRate"),
-            Order = node.Order ?? GetInt(json, "order")
+            Order = node.Order ?? lob.Order
         };
     }
 
-    private static BusinessUnit? ConvertToBusinessUnit(MeshNode node)
+    private static AmountType? ConvertToAmountType(MeshNode node, JsonSerializerOptions options)
     {
-        if (node.Content is BusinessUnit bu)
-            return bu;
-        if (node.Content is not JsonElement json)
+        var amountType = node.ContentAs<AmountType>(options);
+        if (amountType is null)
             return null;
 
-        return new BusinessUnit
+        return amountType with
         {
-            Id = GetString(json, "id") ?? node.Id,
-            Name = GetString(json, "name") ?? node.Name ?? node.Id,
-            Description = GetString(json, "description"),
-            Currency = GetString(json, "currency") ?? "USD",
-            Region = GetString(json, "region"),
-            Icon = GetString(json, "icon") ?? "Building"
+            SystemName = string.IsNullOrEmpty(amountType.SystemName) ? node.Id : amountType.SystemName,
+            DisplayName = string.IsNullOrEmpty(amountType.DisplayName)
+                ? node.Name ?? node.Id
+                : amountType.DisplayName
         };
     }
 
-    // ---------------------------------------------------------------
-    // JSON Helpers
-    // ---------------------------------------------------------------
+    private static Currency? ConvertToCurrency(MeshNode node, JsonSerializerOptions options)
+    {
+        var currency = node.ContentAs<Currency>(options);
+        if (currency is null)
+            return null;
 
-    private static string? GetString(JsonElement json, string property) =>
-        json.TryGetProperty(property, out var val) && val.ValueKind == JsonValueKind.String
-            ? val.GetString()
-            : null;
+        return currency with
+        {
+            Id = string.IsNullOrEmpty(currency.Id) ? node.Id : currency.Id,
+            Name = string.IsNullOrEmpty(currency.Name) ? node.Name ?? node.Id : currency.Name
+        };
+    }
 
-    private static int GetInt(JsonElement json, string property) =>
-        json.TryGetProperty(property, out var val) && val.ValueKind == JsonValueKind.Number
-            ? val.GetInt32()
-            : 0;
+    private static Country? ConvertToCountry(MeshNode node, JsonSerializerOptions options)
+    {
+        var country = node.ContentAs<Country>(options);
+        if (country is null)
+            return null;
 
-    private static double GetDouble(JsonElement json, string property) =>
-        json.TryGetProperty(property, out var val) && val.ValueKind == JsonValueKind.Number
-            ? val.GetDouble()
-            : 0.0;
+        return country with
+        {
+            Id = string.IsNullOrEmpty(country.Id) ? node.Id : country.Id,
+            Name = string.IsNullOrEmpty(country.Name) ? node.Name ?? node.Id : country.Name
+        };
+    }
 
-    private static bool GetBool(JsonElement json, string property) =>
-        json.TryGetProperty(property, out var val) &&
-        (val.ValueKind == JsonValueKind.True || val.ValueKind == JsonValueKind.False)
-            && val.GetBoolean();
+    private static ExchangeRate? ConvertToExchangeRate(MeshNode node, JsonSerializerOptions options)
+    {
+        var fx = node.ContentAs<ExchangeRate>(options);
+        if (fx is null)
+            return null;
+
+        return fx with
+        {
+            SystemName = node.Id,
+            DisplayName = node.Name ?? node.Id,
+            Order = node.Order ?? fx.Order
+        };
+    }
+
+    private static BusinessUnit? ConvertToBusinessUnit(MeshNode node, JsonSerializerOptions options)
+    {
+        var bu = node.ContentAs<BusinessUnit>(options);
+        if (bu is null)
+            return null;
+
+        return bu with
+        {
+            Id = string.IsNullOrEmpty(bu.Id) ? node.Id : bu.Id,
+            Name = string.IsNullOrEmpty(bu.Name) ? node.Name ?? node.Id : bu.Name
+        };
+    }
 }
