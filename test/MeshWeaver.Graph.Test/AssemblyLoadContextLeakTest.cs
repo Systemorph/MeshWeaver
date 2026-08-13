@@ -262,4 +262,64 @@ public sealed class AssemblyLoadContextLeakTest : IDisposable
         ctx.Dispose();
         Assert.Throws<ObjectDisposedException>(() => ctx.Pin());
     }
+
+    /// <summary>
+    /// 🚨 The other half of the pin contract, and the one that was missing: a pin must make the
+    /// assembly LOADABLE for as long as it is held, not merely delay <c>Unload()</c>.
+    ///
+    /// <para>Dispose() drains in-flight pins BEFORE it unloads, so while a pin is held the
+    /// LoaderAllocator is provably still alive and nothing about the assembly has changed. But
+    /// the "is this context dead?" flag that <c>LoadNodeAssembly</c> guards on was the SAME flag
+    /// Dispose raised on entry — so a scan that had legitimately pinned the context got
+    /// <c>ObjectDisposedException: Cannot load assembly from disposed context</c> thrown into it
+    /// by the very teardown that was standing there waiting for it to finish.</para>
+    ///
+    /// <para>That throw is not a hiccup. <c>CompileResultFromAssembly</c> catches it, writes
+    /// <c>CompilationStatus.Error</c>, and the compile watcher PARKS the NodeType — "further
+    /// activations serve the cached error without recompiling" — so a millisecond-wide teardown
+    /// race permanently kills the type. Observed as
+    /// <c>StaleStampRootBindingTest.StaleStampSelfTypedRoot_RootServesItsTypesArea</c> failing
+    /// with exactly that message on main (run 31683003325) and on an unrelated PR 40 minutes
+    /// later (run 31686258015), both 2026-08-13, plus 6× on 08-10.</para>
+    ///
+    /// <para>Deterministic, not timing-hopeful: the pin is taken FIRST and released only after the
+    /// load has been attempted, so the interleaving this asserts is the one that always happens.</para>
+    /// </summary>
+    [Fact]
+    public void PinnedScan_StillLoadsTheAssembly_WhileDisposeIsDraining()
+    {
+        const string nodeName = "pin_load_during_drain";
+        var dllPath = EmitTinyAssemblyToDisk(nodeName, "Widget");
+        var ctx = _service.GetOrCreateLoadContextForPath(nodeName, dllPath);
+
+        // A scan pins the context — exactly what CompileResultFromAssembly does via PinForScan.
+        using var pin = ctx.Pin();
+
+        // Teardown starts underneath it (a concurrent recompile/eviction/hub disposal) and parks
+        // in the drain, because our pin is outstanding.
+        var disposeReturned = new ManualResetEventSlim(false);
+        var disposer = new Thread(() => { ctx.Dispose(); disposeReturned.Set(); }) { IsBackground = true };
+        disposer.Start();
+        disposeReturned.Wait(300).Should().BeFalse(
+            "Dispose() must be draining — the pin is still held");
+
+        // THE ASSERTION: the pinned scan can still load. Before the fix this threw
+        // ObjectDisposedException and the caller recorded a permanent CompilationStatus.Error.
+        var assembly = ctx.LoadNodeAssembly();
+        assembly.Should().NotBeNull(
+            "a pin held across a concurrent Dispose must keep the assembly loadable: Dispose drains "
+            + "pins BEFORE Unload, so the LoaderAllocator is still alive and refusing the load only "
+            + "manufactures a compile 'failure' that parks the NodeType for good");
+        assembly!.GetTypes().Should().NotBeEmpty(
+            "the scan the pin exists to protect is GetTypes — it must complete against live metadata");
+
+        // Releasing the pin lets the deferred unload finish, exactly as before.
+        pin.Dispose();
+        disposeReturned.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue(
+            "releasing the pin must let Dispose() finish the unload");
+        disposer.Join();
+
+        // …and once the drain is over the context IS closed: a later load must not resurrect it.
+        Assert.Throws<ObjectDisposedException>(() => ctx.LoadNodeAssembly());
+    }
 }

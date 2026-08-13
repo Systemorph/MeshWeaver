@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using Azure;
 using Azure.Storage.Blobs;
+using MeshWeaver.Mesh.Persistence;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
@@ -84,9 +85,20 @@ public sealed class BlobAssemblyStore : IAssemblyStore
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-                await dllBlob.DownloadToAsync(localPath, ct).ConfigureAwait(false);
-                try { await pdbBlob.DownloadToAsync(Path.ChangeExtension(localPath, ".pdb"), ct).ConfigureAwait(false); }
+                // 🚨 Materialise through a temp file + rename (MeshWeaver#1387). localPath is the
+                // exact name the File.Exists fast path above discovers by, and the winner's path
+                // goes to AssemblyLoadContext.LoadFromAssemblyPath — so downloading straight into
+                // it publishes a growing, partially-written PE image under its final name. The
+                // pdb is published first so a discoverable DLL always has its symbols.
+                try
+                {
+                    await AtomicFileWrite.PublishAsync(
+                        Path.ChangeExtension(localPath, ".pdb"),
+                        temp => pdbBlob.DownloadToAsync(temp, ct)).ConfigureAwait(false);
+                }
                 catch (RequestFailedException rfe) when (rfe.Status == 404) { /* pdb optional */ }
+                await AtomicFileWrite.PublishAsync(
+                    localPath, temp => dllBlob.DownloadToAsync(temp, ct)).ConfigureAwait(false);
                 logger.LogInformation(
                     "Hydrated {NodeTypePath}@v{Version} from blob to {LocalPath}",
                     nodeTypePath, version, localPath);
@@ -115,10 +127,20 @@ public sealed class BlobAssemblyStore : IAssemblyStore
 
             // Write to local cache first so the caller can load immediately without waiting
             // on the upload round-trip.
+            //
+            // 🚨 Through a temp file + rename (MeshWeaver#1387): localPath is the exact name
+            // TryGetAssemblyPath's File.Exists fast path discovers by, and the discovered path is
+            // handed to AssemblyLoadContext.LoadFromAssemblyPath. File.WriteAllBytesAsync opens
+            // FileMode.Create — target first, bytes after — so writing it directly publishes a
+            // truncated PE image under its final name for the duration of the write. Replace
+            // semantics are correct here (and atomic): this cache is a process-local directory,
+            // and the key carries no framework tag, so a new image must be able to overwrite the
+            // previous image's bytes for the same version.
             Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-            await File.WriteAllBytesAsync(localPath, assemblyBytes, ct).ConfigureAwait(false);
             if (pdbBytes is { Length: > 0 })
-                await File.WriteAllBytesAsync(Path.ChangeExtension(localPath, ".pdb"), pdbBytes, ct).ConfigureAwait(false);
+                await AtomicFileWrite.ReplaceAllBytesAsync(
+                    Path.ChangeExtension(localPath, ".pdb"), pdbBytes, ct).ConfigureAwait(false);
+            await AtomicFileWrite.ReplaceAllBytesAsync(localPath, assemblyBytes, ct).ConfigureAwait(false);
 
             // Then upload. Overwrite=true is safe because two replicas compiling the same
             // version produce (near-)identical bytes.

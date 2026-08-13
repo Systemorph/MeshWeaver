@@ -30,6 +30,12 @@ public static class IoPoolExtensions
     /// Runs a genuinely-async I/O leaf (DB round-trip, blob, async file) in the
     /// pool and replays its single result. Drop-in for
     /// <c>Observable.FromAsync(io).SubscribeOn(TaskPoolScheduler.Default)</c>.
+    ///
+    /// <para>🚨 Caching this observable for reuse? Use
+    /// <see cref="PromiseCache{TKey,TValue}"/> / <see cref="PromiseSlot{TValue}"/>, never a bare
+    /// <c>ConcurrentDictionary</c> or <c>_field ??= …</c>: the <see cref="ReplaySubject{T}"/>
+    /// below latches <c>OnError</c> as readily as a value, so an un-evicted cache turns ONE
+    /// transient fault into a permanent one (#1369).</para>
     /// </summary>
     public static IObservable<T> Run<T>(this IIoPool pool, Func<CancellationToken, Task<T>> io)
     {
@@ -38,6 +44,19 @@ public static class IoPoolExtensions
         // subscribes to the returned observable. The inner subscription auto-
         // disposes when the (completing) leaf calls OnCompleted.
         pool.Invoke(io).Subscribe(subject);
+        return subject.AsObservable();
+    }
+
+    /// <summary>
+    /// Runs a sync-blocking / CPU leaf (<c>File.Exists</c> probe, a Roslyn compile) in the pool
+    /// and replays its single result — <see cref="Run{T}"/>'s counterpart for
+    /// <see cref="IIoPool.InvokeBlocking{T}"/>, so a one-shot over a blocking leaf never has to
+    /// hand-roll its own <see cref="ReplaySubject{T}"/>.
+    /// </summary>
+    public static IObservable<T> RunBlocking<T>(this IIoPool pool, Func<CancellationToken, T> work)
+    {
+        var subject = new ReplaySubject<T>();
+        pool.InvokeBlocking(work).Subscribe(subject);
         return subject.AsObservable();
     }
 

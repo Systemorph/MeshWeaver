@@ -260,17 +260,7 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     /// the composer at a non-existent <c>system-security/_Thread/ThreadComposer</c>, so the
     /// "+" new-chat rendered nothing — the "+ not working" bug.
     /// </summary>
-    private string? ResolveUserHome()
-    {
-        foreach (var candidate in new[] { AccessService.CircuitContext?.ObjectId, AccessService.Context?.ObjectId })
-        {
-            if (!string.IsNullOrEmpty(candidate)
-                && candidate != WellKnownUsers.System
-                && !AccessService.LooksLikeHubPrincipal(candidate))
-                return candidate;
-        }
-        return null;
-    }
+    private string? ResolveUserHome() => CircuitUser.ResolveUserId(AccessService);
 
     private string SidePanelTitle => selectedThreadName ?? "New Chat";
 

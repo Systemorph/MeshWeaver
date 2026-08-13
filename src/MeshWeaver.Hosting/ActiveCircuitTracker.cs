@@ -36,9 +36,11 @@ public sealed class ActiveCircuitTracker
 
     /// <summary>
     /// Records a circuit closing. Clamped at zero: a double-close (Blazor can report a circuit
-    /// closed after a connection-down that already ended it) must never push the count negative —
-    /// a negative count reads as "drained" forever after, which would hand back the very kill this
-    /// exists to prevent.
+    /// closed after a connection-down that already ended it) must never push the count negative.
+    /// <see cref="Drained"/> is <c>Count == 0</c>, so a negative count reads as "still busy" and
+    /// the pod would sit out its whole grace period on every roll before being SIGKILLed — and
+    /// then the NEXT open would only bring it back to zero, so a live session would read as
+    /// drained and get cut off. Both directions are wrong; the clamp removes both.
     /// </summary>
     public void Closed()
     {

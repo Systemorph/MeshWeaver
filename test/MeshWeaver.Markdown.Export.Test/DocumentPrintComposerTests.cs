@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Immutable;
 using System.Linq;
 using HtmlAgilityPack;
 using MeshWeaver.Markdown.Export.Ast;
@@ -43,12 +45,15 @@ public class DocumentPrintComposerTests
     private static string Compose(
         DocumentExportOptions? options = null,
         BrandingOptions? branding = null,
-        string? markdown = null)
-        => DocumentPrintComposer.Compose(new DocumentBuilder().Build(
-            "Quarterly Report 2026",
-            markdown ?? SampleMarkdown,
-            options ?? new DocumentExportOptions(),
-            branding ?? Brand));
+        string? markdown = null,
+        ImmutableArray<int> tocPageNumbers = default)
+        => DocumentPrintComposer.Compose(
+            new DocumentBuilder().Build(
+                "Quarterly Report 2026",
+                markdown ?? SampleMarkdown,
+                options ?? new DocumentExportOptions(),
+                branding ?? Brand),
+            tocPageNumbers);
 
     private static HtmlDocument Parse(string html)
     {
@@ -138,6 +143,110 @@ public class DocumentPrintComposerTests
         => Parse(Compose(new DocumentExportOptions { TableOfContents = false }))
             .DocumentNode.SelectSingleNode("//section[@class='mw-toc']")
             .Should().BeNull();
+
+    // ── Contents page numbers (#1309) ───────────────────────────────────────────────────
+
+    [Fact]
+    public void Contents_entries_print_the_page_number_supplied_for_each_of_them()
+    {
+        var numbers = Parse(Compose(tocPageNumbers: [7, 9]))
+            .DocumentNode.SelectNodes("//span[@class='mw-toc-page']")
+            .Select(n => n.InnerText)
+            .ToArray();
+
+        numbers.Should().Equal("7", "9");
+    }
+
+    [Fact]
+    public void The_number_column_is_reserved_even_when_there_is_no_number_to_print()
+    {
+        // The measuring print has to occupy the same box the numbered one will, or the digits
+        // would reflow the list and the page they were measured on would stop being the page
+        // they end up describing.
+        var cells = Parse(Compose())
+            .DocumentNode.SelectNodes("//span[@class='mw-toc-page']");
+
+        cells.Should().HaveCount(2, "one reserved cell per contents entry");
+        cells.Select(c => c.InnerText).Should().AllBe("\u200b", "an empty inline box has no line box");
+    }
+
+    [Fact]
+    public void The_numbered_print_differs_from_the_measuring_print_ONLY_in_the_digits()
+    {
+        // The property the whole two-pass rests on, asserted as a property: swap the digits back
+        // out and the two documents are byte-identical — so nothing else about the layout, and in
+        // particular nothing about the amount of content, changed between the prints.
+        var measuring = Compose();
+        var numbered = Compose(tocPageNumbers: [7, 9]);
+
+        numbered
+            .Replace(">7</span>", ">\u200b</span>", StringComparison.Ordinal)
+            .Replace(">9</span>", ">\u200b</span>", StringComparison.Ordinal)
+            .Should().Be(measuring);
+    }
+
+    [Fact]
+    public void The_number_column_has_a_constant_width_that_the_digits_cannot_change()
+    {
+        // A column sized to its content — min-width, fit-content, a width derived from the page
+        // count — is exactly how a two-pass prints numbers that are quietly wrong: the digits
+        // widen the column, the title rewraps, the list grows a line and everything after it
+        // moves a page. So the rule is read out and checked on its own, not searched for in the
+        // whole document where a comment could satisfy it.
+        var html = Compose();
+        var start = html.IndexOf(".mw-toc-page {", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(-1, "the reserved column needs a rule of its own");
+        var rule = html[start..(html.IndexOf('}', start) + 1)];
+
+        rule.Should().Contain("flex: 0 0 40pt").And.Contain("width: 40pt");
+        rule.Should().NotContain("min-width").And.NotContain("max-width").And.NotContain("fit-content");
+    }
+
+    [Fact]
+    public void A_page_number_list_that_does_not_match_the_entry_count_is_ignored_entirely()
+    {
+        // Off-by-one numbering is worse than none: every entry after the slip would point at the
+        // wrong section with total confidence. Partial application is therefore not an option.
+        var oneShort = Parse(Compose(tocPageNumbers: [7]))
+            .DocumentNode.SelectNodes("//span[@class='mw-toc-page']");
+
+        oneShort.Select(c => c.InnerText).Should().AllBe("\u200b");
+    }
+
+    [Fact]
+    public void A_contents_entry_is_one_block_level_link_so_a_wrapped_title_stays_one_annotation()
+    {
+        // Identification of an entry in the printed PDF is positional, and it holds because
+        // Chromium emits ONE link annotation per entry. That is a consequence of the entry being
+        // a block-level (flex) box: an inline link wrapping onto a second line would emit two
+        // rects and slide every later entry's number by one.
+        var html = Compose();
+
+        html.Should().Contain(".mw-toc-entry a {").And.Contain("display: flex;");
+
+        var link = Parse(html).DocumentNode.SelectSingleNode("//p[contains(@class,'mw-toc-entry')]/a");
+        link.ChildNodes.Where(n => n.NodeType == HtmlNodeType.Element)
+            .Select(n => n.GetAttributeValue("class", ""))
+            .Should().Equal("mw-toc-text", "mw-toc-page");
+    }
+
+    [Fact]
+    public void A_contents_entry_never_straddles_a_page_break()
+    {
+        // The other half of one-annotation-per-entry. Being a block box stops a WRAPPED title
+        // emitting a rect per line; this stops a title CAUGHT BY A PAGE BREAK emitting a rect
+        // per fragment, which would push the link count past the entry count and cost the whole
+        // list its numbers. Measured: sliding a contents list past a break in 8pt steps, 10 of
+        // 15 layouts printed 15 annotations for 14 entries without the rule and 14 with it —
+        // but only with titles of FOUR or more lines, since orphans/widows (2 by default) make a
+        // shorter entry unsplittable. That is why this is pinned here rather than left to a
+        // browser test nobody could make fail on purpose.
+        var html = Compose();
+        var start = html.IndexOf(".mw-toc-entry {", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(-1);
+
+        html[start..(html.IndexOf('}', start) + 1)].Should().Contain("break-inside: avoid");
+    }
 
     // ── Running header and footer ───────────────────────────────────────────────────────
 

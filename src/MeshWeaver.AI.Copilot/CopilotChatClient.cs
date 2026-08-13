@@ -35,9 +35,14 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
     // pool is IObservable; the only async/await lives inside the leaves the pool owns.
     private readonly IIoPool ioPool;
     // The connect/start handshake is a one-shot resource: the promise-cache runs it at most once and
-    // replays to every later caller (pool.Run is eager + ReplaySubject-backed). Built once via an
-    // atomic ref swap (NOT a lock-for-async) — replaces the former SemaphoreSlim clientLock.
-    private IObservable<CopilotClient>? connectPromise;
+    // replays to every later caller (pool.Run is eager + ReplaySubject-backed). PromiseSlot, NOT a
+    // lock-for-async — it replaced the former SemaphoreSlim clientLock, then the bare
+    // CompareExchange that succeeded it. Two things the bare swap got wrong (#1369):
+    //   1. A ReplaySubject latches OnError, so ONE failed CLI start — the binary missing for a
+    //      moment, an auth blip — disabled Copilot for the life of the process.
+    //   2. pool.Run is EAGER, so a CAS *loser* had already spawned a CLI subprocess that nothing
+    //      would ever observe or stop. The slot's Lazy means only the winner's factory runs.
+    private readonly PromiseSlot<CopilotClient> connectPromise = new();
     private bool disposed;
 
     /// <summary>
@@ -171,8 +176,9 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
             return;
         disposed = true;
 
-        var promise = Interlocked.Exchange(ref connectPromise, null);
-        if (promise is null)
+        // TryTake is atomic — the direct replacement for the former Interlocked.Exchange, so
+        // exactly one concurrent teardown claims the client and stops it once.
+        if (!connectPromise.TryTake(out var promise))
             return;
 
         // StopAsync is the IO leaf -> Http pool. Subscribe (cold-observable side effect) so the work
@@ -184,18 +190,12 @@ public class CopilotChatClient : IChatClient, IAsyncDisposable
                 ex => logger?.LogWarning(ex, "Copilot client teardown failed"));
     }
 
+    // pool.Run is eager (kicks the connect off on the Http pool NOW) + ReplaySubject-backed, so
+    // concurrent first callers all observe the single connection. The slot builds it exactly once
+    // — no spawned-then-discarded CLI — and evicts it if the start FAILS, so the next chat round
+    // tries again instead of replaying a dead handshake. It never retries on its own.
     private IObservable<CopilotClient> GetOrCreateConnectPromise()
-    {
-        var promise = connectPromise;
-        if (promise is not null)
-            return promise;
-
-        // pool.Run is eager (kicks the connect off on the Http pool NOW) + ReplaySubject-backed, so
-        // concurrent first callers all observe the single connection. CompareExchange publishes only
-        // if nobody else won the race; otherwise we drop ours and use theirs.
-        var candidate = ioPool.Run(StartClientAsync);
-        return Interlocked.CompareExchange(ref connectPromise, candidate, null) ?? candidate;
-    }
+        => connectPromise.GetOrCreate(() => ioPool.Run(StartClientAsync));
 
     // ── SDK / subprocess boundary: the leaves the I/O pool owns — the ONLY place async/await lives ──
 
