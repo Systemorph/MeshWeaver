@@ -140,7 +140,7 @@ internal static class NodeTypeContractHandler
                                         hubPath, requestedReleasePath, localPath);
                                     return compilationService.GetConfigurationsFromExistingAssembly(localPath!, hubPath)
                                         .Select(result => new ResolvedResponse(BuildResponseFromLocal(
-                                            hubPath, node, localPath!, release.AssemblyCollection,
+                                            hubPath, releaseVersion, localPath!, release.AssemblyCollection,
                                             release.AssemblyContentPath, result), false));
                                 });
                         });
@@ -176,7 +176,7 @@ internal static class NodeTypeContractHandler
                                 .SelectMany(result => SurfaceActivityLog(
                                     hub, def.LastCompilationActivityPath, result,
                                     res => BuildResponseFromLocal(
-                                        hubPath, node, localPath!, def.LatestAssemblyCollection,
+                                        hubPath, compileVersion, localPath!, def.LatestAssemblyCollection,
                                         def.LatestAssemblyPath, res)))
                                 .Select(response => new ResolvedResponse(response, false));
                         });
@@ -244,7 +244,24 @@ internal static class NodeTypeContractHandler
                                     // populate them (Null store).
                                     LatestAssemblyCollection = response.Collection ?? def.LatestAssemblyCollection,
                                     LatestAssemblyPath = response.ContentPath ?? def.LatestAssemblyPath,
-                                    LastCompiledVersion = curr.Version,
+                                    // 🚨 The version the BYTES are stored under — never curr.Version.
+                                    // LastCompiledVersion is one half of the IAssemblyStore key
+                                    // (nodeTypePath, version); the response echoes that key's version
+                                    // precisely "so the consumer's cache key matches what was actually
+                                    // compiled". curr.Version is the node's version at WRITE-BACK time,
+                                    // which has advanced past the upload (every compile-status write
+                                    // bumps it) and, on a hydrate, was never the upload version at all.
+                                    //
+                                    // Stamping it re-pointed the record at a store key holding no bytes,
+                                    // and this handler races the activity write-back (ApplyCompileSuccess,
+                                    // which stamps correctly) — so whether the record ended up valid was
+                                    // decided by scheduling. Whoever lost, the readers all use this field
+                                    // as the store key: activation (MeshDataSource / EnrichWithNodeType)
+                                    // then misses and falls back to the DEFAULT config — no
+                                    // MeshNodeReference reducer, the instance page renders nothing — and
+                                    // NodeTypeBakeStatus reports a baked type as having no bytes.
+                                    // Issue #1368.
+                                    LastCompiledVersion = ResolvedStoreVersion(response, def, curr),
                                     // 🚨 A FRESH compile's success write must be COMPLETE —
                                     // stamp the framework version the build ran against,
                                     // exactly like the activity write-back (RunCompile).
@@ -508,9 +525,18 @@ internal static class NodeTypeContractHandler
     /// NodeTypeDefinition. The local path is what <c>MessageHubGrain</c> still
     /// needs to <c>Assembly.LoadFrom</c> during Stage 1.
     /// </summary>
+    /// <param name="storeVersion">
+    /// 🚨 The version the bytes were RESOLVED under — the second half of the
+    /// <c>(nodeTypePath, version)</c> store key that <see cref="ResolveAssembly"/> just hit.
+    /// It is emphatically NOT <c>node.Version</c>: a hydrate serves an assembly uploaded at some
+    /// EARLIER node version, and the node has advanced since (every compile-status write bumps
+    /// it). Echoing the live node version made the caller's write-back re-point
+    /// <see cref="NodeTypeDefinition.LastCompiledVersion"/> at a store key with no bytes — see
+    /// the write-back note in <see cref="Handle"/> for what that costs.
+    /// </param>
     private static GetCompilationPathResponse BuildResponseFromLocal(
         string hubPath,
-        MeshNode node,
+        long storeVersion,
         string localPath,
         string? collection,
         string? contentPath,
@@ -537,7 +563,7 @@ internal static class NodeTypeContractHandler
             Success: true,
             AssemblyLocation: localPath,
             Collection: collection,
-            Version: node.Version.ToString(),
+            Version: storeVersion.ToString(),
             Error: null,
             HubConfiguration: matchingConfig?.HubConfiguration,
             Log: result.Log)
@@ -545,6 +571,24 @@ internal static class NodeTypeContractHandler
             ContentPath = contentPath
         };
     }
+
+    /// <summary>
+    /// The <see cref="IAssemblyStore"/> key version that <see cref="NodeTypeDefinition.LastCompiledVersion"/>
+    /// must name after a successful resolve: the one the response echoes
+    /// (<see cref="GetCompilationPathResponse.Version"/> — set by the upload on a fresh compile, by
+    /// the resolved store key on a hydrate). Falls back to the value already persisted (still a
+    /// valid key — the bytes it names are exactly what we just served) and only then to the node's
+    /// own version, which is the last-resort guess used when nothing produced a store reference.
+    ///
+    /// <para>🚨 Never stamp the live node version directly. It is the one value guaranteed to be
+    /// WRONG whenever the node advanced after the upload, and it silently converts a healthy
+    /// record into one whose store key holds no bytes (issue #1368).</para>
+    /// </summary>
+    private static long ResolvedStoreVersion(
+        GetCompilationPathResponse response, NodeTypeDefinition def, MeshNode curr)
+        => long.TryParse(response.Version, out var v) && v > 0
+            ? v
+            : def.LastCompiledVersion ?? curr.Version;
 
     private static GetCompilationPathResponse Fail(string? version, string error, ActivityLog? log = null) =>
         new(Success: false,
