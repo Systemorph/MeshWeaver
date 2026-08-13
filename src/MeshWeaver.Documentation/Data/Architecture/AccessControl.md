@@ -418,7 +418,13 @@ axis at all. It needs a third outcome:
 |---|---|---|
 | granted | the fold decided yes | operation proceeds |
 | denied | the fold decided no | `Unauthorized` — a statement about the caller's entitlements |
-| **could not be established** | the fold reached **no decision** | `NodeRejectionReason.Unavailable` → `Node{Creation,Deletion,Move}RejectionReason.Unavailable`, and `ErrorType.Unavailable` on the message gate |
+| **could not be established** | the fold reached **no decision** | `NodeRejectionReason.Unavailable` → `Node{Creation,Deletion,Move}RejectionReason.Unavailable` |
+
+The message gate has the same *vocabulary* but a narrower reach: `CheckPermissionOutcome` catches a
+**faulted** fold as `Undetermined` → `ErrorType.Unavailable`. It deliberately carries **no** bound
+(see its "No Timeout here" comment), so a **silent** starvation still parks a `[RequiresPermission]`
+delivery there. Giving the gate a terminal for that case changes the behaviour of every gated
+message and wants its own argument; the node-operation validator below is bounded today.
 
 **Decision callers give the check a terminal; live subscribers do not.** `RlsNodeValidator` bounds
 its whole chain with `RowLevelSecurityOptions.PermissionEstablishmentBudget` (default 30 s —

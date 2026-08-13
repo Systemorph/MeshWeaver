@@ -180,18 +180,25 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
     private NodeValidationResult UnestablishedCheck(
         NodeValidationContext context, string? userId, string pathToCheck, Exception cause)
     {
+        // Both roads lead here, and they are NOT the same defect: a stall means nothing answered,
+        // a fault means something answered badly. Saying "did not answer within 30s" about a
+        // NullReferenceException would point the reader at a starving peer silo that was never
+        // involved — the same mis-naming this fix exists to stop doing to the CALLER.
+        var why = cause is TimeoutException
+            ? $"did not answer within {_establishmentBudget.TotalSeconds:0}s"
+            : $"failed ({cause.GetType().Name}: {cause.Message})";
+
         _logger.LogWarning(cause,
             "RLS: the {Operation} permission check on {Path} could NOT be established — the "
-            + "effective-permission read of {CheckedPath} for {UserId} did not answer within "
-            + "{Budget}. Reporting an availability failure, not a decision",
-            context.Operation, context.Node.Path, pathToCheck, userId ?? "(anonymous)",
-            _establishmentBudget);
+            + "effective-permission read of {CheckedPath} for {UserId} {Why}. Reporting an "
+            + "availability failure, not a decision",
+            context.Operation, context.Node.Path, pathToCheck, userId ?? "(anonymous)", why);
 
         return NodeValidationResult.Unavailable(
             $"The {context.Operation} permission check for node '{context.Node.Path}' could not be "
-            + $"established: the effective-permission read of '{pathToCheck}' did not answer within "
-            + $"{_establishmentBudget.TotalSeconds:0}s. This is an availability failure, NOT a "
-            + "decision about your access — the operation was not evaluated and may be retried.");
+            + $"established: the effective-permission read of '{pathToCheck}' {why}. This is an "
+            + "availability failure, NOT a decision about your access — the operation was not "
+            + "evaluated and may be retried.");
     }
 
     private IObservable<NodeValidationResult?> CheckHubRule(NodeValidationContext context, string? userId)
