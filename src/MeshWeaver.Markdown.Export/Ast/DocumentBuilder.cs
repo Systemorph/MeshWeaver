@@ -308,13 +308,11 @@ public class DocumentBuilder
                     builder.Add(new TextInline(lit.Content.ToString(), bold, italic, strike));
                     break;
                 case EmphasisInline em:
-                    var isStrong = em.DelimiterCount >= 2;
-                    var isStrike = em.DelimiterChar is '~';
-                    ReadInlinesInto(em, builder,
-                        bold || isStrong,
-                        italic || (!isStrong && !isStrike),
-                        strike || isStrike);
+                {
+                    var (emBold, emItalic, emStrike) = EmphasisStyle(em);
+                    ReadInlinesInto(em, builder, bold || emBold, italic || emItalic, strike || emStrike);
                     break;
+                }
                 case CodeInline code:
                     builder.Add(new TextInline(code.Content, bold, italic, strike, Code: true));
                     break;
@@ -350,6 +348,40 @@ public class DocumentBuilder
             }
         }
     }
+
+    /// <summary>
+    /// Which of the document model's styles an emphasis span carries.
+    ///
+    /// <para>🚨 The delimiter CHARACTER decides — never the count on its own. Markdig's
+    /// <c>EmphasisExtras</c> (enabled here by <c>UseAdvancedExtensions</c>) folds SIX different
+    /// constructs into the one <see cref="EmphasisInline"/> node and tells them apart by
+    /// <see cref="EmphasisInline.DelimiterChar"/>: <c>**</c>/<c>__</c> strong, <c>*</c>/<c>_</c>
+    /// emphasis, <c>~~</c> strikethrough, <c>~</c> subscript, <c>^</c> superscript, <c>++</c>
+    /// inserted, <c>==</c> marked.</para>
+    ///
+    /// <para>Reading strength off <c>DelimiterCount >= 2</c> alone therefore made EVERY doubled
+    /// delimiter strong, and <c>~~strike~~</c> is doubled: it printed as <b>bold</b> AND struck
+    /// through in both PDF and DOCX (#1373). The same slip gave <c>++ins++</c> and <c>==mark==</c>
+    /// bold, <c>~sub~</c> a strikethrough, and <c>^sup^</c> italics — every one of them an emphasis
+    /// its author never wrote.</para>
+    ///
+    /// <para>Subscript, superscript, inserted and marked have no representation in the document
+    /// model, which carries bold / italic / strike / code and nothing else. They render as their
+    /// plain text: no content is lost, and a construct the model cannot express is better shown
+    /// neutrally than dressed in the wrong style. Giving them styles of their own is a change to
+    /// the model, not a fix to this.</para>
+    /// </summary>
+    private static (bool Bold, bool Italic, bool Strike) EmphasisStyle(EmphasisInline em) =>
+        em.DelimiterChar switch
+        {
+            // `***both***` arrives as a count-1 span wrapping a count-2 span, so each level maps on
+            // its own and the two accumulate into bold+italic exactly as before.
+            '*' or '_' => (em.DelimiterCount >= 2, em.DelimiterCount == 1, false),
+            // A SINGLE '~' is subscript, not a strikethrough — the count matters here too, just not
+            // as a stand-in for strength.
+            '~' => (false, false, em.DelimiterCount >= 2),
+            _ => (false, false, false),
+        };
 
     private static string ExtractPlainText(ContainerInline c)
     {
