@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
 // 🚨 Namespace deliberately NOT MeshWeaver.Messaging.Serialization (where the file now lives).
@@ -320,18 +321,89 @@ public sealed class MeshContentTypeRegistry(ILogger<MeshContentTypeRegistry>? lo
         return string.Equals(shortName, candidate.Name, StringComparison.Ordinal);
     }
 
-    private static object? Materialize(JsonElement content, Type contentType, JsonSerializerOptions options)
+    private object? Materialize(JsonElement content, Type contentType, JsonSerializerOptions options)
     {
         try
         {
             // Deserialise to the CONCRETE type explicitly: STJ maps the JSON to its properties and
             // ignores the stale $type member, so recovery works regardless of whether `options`'
             // (frozen) registry knows the type — exactly the ContentAs<T> JsonElement contract.
-            return content.Deserialize(contentType, options);
+            var recovered = content.Deserialize(contentType, options);
+            if (recovered is not null)
+                WarnIfLossy(content, contentType, options);
+            return recovered;
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
         {
             return null;
         }
     }
+
+    // Once per (target type, dropped member set): a mismatch is a property of the installed
+    // content + declaration, so repeating it on every read would be noise.
+    private readonly ConcurrentDictionary<string, byte> _warnedLossy = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Names the members a recovery could not carry. <b>STJ ignores what the target does not
+    /// declare</b>, so materialising into a type that cannot represent the content SUCCEEDS and
+    /// returns a plausible, wrong object — the loss leaves no exception and no trace, and a later
+    /// persistence echo can make it permanent. Two of the three ways to get a wrong target are
+    /// already refused outright (an ambiguous discriminator, and one that contradicts the NodeType
+    /// declaration); the third — a declaration that simply names a type nothing instantiates —
+    /// cannot be detected from types alone, so it is reported here instead.
+    ///
+    /// <para>Reported, not refused: content written against an EARLIER version of the right type
+    /// legitimately carries members it has since lost, and refusing those would turn a cosmetic
+    /// drift into an empty render. The framework's cure for that case is a
+    /// <see cref="JsonExtensionDataAttribute"/> buffer, and a target that has one loses nothing —
+    /// so it is skipped here.</para>
+    ///
+    /// <para>Systemorph/MeshWeaver#1388: three sample Article NodeTypes declared a content type
+    /// that no instance used, and every article created without an explicit <c>$type</c> was
+    /// reshaped into it — losing <c>abstract</c>, which that type had no member for, with nothing
+    /// logged anywhere.</para>
+    /// </summary>
+    private void WarnIfLossy(JsonElement content, Type contentType, JsonSerializerOptions options)
+    {
+        if (logger is null || HasExtensionDataBuffer(contentType))
+            return;
+
+        HashSet<string> declared;
+        try
+        {
+            declared = options.GetTypeInfo(contentType).Properties
+                .Select(p => p.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException)
+        {
+            return;   // no contract to compare against — the deserialize above already answered
+        }
+
+        var dropped = content.EnumerateObject()
+            .Select(p => p.Name)
+            .Where(n => !string.Equals(n, "$type", StringComparison.Ordinal) && !declared.Contains(n))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (dropped.Length == 0)
+            return;
+
+        var members = string.Join(", ", dropped);
+        if (!_warnedLossy.TryAdd(contentType.FullName + "|" + members, 0))
+            return;
+
+        logger.LogWarning(
+            "Content recovered into '{ContentType}' could not carry {Count} authored member(s): "
+            + "{Members}. System.Text.Json drops what the target does not declare, so this read "
+            + "SUCCEEDED and produced a plausible object with those values missing — and a write "
+            + "back through the same shape would make the loss permanent. Either the NodeType "
+            + "declares a content type its instances do not use (declare the one they carry), or "
+            + "'{ContentType}' is missing the members and needs a [JsonExtensionData] buffer to "
+            + "round-trip them.",
+            contentType.Name, dropped.Length, members, contentType.Name);
+    }
+
+    private static bool HasExtensionDataBuffer(Type contentType)
+        => contentType.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Any(p => p.IsDefined(typeof(JsonExtensionDataAttribute), inherit: true));
 }
