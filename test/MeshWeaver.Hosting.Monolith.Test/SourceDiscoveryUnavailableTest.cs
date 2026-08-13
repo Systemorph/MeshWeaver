@@ -259,15 +259,33 @@ public sealed class StarvedSourceQueryProvider : IMeshQueryProvider
     /// <see cref="CodeQueryResolver.ExpandAll"/> produces it
     /// (<c>namespace:{selfPath}/Source scope:subtree nodeType:Code</c>).
     ///
-    /// <para>🚨 Matched on the <c>namespace:</c> FORM, not on the bare path, so only source
-    /// DISCOVERY starves. Node creation and single-node reads under the same subtree use
-    /// <c>path:</c>-shaped queries and must keep working — otherwise the test could not put a
-    /// healthy source node in the mesh in the first place, and "the code is fine, the read is
-    /// not" would be unprovable. Note the type's <c>/Test</c> query is deliberately NOT starved:
-    /// one leg dies while the other answers, which is precisely the PARTIAL source set that used
-    /// to reach Roslyn.</para>
+    /// <para>🚨 Matched on the <c>namespace:</c> FORM **and** <c>nodeType:Code</c>, so only source
+    /// DISCOVERY starves. Node creation and single-node reads under the same subtree must keep
+    /// working — otherwise the test could not put a healthy source node in the mesh in the first
+    /// place, and "the code is fine, the read is not" would be unprovable. Note the type's
+    /// <c>/Test</c> query is deliberately NOT starved: one leg dies while the other answers, which
+    /// is precisely the PARTIAL source set that used to reach Roslyn.</para>
+    ///
+    /// <para>🚨 <b>The <c>nodeType:Code</c> half is load-bearing, and its absence was a real flake</b>
+    /// (shard 1, 2026-08-13). The SECURITY layer reads its policy and grants with
+    /// <c>namespace:</c>-shaped queries over the SAME subtree —
+    /// <c>namespace:…/Source id:_Policy nodeType:PartitionAccessPolicy</c> and
+    /// <c>namespace:…/Source/_Access nodeType:AccessAssignment</c> — so a marker that matched the
+    /// namespace alone starved those too, and the <c>CreateNode</c> at the top of this test hung
+    /// (observed: <c>Executing(CreateNodeRequest, 33014ms)</c>) until the 30 s assertion gave up.
+    /// It passed whenever those security queries were already cached and failed when they were
+    /// cold, which is why it reproduced on a CI shard and never locally (10/10 green).
+    /// <c>CodeQueryResolver</c> ANDs <c>nodeType:Code</c> into every source query it emits, and the
+    /// security queries carry their own node types — so that clause separates them exactly.</para>
     /// </summary>
     private const string StarveMarker = "namespace:SourceUnavailableTest/StarvedSourceType/Source";
+
+    /// <summary>
+    /// The discriminator that keeps the starve to SOURCE DISCOVERY — see the note on
+    /// <see cref="StarveMarker"/>. Without it the security policy/grant reads over the same
+    /// namespace starve as well, and node creation into that subtree hangs.
+    /// </summary>
+    private const string SourceDiscoveryMarker = "nodeType:Code";
 
     /// <inheritdoc />
     public string Name => nameof(StarvedSourceQueryProvider);
@@ -280,7 +298,8 @@ public sealed class StarvedSourceQueryProvider : IMeshQueryProvider
         MeshQueryRequest request, JsonSerializerOptions options)
     {
         var starve = request.EffectiveQueries
-            .Any(q => q?.Contains(StarveMarker, StringComparison.OrdinalIgnoreCase) == true);
+            .Any(q => q?.Contains(StarveMarker, StringComparison.OrdinalIgnoreCase) == true
+                && q.Contains(SourceDiscoveryMarker, StringComparison.OrdinalIgnoreCase));
         return starve
             ? Observable.Throw<QueryResultChange<T>>(new TimeoutException(
                 "No response received for SubscribeRequest within 00:01:00 — the owning "
