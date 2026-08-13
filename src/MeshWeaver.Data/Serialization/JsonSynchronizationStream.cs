@@ -1150,7 +1150,9 @@ public static class JsonSynchronizationStream
                     {
                         // Apply patch with correct RFC 6901 unescaping
                         // The json-everything library doesn't properly unescape ~1 -> / in property names
-                        (currentJson, _) = ApplyPatchWithCorrectUnescaping(patchJson, currentJson.Value, stream.Host.JsonSerializerOptions);
+                        (currentJson, _) = ApplyPatchWithCorrectUnescaping(
+                            patchJson, currentJson.Value, stream.Host.JsonSerializerOptions,
+                            wantAppliedPatch: false);
                     }
                     catch (StaleStreamStateException stale)
                     {
@@ -1276,7 +1278,16 @@ public static class JsonSynchronizationStream
         return ApplyPatchWithCorrectUnescaping(request.Change.Content, currentJson.Value, options);
     }
 
-    private static (JsonElement, JsonPatch) ApplyPatchWithCorrectUnescaping(string patchJson, JsonElement currentJson, JsonSerializerOptions options)
+    /// <param name="wantAppliedPatch">
+    /// Whether the caller reads the second tuple element. Two of the three callers do
+    /// (<see cref="UpdateJsonElement{TChange}"/> and the <c>InstanceCollection</c> overload hand it
+    /// on); the fan-out discards it, and re-parsing the patch for a caller that drops it is
+    /// per-subscriber, per-frame work with no consumer — issue #1284. The already-built
+    /// <c>fallbackPatch</c> branch below costs nothing either way and is returned regardless.
+    /// </param>
+    private static (JsonElement, JsonPatch) ApplyPatchWithCorrectUnescaping(
+        string patchJson, JsonElement currentJson, JsonSerializerOptions options,
+        bool wantAppliedPatch = true)
     {
         using var doc = JsonDocument.Parse(patchJson);
         var currentNode = JsonSerializer.SerializeToNode(currentJson, options);
@@ -1346,9 +1357,14 @@ public static class JsonSynchronizationStream
 
         // Serialize back to JsonElement
         var resultElement = JsonSerializer.SerializeToElement(currentNode, options);
-        // Create a dummy patch for the return value (we don't use it on the receiving end)
-        var dummyPatch = JsonSerializer.Deserialize<JsonPatch>(patchJson, options)!;
-        return (resultElement, dummyPatch);
+        // 🚨 Re-parsing patchJson into a JsonPatch is only worth doing for a caller that reads it —
+        // issue #1284. This ran on the FAN-OUT path too, once per subscriber per frame, and the
+        // comment beside it ("we don't use it on the receiving end") was describing the very caller
+        // that discards it. For an un-negotiated subscriber the patch still carries whole values, so
+        // the parse it threw away was O(document).
+        return (resultElement, wantAppliedPatch
+            ? JsonSerializer.Deserialize<JsonPatch>(patchJson, options)!
+            : null!);
     }
 
     private static string[] ParsePathSegments(string path)
