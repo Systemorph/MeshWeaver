@@ -119,6 +119,13 @@ jobs:
         if: always()
         run: |
           set -uo pipefail
+          # 🚨 GitHub runs a `run:` block as `bash -e {0}`, and `set -uo pipefail` does NOT clear
+          # that. So the FIRST failing `dotnet test` killed the whole step on the spot: the
+          # `::error::REPRO on iteration N` annotation below had never once fired, the loop's own
+          # summary never printed, and `rate` mode could never reach a denominator — a reproduction
+          # and a harness crash were again indistinguishable, which is the exact failure mode the
+          # rest of this file is written to prevent. The loop checks every exit code itself.
+          set +e
           iters="$REPRO_ITERS"
           proj="$REPRO_PROJECT"
           filt="$REPRO_FILTER"
@@ -132,7 +139,7 @@ jobs:
             hunt|rate) ;;
             *) echo "::error::REPRO DID NOT RUN — unknown mode '$REPRO_MODE' (expected 'hunt' or 'rate')."; exit 1 ;;
           esac
-          echo "Looping '$filt' in $proj up to $iters× in '$REPRO_MODE' mode on a 2-vCPU runner (nproc=$(nproc))."
+          echo "Looping '$filt' in $proj up to $iters× in '$REPRO_MODE' mode (nproc=$(nproc) — the flake is load-dependent, so record this alongside the rate)."
           failures=0
           ran=0
           failed_iters=""
