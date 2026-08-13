@@ -1,7 +1,7 @@
 ---
 Name: Plugin Update on Green Build
 Category: Architecture
-Description: A plugin repo's CI going green reaches every installation that uses it, without anyone polling a registry or opening the catalog. The webhook records the build as a mesh node; the catalog subscribes to that node and reacts per module, gated on content identity so a green run that changed nothing stays completely silent.
+Description: A plugin repo's CI going green reaches every installation that uses it, with nobody opening the catalog and no poll timer anywhere. An installation with GitHub access subscribes to a build node the webhook writes; an installation that installs from a registry reads that registry's own feed at startup. Both react per module, gated on content identity, so a build that changed nothing stays completely silent.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/><path d="m9 12 2 2 4-4"/></svg>
 ---
 
@@ -30,6 +30,53 @@ per installed module:  ModuleVersion changed?
    ├── no  ──▶ silent. no notification, no fetch, nothing.
    └── yes ──▶ opted in ? install the delta : raise an "Update available" reminder
 ```
+
+## 🚨 Two inputs, one decision — and which one your installation has
+
+The path above needs a **GitHub webhook on the plugin repo**. An installation that installs from a
+[registry](/Doc/Architecture/PluginRegistry) over HTTP deliberately holds no GitHub credential and
+receives no webhooks, so for a long time it had **no input at all**: `BuildCompletion` is constructed
+in exactly one place in the whole tree — the `workflow_run` webhook — and the watcher only opens a
+subscription once a catalog node names a source repo. Such an installation had neither, so the
+watcher was registered, live and completely inert, and `AutoUpdate` was a flag nothing ever fired.
+Its plugins stayed at the version they were installed at until an administrator pressed **Provision**.
+
+There are now two inputs, by deployment shape:
+
+| | learns from | how | when |
+|---|---|---|---|
+| **Registry instance** (holds the GitHub credential) | its plugin repos | `PluginUpdateWatcher` subscribes to `Admin/_Build/{owner}.{repo}` | on every green build |
+| **Consumer** (registry token, no GitHub) | its registry | `RegistryUpdateReconciler` **reads** `GET /api/plugins` | at startup |
+
+Both hand the per-module verdict to the same `PackageUpdateReconciler`, so they can never disagree
+about what "changed" means or about who opted into an unattended install. Both are registered
+unconditionally and each is inert on the deployment shape it does not serve.
+
+### Why the consumer READS instead of waiting to be told
+
+There is nothing for a consumer to subscribe to. The registry is a **different deployment with a
+different database**, so it shares no durable row; and there is no cross-process change feed either
+(`PostgreSqlChangeListener` is registered and never started). A signal would therefore mean a new
+push protocol — a subscription registry, a shared secret, an inbox — kept in step with the feed that
+already exists.
+
+It does not need one. `GET /api/plugins` already returns every package's `ModuleVersion`, which is
+the same content identity the install records carry, so **comparing the two answers the question
+outright**. That is the shape `BuildProtocolDriver.FollowGo` arrived at for the cross-cluster case:
+end on a fact you can read, not on a notification that cannot reach you.
+
+### 🚨 Not a poll timer
+
+The reconcile runs on an event the deployment already has — **this process starting** — and not on a
+clock. A timer answers "how stale am I willing to be", which is a question nobody asked, and it turns
+one misconfiguration into permanent background load.
+
+On these deployments the restart *is* the fan-out: plugin content and the framework image are
+published by the same CI, and the portals self-update onto each new image, so a green plugin build
+and a pod roll already arrive together. The honest bound is therefore **a consumer learns on its next
+boot** — plus immediately, on demand, whenever somebody opens the catalog page, which reads the same
+feed and offers the same **Update**. An installation that never restarts also never picks up
+framework fixes, which is a louder problem with its own alarm.
 
 ## Why a node and not a call
 
@@ -144,7 +191,7 @@ install-time seed.
 | Symptom | Cause |
 |---|---|
 | Nothing happens on a green build | The webhook does not send **Workflow runs**; or no catalog's `SourceRepoPath` matches the repo; or the run's conclusion was not `success` — only completed+successful runs are recorded; or the run was **not triggered by a push** (`workflow_run` also fires for `pull_request`, `schedule`, `workflow_dispatch`, … — none of those record); or the run was **not on the repository's default branch** — a green PR-branch build is unmerged code and is deliberately never recorded (fail-closed: a payload with no readable branch records nothing either). |
-| A notification per green run, nothing changed | A module's `manifest.lock` is missing or unparseable, so `ModuleVersion` is null and the legacy commit-sha comparison applies — every commit looks like a change. Fix the module's CI to emit the sidecar. |
+| A module never updates, and the log says it "has no module content identity" | The module's `manifest.lock` is missing or unparseable, so there is no `ModuleVersion` to compare and "has it changed" is unanswerable. A missing hash is the **absence of evidence**, not evidence of a change: treating it as changed would re-install the module on every green build of the repo *and* on every pod start, which is acting on the event rather than the content. It is refused, loudly, and the catalog card's manual **Update** stays available. Fix the module's CI to emit the sidecar. |
 | Build node updates but no installation reacts | The package is not installed on that instance. A catalog lists far more packages than any instance installs; only packages with an install record are considered. |
 
 The webhook **never throws** on a write failure: GitHub retries a non-2xx delivery, so an unhandled
