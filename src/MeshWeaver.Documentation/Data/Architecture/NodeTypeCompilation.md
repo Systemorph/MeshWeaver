@@ -492,6 +492,43 @@ stalled memex-cloud on 2026-08-02 with "7 NodeType(s) regressed" and not one `CS
 counting only *direct* timeouts leniently still let one timed-out shared source gate through its
 dependents, which reproduced the same stall one hop downstream.
 
+### A sweep that ERRORED is not a sweep that passed
+
+The leniency above is about *individual types* the sweep could not evaluate. It does **not** extend
+to the sweep itself failing. If the ENUMERATION errors or times out, the pod has verified nothing at
+all, and that is `BakePhase.Faulted` — **refuses readiness**, exactly like a regression:
+
+| Sweep terminal | Phase | `/health` | Why |
+|---|---|---|---|
+| Enumerated, every type settled | `Complete` | Healthy | the bake ran |
+| Enumerated, found **zero** types | `Complete` | Healthy | emptiness is an *answer*; a fresh mesh must serve |
+| Enumeration **threw / timed out** | `Faulted` | **Unhealthy** | nothing was measured — there is no bake to certify |
+| Pre-warm switched off | `NotStarted` | Healthy | nothing is being measured *and nothing claims to be* |
+
+The last two rows are the whole point, and they are easy to conflate. The health check's documented
+policy — *"fail CLOSED on a regression, fail OPEN on 'not running'"* — is scoped to `NotStarted`,
+i.e. the gate is **disabled** ("a configuration mistake must never black-hole a pod"). A sweep that
+**errored** was armed and measuring and simply failed to, which is a different thing; the same
+switch already reports `Running` — a pod that knows strictly *more* than a faulted one — as
+Unhealthy.
+
+`WarmDynamicTypes` used to swallow the enumeration fault and return `Observable.Empty`, so both
+"found nothing" and "could not look" reached the subscriber as the same empty completion and the
+gate marked itself `Complete` → Healthy. The retired pre-run bake Job carried the counterpart guard
+from outside the portal — *"FINDING NOTHING IS NOT PASSING … a gate that certifies 'I verified
+nothing' is worse than no gate"*, exit 3, with a `Bake:AllowEmpty` escape — and named that `Catch`
+as the reason it had to. Retiring the Job (#1357) removed the guard; the distinction now lives at
+the source, where it can be made honestly.
+
+**Cold start.** On a roll this is free: `maxSurge:1 / maxUnavailable:0` keeps the old pod serving
+while the new one refuses. On a *first* deployment there is no predecessor, so the pod fails its
+`startupProbe` and restarts — re-running the sweep each time, which is what clears a transient cause
+without anybody adding a retry. That is the same trade `Regressed` already makes, and the likeliest
+environmental cause of a blind enumeration (an unmigrated database) is refused earlier and more
+precisely by `DbVersionGate`. The escape hatch is `PreWarm:AllowUnprovenBake` — it relaxes the
+verdict only, never the record: the phase stays `Faulted` and the payload keeps saying the bake was
+never proven. It cannot waive a real regression.
+
 ### The obligation on framework changes
 
 Removing or renaming any public framework surface — extension methods on
