@@ -88,6 +88,24 @@ public interface ISynchronizationStream : IDisposable
     IMessageHub Hub { get; }
     /// <summary>The hub that hosts the underlying data source backing this stream.</summary>
     IMessageHub Host { get; }
+
+    /// <summary>
+    /// The stream this one was reduced FROM, or <c>null</c> for a stream that is not a reduce of
+    /// another (a data source's primary stream, a combined stream, a remote mirror).
+    ///
+    /// <para>🚨 This exists because a reduced stream is its parent's SIBLING, not its child:
+    /// <c>WorkspaceStreams.CreateReducedStream</c> hosts the reduced stream's <c>sync/{id}</c>
+    /// sub-hub under <see cref="Host"/> and only registers it for disposal on the parent. Without
+    /// this link, "is this stream alive?" cannot see that the thing it mirrors is already dead —
+    /// the gap behind Systemorph/MeshWeaver#1455. Ask <c>StreamLiveness.IsUsable</c> rather than
+    /// walking this by hand.</para>
+    /// </summary>
+    internal ISynchronizationStream? Source { get; }
+
+    /// <summary>
+    /// Whether this stream has been disposed. Its store is completed and it will never emit again.
+    /// </summary>
+    internal bool IsDisposed { get; }
     /// <summary>Reads a per-stream value previously stashed under <paramref name="key"/>.</summary>
     /// <typeparam name="T">Expected value type.</typeparam>
     /// <param name="key">Key the value was stored under.</param>

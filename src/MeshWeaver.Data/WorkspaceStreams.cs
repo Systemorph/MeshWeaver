@@ -197,7 +197,15 @@ c => c
             reference,
             stream.ReduceManager.ReduceTo<TReduced>(),
             configuration
-        );
+        )
+        {
+            // 🚨 The link that makes this stream's liveness answerable. The sub-hub below is
+            // hosted on `stream.Host`, so it is the PARENT'S SIBLING and outlives the parent for
+            // the whole teardown cascade; without a way back to the parent, every cache that
+            // keys on the reference alone serves a mirror of a dead source (#1455). Read it
+            // through StreamLiveness.IsUsable, never by hand.
+            Source = stream
+        };
 
         stream.RegisterForDisposal(reducedStream);
 
