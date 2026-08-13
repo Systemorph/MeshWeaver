@@ -54,11 +54,20 @@ public enum PreWarmStatus
     /// </summary>
     UpstreamUnevaluated,
     /// <summary>
-    /// The compile settled at Error AND the type's declared source queries currently match ZERO
-    /// Code nodes (<see cref="NodeTypeDefinition.CurrentSourceVersions"/> is EXPLICITLY empty) —
-    /// the sources were deleted or moved out from under the type. This is a CONTENT verdict, not
-    /// an image verdict: which nodes a mesh query matches is a property of the mesh, not of the
-    /// framework being rolled out, so no image caused it and no rollout can fix it.
+    /// The compile settled at Error AND the type's source queries currently match ZERO Code nodes
+    /// (<see cref="NodeTypeDefinition.CurrentSourceVersions"/> is EXPLICITLY empty) — the sources
+    /// were deleted or moved out from under the type. This is a CONTENT verdict, not an image
+    /// verdict: which nodes a mesh query matches is a property of the mesh, not of the framework
+    /// being rolled out, so no image caused it and no rollout can fix it.
+    ///
+    /// <para>🚨 "Source queries" here means the type's EFFECTIVE queries — the ones it DECLARES in
+    /// <see cref="NodeTypeDefinition.Sources"/> or, far more commonly, the DEFAULT
+    /// <c>namespace:{path}/Source scope:subtree</c> pair it gets when it declares none. The
+    /// classifier used to additionally require declared queries, which made this member
+    /// unreachable for nearly every NodeType in a real mesh and is what let a DELETED type gate
+    /// readiness on every boot (#1391). Do not reintroduce that condition: an empty
+    /// <see cref="NodeTypeDefinition.Sources"/> means "uses the defaults", not
+    /// "configuration-only".</para>
     ///
     /// <para>🚨 This member exists because on 2026-08-10 four such types (KmuBasics/* — their
     /// Source subtrees removed when the course was re-installed under a new id, the type nodes
