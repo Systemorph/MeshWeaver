@@ -169,7 +169,8 @@ public static class NodeTypeLayoutAreas
                 var def = node?.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
                 if (node is null || def is null)
                     return (UiControl?)Controls.Markdown(
-                        $"*{host.Localize("ui.noNodeTypeDefinition")}*");
+                            $"*{host.Localize("ui.noNodeTypeDefinition")}*")
+                        .WithId(AreaFrameClassifier.CompileProgressId);
 
                 // Compile finished cleanly → redirect to the now-addressable page. The user
                 // only landed here because activation could not complete mid-compile; once
@@ -251,7 +252,12 @@ public static class NodeTypeLayoutAreas
                 if (def.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
                     stack = AppendSweepSummary(stack, host, sweepNodes);
 
-                return (UiControl?)stack;
+                // 🚨 Every frame this surface serves is tagged so a CONSUMER — not just a human
+                // reading the headline — can tell "the type is still building, keep waiting" from
+                // the framework's terminal "Area not found". Since the compilation-in-progress
+                // overlay serves this page on EVERY area of an instance, a waiter that latched it
+                // as the real content would fail on the assertion instead of waiting (#1411).
+                return (UiControl?)stack.WithId(AreaFrameClassifier.CompileProgressId);
             });
     }
 
