@@ -370,6 +370,64 @@ On a framework-version mismatch the NodeType recompiles and **mints a new releas
 for the new framework. The old release is left intact as history so instances still
 loaded on it keep running until they cycle.
 
+### 🚨 ONE POD BAKES — and cluster membership, not a clock, decides when another may take over
+
+Rule 3 makes every pod on a new image discover the same framework-stale cache at once. The cache is
+shared but the *decision* to rebuild is per-process, so with `maxSurge` during a rollout — or any
+`replicas > 1` — every replica independently starts the same sweep over the same NodeTypes into the
+same volume. That is not merely duplicated work: it is concurrent cold Roslyn compiles of the SAME
+type, which is precisely the storm the sequential, dependency-ordered sweep exists to prevent (four
+of them on memex, 2026-07-28 04:05, dropped six plugin roots to the "did not settle" overlay and
+needed a scale-to-zero).
+
+`NodeTypeBakeLease` elects the single baker with an atomic `CreateNew` on a lease file in the shared
+assembly-cache directory, keyed per framework version (a bake-ahead pod on a NEW image and the live
+pods on the OLD one write different files and must not block each other). Everyone else FOLLOWS: it
+re-probes the assembly store and re-attempts the lease every `FollowPollInterval`, compiling nothing.
+
+**Takeover is decided by cluster membership.** The holder stamps its `IClusterMembership.LocalIdentity`
+into the lease, so "did the baker die?" is answered by the thing that already runs probes, indirect
+probes and a membership table for exactly that question:
+
+| Membership says | Result |
+|---|---|
+| the holder is **Gone** | take over **immediately** — no staleness budget to wait out |
+| the holder is **Alive** | **never** take over, however old the heartbeat looks |
+| **Unknown** — no cluster (monolith, test, dev), an unresolvable identity, a silo the snapshot does not list | fall back to the `StaleAfter` (10 min) heartbeat clock |
+
+Absence from the membership snapshot is **Unknown, never Gone**: Orleans keeps departed silos as
+`Dead` until the defunct-cleanup window elapses, so a silo that really died IS in the snapshot, while
+one that is missing entirely usually means our snapshot is not hydrated — and reading that as "gone"
+on a freshly-started silo would evict a live baker.
+
+**The heartbeat is a write, not a touch.** Its instant lives in the lease file's CONTENT.
+`SetLastWriteTimeUtc` would put it in metadata, which Azure Files may serve from cache, and a
+falsely-stale metadata read is exactly the misreading that puts two pods on one compile.
+
+**Where it fails open, and where it does not.** Failing open used to be blanket — every error path
+returned "you may bake" — which is where "one pod bakes" stopped being a guarantee. It is now split
+by what the failure actually tells you:
+
+- **No coordination substrate** (the shared directory cannot be created, the lease path is not a
+  usable file) → **bake**. There is no fleet to coordinate with, and a mechanism that could deny work
+  here would turn a volume blip into a fleet that never compiles.
+- **The substrate works but the holder is indeterminate** (a takeover we decided on whose write
+  failed; a lease that vanished under us and was immediately re-taken) → **follow**. The follower
+  re-attempts every poll, so being wrong costs one interval — while baking costs the storm.
+
+**What the election does NOT fix.** `NodeTypeBatchBake.WriteStamp` is a read-modify-write at
+`NextVersion`, and the monotonic write guard bounces the loser (`compile-state stamp … was REFUSED`),
+so the bytes land on the share while the record does not name them. The election removes one of the
+two writers that can race there — a second baker — but the other is the type's OWN per-node hub,
+which stamps compile state from the activation path, the sources watcher and the release watcher, and
+is legitimately live while a batch bake runs. The loser's outcome is already correct: the bytes are
+durable and content-addressed, the record stays pending, and the level-triggered probe (which asks
+the STORE, not the record) re-bakes and re-stamps on the next pass.
+
+Code: `src/MeshWeaver.Hosting/NodeTypeBakeLease.cs`, elected from `DynamicTypePreWarmer.BakeOrFollow`;
+`IClusterMembership` (`src/MeshWeaver.Mesh.Contract/Services/IClusterMembership.cs`) with the Orleans
+implementation registered silo-side by `ConfigureMeshWeaverServer`.
+
 ---
 
 ## 🚨 That recompile can FAIL — and nothing upstream can warn you

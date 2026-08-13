@@ -354,8 +354,14 @@ public static class DynamicTypePreWarmer
         if (coordination is null)
             return WarmPending(mesh, workspace, accessService, definitions, nodes, report, budget, pacing, batchBake, logger);
 
+        // Cluster membership, when this host is in a cluster, is what decides takeover — a lease
+        // whose holder membership reports GONE is taken over at once, and one whose holder it reports
+        // ALIVE is never taken however old the heartbeat looks. Absent (monolith, test, Orleans
+        // client) the lease falls back to its staleness clock. See NodeTypeBakeLease.
+        var membership = mesh.ServiceProvider.GetService<IClusterMembership>();
         var lease = NodeTypeBakeLease.TryAcquire(
-            coordination.LeaseDirectory, report.FrameworkVersion, Environment.MachineName, logger);
+            coordination.LeaseDirectory, report.FrameworkVersion, Environment.MachineName,
+            logger, membership);
 
         if (lease is not null)
             // Observable.Using holds the lease for the LIFETIME of the bake and releases it on
