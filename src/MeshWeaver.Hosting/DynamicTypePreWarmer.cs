@@ -255,7 +255,8 @@ public static class DynamicTypePreWarmer
         ILogger? logger = null,
         TimeSpan? perTypeBudget = null,
         TimeSpan? betweenTypes = null,
-        bool batchBake = false)
+        bool batchBake = false,
+        bool buildProtocol = false)
     {
         var budget = perTypeBudget ?? DefaultPerTypeBudget;
         var pacing = betweenTypes ?? BetweenTypes;
@@ -317,7 +318,7 @@ public static class DynamicTypePreWarmer
                         .Probe(definitions, store, logger: logger)
                         .SelectMany(report => BakeOrFollow(
                             mesh, workspace, accessService, definitions, nodes, store, report,
-                            budget, pacing, batchBake, logger));
+                            budget, pacing, batchBake, buildProtocol, logger));
                 })
                 // 🚨 NO Catch HERE, AND NO LOG-AND-SWALLOW — DELIBERATELY.
                 //
@@ -377,8 +378,22 @@ public static class DynamicTypePreWarmer
         TimeSpan budget,
         TimeSpan pacing,
         bool batchBake,
+        bool buildProtocol,
         ILogger? logger)
     {
+        // Build-protocol coordination (Doc/Architecture/BuildCoordination): the Admin/Build claim
+        // decides who bakes and the per-fingerprint GO is what everyone else waits on — no lease
+        // file, no follower poll. Deliberately BEFORE the IsComplete fast path: a complete share
+        // still (re)publishes its fingerprint's GO, so a baker that crashed between finishing the
+        // share and writing the GO heals on the next boot instead of stranding future GO waiters.
+        if (buildProtocol)
+            return BuildProtocolDriver.Run(
+                mesh, report, definitions, store,
+                () => WarmPending(
+                    mesh, workspace, accessService, definitions, nodes, report,
+                    budget, pacing, batchBake, logger),
+                logger);
+
         // Nothing outstanding — no lease needed, and nothing for a follower to wait for.
         if (report.IsComplete)
             return WarmPending(mesh, workspace, accessService, definitions, nodes, report, budget, pacing, batchBake, logger);
@@ -410,7 +425,8 @@ public static class DynamicTypePreWarmer
             .Timer(FollowPollInterval)
             .SelectMany(_ => NodeTypeBakeStatus.Probe(definitions, store, logger: logger))
             .SelectMany(fresh => BakeOrFollow(
-                mesh, workspace, accessService, definitions, nodes, store, fresh, budget, pacing, batchBake, logger));
+                mesh, workspace, accessService, definitions, nodes, store, fresh, budget, pacing,
+                batchBake, buildProtocol: false, logger));
     }
 
     /// <summary>
