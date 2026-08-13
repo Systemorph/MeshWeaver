@@ -72,11 +72,12 @@ public static class CourseLayoutAreas
         var options = hub.JsonSerializerOptions;
         var nodeStream = host.Workspace.GetMeshNodeStream();
 
-        // 🚨 CONTENT-BEARING read, and the query string MUST stay byte-identical to
-        // ModuleLayoutAreas' siblingStream — same cache id, and the synced-query cache is
-        // keyed by ID ALONE (it ignores the queries on a hit). BuildModuleCards reads
-        // ContentAs<ModuleConfiguration> off these nodes for the card summary, so `content`
-        // is projected deliberately.
+        // 🚨 CONTENT-BEARING read. BuildModuleCards reads ContentAs<ModuleConfiguration> off
+        // these nodes for the card summary, so `content` is projected deliberately. Keep the
+        // query string byte-identical to ModuleLayoutAreas' siblingStream (same cache id) so the
+        // two call sites SHARE one subscription: since #1311 the cache is keyed by (id, query
+        // set), so a drift is no longer a silent null — it just quietly opens a second synced
+        // query that stays resident for the life of the process.
         var moduleStream = hub.GetQuery(
             $"course-modules:{coursePath}",
             $"path:{coursePath} scope:children nodeType:{ModuleNodeType.NodeType} select:path,id,name,order,content");
