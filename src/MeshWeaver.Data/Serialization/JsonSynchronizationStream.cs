@@ -1509,6 +1509,16 @@ public static class JsonSynchronizationStream
             }
             else if (current is JsonArray arr && int.TryParse(segment, out var index))
             {
+                // 🚨 Bounds belong HERE, not at the indexer. An INTERMEDIATE array segment that no
+                // longer addresses an element (`/lines/7/text` against a two-element array) is a
+                // stale-snapshot symptom exactly like a stale leaf index — but left to
+                // JsonArray's indexer it escapes as ArgumentOutOfRangeException, which
+                // SynchronizationStream.UpdateStream does NOT catch, so the divergence faults the
+                // stream instead of taking the RequestFreshSnapshot route it is entitled to.
+                // Shared by add / replace / splice, so all three recover the same way.
+                if (index < 0 || index >= arr.Count)
+                    throw new StaleStreamStateException(
+                        $"Stale patch: segment '{segment}' addresses an element of a {arr.Count}-element array.");
                 current = arr[index];
             }
             else
@@ -1532,6 +1542,11 @@ public static class JsonSynchronizationStream
             }
             else if (current is JsonArray arr && int.TryParse(segment, out var index))
             {
+                // Same rule as EnsureParentPath: a stale INTERMEDIATE index takes the resync
+                // route, never an ArgumentOutOfRangeException the caller cannot recover from.
+                if (index < 0 || index >= arr.Count)
+                    throw new StaleStreamStateException(
+                        $"Stale patch: segment '{segment}' addresses an element of a {arr.Count}-element array.");
                 current = arr[index];
             }
             else
