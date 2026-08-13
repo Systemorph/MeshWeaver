@@ -1,4 +1,4 @@
-# Aspire.Hosting.Memex
+# MeshWeaver.Aspire.Hosting.Memex
 
 Aspire hosting integration for the MeshWeaver Memex portal. `builder.AddMemex(...)` composes
 a complete portal deployment from published container images — no portal source tree needed —
