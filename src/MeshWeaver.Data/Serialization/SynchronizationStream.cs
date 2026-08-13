@@ -97,6 +97,73 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public ISynchronizationStream<TReduced>? Reduce<TReduced>(WorkspaceReference<TReduced> reference)
         => Reduce(reference, (Func<StreamConfiguration<TReduced>, StreamConfiguration<TReduced>>?)(x => x));
 
+    // 🚨 Intermediate reduced streams are CACHED, for the same reason Workspace.GetStream caches
+    // local reduced streams (#1345) and _remoteStreamCache caches mirrors: a reduce is neither free
+    // nor garbage-collectable.
+    //
+    // CreateReducedStream constructs a SynchronizationStream — hence a hosted `sync/{id}` sub-hub
+    // with its own Autofac scope, TypeRegistry and JsonSerializerOptions (~140 KB) — and registers
+    // it for disposal ON THIS STREAM. So when THIS stream is hub-lifetime (a data source's primary
+    // EntityStore), every uncached reduce is a hub that survives until the hub dies. MeshDataSource's
+    // own-node factory paid exactly that once per inbound SubscribeRequest, which is the residual
+    // measured in Systemorph/MeshWeaver#1324 after #1415 closed the eviction-parking retainer.
+    //
+    // Keyed by reference only: a shared reduce carries no caller-specific configuration by
+    // construction (that is what makes it shareable — see ISynchronizationStream.ReduceShared).
+    private readonly ConcurrentDictionary<WorkspaceReference, Lazy<ISynchronizationStream>> sharedReduceCache = new();
+
+    /// <inheritdoc />
+    public ISynchronizationStream<TReduced>? ReduceShared<TReduced>(WorkspaceReference<TReduced> reference)
+    {
+        // 🚨 A DISPOSED PARENT IS NEVER SERVED FROM CACHE — sharing must not outlive the thing being
+        // shared FROM. The cached child's own sub-hub is a sibling under `Host`, not a child of this
+        // stream's hub, so it stays alive when this stream is disposed: a liveness check on the child
+        // alone happily hands back a mirror of a dead source. Reads then bind to a stream that will
+        // never emit and never complete, so a reader gets neither an answer nor the NACK that
+        // `DataExtensions.HandleGetDataRequest`'s disposal arm owes it — it hangs for its whole
+        // budget (SilentReadNackTest, both arms). Falling through to the plain reduce keeps the
+        // behaviour a disposed parent has always had.
+        if (isDisposed)
+            return Reduce(reference, x => x);
+
+        while (true)
+        {
+            var lazy = sharedReduceCache.GetOrAdd(reference,
+                _ => new Lazy<ISynchronizationStream>(
+                    () => Reduce(reference, x => x)
+                          ?? throw new InvalidOperationException(
+                              $"Cannot reduce stream {StreamId} to {reference}"),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            ISynchronizationStream reduced;
+            try
+            {
+                reduced = lazy.Value;
+            }
+            catch
+            {
+                // A Lazy in ExecutionAndPublication mode CACHES the exception, so one transient
+                // failure (e.g. HubDisposingException from a hub winding down) would otherwise
+                // poison this reference for the parent's whole life. Drop the faulted entry — only
+                // if it is still ours — and let the caller see the original fault.
+                Remove(reference, lazy);
+                throw;
+            }
+
+            // Same liveness contract as Workspace.GetStream: a cached child whose sub-hub is gone
+            // is replaced rather than handed out dead.
+            if (reduced.Hub?.RunLevel <= MessageHubRunLevel.Started
+                && reduced.Hub is not MessageHub { IsDisposing: true })
+                return (ISynchronizationStream<TReduced>)reduced;
+
+            Remove(reference, lazy);
+        }
+
+        void Remove(WorkspaceReference key, Lazy<ISynchronizationStream> entry) =>
+            ((ICollection<KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>>)sharedReduceCache)
+                .Remove(new KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>(key, entry));
+    }
+
 
     /// <summary>
     /// Derives a reduced stream of <typeparamref name="TReduced"/> for the given reference, applying the
@@ -1521,6 +1588,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         // the 1-item replay buffer is equally reachable via `current` for the stream's
         // remaining lifetime.
         Store.OnCompleted();
+        // The shared children were registered for disposal on THIS stream (CreateReducedStream),
+        // so the hub teardown below is what disposes them; dropping the index here just stops this
+        // corpse from referencing them.
+        sharedReduceCache.Clear();
         if (Hub is not null && Hub.RunLevel <= MessageHubRunLevel.Started)
             Hub.Dispose();
     }
