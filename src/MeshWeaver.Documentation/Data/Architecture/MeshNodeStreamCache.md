@@ -128,6 +128,57 @@ hub.SubmitMessage(threadPath, "second");
 hub.SubmitMessage(threadPath, "third");
 ```
 
+## Big strings ship as a SPLICE, not as the whole value
+
+Step 2 above — "ships only the JSON-merge patch" — is per *leaf*, and a changed leaf normally travels
+whole. For a field that **grows one chunk at a time** that is quadratic: an agent response cell
+re-sent its entire text on every `Sample(100 ms)` tick, and `ExtractBaseValues` re-sent the entire
+*previous* text alongside it, so one reply cost `O(ticks × final length)` — **3.8 MB measured for a
+20 kB answer**, all of it Large-Object-Heap traffic on the writer and the owner both.
+
+So a changed **string** leaf at least `PatchStringSplice.MinSpliceLength` (1 kB) long, whose change
+is smaller than the value, is encoded as a splice instead:
+
+| where | shape |
+|---|---|
+| in the patch | `{ "$sd": [start, removedLength, "inserted"] }` |
+| in `BaseValues`, same leaf | `{ "$sdb": [baseLength, "fingerprint"] }` |
+
+Both halves matter. Splicing only the patch would still leave the base half re-shipping the previous
+value every tick, and the round would stay `O(ticks × length)`.
+
+**The owner applies a splice only when it can prove the offsets still address the right characters.**
+The fingerprint (length + truncated SHA-256) is compared against the owner's live text:
+
+- **match** → the owner's text *is* the text the writer diffed against, so applying the splice yields
+  byte-for-byte the string a whole-value patch would have written. This is the normal path.
+- **mismatch** → the owner moved on since the writer's base. The leaf is **refused**: the owner keeps
+  its newer value and NACKs `Conflict`, which re-runs the writer's update lambda against the fresh
+  state and re-diffs — the same self-healing route a refused scalar takes.
+
+That refusal is the deliberate half of the trade. A splice is never applied at an offset the
+fingerprint did not vouch for, so two mirrors splicing the same string concurrently cannot interleave
+into corrupted text; the loser re-diffs instead. The cost is that a *disjoint* concurrent edit to a
+big string, which the full-value three-way merge would have rebased and landed, now costs a round
+trip. For every field this applies to — streaming cells, markdown bodies, prerendered html — that is
+a trade of a rare extra round trip against a constant, per-tick, per-viewer megabyte.
+
+Below 1 kB, and for arrays and scalars, nothing changes: the whole value and the whole base still
+travel, and `MeshNodePatchMerge` resolves them exactly as before (arrays in particular *need* their
+full base — `MergeArray` consumes it to tell a writer's removal from an element the owner dropped).
+
+**Rolling deploys.** The marker lives *inside* the patch, so during the minute or two a rollout has
+old and new pods coexisting, a new writer can send a splice to a per-node hub still running the old
+image. That owner does not decode `$sd`, merges the marker object into a string-typed field, and the
+merged node then **fails to deserialize** — the write is NACKed `Deserialization` and never commits.
+Loud and non-destructive, and it self-heals: the mirror never advanced, so the next splice is
+computed against the same base and lands the whole missing span once the owner is upgraded.
+
+That failure mode is deliberate. The obvious alternative — carrying splices in a new sibling property
+the old owner would simply ignore — degrades instead into an owner that **acks a write it only
+partly applied**, which is the acked-write-loss class of [#648](https://github.com/Systemorph/MeshWeaver/issues/648).
+A visibly stalled field beats a silently lost one.
+
 ## Idle release — quiet paths give their upstream back
 
 A read entry does **not** live for the process lifetime. Like the write-side serial
