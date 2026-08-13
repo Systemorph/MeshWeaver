@@ -195,8 +195,24 @@ public static class MeshDataSourceExtensions
                                 var ownDataSource = workspace.DataContext
                                     .GetDataSourceForType(typeof(MeshNode));
                                 var primary = ownDataSource?.GetStreamForPartition(null);
+                                // 🚨 ReduceShared, NOT Reduce — this InstanceCollection stream is a
+                                // NAMELESS INTERMEDIATE that no caller owns. A plain Reduce builds a
+                                // new one per call and registers it for disposal on `primary`, the
+                                // data source's hub-lifetime stream — so every call permanently
+                                // added a `sync/{id}` sub-hub (its own Autofac scope, TypeRegistry
+                                // and JsonSerializerOptions, ~140 KB). This factory runs uncached on
+                                // every call that passes a `configuration`, i.e. once per inbound
+                                // SubscribeRequest, so an unsubscribe reaped the subscription's own
+                                // stream and left this intermediate behind forever: the residual
+                                // measured in Systemorph/MeshWeaver#1324 after #1415 closed the
+                                // eviction-parking retainer. Same defect as #1345 (an unmemoized
+                                // Workspace.GetStream) one layer down at stream.Reduce.
+                                //
+                                // Sharing is safe here precisely because the intermediate is
+                                // ownerless: nobody disposes it, and it carries no caller-specific
+                                // configuration. The caller-specific half stays a fresh Reduce below.
                                 var collectionStream = primary
-                                    ?.Reduce<InstanceCollection>(new CollectionReference(nameof(MeshNode)));
+                                    ?.ReduceShared<InstanceCollection>(new CollectionReference(nameof(MeshNode)));
                                 var ownPathReference = string.IsNullOrEmpty(meshRef.Path)
                                     ? new MeshNodeReference(workspace.Hub.Address.Path)
                                     : meshRef;

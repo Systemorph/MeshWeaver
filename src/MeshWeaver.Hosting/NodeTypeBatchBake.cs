@@ -536,10 +536,10 @@ internal static class NodeTypeBatchBake
                 if (error is SourceDiscoveryUnavailableException)
                     return new PreWarmOutcome(typePath, PreWarmStatus.TimedOut, error.Message);
 
-                // Same classification the activation path applies (ClassifyCompileFailure): a
-                // type that DECLARES source queries whose resolution is EXPLICITLY empty is
-                // broken by CONTENT (its sources were deleted from the mesh) — NoSources, which
-                // must never gate a rollout.
+                // Same classification the activation path applies
+                // (DynamicTypePreWarmer.ClassifyCompileFailure): a compile whose source set
+                // resolved EMPTY is broken by CONTENT (its sources were deleted from the mesh) —
+                // NoSources, which must never gate a rollout.
                 //
                 // 🚨 BOTH witnesses are required (#1216). The batch's own resolved snapshot alone is
                 // NOT sufficient authority: when discovery is starved or truncated it also reports
@@ -548,10 +548,24 @@ internal static class NodeTypeBatchBake
                 // The type's persisted CurrentSourceVersions is the independent corroboration, and
                 // ResolveSources already refuses to produce a set at all when it is missing; this
                 // check keeps the classification honest even if a future caller bypasses that.
+                //
+                // 🚨 What is NOT required — and its removal is the fix for #1391 — is that the type
+                // DECLARE its source queries. An empty NodeTypeDefinition.Sources means "uses the
+                // DEFAULT {path}/Source query", which is how nearly every NodeType is authored, so
+                // demanding declared queries made NoSources unreachable for almost the whole
+                // population and turned every deleted-source type into a gating image verdict.
+                //
+                // 🚨 What REPLACES it is LastCompileSucceededAt: the sources must have been LOST,
+                // not merely absent. A type that never built cannot have lost anything — its empty
+                // snapshot is its normal state and a failure is a defect in its own Configuration,
+                // which must keep gating (and must keep cascading UpstreamFailed to its dependents).
+                // See ClassifyCompileFailure for the full reasoning; the two paths must agree,
+                // because the status vocabulary may not depend on WHICH driver ran the compile.
                 var def = typeNode.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions);
-                var status = def?.Sources is { Count: > 0 }
+                var status = def is not null
                         && sources.Count == 0
                         && def.CurrentSourceVersions is { Count: 0 }
+                        && def.LastCompileSucceededAt is not null
                     ? PreWarmStatus.NoSources
                     : PreWarmStatus.CompileError;
                 return new PreWarmOutcome(
@@ -633,6 +647,25 @@ internal static class NodeTypeBatchBake
                     // record does not name them, so the type simply stays pending and the next
                     // level-triggered probe re-bakes and re-stamps it. Saying so is the
                     // difference between a self-healing skip and a stamp that vanished.
+                    //
+                    // 🚨 THE SINGLE-BAKER CLAIM DOES NOT CLOSE THIS, AND IS NOT MEANT TO (#1355).
+                    // It removes one of the two writers that can race here — a SECOND BAKER, which
+                    // the build protocol's claim arbiter excludes, handing a claim on only when
+                    // cluster membership says the holder is gone rather than when a clock expires
+                    // (BuildNodeType.Arbitrate). The
+                    // other writer is the type's OWN per-node hub, which is not a baker at all: it
+                    // stamps compile state from the activation-driven path, the sources watcher and
+                    // the release watcher, and it is legitimately live while a batch bake runs. So
+                    // the read-modify-write at NextVersion stays racy by construction, and the guard
+                    // above stays the thing that makes it safe.
+                    //
+                    // It is DEFENDED rather than fixed because the loser's outcome is already the
+                    // correct one: the bytes are durable and content-addressed, the record is left
+                    // pending, and the level-triggered probe re-bakes the type on the next pass
+                    // (NodeTypeBakeStatus.Probe asks the STORE, not the record). Turning it into a
+                    // compare-and-re-apply here would buy one saved recompile at the cost of a
+                    // second write path into the same record from a driver that does not own it —
+                    // which is the shape that produced the racing writers in the first place.
                     .Do(saved =>
                     {
                         if (saved is not null && saved.Version > stampedNode.Version)
