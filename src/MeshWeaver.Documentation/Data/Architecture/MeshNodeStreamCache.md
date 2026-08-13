@@ -202,6 +202,32 @@ NodeType activation, MCP get/search, synced-query grain warming — leaked a
 permanently-connected upstream stream (~1,650 live streams / 37 heartbeats-per-second
 measured on a long-lived portal).
 
+### A warm mirror is a KEEP-ALIVE, so "final" must be an event, not a wait
+
+The ten-minute window is a *heuristic about the future*: a path touched just now is
+probably about to be touched again. For a node with a **terminal lifecycle** that
+heuristic is provably false, and waiting it out is not merely wasteful — it is
+self-defeating. The mirror posts a `HeartBeatEvent` to its owner every 45 s
+(`SyncStreamOptions.HeartbeatInterval`) *expressly to keep that hub alive*, and that
+message re-arms every idle clock the platform has: the cache's own window, an Orleans
+grain's collection age, `KernelContainer.DisposeOnTimeout`. So a finished activity does
+not sit waiting to be reclaimed — it **prevents its own reclamation**, and it takes the
+owning node hub and the `sync/` sub-hubs on both sides with it
+([#1324](https://github.com/Systemorph/MeshWeaver/issues/1324)).
+
+`IMeshNodeStreamCache.ReleaseIfUnwatched(path)` is the event-driven counterpart: the same
+detach → claim → tear-down protocol as the sweep, and the same **atomic zero-subscriber
+guard**, but with the wait replaced by proof from the caller. Its one caller today is
+`ActivityLogAppender.Append`, which releases the path in the same write that reports a
+status where `ActivityStatus.IsTerminal()` holds — an activity in that state is never
+written again, by definition. A reader still watching the finished activity wins the race
+and keeps its mirror; the release simply declines and the sweep remains the backstop.
+
+🚨 It is **not** a shorter timer, and must not become one. Nothing about the idle window
+changes; what changed is that a caller who *knows* the answer no longer has to wait for
+the heuristic to guess it. Measured on `NodeTypeRecompileAlcLeakTest`: 6.5 → 5.0 retained
+hubs per compile activity, with the `cache/`-side mirror hubs going 3 → 0.
+
 ### The idle sweep is not the only reaper — an evicted upstream dies with its last holder
 
 The idle sweep answers *"this path went quiet"*. It cannot answer *"this write is finished
