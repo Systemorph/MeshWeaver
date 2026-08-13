@@ -113,20 +113,46 @@ There is no "out of scope" residue. If you find yourself typing `Observable.From
 
 ### Promise-cache for idempotent one-shots
 
-For work that should run **at most once** and then be observed by many (schema provisioning, a cached resource handshake), cache the eager `pool.Run(...)` observable in an **instance** `ConcurrentDictionary<key, IObservable<T>>` (never static):
+For work that should run **at most once** and then be observed by many (schema provisioning, a connect handshake, a container-ready probe), hold the eager `pool.Run(...)` observable in an **instance** `PromiseCache<TKey, TValue>` — or `PromiseSlot<TValue>` when there is only one — never static:
 
 ```csharp
 // PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned — the canonical example.
 // First caller kicks the CREATE SCHEMA off on the per-adapter pool; every later subscriber
 // replays the cached completion. No Observable.FromAsync at the call site.
-private readonly ConcurrentDictionary<string, IObservable<Unit>> _provisioned = new();
+private readonly PromiseCache<string, Unit> _provisioned = new(StringComparer.OrdinalIgnoreCase);
 
 public IObservable<Unit> EnsurePartitionProvisioned(string @namespace) =>
     _provisioned.GetOrAdd(schema, _ =>
         _ioPool.Run(ct => EnsureSchemaAsync(def, ct)).Select(_ => Unit.Default));
+
+// The keyless variant — McpRemoteMeshClient's connect handshake.
+private readonly PromiseSlot<McpClient> _connect = new();
+private IObservable<McpClient> Connect() => _connect.GetOrCreate(() => _pool.Run(ConnectAsync));
 ```
 
-`pool.Run` is `ReplaySubject`-backed (see [IoPoolExtensions](#hidden-inside-the-interfaces)) — eager, single-run, replays to all. That is the "promise pattern": the dictionary entry *is* the promise.
+`pool.Run` is `ReplaySubject`-backed (see [IoPoolExtensions](#hidden-inside-the-interfaces)) — eager, single-run, replays to all. That is the "promise pattern": the cache entry *is* the promise. (`pool.RunBlocking` is the same for a sync-blocking leaf.)
+
+#### 🚨 Why this is a type and not a `ConcurrentDictionary`
+
+**A `ReplaySubject` latches _terminals_, `OnError` included.** So the older recipe — the eager observable in a bare `ConcurrentDictionary<key, IObservable<T>>` — turned **one transient fault into a permanent one**: the entry replayed that same exception to every later subscriber for the life of the process, and nothing ever re-attempted. `Replay(1).AutoConnect(1)` and `Replay(1).RefCount()` latch identically — one already-terminated subject behind the connectable.
+
+That is not a corner case; it shipped **eight** times before it was fixed in the recipe (#1369), and its worst instance made a partition permanently un-provisionable after a single connect blip — every later write `42P01`-ing until the pod was restarted. `PromiseCache` exists so the next one-shot someone writes gets the cure for free.
+
+What the type guarantees, and what you must not undo:
+
+| Rule | Why |
+|---|---|
+| **Cache success, evict failure** | A retry must be a genuinely NEW attempt, never a replay of the old terminal. |
+| **Never a retry loop / timer / poller** | Eviction means only "the next caller who asks will try again". Nothing re-attempts on its own — that self-driving shape is the resubscribe storm that took prod down on 2026-06-08. |
+| **The caller still sees the error** | Eviction does not swallow the fault. The subscriber that hit it gets it; the *cache* just stops serving it to everyone after. |
+| **Eviction is pair-exact** | Several subscribers can be attached when the fault arrives, and a healthy replacement may already be in flight by the time the last of them reacts. Removing by key alone would drop it. |
+| **In-flight entries are never evicted** | Eviction is driven by the terminal `OnError`, so concurrent callers keep sharing the single attempt. A caller that subscribes between the fault and the removal sees that fault — it was concurrent with the failing attempt. |
+| **The factory runs once per stored entry** | `pool.Run` is EAGER, so a `ConcurrentDictionary.GetOrAdd` factory invoked twice and discarded once would have fired a real, unobserved round-trip (a duplicate `CREATE SCHEMA`, an orphaned CLI subprocess). Each entry's `Lazy` closes that. |
+| **Instance field, never static** | Its lifetime must be the mesh's — see [No Static State](/Doc/Architecture/NoStaticState). |
+
+Internally the eviction is attached with `Do`, never a bookkeeping `Subscribe`: subscribing would be the `AutoConnect(1)` first subscriber and would connect chains nobody asked for. `Invalidate(key)` exists for a real domain invalidation (the partition was dropped) — not for test isolation, which a mesh-scoped instance never needs.
+
+Contract pinned by `PromiseCacheFaultEvictionTest` (test/MeshWeaver.Hosting.Test) and, end-to-end against a real Postgres, `PartitionProvisioningFaultRecoveryTests`.
 
 ---
 
