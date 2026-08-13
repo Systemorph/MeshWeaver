@@ -203,6 +203,49 @@ public class RegistryUpdateReconcileTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
+    /// 🚨 A module with NO content identity is refused LOUDLY, not absorbed into "nothing changed".
+    ///
+    /// <para>The ordering is the whole point, and it is easy to get backwards: <c>null == null</c> is
+    /// <i>equal</i>, so checking equality first silently swallows the commonest shape of this defect
+    /// — a module whose CI emits no <c>manifest.lock</c>, on both sides — and the operator is left
+    /// with a plugin that never updates and no line in the log saying why. The missing-identity check
+    /// therefore runs BEFORE the equality gate.</para>
+    ///
+    /// <para>It must still install nothing: a missing hash is the absence of evidence, not evidence
+    /// of a change, and treating it as a change would re-install the module on every single boot.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AModuleWithNoContentIdentity_InstallsNothing_AndSaysSo()
+    {
+        var noIdentity = Pkg(ModuleV1) with { ModuleVersion = null };
+
+        // 🚨 The record's hash comes from the module's `manifest.lock` FILE, not from the manifest
+        // handed to the installer — so a fixture that only blanks the manifest field installs a
+        // record that HAS a hash, and the test would then exercise the ordinary changed/unchanged
+        // path while claiming to exercise this one. The assertion below is what caught exactly that.
+        var withoutLock = FilesAt(ModuleV1, "# Notes v1", "c1")
+            .Where(f => !f.RelativePath.EndsWith("manifest.lock", StringComparison.Ordinal))
+            .ToList();
+
+        await PackageInstaller.Install(Mesh, noIdentity, withoutLock, "c1")
+            .FirstAsync().ToTask();
+
+        var record = await ReadRecord().ToTask();
+        record!.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)!.ModuleVersion
+            .Should().BeNullOrEmpty("the fixture only means anything if the record really has no hash");
+
+        var source = new FeedSource([noIdentity], FilesAt(ModuleV2, "# Notes v2", "c2"));
+
+        await PackageUpdateReconciler.ReconcileInstalled(
+                Mesh, source, "HEAD", [noIdentity], "Served by registry 'test'", null)
+            .FirstAsync().ToTask();
+
+        source.Fetches.Should().BeEmpty(
+            "there is no content identity to compare, so 'has it changed' is unanswerable — "
+            + "answering 'yes' would re-install this module on every pod start");
+    }
+
+    /// <summary>
     /// The wiring, pinned the same way the watcher's is. Registration alone does not start it — the
     /// host starts only <c>IHostedService</c> registrations, and the hosted registration must
     /// resolve the SAME mesh singleton rather than a second inert copy.

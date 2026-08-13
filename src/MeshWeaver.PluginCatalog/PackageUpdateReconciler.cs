@@ -128,11 +128,6 @@ internal static class PackageUpdateReconciler
         string provenance,
         ILogger? logger)
     {
-        // 🚨 THE gate: content identity, not the event that woke us. Equal module hashes ⇒ nothing
-        // in this module changed ⇒ stay completely silent.
-        if (string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
-            return Observable.Return(Unit.Default);
-
         // 🚨 A MISSING hash on either side is not evidence of a change — it is the ABSENCE of
         // evidence, and the two must not be confused. Without a `manifest.lock` there is no content
         // identity to compare, so "has it changed" is unanswerable; answering "yes" would act on the
@@ -145,6 +140,10 @@ internal static class PackageUpdateReconciler
         // is an authoring defect in the module's CI (Doc/Architecture/PluginAuthoring) rather than
         // something to paper over here — logged at Warning precisely so it does not become a quiet
         // "my plugin never updates".
+        //
+        // 🚨 This is checked BEFORE the equality gate below, not after. `null == null` is *equal*,
+        // so an equality-first order would silently absorb the commonest shape of this defect — both
+        // sides missing a manifest.lock — into "nothing changed" and never say a word (Copilot catch).
         if (string.IsNullOrEmpty(pkg.ModuleVersion) || string.IsNullOrEmpty(record.ModuleVersion))
         {
             logger?.LogWarning(
@@ -157,6 +156,11 @@ internal static class PackageUpdateReconciler
                 provenance);
             return Observable.Return(Unit.Default);
         }
+
+        // 🚨 THE gate: content identity, not the event that woke us. Equal module hashes ⇒ nothing in
+        // this module changed ⇒ stay completely silent — no notification, and not one file fetched.
+        if (string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
+            return Observable.Return(Unit.Default);
 
         var detail = Describe(pkg, record);
 
