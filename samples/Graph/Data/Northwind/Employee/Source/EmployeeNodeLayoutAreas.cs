@@ -4,7 +4,6 @@
 // </meshweaver>
 
 using System.Reactive.Linq;
-using System.Text.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 
@@ -20,33 +19,16 @@ public static class EmployeeNodeLayoutAreas
             .WithView("EmployeeOverview", EmployeeOverview)
             .WithView("Employment", Employment);
 
-    private static EmployeeContent? ExtractEmployeeContent(MeshNode? node)
-    {
-        if (node?.Content == null)
-            return null;
-
-        if (node.Content is EmployeeContent ec)
-            return ec;
-
-        if (node.Content is JsonElement json)
-        {
-            return new EmployeeContent
-            {
-                EmployeeId = json.TryGetProperty("employeeId", out var eid) ? eid.GetInt32() : 0,
-                LastName = json.TryGetProperty("lastName", out var ln) ? ln.GetString() ?? "" : "",
-                FirstName = json.TryGetProperty("firstName", out var fn) ? fn.GetString() ?? "" : "",
-                Title = json.TryGetProperty("title", out var title) ? title.GetString() ?? "" : "",
-                TitleOfCourtesy = json.TryGetProperty("titleOfCourtesy", out var toc) ? toc.GetString() ?? "" : "",
-                BirthDate = json.TryGetProperty("birthDate", out var bd) ? bd.GetDateTime() : DateTime.MinValue,
-                HireDate = json.TryGetProperty("hireDate", out var hd) ? hd.GetDateTime() : DateTime.MinValue,
-                City = json.TryGetProperty("city", out var city) ? city.GetString() ?? "" : "",
-                Region = json.TryGetProperty("region", out var region) ? region.GetString() ?? "" : "",
-                Country = json.TryGetProperty("country", out var country) ? country.GetString() ?? "" : "",
-                ReportsTo = json.TryGetProperty("reportsTo", out var rt) ? rt.GetInt32() : 0
-            };
-        }
-        return null;
-    }
+    /// <summary>
+    /// The node's employee content. <c>ContentAs</c> — never <c>is</c> + a hand-rolled JSON branch:
+    /// the accessor covers the already-typed value AND the degraded JsonElement/JsonNode AND a
+    /// same-short-named <c>EmployeeContent</c> from another build (every recompile of a dynamic
+    /// NodeType mints a new collectible assembly, so "the same" record has a different CLR identity
+    /// per build — the case the hand-rolled version had no round-trip to recover, leaving the view
+    /// blank after a recompile with nothing to grep).
+    /// </summary>
+    private static EmployeeContent? ExtractEmployeeContent(LayoutAreaHost host, MeshNode? node) =>
+        node.ContentAs<EmployeeContent>(host.Hub.JsonSerializerOptions);
 
     /// <summary>Employee overview with personal details.</summary>
     [Display(GroupName = "Overview", Order = 0)]
@@ -60,7 +42,7 @@ public static class EmployeeNodeLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var employee = ExtractEmployeeContent(node);
+            var employee = ExtractEmployeeContent(host, node);
 
             if (employee == null)
                 return (UiControl?)Controls.Markdown("*Employee data not available*");
@@ -115,7 +97,7 @@ public static class EmployeeNodeLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var employee = ExtractEmployeeContent(node);
+            var employee = ExtractEmployeeContent(host, node);
 
             if (employee == null)
                 return (UiControl?)Controls.Markdown("*Employee data not available*");

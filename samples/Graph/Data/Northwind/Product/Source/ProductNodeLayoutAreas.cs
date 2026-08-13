@@ -4,7 +4,6 @@
 // </meshweaver>
 
 using System.Reactive.Linq;
-using System.Text.Json;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 
@@ -20,32 +19,16 @@ public static class ProductNodeLayoutAreas
             .WithView("ProductOverview", ProductOverview)
             .WithView("InventoryStatus", InventoryStatus);
 
-    private static ProductContent? ExtractProductContent(MeshNode? node)
-    {
-        if (node?.Content == null)
-            return null;
-
-        if (node.Content is ProductContent pc)
-            return pc;
-
-        if (node.Content is JsonElement json)
-        {
-            return new ProductContent
-            {
-                ProductId = json.TryGetProperty("productId", out var pid) ? pid.GetInt32() : 0,
-                ProductName = json.TryGetProperty("productName", out var pn) ? pn.GetString() ?? "" : "",
-                SupplierId = json.TryGetProperty("supplierId", out var sid) ? sid.GetInt32() : 0,
-                CategoryId = json.TryGetProperty("categoryId", out var cid) ? cid.GetInt32() : 0,
-                QuantityPerUnit = json.TryGetProperty("quantityPerUnit", out var qpu) ? qpu.GetString() ?? "" : "",
-                UnitPrice = json.TryGetProperty("unitPrice", out var up) ? up.GetDouble() : 0,
-                UnitsInStock = json.TryGetProperty("unitsInStock", out var uis) ? uis.GetInt16() : (short)0,
-                UnitsOnOrder = json.TryGetProperty("unitsOnOrder", out var uoo) ? uoo.GetInt16() : (short)0,
-                ReorderLevel = json.TryGetProperty("reorderLevel", out var rl) ? rl.GetInt16() : (short)0,
-                Discontinued = json.TryGetProperty("discontinued", out var disc) && disc.GetBoolean()
-            };
-        }
-        return null;
-    }
+    /// <summary>
+    /// The node's product content. <c>ContentAs</c> — never <c>is</c> + a hand-rolled JSON branch:
+    /// the accessor covers the already-typed value AND the degraded JsonElement/JsonNode AND a
+    /// same-short-named <c>ProductContent</c> from another build (every recompile of a dynamic
+    /// NodeType mints a new collectible assembly, so "the same" record has a different CLR identity
+    /// per build — the case the hand-rolled version had no round-trip to recover, leaving the view
+    /// blank after a recompile with nothing to grep).
+    /// </summary>
+    private static ProductContent? ExtractProductContent(LayoutAreaHost host, MeshNode? node) =>
+        node.ContentAs<ProductContent>(host.Hub.JsonSerializerOptions);
 
     /// <summary>Product overview with details.</summary>
     [Display(GroupName = "Overview", Order = 0)]
@@ -59,7 +42,7 @@ public static class ProductNodeLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var product = ExtractProductContent(node);
+            var product = ExtractProductContent(host, node);
 
             if (product == null)
                 return (UiControl?)Controls.Markdown("*Product data not available*");
@@ -116,7 +99,7 @@ public static class ProductNodeLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var product = ExtractProductContent(node);
+            var product = ExtractProductContent(host, node);
 
             if (product == null)
                 return (UiControl?)Controls.Markdown("*Product data not available*");

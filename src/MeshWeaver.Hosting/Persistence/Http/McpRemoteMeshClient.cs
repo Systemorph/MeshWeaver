@@ -54,11 +54,16 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
     // call and shared by every later caller. pool.Run(...) is eager + ReplaySubject-
     // backed (IoPoolExtensions.Run): it runs the connect ONCE on the Http pool and
     // replays the resulting client to all subscribers — so the connect happens
-    // exactly once under concurrency with no SemaphoreSlim gate. The _connectLock
+    // exactly once under concurrency with no SemaphoreSlim gate. The slot's Lazy
     // guards only the field assignment (a synchronous, never-awaited lazy init), so
     // pool.Run is never invoked twice; it never parks the action block.
-    private readonly object _connectLock = new();
-    private IObservable<McpClient>? _connect;
+    //
+    // 🚨 PromiseSlot, not `_field ??= pool.Run(…)` under a lock: a ReplaySubject latches
+    // OnError too, so the hand-rolled slot pinned ONE failed handshake — a portal
+    // mid-restart, an expired token, a DNS blip — for the life of the process; the mirror
+    // then never reconnected (#1369). The slot evicts a faulted promise, so the next call
+    // dials again. It does NOT retry on its own.
+    private readonly PromiseSlot<McpClient> _connect = new();
 
     /// <summary>
     /// Creates a remote-mesh client targeting a portal's <c>/mcp</c> endpoint. The
@@ -194,18 +199,13 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
     /// <summary>
     /// The connect/handshake promise — opens the <see cref="McpClient"/> exactly
     /// once on the Http <see cref="IIoPool"/> and replays the connected client to
-    /// every caller. The lock guards only the lazy field assignment (synchronous,
+    /// every caller. The slot's lazy guards only the field assignment (synchronous,
     /// never awaited); <c>pool.Run</c> being eager + ReplaySubject-backed means the
-    /// handshake runs a single time even under concurrent first calls.
+    /// handshake runs a single time even under concurrent first calls. A FAILED
+    /// handshake is evicted, so the next call dials for real instead of replaying it.
     /// </summary>
     private IObservable<McpClient> Connect()
-    {
-        if (_connect is { } existing) return existing;
-        lock (_connectLock)
-        {
-            return _connect ??= _pool.Run(ConnectAsync);
-        }
-    }
+        => _connect.GetOrCreate(() => _pool.Run(ConnectAsync));
 
     private async Task<McpClient> ConnectAsync(CancellationToken ct)
     {
@@ -266,13 +266,8 @@ public sealed class McpRemoteMeshClient : IRemoteMeshClient, IAsyncDisposable
         // Snapshot + clear the connect promise so no leaf composes off a disposing
         // client. The cached observable is ReplaySubject-backed, so this Take(1)
         // replays the already-connected client (no re-connect) if it ran.
-        IObservable<McpClient>? connect;
-        lock (_connectLock)
-        {
-            connect = _connect;
-            _connect = null;
-        }
-        if (connect is null) return;
+        // TryTake is atomic — exactly one concurrent disposer wins and closes the client once.
+        if (!_connect.TryTake(out var connect)) return;
 
         McpClient? client = null;
         try

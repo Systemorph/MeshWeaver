@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -211,15 +212,30 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
     /// owning activity ends Failed when any file failed. Cancellation is NOT a per-file failure: it
     /// propagates so the activity terminates Cancelled.
     /// </summary>
+    /// <summary>
+    /// Files between two live "still working" lines. Those are the only writes made DURING the walk,
+    /// and they land while the activity document is still small (opening line + a handful of
+    /// heartbeats), so each one is cheap; the per-file detail is flushed once at the end.
+    /// </summary>
+    private const int ProgressEvery = 200;
+
     private IObservable<int> ReindexCollection(
         string collectionPath, ContentIndexingActivityContext ctx, bool force) =>
         Observable.Defer(() =>
         {
             ctx.Log($"Scanning collection '{collectionPath}'.");
+            // 🚨 The per-file lines are COLLECTED and written ONCE for the whole collection.
+            // Each stream.Update re-serialises the entire activity node, so a line-per-file append
+            // over n files costs O(n²) CPU and allocation — the shape #1341 removed from the static
+            // repo importer and the same one that put memex-cloud at 51% CFS-throttled (#1172).
+            // Batching makes it O(n). The trade is the one already accepted in #1341: per-collection
+            // detail instead of per-file, with a bounded heartbeat below so a long walk still shows life.
+            var indexed = 0;
             return RegisterCollection(collectionPath).SelectMany(contentService => EnumerateFiles(contentService, collectionPath)
                 // Sequentially index each file (Concat): each IndexFile leaf takes its own pool slots;
                 // serialising the walk keeps the activity log ordered and embed concurrency bounded.
-                // Each file emits its failure count (0 = indexed/skipped/no-text, 1 = failed).
+                // Each file emits its failure count (0 = indexed/skipped/no-text, 1 = failed) plus the
+                // line describing it, so the aggregate below can write them all in one go.
                 .Select(filePath => Observable.Defer(() =>
                 {
                     ctx.CancellationToken.ThrowIfCancellationRequested();
@@ -227,28 +243,47 @@ public sealed class ContentIndexingObserver : IContentUploadObserver
                         .SelectMany(bytes =>
                         {
                             if (bytes is null)
-                                return Observable.Return(0);
+                                return Observable.Return<FileOutcome>(new(0, null));
                             var fileName = System.IO.Path.GetFileName(filePath);
                             return indexingService.IndexFile(collectionPath, filePath, fileName, bytes, force)
                                 .Take(1)
-                                .Select(result =>
-                                {
-                                    ctx.Log($"'{filePath}': {result.Status} ({result.ChunkCount} chunk(s)).");
-                                    return 0;
-                                })
-                                // Per-file isolation: log + count the failure and CONTINUE the walk.
+                                .Select(result => new FileOutcome(0, new LogMessage(
+                                    $"'{filePath}': {result.Status} ({result.ChunkCount} chunk(s)).",
+                                    LogLevel.Information)))
+                                // Per-file isolation: record + count the failure and CONTINUE the walk.
                                 // Cancellation is re-thrown so it aborts the activity (Cancelled), never
                                 // counted as a content failure.
-                                .Catch<int, Exception>(ex => ex is OperationCanceledException
-                                    ? Observable.Throw<int>(ex)
-                                    : Observable.Return(1).Do(_ =>
-                                        ctx.Log($"'{filePath}': FAILED — {ex.Message}", LogLevel.Error)));
+                                .Catch<FileOutcome, Exception>(ex => ex is OperationCanceledException
+                                    ? Observable.Throw<FileOutcome>(ex)
+                                    : Observable.Return(new FileOutcome(1, new LogMessage(
+                                        $"'{filePath}': FAILED — {ex.Message}", LogLevel.Error))));
+                        })
+                        // Bounded liveness: one small line every ProgressEvery files. The count of these
+                        // is n/200, and each lands against a still-small document, so they cannot
+                        // reintroduce the quadratic cost the batching removes.
+                        .Do(_ =>
+                        {
+                            if (++indexed % ProgressEvery == 0)
+                                ctx.Log($"'{collectionPath}': {indexed} files processed…");
                         });
                 }))
                 .Concat()
-                .Aggregate(0, (failed, fileFailures) => failed + fileFailures)
-                .Do(failed => ctx.Log($"Collection '{collectionPath}' done ({failed} failed).")));
+                .Aggregate(
+                    (Failed: 0, Lines: ImmutableList<LogMessage>.Empty),
+                    (acc, outcome) => (acc.Failed + outcome.Failures,
+                        outcome.Line is null ? acc.Lines : acc.Lines.Add(outcome.Line)))
+                .Select(acc =>
+                {
+                    // ONE write for the whole collection: every per-file line plus the closing summary.
+                    ctx.LogRange(acc.Lines.Add(new LogMessage(
+                        $"Collection '{collectionPath}' done ({acc.Failed} failed).", LogLevel.Information)));
+                    return acc.Failed;
+                }));
         });
+
+    /// <summary>One file's contribution to the walk: its failure count (0 or 1) and the line describing
+    /// it (null when there was nothing to say, e.g. the file had no readable bytes).</summary>
+    private readonly record struct FileOutcome(int Failures, LogMessage? Line);
 
     /// <summary>
     /// Reads a file's bytes back from the collection. The read leaf runs on the collection's own

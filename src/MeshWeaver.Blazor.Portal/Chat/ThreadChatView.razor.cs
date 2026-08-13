@@ -662,24 +662,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// <summary>
     /// The signed-in user's partition — the partition that owns
     /// <c>{user}/_Thread/ThreadComposer</c> and the namespace a submitted thread is created
-    /// under. Prefer <see cref="AccessService.CircuitContext"/> (the durable per-circuit
-    /// identity); <see cref="AccessService.Context"/> (AsyncLocal) is only a fallback and
-    /// is filtered for a leaked <c>system-security</c> / hub principal. Trusting
-    /// <c>Context</c> first pointed the composer at <c>system-security/_Thread/ThreadComposer</c>
-    /// and would have created threads under the wrong partition.
+    /// under. Trusting <c>Context</c> first pointed the composer at
+    /// <c>system-security/_Thread/ThreadComposer</c> and would have created threads under the
+    /// wrong partition — the resolution order lives in <see cref="CircuitUser.ResolveUserId"/>.
     /// </summary>
     private static string? ResolveUserHome(AccessService? accessSvc)
-    {
-        if (accessSvc is null) return null;
-        foreach (var candidate in new[] { accessSvc.CircuitContext?.ObjectId, accessSvc.Context?.ObjectId })
-        {
-            if (!string.IsNullOrEmpty(candidate)
-                && candidate != WellKnownUsers.System
-                && !AccessService.LooksLikeHubPrincipal(candidate))
-                return candidate;
-        }
-        return null;
-    }
+        => CircuitUser.ResolveUserId(accessSvc);
 
     // ResolveCircuitUser() / RunUnderCircuitUser<T>() / UpdateMeshNodeAsCircuitUser(...) are inherited
     // from BlazorView — the ONE place every circuit-scoped view re-establishes the durable circuit user

@@ -292,6 +292,127 @@ public class MeshContentTypeRegistryTest
             .GetType().Should().Be(scenario, "an unregistered path falls back rather than failing");
     }
 
+    /// <summary>
+    /// 🚨 The exact route must not reshape content into a type its OWN <c>$type</c> contradicts.
+    ///
+    /// <para><see cref="MeshContentTypeRegistry.Register"/> is last-writer-wins on the NodeType key,
+    /// so one wrong writer poisons the entry for every reader — and because
+    /// System.Text.Json ignores members the target does not declare and materialises defaults for
+    /// the ones it does, deserialising into the wrong record SUCCEEDS. The recovery then returns a
+    /// plausible, wrong object rather than failing, which is exactly how Systemorph/MeshWeaver#1379
+    /// stayed invisible: a <c>Store/Plugin</c> instance served its type's
+    /// <c>NodeTypeDefinition</c> as its own content, at its unchanged Version, on every read, and
+    /// the paid install reported "nothing to install".</para>
+    ///
+    /// <para>The poisoning writer is fixed at its source (<c>MeshNodeHubFactory</c> no longer stamps
+    /// a definition node's own path). This pins the invariant that keeps the NEXT such mismatch
+    /// loud: an unresolvable read leaves a <see cref="JsonElement"/> the consumer's
+    /// <c>ContentAs&lt;T&gt;</c> can still recover and the seams already warn about; a wrongly-typed
+    /// one is silent and lossy.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void TryRecoverForNodeType_RefusesATypeTheContentsOwnDiscriminatorContradicts()
+    {
+        var registry = new MeshContentTypeRegistry();
+        var declaration = EmitTypeWithProperty("Store_Plugin_Declaration", "PluginContent", "Id");
+        var foreign = EmitTypeWithProperty("Graph_Definition", "NodeTypeDefinition", "Description");
+
+        // The poisoned entry: the key belongs to Store/Plugin's INSTANCES, the value does not.
+        registry.Register(foreign, "Store/Plugin");
+
+        var element = JsonSerializer.Deserialize<JsonElement>("""{"$type":"PluginContent","Id":"pack-1"}""");
+
+        registry.TryRecoverForNodeType("Store/Plugin", element, JsonSerializerOptions.Default)
+            .Should().BeNull(
+                "the content says it is a PluginContent — materialising it as a NodeTypeDefinition "
+                + "would succeed and be silently wrong, which is worse than not answering");
+
+        // The same guard must NOT cost the exact route its purpose: once the correct writer wins,
+        // a discriminator two packages share still resolves through the NodeType key.
+        registry.Register(declaration, "Store/Plugin");
+        registry.TryRecoverForNodeType("Store/Plugin", element, JsonSerializerOptions.Default)!
+            .GetType().Should().Be(declaration);
+    }
+
+    /// <summary>
+    /// Content written WITHOUT a <c>$type</c> has nothing to contradict, so the NodeType route stays
+    /// the only answer available and must still give it. Pinned separately because the obvious way
+    /// to write the guard above — "require a matching discriminator" — would silently stop typing
+    /// every such node.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void TryRecoverForNodeType_StillResolvesContentThatCarriesNoDiscriminator()
+    {
+        var registry = new MeshContentTypeRegistry();
+        var scenario = EmitTypeWithProperty("SST_Untagged", "Scenario", "Code");
+        registry.Register(scenario, "SST/Scenario");
+
+        var element = JsonSerializer.Deserialize<JsonElement>("""{"Code":"base"}""");
+
+        var recovered = registry.TryRecoverForNodeType("SST/Scenario", element, JsonSerializerOptions.Default);
+        recovered!.GetType().Should().Be(scenario, "an absent discriminator contradicts nothing");
+        scenario.GetProperty("Code")!.GetValue(recovered).Should().Be("base");
+    }
+
+    /// <summary>
+    /// 🚨 A recovery that cannot carry part of its input must SAY SO (issue #1388).
+    ///
+    /// <para>This is the third way the exact route can land on a wrong target, and the only one it
+    /// cannot detect from types alone: the NodeType simply declares a content type its instances do
+    /// not use. The other two are refused outright — an ambiguous discriminator, and one that
+    /// contradicts the declaration — but a declaration nobody instantiates looks identical to a
+    /// correct one, and System.Text.Json makes the mismatch SUCCEED: it ignores whatever the target
+    /// does not declare, so the read returns a plausible object with authored values missing, no
+    /// exception, nothing to grep. Three sample Article NodeTypes were in exactly that state, and
+    /// every article created without an explicit <c>$type</c> lost its <c>abstract</c> — the one
+    /// field the declared type had no member for.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void ARecoveryThatDropsAuthoredMembers_IsReportedNamingThem()
+    {
+        var logger = new CapturingLogger();
+        var registry = new MeshContentTypeRegistry(logger);
+        var article = EmitTypeWithProperty("SST_Lossy", "Article", "Title");
+        registry.Register(article, "SST/Article");
+
+        var recovered = registry.TryRecoverForNodeType(
+            "SST/Article",
+            JsonSerializer.Deserialize<JsonElement>("""{"Title":"t","abstract":"a","authors":["x"]}"""),
+            JsonSerializerOptions.Default);
+
+        recovered.Should().NotBeNull(
+            "reported, not refused: content written against an EARLIER version of the RIGHT type "
+            + "legitimately carries members it has since lost, and refusing those would turn "
+            + "cosmetic drift into an empty render. This also pins that the REPORT cannot change "
+            + "the answer — composing it used to run inside the deserialize's try, where any throw "
+            + "would have been swallowed into a null recovery");
+        logger.Warnings.Should().ContainSingle().Which
+            .Should().Contain("Article")
+            .And.Contain("abstract")
+            .And.Contain("authors");
+    }
+
+    /// <summary>
+    /// The counter-case, so the report cannot become noise: when the target CAN represent
+    /// everything, nothing is said. Pinning this is what keeps the warning meaningful — a line that
+    /// fires on every healthy read is one nobody reads.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void ARecoveryThatCarriesEverything_IsSilent()
+    {
+        var logger = new CapturingLogger();
+        var registry = new MeshContentTypeRegistry(logger);
+        var scenario = EmitTypeWithProperty("SST_Lossless", "Scenario", "Code");
+        registry.Register(scenario, "SST/Scenario");
+
+        registry.TryRecoverForNodeType(
+            "SST/Scenario",
+            JsonSerializer.Deserialize<JsonElement>("""{"$type":"Scenario","Code":"base"}"""),
+            JsonSerializerOptions.Default).Should().NotBeNull();
+
+        logger.Warnings.Should().BeEmpty("$type is the discriminator, not an authored member");
+    }
+
     /// <summary>A type with one settable string property — enough to prove the payload round-trips.</summary>
     private static Type EmitTypeWithProperty(string assemblyName, string typeName, string propertyName)
     {

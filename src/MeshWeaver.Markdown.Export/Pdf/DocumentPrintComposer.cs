@@ -53,9 +53,31 @@ public static partial class DocumentPrintComposer
     /// </summary>
     internal const string ContentsHeading = "Contents";
 
+    /// <summary>
+    /// What the reserved page-number column holds on the MEASURING print — a zero-width space,
+    /// spelled as an escape so it survives any editor that would otherwise eat an invisible
+    /// character.
+    ///
+    /// <para>Not an empty string: an inline box with no content generates no line box, so the
+    /// reserved column would not sit on the baseline the numbered print then puts a digit on, and
+    /// the two prints would not be the pixel-for-pixel same layout that the measurement relies
+    /// on.</para>
+    /// </summary>
+    internal const string ReservedColumnFiller = "\u200b";
+
     /// <summary>Composes the print document for <paramref name="document"/>.</summary>
+    /// <param name="document">The document model to lay out.</param>
+    /// <param name="tocPageNumbers">
+    /// The page each contents entry points at, in entry order, as read back out of a first print by
+    /// <see cref="TocPageNumbers"/>. Leave it defaulted for the measuring print: the number column
+    /// is then reserved but left blank.
+    ///
+    /// <para>🚨 A list of the wrong length is IGNORED rather than partially applied — a contents
+    /// list whose numbers have slipped by one entry is exactly the silent lie this feature exists
+    /// not to print.</para>
+    /// </param>
     /// <returns>A complete, self-contained HTML document.</returns>
-    public static string Compose(Document document)
+    public static string Compose(Document document, ImmutableArray<int> tocPageNumbers = default)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -63,7 +85,7 @@ public static partial class DocumentPrintComposer
             (TitleToken, MarkupNode.Text(document.Title).Render()),
             (StylesToken, ComposeStyles(document)),
             (CoverToken, ComposeCover(document)),
-            (TocToken, ComposeToc(document)),
+            (TocToken, ComposeToc(document, tocPageNumbers)),
             (BodyToken, ComposeBody(document)));
     }
 
@@ -176,28 +198,46 @@ public static partial class DocumentPrintComposer
 
     // ── Table of contents ───────────────────────────────────────────────────────────────
 
-    private static string ComposeToc(Document document)
+    private static string ComposeToc(Document document, ImmutableArray<int> pageNumbers)
     {
         if (!document.Options.TableOfContents || document.TocHeadings.Length == 0)
             return string.Empty;
+
+        // Partial numbering is not a thing: either every entry carries a number that was read back
+        // out of a print of THIS document, or none does.
+        var numbered = !pageNumbers.IsDefault && pageNumbers.Length == document.TocHeadings.Length;
 
         var toc = MarkupNode.El("section")
             .With("class", "mw-toc")
             .Add(MarkupNode.El("div").With("class", "mw-toc-title").Add(MarkupNode.Text(ContentsHeading)));
 
-        // Each entry is a real internal link, which Chromium turns into a PDF link annotation —
-        // so the contents list navigates. It carries no page NUMBER: Chromium implements neither
-        // `target-counter` nor any other way to read a target's page from CSS, and the two-pass
-        // alternative (print, read back where each anchor landed, print again) can silently
-        // publish wrong numbers when the inserted digits reflow the list. See the doc page.
-        foreach (var heading in document.TocHeadings)
+        // Each entry is a real internal link, which Chromium turns into a PDF link annotation. That
+        // annotation does double duty: it is what makes the contents list navigate, AND it is what
+        // the page number is read back from — Chromium implements no part of `target-counter`, so
+        // the browser's own pagination in the printed PDF is the only truthful source (#1309).
+        //
+        // 🚨 The page-number cell is emitted on BOTH passes and its width is a CONSTANT (see
+        // DocumentPrint.css). The measuring print therefore has exactly the pagination of the
+        // numbered one — digits cannot reflow a box whose width does not depend on them — which is
+        // what makes the number read off the first print still true of the second. The renderer
+        // re-reads the numbered print and verifies that anyway; belt and braces, because the whole
+        // point is to never publish a number nobody checked.
+        for (var i = 0; i < document.TocHeadings.Length; i++)
         {
+            var heading = document.TocHeadings[i];
             var level = Math.Clamp(heading.Level, 1, 6);
             toc = toc.Add(MarkupNode.El("p")
                 .With("class", $"mw-toc-entry mw-toc-{level.ToString(CultureInfo.InvariantCulture)}")
                 .Add(MarkupNode.El("a")
                     .With("href", "#" + heading.AnchorId)
-                    .Add(MarkupNode.Text(PlainText(heading.Content)))));
+                    .Add(MarkupNode.El("span")
+                        .With("class", "mw-toc-text")
+                        .Add(MarkupNode.Text(PlainText(heading.Content))))
+                    .Add(MarkupNode.El("span")
+                        .With("class", "mw-toc-page")
+                        .Add(MarkupNode.Text(numbered
+                            ? pageNumbers[i].ToString(CultureInfo.InvariantCulture)
+                            : ReservedColumnFiller)))));
         }
 
         return toc.Render();

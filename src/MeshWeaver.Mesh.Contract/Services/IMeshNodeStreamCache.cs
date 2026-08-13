@@ -129,6 +129,17 @@ public interface IMeshNodeStreamCache
     /// back <see cref="System.Text.Json.JsonElement"/> and drops the typed shape
     /// (the "empty typed catalog" / "serialization error" bug class). That's why
     /// there is no options-less build overload — options are mandatory.</para>
+    ///
+    /// <para>🚨 <b>The cache is keyed on the id AND the query set</b> (issue #1311). Calling with
+    /// the same <paramref name="id"/> but a DIFFERENT <paramref name="queries"/> set returns a
+    /// stream answering the set you asked for — it does not hand back the previously registered
+    /// one. It used to, which meant an id that did not fully determine its queries silently froze
+    /// on whichever set materialised first: a NodeType that gained a
+    /// <c>shared=@Other/Type/Source</c> on a running portal kept compiling against its own
+    /// sources only, and the <c>CS0103</c> Roslyn then emitted read as a verdict on the author's
+    /// code. Each distinct set keeps its own shared subscription and superseded sets stay
+    /// resident for the process's life, so ids are still expected to be stable rather than
+    /// composed per call.</para>
     /// </summary>
     internal IObservable<IEnumerable<MeshNode>> GetQuery(object id, JsonSerializerOptions options, params string[] queries);
 
@@ -136,7 +147,8 @@ public interface IMeshNodeStreamCache
     /// Lookup-only overload: returns the cached observable for
     /// <paramref name="id"/>, or <c>null</c> if no synced query has been
     /// registered with that id (no get-or-create, so no options needed).
-    /// Internal — reached via <c>workspace.GetQuery(id)</c>.
+    /// When several query sets have been registered under one id, this answers with the most
+    /// recently registered. Internal — reached via <c>workspace.GetQuery(id)</c>.
     /// </summary>
     internal IObservable<IEnumerable<MeshNode>>? GetQuery(object id);
 }

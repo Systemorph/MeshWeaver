@@ -57,7 +57,7 @@ public class PdfHeaderLogoTests : IDisposable
 
         var browser = Browser();
         var executable = await browser.Probe().FirstAsync().ToTask();
-        var renderer = new PdfDocumentRenderer(browser);
+        var renderer = new PdfDocumentRenderer(browser, pools);
 
         if (executable is null)
         {
@@ -90,7 +90,7 @@ public class PdfHeaderLogoTests : IDisposable
 
         var browser = Browser();
         var executable = await browser.Probe().FirstAsync().ToTask();
-        var renderer = new PdfDocumentRenderer(browser);
+        var renderer = new PdfDocumentRenderer(browser, pools);
 
         if (executable is null)
         {

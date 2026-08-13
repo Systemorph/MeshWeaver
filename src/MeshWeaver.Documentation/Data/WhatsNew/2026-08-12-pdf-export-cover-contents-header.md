@@ -18,8 +18,11 @@ that start each chapter on a fresh page. Two things are better than before — a
 spans pages now **repeats its header row**, and a heading is no longer left stranded alone at
 the foot of a page.
 
-**One thing is gone, and it is worth naming:** entries in the table of contents no longer show
-the page they point at. They are still real links — clicking one jumps to that section — but
-the `..... 12` column is not there. Browsers provide no way to read a target's page number
+**One thing was gone, and it is worth naming:** entries in the table of contents no longer showed
+the page they point at. They were still real links — clicking one jumps to that section — but
+the `..... 12` column was not there. Browsers provide no way to read a target's page number
 while laying the document out, and guessing it would risk printing numbers that are quietly
 wrong, which is worse than not printing them.
+
+> **Since resolved.** The column came back the next day, without any guessing: see
+> [The contents list tells you the page again](../2026-08-13-the-contents-list-tells-you-the-page-again).
