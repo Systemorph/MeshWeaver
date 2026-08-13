@@ -24,9 +24,11 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout views for Code nodes.
-/// - Content (default): Read-only code display as markdown code block
+/// - Content (default): the notebook cell. For a viewer holding Update the code segment IS an
+///   inline Monaco editor (edit mode is the mode — no Edit button, auto-saved, Run persists the
+///   buffer first); for everyone else it is the read-only markdown code block.
 /// - Overview: Splitter with sibling code list and embedded content view
-/// - Edit: Monaco editor with language support
+/// - Edit: Monaco editor with language support (kept for deep links and metadata edits)
 /// </summary>
 public static class CodeLayoutAreas
 {
@@ -60,6 +62,14 @@ public static class CodeLayoutAreas
     public const string CopyDialogCancelArea = "CopyDialogCancel";
     /// <summary>Area id of the Confirm button inside the copy-to-home dialog.</summary>
     public const string CopyDialogConfirmArea = "CopyDialogConfirm";
+
+    /// <summary>
+    /// Data id of the EDIT-MODE cell's code buffer — what the inline editor binds. Seeded ONCE
+    /// per rendered area from the node's stored code (see <see cref="Content"/>) and written by
+    /// the editor from then on; Run snapshots it so the kernel always executes what the viewer
+    /// sees.
+    /// </summary>
+    public const string CellBufferDataId = "cellCode";
 
     private const string CodeDataId = "code";
     private const string SiblingNodesDataId = "siblingCodeNodes";
@@ -147,11 +157,46 @@ public static class CodeLayoutAreas
             .DistinctUntilChanged(log => (log?.Status, log?.RequestedStatus))
             .StartWith((ActivityLog?)null);
 
-        return nodeStream.CombineLatest(lastActivityStream, permissionStream,
-            (node, lastActivity, permissions) => (UiControl?)BuildContent(host, node, lastActivity, permissions));
+        // The edit-mode buffer: seeded ONCE from the first emission and never re-seeded — from
+        // then on the EDITOR is the writer (its auto-save persists through the node stream
+        // cache), and a save echo re-seeding the buffer would clobber whatever the viewer typed
+        // since. The editor height is fixed from the same seed so the editor CONTROL stays
+        // identical across re-renders: the client diff then never re-mounts Monaco (a re-mount
+        // mid-typing loses cursor and scroll).
+        var editorSetup = nodeStream
+            .Where(n => n is not null)
+            .Select(n => n.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions)?.Code ?? "")
+            .Take(1)
+            .Select(code =>
+            {
+                host.UpdateData(CellBufferDataId, code);
+                return CellEditorHeight(code);
+            })
+            // Render is never held hostage to the seed: a defensive null-first emission (or a
+            // ghost node) still paints the page with the floor height; the real seed follows.
+            .StartWith(CellEditorHeight(null));
+
+        return nodeStream.CombineLatest(lastActivityStream, permissionStream, editorSetup,
+            (node, lastActivity, permissions, editorHeight) =>
+                (UiControl?)BuildContent(host, node, lastActivity, permissions, editorHeight));
     }
 
-    private static UiControl BuildContent(LayoutAreaHost host, MeshNode? node, ActivityLog? lastActivity, Permission permissions)
+    /// <summary>
+    /// The inline editor's height for a cell seeded with <paramref name="code"/>: Monaco's 19px
+    /// per line plus the frame chrome, clamped to [96, 480] px. Computed once from the SEED —
+    /// a height that followed the text would change the editor control on every save and
+    /// re-mount Monaco under the viewer's cursor. Pure.
+    /// </summary>
+    public static string CellEditorHeight(string? code)
+    {
+        var lines = string.IsNullOrEmpty(code) ? 1 : code!.Split('\n').Length;
+        var px = Math.Clamp(lines * 19 + 20, 96, 480);
+        return $"{px}px";
+    }
+
+    private static UiControl BuildContent(
+        LayoutAreaHost host, MeshNode? node, ActivityLog? lastActivity, Permission permissions,
+        string editorHeight)
     {
         var hubAddress = host.Hub.Address;
         var codeConfig = node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions);
@@ -160,6 +205,7 @@ public static class CodeLayoutAreas
         var title = node?.Name ?? node?.Id ?? "Code";
         var isExecutable = codeConfig?.IsExecutable == true;
         var language = codeConfig?.Language ?? "csharp";
+        var canEdit = permissions.HasFlag(Permission.Update);
 
         // Page header: title only. Run/Cancel/Edit live in the cell toolbar
         // below — ONE source of truth for the notebook controls, no second Run
@@ -176,8 +222,14 @@ public static class CodeLayoutAreas
             .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; " +
                        "overflow: hidden; background: var(--neutral-layer-1);");
 
-        // Code segment (markdown fence rendering, unchanged).
-        if (!string.IsNullOrEmpty(codeConfig?.Code))
+        // Code segment. A viewer who may edit gets the EDITOR — edit mode IS the mode, there is
+        // no separate page behind a button. Everyone else keeps the read-only fence rendering.
+        if (canEdit)
+        {
+            cell = cell.WithView(BuildCellEditor(hubAddress.ToString(), language, editorHeight),
+                CellCodeArea);
+        }
+        else if (!string.IsNullOrEmpty(codeConfig?.Code))
         {
             cell = cell.WithView(Controls.Markdown($"```{language}\n{codeConfig.Code}\n```")
                     .WithStyle("width: 100%; overflow: auto; padding: 0 12px;"),
@@ -221,8 +273,7 @@ public static class CodeLayoutAreas
         // Toolbar LAST — the composer bar at the bottom of the cell frame,
         // below the output segment.
         cell = cell.WithView(
-            BuildCellToolbar(hubAddress, codeConfig, isExecutable, language, lastActivity,
-                canEdit: permissions.HasFlag(Permission.Update)),
+            BuildCellToolbar(hubAddress, codeConfig, isExecutable, language, lastActivity, canEdit),
             CellToolbarArea);
 
         stack = stack.WithView(cell, CellArea);
@@ -239,12 +290,14 @@ public static class CodeLayoutAreas
     /// The cell's toolbar — the composer bar on the BOTTOM edge of the cell:
     /// ▶ Run (accent), ⏹ Cancel (only while the last run is actually running and
     /// no cancel is already in flight — the shared
-    /// <see cref="ActivityLayoutAreas.IsCancelButtonVisible"/> predicate), ✎ Edit,
+    /// <see cref="ActivityLayoutAreas.IsCancelButtonVisible"/> predicate),
     /// then subtle right-aligned metadata (language badge, last-run provenance).
-    /// <para>Edit is rights-gated: with <see cref="Permission.Update"/> on the node
-    /// it navigates straight to the Edit area; without it, it opens the
-    /// copy-to-home dialog (<see cref="OpenCopyToHomeDialog"/>) offering to copy
-    /// the node into the viewer's own home space via the standard copy machinery.</para>
+    /// <para>A viewer WITH <see cref="Permission.Update"/> gets NO Edit button — their cell's
+    /// code segment already IS the editor (see <see cref="BuildCellEditor"/>), and their Run
+    /// persists the buffer before executing (<see cref="RunFromBuffer"/>). A read-only viewer
+    /// keeps the Edit button, which opens the copy-to-home dialog
+    /// (<see cref="OpenCopyToHomeDialog"/>) offering to copy the node into their own home space
+    /// via the standard copy machinery.</para>
     /// </summary>
     internal static UiControl BuildCellToolbar(
         Address hubAddress,
@@ -275,14 +328,20 @@ public static class CodeLayoutAreas
             // button client-side hid it even from admins when the live
             // permission stream had a transient empty emission, which is exactly
             // the state we once spent a session debugging.
+            // For an EDITOR the click persists the cell buffer FIRST: the kernel executes the
+            // STORED code, the editor's auto-save is debounced, and running anything other than
+            // what the viewer sees is the classic stale-cell trap.
             toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.run", locale))
                     .WithIconStart(RunGlyph(isStale))
                     .WithAppearance(Appearance.Accent)
                     .WithClickAction(ctx =>
                     {
-                        ctx.Host.Hub.Post(
-                            new ExecuteScriptRequest(),
-                            o => o.WithTarget(hubAddress));
+                        if (canEdit)
+                            RunFromBuffer(ctx.Host, hubAddress);
+                        else
+                            ctx.Host.Hub.Post(
+                                new ExecuteScriptRequest(),
+                                o => o.WithTarget(hubAddress));
                         return Task.CompletedTask;
                     }),
                 RunButtonArea);
@@ -314,21 +373,13 @@ public static class CodeLayoutAreas
             }
         }
 
-        if (canEdit)
+        if (!canEdit)
         {
-            // Direct edit navigation — ONLY for viewers holding Update on the node.
-            toolbar = toolbar.WithView(Controls.Button("")
-                    .WithIconStart(FluentIcons.Edit())
-                    .WithAppearance(Appearance.Accent)
-                    .WithNavigateToHref(new LayoutAreaReference(EditArea).ToHref(hubAddress)),
-                EditButtonArea);
-        }
-        else
-        {
-            // Read-only viewer: Edit still shows, but opens the copy-to-home
-            // dialog instead of navigating (no NavigateToHref — the click action
-            // drives the DialogControl area). Identity resolution + the actual
+            // Read-only viewer: Edit opens the copy-to-home dialog (no NavigateToHref — the
+            // click action drives the DialogControl area). Identity resolution + the actual
             // copy happen at CLICK time under the clicker's AccessContext.
+            // An EDITOR gets no Edit button at all: their cell IS the editor (see
+            // BuildContent) — there is no second mode to navigate to.
             var sourcePath = hubAddress.ToString();
             toolbar = toolbar.WithView(Controls.Button(LocalizationCatalog.Get("common.edit", locale))
                     .WithIconStart(FluentIcons.Edit())
@@ -389,6 +440,89 @@ public static class CodeLayoutAreas
         var (glyph, label) = ActivityLayoutAreas.StatusGlyph(lastActivity.Status, locale);
         return Controls.Body($"{glyph} {label}")
             .WithStyle($"font-weight: 600; color: {ActivityLayoutAreas.StatusColor(lastActivity.Status)};");
+    }
+
+    /// <summary>
+    /// The EDIT-MODE code segment: an inline Monaco bound to the cell buffer (seeded once in
+    /// <see cref="Content"/>), with Roslyn language services for C# and AUTO-SAVE back into this
+    /// node — the circuit-side <c>IMeshNodeStreamCache</c> seam (<c>CodeEditorView</c>), so the
+    /// debounced write carries the viewer's own identity. Every property is deterministic for a
+    /// given node + seed, so re-renders (each auto-save echoes a node emission) produce an
+    /// IDENTICAL control and the client diff leaves the live editor — and the cursor — alone.
+    /// </summary>
+    internal static UiControl BuildCellEditor(string sourcePath, string language, string editorHeight)
+    {
+        var editor = new CodeEditorControl()
+            .WithLanguage(language)
+            .WithHeight(editorHeight)
+            .WithLineNumbers(true)
+            .WithMinimap(false)
+            .WithWordWrap(true)
+            .WithAutoSave(sourcePath);
+        if (language == "csharp")
+            editor = editor.WithLanguageServer(OwnerPathOf(sourcePath), sourcePath);
+        return editor with
+        {
+            DataContext = LayoutAreaReference.GetDataPointer(CellBufferDataId),
+            Value = new JsonPointerReference(""),
+        };
+    }
+
+    /// <summary>
+    /// The compilation OWNER of a source path — the NodeType above <c>/Source/</c> when there is
+    /// one (siblings in scope), else the parent (a standalone script cell — e.g. a course
+    /// lesson's <c>{lesson}/Source/{cell}</c> — answers from the kernel's script environment).
+    /// Shared by the inline cell editor and the Edit area. Pure.
+    /// </summary>
+    internal static string OwnerPathOf(string sourcePath)
+    {
+        var sourceMarkerIdx = sourcePath.IndexOf("/Source/", StringComparison.Ordinal);
+        var lastSlashIdx = sourcePath.LastIndexOf('/');
+        return sourceMarkerIdx > 0
+            ? sourcePath.Substring(0, sourceMarkerIdx)
+            : lastSlashIdx > 0 ? sourcePath.Substring(0, lastSlashIdx) : sourcePath;
+    }
+
+    /// <summary>
+    /// Run for an EDITOR: persist the cell buffer FIRST, then execute. The kernel runs the
+    /// STORED code and the editor's auto-save is debounced, so the freshest keystrokes may not
+    /// have landed yet — executing without this save runs code the viewer is no longer looking
+    /// at. The save mirrors the Edit area's (snapshot both, write only when they differ, post
+    /// under the clicker's context); an unchanged buffer executes immediately.
+    /// </summary>
+    private static void RunFromBuffer(LayoutAreaHost host, Address hubAddress)
+    {
+        void Execute() => host.Hub.Post(new ExecuteScriptRequest(), o => o.WithTarget(hubAddress));
+        void Fail(string detail) => host.UpdateArea(DialogControl.DialogArea, Controls.Dialog(
+                Controls.Markdown($"**Save before run failed:**\n\n{detail}"), "Save Failed")
+            .WithSize("M").WithClosable(true));
+
+        host.Stream.GetDataStream<string>(CellBufferDataId).Take(1)
+            .CombineLatest(host.Workspace.GetMeshNodeStream().Take(1), (buffer, node) => (buffer, node))
+            .Take(1)
+            .Subscribe(t =>
+            {
+                var config = t.node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions);
+                if (config is null || (config.Code ?? "") == (t.buffer ?? ""))
+                {
+                    Execute();
+                    return;
+                }
+                var delivery = host.Hub.Post(
+                    new DataChangeRequest { ChangedBy = host.Stream.ClientId }
+                        .WithUpdates(config with { Code = t.buffer }),
+                    o => o.WithTarget(hubAddress))!;
+                host.Hub.Observe(delivery).Subscribe(
+                    response =>
+                    {
+                        if (response.Message is DataChangeResponse { Log.Status: ActivityStatus.Succeeded })
+                            Execute();
+                        else
+                            Fail((response.Message as DataChangeResponse)?.Log.ToString()
+                                 ?? response.Message?.GetType().Name ?? "no response");
+                    },
+                    ex => Fail(ex.Message));
+            });
     }
 
     /// <summary>
@@ -712,14 +846,9 @@ public static class CodeLayoutAreas
         // Either way the editor completes exactly what that cell can actually compile, so
         // there is no longer a reason to leave standalone scripts without language services.
         var sourcePath = host.Hub.Address.ToString();
-        var sourceMarkerIdx = sourcePath.IndexOf("/Source/", StringComparison.Ordinal);
-        var lastSlashIdx = sourcePath.LastIndexOf('/');
-        var ownerPath = sourceMarkerIdx > 0
-            ? sourcePath.Substring(0, sourceMarkerIdx)
-            : lastSlashIdx > 0 ? sourcePath.Substring(0, lastSlashIdx) : sourcePath;
         CodeEditorLanguageServerConfig? lspConfig = language == "csharp"
             ? new CodeEditorLanguageServerConfig(
-                NodeTypePath: ownerPath,
+                NodeTypePath: OwnerPathOf(sourcePath),
                 SourcePath: sourcePath)
             : null;
 
