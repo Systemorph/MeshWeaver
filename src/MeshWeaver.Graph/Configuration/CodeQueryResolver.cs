@@ -25,8 +25,10 @@ namespace MeshWeaver.Graph.Configuration;
 ///   <item>A <c>namespace:X</c> value with no <c>/</c> (e.g. bare <c>Source</c>
 ///     or <c>Test</c>) is rebased onto the NodeType's own path so the defaults
 ///     read as "my own Source / Test folder".</item>
-///   <item>Every emitted query is ANDed with <c>nodeType:Code</c> so non-code
-///     children never leak in.</item>
+///   <item>A query that does not already name a node type is ANDed with
+///     <c>nodeType:Code</c>, so non-code children never leak in. One that names its
+///     own (<c>nodeType:Scope</c>, say) is left as authored — the filter is a
+///     DEFAULT, not an override.</item>
 /// </list>
 /// </summary>
 public static class CodeQueryResolver
