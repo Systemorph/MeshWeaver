@@ -58,8 +58,38 @@ data:
   #       gate: a namespace probing /alive or /healthz ignores it entirely.
   #    3. strategy.maxUnavailable: 0 — the gate works by making the NEW pod refuse
   #       readiness, which protects nothing if the serving pod was already deleted.
+  # PreWarm__AllowUnprovenBake: the escape hatch for the one condition that is NOT a verdict —
+  #   the sweep ERRORED (enumeration threw or timed out) and so verified nothing. That refuses
+  #   readiness by default, because a gate that certifies "I verified nothing" is worse than no
+  #   gate: it was the retired pre-run bake Job's Bake__AllowEmpty guard ("FINDING NOTHING IS NOT
+  #   PASSING", exit 3), lost when #1357 retired the Job and now enforced on the surviving path.
+  #   Set true only to roll forward despite an environment that cannot answer the enumeration,
+  #   accepting lazy compilation — never to quiet a recurring fault, which is a defect to find.
+  #   It can NEVER waive a real regression, and /health keeps reporting the bake as unproven.
+  #   ⚠️ Note "empty" is NOT "unproven": a mesh that genuinely has no dynamic NodeTypes enumerates
+  #   successfully, completes, and serves. Only the inability to obtain an answer gates.
   PreWarm__DynamicTypes: "{{ .Values.config.memex_portal.PreWarm__DynamicTypes }}"
   PreWarm__GateReadiness: "{{ .Values.config.memex_portal.PreWarm__GateReadiness }}"
+  PreWarm__AllowUnprovenBake: "{{ .Values.config.memex_portal.PreWarm__AllowUnprovenBake }}"
+  # ---- Assembly-cache retention -------------------------------------------
+  # The bake writes one WHOLE GENERATION of NodeType assemblies per image, because the store
+  # keys every file by the MeshWeaver.Graph MVID and a CI build changes it on every publish.
+  # That is deliberate ABI safety (a new image must never load the previous image's bytes);
+  # what was missing is anything that removes an old generation. Measured on memex 2026-08-12:
+  # 7817 DLLs / 93 generations / 3.2 GB of a 16 GiB share — 1% of it loadable — on the SAME
+  # share as the DataProtection key ring, so filling it takes auth-adjacent state with it.
+  #
+  # The pod always CLAIMS the generation it runs (that claim, not an age or a count, is what
+  # proves a generation is still referenced) and always REPORTS what is collectable. This key
+  # arms the deletion. Off by default deliberately: read one report, confirm the kept set
+  # matches your roll cadence, then arm it — a first run that deletes on unexamined defaults is
+  # the one mistake here that cannot be undone.
+  #
+  # A generation is kept if ANY of these holds: it is the pod's own framework, a claim younger
+  # than 24 h names it, it is one of the 3 most recently written, or its newest file is under
+  # 7 days old. Nothing outside the per-NodeType directories is ever touched, and any error
+  # reading the cache aborts the sweep with nothing collected.
+  AssemblyCache__Retention__Delete: "{{ .Values.config.memex_portal.AssemblyCache__Retention__Delete | default "false" }}"
   Deployment__Orleans__Clustering: "{{ .Values.config.memex_portal.Deployment__Orleans__Clustering }}"
   Storage__Name: "{{ .Values.config.memex_portal.Storage__Name }}"
   Storage__SourceType: "{{ .Values.config.memex_portal.Storage__SourceType }}"
