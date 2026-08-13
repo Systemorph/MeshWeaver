@@ -144,13 +144,7 @@ internal static class NodeTypeCompilationActivity
                 hub.GetWorkspace().GetMeshNodeStream(activityPath!)
                     .Update(current =>
                         current?.Content is ActivityLog log
-                            ? current with
-                            {
-                                Content = log with
-                                {
-                                    Messages = log.Messages.AddRange(messages)
-                                }
-                            }
+                            ? current with { Content = log.Append(messages) }
                             : current!)
                     .Subscribe(
                         _ => { },
@@ -188,11 +182,10 @@ internal static class NodeTypeCompilationActivity
                         current?.Content is ActivityLog log
                             ? current with
                             {
-                                Content = log with
+                                Content = log.Append(messages) with
                                 {
                                     Status = status,
                                     End = DateTime.UtcNow,
-                                    Messages = log.Messages.AddRange(messages)
                                 }
                             }
                             : current!)
@@ -250,14 +243,13 @@ internal static class NodeTypeCompilationActivity
                         current?.Content is ActivityLog log
                             ? current with
                             {
-                                Content = log with
+                                Content = (error is { Length: > 0 }
+                                    ? log.Append(new LogMessage(error,
+                                        Microsoft.Extensions.Logging.LogLevel.Error))
+                                    : log) with
                                 {
                                     Status = status,
                                     End = DateTime.UtcNow,
-                                    Messages = error is { Length: > 0 }
-                                        ? log.Messages.Add(new LogMessage(error,
-                                            Microsoft.Extensions.Logging.LogLevel.Error))
-                                        : log.Messages
                                 }
                             }
                             : current!)
