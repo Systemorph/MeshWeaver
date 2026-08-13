@@ -2154,18 +2154,41 @@ internal class MeshNodeCompilationService(
         + "{ public T A; public U B; public V C; } } }";
 
     /// <summary>
-    /// Answers ONE question, at the moment a Roslyn <c>Emit</c> throws: is the fault specific to
-    /// THIS compilation's inputs, or is process-wide emit state broken?
+    /// Answers, at the moment a Roslyn <c>Emit</c> throws, which state is actually broken — in
+    /// TWO legs, because the first leg alone cannot tell "the shared reference set is poisoned"
+    /// from "the process is broken below Roslyn".
     ///
-    /// <para>It re-emits a trivial nested-generic compilation built against <b>the same
-    /// <see cref="MetadataReference"/> instances</b> as the compilation that just failed, to a
-    /// <see cref="MemoryStream"/>. Those references — and the Roslyn symbols cached on their
-    /// shared <c>AssemblyMetadata</c> — are the only state the two compilations have in common,
-    /// so the canary separates the two halves of the search space that issue #890 could not:
-    /// canary FAILS ⇒ the shared reference/symbol state is poisoned (a process-wide fault; the
-    /// next step is bisecting the reference set and reporting upstream). Canary SUCCEEDS ⇒ the
-    /// shared state is fine and the fault is a property of this node's own compilation inputs
-    /// (the next step is dumping its generated source).</para>
+    /// <para><b>Leg 1 — same references.</b> Re-emit a trivial nested-generic compilation built
+    /// against <b>the same <see cref="MetadataReference"/> instances</b> as the compilation that
+    /// just failed. Succeeds ⇒ shared state is healthy and the fault is a property of this node's
+    /// own compilation inputs (dump its generated source). This is the leg #1378 shipped, and on
+    /// 2026-08-13 it returned THREW — closing the "generated source" half of the search
+    /// space.</para>
+    ///
+    /// <para><b>Leg 2 — pristine references.</b> Run only when leg 1 fails: the SAME source
+    /// against a freshly created, minimal reference set that has never been handed to Roslyn
+    /// before and is shared with nothing. This is the discriminator, and it exists because
+    /// Roslyn's own source settles who can supply the null. The NRE's guard
+    /// (<c>NamedTypeSymbolAdapter.AsNestedTypeDefinitionImpl</c>) admits a type only when
+    /// <c>ContainingModule == moduleBeingBuilt.SourceModule</c> — so the symbol whose
+    /// <c>ContainingType</c> reads null is a <b>source</b> symbol of the compilation being
+    /// emitted, never a PE symbol arriving from a reference. Leg 1 therefore proves the fault is
+    /// process-wide without proving the reference set carries it.
+    /// <list type="bullet">
+    ///   <item><c>canary=REFERENCES</c> — pristine emits, shared does not: the poison travels
+    ///     with the reference instances (or the symbols Roslyn caches on their
+    ///     <c>AssemblyMetadata</c>), and scoping the set per-mesh is on the right axis.</item>
+    ///   <item><c>canary=BELOW-ROSLYN</c> — neither emits: brand-new references and freshly
+    ///     parsed source still cannot emit, so nothing about the reference set explains it. The
+    ///     broken state is under Roslyn (CLR heap / JIT / GC) and no reference-set change can fix
+    ///     it. Roslyn keeps no cross-emit state — the metadata writer's indices are per-emit, its
+    ///     object pools hold only scratch buffers, and <c>AssemblyMetadata.CachedSymbols</c> is a
+    ///     weak list of assembly symbols — so there is no Roslyn cache left to blame.</item>
+    ///   <item><c>canary=INCONCLUSIVE</c> — the pristine control could not be BUILT (no on-disk
+    ///     CoreLib to reference), so leg 2 never ran. Reported as its own verdict rather than
+    ///     folded into BELOW-ROSLYN: a probe that answers its scariest branch on its own
+    ///     inability would send triage after a CLR heap bug nothing observed.</item>
+    /// </list></para>
     ///
     /// <para>🚨 It cannot fail into the fault path it is diagnosing: every outcome — including
     /// the canary throwing — returns a STRING. A diagnostic that throws while diagnosing would
@@ -2177,32 +2200,89 @@ internal class MeshNodeCompilationService(
     /// <returns>A one-line verdict, safe to append to a log message.</returns>
     internal static string ProbeSharedEmitState(CSharpCompilation faulted)
     {
+        var shared = EmitCanary(() => faulted.References);
+        if (shared.StartsWith("OK", StringComparison.Ordinal))
+            return "canary=OK (a trivial nested-generic emit against the SAME reference set "
+                + "still succeeds ⇒ shared Roslyn/reference state is healthy; the fault is "
+                + "specific to THIS compilation's inputs — dump its generated source)";
+
+        // The shared-reference canary failed. Re-run the SAME source against a reference set that
+        // shares NOTHING with this process's other compilations — freshly created, minimal
+        // (System.Private.CoreLib is all the canary source needs), and never handed to Roslyn
+        // before.
+        //
+        // 🚨 BUILDING the pristine reference is a SEPARATE step from emitting against it, and its
+        // failure is a SEPARATE verdict. If CreateFromFile cannot produce it (an empty
+        // Assembly.Location on a single-file host, a missing file), the discriminator was never
+        // run — and folding that into BELOW-ROSLYN would make the probe answer its scariest
+        // branch on its own inability, sending triage after a CLR heap bug that nothing observed.
+        // A diagnostic that cannot report "I could not run" is the same defect as a gate that
+        // passes when its input is missing.
+        string? pristineUnavailable = null;
+        IReadOnlyList<MetadataReference> pristineRefs = [];
+        try
+        {
+            var coreLib = typeof(object).Assembly.Location;
+            if (string.IsNullOrEmpty(coreLib) || !File.Exists(coreLib))
+                pristineUnavailable = "no on-disk System.Private.CoreLib to reference";
+            else
+                pristineRefs = [MetadataReference.CreateFromFile(coreLib)];
+        }
+        catch (Exception buildError)
+        {
+            pristineUnavailable = $"{buildError.GetType().Name}: {buildError.Message}";
+        }
+
+        if (pristineUnavailable is not null)
+            return $"canary=INCONCLUSIVE shared:{shared} pristine:UNAVAILABLE({pristineUnavailable}) "
+                + "— the shared reference set cannot emit, but the pristine control could not be "
+                + "BUILT, so this says nothing about whether the reference set is the cause";
+
+        var pristine = EmitCanary(() => pristineRefs);
+
+        return pristine.StartsWith("OK", StringComparison.Ordinal)
+            ? $"canary=REFERENCES shared:{shared} pristine:{pristine} — the same source emits fine "
+                + "against BRAND-NEW references but fails against the shared set ⇒ the poison "
+                + "travels with the MetadataReference instances / the Roslyn symbols cached on "
+                + "them (reference-set scoping is the right axis)"
+            : $"canary=BELOW-ROSLYN shared:{shared} pristine:{pristine} — a trivial compilation "
+                + "with BRAND-NEW references and freshly parsed source cannot emit either ⇒ "
+                + "nothing about the reference set explains this; the broken state is below "
+                + "Roslyn (CLR heap / JIT / GC), so no reference-set change can fix it — "
+                + "capture a core dump and re-run with tiering disabled";
+    }
+
+    /// <summary>
+    /// One canary leg: emit <see cref="EmitCanarySource"/> against the references
+    /// <paramref name="references"/> produces, into memory, and reduce the outcome to a short
+    /// token. Never throws — see the "cannot fail into the fault path it is diagnosing" note on
+    /// <see cref="ProbeSharedEmitState"/>. The references arrive as a FACTORY so that building
+    /// them is inside this method's try as well: on a poisoned process even
+    /// <c>MetadataReference.CreateFromFile</c> is a candidate to fail.
+    /// </summary>
+    private static string EmitCanary(Func<IEnumerable<MetadataReference>> references)
+    {
         try
         {
             var canary = CSharpCompilation.Create(
                 "MeshWeaverEmitCanary",
                 syntaxTrees: [CSharpSyntaxTree.ParseText(EmitCanarySource)],
-                references: faulted.References,
+                references: references(),
                 options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
             using var canaryStream = new MemoryStream();
             var result = canary.Emit(canaryStream);
             if (result.Success)
-                return "canary=OK (a trivial nested-generic emit against the SAME reference set "
-                    + "still succeeds ⇒ shared Roslyn/reference state is healthy; the fault is "
-                    + "specific to THIS compilation's inputs — dump its generated source)";
+                return "OK";
 
             var ids = result.Diagnostics
                 .Where(d => d.Severity == DiagnosticSeverity.Error)
                 .Select(d => d.Id).Distinct().Take(5);
-            return $"canary=DIAGNOSTICS ({string.Join(",", ids)}) — the shared reference set no "
-                + "longer binds a trivial compilation ⇒ process-wide reference state is broken";
+            return $"DIAGNOSTICS({string.Join(",", ids)})";
         }
         catch (Exception probeError)
         {
-            return $"canary=THREW {probeError.GetType().Name}: {probeError.Message} — a trivial "
-                + "emit against the SAME reference set fails too ⇒ process-wide Roslyn/reference "
-                + "state is POISONED, not this compilation's inputs (bisect the reference set)";
+            return $"THREW {probeError.GetType().Name}: {probeError.Message}";
         }
     }
 
