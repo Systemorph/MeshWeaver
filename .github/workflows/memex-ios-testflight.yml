@@ -42,7 +42,7 @@ jobs:
         run: dotnet workload install maui-ios --version ${{ env.DOTNET_VERSION }}
 
       - name: Import signing certificate
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERT_PASSWORD }}
