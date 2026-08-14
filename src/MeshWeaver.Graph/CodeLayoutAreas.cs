@@ -24,7 +24,8 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout views for Code nodes.
-/// - Content (default): the notebook cell, stacked CODE → TOOLBAR → OUTPUT. For a viewer holding
+/// - Content (default): the notebook cell, stacked CODE → TOOLBAR → OUTPUT (the output appears
+///   only once there IS a run to show). For a viewer holding
 ///   Update the code segment IS an inline Monaco editor with code completion (edit mode is the
 ///   mode — no Edit button, auto-saved, Run persists the buffer first); for everyone else it is
 ///   the read-only markdown code block. Run sits directly under the code it executes and directly
@@ -256,33 +257,29 @@ public static class CodeLayoutAreas
             BuildCellToolbar(hubAddress, codeConfig, isExecutable, language, lastActivity, canEdit),
             CellToolbarArea);
 
-        if (isExecutable)
+        // Output segment LAST — and ONLY once there IS a run to show: the latest activity's
+        // Progress area (log + status badge), directly beneath the toolbar that produced it.
+        // Jupyter-esque left accent + thin separator mark it as the cell's output; full width so
+        // its left edge lines up with the code and the toolbar above it.
+        //
+        // 🚨 A cell that has never run renders NO output segment at all. It used to render an
+        // italic "Not yet run." strip, which after the toolbar moved above it reads as a dead
+        // empty box hanging off the bottom of every unrun cell — a status nobody needs, directly
+        // under the accent Run button that is the answer to it. Absence says the same thing and
+        // says it quieter (maintainer feedback, 2026-08-13). The moment Run is pressed the node
+        // gains a LastActivityPath and the pane appears with the live log in it.
+        if (isExecutable && !string.IsNullOrEmpty(codeConfig?.LastActivityPath))
         {
-            // Output segment LAST: the LATEST activity's Progress area (log + status badge),
-            // directly beneath the toolbar that produced it. Jupyter-esque left accent + thin
-            // separator mark it as the cell's output; full width so its left edge lines up with
-            // the code and the toolbar above it.
             const string outputStyle =
                 "width: 100%; box-sizing: border-box; " +
                 "border-top: 1px solid var(--neutral-stroke-rest); " +
                 "border-left: 3px solid var(--accent-fill-rest); " +
                 "background: var(--neutral-layer-2); padding: 10px 12px;";
-            if (!string.IsNullOrEmpty(codeConfig?.LastActivityPath))
-            {
-                cell = cell.WithView(new LayoutAreaControl(
-                            new Address(codeConfig.LastActivityPath!),
-                            new LayoutAreaReference(ActivityLayoutAreas.ProgressArea))
-                        .WithStyle(outputStyle),
-                    CellOutputArea);
-            }
-            else
-            {
-                // Not yet run: a one-line subtle hint, not a large empty pane.
-                cell = cell.WithView(Controls.Body(host.Localize("ui.notYetRun"))
-                        .WithStyle($"display: block; {outputStyle} " +
-                                   "color: var(--neutral-foreground-hint); font-style: italic; font-size: 0.85rem;"),
-                    CellOutputArea);
-            }
+            cell = cell.WithView(new LayoutAreaControl(
+                        new Address(codeConfig!.LastActivityPath!),
+                        new LayoutAreaReference(ActivityLayoutAreas.ProgressArea))
+                    .WithStyle(outputStyle),
+                CellOutputArea);
         }
 
         stack = stack.WithView(cell, CellArea);
