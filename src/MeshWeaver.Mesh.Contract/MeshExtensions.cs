@@ -2034,9 +2034,7 @@ public static class MeshExtensions
     /// infrastructure-write). Mirrors <c>StaticRepoImporter.AsSystem</c>.
     /// </summary>
     private static IObservable<T> AsSystem<T>(AccessService? access, Func<IObservable<T>> write)
-        => access is null
-            ? Observable.Defer(write)
-            : Observable.Using(() => access.ImpersonateAsSystem(), _ => write());
+        => access.RunAsSystem(write);
 
     /// <summary>
     /// True if the exception (or any inner) reports an "already exists" outcome — the idempotent-create

@@ -175,7 +175,5 @@ public sealed class SystemOwnedAccessRetractionHandler(
     /// <summary>Establishes the System identity on the write's own subscribe thread — mirrors
     /// <c>MeshExtensions.AsSystem</c>, so the deletes are attributed to the platform.</summary>
     private IObservable<T> AsSystem<T>(Func<IObservable<T>> write)
-        => accessService is null
-            ? Observable.Defer(write)
-            : Observable.Using(() => accessService.ImpersonateAsSystem(), _ => write());
+        => accessService.RunAsSystem(write);
 }

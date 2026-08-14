@@ -1602,12 +1602,7 @@ public static class StaticRepoImporter
     /// (which the sync-stream post then carries). See Doc/Architecture/AccessContextPropagation.md.
     /// </summary>
     private static IObservable<T> AsSystem<T>(IMessageHub hub, Func<IObservable<T>> write)
-    {
-        var access = hub.ServiceProvider.GetService<AccessService>();
-        return access is null
-            ? Observable.Defer(write)
-            : Observable.Using(() => access.ImpersonateAsSystem(), _ => write());
-    }
+        => hub.ServiceProvider.GetService<AccessService>().RunAsSystem(write);
 
     /// <summary>
     /// Surfaces a boot/startup import failure LOUDLY in the GUI. The activity at

@@ -208,7 +208,7 @@ public sealed class AccessGrantNotifier(
     }
 
     private IObservable<T> AsSystem<T>(Func<IObservable<T>> factory)
-        => Observable.Using(accessService.ImpersonateAsSystem, _ => Observable.Defer(factory));
+        => accessService.RunAsSystem(factory);
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 

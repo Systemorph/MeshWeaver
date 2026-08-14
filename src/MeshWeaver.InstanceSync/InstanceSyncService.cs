@@ -312,8 +312,5 @@ public sealed class InstanceSyncService(
     /// the user's own context and never go through here.
     /// </summary>
     public IObservable<T> AsSystem<T>(Func<IObservable<T>> operation)
-    {
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        return Observable.Using(() => accessService.ImpersonateAsSystem(), _ => operation());
-    }
+        => hub.ServiceProvider.GetRequiredService<AccessService>().RunAsSystem(operation);
 }
