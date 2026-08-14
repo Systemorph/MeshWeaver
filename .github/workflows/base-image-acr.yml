@@ -41,7 +41,7 @@ jobs:
       # buildx + QEMU: emulate the linux/arm64 RUN steps (apt/node/npm) of the base Dockerfile on this
       # amd64 runner; buildx assembles + pushes the manifest list.
       - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 

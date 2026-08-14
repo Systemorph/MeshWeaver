@@ -57,7 +57,7 @@ jobs:
       # SDK container builds below assemble layers without executing them, so they cross-build arm64
       # on an amd64 host with no emulation. (App images push the index straight to GHCR — Docker-free.)
       - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
