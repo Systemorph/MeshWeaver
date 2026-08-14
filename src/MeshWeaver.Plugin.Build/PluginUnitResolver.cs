@@ -56,6 +56,17 @@ public static partial class PluginUnitResolver
                 ? pluginName
                 : $"{pluginName}/{Path.GetRelativePath(pluginDirectory, owner).Replace(Path.DirectorySeparatorChar, '/')}";
 
+            // 🚨 A Source/ directory is a compilation unit ONLY when a NodeType owns it. Of the 774
+            // Source directories across the four repos just 221 qualify; the rest are:
+            //   * SHARED-SOURCE libraries with no node at all (`Claims/SampleData/Source`, pulled in
+            //     by consumers via `shared=@Claims/SampleData/Source`) — 552 of them;
+            //   * a directory whose sibling node is a MARKDOWN page describing the sample data
+            //     rather than declaring a type (`Claims/SampleData.json`).
+            // Building either standalone reports CS0246 for every type it legitimately borrows from
+            // its consumer — a false alarm on healthy content, which is worse than no check at all.
+            if (!IsCompilationUnitOwner(owner))
+                continue;
+
             var declared = ReadDeclaredQueries(owner, "sources");
             var declaredTests = ReadDeclaredQueries(owner, "tests");
             units.Add(new PluginUnit(
@@ -75,14 +86,9 @@ public static partial class PluginUnitResolver
     /// </summary>
     private static ImmutableArray<string> ReadDeclaredQueries(string ownerDirectory, string property)
     {
-        foreach (var candidate in new[]
-                 {
-                     Path.Combine(ownerDirectory, "index.json"),
-                     ownerDirectory + ".json",
-                 })
+        var candidate = FindNodeFile(ownerDirectory);
+        if (candidate is not null)
         {
-            if (!File.Exists(candidate))
-                continue;
             try
             {
                 using var doc = JsonDocument.Parse(File.ReadAllText(candidate));
@@ -101,9 +107,39 @@ public static partial class PluginUnitResolver
                 // A malformed node file is the author's problem, not a resolution failure — the
                 // unit still builds from its own Source and Roslyn reports whatever is missing.
             }
-            return [];
         }
         return [];
+    }
+
+    /// <summary>
+    /// The node file describing a directory — <c>&lt;Owner&gt;/index.json</c> or
+    /// <c>&lt;Owner&gt;.json</c> beside it — or null when the directory is not a JSON-authored node.
+    /// </summary>
+    private static string? FindNodeFile(string ownerDirectory) =>
+        new[] { Path.Combine(ownerDirectory, "index.json"), ownerDirectory + ".json" }
+            .FirstOrDefault(File.Exists);
+
+    /// <summary>
+    /// Whether a directory's node declares something the portal compiles: a
+    /// <c>NodeTypeDefinition</c> (a NodeType, including a Space that owns a partition) or a
+    /// <c>PluginContent</c> root that carries its own shared model.
+    /// </summary>
+    private static bool IsCompilationUnitOwner(string ownerDirectory)
+    {
+        var nodeFile = FindNodeFile(ownerDirectory);
+        if (nodeFile is null)
+            return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(nodeFile));
+            return doc.RootElement.TryGetProperty("content", out var content)
+                   && content.TryGetProperty("$type", out var type)
+                   && type.GetString() is "NodeTypeDefinition" or "PluginContent";
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
