@@ -83,10 +83,7 @@ export const fetchViewer = requestCache(async (origin: string, cookieHeader: str
     const resp = await fetch(`${origin}/api/mesh/whoami`, {
       method: "POST",
       cache: "no-store",
-      headers: {
-        "content-type": "application/json",
-        cookie: cookieHeader, // the incoming request's session cookie authorizes the read
-      },
+      headers: readHeaders(cookieHeader),
       body: "{}",
     });
     if (!resp.ok) return null;
