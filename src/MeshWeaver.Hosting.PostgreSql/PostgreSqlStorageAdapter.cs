@@ -533,7 +533,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
 
             // Build every upsert first (this is where the embedding calls happen), keeping the
             // caller's order, then window by target table.
-            var built = new List<(MeshNode Node, string Table, string Sql, IReadOnlyList<object> Parameters)>(ordered.Count);
+            var built = new List<(MeshNode Node, string Table, string Sql, IReadOnlyList<NpgsqlParameter> Parameters)>(ordered.Count);
             foreach (var node in ordered)
             {
                 var (sql, parameters) = await BuildUpsertAsync(node, options).ConfigureAwait(false);
@@ -560,8 +560,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                     foreach (var item in items)
                     {
                         var command = new NpgsqlBatchCommand(item.Sql);
-                        foreach (var value in item.Parameters)
-                            command.Parameters.AddWithValue(value);
+                        foreach (var parameter in item.Parameters)
+                            command.Parameters.Add(parameter);
                         batch.BatchCommands.Add(command);
                     }
                     await batch.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -626,8 +626,8 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     {
         var (sql, parameters) = await BuildUpsertAsync(node, options, expectedVersion).ConfigureAwait(false);
         await using var cmd = _dataSource.CreateCommand(sql);
-        foreach (var value in parameters)
-            cmd.Parameters.AddWithValue(value);
+        foreach (var parameter in parameters)
+            cmd.Parameters.Add(parameter);
         return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
     }
 
@@ -654,6 +654,43 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         });
 
     /// <summary>
+    /// One positional upsert parameter, with its PostgreSQL type stated explicitly.
+    ///
+    /// <para>🚨 Never <c>AddWithValue</c> here. Npgsql sends a parameter whose type it does not know
+    /// — which is every <c>DBNull</c> — with the unspecified OID 0, delegating the decision to the
+    /// SERVER, which infers it from where the parameter is USED. The compare-and-set branch below
+    /// deliberately binds parameters it never references (<c>created_by</c> and <c>created_date</c>
+    /// are immutable, so the UPDATE omits them while the positional layout still carries them), and
+    /// for those there is nothing to infer from: PostgreSQL rejects the whole statement with
+    /// <c>42P18: could not determine data type of parameter $n</c>, naming whichever untyped
+    /// unreferenced parameter comes first. That is not a hypothetical — it wedged a production
+    /// portal's readiness, because the build-claim lock is written by the framework itself and so
+    /// carries no authorship at all, and every arbitration pass past the first (insert-only, where
+    /// every parameter IS referenced) failed forever: no builder elected, no NodeType bake, no
+    /// ready pod.</para>
+    ///
+    /// <para>Stating the type removes the dependence on inference for EVERY parameter and every
+    /// branch, so no later change to which columns a statement mentions can re-arm this. Fixing
+    /// only the two columns that happen to be unreferenced today would leave that trap set.</para>
+    /// </summary>
+    /// <param name="type">The column's PostgreSQL type.</param>
+    /// <param name="value">The value, or <c>null</c> for SQL NULL.</param>
+    /// <returns>An unnamed (positional) parameter carrying an explicit type.</returns>
+    private static NpgsqlParameter Typed(NpgsqlDbType type, object? value)
+        => new() { NpgsqlDbType = type, Value = value ?? DBNull.Value };
+
+    /// <summary>
+    /// The <c>embedding</c> parameter. pgvector's type has no <see cref="NpgsqlDbType"/> member, so
+    /// it is named directly — the data sources this adapter is built over all register the mapping
+    /// (<c>UseVector()</c>), and naming it means a NULL embedding is typed exactly like a present
+    /// one instead of relying on the column context.
+    /// </summary>
+    /// <param name="embedding">The embedding, or <c>null</c> when none was generated.</param>
+    /// <returns>An unnamed (positional) <c>vector</c> parameter.</returns>
+    private static NpgsqlParameter TypedVector(float[]? embedding)
+        => new() { DataTypeName = "vector", Value = embedding is null ? DBNull.Value : new Vector(embedding) };
+
+    /// <summary>
     /// The upsert for ONE node: its SQL text and its positional parameters, in order.
     /// Shared by <see cref="WriteAsyncCore"/> (one command) and <see cref="WriteMany"/>
     /// (one <see cref="NpgsqlBatchCommand"/> per node) so the two paths can never drift —
@@ -671,7 +708,7 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
     /// exactly this version". The equality is what makes the write EXCLUSIVE rather than merely
     /// non-regressing — see the contract note on <see cref="IStorageAdapter.WriteIfVersion"/>.
     /// </param>
-    private async Task<(string Sql, IReadOnlyList<object> Parameters)> BuildUpsertAsync(
+    private async Task<(string Sql, IReadOnlyList<NpgsqlParameter> Parameters)> BuildUpsertAsync(
         MeshNode node, JsonSerializerOptions options, long? expectedVersion = null)
     {
         var ns = node.Namespace ?? "";
@@ -730,35 +767,36 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         // still apply — re-persisting an unchanged node is a legitimate, common shape. The alias is
         // required: inside ON CONFLICT DO UPDATE the target row is referenced by its range-table name,
         // and `{table}` is schema-qualified.
-        var parameters = new List<object>(21)
+        var parameters = new List<NpgsqlParameter>(21)
         {
-            ns,
-            node.Id,
-            (object?)node.Name ?? DBNull.Value,
-            (object?)node.Description ?? DBNull.Value,
-            (object?)node.NodeType ?? DBNull.Value,
-            (object?)node.Category ?? DBNull.Value,
-            (object?)node.Icon ?? DBNull.Value,
-            node.Order.HasValue ? node.Order.Value : DBNull.Value,
-            node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified,
-            node.Version,
-            (short)node.State,
-            (object?)contentJson ?? DBNull.Value,
-            (object?)node.DesiredId ?? DBNull.Value,
-            embeddingVector != null ? new Vector(embeddingVector) : DBNull.Value,
-            node.MainNode,
+            Typed(NpgsqlDbType.Text, ns),
+            Typed(NpgsqlDbType.Text, node.Id),
+            Typed(NpgsqlDbType.Text, node.Name),
+            Typed(NpgsqlDbType.Text, node.Description),
+            Typed(NpgsqlDbType.Text, node.NodeType),
+            Typed(NpgsqlDbType.Text, node.Category),
+            Typed(NpgsqlDbType.Text, node.Icon),
+            Typed(NpgsqlDbType.Integer, node.Order),
+            Typed(NpgsqlDbType.TimestampTz,
+                node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified),
+            Typed(NpgsqlDbType.Bigint, node.Version),
+            Typed(NpgsqlDbType.Smallint, (short)node.State),
+            Typed(NpgsqlDbType.Text, contentJson),   // bound as text, cast to jsonb in the statement
+            Typed(NpgsqlDbType.Text, node.DesiredId),
+            TypedVector(embeddingVector),
+            Typed(NpgsqlDbType.Text, node.MainNode),
         };
 
         // $16–$20 — only bound when the target is mesh_nodes (see writeSync above).
         if (writeSync)
         {
-            parameters.Add((short)node.SyncBehavior);
-            parameters.Add((object?)node.CreatedBy ?? DBNull.Value);
-            parameters.Add((object?)node.LastModifiedBy ?? DBNull.Value);
-            parameters.Add(node.CreatedDate == default ? DBNull.Value : node.CreatedDate);
-            parameters.Add(node.ExcludeFromContext is { Count: > 0 } efc
-                ? efc.ToArray()
-                : (object)DBNull.Value);
+            parameters.Add(Typed(NpgsqlDbType.Smallint, (short)node.SyncBehavior));
+            parameters.Add(Typed(NpgsqlDbType.Text, node.CreatedBy));
+            parameters.Add(Typed(NpgsqlDbType.Text, node.LastModifiedBy));
+            parameters.Add(Typed(NpgsqlDbType.TimestampTz,
+                node.CreatedDate == default ? null : node.CreatedDate));
+            parameters.Add(Typed(NpgsqlDbType.Array | NpgsqlDbType.Text,
+                node.ExcludeFromContext is { Count: > 0 } efc ? efc.ToArray() : null));
         }
 
         // The conflict action. Built AFTER the parameter list so the compare-and-set predicate can
@@ -774,9 +812,13 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
         // the two backends must not disagree about what compare-and-set means.
         if (expectedVersion is > 0)
         {
-            parameters.Add(expectedVersion.Value);
+            parameters.Add(Typed(NpgsqlDbType.Bigint, expectedVersion.Value));
             // Mirrors the ON CONFLICT SET list exactly — created_by / created_date stay untouched
             // (insert-only there, absent here), so authorship survives a compare-and-set too.
+            // 🚨 That makes $17 and $19 BOUND BUT NEVER REFERENCED in this statement. Legal only
+            // because every parameter carries an explicit type (see Typed): an untyped one here has
+            // no usage to infer from and 42P18s the whole statement. Do not switch this list back
+            // to AddWithValue, and do not "tidy" the layout by assuming a bound parameter is used.
             var casSync = writeSync ? ",\n                sync_behavior = $16" : "";
             var casAuthor = writeSync ? ",\n                last_modified_by = $18" : "";
             var casExclude = writeSync ? ",\n                exclude_from_context = $20" : "";
