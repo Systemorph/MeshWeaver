@@ -70,6 +70,38 @@ public sealed record PluginManifest(
             : null;
 
     /// <summary>
+    /// A caret range as NuGet interval notation — "compatible with", where the upper bound is the
+    /// next version that may break.
+    ///
+    /// <para>🚨 <b>Below 1.0.0 the leading non-zero component is the breaking one.</b>
+    /// <c>^0.2.3</c> means <c>[0.2.3,0.3.0)</c> and <c>^0.0.3</c> means <c>[0.0.3,0.0.4)</c> — not
+    /// <c>[…,1.0.0)</c>. Capping every caret at the next MAJOR silently widens a 0.x dependency
+    /// across its actual breaking boundary, so a resolver would happily pick a release the author
+    /// declared incompatible. Harmless today only because every plugin in the tree declares
+    /// <c>^1.0.0</c>; it stops being harmless the first time someone ships a 0.x module.</para>
+    /// </summary>
+    private static string CaretRange(string lower)
+    {
+        var parts = lower.Split('.');
+        if (parts.Length < 1 || !int.TryParse(parts[0], out var major))
+            return lower;
+
+        if (major > 0)
+            return $"[{lower},{major + 1}.0.0)";
+
+        if (parts.Length < 2 || !int.TryParse(parts[1], out var minor))
+            return $"[{lower},1.0.0)";
+
+        if (minor > 0)
+            return $"[{lower},0.{minor + 1}.0)";
+
+        // 0.0.x — every patch may break, so the range admits exactly one.
+        return parts.Length >= 3 && int.TryParse(parts[2].Split('-')[0], out var patch)
+            ? $"[{lower},0.0.{patch + 1})"
+            : $"[{lower},0.1.0)";
+    }
+
+    /// <summary>
     /// Manifests carry two-part versions (<c>"1.3"</c>); NuGet requires three. Widening here rather
     /// than at the author keeps the mesh manifest the source of truth.
     /// </summary>
@@ -102,11 +134,7 @@ public sealed record PluginManifest(
                 continue;
             }
 
-            var lower = spec[1..];
-            var major = lower.Split('.')[0];
-            yield return int.TryParse(major, out var m)
-                ? (id, $"[{lower},{m + 1}.0.0)")
-                : (id, lower);
+            yield return (id, CaretRange(spec[1..]));
         }
     }
 }

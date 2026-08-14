@@ -102,8 +102,15 @@ foreach (var unit in units)
         RedirectStandardOutput = true,
         RedirectStandardError = true,
     })!;
-    var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+    // 🚨 BOTH reads must be started before either is awaited. Reading stdout to completion first
+    // deadlocks as soon as the child fills stderr's pipe buffer: it blocks writing stderr, so it
+    // never closes stdout, so this never returns. `dotnet build` emits plenty of both on a failing
+    // unit — precisely the case this tool exists to report.
+    var standardOutput = process.StandardOutput.ReadToEndAsync();
+    var standardError = process.StandardError.ReadToEndAsync();
+    Task.WaitAll(standardOutput, standardError);
     process.WaitForExit();
+    var output = standardOutput.Result + standardError.Result;
 
     if (process.ExitCode == 0)
         continue;

@@ -89,23 +89,18 @@ public static partial class PluginUnitResolver
         var candidate = FindNodeFile(ownerDirectory);
         if (candidate is not null)
         {
-            try
+            // Same reason as IsCompilationUnitOwner: swallowing a parse failure here would drop the
+            // node's DECLARED includes and compile the unit against a short closure, producing a
+            // convincing CS0246 on a symbol that does exist — the harness blaming the author.
+            using var doc = ParseOrThrow(candidate);
+            if (doc.RootElement.TryGetProperty("content", out var content)
+                && content.TryGetProperty(property, out var queries)
+                && queries.ValueKind == JsonValueKind.Array)
             {
-                using var doc = JsonDocument.Parse(File.ReadAllText(candidate));
-                if (doc.RootElement.TryGetProperty("content", out var content)
-                    && content.TryGetProperty(property, out var queries)
-                    && queries.ValueKind == JsonValueKind.Array)
-                {
-                    return [.. queries.EnumerateArray()
-                        .Select(e => e.GetString())
-                        .Where(s => !string.IsNullOrWhiteSpace(s))
-                        .Select(s => s!)];
-                }
-            }
-            catch (JsonException)
-            {
-                // A malformed node file is the author's problem, not a resolution failure — the
-                // unit still builds from its own Source and Roslyn reports whatever is missing.
+                return [.. queries.EnumerateArray()
+                    .Select(e => e.GetString())
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Select(s => s!)];
             }
         }
         return [];
@@ -129,16 +124,27 @@ public static partial class PluginUnitResolver
         var nodeFile = FindNodeFile(ownerDirectory);
         if (nodeFile is null)
             return false;
+
+        // 🚨 A malformed node file is NOT "not a unit". Swallowing the JsonException here would
+        // drop the unit from the build and report success — a false green precisely when the node
+        // is broken, which is the one case a build must not wave through. Fail loudly, naming the
+        // file: a bad node file is an authoring error with an obvious fix.
+        using var doc = ParseOrThrow(nodeFile);
+        return doc.RootElement.TryGetProperty("content", out var content)
+               && content.TryGetProperty("$type", out var type)
+               && type.GetString() is "NodeTypeDefinition" or "PluginContent";
+    }
+
+    /// <summary>Parses a node file, or throws naming it.</summary>
+    private static JsonDocument ParseOrThrow(string nodeFile)
+    {
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(nodeFile));
-            return doc.RootElement.TryGetProperty("content", out var content)
-                   && content.TryGetProperty("$type", out var type)
-                   && type.GetString() is "NodeTypeDefinition" or "PluginContent";
+            return JsonDocument.Parse(File.ReadAllText(nodeFile));
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return false;
+            throw new InvalidOperationException($"malformed node file: {nodeFile} — {ex.Message}", ex);
         }
     }
 

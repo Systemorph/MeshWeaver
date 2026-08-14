@@ -26,8 +26,9 @@ assembly store, not a reference set.
 ## Why
 
 Source stored in mesh nodes (`Source/*.cs` under a NodeType) compiles **at runtime, in the portal**
-— never in `dotnet build`, never in a test. Across the four plugin repos that is ~700 files in 242
-compilation units that no build has ever type-checked. The consequences are routine: a framework
+— never in `dotnet build`, never in a test. Across the four plugin repos that is hundreds of files
+in a couple of hundred compilation units, and the portal recompiles every one of them whenever the
+framework's content changes. The consequences are routine: a framework
 symbol gets deleted, every check is green, and the breakage appears as `CompileError` overlays in
 production against code the compiler was never shown.
 
@@ -43,7 +44,8 @@ so two may legitimately declare the same type name (`TaskAssignmentService` exis
 `UwPortfolio/Source` and `UWDeepfieldHome/Source`). Merging a plugin's units into one assembly
 yields ~200 spurious `CS0111`s.
 
-Of the 774 `Source/` directories across the four repos, only ~221 are units. The rest are
+Most `Source/` directories are not units at all — in the four plugin repos it is roughly one in
+three. The rest are
 **shared-source libraries** — `Claims/SampleData/Source` has no node at all and is pulled into its
 consumers via `shared=@Claims/SampleData/Source`. Building one standalone reports `CS0246` for every
 type it legitimately borrows from the consumer: a false alarm on healthy content, which is worse
