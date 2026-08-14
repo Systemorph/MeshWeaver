@@ -75,9 +75,9 @@ export function fakeMeshTransport(opts: FakeMeshOptions = {}) {
             case "EchoRequest":
               respond(out, d, { $type: "EchoResponse", text: d.message.text });
               break;
-            case "QueryRequest":
-              respond(out, d, { $type: "QueryResponse", results: [{ path: "ACME/Stories/1", name: "S1" }] });
-              break;
+            // No QueryRequest responder — the REAL server has no such handler (issue #1473), and
+            // faking one here is exactly how Mesh.search shipped posting into the void. Search is
+            // REST (`/api/mesh/query-nodes`); tests exercise it via an injected fetch.
             case "CreateNodeRequest": {
               const node = d.message.node as { path?: string; id?: string } | undefined;
               // An id containing "fail" answers a refused create — pins the surfaced-failure path.

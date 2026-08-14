@@ -146,10 +146,20 @@ deploy/aks/scripts/check-chart-drift.sh -n <NS> -r <release> \
   --expect-patch deploy/aks/envs/<env>/portal-patch.json
 ```
 
-It renders the chart, reads the live `memex-portal-config` and `memex-portal-deployment`, and
-classifies every difference as **CLUSTER-ONLY** (hand-applied — the next `helm upgrade` deletes
-it), **CHART-ONLY** (described but never applied — nobody is getting it), or **DIFFERS**. Secret
-values are never printed; inline `env` is compared by name only.
+It renders the chart, reads the live `memex-portal-config` and `memex-portal-deployment` plus the
+namespace's `PodDisruptionBudget` and `ScaledObject`, and classifies every difference as
+**CLUSTER-ONLY** (hand-applied — the next `helm upgrade` deletes it), **CHART-ONLY** (described
+but never applied — nobody is getting it), or **DIFFERS**. Secret values are never printed;
+inline `env` is compared by name only.
+
+The **availability shape** — `spec.replicas`, the budget, the autoscaler — is compared because
+without it the check cannot see an outage. On 2026-08-14 `memex-cloud` served every request from
+ONE pod, and none of the three reasons was a ConfigMap key: a hand-applied `minAvailable: 2`
+budget (the chart renders `maxUnavailable: 1`) sitting at `disruptionsAllowed: 0`, and a
+`ScaledObject` annotated `autoscaling.keda.sh/paused-replicas: "1"` — which pins the replica
+count, deletes the HPA, and silently reverts `kubectl scale`. A live `disruptionsAllowed: 0` is
+now reported on its own terms, whether or not the chart agrees with it: agreeing would not make
+it survivable.
 
 Two things to know before you trust a green run:
 
@@ -160,11 +170,36 @@ Two things to know before you trust a green run:
   `portal-patch.json` after `helm upgrade` (the CSI `envFrom`, extra volumes); pass it so those
   additions read as intentional. Anything cluster-only and *not* in that file is undeclared drift.
 
-It is a script and not a CI job on purpose: it needs cluster credentials, and a CI gate that
-skips when credentials are absent renders the same tick as one that passed — that would rebuild
-the very defect it is meant to catch. It fails RED when it cannot compare — an unreachable
-cluster, a failed render, or a rendered ConfigMap with no keys — rather than reporting "no
-drift" on no evidence.
+It fails RED when it cannot compare — an unreachable cluster, a failed render, or a rendered
+ConfigMap with no keys — rather than reporting "no drift" on no evidence.
+
+**Two callers, and neither may skip.** The script's inputs are cluster credentials and the
+per-env values, so it cannot be a pull-request gate: a gate that skips when a credential is
+absent renders the same tick as one that passed, which would rebuild the very defect it catches.
+It runs from `.github/workflows/chart-drift.yml` on a daily `schedule` (plus `workflow_dispatch`)
+behind a `preflight` job that asserts every external input and **fails red naming what to
+provision** — never an `if:` that decides whether to run. Expect it red until the CI identity has
+AKS `runCommand` rights and each environment's SECRET-FREE `values.<env>.public.yaml` is
+committed to the private deploy repo; that red is the honest report that drift detection is not
+wired up yet.
+
+### The chart must also agree with ITSELF — `check-chart-invariants.sh`
+
+Drift is only half of it. The `memex-cloud` outage above needed no cluster to detect: the chart
+in git described an impossibility. `deploy/aks/values.aks.yaml` asked for `keda.minReplicas: 2`,
+`scaledobject.yaml` rendered a floor of 2, `pdb.yaml` budgeted for two pods — and
+`deployment.yaml` hard-coded `replicas: 1`, so `replicas.portal: 2` had sat in values consumed by
+nothing for a month. `helm template` emits that set happily, because helm validates syntax, not
+sense.
+
+`deploy/aks/scripts/check-chart-invariants.sh` renders every values combination the repo ships
+and asserts the ones that matter: `spec.replicas` absent under KEDA (helm and the HPA must not
+both own it), a replica floor above 1 implying AdoNet clustering and `ReadWriteMany` on every
+portal claim, AdoNet implying a rendered `ConnectionStrings__orleans`, a budget using
+`maxUnavailable` rather than the not-scale-invariant `minAvailable`, a budget implying a floor
+above 1, and `strategy.maxUnavailable: 0` under KEDA. Every input is in this repository, so it
+runs unconditionally on every pull request (`.github/workflows/chart-gate.yml`) — no secret to be
+absent means no condition under which it may decline to run.
 
 ## Self-update ops — pausing, pinning, and the rules that bite
 
