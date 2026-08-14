@@ -7,7 +7,10 @@
 </HeadContent>
 
 <CascadingValue Value="@themeService">
-    @if (SeriesList != null && SeriesList.Any())
+    @* Gate on AssetsReady: RadzenChart invokes Radzen.Blazor.js via interop, and the pack
+       self-loads that script on first render (no App.razor tag) — rendering earlier would race
+       the script load. *@
+    @if (AssetsReady && SeriesList != null && SeriesList.Any())
     {
         <div style="@GetContainerStyle()">
             @if (Title != null && !string.IsNullOrEmpty(Title.ToString()))

@@ -6,7 +6,9 @@
 </HeadContent>
 
 <CascadingValue Value="@themeService">
-    @if (Configuration != null && RawData != null && DataItemType != null)
+    @* AssetsReady: the pack self-loads Radzen's stylesheet + interop script on first render
+       (no App.razor tag) — see RadzenViewBase. *@
+    @if (AssetsReady && Configuration != null && RawData != null && DataItemType != null)
     {
         @RenderPivotGrid()
     }
