@@ -1065,6 +1065,83 @@ jobs:
           exit "$status"
         fi
 
+  doc-gate:
+    name: "Doc content compiles and runs"
+    # Unlike plugin-gate this needs no credential and no fork guard: the content under test IS
+    # this repo's own src/MeshWeaver.Documentation/Data, checked out with the PR. The job exists
+    # because that content is Roslyn-compiled at RUNTIME in the portal and invisible to
+    # `dotnet build` (the csproj embeds Data/** and explicitly removes its .cs from compilation)
+    # — without this job, the doc tree's node sources and NodeType configuration lambdas ship
+    # untested, and two of the four Doc NodeTypes had never been compiled by anything.
+    needs: [build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    # Same wall-clock contract as plugin-gate: depends on `build` like the shards, so it runs
+    # CONCURRENTLY with them; while it stays under the slowest shard it costs the PR nothing.
+    timeout-minutes: 12
+    outputs:
+      failure: ${{ steps.gate.outputs.failure }}
+    steps:
+    - uses: actions/checkout@v6
+      with: { fetch-depth: 1 }
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+    - name: "Download artifact: build output (shard 0)"
+      uses: actions/download-artifact@v6
+      with:
+        name: build-output-0
+    - name: Extract build output
+      run: |
+        set -euo pipefail
+        tar -I 'zstd --long=27' -xf build-output-0.tar.zst
+        rm -f build-output-0.tar.zst
+    - name: "Compile + run the Doc content against this PR"
+      id: gate
+      run: |
+        set -euo pipefail
+        TESTER="$(find . -path '*/MeshWeaver.PluginTester/bin/*/mw-plugin-test.dll' | head -1)"
+        if [ -z "$TESTER" ]; then
+          echo "::error::mw-plugin-test.dll not in the build output — the doc gate cannot run."
+          exit 1
+        fi
+        # Stage src/MeshWeaver.Documentation/Data as a package root named Doc/. The tree has no
+        # index.json of its own (index.md is the partition's root PAGE, and committing a JSON
+        # root would ship a duplicate root node in the embedded partition), so the root is
+        # synthesized here and index.md is dropped from the STAGE only — shipped content is
+        # untouched. NodeFileMapper then maps Doc/DataMesh/SocialMedia/Post.json et al. to the
+        # exact namespaces the files themselves declare, so the gate compiles the tree under
+        # its canonical paths.
+        STAGE="${RUNNER_TEMP:-/tmp}/doc"
+        mkdir -p "$STAGE/Doc"
+        cp -R src/MeshWeaver.Documentation/Data/. "$STAGE/Doc/"
+        rm -f "$STAGE/Doc/index.md"
+        printf '%s' '{"$type":"MeshNode","id":"Doc","path":"Doc","mainNode":"Doc","name":"MeshWeaver Documentation","nodeType":"Space","state":"Active"}' > "$STAGE/Doc/index.json"
+        # .github/doc-gate.allow is THIS repo's known-debt ratchet for doc content: listed
+        # failures are tolerated, NEW failures fail the PR, and a listed check that starts
+        # passing fails the PR until its line is removed — the list can only shrink.
+        log="${RUNNER_TEMP:-/tmp}/doc-gate.log"
+        status=0
+        if ! time dotnet "$TESTER" "$STAGE" --allow .github/doc-gate.allow 2>&1 | tee "$log"; then
+          status="${PIPESTATUS[0]}"
+          # tee always exits 0, so a non-zero pipeline with a zero head means tee itself failed.
+          if [ "$status" = "0" ]; then status=1; fi
+        fi
+        verdict="$(grep -m1 -- '^GATE FAILED' "$log" || true)"
+        {
+          echo "failure<<GATE_EOF"
+          echo "$verdict"
+          echo "GATE_EOF"
+        } >> "$GITHUB_OUTPUT"
+        if [ "$status" != "0" ]; then
+          if [ -n "$verdict" ]; then
+            echo "::error::$verdict"
+          else
+            echo "::error::The doc gate failed before it produced a verdict — no check was judged. See this job's log."
+          fi
+          exit "$status"
+        fi
+
   licence-gate:
     name: "Dependency licences"
     # MeshWeaver ships dual-licensed Apache-2.0 / MIT. A copyleft (AGPL/GPL/LGPL) or
@@ -1109,7 +1186,7 @@ jobs:
     # is a NEEDS for the same reason one level up: this job is the repo's ONLY required status
     # check, so anything that must block a merge has to be able to fail it. licence-gate is a
     # NEEDS on the same principle: a licensing defect must be able to block a merge.
-    needs: [precheck, preflight, build, test, plugin-gate, licence-gate]
+    needs: [precheck, preflight, build, test, plugin-gate, doc-gate, licence-gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1305,6 +1382,25 @@ jobs:
             echo "::error::A failing 'compile' check means a public API change here broke plugin node source that is Roslyn-compiled at runtime from the plugins repo."
             ;;
         esac
+        exit 1
+
+    # ── …and the doc-content gate decides it too ────────────────────────────────────────────
+    # 🚨 Same lesson as the plugin-gate step above: `needs:` alone is NOT enough under
+    # `if: always()` — a failed doc-gate must explicitly turn the repo's only required check RED.
+    - name: Fail if the doc gate failed
+      if: needs.doc-gate.result == 'failure'
+      env:
+        # Empty when the gate produced no verdict (it died before judging). Degrades to
+        # "see the job", which is true either way.
+        GATE_VERDICT: ${{ needs.doc-gate.outputs.failure }}
+      run: |
+        set -uo pipefail
+        verdict="$(printf '%s' "${GATE_VERDICT}" | head -1)"
+        if [ -n "$verdict" ]; then
+          echo "::error::The doc gate failed: ${verdict} — see the 'Doc content compiles and runs' job."
+        else
+          echo "::error::The doc gate failed — see the 'Doc content compiles and runs' job for the failing check (install / compile / render / tests) and the node(s) it failed on."
+        fi
         exit 1
 
     # ── …and a licensing defect decides it too ──────────────────────────────────────────────

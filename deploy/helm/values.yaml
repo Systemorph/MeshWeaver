@@ -98,6 +98,22 @@ instancesAdmin:
   # Instances tab (→ Instances__GrafanaBaseUrl). Empty = the tab shows a configure-me hint
   # instead of links. Only meaningful where clusterRead is true (the company instance).
   grafanaBaseUrl: ""
+# ---- Fixed replica count (portal) ------------------------------------------
+# Read ONLY when keda.enabled is false — with KEDA on, the HPA owns spec.replicas and the chart
+# deliberately renders no such field (see templates/memex-portal/deployment.yaml).
+#
+# 1 is the self-host default. Raising it is an HA decision with two hard prerequisites, because a
+# second replica is a second Orleans SILO and a second writer on every volume:
+#   * config.memex_portal.Deployment__Orleans__Clustering must be "AdoNet" (or "AzureTables").
+#     "Localhost" clustering is single-process membership — two Localhost silos do not form one
+#     mesh, they form two, and grain calls resolve against whichever pod the request landed on.
+#   * every persistence.* claim must be ReadWriteMany. /data is shared state (DataProtection key
+#     ring, the NodeType assembly cache, the NuGet cache); a ReadWriteOnce claim either pins both
+#     pods to one node or leaves the second pod unschedulable.
+# Both are asserted at render time by .github/workflows/chart-gate.yml, so a values file that
+# raises this without them fails the build instead of the deployment.
+replicas:
+  portal: 1
 # ---- KEDA autoscaling (portal) --------------------------------------------
 # HA deployments autoscale the portal via a KEDA ScaledObject (templates/
 # memex-portal/scaledobject.yaml) instead of a fixed replica count. Off by
@@ -262,14 +278,28 @@ portalNext:
   # gRPC-web are ingress-routed), so this only affects SSR.
   portalOrigin: "http://memex-portal-service:8080"
 secrets:
+  # ---- Database connection strings -------------------------------------------
+  # Leave EMPTY to use the chart's in-cluster Postgres (memex-postgres-service) — the self-host /
+  # local-k3s / compose default. Set them to point at an EXTERNAL server (Azure Postgres Flexible
+  # Server, RDS, …); the chart then renders exactly what you supply, and the deployment no longer
+  # needs a post-`helm upgrade` `kubectl patch` to undo a hard-coded host.
+  #
+  # ConnectionStrings__orleans is the Orleans membership store — a dedicated `orleans` database on
+  # the SAME server, created by the migration's OrleansClusteringSetup. It is emitted only when
+  # config.memex_portal.Deployment__Orleans__Clustering is "AdoNet", and the chart REFUSES to
+  # render (helm `fail`) if you supply an external ConnectionStrings__memex without it — silently
+  # defaulting membership to an in-cluster host the deployment does not run is how an upgrade
+  # takes the whole namespace down.
   memex_postgres:
     memex_postgres_password: ""
   memex_migration:
     ConnectionStrings__memex: ""
+    ConnectionStrings__orleans: ""
     memex_postgres_password: ""
     MEMEX_URI: ""
   memex_portal:
     ConnectionStrings__memex: ""
+    ConnectionStrings__orleans: ""
     memex_postgres_password: ""
     MEMEX_URI: ""
     # AI provider keys — empty by default (neutral chart). Set in an overlay
