@@ -18,7 +18,17 @@ public static class ProjectEmitter
     /// the value that must also be stamped on the produced release, because it is what
     /// <c>HasUsableBuild</c> compares against at activation.</param>
     /// <param name="outputDirectory">Directory to write project folders into.</param>
-    public static string Emit(PluginUnit unit, string frameworkVersion, string outputDirectory)
+    /// <param name="restoreSources">Extra package sources. Supplying the framework built from the
+    /// CURRENT change turns this build into an ABI gate: the 181 in-mesh units are compiled against
+    /// the candidate framework, so deleting a public symbol any plugin uses fails on the PR rather
+    /// than as a CompileError overlay in production. Emitted as <c>RestoreSources</c>, which REPLACES
+    /// the configured sources — sidestepping a global <c>packageSourceMapping</c> that would
+    /// otherwise reject an added source outright.</param>
+    public static string Emit(
+        PluginUnit unit,
+        string frameworkVersion,
+        string outputDirectory,
+        IReadOnlyList<string>? restoreSources = null)
     {
         var projectDirectory = Path.Combine(outputDirectory, unit.UnitName);
         Directory.CreateDirectory(projectDirectory);
@@ -44,6 +54,9 @@ public static class ProjectEmitter
         sb.AppendLine("    <RootNamespace></RootNamespace>");
         // In-mesh source is authored without XML docs; CS1591 would drown the real diagnostics.
         sb.AppendLine("    <NoWarn>$(NoWarn);CS1591</NoWarn>");
+        if (restoreSources is { Count: > 0 })
+            sb.AppendLine(
+                $"    <RestoreSources>{SecurityElement.Escape(string.Join(';', restoreSources))}</RestoreSources>");
         sb.AppendLine("  </PropertyGroup>");
         sb.AppendLine();
 

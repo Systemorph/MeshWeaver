@@ -20,6 +20,8 @@ if (args.Length == 0 || args[0] is "-h" or "--help")
           --no-build                  emit projects only
           --pack <dir>                after a fully successful build, write a .nupkg here
           --package-version <v>       version for manifests that declare none (most do not)
+          --source <uri|dir>          extra package source (repeatable). Point at the framework
+                                      built from the current change to make this an ABI gate.
         """);
     return 0;
 }
@@ -36,6 +38,7 @@ var frameworkVersion = "3.0.0-rc2";
 var repoRoots = new List<string>();
 var build = true;
 string? packDirectory = null;
+var restoreSources = new List<string>();
 var packageVersion = "0.0.1";
 
 for (var i = 1; i < args.Length; i++)
@@ -60,6 +63,9 @@ for (var i = 1; i < args.Length; i++)
         case "--package-version" when i + 1 < args.Length:
             packageVersion = args[++i];
             break;
+        case "--source" when i + 1 < args.Length:
+            restoreSources.Add(args[++i]);
+            break;
         default:
             Console.Error.WriteLine($"error: unrecognised argument '{args[i]}'");
             return 2;
@@ -83,7 +89,7 @@ Console.WriteLine($"{Path.GetFileName(pluginDirectory)}: {units.Length} compilat
 var failures = 0;
 foreach (var unit in units)
 {
-    var projectPath = ProjectEmitter.Emit(unit, frameworkVersion, outputDirectory);
+    var projectPath = ProjectEmitter.Emit(unit, frameworkVersion, outputDirectory, restoreSources);
     var shared = unit.Closure.Length - 1;
     Console.WriteLine($"  {unit.NodePath}  ({shared} shared include(s))");
 
