@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -170,12 +169,19 @@ public static class ApprovalLayoutAreas
                 Status = ActivityStatus.Succeeded,
                 User = new UserInfo(currentUser, currentUserName),
                 HubPath = approval.PrimaryNodePath,
-                Messages = ImmutableList.Create(
-                    new LogMessage($"{verb}: {approval.Purpose}", LogLevel.Information))
-            };
-            var activityNode = MeshNode.FromPath($"{approval.PrimaryNodePath}/ActivityLog/{log.Id}") with
+            }.Append(new LogMessage($"{verb}: {approval.Purpose}", LogLevel.Information));
+            // 🚨 `{owner}/_Activity/{id}` with NodeType "Activity" — the shape every other activity
+            // writer uses. The old `{owner}/ActivityLog/{id}` + NodeType "ActivityLog" diverged on
+            // BOTH axes and cost the approval activity everything that hangs off them: `_Activity` is
+            // a satellite segment routed to the partition's `activities` table, so a plain
+            // `ActivityLog` segment landed as ordinary content in the owner's own table; the running-
+            // activities stripe queries `namespace:…/_Activity nodeType:Activity`, which matched
+            // neither clause; and ActivityNodeType's Overview/Progress views are bound to "Activity",
+            // so the node rendered with no activity UI at all.
+            var activityNode = MeshNode.FromPath($"{approval.PrimaryNodePath}/_Activity/{log.Id}") with
             {
-                NodeType = "ActivityLog",
+                NodeType = ActivityNodeType.NodeType,
+                MainNode = approval.PrimaryNodePath,
                 Name = $"Approval: {verb}",
                 State = MeshNodeState.Active,
                 Content = log
