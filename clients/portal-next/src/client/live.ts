@@ -20,7 +20,7 @@ import type {
   RenderedMarkdown,
   ThreadSubmitOptions,
 } from "@meshweaver/react/core";
-import { connect, Mesh, type MeshWebConnection } from "@meshweaver/client-web";
+import { connect, Mesh, MeshRest, type MeshWebConnection } from "@meshweaver/client-web";
 
 /** A queried mesh node row — the hub-serialized MeshNode shape (camelCase, $type-tagged content). */
 export type MeshNodeRow = Record<string, unknown>;
@@ -123,16 +123,20 @@ export async function connectLive(baseUrl: string = window.location.origin): Pro
   const connection = await connect(baseUrl, { token: rawToken, address: `portal/${stableClientId()}` });
   const mesh = Mesh.from(connection);
   const userId = (nodePath ?? "").split("/")[0] ?? "";
-  const runQuery = (query: string, limit = 50) => queryNodes(baseUrl, rawToken, query, limit);
+  // The four shared /api/mesh verbs come from ONE implementation (#1497) — the copies in this file,
+  // clients/portal/src/live.ts and clients/react-native/src/liveOps.ts had drifted on the token, the
+  // error convention and the base-URL composition. Verbs genuinely local to this shell (deleteNode,
+  // transcribe, autocomplete) stay below.
+  const rest = new MeshRest({ baseUrl, token: rawToken });
+  const runQuery = (query: string, limit = 50) => rest.queryNodes(query, limit);
   const runAutocomplete = (query: string, contextPath?: string) =>
     autocomplete(connection, userId, query, contextPath);
-  const runRenderMarkdown = (markdown: string, nodePath?: string) =>
-    renderMarkdown(baseUrl, rawToken, markdown, nodePath);
+  const runRenderMarkdown = (markdown: string, nodePath?: string) => rest.renderMarkdown(markdown, nodePath);
   const runDeleteNode = (path: string) => deleteNode(baseUrl, rawToken, path);
   const runStartKernel = (cells: MarkdownCellSubmission[]) =>
     startMarkdownKernel(connection, mesh, userId, cells, runDeleteNode);
-  const runListContent = (path: string) => listContent(baseUrl, rawToken, path);
-  const runUploadContent = (path: string, file: File) => uploadContent(baseUrl, rawToken, path, file);
+  const runListContent = (path: string) => rest.listContent(path);
+  const runUploadContent = (path: string, file: File) => rest.uploadContent(path, file);
   const runTranscribe = (audio: Blob, language?: string) => transcribe(baseUrl, rawToken, audio, language);
   return {
     connection,
@@ -155,25 +159,6 @@ async function deleteNode(baseUrl: string, token: string, path: string): Promise
     body: JSON.stringify({ paths: JSON.stringify([path]) }),
   });
   if (!resp.ok) throw new Error(`delete failed (${resp.status})`);
-}
-
-/** Server-side Markdig render (`POST /api/mesh/render-markdown`) — the ONE markdown parser. */
-async function renderMarkdown(
-  baseUrl: string,
-  token: string,
-  markdown: string,
-  nodePath?: string,
-): Promise<RenderedMarkdown> {
-  const resp = await fetch(`${baseUrl}/api/mesh/render-markdown`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ markdown, nodePath: nodePath ?? null }),
-  });
-  if (!resp.ok) throw new Error(`render-markdown failed (${resp.status})`);
-  const text = await resp.text();
-  if (text.startsWith("Error:")) throw new Error(text);
-  const parsed = JSON.parse(text) as { html?: string; codeSubmissions?: MarkdownCellSubmission[] };
-  return { html: parsed.html ?? "", codeSubmissions: parsed.codeSubmissions ?? [] };
 }
 
 /** Speech-to-text (`POST /api/speech/transcribe`) — multipart audio → {text, language}, Bearer-auth. */
@@ -281,23 +266,6 @@ async function startMarkdownKernel(
 function newRandomId(): string {
   const g = globalThis as { crypto?: { randomUUID?: () => string } };
   return (g.crypto?.randomUUID?.() ?? `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`).replace(/-/g, "");
-}
-
-async function queryNodes(baseUrl: string, token: string, query: string, limit: number): Promise<MeshNodeRow[]> {
-  try {
-    const resp = await fetch(`${baseUrl}/api/mesh/query-nodes`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ query, limit }),
-    });
-    if (!resp.ok) return [];
-    const text = await resp.text();
-    if (text.startsWith("Error:") || text.startsWith("Not found:")) return [];
-    const parsed = JSON.parse(text) as { results?: MeshNodeRow[] };
-    return Array.isArray(parsed.results) ? parsed.results : [];
-  } catch {
-    return [];
-  }
 }
 
 async function autocomplete(
@@ -429,38 +397,6 @@ function adaptOps(
     // Speech-to-text: the composer's mic records + POSTs here (→ /api/speech/transcribe → Whisper).
     transcribe: runTranscribe,
   };
-}
-
-/** Content-collection listing (`POST /api/mesh/content/list`) — `path` = {node}/{collection}[/{dir}]. */
-async function listContent(baseUrl: string, token: string, path: string): Promise<ContentListing> {
-  const resp = await fetch(`${baseUrl}/api/mesh/content/list`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ path }),
-  });
-  const text = await resp.text();
-  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `content list failed (${resp.status})`);
-  const parsed = JSON.parse(text) as ContentListing;
-  return {
-    collection: String(parsed.collection ?? ""),
-    path: String(parsed.path ?? ""),
-    editable: !!parsed.editable,
-    items: Array.isArray(parsed.items) ? parsed.items : [],
-  };
-}
-
-/** Content upload (`POST /api/mesh/upload`, multipart) — `path` = {node}/{collection}/{filePath}. */
-async function uploadContent(baseUrl: string, token: string, path: string, file: File): Promise<void> {
-  const form = new FormData();
-  form.append("path", path);
-  form.append("file", file, file.name);
-  const resp = await fetch(`${baseUrl}/api/mesh/upload`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}` },
-    body: form,
-  });
-  const text = await resp.text();
-  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `upload failed (${resp.status})`);
 }
 
 /**
