@@ -911,9 +911,9 @@ public static class MemexConfiguration
                     return config
                         .WithHeartBeatHandler() // silently ack heartbeats on every per-node hub
                         .AddDefaultLayoutAreas()
-                        // Course areas from the MeshWeaver.Education feature pack (StartExercise /
-                        // GoToMyCopy / CourseNav / Learn) — no longer part of core's defaults.
-                        .AddEducationLayoutAreas()
+                        // The course-shell areas (StartExercise / GoToMyCopy / CourseNav / Learn)
+                        // ship as in-mesh source in the Edu plugin (Plugins#481) — no platform
+                        // registration remains; only the navigation contributor below is compiled.
                         .AddThreadsLayoutArea()
                         // Scope-tabbed AI catalogs (Agents/Skills/Providers/Models) with per-tab
                         // create buttons — the AI-menu targets below point here. Registered on every

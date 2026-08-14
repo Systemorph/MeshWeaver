@@ -65,7 +65,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
 
         // The indexed root: the page's partition — or, inside the signed-in viewer's own home
         // ({viewer}/{course}/…), the course copy one level down (see class remarks).
-        var viewer = EducationLayoutAreas.ResolveViewerHome(
+        var viewer = EducationHelpers.ResolveViewerHome(
             host.Hub.ServiceProvider.GetService<AccessService>());
         var root = !string.IsNullOrEmpty(viewer)
                    && string.Equals(segments[0], viewer, StringComparison.Ordinal)
@@ -85,7 +85,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
         // snapshot and returns (nearly) nothing, so the provider silently declined and every course
         // page fell back to the one-branch child list — on live memex only, because the Monolith
         // test host's synced queries see the whole store. The reader shell's rail
-        // (EducationLayoutAreas.CourseNavStream) uses this same unified read and demonstrably
+        // (the deleted CourseNavStream (now Edu-plugin source)) uses this same unified read and demonstrably
         // returns the full course from a lesson hub in production; same family as the live compile
         // trace in MeshWeaver#1311 and the record-page fix in MeshWeaver.Plugins#430.
 
@@ -96,7 +96,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
             : meshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"path:{CourseProgress.VisitedPath(viewer, courseSlug)} scope:descendants"))
-                .Scan(ImmutableDictionary<string, MeshNode>.Empty, EducationLayoutAreas.ApplyQueryChange)
+                .Scan(ImmutableDictionary<string, MeshNode>.Empty, EducationHelpers.ApplyQueryChange)
                 .Select(markers => CourseProgress.VisitedSlugs(markers.Values))
                 .Catch((Exception _) => Observable.Return(NoLessons))
                 .StartWith(NoLessons);
@@ -119,7 +119,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
             var recorded = false;
             return meshService
                 .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{root} scope:subtree is:main"))
-                .Scan(ImmutableDictionary<string, MeshNode>.Empty, EducationLayoutAreas.ApplyQueryChange)
+                .Scan(ImmutableDictionary<string, MeshNode>.Empty, EducationHelpers.ApplyQueryChange)
                 .CombineLatest(visitedStream, (nodes, visited) =>
                     DecorateVisited(BuildNavigation(root, nodes.Values.ToList(), currentPath), visited))
                 .Do(navigation =>
@@ -171,7 +171,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
         return navigation with
         {
             Entries = navigation.Entries
-                .Select(e => visitedSlugs.Contains(new string(EducationLayoutAreas.LastSegment(e.Path)))
+                .Select(e => visitedSlugs.Contains(new string(EducationHelpers.LastSegment(e.Path)))
                     ? e with { Label = $"✓ {e.Label}" }
                     : e)
                 .ToList(),
@@ -185,7 +185,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
     ///
     /// <list type="bullet">
     ///   <item><b>Every lesson, whatever the page.</b> The index lists the course's direct children
-    ///   (<see cref="EducationLayoutAreas.SelectCoursePages"/> — ordered by Order then name,
+    ///   (<see cref="EducationHelpers.SelectCoursePages"/> — ordered by Order then name,
     ///   satellites and sync config excluded); a child with pages becomes a group holding them.
     ///   Where the reader stands only moves the marker, never the scope.</item>
     ///   <item><b>Lesson internals stay out.</b> A lesson's <c>Source</c>/<c>Test</c> folders hold
@@ -194,7 +194,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
     ///   at the END of their lesson — reading pages first, then the your-turn list (the same order
     ///   the reader shell's rail uses).</item>
     ///   <item><b>Exactly one entry is current</b> — the page itself, or the deepest listed entry
-    ///   containing it (<see cref="EducationLayoutAreas.ResolveActivePath"/>), so a reader inside
+    ///   containing it (<see cref="EducationHelpers.ResolveActivePath"/>), so a reader inside
     ///   an exercise's sub-page still has a position.</item>
     /// </list>
     /// Pure.
@@ -211,7 +211,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
         var rootNode = nodes.FirstOrDefault(n => string.Equals(n.Path, root, StringComparison.Ordinal));
         var entries = new List<NodeNavigationEntry>();
 
-        foreach (var child in EducationLayoutAreas.SelectCoursePages(root, nodes))
+        foreach (var child in EducationHelpers.SelectCoursePages(root, nodes))
         {
             var children = LessonPages(child.Path, nodes);
             entries.Add(new NodeNavigationEntry(
@@ -223,12 +223,12 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
 
         // Position is stamped LAST, onto exactly one entry, so the index itself is provably the
         // same wherever the reader stands.
-        var active = EducationLayoutAreas.ResolveActivePath(
+        var active = EducationHelpers.ResolveActivePath(
             currentPath,
             entries.SelectMany(e => new[] { e.Path }.Concat(e.Children.Select(c => c.Path))));
 
         return new NodeNavigation(
-            rootNode?.Name ?? rootNode?.Id ?? new string(EducationLayoutAreas.LastSegment(root)),
+            rootNode?.Name ?? rootNode?.Id ?? new string(EducationHelpers.LastSegment(root)),
             active is null ? entries : entries.Select(e => Marked(e, active)).ToList())
         {
             TitlePath = root,
@@ -239,7 +239,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
     /// Whether a subtree IS a course this provider should claim: any node typed as a lesson,
     /// module or exercise of an education module (<c>Edu/Lesson</c>, <c>Edu/Module</c>,
     /// <c>{anything}/Lesson</c>, …, or the exercise shapes
-    /// <see cref="EducationLayoutAreas.IsExercise"/> recognizes). Core's own Courses types
+    /// <see cref="EducationHelpers.IsExercise"/> recognizes). Core's own Courses types
     /// (<c>Course</c>/<c>Module</c>, no module prefix) deliberately do NOT match — those pages
     /// belong to MeshWeaver.Courses' provider. Pure.
     /// </summary>
@@ -248,7 +248,7 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
         => nodes.Any(n =>
             EndsWithSegment(n.NodeType, "Lesson")
             || EndsWithSegment(n.NodeType, "Module")
-            || EducationLayoutAreas.IsExercise(n));
+            || EducationHelpers.IsExercise(n));
 
     private static bool EndsWithSegment(string? nodeType, string segment)
         => nodeType is not null
@@ -263,25 +263,25 @@ public sealed class EducationNavigationProvider : INodeNavigationProvider
         var pages = new List<NodeNavigationEntry>();
         var exercises = new List<NodeNavigationEntry>();
 
-        foreach (var page in EducationLayoutAreas.SelectCoursePages(lessonPath, nodes))
+        foreach (var page in EducationHelpers.SelectCoursePages(lessonPath, nodes))
         {
-            var segment = EducationLayoutAreas.LastSegment(page.Path);
+            var segment = EducationHelpers.LastSegment(page.Path);
             if (segment.Equals("Source", StringComparison.OrdinalIgnoreCase)
                 || segment.Equals("Test", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            if (EducationLayoutAreas.IsExerciseSegment(segment))
+            if (EducationHelpers.IsExerciseSegment(segment))
             {
                 // The Exercise/ folder: its children ARE the exercises — with none, the node
                 // itself is the lesson's single exercise (mirrors the reader shell's rail).
-                var contained = EducationLayoutAreas.SelectCoursePages(page.Path, nodes);
+                var contained = EducationHelpers.SelectCoursePages(page.Path, nodes);
                 exercises.AddRange(contained.Count > 0
                     ? contained.Select(Entry)
                     : [Entry(page)]);
                 continue;
             }
 
-            (EducationLayoutAreas.IsExercise(page) ? exercises : pages).Add(Entry(page));
+            (EducationHelpers.IsExercise(page) ? exercises : pages).Add(Entry(page));
         }
 
         pages.AddRange(exercises);
