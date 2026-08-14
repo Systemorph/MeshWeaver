@@ -1,0 +1,128 @@
+name: Plugin Build
+
+# The compile gate for in-mesh plugin source, called by every plugin repo.
+#
+# ═══════════════════════════ WHY THIS EXISTS ═══════════════════════════
+# C# stored in mesh nodes compiles at RUNTIME in the portal — never in `dotnet build`, never in a
+# test. Across the four plugin repos that is ~700 files in 181 compilation units that no build has
+# ever type-checked. The failure mode is routine and expensive: a framework symbol is deleted,
+# every check goes green, and the breakage lands as CompileError overlays in production against
+# code the compiler was never shown (#683 put nine plugin partitions on the overlay that way).
+#
+# ═══════════════════════ WHY REUSABLE AND NOT COPIED ═══════════════════════
+# Four repos need this gate. Copied, it drifts — and a drifted gate is worse than none, because a
+# gate that never runs is rendered with the same green tick as one that passed (AGENTS.md, "A gate
+# NEVER tests its own inputs"). One definition, four thin callers.
+#
+# 🚨 Per-repo differences are RESOLVED, never assumed. The four repos differ in branch protection
+# (MeshWeaver.Plugins is strict:true, education has none) and in required-check naming. This
+# workflow reads nothing about those; it compiles and reports. Anything it cannot establish is a
+# RED failure naming what to provision — never a skip.
+
+on:
+  workflow_call:
+    inputs:
+      framework-version:
+        description: MeshWeaver package version the plugins compile against.
+        required: true
+        type: string
+      meshweaver-ref:
+        description: >
+          Ref of Systemorph/MeshWeaver to build the plugin-build tool from. Pinned by the caller so
+          a gate failure is attributable to the plugin change, not to main moving underneath it.
+        required: false
+        default: main
+        type: string
+
+# 🚨 There is deliberately NO cross-repo checkout here. A grep for `shared=` across the four repos
+# turns up references that look cross-repo — education appearing to include Store/Coupon/Source,
+# Chess/Game/Source, BusinessRules/Scope/Source — and an earlier draft of this workflow grew a
+# `dependency-repos` input plus a token to clone them. Every one of those strings lives under
+# `education/e2e/mesh/.packages-repo/`, an e2e FIXTURE holding a copy of the Plugins tree; none is
+# a real include. Verified by falsification: all ten education plugins build with only their own
+# repo checked out. Every plugin's compilation closure is self-contained within its repo.
+#
+# Left as a comment because the machinery it removes was a token-gated clone — precisely the shape
+# that becomes a skip-trapdoor once the secret goes unprovisioned. Do not re-add it on the strength
+# of a grep; re-run the build without the checkout first.
+
+permissions:
+  contents: read
+
+jobs:
+  # Asserts every input that comes from outside the tree and fails RED naming what is missing.
+  # A gate whose inputs are unverified reports green on no evidence.
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    steps:
+      # Asserts every input that comes from outside the tree, RED, naming what to provision — never
+      # an `if: inputs.x != ''` on a later step. At job level those two look identical and only one
+      # is safe: a skipped gate renders with the same tick as a passed one, which is how the earlier
+      # cross-repo plugin gate ran zero times while reporting green (#683).
+      - name: Assert inputs
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.framework-version }}" ]; then
+            echo "::error::missing required input: framework-version"
+            exit 1
+          fi
+          echo "framework-version = ${{ inputs.framework-version }}"
+
+  compile:
+    name: Compile in-mesh source
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout plugin repo
+        uses: actions/checkout@v6
+        with:
+          path: plugins
+
+      # Built from source rather than restored from nuget.org because the tool is versioned in
+      # LOCKSTEP with the framework — it encodes how a given version compiles. Once it ships as a
+      # published tool this becomes `dotnet tool install -g MeshWeaver.Plugin.Build --version …`.
+      - name: Checkout MeshWeaver (for the plugin-build tool)
+        uses: actions/checkout@v6
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.meshweaver-ref }}
+          path: meshweaver
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.x'
+
+      - name: Build the tool
+        run: dotnet build meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release
+
+      # One invocation per plugin, all of them attempted, the failures collected. Stopping at the
+      # first would report one broken plugin and hide the other three — and a contributor would fix
+      # them one CI cycle at a time.
+      - name: Compile every plugin
+        run: |
+          set -uo pipefail
+          failed=()
+          built=0
+          for plugin in plugins/*/; do
+            [ -f "$plugin/index.json" ] || continue
+            name=$(basename "$plugin")
+            echo "::group::$name"
+            if dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build -- \
+                 "$plugin" \
+                 --framework-version "${{ inputs.framework-version }}" \
+                 --repo-root plugins \
+                 --out "$RUNNER_TEMP/plugin-build"; then
+              built=$((built + 1))
+            else
+              failed+=("$name")
+            fi
+            echo "::endgroup::"
+          done
+          echo "built $built plugin(s)"
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::in-mesh compilation failed for: ${failed[*]}"
+            exit 1
+          fi
