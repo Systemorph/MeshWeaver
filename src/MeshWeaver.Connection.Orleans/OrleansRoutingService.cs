@@ -9,7 +9,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reflection;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -191,14 +190,14 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 logger.LogDebug("Orleans: {MessageType} → {Address} rejected as {ErrorType} — host is shutting down",
                     delivery.Message?.GetType().Name, address, nameof(ErrorType.ShuttingDown));
 
-                // Same NACK-once contract as RoutingServiceBase.PostNotFound (see MayAnswer), but
-                // DO classify the returned delivery either way so whoever finishes it can.
+                // Same NACK-once contract as RoutingServiceBase.PostNotFound — see AnswerPolicy —
+                // but DO classify the returned delivery either way so whoever finishes it can.
                 //
                 // 🚨 senderNacked is the POST's verdict, not the permission to post. FailedAndNacked
                 // means "the sender has been answered" and suppresses downstream reporting, so
                 // claiming it when SendDeliveryFailure could not post (no mesh hub) would leave an
                 // Observe(...) caller waiting out its full budget with the failure recorded nowhere.
-                var senderNacked = MayAnswer(delivery)
+                var senderNacked = delivery.MayAnswer()
                                    && SendDeliveryFailure(delivery, shutdownMessage, ErrorType.ShuttingDown);
 
                 return Observable.Return(senderNacked
@@ -264,7 +263,7 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                         // no one waiting, so the NACK is pure added traffic. Both matter most
                         // precisely here: dispatch fails in bulk while a silo is leaving, which is
                         // when the mesh can least afford an answering storm.
-                        if (MayAnswer(delivery))
+                        if (delivery.MayAnswer())
                             SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}",
                                 shuttingDown ? ErrorType.ShuttingDown : ErrorType.Failed);
                         return Observable.Empty<IMessageDelivery>();
@@ -364,22 +363,6 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 }
             });
     }
-
-    /// <summary>
-    /// Whether a NACK may be sent for <paramref name="delivery"/> AT ALL — the routing layer's
-    /// answer-once contract, stated in one place so every path that gives up on a delivery
-    /// applies it identically (the same contract as <c>RoutingServiceBase.PostNotFound</c>).
-    ///
-    /// <para>Never answer a <see cref="DeliveryFailure"/>: the answer is itself a
-    /// <see cref="DeliveryFailure"/>, so answering one loops. Never answer a
-    /// <see cref="CanBeIgnoredAttribute"/> message: nobody is awaiting it, so the NACK is pure
-    /// added traffic — and it is added at exactly the worst moment, since the paths that give up
-    /// are shutdown and dispatch failure, when the volume of control messages is highest and the
-    /// process has least capacity. That is how a teardown turns into a failure storm.</para>
-    /// </summary>
-    private static bool MayAnswer(IMessageDelivery delivery) =>
-        delivery.Message is not DeliveryFailure
-        && delivery.Message?.GetType().HasAttribute<CanBeIgnoredAttribute>() != true;
 
     /// <param name="delivery">The delivery that could not be routed.</param>
     /// <param name="message">The failure message returned to the sender.</param>

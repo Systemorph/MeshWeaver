@@ -6,7 +6,6 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -153,12 +152,12 @@ namespace MeshWeaver.Hosting
 
         private void NackRouteFailure(IMessageDelivery delivery, Exception ex)
         {
-            // [CanBeIgnored] messages (Shutdown/Dispose/HeartBeat) have no awaiting
-            // sender — a DeliveryFailure for them is meaningless and feeds the disposal
-            // ping-pong storm (see ReportFailure). Same rule as the Ignored-handler path.
+            // The answer-once contract — see AnswerPolicy. 🚨 Read the ENVELOPE, not
+            // delivery.Message's CLR type: MeshBuilder is the ONLY caller of
+            // IRoutingService.DeliverMessage and it packages, so this guard's payload is
+            // ALWAYS RawJson and the old CLR-type test never matched (#1485).
             // Also never post once the mesh is tearing down — the recipients are gone.
-            if (delivery.Message is DeliveryFailure
-                || delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
+            if (!delivery.MayAnswer()
                 || Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                 return;
             // 🚨 Routing infrastructure's OWN post. ResponseFor carries the failed
@@ -355,8 +354,9 @@ namespace MeshWeaver.Hosting
                 "RouteMessage: NotFound for {MessageType} → {Address}. {FailureMessage}",
                 delivery.Message.GetType().Name, originalAddress, failureMessage);
 
-            var senderNacked = delivery.Message is not DeliveryFailure
-                && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()
+            // The answer-once contract, read off the ENVELOPE — see AnswerPolicy and
+            // NackRouteFailure above for why the CLR-type test this replaces was dead (#1485).
+            var senderNacked = delivery.MayAnswer()
                 && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs;
             if (senderNacked)
             {

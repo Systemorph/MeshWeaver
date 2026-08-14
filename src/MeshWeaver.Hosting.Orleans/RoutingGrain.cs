@@ -7,7 +7,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
-using MeshWeaver.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Concurrency;
@@ -407,13 +406,11 @@ internal class RoutingGrain(
         ErrorType errorType)
     {
         if (delivery.Sender == null) return;
-        // [CanBeIgnored] messages (HeartBeatEvent, Shutdown/Dispose) are fire-and-forget: there is NO
-        // awaiting Observe callback to fail, so a DeliveryFailure for them is meaningless. It would be
-        // dropped as unhandled at the sender, or — for a permanently-gone owner that is heart-beaten
-        // every interval — re-posted forever, which IS the NotFound storm. Silently ignore, matching
-        // the monolith RoutingServiceBase.PostNotFound / NackRouteFailure guard so both routers agree.
-        if (delivery.Message is DeliveryFailure
-            || delivery.Message?.GetType().HasAttribute<CanBeIgnoredAttribute>() == true)
+        // The answer-once contract — see AnswerPolicy for what it forbids and why. 🚨 Read the
+        // ENVELOPE, never delivery.Message's CLR type: MeshBuilder hands the router
+        // delivery.Package(...), so by the time a route fails the payload is ALWAYS RawJson and the
+        // CLR-type test this guard used to make could not match on any routed delivery (#1485).
+        if (!delivery.MayAnswer())
             return;
         var failureDelivery = new MessageDelivery<DeliveryFailure>(
             new DeliveryFailure(delivery, failureMessage) { ErrorType = errorType },

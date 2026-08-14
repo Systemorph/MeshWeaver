@@ -456,7 +456,15 @@ public class MessageService : IMessageService
             && !(delivery.Message is RawJson rawJson
                  && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
             return false;
-        if (delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
+        // 🚨 The answer-once contract off the ENVELOPE, not the CLR type (#1485). A cross-hub
+        // delivery arrives here as RawJson — which is exactly the case the RawJson clause above
+        // exists to admit — so the [CanBeIgnored] test this line used to make was dead for every
+        // delivery that had crossed a hub boundary, and a packaged HeartBeatEvent dropped at a
+        // disposing hub was NACKed through the parent: fire-and-forget traffic answered during
+        // teardown, which is precisely the storm shape. The content sniff above is KEPT as the
+        // fallback for a RawJson that never went through Package (an external client's
+        // pre-serialised frame carries no stamp).
+        if (!delivery.MayAnswer())
             return false;
         // The same "ONE request, ONE failure response" rule ReportFailure applies: an
         // authoritative, typed DeliveryFailure has already been posted for this delivery, so a
@@ -615,8 +623,15 @@ public class MessageService : IMessageService
         //    tests, which under the 2-core CI runner saturated the pipeline and timed the
         //    project out). Real requests still fail closed; only response-less control traffic
         //    is suppressed — the same rule the Ignored-handler path already applies below.
-        if (delivery.Message is not DeliveryFailure
-            && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
+        //
+        // 🚨 Read the ENVELOPE, not delivery.Message's CLR type (#1485). This is the ROUTING TAIL's
+        // reporter as well as the on-target one: ReportRoutingFailure lands here with the delivery
+        // the mesh's route handler returned, and that handler is
+        // `IRoutingService.DeliverMessage(delivery.Package(...))` — so its payload is RawJson and
+        // the CLR-type test alone let a fire-and-forget heartbeat through. That mattered most on the
+        // one path where the router returns Failed synchronously: the Orleans shutdown branch. Fixing
+        // only the routers would have moved the very same storm one level up, into this method.
+        if (delivery.MayAnswer())
         {
             try
             {
@@ -635,8 +650,30 @@ public class MessageService : IMessageService
         }
         else
         {
-            logger.LogWarning("Suppressing DeliveryFailure reporting for response-less control message {MessageType} (ID: {MessageId}) in {Address}",
-                delivery.Message.GetType().Name, delivery.Id, Address);
+            // 🚨 Debug, and the level is part of the #1485 fix rather than a debugging tweak.
+            //
+            // COST: this branch used to be reached only by TYPED control traffic, because a packaged
+            // delivery could not match the CLR-type test above — so it was rare, and Warning was the
+            // right price. Now that the contract is read off the envelope it is reached once per
+            // SUPPRESSED delivery, and the moment that happens in bulk is precisely a pod shutdown:
+            // the Orleans shutdown branch fails every in-flight delivery, and prod (2026-08-10)
+            // measured 944 on a single dying pod. At Warning that is ~1k Loki lines per shutdown,
+            // billed forever, emitted exactly when the process has least capacity.
+            //
+            // VALUE: near zero. Suppression here is the DESIGNED outcome for a DeliveryFailure or a
+            // [CanBeIgnored] message, both of which are provably response-less — MayAnswer() is
+            // false for nothing else — so the line reports normal behaviour, not an anomaly. The
+            // storm it replaces (a posted NACK per message, each itself routed and logged) is the
+            // thing that was expensive; keeping a per-message Warning in its place would bank a
+            // fraction of the same bill for no diagnostic gain.
+            //
+            // 🚨 GetMessageType, not GetType().Name: the payload here is RawJson by construction, so
+            // the old call printed the literal string "RawJson" for every one of those lines. This
+            // reads the $type out of the JSON, which is the only way the line names what was
+            // actually suppressed.
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Suppressing DeliveryFailure reporting for response-less control message {MessageType} (ID: {MessageId}) in {Address}",
+                    GetMessageType(delivery), delivery.Id, Address);
         }
 
         return delivery;
