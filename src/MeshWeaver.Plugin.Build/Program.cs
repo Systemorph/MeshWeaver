@@ -75,7 +75,20 @@ for (var i = 1; i < args.Length; i++)
 if (repoRoots.Count == 0)
     repoRoots.Add(Path.GetDirectoryName(pluginDirectory.TrimEnd(Path.DirectorySeparatorChar))!);
 
-var units = PluginUnitResolver.Resolve(pluginDirectory, repoRoots);
+// A malformed node file fails the build deliberately (silently skipping it would report success
+// while testing less than claimed) — but it is an authoring error with an obvious fix, so it is
+// reported as one line naming the file, not as an unhandled exception. A stack trace here says
+// "the tool broke" when the truth is "this file has a typo".
+System.Collections.Immutable.ImmutableArray<PluginUnit> units;
+try
+{
+    units = PluginUnitResolver.Resolve(pluginDirectory, repoRoots);
+}
+catch (InvalidOperationException ex)
+{
+    Console.Error.WriteLine($"error: {ex.Message}");
+    return 1;
+}
 if (units.Length == 0)
 {
     // Content-only plugins are legitimate and common (courses, agent/skill packs): six of the
