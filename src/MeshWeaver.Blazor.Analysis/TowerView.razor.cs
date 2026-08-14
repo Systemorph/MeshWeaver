@@ -3,7 +3,7 @@ using System.Globalization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.Analysis;
 
 /// <summary>
 /// Renders a <see cref="TowerControl"/> as a vertical stack of bands over its retention.

@@ -52,6 +52,7 @@
     <Project Path="src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
     <Project Path="src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
+    <Project Path="src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <Project Path="src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Graph/MeshWeaver.Blazor.Graph.csproj" />

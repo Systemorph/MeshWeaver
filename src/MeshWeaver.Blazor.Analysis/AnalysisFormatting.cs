@@ -1,7 +1,7 @@
 using System.Globalization;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.Analysis;
 
 /// <summary>
 /// Number formatting for the analysis views. (Row resolution is framework-owned and lives in
