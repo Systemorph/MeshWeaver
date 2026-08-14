@@ -41,6 +41,18 @@ updates:
       npm-minor-patch:
         applies-to: version-updates
         update-types: [minor, patch]
+      # Majors grouped too — the first weekly run opened 20 individual major PRs (TS 7, vite 8,
+      # @types/node 26, react 19, …), each burning a full CI cycle + a Copilot review. One majors
+      # PR per wave keeps the review meaningful and the CI bill bounded.
+      npm-major:
+        applies-to: version-updates
+        update-types: [major]
+    ignore:
+      # react-native's 0.x "minors" are breaking platform jumps coupled to the Expo SDK
+      # (0.76→0.86 requires React 19): the first wave's group PR broke npm ci on exactly this.
+      # RN (and react-native-web, which tracks it) upgrade DELIBERATELY with the Expo SDK.
+      - dependency-name: react-native
+      - dependency-name: react-native-web
 
   # Python SDK.
   - package-ecosystem: pip
@@ -61,6 +73,10 @@ updates:
       time: "06:00"
       timezone: Europe/Zurich
     open-pull-requests-limit: 5
+    groups:
+      actions-all:
+        applies-to: version-updates
+        update-types: [major, minor, patch]
 
   # The portal-ai base image (Node + CLI + Playwright layers).
   - package-ecosystem: docker
