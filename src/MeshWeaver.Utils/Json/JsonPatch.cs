@@ -123,6 +123,11 @@ internal static class JsonPatchApplier
         OperationType.Move => Move(ref source, operation.From, operation.Path),
         OperationType.Copy => Copy(ref source, operation.From, operation.Path),
         OperationType.Test => Test(source, operation.Path, operation.Value),
+        // 🚨 Splice lands here DELIBERATELY. Folding one requires verifying the carried fingerprint
+        // against the live text first, which is the synchronization stream's job
+        // (JsonSynchronizationStream.ApplySplice) and needs the codec that lives with it. Applying it
+        // here without that check would be exactly the blind splice the whole design forbids, and
+        // skipping it would be the silent half-apply. Refusing says so.
         _ => $"Unsupported operation `{operation.Op}`."
     };
 

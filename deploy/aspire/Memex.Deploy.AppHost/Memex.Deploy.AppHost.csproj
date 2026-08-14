@@ -11,7 +11,7 @@
 
   <!-- The Memex Aspire integration (builder.AddMemex). Project-referenced from the monorepo
        here; a true standalone customer solution swaps this for the published
-       <PackageReference Include="Aspire.Hosting.Memex" />. -->
+       <PackageReference Include="MeshWeaver.Aspire.Hosting.Memex" />. -->
   <ItemGroup>
     <ProjectReference Include="..\..\..\memex\aspire\Memex.Aspire.Hosting\Memex.Aspire.Hosting.csproj"
                       IsAspireProjectResource="false" />

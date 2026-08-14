@@ -1,7 +1,7 @@
 name: Publish Container Images
 
 # Prod release path for the Memex deployment images. Fires on the SAME v*.*.* tag as
-# release-packages.yml (NuGet) so one tag ships the Aspire.Hosting.Memex package AND the
+# release-packages.yml (NuGet) so one tag ships the MeshWeaver.Aspire.Hosting.Memex package AND the
 # images the generated compose/Helm/ACA artifacts reference. Local testing uses the local
 # registry instead (see deploy/ + the repo's local-publish flow) — never this workflow.
 on:
@@ -18,6 +18,15 @@ permissions:
 jobs:
   images:
     runs-on: ubuntu-latest
+    # 🚨 The `release` environment is what makes the Azure OIDC login work on TAG runs. The
+    # github-actions-deploy managed identity's federated credentials match on the token's
+    # `sub` claim, which for a plain tag run is `…:ref:refs/tags/v<X>` — a NEW subject per
+    # release, unmatchable by the exact-match credentials a user-assigned MI supports (the
+    # v3.0.0-rc1 run failed AADSTS700213 exactly this way). Running the job in an environment
+    # makes the subject the STABLE `repo:Systemorph/MeshWeaver:environment:release`, covered by
+    # the `gh-env-release` federated credential — same pattern as the memex/atioz/memex-cloud
+    # deploy environments.
+    environment: release
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

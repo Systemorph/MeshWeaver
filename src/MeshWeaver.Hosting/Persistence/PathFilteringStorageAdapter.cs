@@ -25,6 +25,17 @@ public sealed class PathFilteringStorageAdapter(IStorageAdapter inner, Func<stri
             : Observable.Return<MeshNode?>(null);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Out of scope declines with <c>null</c> — "not mine" — exactly as <see cref="Write"/> does, so
+    /// the try-then-claim chain moves on instead of reading a refusal as this provider's verdict.
+    /// </remarks>
+    public IObservable<bool?> WriteIfVersion(
+        MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => matches(node.Path)
+            ? inner.WriteIfVersion(node, expectedVersion, options)
+            : Observable.Return<bool?>(null);
+
+    /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
         => matches(path)
             ? inner.Read(path, options)

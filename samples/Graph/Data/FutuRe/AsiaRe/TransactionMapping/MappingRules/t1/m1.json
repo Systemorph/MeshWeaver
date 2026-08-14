@@ -1,6 +1,7 @@
 {
   "$type": "MeshNode",
-  "id": "FutuRe/AsiaRe/TransactionMapping/MappingRules/t1/m1",
+  "id": "m1",
+  "namespace": "FutuRe/AsiaRe/TransactionMapping/MappingRules/t1",
   "path": "FutuRe/AsiaRe/TransactionMapping/MappingRules/t1/m1",
   "nodeType": "ThreadMessage",
   "icon": "/static/NodeTypeIcons/message.svg",

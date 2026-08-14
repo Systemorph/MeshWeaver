@@ -123,6 +123,27 @@ The build guard classifies permitted static fields into four buckets. Everything
 
 `static readonly` collections initialized once and **never written at runtime**: media-type maps, reserved-word sets, built-in role tables, SQL-keyword lists, parser character sets. If nothing calls `Add`, `[]=`, `Remove`, or `Clear` on it after construction, it is a *constant*, not a cache — it is safe.
 
+> 🚨 **"Never written" is about the ELEMENTS, not just the collection.** A write-once list of objects
+> that carry their own mutable, lazily-materialized state is a process-wide cache, and CONST does not
+> cover it. This exemption was applied twice to
+> `MeshNodeCompilationService._references` — a `static readonly IReadOnlyList<MetadataReference>` —
+> on the grounds that the list is never mutated. It isn't; but each `PortableExecutableReference`
+> owns lazily memory-mapped, `IDisposable` metadata and Roslyn hangs its derived assembly/symbol
+> tables off that same instance, so the field is a mutable process-wide cache in `static readonly`
+> clothing. It survived two reviews and is the shared state
+> [#890](https://github.com/Systemorph/MeshWeaver/issues/890) came down to.
+>
+> Ask **"could two meshes observe each other through an element of this?"** — not "does anything call
+> `Add`". Roslyn `MetadataReference`s in particular are now rejected by their own guard in
+> `NoStaticCollectionsTest`, whatever the declared collection type, because the declared-type check
+> could not see an `IReadOnlyList<>`.
+>
+> The field itself is still there, listed as a `CACHE` debt with its issue number rather than
+> silently exempt — removing it gives every mesh its own reference set, which measurably costs ~15 MiB
+> per compiling mesh, and whether that buys anything is decided by #890's emit canary. **Landing the
+> detector does not require paying for the fix**, and an allowlist entry with a reason is what turns
+> "nobody noticed" into "we know, and here is the open question".
+
 ### MEMO — Pure memoization on process-global keys
 
 Process-global memoization keyed by a **process-global identity** (`Type`, `MethodInfo`, or deterministic content), where the cached value is a pure function of the key so cross-mesh sharing is always correct.

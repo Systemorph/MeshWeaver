@@ -90,10 +90,66 @@ public class AreaFrameClassifierTest
         var content = Controls.Markdown("### Total Premium\n\n1,234");
         AreaFrameClassifier.IsAreaNotFound(content).Should().BeFalse();
         AreaFrameClassifier.IsCompileProgress(content).Should().BeFalse();
+        AreaFrameClassifier.IsMissingReference(content).Should().BeFalse();
         AreaFrameClassifier.IsTransientFrame(content).Should().BeFalse();
 
         AreaFrameClassifier.IsAreaNotFound(null).Should().BeFalse();
         AreaFrameClassifier.IsCompileProgress(null).Should().BeFalse();
+        AreaFrameClassifier.IsMissingReference(null).Should().BeFalse();
         AreaFrameClassifier.IsTransientFrame(null).Should().BeFalse();
+    }
+
+    // ── The THIRD state (#1456): the area renders, its REFERENCE is broken ────────────────
+
+    private static MarkdownControl MissingReferenceFrame() =>
+        new("**Missing reference**\n\nThis area refers to an item that does not exist.\n\n`ClientDelta/Abschlusspraesentation/04-extraktion`")
+        {
+            Id = AreaFrameClassifier.MissingReferenceId
+        };
+
+    /// <summary>
+    /// The distinction the whole class exists for, now three-way. A broken reference is TERMINAL
+    /// like "area not found" (nothing will replace it) but it is NOT "area not found": the area is
+    /// registered and rendering — the data it points at is absent. Conflating them sends an author
+    /// hunting for a missing renderer instead of a missing node.
+    /// </summary>
+    [Fact]
+    public void MissingReferenceFrame_IsItsOwnState_TerminalButNotAreaNotFound()
+    {
+        var frame = MissingReferenceFrame();
+        AreaFrameClassifier.IsMissingReference(frame).Should().BeTrue();
+        AreaFrameClassifier.IsAreaNotFound(frame).Should().BeFalse(
+            "the area exists and rendered — it is the referenced NODE that does not");
+        AreaFrameClassifier.IsCompileProgress(frame).Should().BeFalse(
+            "nothing is building — a waiter must not treat this as 'not yet'");
+        AreaFrameClassifier.IsTransientFrame(frame).Should().BeFalse(
+            "a broken reference is data an author must fix — nothing is going to replace it");
+    }
+
+    /// <summary>The other two frames must not answer to the new predicate.</summary>
+    [Fact]
+    public void TheThreeStatesAreMutuallyExclusive()
+    {
+        AreaFrameClassifier.IsMissingReference(NotFoundFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsMissingReference(CompileProgressFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsAreaNotFound(MissingReferenceFrame()).Should().BeFalse();
+        AreaFrameClassifier.IsCompileProgress(MissingReferenceFrame()).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// 🚨 The same wire trap as <see cref="FrameIdSurvivesTheWire_WhereIdIsAJsonElementNotAString"/>,
+    /// asserted for the new state too — a CLR `is string` check would pass every test above and
+    /// answer "no" for every frame that actually reached a client.
+    /// </summary>
+    [Fact]
+    public void MissingReferenceIdSurvivesTheWire_AsAJsonElement()
+    {
+        var wireId = JsonSerializer.Deserialize<JsonElement>(
+            JsonSerializer.Serialize(AreaFrameClassifier.MissingReferenceId));
+        wireId.Should().NotBeOfType<string>();
+
+        var frame = Controls.Markdown("**Missing reference**").WithId(wireId);
+        AreaFrameClassifier.IsMissingReference(frame).Should().BeTrue();
+        AreaFrameClassifier.IsTransientFrame(frame).Should().BeFalse();
     }
 }

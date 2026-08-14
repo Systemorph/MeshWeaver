@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>Mesh/portal integration for MeshWeaver content indexing: change-driven indexing activities, chunk autocomplete, and AI summarization.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- IChatClient / ChatMessage / ChatResponse for the ISummarizer impl. The concrete client
          is supplied by the host (it is not a globally-registered DI service in this codebase). -->

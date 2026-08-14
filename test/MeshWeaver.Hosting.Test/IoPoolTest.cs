@@ -396,20 +396,41 @@ public class IoPoolTest
             "exactly leg A holds the permit; leg B must still be waiting on the gate");
 
         var drainDone = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
+
+        // 🚨 ESTABLISH the ordering the assertions below depend on — do not assume it.
+        //
+        // `Task.Run` only SCHEDULES Drain; it says nothing about whether Drain has reached its
+        // `_poolCts.Cancel()`. Releasing leg A here — as this test used to — frees the only permit
+        // while the cancel may still be queued behind a busy thread pool, and SemaphoreSlim then
+        // legitimately hands that permit to the leg B waiter already queued on it. Leg B's
+        // `ct.ThrowIfCancellationRequested()` guard passes (nothing is cancelled yet), it subscribes,
+        // and the test fails on `legBSubscribed == 1` — reporting a product regression when the
+        // product did exactly the right thing. Observed on a loaded CI runner (six shards on one
+        // box); the assertion asserted an ordering the test never created.
+        //
+        // Leg B's TERMINATION is the observable proof that the cancel has happened: it is parked in
+        // `_gate.WaitAsync(linked)`, so `_poolCts.Cancel()` is what completes that wait as cancelled
+        // → OnCompleted → this `.Finally`. Waiting for it costs nothing when the pool is healthy and
+        // is what makes "the drain cancels BEFORE the permit is granted" true by construction rather
+        // than by scheduling luck. It does not deadlock: Drain blocks re-acquiring leg A's permit,
+        // which is independent of leg B's cancellation continuation.
+        Assert.True(legBTerminated.Wait(Timeout5),
+            "a leg the drain cancels MUST terminate (OnCompleted) so its .Finally runs — that callback "
+            + "is what releases RoutingGrain's in-flight route slot and advances OrderedRouteDispatcher's "
+            + "per-destination FIFO; swallowing the cancellation silently leaked both");
+
         releaseLegA.Set();
         await drainDone.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
 
         Volatile.Read(ref legAReleasedCleanly).Should().Be(1,
             "leg A must have been RELEASED, not timed out — a timed-out wait would free the permit on "
             + "its own and leg B would no longer be parked on the gate, so the test would prove nothing");
+        // 🚨 THE REGRESSION GUARD — and it is now asserted on a cancellation that PROVABLY preceded
+        // the permit becoming free (see the wait above), so a pass means the drain refused leg B
+        // rather than merely outrunning it. Before the termination fix this never fired at all and
+        // the test hung to its timeout.
         Volatile.Read(ref legBSubscribed).Should().Be(0,
             "the drain cancels before the permit is granted, so leg B's source must never be subscribed");
-
-        // 🚨 THE REGRESSION GUARD. Before the fix this never fired and the test hung to its timeout.
-        Assert.True(legBTerminated.Wait(Timeout5),
-            "a leg the drain cancels MUST terminate (OnCompleted) so its .Finally runs — that callback "
-            + "is what releases RoutingGrain's in-flight route slot and advances OrderedRouteDispatcher's "
-            + "per-destination FIFO; swallowing the cancellation silently leaked both");
     }
 
     [Fact]

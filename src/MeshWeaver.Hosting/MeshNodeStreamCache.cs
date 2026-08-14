@@ -967,38 +967,73 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         try
         {
             foreach (var (path, lazy) in _streams)
-            {
-                if (!lazy.IsValueCreated)
-                    continue;
-                var entry = lazy.Value;
-                if (!entry.IsIdleCandidate(readStreamIdleExpiration))
-                    continue;
-
-                var detached = entry.Handle.DetachUpstreams();
-                if (!entry.TryMarkIdleEvicted(readStreamIdleExpiration))
-                {
-                    // Lost the race — a consumer pinned the entry between the
-                    // pre-check and the mark. Hand the upstreams back; the entry
-                    // keeps serving them. (A later write may open a fresh upstream
-                    // alongside — the same benign divergence a change-feed evict
-                    // produces; both are reaped on the eventual release.)
-                    entry.Handle.ReparkUpstreams(detached);
-                    continue;
-                }
-
-                _streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy));
-                var upstreamReleased = TearDownEntry(path, entry, detached);
-                logger.LogDebug(
-                    "MeshNodeStreamCache: released idle read stream for {Path} (upstreams disposed: {Count})",
-                    path, detached.Count);
-                readStreamEvictions.OnNext(new ReadStreamEviction(path, upstreamReleased, "idle"));
-            }
+                TryReleaseUnwatched(path, lazy, readStreamIdleExpiration, "idle");
         }
         catch (Exception ex)
         {
             // Never let a sweep fault kill the interval subscription silently — the
             // leak would quietly return. Log loudly; the next tick runs a fresh pass.
             logger.LogError(ex, "MeshNodeStreamCache: idle read-stream sweep failed");
+        }
+    }
+
+    /// <summary>
+    /// The detach-then-mark release protocol, shared by the timed idle sweep and the event-driven
+    /// <see cref="ReleaseIfUnwatched"/>. The ONLY difference between the two callers is
+    /// <paramref name="idleWindow"/> — the sweep waits out the ten-minute heuristic, a caller that
+    /// KNOWS the node is final passes <see cref="TimeSpan.Zero"/>. The zero-subscriber guard is the
+    /// same atomic one in both cases, so a live reader can never lose its subscription to either.
+    /// </summary>
+    /// <returns>True when this call claimed the entry and tore it down.</returns>
+    private bool TryReleaseUnwatched(string path, Lazy<Entry> lazy, TimeSpan idleWindow, string reason)
+    {
+        if (!lazy.IsValueCreated)
+            return false;
+        var entry = lazy.Value;
+        if (!entry.IsIdleCandidate(idleWindow))
+            return false;
+
+        var detached = entry.Handle.DetachUpstreams();
+        if (!entry.TryMarkIdleEvicted(idleWindow))
+        {
+            // Lost the race — a consumer pinned the entry between the
+            // pre-check and the mark. Hand the upstreams back; the entry
+            // keeps serving them. (A later write may open a fresh upstream
+            // alongside — the same benign divergence a change-feed evict
+            // produces; both are reaped on the eventual release.)
+            entry.Handle.ReparkUpstreams(detached);
+            return false;
+        }
+
+        _streams.TryRemove(new KeyValuePair<string, Lazy<Entry>>(path, lazy));
+        var upstreamReleased = TearDownEntry(path, entry, detached);
+        logger.LogDebug(
+            "MeshNodeStreamCache: released {Reason} read stream for {Path} (upstreams disposed: {Count})",
+            reason, path, detached.Count);
+        readStreamEvictions.OnNext(new ReadStreamEviction(path, upstreamReleased, reason));
+        return true;
+    }
+
+    /// <inheritdoc />
+    public bool ReleaseIfUnwatched(string path)
+    {
+        if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            return false;
+        if (!_streams.TryGetValue(path, out var lazy))
+            return false;
+        try
+        {
+            // TimeSpan.Zero, not a shortened idle window: the CALLER supplied the event that makes
+            // the entry provably dead (a terminal ActivityLog status), so there is no heuristic left
+            // to wait out. Everything that protects the sweep still applies verbatim.
+            return TryReleaseUnwatched(path, lazy, TimeSpan.Zero, "final");
+        }
+        catch (Exception ex)
+        {
+            // Releasing a warm cache entry is an optimisation, never a correctness step: the idle
+            // sweep will get to it. Never fail the write that reported the terminal status.
+            logger.LogDebug(ex, "MeshNodeStreamCache: releasing final read stream for {Path} failed", path);
+            return false;
         }
     }
 

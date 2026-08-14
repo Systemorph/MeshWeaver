@@ -334,6 +334,24 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Explicit forward, and NO guard of its own: a compare-and-set is conditioned on the exact
+    /// durable version the caller read, so by construction it cannot move the row backward — the
+    /// store itself refuses when the row has advanced. Applying the high-water FILTER here would be
+    /// strictly harmful, because the caller of a CAS wants the store's verdict, not a merge. The
+    /// mark is still claimed on an APPLIED write so the ordinary <see cref="Write"/> path stays
+    /// sound afterwards (the "claim before the row is mutated" rule cannot apply — the row's fate is
+    /// decided inside the store — so we record what the store confirmed instead).
+    /// </remarks>
+    public IObservable<bool?> WriteIfVersion(
+        MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => inner.WriteIfVersion(node, expectedVersion, options)
+            .Do(applied =>
+            {
+                if (applied is true) Observe(node);
+            });
+
+    /// <inheritdoc />
     public IObservable<string> Delete(string path)
         => inner.Delete(path).Do(_ => Forget(path));
 
@@ -380,6 +398,12 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
     /// </remarks>
     public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
         => inner.ListDescendantPaths(rootPath);
+
+    /// <inheritdoc />
+    /// <remarks>Pure delegation — only the composite below knows its providers, and the
+    /// interface default (<c>null</c>) would silently drop the delete pre-flight (#1433).</remarks>
+    public IObservable<string?> FindDeleteBlockingProvider(string path)
+        => inner.FindDeleteBlockingProvider(path);
 
     /// <inheritdoc />
     public IObservable<bool> Exists(string path) => inner.Exists(path);

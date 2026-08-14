@@ -119,6 +119,52 @@ public interface IStorageAdapter
                     n => n!)),
             written => (IReadOnlyList<MeshNode>)written);
 
+    /// <summary>
+    /// COMPARE-AND-SET — the atomic "first writer wins" primitive, and the WRITE-side twin of
+    /// <see cref="DeleteIfExists"/>. Applies <paramref name="node"/> only while the durable row
+    /// still carries <paramref name="expectedVersion"/> (or no row exists at all, when it is
+    /// <c>0</c>), and reports which of the two happened:
+    ///
+    /// <list type="bullet">
+    /// <item><c>true</c> — APPLIED. The durable row now holds <paramref name="node"/>.</item>
+    /// <item><c>false</c> — REFUSED. Somebody else moved the row (or it is absent when a version
+    /// was expected). The caller's intent did NOT land and it must not act as though it did.</item>
+    /// <item><c>null</c> — this adapter does not own the path, so the try-then-claim chain in
+    /// <c>PersistenceService</c> moves on to the next writable provider. Same "not mine" signal
+    /// <see cref="Write"/> gives by emitting <c>null</c>.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>Why the ordinary <see cref="Write"/> cannot serve here (#1424).</b> The regular
+    /// upsert is version-conditional but NOT exclusive: it applies at EQUAL versions, because
+    /// re-persisting an unchanged node is a legitimate, common shape. Two writers that each read the
+    /// row at version <c>v</c> and each mint <c>v+1</c> therefore BOTH commit, last-write-wins, and
+    /// neither is told it lost — the store returns the node it was handed, so the
+    /// <c>saved.Version &gt; written.Version</c> refusal signal never fires. That is exactly how two
+    /// Orleans clusters sharing one Postgres database each granted themselves the build claim and each
+    /// ran the full bake. Exclusivity needs an equality condition on a version the caller READ, which
+    /// is what this method is: at most one of N concurrent callers holding the same
+    /// <paramref name="expectedVersion"/> can be told <c>true</c>.</para>
+    ///
+    /// <para>Backends that can express the condition MUST override — Postgres via
+    /// <c>ON CONFLICT … DO UPDATE … WHERE target.version = @expected</c> (and
+    /// <c>DO NOTHING</c> for <paramref name="expectedVersion"/> <c>0</c>) plus the row count,
+    /// in-memory via <c>TryAdd</c>/<c>TryUpdate</c>. The default below is a NON-ATOMIC
+    /// read-compare-write, correct only for single-writer backends (a FileSystem dev host) —
+    /// the same contract, and the same caveat, as <see cref="DeleteIfExists"/>.</para>
+    ///
+    /// <para>🚨 Decorators MUST forward to their inner adapter, or the atomicity is silently lost at
+    /// the outermost decorator that falls back to the default — the same forwarding rule as
+    /// <see cref="Changes"/>, <see cref="DeleteIfExists"/>, <see cref="ResolvePath"/> and
+    /// <see cref="ListDescendantPaths"/>.</para>
+    /// </summary>
+    IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => System.Reactive.Linq.Observable.SelectMany(
+            System.Reactive.Linq.Observable.Take(Read(node.Path, options), 1),
+            stored => (stored?.Version ?? 0) != expectedVersion
+                ? System.Reactive.Linq.Observable.Return<bool?>(false)
+                : System.Reactive.Linq.Observable.Select(
+                    Write(node, options), written => written is null ? (bool?)null : true));
+
     /// <summary>Deletes a node from storage and emits the deleted path.</summary>
     IObservable<string> Delete(string path);
 
@@ -134,6 +180,34 @@ public interface IStorageAdapter
     /// </summary>
     IObservable<bool> DeleteIfExists(string path)
         => System.Reactive.Linq.Observable.Select(Delete(path), _ => true);
+
+    /// <summary>
+    /// 🚨 PRE-FLIGHT for <see cref="Delete"/> — names the READ-ONLY storage provider that makes
+    /// <paramref name="path"/> structurally undeletable, or <c>null</c> when a delete is
+    /// unobstructed. This is the question <see cref="Delete"/> itself answers at COMMIT time,
+    /// exposed so a caller can ask it BEFORE it starts removing anything (#1433).
+    ///
+    /// <para><b>Why it exists.</b> A composite adapter reads across every provider (read-only ones
+    /// included) but can only delete through the WRITABLE ones, so a path served solely by a
+    /// read-only provider passes an existence check and then cannot be committed. In a RECURSIVE
+    /// delete that is not a cosmetic mismatch: <c>HierarchicalPathDeletion</c> walks bottom-up, so
+    /// by the time the undeletable root is reached its writable descendants are already gone —
+    /// the subtree is destroyed and the operation still fails. Asking first is what keeps the
+    /// gate and the commit looking at the same thing.</para>
+    ///
+    /// <para>Non-null means REFUSE — it never means "delete it some other way". Nothing here
+    /// widens what a delete removes; a read-only provider is never asked to delete.</para>
+    ///
+    /// <para>The default is <c>null</c>: a single-store adapter has no read-only provider behind
+    /// it, so nothing can block a delete that its own <see cref="Delete"/> would not already
+    /// refuse. That default cannot open a hole — <see cref="Delete"/> remains the authority and
+    /// still refuses at commit; this only moves an inevitable refusal earlier. Decorators MUST
+    /// forward to their inner adapter (same rule as <see cref="ListDescendantPaths"/>).</para>
+    /// </summary>
+    /// <param name="path">The path a delete is being considered for.</param>
+    /// <returns>The blocking read-only provider's name, or <c>null</c> when nothing blocks.</returns>
+    IObservable<string?> FindDeleteBlockingProvider(string path)
+        => System.Reactive.Linq.Observable.Return<string?>(null);
 
     /// <summary>
     /// Lists child paths under a parent path.
