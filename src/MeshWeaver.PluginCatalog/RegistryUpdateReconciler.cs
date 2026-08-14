@@ -66,6 +66,17 @@ public sealed class RegistryUpdateReconciler(
 {
     private readonly CompositeDisposable subscriptions = new();
 
+    /// <summary>
+    /// How many times a transport-level failure of the feed read is re-attempted within the boot
+    /// reconcile (see the RetryWhen in <see cref="ReconcileOne"/>). Small on purpose: this bounds a
+    /// cold pod's startup work, and the retries exist to survive a hiccup, not to wait out an outage.
+    /// </summary>
+    private const int FeedReadRetries = 3;
+
+    /// <summary>Exponential-ish backoff between feed-read attempts: 2 s, 6 s, 18 s.</summary>
+    private static TimeSpan FeedReadBackoff(int attempt) =>
+        TimeSpan.FromSeconds(2 * Math.Pow(3, attempt));
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -154,6 +165,30 @@ public sealed class RegistryUpdateReconciler(
 
                 var source = new RegistryPackageSource(hub, registry.Url, token);
                 return source.ListPackages(gitRef)
+                    // 🚨 The ONE attempt the design allots must actually get a fair chance (#1500).
+                    //
+                    // This service deliberately has NO poll timer (see the type remarks): the bound
+                    // it promises is "a consumer learns on its NEXT BOOT". A single TCP hiccup on a
+                    // cold pod silently consumed that one chance — the feed read failed, the Error
+                    // was logged, and the installation then stayed unreconciled for the whole life
+                    // of the pod, because nothing here ever asks again. That is the defect: not the
+                    // timeout's length, but that the boot attempt is unrepeated.
+                    //
+                    // So this is a bounded retry INSIDE the boot attempt, not a clock. It does not
+                    // widen any bound and it adds no background load — and it deliberately does not
+                    // retry an InvalidOperationException, which is how RegistryPackageSource reports
+                    // a definite HTTP answer (401/403/404): a registry that refuses this instance's
+                    // key will refuse it again in two seconds, and burning the boot window on that
+                    // would only delay the log line that names it.
+                    .RetryWhen(faults => faults
+                        .Select((fault, attempt) => (fault, attempt))
+                        .SelectMany(f => f.fault is not InvalidOperationException && f.attempt < FeedReadRetries
+                            ? Observable.Timer(FeedReadBackoff(f.attempt)).Select(_ => Unit.Default)
+                                .Do(_ => logger.LogWarning(f.fault,
+                                    "[RegistryUpdate] reading {Url} failed (attempt {Attempt}/{Total}) — retrying; "
+                                    + "this boot is the only chance this installation gets to reconcile.",
+                                    registry.Url, f.attempt + 1, FeedReadRetries + 1))
+                            : Observable.Throw<Unit>(f.fault)))
                     .Take(1)
                     .SelectMany(packages =>
                     {
@@ -171,8 +206,11 @@ public sealed class RegistryUpdateReconciler(
                 // One unreachable registry must not withhold the others, and must never be silent:
                 // "the store is empty and nobody said why" is the exact failure this issue began as.
                 logger.LogError(ex,
-                    "[RegistryUpdate] could not read the package feed of {Name} ({Url}) — installed "
-                    + "packages from it are NOT reconciled this boot.", name, registry.Url);
+                    "[RegistryUpdate] could not read the package feed of {Name} ({Url}) after up to "
+                    + "{Attempts} attempt(s) — installed packages from it are NOT reconciled this "
+                    + "boot, and there is no poll behind this: the next chance is the next restart "
+                    + "or a human opening the catalog page.",
+                    name, registry.Url, FeedReadRetries + 1);
                 return Observable.Return(Unit.Default);
             });
     }
