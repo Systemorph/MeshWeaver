@@ -30,7 +30,12 @@ on:
   workflow_call:
     inputs:
       framework-version:
-        description: MeshWeaver package version the plugins compile against.
+        description: >
+          MeshWeaver package version the plugins compile against, or `latest` to resolve the newest
+          from the configured sources. `latest` freezes the FULL resolved version — including the
+          `.ci.<run-number>` suffix — as the package's framework floor, because that suffix is where
+          new API lands: a floor of `3.0.0-rc3` is satisfied by `3.0.0-rc3.ci.1`, thousands of runs
+          before the API the plugin was written against.
         required: true
         type: string
       meshweaver-ref:
