@@ -267,7 +267,11 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
         var activity = new MeshNode(id, activityNamespace)
         {
             Name = $"Write conflict on {path}",
-            NodeType = "ActivityLog",
+            // "Activity" — the canonical activity node type. The node already lands in `_Activity`
+            // (so path routing put it in the right table regardless), but the stray "ActivityLog"
+            // type kept it out of every `nodeType:Activity` query, including the running-activities
+            // stripe and the activity feed a write-conflict most needs to surface in.
+            NodeType = "Activity",
             MainNode = path,
             State = MeshNodeState.Active,
             Version = 1,
