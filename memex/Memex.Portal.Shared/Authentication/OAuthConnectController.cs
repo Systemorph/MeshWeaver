@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using MeshWeaver.Blazor.Infrastructure; // PortalApplication
+using MeshWeaver.Mesh.Security;         // ApiToken (the minted token content)
 using MeshWeaver.Messaging;             // AccessService / AccessContext
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -297,12 +298,27 @@ public class OAuthConnectController(
                 // days surprises users who connect once and come back months later.
                 // Refresh-token flow isn't implemented yet; until it is, default to
                 // 1 year. Bump if needed via TokenLifetime below.
+                var label = $"OAuth: {request.client_id}";
+
                 return TokenService.CreateToken(
                         userId: entry.UserId,
                         userName: entry.UserName,
                         userEmail: entry.UserEmail,
-                        label: $"OAuth: {request.client_id}",
+                        label: label,
                         expiresAt: DateTimeOffset.UtcNow.Add(TokenLifetime))
+                    // 🚨 ONE live credential per client, not N (#1493). Every authorization used to
+                    // mint a FRESH year-long token and leave the previous one live and listed, so a
+                    // reinstall, a new device, or a revoked-and-reconnected integration each left
+                    // another usable credential behind — for a year. That is what dominated the 86
+                    // ApiToken rows found on the live portal, and each of them is a key that still
+                    // opens the door.
+                    //
+                    // Ordered mint-THEN-supersede, never the reverse: if the mint fails the client
+                    // must keep the credential it already has, so revoking first could strand it
+                    // with none at all.
+                    .SelectMany(creation => SupersedePreviousTokens(
+                            entry.UserId, label, creation.Node.Path, MintedAt(creation))
+                        .Select(_ => creation))
                     .Select(creation =>
                     {
                         logger.LogInformation("Issued OAuth access token for user {Email}, client {ClientId}", entry.UserEmail, request.client_id);
@@ -317,6 +333,87 @@ public class OAuthConnectController(
             .FirstAsync()
             .ToTask(ct);
     }
+
+    /// <summary>
+    /// Removes this client's PREVIOUS tokens once a fresh authorization has minted its replacement
+    /// (#1493), so a `(user, client_id)` pair has exactly one live credential.
+    ///
+    /// <para>Identity is the label — <c>OAuth: {client_id}</c> — and <c>client_id</c> is a random
+    /// 24-byte value issued per client registration, so a shared label means the same client. The
+    /// token just minted is excluded by PATH, which also makes the read's lag harmless: a listing
+    /// that has not caught up yet simply leaves an older row for the next authorization to collect,
+    /// and can never take the new one.</para>
+    ///
+    /// <para>Deleted, not merely marked revoked: this issue is BOTH "one live credential" and the
+    /// unbounded accumulation behind it, and a revoked row keeps accumulating. It matches what
+    /// #1477's expiry sweep already does with a dead credential.</para>
+    ///
+    /// <para>Never fails the exchange. The client has a valid token by this point; housekeeping
+    /// that could not complete is a Warning and the next authorization tries again.</para>
+    /// </summary>
+    private IObservable<System.Reactive.Unit> SupersedePreviousTokens(
+        string userId, string label, string keepPath, DateTimeOffset mintedAt)
+    {
+        var tokens = TokenService;
+        return tokens.GetTokensForUser(userId)
+            .Take(1)
+            .SelectMany(all =>
+            {
+                // 🚨 Supersede only what is strictly OLDER, in a TOTAL order — never "everything
+                // that is not mine". Two concurrent exchanges for the same (user, client_id) each
+                // see the other's freshly-minted token in this listing, and a not-mine rule would
+                // have them delete each other's: both clients then walk away holding a credential
+                // that was removed moments later. Ordering by (CreatedAt, path) makes the outcome
+                // convergent instead — every participant deletes strictly below itself, so the
+                // NEWEST token survives no matter which exchange evaluates last, and there is
+                // still exactly one live credential at the end.
+                //
+                // The path tiebreak matters: CreatedAt is a UTC timestamp and two exchanges can
+                // land on the same tick, where "strictly older by time" would let both survive.
+                var superseded = all
+                    .Where(t => t.Label == label && t.NodePath != keepPath)
+                    .Where(t => t.CreatedAt < mintedAt
+                                || (t.CreatedAt == mintedAt
+                                    && string.CompareOrdinal(t.NodePath, keepPath) < 0))
+                    .Select(t => t.NodePath)
+                    .ToArray();
+                if (superseded.Length == 0)
+                    return Observable.Return(System.Reactive.Unit.Default);
+
+                logger.LogInformation(
+                    "OAuth: superseding {Count} previous token(s) for user {UserId}, client label {Label} — "
+                    + "a re-authorization replaces the client's credential rather than adding one",
+                    superseded.Length, userId, label);
+
+                // Self-paced (Concat, never Merge): one delete at a time, the same shape the expiry
+                // sweep uses, so a client that re-authorized many times drains gently.
+                return Observable.Concat(superseded.Select(path => tokens.DeleteToken(path)
+                        .Catch<bool, Exception>(ex =>
+                        {
+                            logger.LogWarning(ex,
+                                "OAuth: could not supersede previous token {Path} — it stays live until "
+                                + "the next authorization or its expiry", path);
+                            return Observable.Return(false);
+                        })))
+                    .LastOrDefaultAsync()
+                    .Select(_ => System.Reactive.Unit.Default);
+            })
+            .Catch<System.Reactive.Unit, Exception>(ex =>
+            {
+                logger.LogWarning(ex,
+                    "OAuth: could not list previous tokens for user {UserId} to supersede them", userId);
+                return Observable.Return(System.Reactive.Unit.Default);
+            });
+    }
+
+    /// <summary>
+    /// The creation stamp of the token this exchange just minted — the ordering key
+    /// <see cref="SupersedePreviousTokens"/> compares against. Falls back to "now" if the content
+    /// is not the expected shape, which only ever makes the sweep MORE conservative on the tie
+    /// (it can then supersede a token minted in the same instant, never a newer one).
+    /// </summary>
+    private static DateTimeOffset MintedAt(TokenCreationResult creation) =>
+        creation.Node.Content is ApiToken t ? t.CreatedAt : DateTimeOffset.UtcNow;
 
     /// <summary>
     /// Lifetime for OAuth-issued API tokens. Single source of truth — the
