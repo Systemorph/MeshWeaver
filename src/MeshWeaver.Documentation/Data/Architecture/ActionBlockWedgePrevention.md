@@ -28,6 +28,38 @@ triggers a resubscribe/repost that fails again.
   it holds at *all* emit sites, permanently, enforced by a test — not re-checked by hand.)
 - Root-aligned, not a band-aid: it removes the *cause* of amplification.
 
+### 🚨 The exemption must be read off the ENVELOPE, never the payload's CLR type
+
+**Issue #1485 — the exemption above was written seven times as `delivery.Message is DeliveryFailure
+|| delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>()`, and on the routed path not one
+of them could ever match.** Every mesh delivery reaches a router as
+`delivery.Package(hub.JsonSerializerOptions)` (`MeshBuilder`) — the single call site of
+`IRoutingService.DeliverMessage` — and `Package` replaces the payload with `RawJson`. So the guards
+were inspecting `RawJson`, which is neither a `DeliveryFailure` nor `[CanBeIgnored]`. The trace tell
+is `RouteMessage: NotFound for RawJson → …`.
+
+The consequence is exactly the amplification this invariant forbids: a departed owner that is
+heart-beaten every `SyncStreamOptions` interval was answered with a `DeliveryFailure` every time, and
+a `DeliveryFailure` could be answered with another one. It affected **both** hosts equally — the
+comments claiming the two routers "both agree" were true only in that both were dead — and it reached
+one level above the routers too, in `MessageService.ReportFailure`, which reports whatever the route
+handler hands back and therefore also sees `RawJson`.
+
+The fix is `AnswerPolicy` (`src/MeshWeaver.Messaging.Contract/AnswerPolicy.cs`):
+`Package` stamps the *fact* "this payload must not be answered" onto the envelope's properties
+immediately before the type is erased (the same mechanism `IDiagnosticKeyed` already uses for the
+storm breaker), and every guard calls `delivery.MayAnswer()`, which reads the stamp and falls back to
+the CLR type for a delivery that never crossed a packaging boundary. Only the *suppressed* case is
+stamped, so ordinary traffic costs nothing and an unstamped delivery degrades to the old behaviour —
+never to "answer something you must not".
+
+**So when adding a new emit site: call `delivery.MayAnswer()`. A hand-written CLR-type check is a
+silent no-op anywhere downstream of a hub hop.** Pinned by
+`OrleansRouterAnswerOnceAfterPackagingTest`, `MonolithRouterAnswerOnceAfterPackagingTest` and
+`RoutingTailAnswerOnceAfterPackagingTest` — one per host plus the reporting tail, each of which
+fails on the pre-fix tree. This is also what the proposed `FailureExemptAtEveryEmitSite` test below
+would have caught years earlier, and it is the strongest argument for writing it.
+
 ## Invariant 2 — A subscription to a missing target dies after N, it does not retry forever
 
 The phantom `_Activity` storm and the rsalzmann subscribe-wedge were both **unbounded

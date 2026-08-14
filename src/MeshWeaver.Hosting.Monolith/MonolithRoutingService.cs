@@ -88,7 +88,12 @@ internal class MonolithRoutingService(
         // makes it read as terminal, which is the CI 30003419841 wedge: erroring the sync stream on
         // this NACK killed the resubscribe latch and wedged every read of a mid-recycle NodeType.
         var errorType = isShuttingDown ? ErrorType.ShuttingDown : ErrorType.NotFound;
-        var senderNacked = delivery.Message is not DeliveryFailure
+        // The answer-once contract — see AnswerPolicy. 🚨 Read the ENVELOPE: this delivery came
+        // through MeshBuilder's delivery.Package(...), so its payload is RawJson and the CLR-type
+        // test this replaces could never match (#1485). It was also missing the [CanBeIgnored]
+        // half of the contract that every sibling guard carries, so a heartbeat reaching a node
+        // whose NodeType yields no hub configuration was answered even in principle.
+        var senderNacked = delivery.MayAnswer()
             && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs;
         if (senderNacked)
         {
