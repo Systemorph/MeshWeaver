@@ -62,6 +62,7 @@ public static class MigrationRegistry
         new V50_RescopePlatformAdminGrants(),
         new V51_DropInvalidPartitionSchemas(),
         new V52_DeleteStaleNodeTypeOrphans(),
+        new V53_RetypeBuiltinSlideDeckToPublish(),
     ];
 
     /// <summary>
