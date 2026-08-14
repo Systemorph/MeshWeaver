@@ -40,9 +40,10 @@ namespace MeshWeaver.Graph;
 ///   navigation as a top-level route, so inline it appears to "do nothing".</item>
 /// </list>
 ///
-/// <para>Registered on every node via <see cref="AddEducationLayoutAreas"/> (called from
-/// <c>MeshNodeLayoutAreas.AddDefaultLayoutAreas</c>), so any course page exposes <c>/StartExercise</c>,
-/// <c>/GoToMyCopy</c>, <c>/Learn</c>, and <c>/CourseNav</c>.</para>
+/// <para>Registered on every node via <see cref="AddEducationLayoutAreas(MessageHubConfiguration)"/>
+/// (chained in the portal's node-hub configuration since the MeshWeaver.Education pack extraction),
+/// so any course page exposes <c>/StartExercise</c>, <c>/GoToMyCopy</c>, <c>/Learn</c>, and
+/// <c>/CourseNav</c>.</para>
 /// </summary>
 public static class EducationLayoutAreas
 {
@@ -62,6 +63,14 @@ public static class EducationLayoutAreas
             .WithView(GoToMyCopyArea, GoToMyCopy)
             .WithView(CourseNavArea, CourseNav)
             .WithView(LearnArea, Learn);
+
+    /// <summary>
+    /// Hub-configuration overload for composition-root chains (the shape the portal's node-hub
+    /// config uses): since the MeshWeaver.Education pack extraction, these areas are registered
+    /// here rather than inside core's <c>AddDefaultLayoutAreas</c>.
+    /// </summary>
+    public static MessageHubConfiguration AddEducationLayoutAreas(this MessageHubConfiguration config)
+        => config.AddLayout(layout => layout.AddEducationLayoutAreas());
 
     /// <summary>
     /// The "Your Turn" landing: ensure the viewing learner has a personal, writable copy of this
