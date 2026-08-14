@@ -23,6 +23,11 @@
     <ProjectReference Include="..\..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
     <ProjectReference Include="..\..\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
     <ProjectReference Include="..\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
+    <!-- Shared "latest DB version" constant — linked source, NOT a ProjectReference: the
+         migration project is a container of its own and must not ride in the portal image.
+         The migration runner pins this constant to its registry at startup, so DbVersionGate
+         and the migrations cannot drift apart (the gate sat at 32 while migrations ran to V52). -->
+    <Compile Include="..\Memex.Database.Migration\DbVersion.cs" Link="DbVersion.cs" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.NuGet.AzureBlob\MeshWeaver.NuGet.AzureBlob.csproj" />
     <!-- 🚨 Referenced for IN-MESH compiles, not for this project's own code. NodeType sources are
