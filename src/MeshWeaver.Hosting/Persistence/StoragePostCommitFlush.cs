@@ -79,12 +79,22 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
                         resolved = true;
                         flushed?.Release(node.Path, node.Version);
                     }
-                },
-                // A fault and an empty sequence are both "nothing was persisted". Releasing tells
-                // the sampler — which is DEFERRED on the claim rather than dropped — to go ahead,
-                // so the ordering fix can never convert a duplicate write into a lost one.
-                _ => { if (!resolved) { resolved = true; flushed?.Release(node.Path, node.Version); } },
-                () => { if (!resolved) { resolved = true; flushed?.Release(node.Path, node.Version); } })
+                })
+            // 🚨 THE CLAIM MUST ALWAYS BE ANSWERED. Finally runs on completion, on error AND on
+            // UNSUBSCRIPTION — the last of which is the one an OnError/OnCompleted pair misses: if
+            // the patch pipeline's subscription is torn down mid-write (hub teardown, a cancelled
+            // round), no terminal notification ever fires, the claim is never resolved, and the
+            // sampler that deferred against it waits forever on a signal nobody will send. A
+            // deferred write must never outlive the thing it is deferring to.
+            //
+            // Releasing an unresolved claim is the FAIL-SAFE direction: the sampler goes ahead and
+            // writes. The other direction would drop a write nobody else is making.
+            .Finally(() =>
+            {
+                if (resolved) return;
+                resolved = true;
+                flushed?.Release(node.Path, node.Version);
+            })
             .Select(_ => true)
             .DefaultIfEmpty(true);
     }
