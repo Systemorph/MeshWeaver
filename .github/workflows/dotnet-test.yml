@@ -265,14 +265,27 @@ jobs:
       env:
         PLUGINS_REPO_SSH_KEY: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        ACTOR: ${{ github.actor }}
       run: |
         set -euo pipefail
-        # The one sanctioned exemption. GitHub withholds org secrets from fork runs BY
-        # DESIGN, and every gate that needs one carries the same fork check at its job
-        # level, so nothing downstream runs half-armed.
+        # The sanctioned exemptions — both expressed as EVENT/ACTOR properties, never as
+        # "is the secret set?" probes (the trapdoor shape this job exists to close).
+        # 1) Fork PRs: GitHub withholds org secrets from fork runs BY DESIGN.
         if [ "${IS_FORK:-}" = "true" ]; then
           echo "Fork PR — org secrets are withheld by design; the gates that need them do not run."
           echo "Fork PR: secret-dependent gates are not applicable." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        # 2) Dependabot PRs: dependabot-actor runs read the SEPARATE Dependabot secrets store,
+        #    not Actions secrets — so Actions secrets are absent BY DESIGN, exactly like forks.
+        #    The plugins gate carries the same actor check at its job level; the push-to-main
+        #    run after merge HAS the secret and runs the gate, so a dependency bump that breaks
+        #    the plugins compile reddens main immediately rather than shipping silently.
+        #    To arm the gate ON dependabot PRs too, provision PLUGINS_REPO_SSH_KEY under
+        #    Settings -> Secrets and variables -> DEPENDABOT and delete this exemption.
+        if [ "${ACTOR:-}" = "dependabot[bot]" ]; then
+          echo "Dependabot PR — Actions secrets are withheld by design (separate Dependabot store); the gates that need them do not run."
+          echo "Dependabot PR: secret-dependent gates are not applicable." >> "$GITHUB_STEP_SUMMARY"
           exit 0
         fi
         missing=()
@@ -933,7 +946,7 @@ jobs:
     # plugins repo (nor to any org secret). A fork cannot break the private repo's consumers in
     # a way this run could prove either way. Expressed as a FORK check — never as a
     # "is the credential set?" check, which is the same shape with none of the safety.
-    if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true
+    if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     # ⏱️ WALL-CLOCK: this job depends on `build` — the SAME dependency the test shards have — so it
     # runs CONCURRENTLY with them, not after. Total run time is max(slowest shard, this), so while
