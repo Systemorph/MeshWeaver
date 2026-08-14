@@ -72,7 +72,7 @@ public class InboxToolIntegrationTest : AITestBase
         return base.ConfigureClient(configuration).AddLayoutClient();
     }
 
-    // â”€â”€â”€ check_inbox via the AIFunction surface â”€â”€â”€
+    // ─── check_inbox via the AIFunction surface ───
 
     [Fact]
     public async Task CheckInbox_NoPending_ReturnsNoNewMessages()
@@ -135,7 +135,7 @@ public class InboxToolIntegrationTest : AITestBase
 
         // Lock IsExecuting=true BEFORE appending so the server-side watcher
         // doesn't drain the queue during our setup. We're simulating "agent is
-        // mid-stream" â€” the real flow has the agent already executing when
+        // mid-stream" — the real flow has the agent already executing when
         // follow-ups arrive, and check_inbox is the only path that promotes
         // them out of PendingUserMessages.
         // Atomically enter mid-execution WITH all three queued (one own-stream write).
@@ -192,7 +192,7 @@ public class InboxToolIntegrationTest : AITestBase
             "once a message has been delivered to the agent it must NOT be redelivered on the next call");
     }
 
-    // â”€â”€â”€ Mid-execution: in-flight message delivered inline, NO output-cell split â”€â”€â”€
+    // ─── Mid-execution: in-flight message delivered inline, NO output-cell split ───
 
     /// <summary>
     /// While a round is streaming into response cell R1, a follow-up message arrives and the
@@ -373,7 +373,7 @@ public class InboxToolIntegrationTest : AITestBase
             afterRound.IngestedMessageIds.Should().Contain(id, "no follow-up may be lost");
     }
 
-    // â”€â”€â”€ Cancel-then-restart: ESC with pending messages â”€â”€â”€
+    // ─── Cancel-then-restart: ESC with pending messages ───
 
     [Fact]
     public async Task Cancel_WithPendingMessages_DispatchesNextRoundAfterCleanup()
@@ -449,7 +449,7 @@ public class InboxToolIntegrationTest : AITestBase
         var u1 = roundStart.IngestedMessageIds[0];
         var initialMsgsCount = roundStart.Messages.Count;
 
-        // Cancel â€” no follow-ups queued.
+        // Cancel — no follow-ups queued.
         // Cancel via stream.Update (see RequestViaStreamUpdate.md). Awaiting
         // the post-update emission asserts the write actually landed.
         var cancelled = await client.GetWorkspace().GetMeshNodeStream(threadPath)
@@ -665,7 +665,7 @@ public class InboxToolIntegrationTest : AITestBase
         ingestedTexts.Should().BeEquivalentTo(texts, client.JsonSerializerOptions);
     }
 
-    // â”€â”€â”€ ViewModel projection â”€â”€â”€
+    // ─── ViewModel projection ───
 
     [Fact]
     public void ExtractPendingTexts_EmptyThread_ReturnsEmpty()
@@ -699,7 +699,7 @@ public class InboxToolIntegrationTest : AITestBase
         texts.Should().BeEmpty();
     }
 
-    // â”€â”€â”€ Helpers â”€â”€â”€
+    // ─── Helpers ───
 
     private async Task<string> SeedEmptyThreadAsync(CancellationToken ct)
     {
@@ -731,7 +731,7 @@ public class InboxToolIntegrationTest : AITestBase
         await ReadNode(threadPath).Should().Within(60.Seconds()).Emit();
         // Resolve the hub through the mesh service.
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        // GetHub is internal â€” we use the same trick as ThreadExecution: the
+        // GetHub is internal — we use the same trick as ThreadExecution: the
         // routed hub becomes accessible by sending a no-op delivery and
         // reading back the workspace. Easier: spin up a hosted hub at the
         // address.
@@ -909,12 +909,12 @@ public class InboxToolIntegrationTest : AITestBase
         return ids;
     }
 
-    // â”€â”€â”€ Fake chat client + factory â”€â”€â”€
+    // ─── Fake chat client + factory ───
 
     /// <summary>
     /// Slow fake that delays ~5 s in the streaming path so tests can race in
     /// follow-up submissions and ESC during the in-flight turn. 1.5 s wasn't
-    /// enough headroom on slow CI runners â€” the in-flight round could finish
+    /// enough headroom on slow CI runners — the in-flight round could finish
     /// before the test had time to submit the queued u2 + assert.
     /// </summary>
     private sealed class InboxFakeChatClient : IChatClient

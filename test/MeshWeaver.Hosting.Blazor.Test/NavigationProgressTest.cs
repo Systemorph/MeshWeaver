@@ -73,7 +73,7 @@ public class NavigationProgressTest
 
         _hub.Configuration.Returns(new MessageHubConfiguration(null, new Address("test", "nav")));
 
-        // Empty mesh query by default â€” node-loading path is best-effort.
+        // Empty mesh query by default — node-loading path is best-effort.
         // Empty observable so the chain in LoadNodeWithPreRenderedHtml completes
         // with node = null (Catch falls through to Observable.Return(null)).
         _meshQuery.Query<MeshNode>(Arg.Any<MeshQueryRequest>(), Arg.Any<JsonSerializerOptions>())
@@ -229,8 +229,8 @@ public class NavigationProgressTest
     [Fact]
     public async Task Status_AllEmissions_HaveNonEmptyMessage()
     {
-        // Drive the service through a full lifecycle: init â†’ resolve ok â†’ navigate
-        // to a path that will NOT resolve â†’ retries â†’ NotFound. Every emission
+        // Drive the service through a full lifecycle: init → resolve ok → navigate
+        // to a path that will NOT resolve → retries → NotFound. Every emission
         // along the way must carry a non-empty message.
         _navigationManager.SetUri("http://localhost/ACME/Project");
         _pathResolver.ResolveNavigationPath("ACME/Project")
@@ -252,7 +252,7 @@ public class NavigationProgressTest
 
         emissions.Should().NotBeEmpty();
         emissions.Should().OnlyContain(s => !string.IsNullOrWhiteSpace(s.Message),
-            "no emission â€” including intermediate ones â€” may render as an empty spinner");
+            "no emission — including intermediate ones — may render as an empty spinner");
     }
 
     // -- Test #7: retries in flight must NOT emit NotFound / null context --------
@@ -261,7 +261,7 @@ public class NavigationProgressTest
     public async Task Status_WhenResolutionFailsInitially_DoesNotEmitNotFoundUntilRetriesExhausted()
     {
         // Initial attempt returns null and we schedule retries. The user should
-        // keep seeing "Looking upâ€¦" during the retry window â€” not a flash of
+        // keep seeing "Looking up…" during the retry window — not a flash of
         // "Page Not Found" followed by the real answer.
         _navigationManager.SetUri("http://localhost/does/not/exist");
         _pathResolver.ResolveNavigationPath(Arg.Any<string>())
@@ -287,7 +287,7 @@ public class NavigationProgressTest
             "while retrying, the status remains 'Looking up'");
     }
 
-    // -- Test #8: retry succeeds â†’ never show NotFound --------------------------
+    // -- Test #8: retry succeeds → never show NotFound --------------------------
 
     [Fact]
     public void Status_WhenResolutionFailsOnFirstAttempt_ThenSucceeds_NeverEmitsNotFound()

@@ -706,7 +706,7 @@ internal class NavigationService : INavigationService
         var settled = false;
         var subscribeReturned = false;
 
-        // Reactive load â€” Subscribe, never await (every async bit through a hub
+        // Reactive load — Subscribe, never await (every async bit through a hub
         // round-trip is a deadlock surface; see Doc/Architecture/AsynchronousCalls.md).
         LoadNodeWithPreRenderedHtml(resolution)
             .Subscribe(node =>
@@ -900,7 +900,7 @@ internal class NavigationService : INavigationService
 
     /// <summary>
     /// Loads the MeshNode for the resolved address. If the node has MarkdownContent
-    /// but no PreRenderedHtml, generates it and persists back. Reactive â€” no await
+    /// but no PreRenderedHtml, generates it and persists back. Reactive — no await
     /// on hub round-trips (100% deadlock; see Doc/Architecture/AsynchronousCalls.md).
     /// </summary>
     private IObservable<MeshNode?> LoadNodeWithPreRenderedHtml(AddressResolution resolution) =>
@@ -1005,7 +1005,7 @@ internal class NavigationService : INavigationService
 
     /// <summary>
     /// Records a navigation activity for the "Recently Viewed" dashboard section.
-    /// Posts TrackActivityRequest to the hub â€” handled asynchronously on a sub-hub.
+    /// Posts TrackActivityRequest to the hub — handled asynchronously on a sub-hub.
     /// </summary>
     private void TrackNavigationActivity(MeshNode node)
     {

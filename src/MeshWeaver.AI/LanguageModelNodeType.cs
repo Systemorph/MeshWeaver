@@ -12,20 +12,20 @@ namespace MeshWeaver.AI;
 ///
 /// <para>Two surfaces feed this:</para>
 /// <list type="bullet">
-///   <item><b>Platform models</b> â€” <see cref="LanguageModelCatalogOptions.Sources"/>
+///   <item><b>Platform models</b> — <see cref="LanguageModelCatalogOptions.Sources"/>
 ///         entries pair a config section (e.g. <c>Anthropic</c>) with a
 ///         provider label. <see cref="BuiltInLanguageModelProvider"/>
 ///         reads <c>{section}:Models[]</c> from <see cref="Microsoft.Extensions.Configuration.IConfiguration"/>
 ///         at static-node-provider time and emits one
 ///         <c>nodeType:LanguageModel</c> MeshNode per entry under
 ///         <see cref="RootNamespace"/>.</item>
-///   <item><b>Bring-your-own models</b> â€” anyone can create a node of this
+///   <item><b>Bring-your-own models</b> — anyone can create a node of this
 ///         type at any path with <see cref="ModelDefinition"/> content; the
 ///         chat picker discovers it via the same synced query that finds
 ///         agents (<c>nodeType:Agent|LanguageModel</c>).</item>
 /// </list>
 ///
-/// <para>Public-read by default â€” model identity and provider are not
+/// <para>Public-read by default — model identity and provider are not
 /// secrets. Credentials live behind <see cref="ModelDefinition.ApiKeySecretRef"/>
 /// in a secret store, never in the node content itself.</para>
 /// </summary>
@@ -127,9 +127,9 @@ public static class LanguageModelNodeType
             // service from meshHub.ServiceProvider, not from their own
             // hub's DI scope.
             services.TryAddSingleton<ModelDiscoveryService>();
-            // ðŸš¨ Plain AddSingleton (not TryAddEnumerable): TryAddEnumerable
+            // 🚨 Plain AddSingleton (not TryAddEnumerable): TryAddEnumerable
             // dedupes by impl-type AND ServiceLifetime AND ImplementationFactory
-            // â€” combinations that occasionally suppress the registration in
+            // — combinations that occasionally suppress the registration in
             // ways that left BuiltInLanguageModelProvider invisible to DI
             // resolution while BuiltInAgentProvider (using plain AddSingleton)
             // worked. Match the AgentProvider pattern so both follow the
@@ -144,7 +144,7 @@ public static class LanguageModelNodeType
             if (!dbSynced)
             {
                 services.AddSingleton<IStaticNodeProvider>(sp => sp.GetRequiredService<BuiltInLanguageModelProvider>());
-                // Partition routing â€” the same instance feeds the routing core's
+                // Partition routing — the same instance feeds the routing core's
                 // "Model" partition. The partition's StaticNodeStorageAdapter is
                 // its storage of record; no SeedIfAbsent fan-in required. Skipped when
                 // the partition is DB-synced (PG serves it instead).
@@ -168,7 +168,7 @@ public static class LanguageModelNodeType
     /// Adds a catalog source: a config section to scan for <c>Models[]</c>
     /// when populating the <c>nodeType:LanguageModel</c> partition.
     ///
-    /// <para>Idempotent on (sectionName, providerName) â€” safe to call from
+    /// <para>Idempotent on (sectionName, providerName) — safe to call from
     /// multiple <c>builder.ConfigureServices</c> blocks. Mutates the
     /// <see cref="LanguageModelCatalogOptions"/> singleton directly
     /// instead of using the <c>IOptions&lt;T&gt;</c> Configure pipeline,

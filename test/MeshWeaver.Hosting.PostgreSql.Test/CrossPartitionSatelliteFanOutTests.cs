@@ -85,7 +85,7 @@ public class CrossPartitionSatelliteFanOutTests
         return partitions;
     }
 
-    // â”€â”€ Thread fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Thread fan-out ──────────────────────────────────────────────────
 
     [Fact(Timeout = 60000)]
     public async Task NodeTypeThread_WithNamespace_QueriesThreadsTable()
@@ -132,7 +132,7 @@ public class CrossPartitionSatelliteFanOutTests
         allResults.Should().OnlyContain(n => n.NodeType == "Thread");
     }
 
-    // â”€â”€ Comment fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Comment fan-out ─────────────────────────────────────────────────
 
     [Fact(Timeout = 60000)]
     public async Task NodeTypeComment_WithNamespace_QueriesAnnotationsTable()
@@ -174,7 +174,7 @@ public class CrossPartitionSatelliteFanOutTests
         allComments.Should().OnlyContain(n => n.NodeType == "Comment");
     }
 
-    // â”€â”€ Activity fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Activity fan-out ────────────────────────────────────────────────
 
     [Fact(Timeout = 60000)]
     public async Task NodeTypeActivity_WithNamespace_QueriesActivitiesTable()
@@ -217,7 +217,7 @@ public class CrossPartitionSatelliteFanOutTests
         allActivities.Should().OnlyContain(n => n.NodeType == "Activity");
     }
 
-    // â”€â”€ Mixed: nodeType without namespace fans out correctly â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Mixed: nodeType without namespace fans out correctly ─────────
 
     [Fact(Timeout = 60000)]
     public async Task NodeTypeOnly_WithoutNamespace_EachPartitionResolvesCorrectTable()
@@ -249,7 +249,7 @@ public class CrossPartitionSatelliteFanOutTests
             State = MeshNodeState.Active,
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        // Query without namespace â€” each adapter should resolve to threads table
+        // Query without namespace — each adapter should resolve to threads table
         var parser = new QueryParser();
         var query = parser.Parse("nodeType:Thread sort:LastModified-desc");
 

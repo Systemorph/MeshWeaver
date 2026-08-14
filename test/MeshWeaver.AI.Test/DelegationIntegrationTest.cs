@@ -145,7 +145,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
         agents.Should().Contain(a => a.Name == "Coordinator", "Coordinator agent should be loaded from .md file");
         agents.Should().Contain(a => a.Name == "Worker", "Worker agent should be loaded from .md file");
 
-        // Act: Send a message â€” Coordinator should delegate to Worker
+        // Act: Send a message — Coordinator should delegate to Worker
         var messages = new List<ChatMessage>
         {
             new(ChatRole.User, "What is the capital of France?")
@@ -215,7 +215,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
 
     /// <summary>
     /// Verifies that the Worker's result (from its isolated thread) appears
-    /// as a FunctionResultContent in the Coordinator's thread â€” proving
+    /// as a FunctionResultContent in the Coordinator's thread — proving
     /// that Worker's thread is in the namespace of Coordinator's thread.
     /// </summary>
     [Fact(Timeout = 120_000)]

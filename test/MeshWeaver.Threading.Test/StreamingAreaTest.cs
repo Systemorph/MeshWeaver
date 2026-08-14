@@ -64,7 +64,7 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var first = await streamingArea.Should().Within(5.Seconds()).Emit();
 
         Output.WriteLine($"StreamingArea emission: ChangeType={first.ChangeType}");
-        // The area returns null when idle â€” the LayoutAreaView renders nothing
+        // The area returns null when idle — the LayoutAreaView renders nothing
     }
 
     [Fact]

@@ -30,6 +30,7 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
 
     private const string MarkdownNodePath = "TestOrg/TestMarkdown";
     private const string DeckNodePath = "TestOrg/TestDeck";
+    private const string PluginDeckNodePath = "TestOrg/PluginDeck";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
@@ -45,6 +46,16 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
                     Name = "Test Deck",
                     NodeType = DeckNodeType.NodeType,
                     Content = new DeckContent { Title = "Test Deck" }
+                },
+                // A PLUGIN-typed deck: a dynamic NodeType's identity is its install path
+                // (e.g. the Publish pack's Publish/Deck). The compiled export gates must
+                // recognize it via the suffix-aware DeckNodeType.Matches — an equality
+                // gate silently drops its whole Export menu.
+                new MeshNode("PluginDeck", "TestOrg")
+                {
+                    Name = "Plugin Deck",
+                    NodeType = "Publish/Deck",
+                    Content = new DeckContent { Title = "Plugin Deck" }
                 }
             )
             .AddMarkdownExport()
@@ -173,6 +184,23 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         group.Area.Should().Be(MarkdownExportMenuProvider.ExportGroupArea);
         group.Children!.Select(c => c.Label).Should().Equal(
             [MarkdownExportMenuProvider.PdfLabel, SendDocumentLayoutArea.SendLabel]);
+    }
+
+    /// <summary>
+    /// A PLUGIN-typed deck (NodeType <c>Publish/Deck</c> — install-path identity) gets the
+    /// SAME Export group as the built-in Deck. This pins the suffix-aware
+    /// <see cref="DeckNodeType.Matches"/> gate through the full menu pipeline: with an
+    /// equality gate the provider contributes nothing and the menu silently loses Export.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task PluginTypedDeck_GetsTheSameExportGroup()
+    {
+        var client = GetClient();
+        var items = await FetchNodeMenuItems(client, new Address(PluginDeckNodePath));
+
+        var group = items.Should().ContainSingle(i => i.Label == MarkdownExportMenuProvider.ExportGroupLabel).Which;
+        group.Children!.Select(c => c.Label).Should().Contain(MarkdownExportMenuProvider.PdfLabel,
+            "a Publish/Deck node must offer PDF export exactly like the built-in Deck");
     }
 
     [Fact(Timeout = 30000)]

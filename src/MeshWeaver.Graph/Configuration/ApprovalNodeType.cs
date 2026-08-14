@@ -10,7 +10,7 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Provides configuration for Approval nodes in the graph.
-/// Approval nodes are system-generated â€” excluded from search and create contexts.
+/// Approval nodes are system-generated — excluded from search and create contexts.
 /// Access is delegated to the MainNode (parent) via SatelliteAccessRule.
 /// </summary>
 public static class ApprovalNodeType

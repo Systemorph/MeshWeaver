@@ -44,7 +44,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
     /// <summary>
     /// Client config that adds layout / data so subscribers can use
     /// <c>workspace.GetRemoteStream(...)</c>. Without <see cref="Layout.LayoutExtensions.AddLayoutClient"/>,
-    /// <c>GetWorkspace()</c> throws "AddData was not called" â€” and posting from
+    /// <c>GetWorkspace()</c> throws "AddData was not called" — and posting from
     /// the mesh hub directly leaves <c>SubscribeRequest</c> without a return route.
     /// </summary>
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -97,7 +97,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
 
     /// <summary>
     /// Polling progress: a script writes 4 log lines spaced ~150 ms apart. Subscribers
-    /// of the ActivityLog stream must see the message count grow GRADUALLY â€” not just
+    /// of the ActivityLog stream must see the message count grow GRADUALLY — not just
     /// the final 4-message snapshot. Proves the Activity-hosted kernel publishes
     /// intermediate snapshots via <c>DataChangeRequest.Update</c> as the script runs,
     /// instead of buffering everything until the script returns.
@@ -139,7 +139,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         // that moment; the count of messages grows monotonically.
         var workspace = GetClient().GetWorkspace();
         // Stream every distinct message-count. Close as soon as we observe the
-        // terminal snapshot (4 messages) by using TakeUntil â€” and re-include
+        // terminal snapshot (4 messages) by using TakeUntil — and re-include
         // that final emission via the wrapping Concat.
         var counts = workspace
             .GetMeshNodeStream(exec.ActivityLog!)
@@ -154,10 +154,10 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
             .ToList()
             .Should().Within(30.Seconds()).Emit();
 
-        // Gradual streaming â†’ at least 3 distinct snapshots before we hit 4.
+        // Gradual streaming → at least 3 distinct snapshots before we hit 4.
         // (We allow batching of two adjacent log calls but not all-at-once.)
         snapshots.Should().HaveCountGreaterThanOrEqualTo(3,
-            "ActivityLog should publish intermediate snapshots as messages land â€” " +
+            "ActivityLog should publish intermediate snapshots as messages land — " +
             "not buffer everything until script completion. Snapshots seen: [" +
             string.Join(", ", snapshots) + "]");
         snapshots.Last().Should().Be(4, "terminal snapshot must contain all 4 log lines");
@@ -190,7 +190,7 @@ public class ActivityLogStreamTest : MonolithMeshTestBase
         exec.ActivityLog.Should().NotBeNullOrEmpty();
 
         // Stream the log until Status flips out of Running. Before-throw must be
-        // present even though the script raised â€” Log is best-effort and survives.
+        // present even though the script raised — Log is best-effort and survives.
         var workspace = GetClient().GetWorkspace();
         var observed = (await workspace
             .GetMeshNodeStream(exec.ActivityLog!)

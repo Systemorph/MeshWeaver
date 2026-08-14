@@ -30,7 +30,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture â€” uses DelegationSiloConfigurator with a custom
+// TODO: needs custom shared fixture — uses DelegationSiloConfigurator with a custom
 // DelegationToolFakeChatClientFactory whose tool-calling behavior is essential to the test.
 // Migration would require either swapping the chat factory per-test (violates structural-only
 // rule) or a dedicated shared fixture variant.

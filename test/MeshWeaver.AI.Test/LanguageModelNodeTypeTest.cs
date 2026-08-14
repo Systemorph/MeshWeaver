@@ -13,7 +13,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Tests covering the <c>nodeType:LanguageModel</c> surface â€” the platform
+/// Tests covering the <c>nodeType:LanguageModel</c> surface — the platform
 /// reads <see cref="LanguageModelCatalogOptions.Sources"/> at mesh init
 /// time and emits one static <see cref="LanguageModelNodeType.NodeType"/>
 /// MeshNode per <c>{section}:Models[]</c> entry under
@@ -27,7 +27,7 @@ public class LanguageModelNodeTypeTest
     [Fact]
     public void Constants_NamespaceAndNodeType_AreStable()
     {
-        // Public mesh-query contract â€” anyone typing `namespace:Model
+        // Public mesh-query contract — anyone typing `namespace:Model
         // nodeType:LanguageModel` in a search box depends on these not
         // silently shifting.
         LanguageModelNodeType.NodeType.Should().Be("LanguageModel");
@@ -88,7 +88,7 @@ public class LanguageModelNodeTypeTest
     public void Provider_TwoSourcesShareModelId_FirstWins()
     {
         // Two providers (e.g. Azure Claude + Direct Anthropic) both
-        // advertise claude-sonnet-4-6 â€” the lower-Order source wins. The
+        // advertise claude-sonnet-4-6 — the lower-Order source wins. The
         // picker shows it once, attributed to the winner.
         var provider = MakeProvider(
             new Dictionary<string, string?>
@@ -96,7 +96,7 @@ public class LanguageModelNodeTypeTest
                 ["Anthropic:Models:0"] = "claude-sonnet-4-6",
                 ["Direct:Models:0"] = "claude-sonnet-4-6"
             },
-            // Order matters â€” registered order = de-dup precedence.
+            // Order matters — registered order = de-dup precedence.
             new LanguageModelCatalogSource("Anthropic", "Azure Claude", 1),
             new LanguageModelCatalogSource("Direct", "Direct Anthropic", 99));
 
@@ -161,7 +161,7 @@ public class LanguageModelNodeTypeTest
     [Fact]
     public void Provider_SectionWithEmptyOrWhitespaceModels_SkipsThem()
     {
-        // Aspire/AppHost env var defaults can be empty strings â€” the
+        // Aspire/AppHost env var defaults can be empty strings — the
         // provider must skip them, not emit nodes with empty ids.
         var provider = MakeProvider(
             new Dictionary<string, string?>
@@ -185,7 +185,7 @@ public class LanguageModelNodeTypeTest
     public void Provider_MissingSection_NoCrash_NoNodes()
     {
         // Catalog source registered but the corresponding config section
-        // absent â€” provider warns + skips, doesn't throw.
+        // absent — provider warns + skips, doesn't throw.
         var provider = MakeProvider(
             new Dictionary<string, string?>(),
             new LanguageModelCatalogSource("MissingProvider", "Missing", 1));

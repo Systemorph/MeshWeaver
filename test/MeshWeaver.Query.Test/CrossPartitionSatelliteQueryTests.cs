@@ -40,7 +40,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         return base.ConfigureClient(configuration);
     }
 
-    // â”€â”€ Thread fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Thread fan-out ──────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task NodeTypeThread_FansOutAcrossAllPartitions()
@@ -63,7 +63,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         var threadB = resp2.Message.Node!.Path!;
         Output.WriteLine($"Thread B: {threadB}");
 
-        // Act: query nodeType:Thread without namespace â€” should fan out to all _Thread tables
+        // Act: query nodeType:Thread without namespace — should fan out to all _Thread tables
         var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"nodeType:Thread => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
@@ -89,7 +89,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
         var resp2 = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("NsY", "Y thread", AdminUserId)), o => o.WithTarget(new Address("NsY"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp2.Message.Success.Should().BeTrue(resp2.Message.Error ?? "");
 
-        // Act: query with explicit namespace â€” should only return threads from NsX
+        // Act: query with explicit namespace — should only return threads from NsX
         var results = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:NsX nodeType:Thread sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
         Output.WriteLine($"namespace:NsX nodeType:Thread => {results.Count} results");
@@ -99,7 +99,7 @@ public class CrossPartitionSatelliteQueryTests(ITestOutputHelper output) : Monol
             "namespace-scoped query should only return threads from that namespace");
     }
 
-    // â”€â”€ Comment fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Comment fan-out ─────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task NodeTypeComment_FansOutAcrossAllPartitions()

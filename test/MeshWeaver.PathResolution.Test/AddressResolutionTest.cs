@@ -261,7 +261,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         };
         await NodeFactory.CreateNode(msgNode).Should().Emit();
 
-        // Resolve the ThreadMessage path â€” should return the full message path, no remainder
+        // Resolve the ThreadMessage path — should return the full message path, no remainder
         var resolution = await PathResolver.ResolvePath($"{threadPath}/msg1").Should().Emit();
 
         resolution.Should().NotBeNull("ThreadMessage node exists at {0}/msg1", threadPath);
@@ -303,7 +303,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         };
         await NodeFactory.CreateNode(msgNode).Should().Emit();
 
-        // Resolve the Thread path â€” should match the Thread node exactly
+        // Resolve the Thread path — should match the Thread node exactly
         var resolution = await PathResolver.ResolvePath(threadPath).Should().Emit();
 
         resolution.Should().NotBeNull();

@@ -40,7 +40,7 @@ namespace MeshWeaver.AI.Test;
 [Collection(ConcurrencyStressCollection.Name)]
 public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
     protected override bool ShareMeshAcrossTests => true;
 
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
@@ -55,29 +55,29 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>
     /// SHOULD-FAIL-IF: <c>LoadOrderedAgentsAsync</c> bridges <c>hub.GetMeshNode(contextPath)</c>
-    /// via <c>.ToTask()</c> + <c>await</c> â€” that pattern deadlocks the hub ActionBlock when
+    /// via <c>.ToTask()</c> + <c>await</c> — that pattern deadlocks the hub ActionBlock when
     /// multiple concurrent callers are in flight.
     /// </summary>
     [Fact]
     public async Task GetOrderedAgentsAsync_WithContextPath_ConcurrentCallers_DoNotDeadlock()
     {
         // ProductLaunch carries NodeType="ACME/Project", which exercises the
-        // single-node-lookup branch (not "Agent" / not "Markdown") â€” the exact branch
+        // single-node-lookup branch (not "Agent" / not "Markdown") — the exact branch
         // that contained the await-on-hub.GetMeshNode bug.
         const string ContextPath = "ACME/ProductLaunch";
 
-        // Pre-flight: confirm the test data is loaded â€” if this fails the test setup
+        // Pre-flight: confirm the test data is loaded — if this fails the test setup
         // is wrong, not the production code under test.
         var contextNode = await MeshQuery.QueryAsync<MeshNode>($"path:{ContextPath}",
             ct: TestContext.Current.CancellationToken)
             .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
-        contextNode.Should().NotBeNull("ProductLaunch fixture node missing â€” test data setup broke");
+        contextNode.Should().NotBeNull("ProductLaunch fixture node missing — test data setup broke");
         contextNode!.NodeType.Should().Be("ACME/Project");
 
         // Fire 8 concurrent GetOrderedAgentsAsync chains against fresh AgentChatClient
         // instances. Each chain re-runs the contextPath single-node lookup. A deadlock
         // in that lookup makes one of the hub pumps stall; under load several stall
-        // in a row. WaitAsync(15s) bounds the wait â€” under deadlock it throws TimeoutException.
+        // in a row. WaitAsync(15s) bounds the wait — under deadlock it throws TimeoutException.
         async Task RunOne(int idx)
         {
             var client = new AgentChatClient(Mesh.ServiceProvider);
@@ -97,7 +97,7 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>
     /// SHOULD-FAIL-IF: the contextPath single-node lookup blocks the hub even for a
-    /// single sequential caller (the trivial repro of the deadlock â€” every fresh
+    /// single sequential caller (the trivial repro of the deadlock — every fresh
     /// <c>AgentChatClient</c> kicks off the same hub round-trip on activation).
     /// </summary>
     [Fact]
@@ -128,13 +128,13 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// SHOULD-FAIL-IF: the single-node lookup path is invoked and hangs even when the
     /// context node has a NodeType that is filtered out (Markdown / Agent). The fix
-    /// is in the lookup itself, not the post-lookup filter â€” the code still runs the
+    /// is in the lookup itself, not the post-lookup filter — the code still runs the
     /// hub round-trip before deciding to discard the result.
     /// </summary>
     [Fact]
     public async Task GetOrderedAgentsAsync_WithMarkdownContext_DoesNotDeadlock()
     {
-        // Use a known Markdown node from the test data â€” TestDoc/ParentDoc.md.
+        // Use a known Markdown node from the test data — TestDoc/ParentDoc.md.
         const string ContextPath = "TestDoc/ParentDoc";
         var contextNode = await MeshQuery.QueryAsync<MeshNode>($"path:{ContextPath}",
             ct: TestContext.Current.CancellationToken)
@@ -153,7 +153,7 @@ public class AgentChatClientDeadlockTest(ITestOutputHelper output) : MonolithMes
             Node = contextNode,
         });
 
-        // No assertion on agents content â€” the existence check is "did the call return".
+        // No assertion on agents content — the existence check is "did the call return".
         await client.GetOrderedAgentsAsync()
             .WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
     }

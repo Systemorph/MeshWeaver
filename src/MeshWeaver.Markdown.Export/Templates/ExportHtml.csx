@@ -63,7 +63,7 @@ if (rootNode is null)
     throw new InvalidOperationException("Source node not found: " + sourcePath);
 
 var jsonOptions = Mesh.JsonSerializerOptions;
-var isDeck = rootNode.NodeType == DeckNodeType.NodeType;
+var isDeck = DeckNodeType.Matches(rootNode.NodeType);
 var title = explicitTitle
             ?? options.Title
             ?? (isDeck ? rootNode.ContentAs<DeckContent>(jsonOptions)?.Title : null)
@@ -81,7 +81,7 @@ if (isDeck)
     // compose an empty document. Slide selection uses the SAME resolution the live Overview /
     // Present binding uses, so the email reads in the deck's own order.
     markdown.Clear();
-    var (paths, query) = DeckLayoutAreas.ResolveDeckSelection(rootNode, sourcePath, jsonOptions);
+    var (paths, query, filterSlideTypes) = DeckLayoutAreas.ResolveDeckSelection(rootNode, sourcePath, jsonOptions);
     var slides = new List<MeshNode>();
     if (paths.Count > 0)
     {
@@ -102,7 +102,10 @@ if (isDeck)
             .Select(c => c.Items)
             .FirstAsync()
             .ToTask(Ct);
+        // The DEFAULT selection keeps only slide-typed nodes (suffix-aware, so plugin types
+        // like Publish/Slide count); a custom DeckContent.Query decides for itself.
         var matched = slideMatches
+            .Where(n => !filterSlideTypes || SlideNodeType.Matches(n.NodeType))
             .Where(n => !string.Equals(n.Path, sourcePath, StringComparison.Ordinal))
             .Where(n => !n.Segments.Skip(1).Any(s => s.StartsWith('_')));
         slides = matched

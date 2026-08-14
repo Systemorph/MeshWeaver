@@ -24,7 +24,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// End-to-end tests for <see cref="ModelProviderService"/> â€” the reactive
+/// End-to-end tests for <see cref="ModelProviderService"/> — the reactive
 /// CRUD surface backing the user's Models settings tab. Asserts that
 /// CreateProvider lays down the canonical
 /// <c>{userId}/_Memex/{provider}</c> + N child LanguageModel nodes, that
@@ -39,7 +39,7 @@ public class ModelProviderServiceTest : AITestBase
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             // Register the Anthropic catalog source so ModelProviderService.CreateProvider
-            // can look up its DefaultModelIds â€” the service auto-creates one
+            // can look up its DefaultModelIds — the service auto-creates one
             // LanguageModel child per default id.
             .AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
                 SectionName: "Anthropic",

@@ -36,15 +36,15 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// Exercises the FULL production flow:
 /// 1. Client creates a thread (like ThreadChatView.SendMessageAsync)
-/// 2. Client submits a message (ThreadInput.AppendUserInput Ã¢â€ â€™ thread grain)
+/// 2. Client submits a message (ThreadInput.AppendUserInput → thread grain)
 /// 3. Thread grain creates user + response cells via Observable
 /// 4. Execution starts on _Exec hosted hub (streaming loop via InvokeAsync)
-/// 5. Top-level agent calls Create tool (MeshPlugin) Ã¢â€ â€™ NodeChangeEntry generated
-/// 6. Top-level agent delegates to sub-agent Ã¢â€ â€™ sub-thread created, SubmitMessage posted
-/// 7. Sub-agent calls Patch tool Ã¢â€ â€™ NodeChangeEntry generated in sub-thread
-/// 8. Sub-thread completes Ã¢â€ â€™ server-internal SubmitMessageResponse.UpdatedNodes propagates up
-/// 9. Parent merges node changes via ForwardNodeChange Ã¢â€ â€™ aggregated with min/max versions
-/// 10. Parent completes Ã¢â€ â€™ final NodeChangeEntry list on response message
+/// 5. Top-level agent calls Create tool (MeshPlugin) → NodeChangeEntry generated
+/// 6. Top-level agent delegates to sub-agent → sub-thread created, SubmitMessage posted
+/// 7. Sub-agent calls Patch tool → NodeChangeEntry generated in sub-thread
+/// 8. Sub-thread completes → server-internal SubmitMessageResponse.UpdatedNodes propagates up
+/// 9. Parent merges node changes via ForwardNodeChange → aggregated with min/max versions
+/// 10. Parent completes → final NodeChangeEntry list on response message
 ///
 /// This test specifically validates:
 /// - No deadlocks in the delegation chain (execution hub, TCS resolution, callbacks)
@@ -95,28 +95,28 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
             });
 
     /// <summary>
-    /// Full chain: top agent calls Create Ã¢â€ â€™ delegates Ã¢â€ â€™ sub-agent calls Patch Ã¢â€ â€™ NodeChangeEntry propagates.
+    /// Full chain: top agent calls Create → delegates → sub-agent calls Patch → NodeChangeEntry propagates.
     /// Tests for deadlocks: the execution hub (InvokeAsync) blocks during streaming;
     /// delegation TCS resolution must not require the blocked scheduler.
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task Delegation_NodeChanges_PropagateFromSubThread()
     {
-        // Pull IMessageHub from the silo's container â€” ChatClientAgentFactory needs it
+        // Pull IMessageHub from the silo's container — ChatClientAgentFactory needs it
         // so MeshPlugin tools (Create/Patch/delegate_to_agent) get wired into every test agent.
         var siloHub = ((InProcessSiloHandle)Fixture.Cluster.Silos[0]).SiloHost.Services
             .GetRequiredService<IMessageHub>();
         Fixture.ChatFactory.SetInner(new NodeChangeTestChatClientFactory(siloHub));
         var client = GetClient();
 
-        // 1. Create thread Ã¢â‚¬â€ exactly like ThreadChatView.SendMessageAsync does
+        // 1. Create thread — exactly like ThreadChatView.SendMessageAsync does
         var threadNode = ThreadNodeType.BuildThreadNode("TestUser", "NodeChange propagation test", "TestUser");
         var threadPath = await CreateNode(client, threadNode, "TestUser");
         Output.WriteLine($"Thread created: {threadPath}");
 
         // 2. Messages observed reactively after submit (live replaying stream).
 
-        // 3. Submit message Ã¢â‚¬â€ triggers the ToolCallDelegatingChatClient which:
+        // 3. Submit message — triggers the ToolCallDelegatingChatClient which:
         //    Turn 1: calls Create (creates a Markdown node)
         //    Turn 2: calls delegate_to_agent (Executor)
         //    Turn 3: returns summary text after delegation completes
@@ -125,7 +125,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
             threadPath,
             "Create a doc and delegate updates to Executor",
             contextPath: "TestUser");
-            Output.WriteLine("ThreadInput.AppendUserInput succeeded Ã¢â‚¬â€ submission queued");
+            Output.WriteLine("ThreadInput.AppendUserInput succeeded — submission queued");
 
         // 4. Wait for message IDs (live replaying stream — observe after submit)
         var msgIds = await ObserveThreadMessages(client, threadPath)
@@ -133,7 +133,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         msgIds.Should().HaveCount(2);
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
-        // 5. Wait for execution to complete Ã¢â‚¬â€ poll response message
+        // 5. Wait for execution to complete — poll response message
         //    If the delegation chain deadlocks, this times out.
         var responsePath = $"{threadPath}/{msgIds[1]}";
         // Wait until the response cell has tool calls AND text AND the propagated
@@ -215,7 +215,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
             "parent response should have aggregated UpdatedNodes from both Create and sub-thread Patch");
         Output.WriteLine($"UpdatedNodes on parent response: {responseMsg.UpdatedNodes.Count} entries");
         foreach (var entry in responseMsg.UpdatedNodes)
-            Output.WriteLine($"  {entry.Operation}: {entry.Path} v{entry.VersionBefore}Ã¢â€ â€™v{entry.VersionAfter}");
+            Output.WriteLine($"  {entry.Operation}: {entry.Path} v{entry.VersionBefore}→v{entry.VersionAfter}");
 
         // The same node (test-doc-nodechange) was Created by parent and Patched by sub-thread.
         // Aggregation should give: min(VersionBefore), max(VersionAfter)
@@ -225,7 +225,7 @@ public class OrleansNodeChangePropagationTest(ITestOutputHelper output) : Orlean
         var docChange = docChanges[0];
         (docChange.VersionAfter ?? 0).Should().BeGreaterThan(docChange.VersionBefore ?? 0,
             "aggregated version should show progression from create to patch");
-        Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}Ã¢â€ â€™v{docChange.VersionAfter}");
+        Output.WriteLine($"Aggregated: {docChange.Path} {docChange.Operation} v{docChange.VersionBefore}→v{docChange.VersionAfter}");
     }
 
     // Resubmit_AfterExecution_DoesNotDeadlock was split out into its own class
@@ -302,7 +302,7 @@ internal class ToolCallDelegatingChatClient : IChatClient
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        // Delegate to non-streaming for simplicity Ã¢â‚¬â€ the framework handles both
+        // Delegate to non-streaming for simplicity — the framework handles both
         var response = await GetResponseAsync(messages, options, cancellationToken);
         var msg = response.Messages.First();
         var functionCalls = msg.Contents.OfType<FunctionCallContent>().ToList();
@@ -404,7 +404,7 @@ internal class PatchToolChatClient : IChatClient
 /// Factory: top-level agents (Navigator/Orchestrator/IsDefault) get
 /// <see cref="ToolCallDelegatingChatClient"/>; sub-agents (Worker/Executor)
 /// get <see cref="PatchToolChatClient"/>. Extends <see cref="ChatClientAgentFactory"/>
-/// so MeshPlugin's Create/Patch/delegate_to_agent tools are wired into every agent â€”
+/// so MeshPlugin's Create/Patch/delegate_to_agent tools are wired into every agent —
 /// otherwise the fake chat clients stream <c>FunctionCallContent</c> for tools the
 /// agent doesn't have and <c>FunctionInvokingChatClient</c> never executes them
 /// (responseMsg.ToolCalls would stay empty).
@@ -461,7 +461,7 @@ public class NodeChangePropagationSiloConfigurator : ISiloConfigurator, IHostCon
         };
         return
         [
-            // Namespace must end in "/_Access" â€” see SecurityService.ComputeScopeRoles.
+            // Namespace must end in "/_Access" — see SecurityService.ComputeScopeRoles.
             new("Public_Access", "User/_Access")
             {
                 NodeType = "AccessAssignment",

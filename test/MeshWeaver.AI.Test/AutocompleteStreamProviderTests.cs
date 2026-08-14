@@ -22,7 +22,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class AutocompleteStreamProviderTests
 {
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Single provider, incremental snapshots â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ──────────────────────── Single provider, incremental snapshots ────────────────────────
 
     /// <summary>Single provider emits one snapshot per item and the final snapshot contains every item.</summary>
     [Fact]
@@ -70,7 +70,7 @@ public class AutocompleteStreamProviderTests
         snapshots[^1].Select(i => i.Label).Should().Equal("high", "mid", "low");
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Multiple providers, fast-then-slow â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ──────────────────────── Multiple providers, fast-then-slow ────────────────────────
 
     /// <summary>With a fast and a slow provider, fast items appear in early snapshots and slow ones merge in later.</summary>
     [Fact]
@@ -88,7 +88,7 @@ public class AutocompleteStreamProviderTests
         var done = new TaskCompletionSource();
         using var sub = sut.Stream("foo", null).Subscribe(snapshots.Add, () => done.TrySetResult());
 
-        // Fast provider streams first â€” wait for both items to be reflected.
+        // Fast provider streams first — wait for both items to be reflected.
         fast.Emit(new AutocompleteItem("local-a", "local-a", Priority: 90));
         fast.Emit(new AutocompleteItem("local-b", "local-b", Priority: 80));
         fast.Complete();
@@ -97,7 +97,7 @@ public class AutocompleteStreamProviderTests
         // Snapshot must contain only fast items at this point.
         snapshots[^1].Select(i => i.Label).Should().Equal("local-a", "local-b");
 
-        // Slow provider emits later â€” final snapshot has all four.
+        // Slow provider emits later — final snapshot has all four.
         slow.Emit(new AutocompleteItem("remote-a", "remote-a", Priority: 70));
         slow.Emit(new AutocompleteItem("remote-b", "remote-b", Priority: 60));
         slow.Complete();
@@ -117,7 +117,7 @@ public class AutocompleteStreamProviderTests
             $"snapshot count never reached {expected} within timeout");
     }
 
-    /// <summary>An exception thrown by one provider does not terminate the merged stream â€” other providers keep emitting.</summary>
+    /// <summary>An exception thrown by one provider does not terminate the merged stream — other providers keep emitting.</summary>
     [Fact]
     public async Task FailingProvider_DoesNotKillTheStream()
     {
@@ -143,7 +143,7 @@ public class AutocompleteStreamProviderTests
         snapshots[^1].Select(i => i.Label).Should().Equal("a", "b");
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Top-N truncation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ──────────────────────── Top-N truncation ────────────────────────
 
     /// <summary>Top-N truncation drops items whose priority falls below the current Nth-ranked item.</summary>
     [Fact]
@@ -168,7 +168,7 @@ public class AutocompleteStreamProviderTests
         snapshots[^1].Select(i => i.Label).Should().Equal("d", "b");
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Monaco-style: varying input over time â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ──────────────────────── Monaco-style: varying input over time ────────────────────────
 
     /// <summary>Sequential subscriptions with different queries each receive their own snapshot stream without leakage between queries.</summary>
     [Fact]
@@ -217,9 +217,9 @@ public class AutocompleteStreamProviderTests
 
         sub.Dispose();
 
-        // Try to emit more after disposal â€” provider tolerates the closed downstream.
+        // Try to emit more after disposal — provider tolerates the closed downstream.
         try { provider.Emit(new AutocompleteItem("b", "b", Priority: 20)); }
-        catch { /* downstream queue may be closed â€” that's the disposal signal */ }
+        catch { /* downstream queue may be closed — that's the disposal signal */ }
 
         // Allow any in-flight scheduled work to drain
         await Task.Delay(100, TestContext.Current.CancellationToken);
@@ -228,7 +228,7 @@ public class AutocompleteStreamProviderTests
             "after disposal, no further snapshots reach the (now disposed) observer");
     }
 
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Test doubles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ──────────────────────── Test doubles ────────────────────────
 
     /// <summary>
     /// Provider whose <c>GetItems</c> observable emits a GROWING snapshot each time
@@ -236,7 +236,7 @@ public class AutocompleteStreamProviderTests
     /// calls <see cref="Complete"/>. Each snapshot is the running accumulation — the
     /// snapshot contract: providers emit their current best <see cref="IReadOnlyCollection{T}"/>,
     /// the aggregator merges + sorts. The backing <see cref="Subject{T}"/> IS the
-    /// observable â€” no async-enumerable bridge needed.
+    /// observable — no async-enumerable bridge needed.
     /// </summary>
     private sealed class ScriptedProvider : IAutocompleteProvider
     {

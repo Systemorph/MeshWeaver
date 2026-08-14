@@ -45,7 +45,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateThread_ViaCreateNodeRequest_UsesThreadPartitionAndSpeakingId()
     {
 
-        // Arrange Ã¢â‚¬â€ create context node so the node hub exists
+        // Arrange — create context node so the node hub exists
         // Organization ⇒ Space: a top-level context node is a partition root. Only User/Space
         // own a partition, so it must be a Space (PartitionWriteGuardValidator rejects top-level
         // Markdown). Creating a Space is the sanctioned explicit partition-creation path.
@@ -53,11 +53,11 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.CreateNode(
             new MeshNode(contextPath) { Name = "ACME Corp", NodeType = "Space" }).Should().Emit();
 
-        // Act Ã¢â‚¬â€ send CreateNodeRequest to the context node's hub (production path)
+        // Act — send CreateNodeRequest to the context node's hub (production path)
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Hello, can you help me with this project?")), o => o.WithTarget(new Address(contextPath))).Should().Within(15.Seconds()).Emit();
 
-        // Assert Ã¢â‚¬â€ response
+        // Assert — response
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
         response.Message.Node?.Path.Should().NotBeNullOrEmpty();
         response.Message.Node?.Name.Should().NotBeNullOrEmpty();
@@ -65,18 +65,18 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var threadPath = response.Message.Node?.Path!;
         Output.WriteLine($"Created thread at: {threadPath}");
 
-        // Assert Ã¢â‚¬â€ path uses _Thread partition
+        // Assert — path uses _Thread partition
         threadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/",
             "thread path must use _Thread partition: {namespace}/_Thread/{speakingId}");
         threadPath.Should().StartWith($"{contextPath}/",
             "thread path must start with the context node path");
 
-        // Assert Ã¢â‚¬â€ speaking ID is human-readable (derived from message text)
+        // Assert — speaking ID is human-readable (derived from message text)
         var speakingId = threadPath.Split('/').Last();
         speakingId.Should().Contain("hello",
             "speaking ID should be derived from the message text");
 
-        // Assert Ã¢â‚¬â€ retrieve node and verify MainNode (satellite auto-set, stream read)
+        // Assert — retrieve node and verify MainNode (satellite auto-set, stream read)
         var node = await ReadNode(threadPath).Should().Emit();
         node.Should().NotBeNull("thread node should be retrievable");
         node!.NodeType.Should().Be(ThreadNodeType.NodeType);
@@ -85,7 +85,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         node.MainNode.Should().NotBe(node.Path,
             "satellite MainNode must NOT be self-referencing");
 
-        // Assert Ã¢â‚¬â€ content is a MeshThread, and MainNode points to context
+        // Assert — content is a MeshThread, and MainNode points to context
         node.Content.Should().BeOfType<MeshThread>();
         node.MainNode.Should().Be(contextPath);
     }
@@ -94,13 +94,13 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateThread_ViaCreateNodeRequest_OnDifferentContextNode()
     {
 
-        // Arrange Ã¢â‚¬â€ create a different context node
+        // Arrange — create a different context node
         // Organization ⇒ Space (top-level context node = partition root; only User/Space own one).
         var contextPath = "TestProject";
         await NodeFactory.CreateNode(
             new MeshNode(contextPath) { Name = "Test Project", NodeType = "Space" }).Should().Emit();
 
-        // Act Ã¢â‚¬â€ send to the context node's hub
+        // Act — send to the context node's hub
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "A thread on TestProject")), o => o.WithTarget(new Address(contextPath))).Should().Within(15.Seconds()).Emit();
 
@@ -252,7 +252,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task GetDataRequest_ToNonExistentNode_ReturnsErrorNotEndlessMessages()
     {
         // A malformed path that mimics the bug. Posted through the CLIENT hub
-        // (same path the GUI takes) â€” the routing layer must resolve within the
+        // (same path the GUI takes) — the routing layer must resolve within the
         // timeout (response OR DeliveryFailure), not spin forever. Folding the
         // error into an emission via Catch lets the reactive assertion accept
         // both terminal outcomes while still failing if routing hangs.
@@ -272,7 +272,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task GetDataRequest_ToNonExistentThread_ReturnsErrorNotEndlessMessages()
     {
         // Thread path that looks valid but doesn't exist. Posted through the CLIENT
-        // â€” routing must resolve (response or DeliveryFailure) within the timeout.
+        // — routing must resolve (response or DeliveryFailure) within the timeout.
         var nonExistentPath = "User/TestUser/nonexistent123";
         var client = GetClient();
 
@@ -526,7 +526,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // No PublicAdminAccess Ã¢â‚¬â€ permissions are enforced
+        // No PublicAdminAccess — permissions are enforced
         return ConfigureMeshBase(builder)
             .AddAI();
     }
@@ -538,7 +538,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     // Framework setup hook: must keep the base's `Task` signature (the base
-    // awaits it during fixture init). Not a test body â€” no deadlock risk â€” so
+    // awaits it during fixture init). Not a test body — no deadlock risk — so
     // blocking .Should().Emit() on the CreateNode streams is the right shape here.
     protected override async Task SetupAccessRightsAsync()
     {
@@ -561,7 +561,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // SecurityService loads assignments via SyncedQuery which is eventually
         // consistent. On cold-start CI, the first HasPermissionAsync call can
         // return false before the synced query catches up. Stream-poll until
-        // admin has Create permission â€” replaces a hand-rolled while +
+        // admin has Create permission — replaces a hand-rolled while +
         // Task.Delay(100) loop.
         await Mesh.GetEffectivePermissions("SecureProject", AdminUserId)
             .Should().Within(10.Seconds()).Match(p => p.HasFlag(Permission.Create));
@@ -570,7 +570,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         await NodeFactory.CreateNode(
             new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Space" }).Should().Emit();
 
-        // Act Ã¢â‚¬â€ admin creates thread (has Update permission)
+        // Act — admin creates thread (has Update permission)
         var client = GetClient();
         var response = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("SecureProject", "Admin creating a thread")), o => o.WithTarget(new Address("SecureProject"))).Should().Within(15.Seconds()).Emit();
 
@@ -668,7 +668,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
 
         // Wait for the admin AccessAssignment from SetupAccessRightsAsync to land
-        // through SyncedQuery â€” same eventually-consistent race as the sibling
+        // through SyncedQuery — same eventually-consistent race as the sibling
         // test. Stream-poll until admin has Create permission.
         await Mesh.GetEffectivePermissions("SecureProject", AdminUserId)
             .Should().Within(10.Seconds()).Match(p => p.HasFlag(Permission.Create));
@@ -679,11 +679,11 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Switch to viewer (Read+Execute only, no Update)
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = ViewerUserId, Name = "Viewer" });
 
-        // Act Ã¢â‚¬â€ viewer tries to create thread (lacks Thread permission)
+        // Act — viewer tries to create thread (lacks Thread permission)
         var client = GetClient();
         Func<Task> act = () => client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("SecureProject", "Viewer trying to create a thread")), o => o.WithTarget(new Address("SecureProject"))).Should().Within(15.Seconds()).Emit();
 
-        // Assert Ã¢â‚¬â€ should be denied (thrown as DeliveryFailureException)
+        // Assert — should be denied (thrown as DeliveryFailureException)
         var ex = await act.Should().ThrowAsync<Exception>();
         ex.Which.Message.Should().Contain("Access denied");
         Output.WriteLine($"Denial message: {ex.Which.Message}");
