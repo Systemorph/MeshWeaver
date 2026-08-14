@@ -1,4 +1,6 @@
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+// `JSX` is imported from "react", not taken from the global namespace: React 19's types no longer
+// declare a global JSX, and TypeScript 7 stopped tolerating the reference (TS2503).
+import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,

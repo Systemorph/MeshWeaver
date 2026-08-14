@@ -4,8 +4,8 @@
   "private": true,
   "description": "Next.js + streaming-SSR variant of the MeshWeaver React portal — server-side area snapshot per request (stateless, no server-held streams), Suspense-streamed HTML, client live takeover over gRPC-web.",
   "scripts": {
-    "dev": "next dev -p 3300",
-    "build": "next build",
+    "dev": "next dev --webpack -p 3300",
+    "build": "next build --webpack",
     "start": "next start -p 3300",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
