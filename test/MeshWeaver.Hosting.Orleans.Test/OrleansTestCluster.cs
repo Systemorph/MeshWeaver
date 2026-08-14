@@ -133,22 +133,44 @@ internal static class OrleansTestCluster
         Action<IServiceCollection, TestCluster>? configureClientServices = null,
         bool withClient = true)
     {
-        var builder = new TestClusterBuilder();
-        // We create the client host ourselves (below) so it can receive the per-cluster
-        // closure; DeployAsync must not create one first.
-        builder.Options.InitializeClientOnDeploy = false;
-        // 🚨 And therefore the cluster must speak TCP. TestCluster's default transport is
-        // ConnectionTransportType.InMemory, wired through an InMemoryTransportConnectionHub that
-        // is a PRIVATE field of TestCluster: DefaultCreateSiloAsync and InitializeClientAsync
-        // both hand it to their hosts, and nothing outside can. A client we build ourselves can
-        // never join that hub, so it would dial the silos' TCP endpoints and get
-        // ConnectionRefused. Declaring TcpSocket makes both ends agree — real loopback sockets,
-        // which is what TestCluster used by default before the in-memory transport existed.
-        builder.Options.ConnectionTransport = ConnectionTransportType.TcpSocket;
-        configure(builder);
+        // Orleans' TestClusterPortAllocator picks base ports by scanning the machine's ACTIVE
+        // listeners under a cross-process mutex, then releases the mutex BEFORE the silo binds —
+        // between allocation and bind, any other process (or an ephemeral outbound socket landing
+        // in the range) can take the port, and the silo host then fails with
+        // AddressInUseException (#1574; it redded an unrelated PR from SharedOrleansFixture init).
+        // The OS cannot hand off a port reservation atomically across processes, so allocate→bind
+        // is inherently optimistic and the correct completion of the pattern is a bounded
+        // redeploy with a FRESH allocation: each retry builds a NEW TestClusterBuilder, which
+        // re-runs the allocator against the now-current listener set — new input every attempt,
+        // never a re-poll of the same state.
+        TestCluster cluster = null!;
+        for (var attempt = 1; ; attempt++)
+        {
+            var builder = new TestClusterBuilder();
+            // We create the client host ourselves (below) so it can receive the per-cluster
+            // closure; DeployAsync must not create one first.
+            builder.Options.InitializeClientOnDeploy = false;
+            // 🚨 And therefore the cluster must speak TCP. TestCluster's default transport is
+            // ConnectionTransportType.InMemory, wired through an InMemoryTransportConnectionHub that
+            // is a PRIVATE field of TestCluster: DefaultCreateSiloAsync and InitializeClientAsync
+            // both hand it to their hosts, and nothing outside can. A client we build ourselves can
+            // never join that hub, so it would dial the silos' TCP endpoints and get
+            // ConnectionRefused. Declaring TcpSocket makes both ends agree — real loopback sockets,
+            // which is what TestCluster used by default before the in-memory transport existed.
+            builder.Options.ConnectionTransport = ConnectionTransportType.TcpSocket;
+            configure(builder);
 
-        var cluster = builder.Build();
-        await cluster.DeployAsync();
+            cluster = builder.Build();
+            try
+            {
+                await cluster.DeployAsync();
+                break;
+            }
+            catch (Exception ex) when (attempt < 3 && IsAddressInUse(ex))
+            {
+                await cluster.DisposeAsync();
+            }
+        }
 
         IHost? clientHost = null;
         if (withClient)
@@ -227,6 +249,21 @@ internal static class OrleansTestCluster
     public static void ShareSiloNodeStore(IServiceCollection services, TestCluster cluster) =>
         services.Replace(ServiceDescriptor.Singleton(
             cluster.SiloServices().GetRequiredService<InMemoryStorageAdapter>()));
+
+    /// <summary>
+    /// True when <paramref name="exception"/> — anywhere in its Inner/Aggregate chain — is the
+    /// port-bind loss: a <see cref="System.Net.Sockets.SocketException"/> with
+    /// <c>AddressAlreadyInUse</c>. Matched structurally on the socket error rather than on the
+    /// wrapping <c>AddressInUseException</c> type, so the check is independent of which hosting
+    /// layer wrapped it.
+    /// </summary>
+    private static bool IsAddressInUse(Exception exception) =>
+        exception switch
+        {
+            System.Net.Sockets.SocketException { SocketErrorCode: System.Net.Sockets.SocketError.AddressAlreadyInUse } => true,
+            AggregateException aggregate => aggregate.InnerExceptions.Any(IsAddressInUse),
+            _ => exception.InnerException is { } inner && IsAddressInUse(inner)
+        };
 }
 
 /// <summary>Reaching a silo host's services from a <see cref="TestCluster"/>.</summary>

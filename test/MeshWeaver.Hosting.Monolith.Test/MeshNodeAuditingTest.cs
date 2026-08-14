@@ -85,9 +85,9 @@ public class MeshNodeAuditingTest(ITestOutputHelper output) : MonolithMeshTestBa
         }
 
         updated.CreatedDate.Should().Be(originalCreatedDate,
-            "CreatedDate is immutable â€” only LastModified should move");
+            "CreatedDate is immutable — only LastModified should move");
         updated.CreatedBy.Should().Be("alice@example.com",
-            "CreatedBy is immutable â€” reflects the original author");
+            "CreatedBy is immutable — reflects the original author");
         updated.LastModifiedBy.Should().Be("bob@example.com",
             "UpdatedBy in the request stamps LastModifiedBy on the node");
         updated.LastModified.Should().BeAfter(originalCreatedDate,

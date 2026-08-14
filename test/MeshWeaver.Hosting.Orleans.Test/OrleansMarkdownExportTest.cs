@@ -28,11 +28,11 @@ using Xunit;
 using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture â€” uses MarkdownExportSiloConfigurator with AddMarkdownExport(),
+// TODO: needs custom shared fixture — uses MarkdownExportSiloConfigurator with AddMarkdownExport(),
 // which the SharedOrleansFixture does not configure.
 /// <summary>
 /// End-to-end Orleans tests for the markdown PDF / DOCX export pipeline. Exercises the full
-/// cross-hub serialization path: client hub â†’ routing â†’ node hub â†’ handler â†’ response back.
+/// cross-hub serialization path: client hub → routing → node hub → handler → response back.
 /// Regression guard for the InvalidCastException users hit when <c>$type</c> discriminators
 /// disagreed between hubs (full name on server, short name on mesh registry).
 /// </summary>
@@ -154,7 +154,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
 
     /// <summary>
     /// Reproduces the user-facing <c>NotSupportedException</c> from
-    /// <c>LayoutExtensions.GetStream&lt;UiControl&gt;</c> â€” the client hub must deserialize a
+    /// <c>LayoutExtensions.GetStream&lt;UiControl&gt;</c> — the client hub must deserialize a
     /// polymorphic <see cref="UiControl"/> JSON payload whose <c>$type</c> is
     /// <c>ExportDocumentControl</c>. If the client's type registry doesn't know that subtype,
     /// <c>PolymorphicTypeInfoResolver</c> can't build the JsonDerivedType mapping and
@@ -172,7 +172,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
             "# Hello\n\nFor layout-stream test.", cts.Token);
         Output.WriteLine($"Created Markdown node: {nodePath}");
 
-        // Subscribe to the ExportPdf layout area â€” this is what the portal does when the
+        // Subscribe to the ExportPdf layout area — this is what the portal does when the
         // user clicks "Export to PDF". The server renders an ExportDocumentControl; the
         // client must deserialize it as UiControl via PolymorphicTypeInfoResolver.
         var workspace = client.GetWorkspace();
@@ -191,7 +191,7 @@ public class OrleansMarkdownExportTest(ITestOutputHelper output) : TestBase(outp
 
         control.Should().NotBeNull("the ExportPdf area must render a UiControl");
         control.Should().BeOfType<ExportDocumentControl>(
-            "the $type discriminator must resolve to ExportDocumentControl â€” if client " +
+            "the $type discriminator must resolve to ExportDocumentControl — if client " +
             "type-registry is missing the type, deserialization falls back to the base " +
             "UiControl and throws NotSupportedException");
 

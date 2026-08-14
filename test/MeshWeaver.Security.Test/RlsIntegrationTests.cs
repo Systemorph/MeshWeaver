@@ -235,7 +235,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Assert - Should fail due to insufficient permissions. Phase 2 of the delete
         // orchestrator now returns Unauthorized for this case; Phase 3 (RLS INodeValidator)
-        // would surface the same refusal as ValidationFailed â€” accept either.
+        // would surface the same refusal as ValidationFailed — accept either.
         deleteResponse.Message.Success.Should().BeFalse();
         deleteResponse.Message.RejectionReason.Should().BeOneOf(
             NodeDeletionRejectionReason.Unauthorized,
@@ -616,13 +616,13 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             Name = "Anonymous Create",
             NodeType = "Markdown"
         };
-        // CreatedBy is null â€” anonymous request
+        // CreatedBy is null — anonymous request
         var request = new CreateNodeRequest(node);
 
         // Act
         var response = await client.Observe(request, o => o.WithTarget(Mesh.Address)).Should().Emit();
 
-        // Assert â€” must be rejected
+        // Assert — must be rejected
         response.Message.Success.Should().BeFalse("Anonymous user must not be able to create nodes");
         response.Message.RejectionReason.Should().Be(NodeCreationRejectionReason.ValidationFailed);
     }
@@ -649,13 +649,13 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         // Clear AccessContext to simulate anonymous user
         SetAnonymous(accessService);
 
-        // Act â€” anonymous delete (no DeletedBy)
+        // Act — anonymous delete (no DeletedBy)
         var deleteResponse = await client.Observe(new DeleteNodeRequest("rls/anon_delete/ToDeleteAnon"), o => o.WithTarget(Mesh.Address)).Should().Emit();
 
-        // Assert â€” must be rejected. Acceptable reasons:
-        //   Unauthorized       â€” Phase 2 permission check denied (the new preferred shape)
-        //   ValidationFailed   â€” INodeValidator (RLS) denied during Phase 3
-        //   NodeNotFound       â€” anonymous can't even see the node
+        // Assert — must be rejected. Acceptable reasons:
+        //   Unauthorized       — Phase 2 permission check denied (the new preferred shape)
+        //   ValidationFailed   — INodeValidator (RLS) denied during Phase 3
+        //   NodeNotFound       — anonymous can't even see the node
         deleteResponse.Message.Success.Should().BeFalse("Anonymous user must not be able to delete nodes");
         deleteResponse.Message.RejectionReason.Should().BeOneOf(
             NodeDeletionRejectionReason.Unauthorized,
@@ -683,7 +683,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task AnonymousUser_WithAnonymousViewerRole_CannotCreate()
     {
-        // Arrange â€” grant Anonymous user Viewer role (Read only), clear admin context
+        // Arrange — grant Anonymous user Viewer role (Read only), clear admin context
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         SetAnonymous(accessService);
         var client = GetClient();
@@ -696,7 +696,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             .Should().Match(p => p == (Permission.Read | Permission.Execute | Permission.Api));
         permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "Anonymous Viewer should only have Read + Execute + Api");
 
-        // Act â€” anonymous Create (CreatedBy = empty, will resolve to Anonymous user)
+        // Act — anonymous Create (CreatedBy = empty, will resolve to Anonymous user)
         var node = new MeshNode("PublicCreate", parentPath)
         {
             Name = "Public Create",
@@ -730,7 +730,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         // Act - editor tries to delete
         var deleteResponse = await client.Observe(new DeleteNodeRequest("rls/nodel/Protected") { DeletedBy = editorId }, o => o.WithTarget(Mesh.Address)).Should().Emit();
 
-        // Assert â€” Phase 2 (permission) or Phase 3 (RLS validator) both valid denial shapes.
+        // Assert — Phase 2 (permission) or Phase 3 (RLS validator) both valid denial shapes.
         deleteResponse.Message.Success.Should().BeFalse("Editor lacks Delete permission");
         deleteResponse.Message.RejectionReason.Should().BeOneOf(
             NodeDeletionRejectionReason.Unauthorized,

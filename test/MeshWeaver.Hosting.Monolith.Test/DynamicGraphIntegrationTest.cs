@@ -341,7 +341,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         moved!.Path.Should().Be(dst);
         moved.Name.Should().Be("Move Test");
 
-        // Catalog-bound wait Ã¢â‚¬â€ ReadNode(src) would falsely succeed via the
+        // Catalog-bound wait — ReadNode(src) would falsely succeed via the
         // TestPartition ancestor's MeshNodeReference reducer.
         var paths = await WaitForQueryPathSet(subtreeQuery,
             set => !set.Contains(src) && set.Contains(dst));
@@ -435,7 +435,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         response.Message.Node.Should().NotBeNull();
         response.Message.Node!.Path.Should().Be(dst);
 
-        // Catalog-bound check Ã¢â‚¬â€ ReadNode on src would falsely succeed via
+        // Catalog-bound check — ReadNode on src would falsely succeed via
         // the TestPartition ancestor.
         var paths = await WaitForQueryPathSet(subtreeQuery,
             set => !set.Contains(src) && set.Contains(dst));
@@ -668,7 +668,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         foreach (var node in nodes)
             Output.WriteLine($"Found with namespace: {node.Path}");
 
-        // Assert: namespace: only checks 1 level deep Ã¢â‚¬â€ Code nodes are at depth 2 (ACME/Project/Source/id)
+        // Assert: namespace: only checks 1 level deep — Code nodes are at depth 2 (ACME/Project/Source/id)
         nodes.Should().BeEmpty("namespace: only finds immediate children; Code nodes are 2 levels deep");
     }
 

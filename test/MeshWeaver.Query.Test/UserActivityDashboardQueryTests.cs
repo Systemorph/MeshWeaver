@@ -33,7 +33,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         return base.ConfigureClient(configuration);
     }
 
-    // â”€â”€ Query 1: Activity Feed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Query 1: Activity Feed ──────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task ActivityFeed_ReturnsMainNodesWithActivitySatellites()
@@ -94,7 +94,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         results.Should().BeEmpty();
     }
 
-    // â”€â”€ Query 2: Recently Viewed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Query 2: Recently Viewed ────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task RecentlyViewed_InMemory_ReturnsMainNodes_ExcludesSatellites()
@@ -199,7 +199,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         }
     }
 
-    // â”€â”€ Query 3: Latest Threads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Query 3: Latest Threads ─────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task LatestThreads_ByNodeType_WithDescendantsScope()
@@ -216,11 +216,11 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread created at: {threadPath}");
 
-        // Act 1: nodeType:Thread with scope:descendants â€” should find threads
+        // Act 1: nodeType:Thread with scope:descendants — should find threads
         var byType = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:Thread scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         Output.WriteLine($"nodeType:Thread scope:descendants => {byType.Count} results");
 
-        // Act 2: namespace query â€” direct _Thread namespace query
+        // Act 2: namespace query — direct _Thread namespace query
         var byNamespace = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{contextPath}/_Thread nodeType:Thread")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
         Output.WriteLine($"namespace:{contextPath}/_Thread nodeType:Thread => {byNamespace.Count} results");
 
@@ -235,13 +235,13 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         // namespace query should also find it
         byNamespace.Should().NotBeEmpty($"namespace:{contextPath}/_Thread should find threads");
 
-        // Dashboard query (no path) â€” InMemory: 0 results (Children scope + empty basePath)
+        // Dashboard query (no path) — InMemory: 0 results (Children scope + empty basePath)
         // PostgreSQL via RoutingMeshQueryProvider: should work (adds scope:descendants per partition)
         Output.WriteLine($"Dashboard query found {dashboardQuery.Count} threads " +
             "(0 expected in InMemory without routing; >0 expected in PostgreSQL with routing)");
     }
 
-    // â”€â”€ Query 4: My Items â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Query 4: My Items ───────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task MyItems_ReturnsOnlyMainContentNodes()

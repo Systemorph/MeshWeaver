@@ -256,8 +256,10 @@ public static class DeckLayoutAreas
     /// <param name="deckNode">The deck node whose <see cref="DeckContent"/> declares the selection.</param>
     /// <param name="deckPath">The deck's mesh path, used to resolve bare-id references and the default query.</param>
     /// <param name="options">JSON options used to read <see cref="DeckContent"/> off the node.</param>
-    /// <returns>The ordered explicit slide paths, or the query to run when the manifest is empty.</returns>
-    public static (ImmutableList<string> Paths, string? Query) ResolveDeckSelection(
+    /// <returns>The ordered explicit slide paths, or the query to run when the manifest is empty —
+    /// with <c>FilterSlideTypes</c> set when the consumer must additionally keep only
+    /// <see cref="SlideNodeType.Matches">slide-typed</see> results.</returns>
+    public static (ImmutableList<string> Paths, string? Query, bool FilterSlideTypes) ResolveDeckSelection(
         MeshNode? deckNode, string deckPath, JsonSerializerOptions options)
     {
         var deck = deckNode.ContentAs<DeckContent>(options);
@@ -266,13 +268,20 @@ public static class DeckLayoutAreas
             .Select(r => ResolveSlidePath(deckPath, r))
             .ToImmutableList();
         // Empty manifest → a live query: the deck's custom Query, else the DEFAULT subtree of
-        // Slide nodes (a deck can be just "a folder of slides"; only Slide nodes count).
+        // slide nodes (a deck can be just "a folder of slides"; only slide nodes count).
+        // 🚨 The default deliberately carries NO `nodeType:` term: that filter is EQUALITY, and a
+        // plugin slide type's identity is its install path (`Publish/Slide`), so `nodeType:Slide`
+        // silently dropped every plugin-typed slide from the deck. Instead FilterSlideTypes tells
+        // the consumer to keep only SlideNodeType.Matches results — suffix-aware, and applied only
+        // to the DEFAULT selection: a custom DeckContent.Query keeps full authority over what
+        // counts as a slide (it can carry its own nodeType term, or none).
+        var useDefaultQuery = paths.Count == 0 && string.IsNullOrWhiteSpace(deck?.Query);
         var query = paths.Count > 0
             ? null
-            : string.IsNullOrWhiteSpace(deck?.Query)
-                ? $"path:{deckPath} nodeType:{SlideNodeType.NodeType} scope:subtree"
+            : useDefaultQuery
+                ? $"path:{deckPath} scope:subtree"
                 : deck!.Query!.Trim();
-        return (paths, query);
+        return (paths, query, useDefaultQuery);
     }
 
     private static string LastSegment(string reference)
@@ -300,7 +309,7 @@ public static class DeckLayoutAreas
                 ? Observable.CombineLatest(x.Paths.Select(ObserveSlide(host)))
                     .Select(items => (IReadOnlyList<(string, MeshNode?)>)items.ToImmutableList())
                 // Query/subtree: the live match, ordered by MeshNode.Order (nulls last, ties by path).
-                : ObserveQuerySlides(host, x.Query!, deckPath))
+                : ObserveQuerySlides(host, x.Query!, deckPath, x.FilterSlideTypes))
             .Switch()
             .StartWith((IReadOnlyList<(string, MeshNode?)>)ImmutableList<(string, MeshNode?)>.Empty);
 
@@ -313,7 +322,7 @@ public static class DeckLayoutAreas
     /// children needs no manifest, and re-ordering is just editing each slide's <c>Order</c>.
     /// </summary>
     private static IObservable<IReadOnlyList<(string Path, MeshNode? Node)>> ObserveQuerySlides(
-        LayoutAreaHost host, string query, string deckPath)
+        LayoutAreaHost host, string query, string deckPath, bool filterSlideTypes)
     {
         var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
@@ -335,6 +344,9 @@ public static class DeckLayoutAreas
                 return map;
             })
             .Select(map => (IReadOnlyList<(string, MeshNode?)>)map.Values
+                // The default selection keeps only slide-typed nodes (suffix-aware, so plugin
+                // types like Publish/Slide count); a custom query decides for itself.
+                .Where(n => !filterSlideTypes || SlideNodeType.Matches(n.NodeType))
                 .Where(n => !string.Equals(n.Path, deckPath, StringComparison.Ordinal)
                             && !n.Segments.Skip(1).Any(s => s.StartsWith('_')))
                 .OrderBy(n => n.Order ?? int.MaxValue)

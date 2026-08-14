@@ -15,7 +15,7 @@ using MeshWeaver.Fixture;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// Tests for <see cref="PathRemappingStorageAdapter"/> â€” the
+/// Tests for <see cref="PathRemappingStorageAdapter"/> — the
 /// <see cref="MirrorOperations"/> uses this to push <c>rbuergi/Story</c>
 /// from local to <c>Systemorph/Story</c> on a remote portal. The remapper
 /// rewrites paths on every Read/Write/Delete + adjusts the
@@ -74,7 +74,7 @@ public class PathRemappingStorageAdapterTests
         var adapter = new PathRemappingStorageAdapter(inner, "rbuergi", "Systemorph");
 
         // A satellite node has MainNode pointing at a DIFFERENT path (its parent);
-        // we must NOT blindly rewrite it â€” the parent rename, if any, comes via
+        // we must NOT blindly rewrite it — the parent rename, if any, comes via
         // a separate Write of the parent node itself.
         await adapter.Write(new MeshNode("act-1", "rbuergi/_Activity")
         {
@@ -130,7 +130,7 @@ public class PathRemappingStorageAdapterTests
         var adapter = new PathRemappingStorageAdapter(inner, "rbuergi", "Systemorph");
 
         // Read on something outside the source prefix lands at the same
-        // path on the inner â€” the remapper only relabels its scoped subtree.
+        // path on the inner — the remapper only relabels its scoped subtree.
         await adapter.Read("Doc/Architecture/GrantingAccess", JsonOptions).Should().Emit();
 
         inner.Reads.Should().ContainSingle().Which.Should().Be("Doc/Architecture/GrantingAccess");
@@ -143,7 +143,7 @@ public class PathRemappingStorageAdapterTests
         var adapter = new PathRemappingStorageAdapter(inner, "rbuergi", "Systemorph");
 
         // Reading the root of the source ("rbuergi") should turn into reading
-        // the root of the target ("Systemorph") â€” no double prefix.
+        // the root of the target ("Systemorph") — no double prefix.
         await adapter.Read("rbuergi", JsonOptions).Should().Emit();
 
         inner.Reads.Should().ContainSingle().Which.Should().Be("Systemorph");
@@ -156,7 +156,7 @@ public class PathRemappingStorageAdapterTests
         act.Should().Throw<ArgumentNullException>().WithParameterName("inner");
     }
 
-    /// <summary>Recording stub that captures every call. No-op semantics â€” returns null/empty.</summary>
+    /// <summary>Recording stub that captures every call. No-op semantics — returns null/empty.</summary>
     private sealed class RecordingStorageAdapter : IStorageAdapter
     {
         public List<string> Reads { get; } = new();
