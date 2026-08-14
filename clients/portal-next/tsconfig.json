@@ -14,7 +14,8 @@
     "jsx": "preserve",
     "incremental": true,
     "plugins": [{ "name": "next" }],
-    "baseUrl": ".",
+    // No "baseUrl": TypeScript 7 removed it (TS5102). The "paths" entries below are already
+    // relative to this tsconfig, which is exactly what baseUrl "." resolved them against.
     "paths": {
       "@meshweaver/react/wire": ["../react/src/live/wire.ts"],
       "@meshweaver/react/accessError": ["../react/src/area/accessError.ts"],

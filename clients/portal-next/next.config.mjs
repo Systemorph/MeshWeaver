@@ -12,6 +12,27 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  *   (@meshweaver/react) and the gRPC-web transport (@meshweaver/client-web) resolve to their
  *   SOURCE trees — no build/link step. `experimental.externalDir` lets SWC compile files
  *   outside this app directory.
+ *
+ * 🚨 BUNDLER: webpack, declared explicitly (`next build --webpack` / `next dev --webpack` in
+ * package.json). Next 16 made Turbopack the default and errors out on a `webpack` config with no
+ * `turbopack` config; the two remedies it offers — `turbopack: {}` or `--turbopack` — would both
+ * SILENTLY DROP the resolution rules below, which is worse than the error. Turbopack cannot express
+ * two of the three (measured against 16.3.0, not assumed):
+ *
+ *   1. resolve.alias      → `turbopack.resolveAlias` covers it, but only with paths RELATIVE to the
+ *                           turbopack root; an absolute path is read as a "server relative import"
+ *                           ("not implemented yet") and every alias fails.
+ *   2. resolve.extensionAlias → NO equivalent. `turbopack.resolveExtensions` is webpack's
+ *                           resolve.EXTENSIONS (what to append to an extensionless specifier), not
+ *                           extensionALIAS (rewrite an explicit `.js` to `.ts`/`.tsx`). With aliases
+ *                           relative and resolveExtensions set, a Turbopack build still dies on 51
+ *                           unresolved `./x.js` specifiers out of the renderer source.
+ *   3. resolve.modules    → NO equivalent in the `turbopack` option set at all. Without it, bare
+ *                           imports made FROM ../react and ../grpc-web have nowhere to resolve: the
+ *                           Docker build installs node_modules ONLY in portal-next (see Dockerfile).
+ *
+ * So this stays on webpack until Turbopack grows those hooks — at which point migrate all three
+ * together and re-run the Docker build, which is the only test that exercises rule 3.
  */
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -44,10 +65,11 @@ const nextConfig = {
   // to resolve modules the runtime bundle resolves fine. Type coverage is owned elsewhere by design:
   // portal-next's OWN code by `npm run typecheck` (tsconfig include = app/src/test only), and
   // @meshweaver/react by its own package CI — so we don't run the mis-scoped cross-package typecheck
-  // (or its ESLint companion) during the production image build. This is NOT ignoring real errors:
-  // it's declining to re-type-check vendored source through the wrong tsconfig.
+  // during the production image build. This is NOT ignoring real errors: it's declining to
+  // re-type-check vendored source through the wrong tsconfig.
+  // (Its former ESLint companion `eslint: { ignoreDuringBuilds: true }` is gone: Next 16 dropped
+  // built-in linting from `next build`, so the key is now an "Unrecognized key" warning, not config.)
   typescript: { ignoreBuildErrors: true },
-  eslint: { ignoreDuringBuilds: true },
   // Monorepo root for standalone output tracing (clients/) — server.js lands under
   // .next/standalone/portal-next/server.js (see Dockerfile). Top-level since Next 15
   // (was `experimental.outputFileTracingRoot` in 14).
