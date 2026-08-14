@@ -1166,10 +1166,24 @@ jobs:
         # closes. So a zero is only believed after this grace period of consecutive zeros.
         ZERO_GRACE_SECONDS=180
         started=$(date +%s)
+        # 🚨 A FAILED QUERY IS NOT A ZERO. An auth error, a rate limit or a network blip must never
+        # collapse into "no runs exist" — that would make this gate pass on no evidence, which is
+        # precisely the trapdoor it was written to close (and the reason `gh api ... || echo
+        # '{"total_count":0}'` is NOT what this does). The two are tracked separately: a fetch error
+        # is retried inside the poll, and if the query never succeeds the job goes RED rather than
+        # reporting a verdict it never obtained.
+        fetched=0
+        lastError=""
         # Poll: Clients starts on the same event and normally finishes long before the .NET
         # suite, but the two are not ordered.
         for _ in $(seq 1 60); do
-          json=$(gh api "$api" 2>/dev/null || echo '{"total_count":0,"workflow_runs":[]}')
+          if ! json=$(gh api "$api" 2>"$RUNNER_TEMP/clients-gate.err"); then
+            lastError=$(tr '\n' ' ' < "$RUNNER_TEMP/clients-gate.err" | cut -c1-400)
+            echo "Could not query the Clients workflow runs (retrying): ${lastError}"
+            sleep 20
+            continue
+          fi
+          fetched=1
           total=$(echo "$json" | jq -r '.total_count // 0')
           if [ "$total" = "0" ] && [ $(( $(date +%s) - started )) -lt "$ZERO_GRACE_SECONDS" ]; then
             echo "No Clients run for ${HEAD_SHA} yet — within the ${ZERO_GRACE_SECONDS}s creation grace period, waiting."
@@ -1213,6 +1227,18 @@ jobs:
           fi
           sleep 20
         done
+        if [ "$fetched" = "0" ]; then
+          echo "::error::Could not query the Clients workflow runs for ${HEAD_SHA} even once — last error: ${lastError}. This job reports the Clients verdict into the required check, so an unobtainable verdict is a RED, never a pass: a gate that cannot read its subject has no evidence at all."
+          {
+            echo "### ❌ Clients: verdict unobtainable"
+            echo
+            echo "Every attempt to query the \`Clients\` workflow runs for \`${HEAD_SHA}\` failed."
+            echo "Last error: \`${lastError}\`"
+            echo
+            echo "This is deliberately a failure and not a pass — \"could not fetch\" is not \"no runs exist\"."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
         echo "::error::The Clients workflow for ${HEAD_SHA} has not completed within this job's budget — it is wedged. Refusing to report a verdict on an unfinished run."
         exit 1
 
