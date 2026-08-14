@@ -11,6 +11,12 @@
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
+    <!-- The build-time packer calls DynamicMeshNodeAttributeGenerator directly. A prebuilt
+         assembly MUST carry the same generated skeleton the runtime compiles (the
+         MeshNodeProviderAttribute subclass + ConfigureHub wrapping the `configuration` lambda),
+         or it does not register as a node provider at all. Reproducing that generation in the
+         tool would be a second implementation free to drift from the one that matters. -->
+    <InternalsVisibleTo Include="MeshWeaver.Plugin.Build" />
   </ItemGroup>
 
   <ItemGroup>

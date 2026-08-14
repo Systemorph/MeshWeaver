@@ -63,6 +63,12 @@ public static class ProjectEmitter
         sb.AppendLine("  <ItemGroup>");
         foreach (var directory in unit.Closure)
             sb.AppendLine($"    <Compile Include=\"{SecurityElement.Escape(directory)}/**/*.cs\" />");
+        // The generated skeleton — assembly attribute, provider class, and the ConfigureHub method
+        // wrapping the `configuration` lambda. Without it the assembly carries the user's types and
+        // registers NOTHING, and the lambda (C# inside a JSON string) stays unchecked by any
+        // compiler — the 2026-08-09 AddTracking() outage.
+        if (SkeletonGenerator.Emit(unit, projectDirectory) is not null)
+            sb.AppendLine($"    <Compile Include=\"{SkeletonGenerator.FileName}\" />");
         sb.AppendLine("  </ItemGroup>");
         sb.AppendLine();
 

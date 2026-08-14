@@ -50,6 +50,23 @@ type it legitimately borrows from the consumer: a false alarm on healthy content
 than no check. A unit's owner declares `NodeTypeDefinition` or `PluginContent`; anything else
 (a Markdown page describing the sample data, a course exercise authored as `index.md`) is skipped.
 
+## The generated skeleton
+
+Each unit compiles its sources **plus** a generated skeleton: the assembly attribute, the
+`MeshNodeProviderAttribute` subclass, and the `ConfigureHub` method wrapping the NodeType's
+`configuration` lambda. The tool calls the framework's own `DynamicMeshNodeAttributeGenerator`
+rather than reproducing it, so CI and runtime emit identical source.
+
+Two reasons it is not optional:
+
+- **Without it the assembly is inert** — it carries the user's types and registers nothing, so it
+  cannot stand in for a runtime compile however cleanly it built.
+- **The lambda is code no compiler has ever seen.** `content.configuration` is C# inside a JSON
+  string: invisible to `dotnet build` (node trees are `<None>`) and to any `*.cs` grep. On
+  2026-08-09 the framework deleted `AddTracking()` while `SocialMedia/Post`, `Profile` and
+  `PostsHub` each still called it from that field; CI was green and all three production portals
+  hit `REFUSING READINESS` on the next framework bump.
+
 ## The three things a plain `.csproj` gets wrong
 
 1. **Includes have three syntaxes.** `shared=@Store/Coupon/Source` (path),
