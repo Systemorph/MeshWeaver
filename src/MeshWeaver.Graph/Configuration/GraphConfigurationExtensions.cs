@@ -35,7 +35,6 @@ public static class GraphConfigurationExtensions
                 .AddReleaseType()
                 .AddBuildType()
                 .AddMarkdownType()
-                .AddHtmlType()
                 .AddSlideType()
                 .AddDeckType()
                 .AddCommentType()

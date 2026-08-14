@@ -523,13 +523,4 @@ public class ApprovalAndNotificationTest
 
     #endregion
 
-    #region WelcomeLayoutArea Tests
-
-    [Fact]
-    public void WelcomeLayoutArea_WelcomeArea_HasCorrectValue()
-    {
-        WelcomeLayoutArea.WelcomeArea.Should().Be("Welcome");
-    }
-
-    #endregion
 }
