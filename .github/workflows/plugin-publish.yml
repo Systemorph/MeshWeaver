@@ -18,13 +18,18 @@ name: Plugin Publish
 # mode is silent: a plugin the diff misses simply never ships, at a version nobody notices is
 # absent until an install resolves the old content.
 #
-# ═════════════════════════ ALL-OR-NOTHING ═════════════════════════
-# Every plugin is PACKED before any is PUSHED. A partial set is worse than none: a consumer
-# resolving plugin A at the new version and plugin B at the old one gets a combination that was
-# never built or tested together, and the caret ranges between them say it is fine.
+# ══════════════════ WHAT THE PACK-THEN-PUSH ORDER BUYS ══════════════════
+# Every plugin is PACKED before any is PUSHED, so a BUILD failure ships nothing. That is the whole
+# guarantee, and it is worth being precise about, because it is weaker than the image pipeline's.
 #
-# NuGet has no equivalent of an image's staging tag — a version is immutable and cannot be
-# retagged — so withholding the PUSH is the only lever, which is why the pack loop completes first.
+# 🚨 The PUSH is NOT transactional and cannot be made so. `dotnet nuget push` uploads packages one
+# at a time; a failure partway leaves the earlier ones published, and a published version cannot be
+# unpublished or retagged. main-cd.yml's images get atomicity from a staging tag promoted only
+# after every leg succeeds — NuGet has no equivalent, because there the version IS the identity.
+#
+# So the recovery is re-running, not rollback: `--skip-duplicate` makes an already-published package
+# a no-op, so a re-fired run completes the remainder. The failure path below says this explicitly
+# rather than leaving whoever finds the red run to work out whether anything shipped.
 
 on:
   workflow_call:
@@ -147,10 +152,21 @@ jobs:
           # detector: an unchanged plugin keeps its version, the push 409s, and the flag turns that
           # into a no-op instead of a failure. It also lets a half-finished run be re-fired to
           # complete the remainder rather than tripping on the first already-published package.
-          dotnet nuget push "$RUNNER_TEMP/nupkgs/*.nupkg" \
-            --source "$FEED" \
-            --api-key "${{ secrets.GITHUB_TOKEN }}" \
-            --skip-duplicate
+          #
+          # 🚨 The glob is UNQUOTED so the shell expands it, matching release-packages.yml. Quoted,
+          # the literal `*.nupkg` is passed through as a path and nothing publishes — a green step
+          # that shipped nothing.
+          if ! dotnet nuget push $RUNNER_TEMP/nupkgs/*.nupkg \
+                 --source "$FEED" \
+                 --api-key "${{ secrets.GITHUB_TOKEN }}" \
+                 --skip-duplicate; then
+            # A push that fails partway leaves earlier packages published and unretractable, so say
+            # so plainly instead of leaving the next person to infer it from a red run.
+            echo "::error::push failed partway. Packages already uploaded REMAIN published — a \
+          version cannot be unpublished or retagged. Re-run this workflow to complete the rest; \
+          --skip-duplicate makes the already-published ones no-ops."
+            exit 1
+          fi
           find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' -exec basename {} \; | sed 's/^/  published: /'
 
       # 🚨 The two `if:`s above and below are a MODE SWITCH, not a skip-trapdoor, and the difference
