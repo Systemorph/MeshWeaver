@@ -136,11 +136,11 @@ public static class MarkdownExportExtensions
             .WithTypes(typeof(CorporateIdentity), typeof(ExportDocumentControl))
             .WithServices(services =>
             {
+                // ONE provider for every exportable type: it reads the type's ExportDeclaration
+                // off the hub configuration (WithExport), so a new exportable type declares
+                // instead of adding a compiled provider (#1576).
                 services.TryAddEnumerable(
-                    ServiceDescriptor.Scoped<INodeMenuProvider, MarkdownExportMenuProvider>());
-                // Deck nodes get a PDF export item (one page per slide) — self-gated on NodeType=Deck.
-                services.TryAddEnumerable(
-                    ServiceDescriptor.Scoped<INodeMenuProvider, DeckExportMenuProvider>());
+                    ServiceDescriptor.Scoped<INodeMenuProvider, ExportMenuProvider>());
                 return services;
             })
             .AddLayout(layout => layout

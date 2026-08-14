@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -104,7 +105,10 @@ public static class ExportDocumentLayoutArea
                         };
                         subject.OnNext(enriched);
 
-                        if (!DeckNodeType.Matches(node.NodeType))
+                        // Pixel fidelity applies to slide-deck composition only — resolved from
+                        // the type's ExportDeclaration (with the transition fallback, #1576).
+                        if (ExportDeclaration.Resolve(host.Hub.Configuration, node.NodeType)
+                                ?.Composition != ExportComposition.SlideDeck)
                             return;
 
                         var renderer = host.Hub.ServiceProvider.GetService<IPixelPdfRenderer>();
