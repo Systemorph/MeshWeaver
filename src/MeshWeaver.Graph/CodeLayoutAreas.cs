@@ -98,6 +98,42 @@ public static class CodeLayoutAreas
         isStale ? FluentIcons.ArrowSync() : FluentIcons.Play();
 
     /// <summary>
+    /// Whether the run recorded on this cell is THIS viewer's own — the gate on showing any output
+    /// at all.
+    /// <para>🚨 <see cref="CodeConfiguration.LastActivityPath"/> is ONE field on a SHARED node, and
+    /// a run writes its activity into the RUNNER's partition (<c>{viewer}/_Activity/{guid}</c>).
+    /// So the pointer a reader finds there is whoever ran the cell last — usually somebody else.
+    /// Rendering it unconditionally has two failure modes, both seen in production:</para>
+    /// <list type="bullet">
+    /// <item>the reader can read that activity → the cell greets them with a <c>✓ Done</c> and
+    /// output for work they never did (and a cell they have never run looks finished);</item>
+    /// <item>the reader cannot → the embed throws <c>UnauthorizedAccessException</c> and takes the
+    /// WHOLE cell down with it: <c>Rendering denied for area Content: User 'x' lacks Read
+    /// permission on 'y/_Activity/…'</c>. The learner sees "Access denied" where the example
+    /// should be. Measured on a disposable mesh, 2026-08-14, on a course copy installed AFTER the
+    /// master cell had been run.</item>
+    /// </list>
+    /// <para>A copy inherits the field wholesale, so every learner whose install happened after an
+    /// author ran the master got one of the two. The rule is therefore not "can I read it" but
+    /// "is it MINE": a cell shows the output of the viewer's own last run, and nothing otherwise —
+    /// which is also what an unrun cell should look like.</para>
+    /// <para>Pure, so the rule is pinned without a hub or a circuit.</para>
+    /// </summary>
+    /// <param name="viewerId">The reader's own partition (their user id), or null when unresolved.</param>
+    /// <param name="activityPath">The node's recorded <c>LastActivityPath</c>.</param>
+    internal static bool ShowsOwnRun(string? viewerId, string? activityPath)
+    {
+        if (string.IsNullOrWhiteSpace(viewerId) || string.IsNullOrWhiteSpace(activityPath))
+            return false;
+        var separator = activityPath.IndexOf('/');
+        // A path with no partition segment names nothing this viewer owns.
+        if (separator <= 0)
+            return false;
+        return activityPath.AsSpan(0, separator)
+            .Equals(viewerId.AsSpan(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Languages a Code node can be authored in. C# runs in-process on the Roslyn kernel; Python routes
     /// to a connected <c>py/python-kernel</c> worker participant (see <c>CodeNodeType.HandleExecuteScript</c>);
     /// the rest are first-class for authoring / syntax highlighting / display. Immutable constant lookup.
@@ -133,6 +169,11 @@ public static class CodeLayoutAreas
     {
         var nodeStream = host.Workspace.GetMeshNodeStream();
 
+        // WHO is reading this cell — resolved ONCE, on the render turn (the AccessContext is an
+        // AsyncLocal, so reading it from a later emission that crossed a scheduler hop yields
+        // nobody). It decides whether the recorded run is this viewer's to see: see ShowsOwnRun.
+        var viewer = ResolveViewerHome(host.Hub.ServiceProvider.GetService<AccessService>());
+
         // The VIEWER's effective permissions on this node — the canonical reactive
         // check (hub.GetEffectivePermissions; resolves the caller from the ambient
         // AccessContext at call time, same as GitHubSyncSettingsTab / CopyLayoutArea).
@@ -152,10 +193,10 @@ public static class CodeLayoutAreas
         var lastActivityStream = nodeStream
             .Select(node => node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions)?.LastActivityPath)
             .DistinctUntilChanged()
-            .Select(path => string.IsNullOrEmpty(path)
-                ? Observable.Return<ActivityLog?>(null)
-                : host.Workspace.GetMeshNodeStream(path!)
-                    .Select(n => n.ContentAs<ActivityLog>(host.Hub.JsonSerializerOptions)))
+            .Select(path => ShowsOwnRun(viewer, path)
+                ? host.Workspace.GetMeshNodeStream(path!)
+                    .Select(n => n.ContentAs<ActivityLog>(host.Hub.JsonSerializerOptions))
+                : Observable.Return<ActivityLog?>(null))
             .Switch()
             .DistinctUntilChanged(log => (log?.Status, log?.RequestedStatus))
             .StartWith((ActivityLog?)null);
@@ -181,7 +222,7 @@ public static class CodeLayoutAreas
 
         return nodeStream.CombineLatest(lastActivityStream, permissionStream, editorSetup,
             (node, lastActivity, permissions, editorHeight) =>
-                (UiControl?)BuildContent(host, node, lastActivity, permissions, editorHeight));
+                (UiControl?)BuildContent(host, node, lastActivity, permissions, editorHeight, viewer));
     }
 
     /// <summary>
@@ -199,7 +240,7 @@ public static class CodeLayoutAreas
 
     private static UiControl BuildContent(
         LayoutAreaHost host, MeshNode? node, ActivityLog? lastActivity, Permission permissions,
-        string editorHeight)
+        string editorHeight, string? viewer)
     {
         var hubAddress = host.Hub.Address;
         var codeConfig = node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions);
@@ -268,7 +309,7 @@ public static class CodeLayoutAreas
         // under the accent Run button that is the answer to it. Absence says the same thing and
         // says it quieter (maintainer feedback, 2026-08-13). The moment Run is pressed the node
         // gains a LastActivityPath and the pane appears with the live log in it.
-        if (isExecutable && !string.IsNullOrEmpty(codeConfig?.LastActivityPath))
+        if (isExecutable && ShowsOwnRun(viewer, codeConfig?.LastActivityPath))
         {
             const string outputStyle =
                 "width: 100%; box-sizing: border-box; " +
