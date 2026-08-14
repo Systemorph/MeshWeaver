@@ -26,6 +26,18 @@ public static class DeckNodeType
     public const string NodeType = "Deck";
 
     /// <summary>
+    /// True when <paramref name="nodeType"/> is a deck type: the built-in <c>Deck</c> OR any
+    /// plugin-installed variant whose dynamic type identity ends in <c>/Deck</c> (a dynamic
+    /// NodeType's identity is its install path; instances carry it verbatim). Every compiled
+    /// gate that used to compare with <c>==</c> must use this instead — an equality gate makes
+    /// a plugin deck silently lose its Export menu, its pixel-export picker and its manifest
+    /// ordering, with no error anywhere. See <see cref="SlideNodeType.Matches"/>.
+    /// </summary>
+    public static bool Matches(string? nodeType) =>
+        nodeType == NodeType
+        || nodeType?.EndsWith("/" + NodeType, StringComparison.Ordinal) == true;
+
+    /// <summary>
     /// Inline deck/presentation-screen glyph (SVG data URI). Kept inline so the node
     /// type needs no static-asset round-trip; it renders directly as an <c>&lt;img src&gt;</c>.
     /// </summary>

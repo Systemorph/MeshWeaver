@@ -45,7 +45,7 @@ public class DeckExportMenuProvider : INodeMenuProvider
             host.Hub.GetEffectivePermissions(hubPath),
             (node, perms) =>
             {
-                if (node is null || node.NodeType != DeckNodeType.NodeType || !perms.HasFlag(Permission.Read))
+                if (node is null || !DeckNodeType.Matches(node.NodeType) || !perms.HasFlag(Permission.Read))
                     return (IReadOnlyCollection<NodeMenuItemDefinition>)[];
 
                 return

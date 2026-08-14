@@ -148,13 +148,19 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
         //     served to another. Bypass requires BOTH UserId=System on the request
         //     AND the ImpersonateAsSystem AsyncLocal scope (defense-in-depth, see
         //     PathResolutionService).
+        // 🚨 No `nodeType:` term: the query language's nodeType filter is EQUALITY, and a
+        // plugin-installed slide type's identity is its install path (`Publish/Slide`), so a
+        // `nodeType:Slide` sibling query silently excluded every plugin-typed slide (education's
+        // 116 Publish/Slide nodes rendered "Slide 1 / 1" with no Prev/Next). Query the parent's
+        // children and apply the suffix-aware SlideNodeType.Matches in the fold instead — the
+        // candidate set is one deck's children, so the wider query costs nothing.
         var request = MeshQueryRequest.FromQuery(
-            $"namespace:{parentPath} nodeType:{SlideNodeType.NodeType}") with
+            $"namespace:{parentPath}") with
         {
             UserId = MeshWeaver.Mesh.Security.WellKnownUsers.System,
         };
 
-        // Candidate set: the sibling Slide nodes sharing this parent.
+        // Candidate set: the sibling slide nodes (built-in or plugin-typed) sharing this parent.
         var siblingSlides = Observable.Using(
                 () => accessService?.ImpersonateAsSystem()
                       ?? System.Reactive.Disposables.Disposable.Empty,
@@ -162,12 +168,16 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
             .Scan(ImmutableDictionary<string, MeshNode>.Empty, (map, change) =>
             {
                 if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-                    return change.Items.ToImmutableDictionary(n => n.Path);
+                    return change.Items
+                        .Where(n => SlideNodeType.Matches(n.NodeType))
+                        .ToImmutableDictionary(n => n.Path);
                 foreach (var item in change.Items)
                     map = change.ChangeType switch
                     {
-                        QueryChangeType.Added or QueryChangeType.Updated => map.SetItem(item.Path, item),
-                        QueryChangeType.Removed => map.Remove(item.Path),
+                        QueryChangeType.Added or QueryChangeType.Updated when SlideNodeType.Matches(item.NodeType)
+                            => map.SetItem(item.Path, item),
+                        // An update can RETYPE a node away from a slide type — drop it either way.
+                        QueryChangeType.Removed or QueryChangeType.Updated => map.Remove(item.Path),
                         _ => map
                     };
                 return map;
@@ -191,7 +201,7 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
     private static IReadOnlyList<string>? DeckManifestPaths(
         MeshNode? parent, string parentPath, JsonSerializerOptions serializerOptions)
     {
-        if (parent is null || !string.Equals(parent.NodeType, DeckNodeType.NodeType, StringComparison.Ordinal))
+        if (parent is null || !DeckNodeType.Matches(parent.NodeType))
             return null;
         var refs = parent.ContentAs<DeckContent>(serializerOptions)?.Slides;
         if (refs is null || refs.Count == 0)
