@@ -3,6 +3,8 @@ using System.Reactive.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.InstanceSync.Test;
@@ -81,6 +83,57 @@ public class InstanceSyncPushTest(ITestOutputHelper output) : InstanceSyncTestBa
         await NodeFactory.DeleteNode("delta/temp").Timeout(30.Seconds()).ToTask();
 
         await WaitForRemote(r => r.Node("delta/temp") is null);
+    }
+
+    /// <summary>
+    /// 🚨 THE COUPLING GUARD. A pending NON-DELETE manifest entry whose local node is being deleted
+    /// must push a DELETE to the remote — never the content.
+    ///
+    /// <para>This pins what makes <c>OnLocalChange</c>'s echo-suppression slot safe to consume on a
+    /// <c>Deleted</c> event. Doing so lets the pull-apply's echo escape suppression, and because
+    /// the manifest coalesces per path with the latest entry winning, that echo can replace the
+    /// <c>Deleted</c> entry with a content change. The remote still converges on the deletion for
+    /// exactly ONE reason: <c>DrainOne</c> resolves every entry against the CURRENT local state
+    /// instead of trusting the recorded kind, so a node that is gone degrades the push to a delete.
+    /// That is a real coupling between two methods, and the sort of thing a later "we already know
+    /// the kind, skip the read" refactor removes without noticing — hence a test rather than a
+    /// comment.</para>
+    ///
+    /// <para>Note this is a REGRESSION GUARD, not a fail-before test: the pre-fix code reached the
+    /// same delete through the collapsed <c>null</c> it is the point of this PR to remove. Its job
+    /// is to stop the property being lost in the future, now that something else leans on it.</para>
+    ///
+    /// <para>The setup is deterministic and production-shaped: the remote is offline so the
+    /// manifest ACCUMULATES a content entry, and the delete is put in flight with the same
+    /// synchronous tombstone the delete handler writes — which emits no change event, so the
+    /// manifest keeps its non-delete entry. That is exactly the escaped-echo shape, without having
+    /// to win a race to produce it.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_pending_content_change_pushes_a_DELETE_when_the_local_node_is_being_deleted()
+    {
+        await CreateSpace("theta");
+        await CreateMarkdown("theta/doc", "Doc", "v1");
+        await AddConfiguredSource("theta");
+        await WaitForConfig("theta", "partner", c => c.InitialSyncAt is not null);
+        await WaitForRemote(r => r.Node("theta/doc") is not null);
+
+        // Offline: the content change accumulates instead of draining immediately.
+        Remote.Unreachable = true;
+        await Mesh.GetWorkspace().GetMeshNodeStream("theta/doc")
+            .Update(n => n with { Content = new MarkdownContent { Content = "v2" } })
+            .Should().Within(30.Seconds()).Emit();
+        var offline = await WaitForConfig("theta", "partner", c => c.PendingChanges.Count == 1);
+        offline.PendingChanges[0].Kind.Should().NotBe(MeshChangeKind.Deleted,
+            "the entry under test is a CONTENT change — the delete fast-path in DrainOne would "
+            + "make this test pass without ever reading the local node");
+
+        // 🔻 The delete goes in flight. MarkDeleted is what the delete handler does synchronously,
+        // and it emits no change event — so the manifest keeps its non-delete entry.
+        Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>().MarkDeleted("theta/doc");
+
+        Remote.Unreachable = false;
+        await WaitForRemote(r => r.Node("theta/doc") is null);
     }
 
     [Fact]

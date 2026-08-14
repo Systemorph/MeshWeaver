@@ -159,12 +159,29 @@ public sealed class InstanceSyncWorker : IDisposable
     {
         if (disposed) return;
         if (!InstanceSyncService.IsSyncablePath(evt.Path, SpacePath)) return;
-        // 🚨 The suppression slot swallows the echo of a pull-apply — and a pull-apply is a
-        // CreateOrUpdate, never a delete (see ApplyLocal). So a local Deleted event is by
-        // construction NOT that echo, and swallowing it drops the deletion from the manifest
-        // permanently: the remote keeps a node the user deleted here, with no reconciliation to
-        // re-derive it. Match on the kind so the slot can only consume what it could have caused.
-        if (evt.Kind != MeshChangeKind.Deleted && appliedInbound.TryRemove(evt.Path, out _)) return;
+        // 🚨 The slot is CONSUMED by whichever event arrives first, but only a NON-delete is
+        // SUPPRESSED. Those two used to be one act, and both couplings are wrong in a different
+        // direction:
+        //
+        //  * Consume-and-suppress together (the original) swallowed a local Deleted as if it were
+        //    the echo of a pull-apply. It never was — ApplyLocal is a CreateOrUpdate and cannot
+        //    produce a Deleted — and the deletion was then dropped from the manifest permanently,
+        //    leaving the remote holding a node the user deleted here.
+        //  * Suppress-and-consume together (leave the slot when a Deleted passes) LEAKS. The slot
+        //    is normally retired by its own echo, but a pull-apply that turns out to be a no-op
+        //    write produces NO echo at all, and the stale slot then swallows the next GENUINE
+        //    local change for that path — silent non-replication, which is worse.
+        //
+        // Consuming on a Deleted means the echo that follows is no longer suppressed and re-enters
+        // the manifest, where Coalesce (per path, latest wins) replaces the Deleted entry with it.
+        // That interleaving IS reachable — the apply's echo is a multi-hop round trip and a user
+        // delete can land inside it. It is nevertheless safe, but for ONE specific reason, which is
+        // therefore load-bearing: DrainOne resolves each entry against the CURRENT local state
+        // rather than trusting the recorded kind, so the node being gone makes the push degrade to
+        // a delete. If that ever changes, this comment is the thread to pull — and
+        // A_pending_content_change_pushes_a_DELETE_when_the_local_node_is_being_deleted pins it.
+        var hadPendingEcho = appliedInbound.TryRemove(evt.Path, out _);
+        if (hadPendingEcho && evt.Kind != MeshChangeKind.Deleted) return;
         if (lastKnownConfig is { Direction: InstanceSyncDirection.PullOnly }) return;
 
         // System scope: feed callbacks carry no ambient AccessContext (fails closed otherwise).
@@ -296,6 +313,14 @@ public sealed class InstanceSyncWorker : IDisposable
     /// delete in flight, which is heading for exactly that) degrades to a delete; an unreadable
     /// local node fails the ENTRY, which keeps it pending and surfaces on the node as LastError
     /// (see <see cref="DrainPending"/>) instead of silently destroying data.</para>
+    ///
+    /// <para>🚨 <b>Resolving against the CURRENT local state — not the recorded
+    /// <see cref="PendingChange.Kind"/> — is load-bearing beyond this method.</b> It is what makes
+    /// <see cref="OnLocalChange"/> safe to consume its echo-suppression slot on a Deleted: an echo
+    /// that then escapes suppression can coalesce OVER the Deleted manifest entry, and the only
+    /// thing that stops that resurrecting the remote copy is the read below reporting
+    /// <see cref="NodeReadStatus.Absent"/> / <see cref="NodeReadStatus.DeleteInProgress"/> and this
+    /// degrading to a delete. Do not "optimise" that read away for non-delete kinds.</para>
     /// </summary>
     private IObservable<bool> DrainOne(IRemoteMeshClient remote, InstanceSyncConfig cfg, PendingChange change)
     {

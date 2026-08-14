@@ -75,9 +75,7 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
             .Observe<GetDataResponse>(
                 new GetDataRequest(new CollectionReference(nameof(Item))),
                 o => o.WithTarget(OwnerAddress))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(30.Seconds()).Emit();
         warm.Message.Data.Should().NotBeNull("the read must work before the teardown, or this test proves nothing");
 
         // Park an un-answered callback so the Quiescing drain cannot complete: the owner then
@@ -90,12 +88,19 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
                 d => Output.WriteLine($"Hold callback answered unexpectedly: {d.Message}"),
                 ex => Output.WriteLine($"Hold callback released: {ex.GetType().Name}: {ex.Message}"));
 
+        // 🔻 ORDER BY CAUSATION, NOT BY WAITING. The owner's action block is single-threaded and
+        // FIFO — the guarantee the mesh hub itself relies on ("Reply + DisposeRequest(s) from the
+        // mesh hub so FIFO guarantees the caller sees the Ok before the deleted hubs tear down").
+        // DisposeRequest's handler calls Dispose(), whose very FIRST statement freezes hosted-hub
+        // creation SYNCHRONOUSLY; message intake stays open until DisposeHostedHubs. So a read
+        // posted after it, from the same sender to the same target, is dequeued INSIDE the window
+        // by construction. No poll, no sleep, no sampled property — and no wait that could fall
+        // through and let the test assert against a hub that never started disposing.
         host.Post(new DisposeRequest(), o => o.WithTarget(OwnerAddress));
-        await WaitForDisposalWindow(owner);
 
-        // 🔻 THE READ UNDER TEST. Creation is frozen, so building the reference's stream throws
+        // THE READ UNDER TEST. Creation is frozen, so building the reference's stream throws
         // HubDisposingException — the exact production fault #1470 is about.
-        var read = host
+        var answer = await host
             .Observe<GetDataResponse>(
                 new GetDataRequest(new CollectionReference(nameof(Item))),
                 o => o.WithTarget(OwnerAddress))
@@ -103,12 +108,16 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
             // A DeliveryFailure arrives as OnError (DeliveryFailureException) — turn it into a
             // value so ONE assertion covers both shapes and a hang is the only other outcome.
             .Catch<object?, Exception>(ex => Observable.Return<object?>(ex))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(30.Seconds()).Emit();
+        Output.WriteLine($"[TEST] answer: {answer} (owner IsShuttingDown={owner.IsShuttingDown}, RunLevel={owner.RunLevel})");
 
-        var answer = await read;
-        Output.WriteLine($"[TEST] answer: {answer}");
+        // The window was real — read AFTER the fact, so this is a statement about what happened,
+        // not a gate that could pass before anything did.
+        owner.IsShuttingDown.Should().BeTrue(
+            "the read must have been served while the owner's hosted-hub creation was frozen — "
+            + "that IS the condition under test, and asserting it here means a routing change that "
+            + "broke the FIFO ordering would fail loudly instead of silently answering the read "
+            + $"from a healthy hub (RunLevel={owner.RunLevel})");
 
         answer.Should().BeOfType<DeliveryFailureException>(
             "a read that faulted because its owner is tearing down must be NACKed as transient. "
@@ -133,21 +142,4 @@ public class ReadDuringDisposalWindowTest(ITestOutputHelper output) : HubTestBas
             + "(MeshNodeStreamCache.IsMissingNodeFailure) — the exact confusion this NACK avoids");
     }
 
-    /// <summary>
-    /// Waits until <paramref name="hub"/> has demonstrably entered the disposal window
-    /// (<see cref="MessageHubRunLevel.Quiescing"/> or later) — creation frozen, message intake
-    /// still open. Polling a PUBLIC state property, not a sleep: the test acts on a verified
-    /// state rather than hoping to hit a race.
-    /// </summary>
-    private static async Task WaitForDisposalWindow(IMessageHub hub)
-    {
-        for (var i = 0; i < 200 && hub.RunLevel < MessageHubRunLevel.Quiescing; i++)
-            await Task.Delay(10);
-        (hub.RunLevel >= MessageHubRunLevel.Quiescing).Should().BeTrue(
-            "the DisposeRequest must have moved the hub into its teardown phases — without that "
-            + $"this test never exercises the window it exists to pin (RunLevel={hub.RunLevel})");
-        (hub.RunLevel < MessageHubRunLevel.DisposeHostedHubs).Should().BeTrue(
-            "past DisposeHostedHubs the message service's own intake gate rejects everything, so "
-            + $"the read would never reach the data plugin (RunLevel={hub.RunLevel})");
-    }
 }

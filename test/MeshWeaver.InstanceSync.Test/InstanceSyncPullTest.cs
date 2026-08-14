@@ -128,9 +128,15 @@ public class InstanceSyncPullTest(ITestOutputHelper output) : InstanceSyncTestBa
     ///
     /// <para>The window is the production one, created the production way: the delete handler marks
     /// <c>RecentlyDeletedRegistry</c> SYNCHRONOUSLY before the row goes, so "marked, node still
-    /// there" IS the in-flight state. The sweep is then observed by its own remote calls — a
-    /// <c>get</c> of the moved hit proves the sweep picked it up, and the NEXT <c>search</c> proves
-    /// that sweep ran to completion (sweeps never overlap: Defer + Repeat).</para>
+    /// there" IS the in-flight state.</para>
+    ///
+    /// <para>🚨 The assertion SUBSCRIBES the local node's own stream and requires that the
+    /// resurrected content never arrives on it — the sanctioned negative shape (<c>NotEmit</c>:
+    /// "the one place a fixed wait is correct — a 'nothing should happen' test has no positive
+    /// signal to await"). No interval probe, no <c>FirstAsync</c>, no sampled property: the window
+    /// spans ~10 pull sweeps at the test's 200 ms interval, and the closing assertion proves from
+    /// the remote's own call log that sweeps really did run — so the negative cannot pass because
+    /// nothing happened at all.</para>
     /// </summary>
     [Fact]
     public async Task Pull_does_not_resurrect_a_node_whose_delete_is_in_flight()
@@ -153,32 +159,27 @@ public class InstanceSyncPullTest(ITestOutputHelper output) : InstanceSyncTestBa
             Content = new MarkdownContent { Content = "remote v2" },
         }, DateTimeOffset.UtcNow.AddMinutes(1));
 
-        // Positive signal #1: the sweep fetched the moved hit.
         var getsBefore = Remote.Calls.Count(c => c is { Op: "get", Path: "pull6/doc" });
-        await Observable.Interval(50.Milliseconds()).StartWith(0L)
-            .Where(_ => Remote.Calls.Count(c => c is { Op: "get", Path: "pull6/doc" }) > getsBefore)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
-        // Positive signal #2: that sweep then RAN OUT — the next sweep's listing can only start
-        // after the previous one completed, so PullOne has finished deciding about this hit.
-        var searchesAfterGet = Remote.Calls.Count(c => c.Op == "search");
-        await Observable.Interval(50.Milliseconds()).StartWith(0L)
-            .Where(_ => Remote.Calls.Count(c => c.Op == "search") > searchesAfterGet)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
 
-        // Read through the node's own stream, NOT GetMeshNode: the tombstone is still up (the
-        // delete is still "in flight" for the whole test), and that is exactly what the read path
-        // is supposed to report. The stream is the authoritative view of what the workspace holds.
-        var local = await Mesh.GetHostedHub(new Address("test-reader-pull6"), c => c.AddData())!
+        // Subscribe the node's OWN stream — not GetMeshNode, whose tombstone answer is the thing
+        // under test, and not a sampled read. The resurrected content must never arrive on it.
+        await Mesh.GetHostedHub(new Address("test-reader-pull6"), c => c.AddData())!
             .GetMeshNodeStream("pull6/doc")
-            .Where(n => n is not null)
-            .FirstAsync().Timeout(30.Seconds()).ToTask();
+            .Select(MarkdownBody)
+            .Where(body => body == "remote v2")
+            .Should().NotEmit(3.Seconds(),
+                "the local delete is in flight — re-applying the remote copy resurrects content "
+                + "the user is deleting. 'remote v2' arriving here means PullOne read the delete "
+                + "tombstone as 'absent, therefore create'");
 
-        MarkdownBody(local).Should().Be("local v1",
-            "the local delete is in flight — re-applying the remote copy resurrects content the "
-            + "user is deleting. 'remote v2' here means PullOne read the delete tombstone as "
-            + "'absent, therefore create'");
+        // …and the window was not empty: the sweep really did fetch this hit and decide about it.
+        // Read after the fact from the remote's own call log — a statement about what happened,
+        // never a gate.
+        Remote.Calls.Count(c => c is { Op: "get", Path: "pull6/doc" }).Should().BeGreaterThan(getsBefore,
+            "without a sweep actually fetching the moved hit the negative assertion above would "
+            + "pass vacuously — nothing would have had the chance to resurrect anything");
 
-        var cfg = await Sync.ReadConfig("pull6", "partner").Timeout(10.Seconds()).ToTask();
+        var cfg = await Sync.ReadConfig("pull6", "partner").Should().Within(10.Seconds()).Emit();
         cfg!.LastError.Should().BeNull(
             "skipping a hit whose local delete is in flight is a normal, expected decision — not a "
             + "sync error, and not a reason to abort the sweep");

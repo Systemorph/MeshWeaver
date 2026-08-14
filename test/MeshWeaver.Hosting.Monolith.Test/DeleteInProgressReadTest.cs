@@ -48,8 +48,7 @@ public class DeleteInProgressReadTest(ITestOutputHelper output) : MonolithMeshTe
         var reader = GetClient(c => c.AddData());
 
         var present = await reader.GetMeshNodeOutcome(path, TimeSpan.FromSeconds(30))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(30.Seconds()).Emit();
         present.Status.Should().Be(NodeReadStatus.Present);
         present.Node!.Path.Should().Be(path);
 
@@ -59,8 +58,7 @@ public class DeleteInProgressReadTest(ITestOutputHelper output) : MonolithMeshTe
         Output.WriteLine($"[TEST] tombstoned {path} — the row is still there, the delete is in flight");
 
         var inFlight = await reader.GetMeshNodeOutcome(path, TimeSpan.FromSeconds(30))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"[TEST] outcome while the delete is in flight: {inFlight.Status}");
 
         inFlight.Status.Should().Be(NodeReadStatus.DeleteInProgress,
@@ -73,15 +71,13 @@ public class DeleteInProgressReadTest(ITestOutputHelper output) : MonolithMeshTe
         // everything DeleteInProgress.
         var absent = await reader
             .GetMeshNodeOutcome($"{TestPartition}/never-existed", TimeSpan.FromSeconds(30))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(30.Seconds()).Emit();
         absent.Status.Should().Be(NodeReadStatus.Absent,
             "routing answers NotFound for a path with no node — that IS absence");
 
         // The convenience read keeps its documented MeshNode? contract exactly: both are null.
         var collapsed = await reader.GetMeshNode(path, TimeSpan.FromSeconds(30))
-            .FirstAsync().Timeout(TimeSpan.FromSeconds(30))
-            .ToTask(TestContext.Current.CancellationToken);
+            .Should().Within(30.Seconds()).Emit();
         collapsed.Should().BeNull(
             "GetMeshNode is GetMeshNodeOutcome with the distinction discarded — callers that do "
             + "not ask for it see no behaviour change at all");
