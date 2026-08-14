@@ -96,28 +96,24 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Should().Within(30.Seconds()).Match(c => c is StackControl s
                 && HasArea(s, CodeLayoutAreas.CellArea)))!;
 
-        // Cell frame: code + output segments with the toolbar at the BOTTOM
-        // (the composer bar — 2026-07-03 UX feedback).
+        // Cell frame: the code segment and the toolbar — and, before the first run, NOTHING else.
         var cell = (StackControl)(await stream
             .GetControlStream(FindArea(root, CodeLayoutAreas.CellArea))
             .Should().Within(10.Seconds()).Match(c => c is StackControl))!;
         HasArea(cell, CodeLayoutAreas.CellToolbarArea).Should().BeTrue("the cell carries its own toolbar");
         HasArea(cell, CodeLayoutAreas.CellCodeArea).Should().BeTrue("the code sits inside the cell frame");
-        HasArea(cell, CodeLayoutAreas.CellOutputArea).Should().BeTrue(
-            "an executable cell always has an output segment attached beneath the code");
+        HasArea(cell, CodeLayoutAreas.CellOutputArea).Should().BeFalse(
+            "a cell that has never run renders NO output segment — an empty 'Not yet run' strip " +
+            "under the Run button is a status nobody needs; absence says it quieter");
 
-        // Order inside the frame: CODE, then the TOOLBAR, then the OUTPUT — Run sits directly
-        // under the code it executes and directly above the result it produced, so a reader never
-        // scrolls past the output to find the button.
+        // Order inside the frame: CODE, then the TOOLBAR — Run sits directly under the code it
+        // executes. (Output-below-toolbar is pinned by the run test, which has an output to order.)
         var areaOrder = cell.Areas.Select(a => a.Area?.ToString() ?? "").ToArray();
         int IndexOf(string id) => Array.FindIndex(areaOrder,
             a => a == id || a.EndsWith("/" + id, StringComparison.Ordinal));
         IndexOf(CodeLayoutAreas.CellCodeArea).Should().BeLessThan(
             IndexOf(CodeLayoutAreas.CellToolbarArea),
             "the toolbar attaches directly beneath the code it runs");
-        IndexOf(CodeLayoutAreas.CellToolbarArea).Should().BeLessThan(
-            IndexOf(CodeLayoutAreas.CellOutputArea),
-            "the output segment sits below the toolbar that produced it");
 
         // (a) Toolbar contains Run; no Cancel while nothing runs — and NO Edit button for the
         // DevLogin admin: a viewer holding Update renders the cell's code segment as the inline
@@ -146,13 +142,8 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Should().Within(10.Seconds()).Match(c => c is not null);
         runControl.Should().BeOfType<ButtonControl>("Run renders as a button control");
 
-        // Before the first run the output segment is the subtle hint,
-        // NOT an activity embed (and not a large empty pane).
-        var outputControl = await stream
-            .GetControlStream(FindArea(cell, CodeLayoutAreas.CellOutputArea))
-            .Should().Within(10.Seconds()).Match(c => c is not null);
-        outputControl.Should().NotBeOfType<LayoutAreaControl>(
-            "no run happened yet, so there is no activity Progress area to embed");
+        // …and nothing pretends to be output: with no run there is no activity Progress area to
+        // embed, so the cell simply ends after the toolbar (asserted above).
     }
 
     [Fact(Timeout = 120000)]
@@ -197,6 +188,19 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
                 && l.Address.ToString() == activityPath
                 && l.Reference.Area == ActivityLayoutAreas.ProgressArea))!;
         Output.WriteLine($"Output segment embeds Progress of {outputControl.Address}");
+
+        // …and it appears BELOW the toolbar that produced it — the reading order of the whole
+        // cell, pinned here because this is the state that actually has an output to order:
+        // CODE → TOOLBAR → OUTPUT.
+        var ranOrder = cell.Areas.Select(a => a.Area?.ToString() ?? "").ToArray();
+        int IndexIn(string id) => Array.FindIndex(ranOrder,
+            a => a == id || a.EndsWith("/" + id, StringComparison.Ordinal));
+        IndexIn(CodeLayoutAreas.CellCodeArea).Should().BeLessThan(
+            IndexIn(CodeLayoutAreas.CellToolbarArea),
+            "the toolbar attaches directly beneath the code it runs");
+        IndexIn(CodeLayoutAreas.CellToolbarArea).Should().BeLessThan(
+            IndexIn(CodeLayoutAreas.CellOutputArea),
+            "the result appears below the Run button that produced it");
 
         // (c) Cancel is present in the cell toolbar while the activity is Running.
         var toolbarArea = FindArea(cell, CodeLayoutAreas.CellToolbarArea);
