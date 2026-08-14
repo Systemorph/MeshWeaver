@@ -299,7 +299,29 @@ spec:
       app.kubernetes.io/name: "{{ .Chart.Name }}"
       app.kubernetes.io/component: "memex-portal"
       app.kubernetes.io/instance: "{{ .Release.Name }}"
-  replicas: 1
+  # 🚨 Replicas are OWNED BY THE AUTOSCALER when KEDA is on — so the chart must not render this
+  # field there at all.
+  #
+  # This used to be a hard-coded `replicas: 1`, and that one line is why memex-cloud could not
+  # survive a pod loss. Everything else the HA shape needs was already true in that namespace —
+  # AdoNet Orleans clustering, a `ConnectionStrings:orleans` pointing at the Flexible Server, RWX
+  # Azure Files on every claim, a KEDA ScaledObject with minReplicaCount 2 — and the Deployment
+  # still declared ONE pod, because the chart had no way to say otherwise. `replicas.portal: 2` sat
+  # in deploy/aks/values.aks.yaml since 2026-07-13 consumed by NOTHING.
+  #
+  # Rendering it under KEDA would be worse than useless: helm and the HPA would then fight over the
+  # same field, and every `helm upgrade` would yank a scaled-out deployment back to the chart's
+  # number until the HPA pushed it out again. Omitting it is what hands ownership over cleanly —
+  # the HPA sets it, helm never touches it, and `minReplicaCount` (values: keda.minReplicas) is the
+  # single place the floor is written.
+  #
+  # Without KEDA the chart is the only writer, so it renders the value: 1 for a single-replica
+  # self-host (the default), higher for a fixed-size install that wants HA without an autoscaler.
+  # ⚠️ Above 1 the same prerequisites apply as for KEDA — AdoNet clustering and RWX on every claim
+  # (values.yaml → persistence). helm-template asserts both; see .github/workflows/chart-gate.yml.
+{{- if not (.Values.keda).enabled }}
+  replicas: {{ (.Values.replicas).portal | default 1 }}
+{{- end }}
   revisionHistoryLimit: 3
   # ⏱️ How long a rollout may be "not progressing" before k8s marks it ProgressDeadlineExceeded.
   #

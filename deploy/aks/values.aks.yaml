@@ -344,12 +344,21 @@ resources:
       memory: "16Gi"   # generous memory ceiling (half a 32 GiB node)
 
 # --- HA / replicas ----------------------------------------------------------
-# Launch 2 portal replicas by default (still needs cookie session affinity +
-# AdoNet Orleans clustering; both are configured). Bump to 3 for full 3-zone
-# spread. portal-ha-patch.yaml sets the same count — keep the two in sync (or
-# `kubectl scale deployment memex-portal-deployment --replicas=2`).
+# Launch 2 portal replicas (needs cookie session affinity + AdoNet Orleans
+# clustering + RWX on every claim; all three are configured below and asserted
+# at render time by .github/workflows/chart-gate.yml).
+#
+# ⚠️ Read ONLY when keda.enabled is false. With KEDA on — which is this file's
+# default — the HPA owns spec.replicas and the chart renders no such field, so
+# the floor that actually applies is keda.minReplicas below. This key is the
+# no-autoscaler fallback, kept equal to that floor so the two never disagree.
+#
+# 🚨 Until 2026-08-14 the chart consumed NEITHER: templates/memex-portal/
+# deployment.yaml hard-coded `replicas: 1`, so this value had sat here inert
+# since 2026-07-13 while memex-cloud served every request from a single pod
+# whose loss was a multi-minute 503.
 replicas:
-  portal: 2        # Blazor Server: initial count; KEDA (below) owns it once installed
+  portal: 2        # fallback when keda.enabled is false; KEDA's minReplicas owns it otherwise
   postgres: 1      # self-managed pg StatefulSet stays single-writer
 
 # --- KEDA autoscaling (portal) ---------------------------------------------
