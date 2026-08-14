@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>meshweaver-plugin-build</ToolCommandName>
+    <Description>Builds a MeshWeaver plugin's in-mesh C# the way the portal compiles it at runtime, so CI type-checks source that no other build can see.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- For DynamicMeshNodeAttributeGenerator (internal; see the InternalsVisibleTo in
+         MeshWeaver.Graph). The tool must emit the SAME skeleton the runtime compiles, so it calls
+         the framework's generator rather than carrying a second copy of it. -->
+    <ProjectReference Include="../MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
+  </ItemGroup>
+
+</Project>
