@@ -108,7 +108,6 @@ public class ProviderPackBootTest
                     "ClaudeCode:ConfigDirRoot", "/mnt/users/"),
             })
             .Build();
-        Assert.Equal("/mnt/users/_skills", ClaudeCodePackAttribute.DeriveSkillsDirectory(configuration));
-        Assert.Equal("/mnt/users/_skills", CopilotPackAttribute.DeriveSkillsDirectory(configuration));
+        Assert.Equal("/mnt/users/_skills", CliSkillsDirectory.Derive(configuration));
     }
 }

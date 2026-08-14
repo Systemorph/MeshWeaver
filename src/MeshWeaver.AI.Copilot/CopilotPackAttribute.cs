@@ -30,7 +30,7 @@ public sealed class CopilotPackAttribute : MeshNodeProviderAttribute
             services.AddOptions<CopilotConfiguration>()
                 .BindConfiguration("Copilot")
                 .PostConfigure<IConfiguration>((config, configuration) =>
-                    config.SkillsDirectory ??= DeriveSkillsDirectory(configuration));
+                    config.SkillsDirectory ??= MeshWeaver.AI.Connect.CliSkillsDirectory.Derive(configuration));
             // The per-user Connect flow's strategy — previously a direct type reference in the
             // portal composition; travels with the pack it belongs to.
             services.AddSingleton<IConnectStrategy, CopilotConnectStrategy>();
@@ -38,13 +38,4 @@ public sealed class CopilotPackAttribute : MeshNodeProviderAttribute
         }),
     ];
 
-    /// <summary>The shared skills folder: <c>Skills:Directory</c>, else <c>{ClaudeCode:ConfigDirRoot}/_skills</c>.</summary>
-    public static string? DeriveSkillsDirectory(IConfiguration configuration)
-    {
-        var configured = configuration["Skills:Directory"];
-        if (!string.IsNullOrWhiteSpace(configured))
-            return configured;
-        var claudeRoot = configuration["ClaudeCode:ConfigDirRoot"]?.TrimEnd('/', '\\');
-        return string.IsNullOrEmpty(claudeRoot) ? null : $"{claudeRoot}/_skills";
-    }
 }

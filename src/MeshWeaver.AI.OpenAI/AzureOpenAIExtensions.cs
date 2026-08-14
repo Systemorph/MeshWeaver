@@ -19,10 +19,10 @@ public static class AzureOpenAIExtensions
     /// binding (<c>AzureOpenAI:</c>) +
     /// <see cref="AzureOpenAIChatClientAgentFactory"/>. Idempotent.
     /// </summary>
-    public static TBuilder AddAzureOpenAI<TBuilder>(this TBuilder builder)
+    public static TBuilder AddAzureOpenAI<TBuilder>(this TBuilder builder, string configSection = "AzureOpenAI")
         where TBuilder : MeshBuilder
     {
-        builder.ConfigureServices(services => services.AddAzureOpenAI());
+        builder.ConfigureServices(services => services.AddAzureOpenAI(configSection));
         return builder;
     }
 
@@ -33,8 +33,12 @@ public static class AzureOpenAIExtensions
         this IServiceCollection services,
         Action<AzureOpenAIConfiguration> configure)
     {
-        services.Configure(configure);
-        return services.AddAzureOpenAI();
+        services.AddAzureOpenAI();
+        // POST-configure: the caller's explicit values must win over the config binding the
+        // parameterless overload registers (review finding — Configure-before-Bind let the
+        // bound section clobber the action's values).
+        services.PostConfigure(configure);
+        return services;
     }
 
     /// <summary>
@@ -42,13 +46,13 @@ public static class AzureOpenAIExtensions
     /// boot-loaded pack carries; the builder overload delegates here. TryAddEnumerable keeps it
     /// idempotent (the legacy bare AddSingleton form double-registered the factory).
     /// </summary>
-    public static IServiceCollection AddAzureOpenAI(this IServiceCollection services)
+    public static IServiceCollection AddAzureOpenAI(this IServiceCollection services, string configSection = "AzureOpenAI")
     {
         services.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
-            SectionName: "AzureOpenAI", ProviderName: "AzureOpenAI", Order: 3,
+            SectionName: configSection, ProviderName: "AzureOpenAI", Order: 3,
             DisplayLabel: "Azure OpenAI", DefaultEndpoint: null,
             DefaultModelIds: ImmutableArray<string>.Empty, RequiresApiKey: true));
-        services.AddOptions<AzureOpenAIConfiguration>().BindConfiguration("AzureOpenAI");
+        services.AddOptions<AzureOpenAIConfiguration>().BindConfiguration(configSection);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatClientFactory, AzureOpenAIChatClientAgentFactory>());
         return services;
     }
