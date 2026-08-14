@@ -130,7 +130,40 @@ public sealed class MessageHub : IMessageHub
     }
 
     /// <summary>The hub's current lifecycle phase; advances through start, quiescing, and the disposal phases.</summary>
-    public MessageHubRunLevel RunLevel { get; private set; }
+    public MessageHubRunLevel RunLevel
+    {
+        get => runLevel;
+        private set
+        {
+            // Publish only on an actual TRANSITION. Several disposal arms assign the same terminal
+            // level defensively (the Dead backstop in the finally, for one), and a subscriber should
+            // see the lifecycle, not the number of times a field was written.
+            if (runLevel == value)
+                return;
+            runLevel = value;
+            runLevelChanged.OnNext(value);
+            // Dead is terminal: complete the source so `.LastAsync()`, `.ToTask()` and every other
+            // completion-shaped composition over it terminates instead of hanging on a hub that will
+            // never emit again.
+            if (value == MessageHubRunLevel.Dead)
+                runLevelChanged.OnCompleted();
+        }
+    }
+
+    private MessageHubRunLevel runLevel;
+
+    /// <summary>
+    /// Backing source for <see cref="RunLevelChanged"/>. A BehaviorSubject, so a late subscriber is
+    /// told the level the hub is ALREADY in rather than waiting for the next transition — without
+    /// that, subscribing to observe the disposal window would itself race the window (#1508).
+    /// Synchronized: the phases are posted from the action block, but disposal arms and the
+    /// watchdog can terminalize from other threads.
+    /// </summary>
+    private readonly ISubject<MessageHubRunLevel> runLevelChanged =
+        Subject.Synchronize(new BehaviorSubject<MessageHubRunLevel>(MessageHubRunLevel.Starting));
+
+    /// <inheritdoc />
+    public IObservable<MessageHubRunLevel> RunLevelChanged => runLevelChanged.AsObservable();
 
     /// <summary>
     /// Non-null once a BuildupAction faulted during init. The hub stays <see cref="MessageHubRunLevel.Started"/>
