@@ -443,6 +443,29 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     }
 
     /// <summary>
+    /// The LOCAL route for <paramref name="address"/>, or null when this silo hosts no hub there —
+    /// the same step-1 short-circuit <see cref="DeliverMessage"/> takes, exposed so the FAILURE leg
+    /// can take it too (issue #1486).
+    ///
+    /// <para>🚨 <b>Why this exists.</b> Every same-process delivery to a co-hosted hub short-circuits
+    /// here and never touches an Orleans stream — except the NACK, which
+    /// <c>RoutingGrain.PostFailure</c> published to a stream unconditionally. That made the failure
+    /// leg the WEAKEST inbound path: a hub whose stream subscription was never attached (or was
+    /// attached and then lost — <see cref="SubscribeWhenStreamingReadyAsync"/> can give up while the
+    /// local route stays live) is reachable for forward traffic and unreachable for NACKs. And a
+    /// publish to a stream with NO live subscriber SUCCEEDS: nothing faults, the continuation never
+    /// sees <c>IsFaulted</c>, and the NACK is simply gone — so the requester waits forever for an
+    /// answer the router believes it sent.</para>
+    ///
+    /// <para>Answering through the local route removes the stream dependency entirely for the
+    /// co-hosted case, which is the majority. It is deliberately NOT the whole
+    /// <see cref="DeliverMessage"/> pipeline: a failure must never re-enter grain dispatch and
+    /// generate a failure of its own.</para>
+    /// </summary>
+    public AsyncDelivery? TryGetLocalRoute(Address address) =>
+        streams.TryGetValue(GetHostAddress(address), out var callback) ? callback : null;
+
+    /// <summary>
     /// Registers a local delivery callback for an address and subscribes the matching Orleans
     /// memory stream so cross-process messages for that address are routed into the callback.
     /// </summary>
