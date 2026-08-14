@@ -13,8 +13,8 @@ namespace MeshWeaver.AI.Test;
 /// <summary>
 /// Unit tests for <see cref="MeshOperations.ResolveContextPath"/>. Regression coverage for the
 /// 2026-04-15 prod bug where <c>CollaborationPlugin.SuggestEdit</c> / <c>AddComment</c> ignored
-/// the chat's context path â€” agents calling the tool with a relative path or bare display name
-/// had the request routed to a non-existent grain (e.g. "Final Report â€“ AI Readiness Assessment"),
+/// the chat's context path — agents calling the tool with a relative path or bare display name
+/// had the request routed to a non-existent grain (e.g. "Final Report – AI Readiness Assessment"),
 /// and the edits never applied.
 /// </summary>
 public class ResolveContextPathTest
@@ -50,7 +50,7 @@ public class ResolveContextPathTest
     [Fact]
     public void RelativeUnifiedPath_IsPrefixedWithContextPath()
     {
-        // "content/report.docx" â€” UCR prefix path; relative to context.
+        // "content/report.docx" — UCR prefix path; relative to context.
         var chat = new StubChat(new AgentContext { Context = "Acme/AIConsulting" });
 
         MeshOperations.ResolveContextPath(chat, "@content/report.docx")
@@ -61,7 +61,7 @@ public class ResolveContextPathTest
     [Fact]
     public void RelativeColonPath_IsPrefixedWithContextPath()
     {
-        // Legacy colon syntax: "content:file.md" â€” no slash before colon, so relative.
+        // Legacy colon syntax: "content:file.md" — no slash before colon, so relative.
         var chat = new StubChat(new AgentContext { Context = "Doc/Architecture" });
 
         MeshOperations.ResolveContextPath(chat, "@content:icon.svg")
@@ -155,7 +155,7 @@ public class ResolveContextPathTest
 
     /// <summary>
     /// Minimal <see cref="IAgentChat"/> stub exposing only <see cref="IAgentChat.Context"/>.
-    /// All other members throw â€” the method under test only reads Context.
+    /// All other members throw — the method under test only reads Context.
     /// </summary>
     private sealed class StubChat : IAgentChat
     {
