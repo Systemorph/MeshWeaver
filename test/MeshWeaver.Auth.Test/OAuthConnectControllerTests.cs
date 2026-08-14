@@ -495,6 +495,62 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
             "a client that re-authorizes must end with ONE live credential, not one per authorization");
     }
 
+    /// <summary>
+    /// The concurrency half of #1493, from review on the fix: two exchanges for the same
+    /// <c>(user, client_id)</c> must not delete EACH OTHER's freshly-minted token.
+    ///
+    /// <para>A naive "delete everything with this label except mine" rule is not convergent — each
+    /// exchange sees the other's new token in the listing and removes it, so BOTH clients walk away
+    /// holding a credential that was deleted moments later. That is strictly worse than the
+    /// accumulation this issue set out to fix. Superseding is therefore ordered by
+    /// <c>(CreatedAt, path)</c>: every participant deletes only strictly below itself, so the newest
+    /// survives whichever exchange evaluates last — and there is still exactly one live
+    /// credential.</para>
+    /// </summary>
+    [Fact]
+    public async Task Token_TwoAuthorizationsRacing_LeaveExactlyOneWORKINGCredential()
+    {
+        var controller = CreateController(AuthenticatedUser("dave@example.com", "Dave"));
+
+        var reg = ((ObjectResult)controller.RegisterClient(new ClientRegistrationRequest
+        {
+            ClientName = "Racing Client",
+            RedirectUris = ["https://claude.ai/cb"],
+        })!).Value as ClientRegistrationResponse;
+
+        // Both codes are obtained BEFORE either is exchanged, so the two exchanges genuinely
+        // overlap rather than running one after the other.
+        var first = AuthorizeAndExchange(controller, reg!.ClientId);
+        var second = AuthorizeAndExchange(controller, reg.ClientId);
+        var tokens = await Task.WhenAll(first, second);
+
+        var service = new ApiTokenService(
+            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
+            Mesh,
+            Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
+            Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>());
+
+        // 🚨 The property that matters is not "one row survives" but "a SURVIVING row still works".
+        // Mutual deletion satisfies the count on its way to zero.
+        var live = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Observable.Concat(tokens.Select(t => service.ValidateToken(t).Take(1)))
+                .Where(v => v is not null).Take(1).DefaultIfEmpty())
+            .Should().Within(30.Seconds()).Match(v => v is not null);
+
+        live.Should().NotBeNull(
+            "at least one of the two racing exchanges must leave a credential that still validates — "
+            + "a not-mine deletion rule would have them remove each other's and leave the client "
+            + "holding nothing");
+
+        var label = $"OAuth: {reg.ClientId}";
+        var remaining = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.GetTokensForUser(live!.UserId).Take(1))
+            .Select(all => all.Where(t => t.Label == label).ToArray())
+            .Should().Within(30.Seconds()).Match(t => t.Length == 1);
+
+        remaining.Should().HaveCount(1, "and the outcome still converges on ONE live credential");
+    }
+
     /// <summary>Runs authorize → token for an already-registered client and returns the raw mw_ token.</summary>
     private async Task<string> AuthorizeAndExchange(OAuthConnectController controller, string clientId)
     {
