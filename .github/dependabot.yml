@@ -47,6 +47,12 @@ updates:
       npm-major:
         applies-to: version-updates
         update-types: [major]
+    ignore:
+      # react-native's 0.x "minors" are breaking platform jumps coupled to the Expo SDK
+      # (0.76→0.86 requires React 19): the first wave's group PR broke npm ci on exactly this.
+      # RN (and react-native-web, which tracks it) upgrade DELIBERATELY with the Expo SDK.
+      - dependency-name: react-native
+      - dependency-name: react-native-web
 
   # Python SDK.
   - package-ecosystem: pip
