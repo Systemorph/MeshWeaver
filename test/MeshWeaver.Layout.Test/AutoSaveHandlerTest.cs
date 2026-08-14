@@ -16,6 +16,11 @@ public class AutoSaveHandlerTest
 {
     private static readonly TimeSpan ThrottleInterval = TimeSpan.FromMilliseconds(500);
 
+    // Derived from ThrottleInterval, never hard-coded: these cases mean "before the throttle fired"
+    // and "after it fired", and they must keep meaning that if the interval is ever retuned.
+    private static readonly TimeSpan InsideTheThrottleWindow = ThrottleInterval / 2;
+    private static readonly TimeSpan PastTheThrottleWindow = ThrottleInterval + ThrottleInterval / 5;
+
     [Fact]
     public void SingleEdit_ShouldSaveAfterThrottleInterval()
     {
@@ -404,5 +409,121 @@ public class AutoSaveHandlerTest
         handler.OnValueChanged("Hello");
         Assert.Equal("Hel", handler.LastSyncedValue); // Still old value
         Assert.Equal("Hello", handler.CurrentValue); // Updated
+    }
+
+    /// <summary>
+    /// 🚨 Issue #1606 — the learner's edit that never reached the node.
+    ///
+    /// <para>A course example cell renders as an inline editor and re-renders on every emission of
+    /// the node it is bound to. The Blazor views create this handler in <c>BindData</c> and register
+    /// it with <c>AddBinding</c>, and <c>OnParametersSet</c> runs <c>DisposeBindings()</c> →
+    /// <c>BindData()</c> — so a re-render inside the 500 ms throttle window disposed the handler
+    /// while <c>Throttle</c> was still holding the keystroke. The value went nowhere, with no error
+    /// anywhere: the learner typed, reloaded, and their work was gone.</para>
+    /// </summary>
+    [Fact]
+    public void DisposeInsideTheThrottleWindow_FlushesThePendingEdit()
+    {
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+        var handler = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
+
+        handler.OnValueChanged("the learner's edit");
+        // INSIDE the window — expressed as a fraction of the interval rather than a literal, so the
+        // case still means "a re-render arrived before the throttle fired" if the interval changes.
+        scheduler.AdvanceBy(InsideTheThrottleWindow.Ticks);
+        Assert.Empty(savedValues);
+
+        handler.Dispose();
+
+        Assert.Equal(new[] { "the learner's edit" }, savedValues);
+    }
+
+    /// <summary>
+    /// The flush must not manufacture a write. A handler disposed with nothing pending — or with
+    /// only what was already saved — writes nothing, or every re-render would post a redundant
+    /// patch for a cell nobody touched.
+    /// </summary>
+    [Fact]
+    public void DisposeWithNothingPending_SavesNothing()
+    {
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+        var handler = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
+
+        handler.Dispose();
+
+        Assert.Empty(savedValues);
+    }
+
+    [Fact]
+    public void DisposeAfterTheThrottleAlreadyFired_DoesNotSaveTwice()
+    {
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+        var handler = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
+
+        handler.OnValueChanged("saved once");
+        scheduler.AdvanceBy(PastTheThrottleWindow.Ticks);
+        Assert.Equal(new[] { "saved once" }, savedValues);
+
+        handler.Dispose();
+
+        Assert.Equal(new[] { "saved once" }, savedValues);
+    }
+
+    /// <summary>
+    /// An external update that the editor adopted is the new baseline, so disposing afterwards must
+    /// not write it back — that would turn a read into a write on every re-render.
+    /// </summary>
+    [Fact]
+    public void DisposeAfterAnExternalUpdateWasApplied_SavesNothing()
+    {
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+        var handler = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
+
+        handler.OnExternalUpdateApplied("text from the stream");
+        handler.Dispose();
+
+        Assert.Empty(savedValues);
+    }
+
+    /// <summary>
+    /// The realistic sequence: type, re-render (dispose + rebuild), type again, re-render again.
+    /// Every keystroke run must survive its re-render — a cell bound to a node that emits on each
+    /// save re-renders constantly, which is why the drop was total rather than occasional.
+    /// </summary>
+    [Fact]
+    public void EveryRebindFlushesItsOwnPendingEdit()
+    {
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+
+        var first = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
+        first.OnValueChanged("edit one");
+        scheduler.AdvanceBy(InsideTheThrottleWindow.Ticks);
+        first.Dispose();
+
+        var second = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
+        second.OnValueChanged("edit one, edit two");
+        scheduler.AdvanceBy(InsideTheThrottleWindow.Ticks);
+        second.Dispose();
+
+        Assert.Equal(new[] { "edit one", "edit one, edit two" }, savedValues);
+    }
+
+    [Fact]
+    public void OnValueChangedAfterDispose_IsStillIgnored()
+    {
+        var scheduler = new TestScheduler();
+        var savedValues = new List<string>();
+        var handler = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
+
+        handler.Dispose();
+        handler.OnValueChanged("too late");
+        scheduler.AdvanceBy(PastTheThrottleWindow.Ticks);
+
+        Assert.Empty(savedValues);
     }
 }
