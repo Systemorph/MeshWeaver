@@ -61,7 +61,9 @@ public class InstanceKeysTest
 
     [Theory]
     [InlineData("Bearer ")]
-    [InlineData("Basic mwi_abc")]                            // wrong scheme
+    // Basic IS an accepted scheme (NuGet clients cannot send Bearer), but its payload must be
+    // base64 of "user:key" — a raw key after the scheme is not, and `_` is not a base64 character.
+    [InlineData("Basic mwi_abc")]
     [InlineData("mwi_abc")]                                  // no scheme
     [InlineData("Bearer notaninstancekey")]                  // no instance prefix
     [InlineData(null)]
@@ -76,6 +78,68 @@ public class InstanceKeysTest
     [InlineData("  Bearer   mwi_abc  ")]                     // stray whitespace is tolerated
     public void WellFormedHeaders_YieldTheKey(string header)
         => Assert.Equal("mwi_abc", InstanceKeys.ExtractKey(header));
+
+    /// <summary>
+    /// A NuGet client CANNOT send Bearer: <c>packageSourceCredentials</c> speaks Basic, and the
+    /// only alternative is shipping a credential-provider plugin. Accepting Basic keeps ONE
+    /// credential and ONE validator for both MeshWeaver's own clients and `dotnet restore`.
+    ///
+    /// <para>The username half is ignored — the key is the whole secret — so any username works,
+    /// which matters because NuGet requires one to be present.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("instance")]
+    [InlineData("anything")]
+    [InlineData("")]
+    public void BasicCredential_YieldsThePasswordHalf(string username)
+    {
+        var header = "Basic " + Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes($"{username}:mwi_abc"));
+
+        Assert.Equal("mwi_abc", InstanceKeys.ExtractKey(header));
+    }
+
+    /// <summary>
+    /// Malformed Basic payloads are an unauthenticated caller (→ 401), never an exception (→ 500).
+    /// An endpoint that 500s on a bad header hands an unauthenticated caller a way to make the
+    /// registry throw.
+    /// </summary>
+    [Theory]
+    [InlineData("Basic !!!not-base64!!!")]
+    [InlineData("Basic ")]
+    public void MalformedBasicCredential_YieldsNoKeyAndDoesNotThrow(string header)
+        => Assert.Null(InstanceKeys.ExtractKey(header));
+
+    [Fact]
+    public void BasicCredentialWithoutAColon_YieldsNoKey()
+    {
+        // No colon means no password half — there is nothing to read as a key, and reading the
+        // whole blob would accept a username that merely looks like one.
+        var header = "Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("mwi_abc"));
+
+        Assert.Null(InstanceKeys.ExtractKey(header));
+    }
+
+    [Fact]
+    public void OverlongBasicCredential_YieldsNoKeyWithoutDecoding()
+    {
+        // Unauthenticated, attacker-controlled input: the reject path must not throw and must not
+        // decode an unbounded blob. A real credential is a username plus a 32-byte key.
+        var header = "Basic " + new string('A', 5000);
+
+        Assert.Null(InstanceKeys.ExtractKey(header));
+    }
+
+    [Fact]
+    public void BasicCredentialWithAPersonalToken_YieldsNoKey()
+    {
+        // The prefix separation that keeps a USER credential from ever authenticating as an
+        // instance must hold on the Basic path too, or the new scheme becomes a way around it.
+        var header = "Basic " + Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes("user:mw_personaltoken"));
+
+        Assert.Null(InstanceKeys.ExtractKey(header));
+    }
 
     [Fact]
     public void HashEquals_MatchesOnlyIdenticalHashes()
