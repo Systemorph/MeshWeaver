@@ -112,6 +112,12 @@ public static class MeshExtensions
     /// Overrides the default 30-second ceiling applied to mesh persistence operations
     /// (create, update, delete, move). Raise this for long-running tests or batch jobs;
     /// lower it to fail faster in environments where slow ops are suspicious.
+    ///
+    /// <para>This is the ONE mesh-operation bound there is to configure: every bound nested inside
+    /// it — a descendant hub answering a pre-flight fan-out, a cascade leg, an authorization fold —
+    /// is derived from it and contracts strictly, so the innermost level is always the one that
+    /// fires. See <see cref="MeshOperationOptions"/> for the ladder and why equal-by-coincidence
+    /// budgets were issue #1198.</para>
     /// </summary>
     public static MessageHubConfiguration WithMeshOperationTimeout(
         this MessageHubConfiguration config, TimeSpan timeout)
@@ -2047,9 +2053,15 @@ public static class MeshExtensions
     /// <summary>
     /// <see cref="Exception.Data"/> key naming the delete STAGE a <see cref="TimeoutException"/>
     /// came out of. Issue #1198: the delete pipeline bounds SIX independent stages with the same
-    /// <see cref="MeshOperationOptions.Timeout"/>, and a bare <c>.Timeout(t)</c> throws
-    /// <c>"The operation has timed out."</c> with no context — so every one of them logged as the
-    /// same indistinguishable <c>[DeleteNode] timeout</c> and the next occurrence was unreadable.
+    /// budget, and a bare <c>.Timeout(t)</c> throws <c>"The operation has timed out."</c> with no
+    /// context — so every one of them logged as the same indistinguishable
+    /// <c>[DeleteNode] timeout</c> and the next occurrence was unreadable.
+    ///
+    /// <para>Six SIBLING stages sharing one budget is correct — only one of them runs at a time, so
+    /// they never race each other, and the stage name is what tells them apart. What was NOT
+    /// correct, and is the other half of #1198, is a NESTED bound sharing that same value: those do
+    /// overlap, and the outer one always starts its clock first, so the inner one could never fire.
+    /// Nested levels now take a contracted rung — see <see cref="MeshOperationOptions"/>.</para>
     /// </summary>
     private const string DeleteStageDataKey = "DeleteStage";
 
@@ -2170,6 +2182,16 @@ public static class MeshExtensions
         var path = capturedRequest.Path;
         var startedAt = DateTime.UtcNow;
 
+        // 🚨 A CASCADE LEG IS NESTED BY CONSTRUCTION, AND ITS BUDGET MUST SAY SO — issue #1198.
+        // The recursive delete's commit stage fans one DeleteNodeRequest out per leaf, and every
+        // leaf re-enters THIS handler and bounds its own six stages. With one shared constant that
+        // made the leaf's bound exactly equal to the commit stage holding it open, so the leaf —
+        // the only level that knows WHICH of its stages ran out of time — could never be the one
+        // to fire; the root always gave up first and reported an anonymous `stage=commit`.
+        // CascadeRootPath is the structural signal that a caller is already holding a bound open,
+        // so it is what selects the contracted rung. See MeshOperationOptions for the ladder.
+        var budget = capturedRequest.CascadeRootPath is null ? opts.Timeout : opts.NestedTimeout;
+
         logger.LogInformation(
             "[DeleteNode] start path={Path} recursive={Recursive} confirmWarnings={Confirm} deletedBy={DeletedBy}",
             path, capturedRequest.Recursive, capturedRequest.ConfirmWarnings,
@@ -2225,9 +2247,9 @@ public static class MeshExtensions
         //    need the live per-node hub state.
         persistence.Read(path, hub.JsonSerializerOptions)
             .DefaultIfEmpty(null!)
-            .TimeoutAtStage(opts.Timeout, () => DeleteStageTimeout(
+            .TimeoutAtStage(budget, () => DeleteStageTimeout(
                 DeleteStage.ReadRoot,
-                $"storage did not return the node at '{path}' within {opts.Timeout.TotalSeconds:0}s"))
+                $"storage did not return the node at '{path}' within {budget.TotalSeconds:0}s"))
             .SelectMany(rootNode =>
             {
                 if (rootNode is null)
@@ -2245,10 +2267,10 @@ public static class MeshExtensions
                 //    hub when fan-out fires a non-recursive DeleteNodeRequest at
                 //    each leaf's address — never load all descendant nodes upfront.
                 return CheckDeletePermissionForNode(hub, senderUserId, rootNode, logger)
-                    .TimeoutAtStage(opts.Timeout, () => DeleteStageTimeout(
+                    .TimeoutAtStage(budget, () => DeleteStageTimeout(
                         DeleteStage.CheckPermission,
                         $"the effective-permission fold for '{path}' did not settle within "
-                        + $"{opts.Timeout.TotalSeconds:0}s (user '{senderUserId}')"))
+                        + $"{budget.TotalSeconds:0}s (user '{senderUserId}')"))
                     .SelectMany(denied =>
                     {
                         if (denied)
@@ -2262,11 +2284,56 @@ public static class MeshExtensions
                             return Observable.Empty<System.Reactive.Unit>();
                         }
 
-                        return RunDeletionValidatorsWithWarningsObs(hub, rootNode, capturedRequest, request.AccessContext)
-                            .TimeoutAtStage(opts.Timeout, () => DeleteStageTimeout(
+                        // 2b. 🚨 Is this node DELETABLE at all? Stage 1's existence gate reads
+                        //     across EVERY storage provider, read-only ones included, while the
+                        //     commit can only remove through the WRITABLE ones — so a node served
+                        //     solely by a read-only provider (static Agent/Harness/LanguageModel
+                        //     definitions, embedded documentation) passed the gate and then died
+                        //     in the commit with "no writable storage provider has this node":
+                        //     an ERROR that reads like a routing bug (#1433).
+                        //
+                        //     Asking here, BEFORE any storage side effect, is the part that
+                        //     matters. HierarchicalPathDeletion walks the subtree BOTTOM-UP, so
+                        //     the undeletable root is reached LAST — refusing at the commit means
+                        //     every writable descendant has already been removed and the operation
+                        //     still fails: a half-destroyed subtree. Refusing here removes nothing.
+                        //
+                        //     Root only. Descendants come from ListDescendantPaths, which
+                        //     enumerates WRITABLE providers exclusively (deliberately — a
+                        //     read-only provider can neither be deleted from nor leak survivors),
+                        //     so no read-only path can reach the plan; a cascade leaf carries
+                        //     CascadeRootPath and skips the probe. And the check is only ever a
+                        //     PRE-flight: PersistenceService.Delete still refuses at commit, so
+                        //     an adapter that cannot answer (the interface default, null) loses
+                        //     the early diagnosis, never the protection.
+                        return (capturedRequest.CascadeRootPath is null
+                                ? persistence.FindDeleteBlockingProvider(path)
+                                : Observable.Return<string?>(null))
+                            .TimeoutAtStage(budget, () => DeleteStageTimeout(
+                                DeleteStage.ValidateRoot,
+                                $"the storage-provider probe for '{path}' did not answer within "
+                                + $"{budget.TotalSeconds:0}s"))
+                            .SelectMany(blockingProvider =>
+                            {
+                                if (blockingProvider is not null)
+                                {
+                                    var msg = $"Cannot delete '{path}': it is served by the "
+                                        + $"read-only storage provider '{blockingProvider}'. "
+                                        + "Nothing was deleted.";
+                                    logger.LogWarning(
+                                        "[DeleteNode] read-only-provider path={Path} provider={Provider}",
+                                        path, blockingProvider);
+                                    PostFailed(msg, NodeDeletionRejectionReason.ValidationFailed,
+                                        [new LogMessage(msg, LogLevel.Error)],
+                                        ImmutableList.Create(path));
+                                    return Observable.Empty<System.Reactive.Unit>();
+                                }
+
+                                return RunDeletionValidatorsWithWarningsObs(hub, rootNode, capturedRequest, request.AccessContext)
+                            .TimeoutAtStage(budget, () => DeleteStageTimeout(
                                 DeleteStage.ValidateRoot,
                                 $"the INodeValidator chain for '{path}' did not complete within "
-                                + $"{opts.Timeout.TotalSeconds:0}s"))
+                                + $"{budget.TotalSeconds:0}s"))
                             .SelectMany(vresult =>
                             {
                                 if (vresult.Error is { Length: > 0 } err)
@@ -2314,7 +2381,7 @@ public static class MeshExtensions
                                 return Observable.Using(
                                     () => recentlyDeleted?.BeginSubtreeDeletion(path)
                                           ?? System.Reactive.Disposables.Disposable.Empty,
-                                    subtreeScope => CollectPathsForDelete(hub, path, capturedRequest.Recursive, opts.Timeout, logger)
+                                    subtreeScope => CollectPathsForDelete(hub, path, capturedRequest.Recursive, budget, logger)
                                     .SelectMany(collected =>
                                     {
                                         if (!capturedRequest.Recursive && collected.HasUnlistedChildren)
@@ -2337,7 +2404,7 @@ public static class MeshExtensions
                                         //     subtree partially destroyed when the user expected an
                                         //     all-or-nothing failure.
                                         var preValidate = capturedRequest.Recursive
-                                            ? PreValidateDescendantsObs(meshHub, path, collected.ToDelete, request.AccessContext, opts.Timeout, logger)
+                                            ? PreValidateDescendantsObs(meshHub, path, collected.ToDelete, request.AccessContext, budget, logger)
                                             : Observable.Return<(string Path, string Error, NodeDeletionRejectionReason Reason)?>(null);
 
                                         return preValidate.SelectMany(failure =>
@@ -2363,12 +2430,18 @@ public static class MeshExtensions
                                                 }
 
                                                 logger.LogWarning(
-                                                    "[DeleteNode] pre-validation failed path={Root} blockedBy={Path} err={Err}",
-                                                    path, f.Path, f.Error);
+                                                    "[DeleteNode] pre-validation failed path={Root} blockedBy={Path} reason={Reason} err={Err}",
+                                                    path, f.Path, f.Reason, f.Error);
                                                 var msg = $"Cannot delete '{f.Path}': {f.Error}";
                                                 PostFailed(
                                                     msg,
-                                                    NodeDeletionRejectionReason.ValidationFailed,
+                                                    // 🚨 f.Reason, not a hard-coded ValidationFailed
+                                                    // (#1198) — a descendant whose permission check
+                                                    // could not be ESTABLISHED answers Unavailable,
+                                                    // and that distinction is the difference between
+                                                    // "retry, something is starving" and "your
+                                                    // content is not deletable".
+                                                    f.Reason,
                                                     [new LogMessage(msg, LogLevel.Error)],
                                                     collected.ToDelete.ToImmutableList());
                                                 return Observable.Empty<System.Reactive.Unit>();
@@ -2416,13 +2489,13 @@ public static class MeshExtensions
                                                 capturedRequest, executionContext,
                                                 recentlyDeleted, logger, collectedMessages,
                                                 deletedProgress)
-                                            .TimeoutAtStage(opts.Timeout, () =>
+                                            .TimeoutAtStage(budget, () =>
                                             {
                                                 var done = SnapshotProgress();
                                                 var ex = DeleteStageTimeout(
                                                     DeleteStage.Commit,
                                                     $"the bottom-up delete of '{path}' did not drain within "
-                                                    + $"{opts.Timeout.TotalSeconds:0}s — {done.Count} of "
+                                                    + $"{budget.TotalSeconds:0}s — {done.Count} of "
                                                     + $"{collected.ToDelete.Count} planned path(s) were already "
                                                     + "removed from storage");
                                                 // Carry the REAL progress: the timeout discards the fan-out's
@@ -2527,6 +2600,7 @@ public static class MeshExtensions
                                         });
                                     }));
                             });
+                            });
                     });
             })
             .Subscribe(
@@ -2603,7 +2677,7 @@ public static class MeshExtensions
                             // The stage detail rides along so the CALLER sees it too — the response
                             // is what a user, an agent or a test reads, and "exceeded 30s" alone is
                             // exactly as unreadable there as it was in the log.
-                            ? $"Delete of '{path}' exceeded {opts.Timeout.TotalSeconds:0}s timeout "
+                            ? $"Delete of '{path}' exceeded {budget.TotalSeconds:0}s timeout "
                               + $"in stage '{stage}': {ex.Message}"
                             : (isNotFound
                                 ? $"Node not found at path '{path}'"
@@ -2613,7 +2687,12 @@ public static class MeshExtensions
                                     ? ex.Message
                                     : $"Unexpected error: {ex.Message}")),
                         isTimeout
-                            ? NodeDeletionRejectionReason.Unknown
+                            // 🚨 A stage that ran out of time DECIDED nothing — it is an
+                            // availability failure, and Unknown said neither that nor anything
+                            // else (#1198). Same vocabulary as NodeRejectionReason.Unavailable and
+                            // CompilationStatus.Unavailable: fail-closed, but stop implying the
+                            // content was judged.
+                            ? NodeDeletionRejectionReason.Unavailable
                             : (dfxReason
                                 ?? (isNotFound
                                     ? NodeDeletionRejectionReason.NodeNotFound
@@ -3028,7 +3107,11 @@ public static class MeshExtensions
                 var resp = d.Message as ValidateDeleteResponse;
                 if (resp is null || resp.IsValid)
                     return ((string, string, NodeDeletionRejectionReason)?)null;
-                return (p, resp.Errors[0], NodeDeletionRejectionReason.ValidationFailed);
+                // 🚨 The descendant's OWN reason, not a blanket ValidationFailed (#1198). When its
+                // permission fold could not be established it says so, and that is the answer the
+                // operator needs — re-labelling it as a validation verdict is what makes the next
+                // occurrence unreadable all over again.
+                return (p, resp.Errors[0], resp.Reason);
             })
             .Catch<(string, string, NodeDeletionRejectionReason)?, Exception>(ex =>
             {
@@ -3128,6 +3211,14 @@ public static class MeshExtensions
     /// <see cref="INodeValidator"/> chain for <see cref="NodeOperation.Delete"/>, and
     /// returns the first validator failure as an Error (empty Warnings in the default
     /// implementation — custom hubs can override this handler to emit Warnings).
+    ///
+    /// <para>🚨 Everything here runs on the CONTRACTED rung
+    /// (<see cref="MeshOperationOptions.NestedTimeout"/>), never the operation budget — issue
+    /// #1198. This handler exists only to answer a caller's pre-flight fan-out, which is already
+    /// holding <see cref="MeshOperationOptions.Timeout"/> open across EVERY descendant; bounding
+    /// the read at that same value meant the descendant could never be the one to give up, so its
+    /// answer — the only one that knows which node and which read — was always discarded in favour
+    /// of the caller's anonymous "N descendants did not answer".</para>
     /// </summary>
     private static IMessageDelivery HandleValidateDeleteRequest(
         IMessageHub hub,
@@ -3145,24 +3236,43 @@ public static class MeshExtensions
         // would see during the real delete.
         var proxyDeleteRequest = new DeleteNodeRequest(path);
 
+        var nested = opts.NestedTimeout;
+
         existingNodeObs
-            .Timeout(opts.Timeout)
+            .Timeout(nested, Observable.Defer(() => Observable.Throw<MeshNode?>(
+                new TimeoutException(
+                    $"[ValidateDelete] storage did not return the node at '{path}' within "
+                    + $"{nested.TotalSeconds:0}s"))))
             .SelectMany(node =>
             {
                 if (node == null)
                     return Observable.Return(
-                        ValidateDeleteResponse.FromError($"Node not found at path: {path}"));
+                        ValidateDeleteResponse.FromError(
+                            $"Node not found at path: {path}",
+                            NodeDeletionRejectionReason.NodeNotFound));
 
                 return RunDeletionValidatorsObs(hub, node, proxyDeleteRequest, request.Message.RootPath)
                     .Select(err => err is null
                         ? ValidateDeleteResponse.Ok()
-                        : ValidateDeleteResponse.FromError(err.Value.ErrorMessage ?? "Validation failed"));
+                        // 🚨 Carry the REASON, not just the text. RunDeletionValidatorsObs already
+                        // distinguishes an availability failure from a verdict (#1446), and
+                        // flattening every descendant refusal into ValidationFailed here re-made
+                        // exactly the mistake that fix exists to stop: an unestablished permission
+                        // check reported as a policy decision, so nobody looks for the starved read.
+                        : ValidateDeleteResponse.FromError(
+                            err.Value.ErrorMessage ?? "Validation failed", err.Value.Reason));
             })
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex, "[ValidateDelete] {Path} failed — treating as error", path);
                 return Observable.Return(
-                    ValidateDeleteResponse.FromError($"Validation error: {ex.Message}"));
+                    ValidateDeleteResponse.FromError(
+                        $"Validation error: {ex.Message}",
+                        // A read that ran out of time did not DECIDE anything — same vocabulary as
+                        // NodeRejectionReason.Unavailable one level in.
+                        ex is TimeoutException
+                            ? NodeDeletionRejectionReason.Unavailable
+                            : NodeDeletionRejectionReason.ValidationFailed));
             })
             .Subscribe(response =>
             {
@@ -3254,6 +3364,9 @@ public static class MeshExtensions
                     NodeRejectionReason.InvalidNodeType => NodeCreationRejectionReason.InvalidNodeType,
                     NodeRejectionReason.InvalidPath => NodeCreationRejectionReason.InvalidPath,
                     NodeRejectionReason.Unauthorized => NodeCreationRejectionReason.ValidationFailed,
+                    // 🚨 An unestablished check must NOT arrive as ValidationFailed (#1446) — that
+                    // is the collapse the distinction exists to prevent.
+                    NodeRejectionReason.Unavailable => NodeCreationRejectionReason.Unavailable,
                     _ => NodeCreationRejectionReason.ValidationFailed
                 };
                 return ((string?, NodeCreationRejectionReason)?)(result.ErrorMessage, reason);
@@ -3455,6 +3568,7 @@ public static class MeshExtensions
                     NodeRejectionReason.NodeNotFound => NodeDeletionRejectionReason.NodeNotFound,
                     NodeRejectionReason.HasChildren => NodeDeletionRejectionReason.HasChildren,
                     NodeRejectionReason.Unauthorized => NodeDeletionRejectionReason.ValidationFailed,
+                    NodeRejectionReason.Unavailable => NodeDeletionRejectionReason.Unavailable,
                     _ => NodeDeletionRejectionReason.ValidationFailed
                 };
                 return ((string?, NodeDeletionRejectionReason)?)(result.ErrorMessage, reason);
@@ -4293,6 +4407,7 @@ public static class MeshExtensions
                 {
                     NodeRejectionReason.NodeNotFound => NodeMoveRejectionReason.SourceNotFound,
                     NodeRejectionReason.Unauthorized => NodeMoveRejectionReason.ValidationFailed,
+                    NodeRejectionReason.Unavailable => NodeMoveRejectionReason.Unavailable,
                     _ => NodeMoveRejectionReason.ValidationFailed
                 };
                 return ((string?, NodeMoveRejectionReason)?)(result.ErrorMessage, reason);

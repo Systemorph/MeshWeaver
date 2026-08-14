@@ -1,6 +1,7 @@
 {
   "$type": "MeshNode",
-  "id": "FutuRe/Analysis/AnnualReport/6JZYu9WfrUmlyeUu29tD8g",
+  "id": "6JZYu9WfrUmlyeUu29tD8g",
+  "namespace": "FutuRe/Analysis/AnnualReport",
   "path": "FutuRe/Analysis/AnnualReport/6JZYu9WfrUmlyeUu29tD8g",
   "name": "Can you check if you have the necessary informatio...",
   "nodeType": "Thread",

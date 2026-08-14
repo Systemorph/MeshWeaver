@@ -396,6 +396,81 @@ The user identity rides on the in-flight delivery's `AccessContext.ObjectId`; `R
 
 Two — and only two — blanket short-circuits exist before the fold: `WellKnownUsers.System` (→ `All | Sync | Compile`) and the mesh-node cache's hydrator identity `cache/mesh-node-cache` (→ `Read` only). **There is deliberately no global-admin short-circuit** — see "The Admin partition" above.
 
+### 🚨 The fold can produce NO answer, and that is a third outcome
+
+`GetEffectivePermissions` is a `CombineLatest` over the grant and policy reads of the target's scope
+and *every ancestor scope* — plus, through its `Zip` against the `Public` evaluation of the same
+path, a second copy of that same fold. `CombineLatest` emits only once **every** leg has emitted.
+
+A leg that **starves** never emits, never completes and never errors: `SyncedQueryMeshNodes` gates on
+`SeenInitial` over a merge containing a `Subject` that is never completed, so it can only stall. The
+fold therefore has **no terminal at all**, and a `.Take(1)` around it bounds the number of emissions
+rather than the wait. This is not hypothetical — it is the ordinary cross-silo shape, where the
+owning activation lives on a peer silo that is busy or has just gone away.
+
+Not every leg is like that, and the difference is deliberate. `ObserveGatedNodes` starts with
+`.StartWith(empty)` precisely so a slow leg cannot stall the fold — safe because a gate only ever
+*adds* `Read`. The grant and policy legs **must not** be seeded: "no grants yet" reads as a denial,
+which would be a silent wrong answer. So an unanswerable read cannot be projected onto the yes/no
+axis at all. It needs a third outcome:
+
+| Outcome | Means | Reported as |
+|---|---|---|
+| granted | the fold decided yes | operation proceeds |
+| denied | the fold decided no | `Unauthorized` — a statement about the caller's entitlements |
+| **could not be established** | the fold reached **no decision** | `NodeRejectionReason.Unavailable` → `Node{Creation,Deletion,Move}RejectionReason.Unavailable` |
+
+The message gate has the same *vocabulary* but a narrower reach: `CheckPermissionOutcome` catches a
+**faulted** fold as `Undetermined` → `ErrorType.Unavailable`. It deliberately carries **no** bound
+(see its "No Timeout here" comment), so a **silent** starvation still parks a `[RequiresPermission]`
+delivery there. Giving the gate a terminal for that case changes the behaviour of every gated
+message and wants its own argument; the node-operation validator below is bounded today.
+
+**Decision callers give the check a terminal; live subscribers do not.** `RlsNodeValidator` bounds
+its whole chain with `MeshOperationOptions.PermissionEstablishmentBudget` (default 20 s —
+comfortably above any healthy cold fold, strictly below the 60 s hub `RequestTimeout`) and answers
+`Unavailable` past it. That is *not* a ceiling that turns a slow check into a denial: reporting a
+stalled read as a refusal sends a correctly-entitled caller to request permissions they already
+hold, and files an availability incident as a policy decision so nobody goes looking for the read
+that starved. It is still fail-**closed** — the operation does not proceed; it simply stops claiming
+to know why. Same vocabulary and the same reasoning as `CompilationStatus.Unavailable` for a starved
+*source* read, and as `PermissionCheckOutcome.Undetermined`, which already gives the message gate
+this distinction for a *faulted* fold.
+
+A live UI subscription is the opposite case and keeps no bound: it is not owed an answer by a
+deadline, and it must re-emit when the grants finally land.
+
+Before this existed, `CreateNodeRequest` simply sat `Executing` — 33 s in the reported case — until
+its *caller's* `RequestTimeout` ended it, which names the caller's impatience rather than the read
+that starved (#1446).
+
+### 🚨 The budget is DERIVED, never configured beside the bound it sits inside (#1198)
+
+A bound that is nested inside another bound only earns its keep by firing **first** — it is the only
+level that knows *which* read starved; the level above it can say no more than "the operation ran out
+of time". That ordering was left to coincidence and duly failed: on the delete path the enclosing
+`MeshOperationOptions.Timeout`, the descendant handler answering the pre-flight fan-out, and this
+establishment budget were **three independently-configured constants all reading 30 s**. Equal is not
+an ordering — the outer clock starts first — so the innermost bound could never win, and every
+starved delete reported the caller's timeout instead of the read.
+
+There is now exactly **one** configured value, `MeshOperationOptions.Timeout`, and every nested rung
+is derived from it by `MeshOperationOptions.Nest`, which contracts strictly:
+
+| rung | what it bounds | default |
+|---|---|---|
+| `Timeout` | the mesh operation, as its caller bounds it | 30 s |
+| `NestedTimeout` | a handler running inside one of that operation's stages — a descendant answering `ValidateDeleteRequest`, a cascade leg re-entering the delete handler | 25 s |
+| `PermissionEstablishmentBudget` | one authorization fold inside such a handler | 20 s |
+
+`RowLevelSecurityOptions` is gone: an independently-settable inner budget is exactly what drifted.
+The contraction parameters (`NestingReserve`, `MinNestingFraction`) refuse a non-contracting value,
+so the collision is unrepresentable rather than merely absent. The reserve is deliberately generous
+about the delay between the outer clock starting and the inner one starting (post, routing, warm
+activation); when a genuinely cold hub exceeds even that, the outer bound firing is the *correct*
+answer — "the hub never answered" is what went wrong. The inner bound exists to attribute a starved
+**read**, not a slow **start**.
+
 ## Reactive update semantics
 
 When an `AccessAssignment` is created at scope `S`:

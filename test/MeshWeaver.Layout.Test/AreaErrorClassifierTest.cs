@@ -99,6 +99,37 @@ public class AreaErrorClassifierTest
         => AreaErrorClassifier.IsNodeGoneNotFound(new InvalidOperationException("No node found at X")).Should().BeFalse(
             "only a routing DeliveryFailure counts — a coincidental message on some other exception must not");
 
+    // ── TryGetMissingNodePath: name the broken reference, never the routing internals (#1456) ──
+
+    /// <summary>
+    /// The path is the one part of the diagnostic an author can act on. "Closest ancestor" and
+    /// "remainder=" are routing internals — the extractor must hand back the path ALONE so a view
+    /// can name it without reproducing the framework string around it.
+    /// </summary>
+    [Fact]
+    public void TryGetMissingNodePath_ReturnsThePathWithoutTheRoutingTail()
+        => AreaErrorClassifier.TryGetMissingNodePath(Failure(
+                "No node found at 'ClientDelta/Abschlusspraesentation/04-extraktion'. Closest ancestor is "
+                + "'ClientDelta/Abschlusspraesentation' (remainder='04-extraktion').", ErrorType.NotFound))
+            .Should().Be("ClientDelta/Abschlusspraesentation/04-extraktion");
+
+    [Fact]
+    public void TryGetMissingNodePath_NullWhenTheMessageCarriesNoQuotedPath()
+        => AreaErrorClassifier.TryGetMissingNodePath(
+            Failure("No node found at Foo/Bar", ErrorType.NotFound)).Should().BeNull(
+            "an unquoted form gives nothing safe to show — better to omit the path than to guess at it");
+
+    [Fact]
+    public void TryGetMissingNodePath_NullForOtherFailures()
+    {
+        AreaErrorClassifier.TryGetMissingNodePath(
+            Failure("Access denied: user lacks Read on 'X/Y'", ErrorType.Unauthorized)).Should().BeNull();
+        AreaErrorClassifier.TryGetMissingNodePath(
+            new InvalidOperationException("No node found at 'X/Y'.")).Should().BeNull(
+            "only a routing DeliveryFailure counts, exactly as for IsNodeGoneNotFound");
+        AreaErrorClassifier.TryGetMissingNodePath(null).Should().BeNull();
+    }
+
     // ── TryGetInitializationFailureReason: a FAILED hub → render the reason, terminal, no retry (#323) ──
 
     [Theory]

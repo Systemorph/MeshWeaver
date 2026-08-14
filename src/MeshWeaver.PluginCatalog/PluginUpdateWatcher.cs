@@ -61,10 +61,6 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
     /// second subscription for the same repository. Instance state — one per mesh.</summary>
     private readonly ConcurrentDictionary<string, byte> watched = new(StringComparer.Ordinal);
 
-    /// <summary>Catalog content by repository URL, so a reaction can rebuild the package source
-    /// without re-reading the catalog node. Instance state — one per mesh.</summary>
-    private readonly ConcurrentDictionary<string, PluginCatalogContent> watchedCatalogs = new(StringComparer.OrdinalIgnoreCase);
-
     /// <summary>Initializes a new instance of the <see cref="PluginUpdateWatcher"/> class.</summary>
     public PluginUpdateWatcher(IMessageHub hub, ILogger<PluginUpdateWatcher>? logger = null)
     {
@@ -145,8 +141,6 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
 
         // The canonical single-node read: one shared handle per path, live, authoritative.
         // Never QueryAsync — that index lags a write by design.
-        watchedCatalogs[content.SourceRepoPath!] = content;
-
         var sub = hub.GetMeshNodeStream(buildPath)
             .Select(n => n?.ContentAs<BuildCompletion>(hub.JsonSerializerOptions, logger))
             .Where(b => b is not null && b.HeadSha.Length > 0)
@@ -178,169 +172,39 @@ public sealed class PluginUpdateWatcher : Microsoft.Extensions.Hosting.IHostedSe
 
         source.ListPackages(build.HeadSha)
             .Subscribe(
-                packages => ReconcileInstalled(packages, build),
+                packages => ReconcileInstalled(source, packages, build),
                 ex => logger?.LogWarning(ex,
                     "Plugin update watcher: listing packages of {Repo} at {Sha} failed.",
                     build.RepositoryUrl, build.HeadSha));
     }
 
-    private void ReconcileInstalled(IReadOnlyList<PackageManifest> packages, BuildCompletion build)
-    {
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
-        if (storage is null)
-            return;
-
-        foreach (var pkg in packages)
-        {
-            var recordPath = $"{PackageInstaller.InstalledPartition}/{pkg.Id}";
-            storage.Read(recordPath, hub.JsonSerializerOptions)
-                .Take(1)
-                .Select(n => n?.ContentAs<PackageManifest>(hub.JsonSerializerOptions))
-                // Not installed here → nothing to remind anyone about. A catalog lists far more
-                // packages than any one instance installs, so this is the common case.
-                .Where(record => record is not null)
-                .Subscribe(
-                    record => Reconcile(meshService, accessService, pkg, record!, recordPath, build),
-                    ex => logger?.LogWarning(ex,
-                        "Plugin update watcher: reading install record {Path} failed.", recordPath));
-        }
-    }
-
-    private void Reconcile(
-        IMeshService meshService, AccessService accessService,
-        PackageManifest pkg, PackageManifest record, string recordPath, BuildCompletion build)
-    {
-        // THE gate: content identity, not the build event. Equal module hashes ⇒ this green build
-        // changed nothing in this module ⇒ stay completely silent (no notification, no fetch).
-        if (string.Equals(record.ModuleVersion, pkg.ModuleVersion, StringComparison.Ordinal))
-            return;
-
-        // What actually changed, for the reminder's message. Available without re-fetching
-        // anything: the installed side is on the record (InstalledFiles), the candidate side rode
-        // in on the catalog entry (ManifestFiles).
-        var changed = 0;
-        var removed = 0;
-        if (record.InstalledFiles is { Count: > 0 } installed && pkg.ManifestFiles is { Count: > 0 } candidate)
-        {
-            foreach (var (path, hash) in candidate)
-                if (!installed.TryGetValue(path, out var old) || !string.Equals(old, hash, StringComparison.Ordinal))
-                    changed++;
-            foreach (var path in installed.Keys)
-                if (!candidate.ContainsKey(path))
-                    removed++;
-        }
-
-        var detail = changed + removed > 0
-            ? $"{changed} file(s) changed, {removed} removed"
-            : "content changed";
-
-        logger?.LogInformation(
-            "Plugin update watcher: {Id} has an update ({Old} → {New}; {Detail}); autoUpdate={Auto}.",
-            pkg.Id, record.ModuleVersion, pkg.ModuleVersion, detail, record.AutoUpdate);
-
-        if (ShouldAutoApply(record))
-        {
-            ApplyUpdate(accessService, meshService, pkg, record, recordPath, build, detail);
-            return;
-        }
-
-        Notify(
-            accessService, meshService, recordPath, pkg,
-            $"Update available: {pkg.Name ?? pkg.Id}",
-            $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}). Built from {build.HeadSha[..Math.Min(7, build.HeadSha.Length)]}.");
-    }
-
-    /// <summary>Raises a system notification on the install record (the user-visible surface of an
-    /// update reminder — and of a refusal, which must never be a silent skip).</summary>
-    private void Notify(
-        AccessService accessService, IMeshService meshService, string recordPath,
-        PackageManifest pkg, string title, string body)
-        => Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => NotificationService.CreateNotification(
-                    meshService, recordPath, title, body,
-                    NotificationType.System, targetNodePath: recordPath))
+    /// <summary>
+    /// Hands the per-module decision to <see cref="PackageUpdateReconciler"/> — the SAME code the
+    /// consumer-side <see cref="RegistryUpdateReconciler"/> runs. The two paths differ only in how
+    /// they learned that something might have changed (a GitHub webhook here, a read of the
+    /// registry's feed there); what counts as a change, and who gets an unattended install rather
+    /// than a reminder, is one decision in one place (#1318).
+    /// </summary>
+    private void ReconcileInstalled(
+        IPackageSource source, IReadOnlyList<PackageManifest> packages, BuildCompletion build)
+        => PackageUpdateReconciler.ReconcileInstalled(
+                hub, source, build.HeadSha, packages,
+                $"Built from {build.HeadSha[..Math.Min(7, build.HeadSha.Length)]}", logger)
             .Subscribe(
                 _ => { },
                 ex => logger?.LogWarning(ex,
-                    "Plugin update watcher: raising the notification for {Id} failed.", pkg.Id));
+                    "Plugin update watcher: reconciling the installed packages of {Repo} failed.",
+                    build.RepositoryUrl));
 
     /// <summary>
-    /// The opt-in rule, extracted so it is pinnable on its own: a changed module installs
+    /// The opt-in rule, kept here so it stays pinnable on its own: a changed module installs
     /// unattended only for a record that opted in — by its own flag, stamped at install time from
-    /// the deployment default (<see cref="PackageInstaller.SeedAutoUpdate"/>). Pure.
+    /// the deployment default (<see cref="PackageInstaller.SeedAutoUpdate"/>). Pure, and the rule
+    /// <see cref="PackageUpdateReconciler"/> applies for BOTH the webhook-driven and the
+    /// registry-driven path.
     /// </summary>
     // Internal for the BuildCompletionSubscriptionTest pin (InternalsVisibleTo).
     internal static bool ShouldAutoApply(PackageManifest record) => record.AutoUpdate;
-
-    /// <summary>
-    /// Unattended install of a changed module — reached only for a record that opted in.
-    ///
-    /// <para>Delegates to the very same <see cref="CatalogLayoutAreas.InstallOrUpdate"/> the Update
-    /// button uses. That matters more than it looks: it keeps the manifest-diff fast path, the
-    /// shared-Source/Test full-install fallback, and above all the "nothing to sync" comparison in
-    /// ONE place, so the automatic path and the manual one can never disagree about what changed.</para>
-    ///
-    /// <para>Runs as SYSTEM: there is no user on a webhook-driven emission, and the install writes
-    /// nodes. Errors are logged, never thrown — this is a background reaction, and a fault here must
-    /// not tear down the subscription that serves every other package.</para>
-    ///
-    /// <para><b>Commercial packages are re-authorized here, every time (#830).</b> "No user on a
-    /// webhook emission" is precisely why this path was the hole: a priced package that was once an
-    /// install record kept updating itself with no permission check at all. The record carries the
-    /// principal that authorized its install
-    /// (<see cref="PackageManifest.AuthorizedBy"/>) and the installer re-checks that principal is
-    /// STILL a global admin — so revoking the admin stops the syncing, and a record that was never
-    /// admin-authorized (a free package that later acquired a price, an unattended install) is
-    /// refused rather than silently updated. A refusal surfaces as a notification on the record,
-    /// exactly like the reminder path.</para>
-    /// </summary>
-    private void ApplyUpdate(
-        AccessService accessService, IMeshService meshService, PackageManifest pkg,
-        PackageManifest record, string recordPath, BuildCompletion build, string detail)
-    {
-        var content = watchedCatalogs.TryGetValue(build.RepositoryUrl, out var c) ? c : null;
-        var source = content is null
-            ? null
-            : PackageSources.FromRepo(hub, content.SourceRepoPath, content.SourceSubdir, logger, nodeRepo: true);
-        if (source is null)
-        {
-            logger?.LogWarning(
-                "Plugin update watcher: {Id} is due an auto-update but its catalog source is unavailable.", pkg.Id);
-            return;
-        }
-
-        logger?.LogInformation(
-            "Plugin update watcher: auto-updating {Id} to {Version} ({Detail}); authorized by {Principal}.",
-            pkg.Id, pkg.ModuleVersion, detail, record.AuthorizedBy ?? "(nobody)");
-
-        Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => CatalogLayoutAreas.InstallOrUpdate(
-                    hub, source, build.HeadSha, pkg, logger, record.AuthorizedBy))
-            .Subscribe(
-                result => logger?.LogInformation(
-                    "Plugin update watcher: {Id} auto-updated ({Result}).", pkg.Id, result),
-                ex =>
-                {
-                    if (ex is PackageAuthorizationException)
-                    {
-                        logger?.LogWarning(
-                            "Plugin update watcher: auto-update of {Id} REFUSED — {Reason}", pkg.Id, ex.Message);
-                        Notify(
-                            accessService, meshService, recordPath, pkg,
-                            $"Update needs a Global Admin: {pkg.Name ?? pkg.Id}",
-                            $"A new build of {pkg.Name ?? pkg.Id} is available ({detail}), but it is a "
-                            + "commercial package and was not applied automatically. " + ex.Message);
-                        return;
-                    }
-                    logger?.LogWarning(ex,
-                        "Plugin update watcher: auto-update of {Id} failed; the card still offers a manual Update.",
-                        pkg.Id);
-                });
-    }
 
     private static (string Owner, string Repo) OctokitParse(string url)
     {
