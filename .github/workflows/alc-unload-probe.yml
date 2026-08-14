@@ -67,7 +67,7 @@ jobs:
       DOTNET_DbgMiniDumpType: 2
       DOTNET_DbgMiniDumpName: /tmp/coredumps/%e-%p.dmp
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -79,7 +79,7 @@ jobs:
           docker-images: true
           swap-storage: true
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       - name: Restore workloads
@@ -148,7 +148,7 @@ jobs:
           ls -lh probe-diagnostics/ || true
       - name: Upload probe diagnostics
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: alc-unload-probe-diagnostics
           path: probe-diagnostics/
