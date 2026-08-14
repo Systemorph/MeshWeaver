@@ -1,0 +1,161 @@
+name: Plugin Publish
+
+# Publishes a repo's plugins as NuGet packages on merge to main. Called by every plugin repo.
+#
+# ═════════════════════════ WHAT A PACKAGE IS ═════════════════════════
+# One package per PLUGIN, carrying its node content plus one prebuilt assembly per compilation unit
+# — the same conversion the portal's bake performs, done once in CI instead of on every portal.
+# See Doc/Architecture/PluginPackaging.
+#
+# ═══════════════════ WHY EVERY PLUGIN, EVERY MERGE ═══════════════════
+# There is no changed-plugin detection here, and that is deliberate rather than lazy. A module's
+# PATCH is DERIVED by gen-manifests.py from its content hash: the version changes when, and only
+# when, the tree changes. So publishing every plugin with `--skip-duplicate` publishes exactly the
+# ones whose content moved — the version IS the change detector, and it is one the repo already
+# maintains and tags.
+#
+# A hand-written diff would be a SECOND detector free to disagree with the first, and its failure
+# mode is silent: a plugin the diff misses simply never ships, at a version nobody notices is
+# absent until an install resolves the old content.
+#
+# ═════════════════════════ ALL-OR-NOTHING ═════════════════════════
+# Every plugin is PACKED before any is PUSHED. A partial set is worse than none: a consumer
+# resolving plugin A at the new version and plugin B at the old one gets a combination that was
+# never built or tested together, and the caret ranges between them say it is fine.
+#
+# NuGet has no equivalent of an image's staging tag — a version is immutable and cannot be
+# retagged — so withholding the PUSH is the only lever, which is why the pack loop completes first.
+
+on:
+  workflow_call:
+    inputs:
+      framework-version:
+        description: MeshWeaver package version the plugins compile against.
+        required: true
+        type: string
+      meshweaver-ref:
+        description: Ref of Systemorph/MeshWeaver to build the plugin-build tool from.
+        required: false
+        default: main
+        type: string
+      dry-run:
+        description: Pack and report, never push. For verifying a repo's wiring before it ships.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    steps:
+      # Asserts what comes from outside the tree, RED, naming what to provision. Never an
+      # `if: inputs.x != ''` on a later step: a skipped job renders with the same tick as a passed
+      # one, so "never published" and "published" become indistinguishable.
+      - name: Assert inputs
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.framework-version }}" ]; then
+            echo "::error::missing required input: framework-version"
+            exit 1
+          fi
+          echo "framework-version = ${{ inputs.framework-version }}"
+
+  publish:
+    name: Pack and publish
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # 🚨 The fork gate, expressed on the EVENT — never on whether a secret happens to be set. A
+    # fork's PR head can also be named "main", and org secrets are withheld from it by design; a
+    # "the token is empty" check would look identical at job level and is the unsafe one.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
+    steps:
+      - name: Checkout plugin repo
+        uses: actions/checkout@v7
+        with:
+          path: plugins
+
+      - name: Checkout MeshWeaver (for the plugin-build tool)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.meshweaver-ref }}
+          path: meshweaver
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.x'
+
+      - name: Build the tool
+        run: dotnet build meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release
+
+      - name: Pack every plugin
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/nupkgs"
+          failed=()
+          packed=0
+          for plugin in plugins/*/; do
+            [ -f "$plugin/index.json" ] || continue
+            name=$(basename "$plugin")
+            echo "::group::$name"
+            if dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build -- \
+                 "$plugin" \
+                 --framework-version "${{ inputs.framework-version }}" \
+                 --repo-root plugins \
+                 --out "$RUNNER_TEMP/plugin-build" \
+                 --pack "$RUNNER_TEMP/nupkgs"; then
+              packed=$((packed + 1))
+            else
+              failed+=("$name")
+            fi
+            echo "::endgroup::"
+          done
+          echo "packed $packed plugin(s)"
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::packing failed for: ${failed[*]} — nothing was pushed"
+            exit 1
+          fi
+
+      # Reached only when EVERY plugin packed. A content-only plugin produces no package and that
+      # is a success, so an empty directory is not an error — but it must be SAID, or "published
+      # nothing" reads the same as "published everything".
+      - name: Push to GitHub Packages
+        if: ${{ !inputs.dry-run }}
+        env:
+          FEED: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+        run: |
+          set -euo pipefail
+          count=$(find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' | wc -l | tr -d ' ')
+          echo "$count package(s) to publish"
+          if [ "$count" = "0" ]; then
+            echo "no packages produced — every plugin in this repo is content-only"
+            exit 0
+          fi
+          # --skip-duplicate is what makes this idempotent AND makes the version the change
+          # detector: an unchanged plugin keeps its version, the push 409s, and the flag turns that
+          # into a no-op instead of a failure. It also lets a half-finished run be re-fired to
+          # complete the remainder rather than tripping on the first already-published package.
+          dotnet nuget push "$RUNNER_TEMP/nupkgs/*.nupkg" \
+            --source "$FEED" \
+            --api-key "${{ secrets.GITHUB_TOKEN }}" \
+            --skip-duplicate
+          find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' -exec basename {} \; | sed 's/^/  published: /'
+
+      # 🚨 The two `if:`s above and below are a MODE SWITCH, not a skip-trapdoor, and the difference
+      # is what makes them safe: `dry-run` is an explicit caller-declared input with BOTH branches
+      # reporting what happened, whereas a trapdoor asks whether a secret happens to be set and
+      # leaves silence when it is not. Exactly one of these two steps always runs and always says
+      # whether anything shipped. Do not add an `if:` that probes for a credential.
+      - name: Report (dry run)
+        if: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          echo "dry run — nothing pushed. Packages that WOULD publish:"
+          find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' -exec basename {} \; | sed 's/^/  /'

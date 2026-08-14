@@ -119,10 +119,20 @@ public static class PluginPacker
         sb.AppendLine("    <dependencies>");
         sb.AppendLine("""      <group targetFramework="net10.0">""");
 
-        // The framework dependency is what makes an ABI mismatch a RESOLVER error instead of a
-        // TypeLoadException in an ALC at activation — the failure mode prebuilt assemblies would
-        // otherwise introduce, and the one the runtime has no diagnostic for.
-        sb.AppendLine($"""        <dependency id="MeshWeaver.Graph" version="[{SecurityElement.Escape(frameworkVersion)}]" />""");
+        // 🚨 A MINIMUM, not an exact pin. The bare form is NuGet's ">= this version".
+        //
+        // The version the package was built against is a floor, not a requirement: the bake
+        // recompiles the plugin's source against whatever the consumer resolves, so a NEWER
+        // framework satisfies it. Pinning it exactly (`[x]`) would make every framework bump
+        // require republishing all ~29 plugins at new versions — and since a module's PATCH is
+        // derived from its CONTENT hash, those republishes would carry the same version as the
+        // unchanged tree, which the immutability rule forbids. The package would be unshippable
+        // without inventing a version the repo never released.
+        //
+        // The prebuilt assemblies remain an OPTIMISATION on top: PrebuiltAssemblySeeder adopts them
+        // only when the framework MVID matches exactly, and compiles when it does not. So a floor
+        // here never risks loading ABI-incompatible bytes — that gate is separate and stricter.
+        sb.AppendLine($"""        <dependency id="MeshWeaver.Graph" version="{SecurityElement.Escape(frameworkVersion)}" />""");
 
         foreach (var (id, range) in manifest.ResolveDependencies())
             sb.AppendLine(range is null
