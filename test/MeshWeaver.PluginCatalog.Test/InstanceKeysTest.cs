@@ -121,6 +121,16 @@ public class InstanceKeysTest
     }
 
     [Fact]
+    public void OverlongBasicCredential_YieldsNoKeyWithoutDecoding()
+    {
+        // Unauthenticated, attacker-controlled input: the reject path must not throw and must not
+        // decode an unbounded blob. A real credential is a username plus a 32-byte key.
+        var header = "Basic " + new string('A', 5000);
+
+        Assert.Null(InstanceKeys.ExtractKey(header));
+    }
+
+    [Fact]
     public void BasicCredentialWithAPersonalToken_YieldsNoKey()
     {
         // The prefix separation that keeps a USER credential from ever authenticating as an

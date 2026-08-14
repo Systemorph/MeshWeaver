@@ -84,6 +84,12 @@ public static class InstanceKeys
     /// <summary>The HTTP auth scheme a NuGet client travels under.</summary>
     public const string BasicScheme = "Basic";
 
+    /// <summary>Largest Basic payload considered; see <see cref="ExtractFromBasic"/>.</summary>
+    private const int MaxBasicPayloadChars = 1024;
+
+    /// <summary>Decode buffer for <see cref="MaxBasicPayloadChars"/> (base64 is 4 chars per 3 bytes).</summary>
+    private const int MaxBasicPayloadBytes = MaxBasicPayloadChars / 4 * 3;
+
     /// <summary>
     /// The password half of a Basic credential, when it is an instance key. Malformed base64 and a
     /// missing colon are treated as "no key" rather than throwing: an unparsable header is an
@@ -91,19 +97,21 @@ public static class InstanceKeys
     /// </summary>
     private static string? ExtractFromBasic(string encoded)
     {
-        string decoded;
-        try
-        {
-            decoded = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
-        }
-        catch (FormatException)
-        {
+        // 🚨 No exception on the reject path. This runs on an UNAUTHENTICATED request with
+        // attacker-controlled input, so a throwing parse would let anyone make the registry raise
+        // and unwind an exception per request — avoidable overhead, and a cheap amplifier. The
+        // length cap bounds the decode buffer for the same reason: a real credential is a username
+        // plus a 32-byte key (~43 base64 chars), so anything near this bound is already not one.
+        if (encoded.Length is 0 or > MaxBasicPayloadChars)
             return null;
-        }
-        catch (DecoderFallbackException)
-        {
+
+        Span<byte> buffer = stackalloc byte[MaxBasicPayloadBytes];
+        if (!Convert.TryFromBase64String(encoded, buffer, out var written))
             return null;
-        }
+
+        // UTF8.GetString uses replacement fallback, so invalid bytes become U+FFFD rather than
+        // throwing — and a key containing U+FFFD simply fails the prefix check below.
+        var decoded = Encoding.UTF8.GetString(buffer[..written]);
 
         var separator = decoded.IndexOf(':');
         if (separator < 0)
