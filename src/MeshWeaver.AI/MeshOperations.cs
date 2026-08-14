@@ -159,6 +159,8 @@ public class MeshOperations
         if (string.IsNullOrEmpty(path))
             return path;
 
+        var contextPath = chat.Context?.Context;
+
         // Strip surrounding quotes (autocomplete wraps spaced paths in quotes)
         if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
             path = path[1..^1];
@@ -187,9 +189,8 @@ public class MeshOperations
                 if (Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(firstSegment))
                 {
                     // Relative unified path like "content/My Report.md" — prepend context
-                    var contextPath = chat.Context?.Context;
                     if (!string.IsNullOrEmpty(contextPath))
-                        return $"@{contextPath}/{raw}";
+                        return PrependContext(contextPath, raw);
                     return path;
                 }
             }
@@ -199,17 +200,40 @@ public class MeshOperations
         }
 
         // Relative path — prepend context
-        var contextPath2 = chat.Context?.Context;
-        if (string.IsNullOrEmpty(contextPath2))
+        if (string.IsNullOrEmpty(contextPath))
             return path; // no context, return as-is
 
         // For unified refs like "content:file.docx", prepend context as address
         if (colonIndex > 0)
-            return $"@{contextPath2}/{raw}";
+            return PrependContext(contextPath, raw);
 
         // For simple names like "MyChild", prepend context
-        return $"@{contextPath2}/{raw}";
+        return PrependContext(contextPath, raw);
     }
+
+    /// <summary>
+    /// Prepends the chat context to a relative path — unless the path ALREADY IS the context (or
+    /// already starts with it at a segment boundary), in which case it is already absolute and
+    /// prepending would double it.
+    ///
+    /// <para>🚨 The doubling this guards against is not hypothetical: it produced
+    /// <c>felice.buergi/felice.buergi</c> on memex-cloud (#1469). The chat context chip for a user
+    /// sitting on their own home page is their PARTITION ROOT — a SINGLE segment — and
+    /// <see cref="ResolveContextPath"/> treats any single-segment token as relative (only a token
+    /// containing '/' takes the "multi-segment ⇒ already absolute" exit above). So the context path
+    /// shipped as an attachment came back through this method as <c>{context}/{context}</c>: a node
+    /// that cannot exist, whose <c>SubscribeRequest</c> the router answers <c>NotFound</c>. Every
+    /// user whose context is a sub-node (<c>ACME/Doc/…</c>) escapes earlier, which is why only
+    /// home-page chatters ever hit it.</para>
+    ///
+    /// <para>Same guard, same reason as <c>PathUtils.ResolveRelativePath</c>'s self-prefix check.
+    /// The trailing '/' makes it a SEGMENT match, so a sibling like <c>ACMEArchive</c> under
+    /// context <c>ACME</c> still resolves against the context rather than false-matching.</para>
+    /// </summary>
+    private static string PrependContext(string contextPath, string raw) =>
+        raw == contextPath || raw.StartsWith(contextPath + "/", StringComparison.Ordinal)
+            ? "@" + raw
+            : $"@{contextPath}/{raw}";
 
     /// <summary>
     /// Reads a node (or, for a <c>path/*</c> query, its direct children) and returns it as a
