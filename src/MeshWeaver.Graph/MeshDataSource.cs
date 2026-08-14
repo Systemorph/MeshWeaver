@@ -354,7 +354,21 @@ public static class MeshDataSourceExtensions
                 "[SaveMeshNode] defer {Path} at version={Version} — the post-commit flush has CLAIMED "
                 + "version={ClaimedVersion} and its write is still in flight",
                 node.Path, node.Version, alreadyFlushed);
-            pending.Take(1).Subscribe(
+            // 🚨 The deferred write goes back THROUGH THE HUB, and the subscription dies with it.
+            //
+            // The claim resolves on whatever thread the flush completes on — a storage/emission
+            // thread, not this hub's inbox. Calling the write directly from there would bypass the
+            // single-threaded action block every other handler is serialised by, and the
+            // subscription would outlive teardown: precisely the two properties the actor model
+            // exists to guarantee. Re-posting SaveMeshNodeRequest puts the retry back in the queue,
+            // where it is ordered against every other message and refused outright once the hub is
+            // shutting down.
+            //
+            // It cannot loop: a resolved claim is REMOVED from the registry, so the re-posted
+            // request reads a high-water of 0 for that version and writes. If a NEWER claim exists
+            // by then it defers once more against THAT one, which resolves in its turn.
+            var deferred = new System.Reactive.Disposables.SingleAssignmentDisposable();
+            deferred.Disposable = pending.Take(1).Subscribe(
                 persisted =>
                 {
                     if (persisted)
@@ -362,11 +376,17 @@ public static class MeshDataSourceExtensions
                             "[SaveMeshNode] drop deferred {Path} at version={Version} — the flush persisted it",
                             node.Path, node.Version);
                     else
-                        WriteSampledNode(persistence, hub, node, logger);
+                    {
+                        logger?.LogDebug(
+                            "[SaveMeshNode] re-enqueue deferred {Path} at version={Version} — the flush "
+                            + "did not persist it", node.Path, node.Version);
+                        hub.Post(new SaveMeshNodeRequest(node));
+                    }
                 },
                 ex => logger?.LogWarning(ex,
                     "[SaveMeshNode] deferred write for {Path} (version={Version}) could not resolve its "
                     + "flush claim", node.Path, node.Version));
+            hub.RegisterForDisposal(deferred);
             return request.Processed();
         }
         WriteSampledNode(persistence, hub, node, logger);

@@ -754,6 +754,22 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// production <c>ValidateToken</c> reads through it since the resilient-read fix.)
     /// </para>
     /// </summary>
+    private IObservable<MeshNode?> ObserveNode(string path)
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        return meshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}", WellKnownUsers.System))
+            .Scan((MeshNode?)null, (current, change) => change.ChangeType switch
+            {
+                QueryChangeType.Initial or QueryChangeType.Reset =>
+                    change.Items.FirstOrDefault(),
+                QueryChangeType.Added or QueryChangeType.Updated =>
+                    change.Items.FirstOrDefault() ?? current,
+                QueryChangeType.Removed => null,
+                _ => current,
+            });
+    }
+
     /// <summary>
     /// Arms a wait for the NEXT expiry sweep of <paramref name="userId"/>'s token namespace, and
     /// returns it. 🚨 Call this BEFORE the mint that triggers the sweep — the subscription has to
@@ -771,22 +787,6 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
             .ToTask();
-
-    private IObservable<MeshNode?> ObserveNode(string path)
-    {
-        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        return meshService
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}", WellKnownUsers.System))
-            .Scan((MeshNode?)null, (current, change) => change.ChangeType switch
-            {
-                QueryChangeType.Initial or QueryChangeType.Reset =>
-                    change.Items.FirstOrDefault(),
-                QueryChangeType.Added or QueryChangeType.Updated =>
-                    change.Items.FirstOrDefault() ?? current,
-                QueryChangeType.Removed => null,
-                _ => current,
-            });
-    }
 
     private sealed record LogEntry(LogLevel Level, string Message);
 
