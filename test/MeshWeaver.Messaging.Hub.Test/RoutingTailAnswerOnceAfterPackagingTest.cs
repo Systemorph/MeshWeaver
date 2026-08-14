@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Fixture;
 using Xunit;
 
@@ -97,5 +98,36 @@ public class RoutingTailAnswerOnceAfterPackagingTest(ITestOutputHelper output) :
         answered.Should().Be(control.Id);
         heartBeat.Id.Should().NotBe(control.Id);
         failure.Id.Should().NotBe(control.Id);
+    }
+
+    /// <summary>
+    /// 🚨 The stamp has to survive the JSON wire, because a participant proxy re-serializes the whole
+    /// envelope (<c>SignalRConnectionHub.DeliverMessage</c> / the gRPC registry) and the routers on
+    /// the far side apply the same contract to what comes back. This is also WHY
+    /// <see cref="AnswerPolicy.MayAnswer"/> checks the key's PRESENCE and never its value: an
+    /// <c>object</c>-valued delivery property is stamped as a <see cref="bool"/> and arrives as a
+    /// <c>JsonElement</c>, so a value comparison would quietly stop matching after exactly one hop —
+    /// the round-trip <c>MessageStormBreaker.ResolvePayloadKey</c> documents for the sibling
+    /// <c>DiagnosticKey</c> stamp.
+    /// </summary>
+    [Fact]
+    public void TheSuppressionStamp_SurvivesTheJsonWire()
+    {
+        var hub = ServiceProvider.CreateMessageHub(RouterAddress, conf => conf
+            .WithPostingIdentity(PostingIdentity.System));
+
+        var packaged = new MessageDelivery<HeartBeatEvent>(SenderAddress, UnreachableTarget,
+                new HeartBeatEvent(), hub.JsonSerializerOptions)
+            .Package(hub.JsonSerializerOptions);
+        packaged.MayAnswer().Should().BeFalse("the payload was [CanBeIgnored] before it was erased");
+
+        // Exactly the participant-proxy hop: serialize the whole envelope, deserialize it back.
+        var json = JsonSerializer.Serialize(packaged, hub.JsonSerializerOptions);
+        var roundTripped = JsonSerializer.Deserialize<IMessageDelivery>(json, hub.JsonSerializerOptions);
+
+        roundTripped.Should().NotBeNull();
+        roundTripped!.MayAnswer().Should().BeFalse(
+            "the far side's routers apply the same answer-once contract, and by then BOTH the payload "
+            + "type and the value's CLR type are gone — only the property key remains");
     }
 }
