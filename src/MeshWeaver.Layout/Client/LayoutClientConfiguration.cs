@@ -47,6 +47,23 @@ public record LayoutClientConfiguration(IMessageHub Hub)
 
     internal ImmutableList<ViewMap> ViewMaps { get; init; } = ImmutableList<ViewMap>.Empty;
 
+    /// <summary>
+    /// The LAST-resort view map, consulted only after every registered map declined. Kept OUTSIDE
+    /// <see cref="ViewMaps"/> so registration ORDER stops being load-bearing: the core registry's
+    /// default mapping used to end in a terminal fallback arm, which silently killed any view pack
+    /// registered after <c>AddBlazor()</c> — first-match-wins met a map that never declined.
+    /// </summary>
+    internal ViewMap? FallbackViewMap { get; init; }
+
+    /// <summary>
+    /// Returns a copy with <paramref name="viewMap"/> as the last-resort fallback (see
+    /// <see cref="FallbackViewMap"/>). The renderer host sets this once; view packs never do.
+    /// </summary>
+    /// <param name="viewMap">The fallback view map.</param>
+    /// <returns>A new instance with the fallback set.</returns>
+    public LayoutClientConfiguration WithFallbackView(ViewMap viewMap)
+        => this with { FallbackViewMap = viewMap };
+
 
     /// <summary>
     /// Returns a copy with <paramref name="viewMap"/> appended to the view-mapping chain.
@@ -71,14 +88,16 @@ public record LayoutClientConfiguration(IMessageHub Hub)
     }
 
     /// <summary>
-    /// Tries each registered view map in order and returns the first non-null <see cref="ViewDescriptor"/> for the given instance.
+    /// Tries each registered view map in order and returns the first non-null <see cref="ViewDescriptor"/> for the given instance;
+    /// when every map declines, the host's <see cref="FallbackViewMap"/> (if any) produces the last-resort descriptor.
     /// </summary>
     /// <param name="instance">The view-model instance to resolve a view for.</param>
     /// <param name="stream">The synchronization stream for the area, or null.</param>
     /// <param name="area">The area name.</param>
-    /// <returns>The first matching <see cref="ViewDescriptor"/>, or null if no map matches.</returns>
+    /// <returns>The first matching <see cref="ViewDescriptor"/>, the fallback's descriptor, or null.</returns>
     public ViewDescriptor? GetViewDescriptor(object instance, ISynchronizationStream<JsonElement>? stream, string area) =>
-        ViewMaps.Select(m => m.Invoke(instance, stream, area)).FirstOrDefault(d => d is not null);
+        ViewMaps.Select(m => m.Invoke(instance, stream, area)).FirstOrDefault(d => d is not null)
+        ?? FallbackViewMap?.Invoke(instance, stream, area);
 
     /// <summary>Parameter key used to pass the view-model instance into a Blazor component's parameter dictionary.</summary>
     public const string ViewModel = nameof(ViewModel);
