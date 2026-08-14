@@ -94,7 +94,13 @@ export function getWindowDimensions() {
     };
 }
 
-export function listenToWindowResize(dotnetHelper) {
+// Live resize listeners, keyed by the token their subscriber passed. They MUST be detachable:
+// the listener closes over a DotNetObjectReference, so one left attached keeps firing after the
+// component is disposed — invoking a method on a released .NET object (console errors on every
+// resize) and pinning that object for as long as the page lives.
+const resizeListeners = new Map();
+
+export function listenToWindowResize(dotnetHelper, token) {
     function throttle(func, timeout) {
         let currentTimeout = null;
         return function () {
@@ -109,17 +115,33 @@ export function listenToWindowResize(dotnetHelper) {
         }
     }
 
+    // Re-subscribing under the same token replaces the previous listener rather than stacking a
+    // second one on top of it.
+    stopListeningToWindowResize(token);
+
     const throttledResizeListener = throttle(() => {
         dotnetHelper.invokeMethodAsync('OnResizeAsync', { width: window.innerWidth, height: window.innerHeight });
     }, 150);
 
     window.addEventListener('load', throttledResizeListener);
     window.addEventListener('resize', throttledResizeListener);
+    resizeListeners.set(token, throttledResizeListener);
+}
+
+// The other half of listenToWindowResize — call it when the subscriber goes away.
+// A caller that passed no token (the older one-argument shape) detaches with no token either.
+export function stopListeningToWindowResize(token) {
+    const listener = resizeListeners.get(token);
+    if (!listener) return;
+    window.removeEventListener('load', listener);
+    window.removeEventListener('resize', listener);
+    resizeListeners.delete(token);
 }
 
 // Expose globally for BrowserDimensionWatcher
 window.getWindowDimensions = getWindowDimensions;
 window.listenToWindowResize = listenToWindowResize;
+window.stopListeningToWindowResize = stopListeningToWindowResize;
 
 // =============================================================================
 // Cookie Consent / Analytics

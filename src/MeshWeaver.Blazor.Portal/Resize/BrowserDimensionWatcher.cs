@@ -48,6 +48,14 @@ public class BrowserDimensionWatcher : ComponentBase, IAsyncDisposable
     private DotNetObjectReference<BrowserDimensionWatcher>? selfReference;
 
     /// <summary>
+    /// Identifies THIS watcher's resize listener on the JS side, so <see cref="DisposeAsync"/> can
+    /// detach exactly it. Releasing <see cref="selfReference"/> alone is not enough: the listener
+    /// closes over that reference, so one left attached keeps firing on every resize and invokes a
+    /// method on a released .NET object — console errors, and the object pinned for the page's life.
+    /// </summary>
+    private readonly string resizeToken = Guid.NewGuid().ToString("N");
+
+    /// <summary>
     /// On first render, reads the initial window dimensions, publishes them, and registers
     /// the browser resize listener.
     /// </summary>
@@ -86,7 +94,7 @@ public class BrowserDimensionWatcher : ComponentBase, IAsyncDisposable
                 await ViewportInformationChanged.InvokeAsync(ViewportInformation);
 
                 selfReference ??= DotNetObjectReference.Create(this);
-                await module.InvokeVoidAsync("listenToWindowResize", selfReference);
+                await module.InvokeVoidAsync("listenToWindowResize", selfReference, resizeToken);
             }
             catch (JSDisconnectedException)
             {
@@ -98,21 +106,26 @@ public class BrowserDimensionWatcher : ComponentBase, IAsyncDisposable
     }
 
     /// <summary>
-    /// Releases the JS module reference and the .NET object reference handed to the resize
-    /// listener. <see cref="JSDisconnectedException"/> is expected here: on a circuit that has
-    /// already gone away there is nothing left to release.
+    /// Detaches the browser resize listener, then releases the JS module reference and the .NET
+    /// object reference it closed over — in that order, because releasing the reference first
+    /// would leave a live listener calling into a released object.
+    /// <see cref="JSDisconnectedException"/> is expected here: on a circuit that has already gone
+    /// away there is nothing left to detach or release.
     /// </summary>
-    /// <returns>A task that completes once both references are released.</returns>
+    /// <returns>A task that completes once the listener is detached and both references released.</returns>
     public async ValueTask DisposeAsync()
     {
         try
         {
             if (module is not null)
+            {
+                await module.InvokeVoidAsync("stopListeningToWindowResize", resizeToken);
                 await module.DisposeAsync();
+            }
         }
         catch (JSDisconnectedException)
         {
-            // The circuit is gone; the browser-side module went with it.
+            // The circuit is gone; the browser-side module and its listeners went with it.
         }
         finally
         {
