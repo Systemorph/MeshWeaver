@@ -163,6 +163,33 @@ describe("every field the SDK sends exists on the C# record it names", () => {
 const WEB_WIRE = "src/wire.ts";
 const NODE_WIRE = "../typescript/src/wire.ts";
 
+// Every file the two SDKs must carry ONE copy of. `wire.ts` is the original (#1475); `jsonPatch.ts`
+// and `changeFold.ts` joined it for #1496, where the Node SDK's own decode treated the
+// DataChangedEvent AS the node and no test compared it against the browser twin that had it right.
+const MIRRORED = [
+  ["src/wire.ts", "../typescript/src/wire.ts"],
+  ["src/jsonPatch.ts", "../typescript/src/jsonPatch.ts"],
+  ["src/changeFold.ts", "../typescript/src/changeFold.ts"],
+] as const;
+
+describe("the two TypeScript SDKs share ONE copy of every mirrored module", () => {
+  for (const [web, node] of MIRRORED) {
+    it(`${node} is byte-identical to ${web}`, () => {
+      const a: string[] = readFileSync(resolve(pkgRoot, web), "utf8").split("\n");
+      const b: string[] = readFileSync(resolve(pkgRoot, node), "utf8").split("\n");
+      const at = a.findIndex((line: string, i: number) => line !== b[i]);
+      expect(
+        at === -1 && a.length === b.length,
+        at === -1
+          ? `${node} has ${b.length} lines vs ${a.length} in ${web} — copy one over the other.`
+          : `${node} diverged from ${web} at line ${at + 1}:\n` +
+            `  grpc-web: ${a[at]}\n  node    : ${b[at] ?? "(missing)"}\n` +
+            `The two SDKs must carry ONE copy — copy one file over the other.`,
+      ).toBe(true);
+    });
+  }
+});
+
 describe("the two TypeScript SDKs share ONE copy of the wire shapes", () => {
   // #1475 shipped in both SDKs at once because each hand-mirrored the other. Byte-identical copies
   // (the discipline clients/react/src/i18n uses for the server string catalog) make a one-sided fix
