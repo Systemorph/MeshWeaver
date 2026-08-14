@@ -31,7 +31,9 @@
     <link href="@(Configuration["Styles:StylesheetName"]).styles.css" rel="stylesheet" />
     <link href="_content/MeshWeaver.Blazor/fonts.css" rel="stylesheet" />
     <link href="_content/MeshWeaver.Blazor/standard-page-layout.css" rel="stylesheet" />
-    <link href="_content/Radzen.Blazor/css/material-base.css" rel="stylesheet" />
+    @* No pack tags here: view packs (Radzen, …) self-load their CSS/JS on first render via
+       _content/MeshWeaver.Blazor/assetLoader.js — the shell stays pack-free so a pack can be
+       added or dropped without touching it. *@
     <ImportMap />
     @if (hasInstance)
     {
@@ -45,8 +47,6 @@
     {
         <link rel="apple-touch-icon" sizes="180x180" href="@appleTouchIcon" />
     }
-    <script src="_content/Radzen.Blazor/Radzen.Blazor.js"></script>
-
     @*
         Load Monaco early, in parallel with HTML parsing, and expose a readiness
         Promise that Blazor.start() awaits below. BlazorMonaco 3.4 ships Monaco
