@@ -6,6 +6,15 @@
 import { connect as connectTransport, MeshConnection, type ConnectOptions } from "./connection.js";
 import { randomUUID } from "node:crypto";
 import { meshNodeFromChange, type MeshNode } from "./types.js";
+import {
+  activityStatusPatch,
+  copyNodeRequest,
+  createNodeRequest,
+  deleteNodeRequest,
+  moveNodeRequest,
+  patchDataRequest,
+  subscribeRequest,
+} from "./wire.js";
 
 export interface MeshOptions extends ConnectOptions {
   meshAddress?: string; // WIRE: confirm the portal's mesh-service address
@@ -78,15 +87,16 @@ export class Mesh {
   /** Subscribe to a node's live state — yields on every change (Full, then merge-patches). */
   async *watch(path: string): AsyncIterableIterator<MeshNode> {
     const streamId = randomUUID().replace(/-/g, "");
-    // WIRE: confirm the reference shape for a node path.
-    for await (const delivery of this.conn.watch(path, streamId, "SubscribeRequest", { reference: { path } })) {
+    const sub = subscribeRequest(path, streamId);
+    for await (const delivery of this.conn.watch(path, streamId, sub.type, sub.message)) {
       yield meshNodeFromChange(delivery.message);
     }
   }
 
   /** Field-level partial update (content deep-merges, RFC 7396) — the canonical mutation. */
   patch(path: string, fields: Record<string, unknown>): void {
-    this.conn.post(path, "PatchDataRequest", { path, change: fields }); // WIRE: confirm partial-update request type
+    const req = patchDataRequest(path, fields);
+    this.conn.post(path, req.type, req.message);
   }
 
   /**
@@ -96,7 +106,8 @@ export class Mesh {
    */
   async create(node: Record<string, unknown>): Promise<Record<string, unknown>> {
     const target = ownerOfNamespace(String(node["namespace"] ?? "")) || this.meshAddress;
-    const resp = await this.conn.observe(target, "CreateNodeRequest", { node });
+    const req = createNodeRequest(node);
+    const resp = await this.conn.observe(target, req.type, req.message);
     const m = resp.message;
     const success = (m["success"] ?? m["Success"]) as boolean | undefined;
     if (success === false || m["$type"] === "DeliveryFailure")
@@ -110,19 +121,20 @@ export class Mesh {
 
   /** Delete a node by path — routed to the node's own hub. */
   async delete(path: string): Promise<void> {
-    await this.conn.observe(path, "DeleteNodeRequest", { path });
+    const req = deleteNodeRequest(path);
+    await this.conn.observe(path, req.type, req.message);
   }
 
   /** Move a node (and its satellites) — routed to the SOURCE node's hub. */
   async move(source: string, target: string): Promise<void> {
-    // Field names match the C# record MoveNodeRequest(SourcePath, TargetPath) — `{source,target}`
-    // never bound (no JsonPropertyName aliases; issue #1475).
-    await this.conn.observe(source, "MoveNodeRequest", { sourcePath: source, targetPath: target });
+    const req = moveNodeRequest(source, target);
+    await this.conn.observe(source, req.type, req.message);
   }
 
   /** Copy a node to a new path — routed to the SOURCE node's hub. */
   async copy(source: string, target: string): Promise<void> {
-    await this.conn.observe(source, "CopyNodeRequest", { sourcePath: source, targetPath: target });
+    const req = copyNodeRequest(source, target);
+    await this.conn.observe(source, req.type, req.message);
   }
 
   /**
@@ -131,6 +143,6 @@ export class Mesh {
    * follow Status to a terminal state.
    */
   execute(path: string): void {
-    this.patch(path, { requestedStatus: "Running" }); // WIRE: confirm the activity control-plane field
+    this.patch(path, activityStatusPatch("Running"));
   }
 }

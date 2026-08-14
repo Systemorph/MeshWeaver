@@ -114,20 +114,51 @@ describe("Mesh ops (gRPC-web, in-memory)", () => {
     mesh.close();
   });
 
-  it("move/copy send the C# record field names SourcePath/TargetPath (issue #1475 — {source,target} never bound)", async () => {
-    const bodies: Record<string, unknown>[] = [];
+  // The half the address assertions above could not see (issue #1475): WHAT is in the body. The
+  // records are MoveNodeRequest(SourcePath, TargetPath) / CopyNodeRequest(SourcePath, TargetPath),
+  // and an unmatched member is dropped without a word — so a move that "resolved" moved nothing.
+  // wireContract.test.ts checks these names against the C# records; this checks Mesh really sends them.
+  it("move/copy/delete/patch send the record's OWN field names", async () => {
+    const sent = new Map<string, Record<string, unknown>>();
     const mesh = await Mesh.connect("memory://", {
-      transport: fakeMeshTransport({
-        onDeliver: (d) => {
-          if (d.messageType === "MoveNodeRequest" || d.messageType === "CopyNodeRequest") bodies.push(d.message);
-        },
-      }),
+      transport: fakeMeshTransport({ onDeliver: (d) => sent.set(d.messageType ?? "", d.message) }),
     });
+    // patch/execute are fire-and-forget posts; the awaited round-trips below are issued after them
+    // on the same transport, so their responses landing proves the posts were delivered first.
+    mesh.patch("ACME/A", { name: "renamed" });
+    mesh.execute("ACME/Job");
+    await mesh.delete("ACME/Old");
     await mesh.move("ACME/A", "ACME/B");
     await mesh.copy("ACME/A", "ACME/C");
-    expect(bodies[0]).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/B" });
-    expect(bodies[1]).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/C" });
-    expect(bodies.every((b) => !("source" in b) && !("target" in b))).toBe(true);
+
+    expect(sent.get("DeleteNodeRequest")).toMatchObject({ path: "ACME/Old" });
+    expect(sent.get("MoveNodeRequest")).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/B" });
+    expect(sent.get("CopyNodeRequest")).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/C" });
+    // …and the old names are GONE. toMatchObject alone would still pass if `source`/`target` rode
+    // along beside the right ones, which is the shape a half-applied fix leaves behind.
+    for (const type of ["MoveNodeRequest", "CopyNodeRequest"]) {
+      const body = sent.get(type)!;
+      expect(Object.keys(body), `${type} still carries the unbound names`).not.toContain("source");
+      expect(Object.keys(body), `${type} still carries the unbound names`).not.toContain("target");
+    }
+    // PatchDataRequest(Reference, Patch) — the reference needs its polymorphic $type or it resolves
+    // against nothing, and execute()'s trigger lives on the CONTENT (MeshNode has no RequestedStatus).
+    // The map keeps the last PatchDataRequest, which is execute()'s.
+    expect(sent.get("PatchDataRequest")).toMatchObject({
+      reference: { $type: "MeshNodeReference", path: "ACME/Job" },
+      patch: { content: { requestedStatus: "Running" } },
+    });
+    mesh.close();
+  });
+
+  it("watch subscribes with a $type-carrying MeshNodeReference", async () => {
+    const sent: Record<string, unknown>[] = [];
+    const mesh = await Mesh.connect("memory://", {
+      transport: fakeMeshTransport({ onDeliver: (d) => d.messageType === "SubscribeRequest" && sent.push(d.message) }),
+    });
+    await mesh.get("ACME/Stories/42");
+    expect(sent[0]).toMatchObject({ reference: { $type: "MeshNodeReference", path: "ACME/Stories/42" } });
+    expect(sent[0].streamId).toBeTruthy();
     mesh.close();
   });
 });
