@@ -110,8 +110,27 @@ public class AutoSaveHandler : IDisposable
     }
 
     /// <summary>
-    /// Disposes the handler by releasing the throttle subscription and completing the value subject.
-    /// Subsequent calls to <c>OnValueChanged</c> are silently ignored after disposal.
+    /// Disposes the handler: releases the throttle subscription and disposes the value subject,
+    /// then FLUSHES any edit that was still inside the throttle window. Subsequent calls to
+    /// <c>OnValueChanged</c> are silently ignored after disposal.
+    ///
+    /// <para>That order is deliberate — tearing the throttle down first makes the flush the only
+    /// remaining writer, where flushing first would leave a window in which both could fire.</para>
+    ///
+    /// <para>🚨 <b>The flush is the point (issue #1606).</b> <c>Throttle</c> holds the last value for
+    /// the whole interval, so a dispose inside that window used to DROP it — silently, with no error
+    /// anywhere. That is not a rare teardown case: the Blazor views that own this handler create it
+    /// in <c>BindData</c> and register it with <c>AddBinding</c>, and <c>OnParametersSet</c> runs
+    /// <c>DisposeBindings()</c> → <c>BindData()</c>. So ANY re-render with new parameters inside 500 ms
+    /// of a keystroke destroyed the pending save — and a course example cell re-renders on every
+    /// emission of the node it is bound to, including the echo of the learner's own previous save.
+    /// The learner typed, the cell looked editable, and the text was gone after a reload.</para>
+    ///
+    /// <para>A pending value that equals <see cref="LastSyncedValue"/> is skipped, exactly as
+    /// <c>OnThrottledValue</c> skips it. If the throttle fires concurrently with this dispose the
+    /// worst case is the same value written twice, which the writers already treat as a no-op (they
+    /// return the node unchanged when the text matches, making the merge patch empty) — so this
+    /// needs no lock, and a lock here would be a hand-woven gate on a UI teardown path.</para>
     /// </summary>
     public void Dispose()
     {
@@ -119,7 +138,13 @@ public class AutoSaveHandler : IDisposable
             return;
 
         _disposed = true;
+        // Stop the throttle FIRST so the flush below is the only remaining writer, then flush what
+        // it was holding. Order matters: flushing first would leave a window for a double write.
         _subscription.Dispose();
         _valueSubject.Dispose();
+
+        var pending = CurrentValue;
+        if (pending is not null && pending != LastSyncedValue)
+            OnThrottledValue(pending);
     }
 }
