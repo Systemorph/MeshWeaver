@@ -73,6 +73,14 @@ namespace Memex.Portal.Shared;
 public static class MemexConfiguration
 {
     /// <summary>
+    /// Conditional fluent step: applies <paramref name="apply"/> only when
+    /// <paramref name="condition"/> holds — keeps feature-flagged registrations readable inside
+    /// long builder chains (the Features:UiPacks gates below).
+    /// </summary>
+    public static T If<T>(this T value, bool condition, Func<T, T> apply)
+        => condition ? apply(value) : value;
+
+    /// <summary>
     /// Configures web portal services for Memex.
     /// Pattern taken from MeshWeaver.Portal's SharedPortalConfiguration.
     /// </summary>
@@ -756,7 +764,7 @@ public static class MemexConfiguration
                 .AddCourses()
                 // Whole-course left-hand index for NODE-NATIVE courses (Edu/Lesson-shaped
                 // plugin partitions) — the same menu AddCourses gives its own course type.
-                .AddEducationNavigation()
+                .If(features.UiPacks.Education, b => b.AddEducationNavigation())
                 .AddPortalType()
                 .AddAI(serveFromPartition);
 
@@ -991,12 +999,20 @@ public static class MemexConfiguration
         /// <summary>
         /// Configures the portal with Graph views, Charts, GoogleMaps, and Radzen.
         /// </summary>
-        public TBuilder ConfigureMemexPortal() => (TBuilder)builder
+        public TBuilder ConfigureMemexPortal(IConfiguration configuration)
+        {
+            var features = configuration.GetSection(MemexFeatureOptions.SectionName)
+                .Get<MemexFeatureOptions>() ?? new MemexFeatureOptions();
+            return (TBuilder)builder
             .ConfigureHub(mesh => mesh
                 .AddMeshTypes()
-                .AddRadzenViews()
-                .AddAnalysisViews()
-                .AddGoogleMaps()
+                // The compiled view packs — each behind its Features:UiPacks flag so a deployment
+                // can switch it off by config (the AI-provider precedent). Registration order
+                // stopped being load-bearing with the fallback-slot seam, so a disabled pack
+                // simply leaves its controls to the fallback.
+                .If(features.UiPacks.Radzen, c => c.AddRadzenViews())
+                .If(features.UiPacks.Analysis, c => c.AddAnalysisViews())
+                .If(features.UiPacks.GoogleMaps, c => c.AddGoogleMaps())
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
                 .AddChatViews()   // Register ThreadChatView
                 .AddUserProfileViews() // Register UserProfilePageView
@@ -1027,6 +1043,7 @@ public static class MemexConfiguration
                     return c.AddData().WithGraphTypes();
                 })
             );
+        }
     }
 
     /// <summary>
