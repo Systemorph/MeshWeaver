@@ -27,11 +27,12 @@ describe("fetchAreaTarget", () => {
         ),
     );
 
-    const target = await fetchAreaTarget("https://p", "mw_t", "Course/Lesson1/Overview");
+    const target = await fetchAreaTarget("https://p", "MemexAuth=t", "Course/Lesson1/Overview");
 
     const [url, init] = spy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://p/api/mesh/resolve");
-    expect((init.headers as Record<string, string>).authorization).toBe("Bearer mw_t");
+    expect((init.headers as Record<string, string>).cookie).toBe("MemexAuth=t");
+    expect((init.headers as Record<string, string>).authorization).toBeUndefined();
     expect(target).toEqual({
       address: "Course/Lesson1",
       area: "Overview",
