@@ -801,9 +801,27 @@ public static class DynamicTypePreWarmer
                                 {
                                     if (node?.Content is not NodeTypeDefinition def)
                                         return node!;
-                                    // Don't clobber an in-flight compile someone else already started.
-                                    if (def.CompilationStatus is CompilationStatus.Pending
-                                                              or CompilationStatus.Compiling)
+                                    // Don't clobber an in-flight compile someone else already started…
+                                    // …but ONLY while it can still be in flight (#1462).
+                                    //
+                                    // 🚨 `Compiling` is a non-terminal state and nothing else reconciles
+                                    // it. The flip to `Compiling` is DURABLE; the terminal write is not
+                                    // guaranteed — a process death mid-compile leaves the row there for
+                                    // good. This guard then declines to touch it on every subsequent
+                                    // sweep, so the type never reaches a terminal state: it is neither
+                                    // `Ok` (usable) nor `Error` (classifiable), it holds portal
+                                    // readiness, and it parks every instance hub for the full activation
+                                    // budget. One row on `public.mesh_nodes` sat at `Compiling` for TEN
+                                    // WEEKS this way; it was harmless only because it was an orphan the
+                                    // prewarmer never enumerates.
+                                    //
+                                    // A claim older than the per-type budget cannot still be in flight —
+                                    // whoever made it would have written a terminal state or been given
+                                    // up on long ago — so it is re-driven rather than deferred to.
+                                    // Note what this is NOT: no timer, no poller, no background sweep for
+                                    // stale rows. The recovery rides the enumeration that already runs,
+                                    // and only ever reinterprets a claim that has provably expired.
+                                    if (IsLiveCompileClaim(def, budget))
                                         return node;
                                     return node with
                                     {
@@ -1037,6 +1055,31 @@ public static class DynamicTypePreWarmer
                     + "must never be read as one)",
                     typePath));
     }
+
+    /// <summary>
+    /// Whether <paramref name="def"/>'s compile claim can still be in flight, i.e. whether deferring
+    /// to it is honouring a live compile rather than a stranded one (#1462).
+    ///
+    /// <para><c>Pending</c> is always honoured: it is the state this prewarmer itself writes to ASK
+    /// for a compile, and a driver picks it up promptly.</para>
+    ///
+    /// <para><c>Compiling</c> is honoured only while <see cref="NodeTypeDefinition.LastCompileStartedAt"/>
+    /// is within <paramref name="budget"/> — the same bound the sweep gives a type to settle. Past it,
+    /// no driver is still working on it: either it finished (and would have written a terminal state)
+    /// or it died. A row with NO start timestamp at all is treated as stranded too, since a live
+    /// compile always stamps one (<c>NodeTypeCompilationHelpers</c>); an unstamped <c>Compiling</c> is
+    /// exactly the shape a row left over from an older write carries, and honouring it forever is how
+    /// this became permanent.</para>
+    /// </summary>
+    internal static bool IsLiveCompileClaim(NodeTypeDefinition def, TimeSpan budget) =>
+        def.CompilationStatus switch
+        {
+            CompilationStatus.Pending => true,
+            CompilationStatus.Compiling =>
+                def.LastCompileStartedAt is { } startedAt
+                && DateTimeOffset.UtcNow - startedAt <= budget,
+            _ => false,
+        };
 
     /// <summary>
     /// Activate one dynamic NodeType's hub by subscribing to its own MeshNode stream —
