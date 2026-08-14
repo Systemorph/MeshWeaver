@@ -882,6 +882,56 @@ jobs:
             echo "- memex-portal-next \`$V_NEXT\`, \`$SHA\`, \`main\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (optional) ──────────────────
+  # After the release is ARMED (promote's last PUT), tell the registry instance's mesh that a new
+  # platform build exists: one signed POST to the WebhookInbox target the Hosting plugin watches
+  # (Hosting/PlatformBuilds/main). The mesh side verifies the HMAC over the RAW body, starts a
+  # thread with the platform-update agent, and that agent opens the MW_IMAGE_DIGEST bump PRs on
+  # the plugin repos — the platform half of dependency maintenance (Dependabot is the ecosystem
+  # half). REPORTER-CLASS, deliberately: losing one notification costs one delayed update wave
+  # (the next green build re-notifies); it can never hide a defect, so an unconfigured or failed
+  # POST must not redden CD. Configure with repo var PLATFORM_WEBHOOK_URL + secret
+  # PLATFORM_WEBHOOK_SECRET; the NOTICE below keeps "not configured" loud in the summary.
+  notify-platform-update:
+    name: "Notify platform-update registry"
+    needs: [gate, plugin-test-image, promote]
+    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: "Sign and POST the build fact"
+        env:
+          URL: ${{ vars.PLATFORM_WEBHOOK_URL }}
+          SECRET: ${{ secrets.PLATFORM_WEBHOOK_SECRET }}
+          SHA: ${{ needs.gate.outputs.short_sha }}
+          V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${URL:-}" ] || [ -z "${SECRET:-}" ]; then
+            echo "::notice::Platform-update notify NOT CONFIGURED — set repo var PLATFORM_WEBHOOK_URL and secret PLATFORM_WEBHOOK_SECRET to enable the fleet platform-update agent."
+            echo "### ⚠️ Platform-update notify not configured (PLATFORM_WEBHOOK_URL / PLATFORM_WEBHOOK_SECRET)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          az acr login --name meshweaver
+          # The digest of mw-plugin-test:main — the exact pin (MW_IMAGE_DIGEST) the plugin repos
+          # compile against. Resolved HERE so the mesh side needs no registry credential.
+          DIGEST=$(docker buildx imagetools inspect meshweaver.azurecr.io/mw-plugin-test:main --format '{{json .Manifest.Digest}}' | tr -d '"')
+          [ -n "$DIGEST" ] || { echo "::error::could not resolve mw-plugin-test:main digest"; exit 1; }
+          BODY=$(printf '{"event":"platform-build","repo":"%s","sha":"%s","version":"%s","image":"meshweaver.azurecr.io/mw-plugin-test","digest":"%s"}'             "$GITHUB_REPOSITORY" "$SHA" "$V_PLUGIN" "$DIGEST")
+          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
+          code=$(curl -sS -o /tmp/resp -w '%{http_code}' -X POST "$URL"             -H 'Content-Type: application/json' -H "X-Hub-Signature-256: $SIG" --data "$BODY")
+          echo "POST $URL -> $code"; cat /tmp/resp || true
+          case "$code" in 2*) echo "### 📣 Platform build $SHA ($DIGEST) notified to the update agent" >> "$GITHUB_STEP_SUMMARY";;
+            *) echo "::warning::platform-update notify returned $code — the next green build re-notifies; investigate the registry instance if it persists.";; esac
+
   # ─────────────────────────── DID IT ACTUALLY SHIP? ──────────────────────────
   # Belt and braces: `promote` PREVENTS a partial set, this CONFIRMS one landed. Assert the
   # IMAGES, never the green tick — 4f0c35cfc shipped memex-portal-ai:3.0.0-rc1.ci.2470 with a
