@@ -29,7 +29,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Integration tests verifying that SetAttachments() â†’ BuildMessageWithContextAsync()
+/// Integration tests verifying that SetAttachments() → BuildMessageWithContextAsync()
 /// loads attachment content and places it before the user message in the assembled prompt.
 /// </summary>
 public class AttachmentContextTest : MonolithMeshTestBase
@@ -38,7 +38,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
 
     public AttachmentContextTest(ITestOutputHelper output) : base(output) { }
 
-    // Share Mesh/ServiceProvider across all [Fact]s in this class â€” saves the
+    // Share Mesh/ServiceProvider across all [Fact]s in this class — saves the
     // ~190 MiB native heap that would otherwise leak per test method.
     protected override bool ShareMeshAcrossTests => true;
 
@@ -163,7 +163,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
         await agentChat.Initialize("ACME").WhenInitialized.FirstAsync().ToTask(ct);
 
-        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        // Static node read — no write before, catalog read is correct (no CQRS lag).
         var contextNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME", null, ct).FirstOrDefaultAsync(ct);
         contextNode.Should().NotBeNull();
 
@@ -314,7 +314,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies the full ordering: agent instructions â†’ context â†’ attachments â†’ user message.
+    /// Verifies the full ordering: agent instructions → context → attachments → user message.
     /// </summary>
     [Fact]
     public async Task PromptAssembly_FullOrdering_InstructionsContextAttachmentsUserMessage()

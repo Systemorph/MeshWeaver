@@ -1217,8 +1217,8 @@ public class NavigationServiceTest
     public async Task OnLocationChanged_SatelliteNode_CurrentNamespacePointsAtMainNode()
     {
         // User browses to a thread under Acme/AIConsulting. The thread node's MainNode
-        // points back at the parent that owns it, so CurrentNamespace â€” which downstream
-        // chat/autocomplete/attachment code uses to resolve relative paths â€” must surface
+        // points back at the parent that owns it, so CurrentNamespace — which downstream
+        // chat/autocomplete/attachment code uses to resolve relative paths — must surface
         // the main node, not the satellite path.
         var service = CreateService();
         const string SatellitePath = "Acme/AIConsulting/_Thread/abc-123";

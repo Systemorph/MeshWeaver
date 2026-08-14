@@ -56,9 +56,9 @@ public class PlanStorageTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var planContent = @"## Plan: Set up project structure
 
 ### Steps
-1. Create Engineering department Ã¢â‚¬â€ `Create` Ã¢â‚¬â€ node under PlanTestOrg
-2. Create Marketing department Ã¢â‚¬â€ `Create` Ã¢â‚¬â€ node under PlanTestOrg
-3. Create README pages Ã¢â‚¬â€ `Create` Ã¢â‚¬â€ one per department
+1. Create Engineering department — `Create` — node under PlanTestOrg
+2. Create Marketing department — `Create` — node under PlanTestOrg
+3. Create README pages — `Create` — one per department
 
 ### Notes
 - All nodes use Markdown type

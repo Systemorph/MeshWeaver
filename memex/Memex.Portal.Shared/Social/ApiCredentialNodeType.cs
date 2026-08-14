@@ -10,7 +10,7 @@ namespace Memex.Portal.Shared.Social;
 /// NodeType definition for <see cref="PlatformCredential"/>. Instances live under
 /// <c>{profilePath}/_ApiCredentials/{platform}</c> and are read/written exclusively
 /// by the Social subsystem + the LinkedIn/X connect endpoints. Access control:
-/// readable/writable only by Admins and the profile owner â€” wired via a satellite
+/// readable/writable only by Admins and the profile owner — wired via a satellite
 /// access rule in the hosting app (Memex security config). This file only registers
 /// the type shape.
 /// </summary>

@@ -47,7 +47,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         return base.ConfigureClient(configuration);
     }
 
-    // â”€â”€ Latest Threads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Latest Threads ─────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task LatestThreads_FindsThreadsAcrossNamespaces_ByCreator()
@@ -102,7 +102,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         var resp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode("External", "Thread in external namespace", AdminUserId)), o => o.WithTarget(new Address("External"))).Should().Within(TimeSpan.FromSeconds(25)).Emit();
         resp.Message.Success.Should().BeTrue(resp.Message.Error ?? "");
 
-        // Act: old query (namespace:User/userId scope:descendants) â€” misses external threads
+        // Act: old query (namespace:User/userId scope:descendants) — misses external threads
         var userNs = $"User/{AdminUserId}";
         var oldQueryResults = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Thread namespace:{userNs} scope:descendants sort:LastModified-desc")).Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
 
@@ -142,7 +142,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
             "should not show threads created by other users");
     }
 
-    // â”€â”€ Activity Feed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Activity Feed ──────────────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task ActivityFeed_FindsNodesWithActivityAcrossNamespaces()
@@ -226,7 +226,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         results[0].Name.Should().Be("Item A");
     }
 
-    // â”€â”€ Thread CreatedBy storage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Thread CreatedBy storage ────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task CreateNodeRequest_Thread_StoresCreatedByInContent()

@@ -144,7 +144,7 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
         Output.WriteLine($"Sub-thread created: {createdSubThreadPath}");
         createdSubThreadPath.Should().Be(subThreadPath);
 
-        // 4. Submit message to the sub-thread Ã¢â‚¬â€ this is the critical routing test!
+        // 4. Submit message to the sub-thread — this is the critical routing test!
         // The sub-thread is 6 segments deep. The RoutingGrain must resolve this
         // to the correct grain key and propagate access context.
         var subTwoMessages = ObserveThreadMessages(client, subThreadPath)
@@ -190,7 +190,7 @@ public class OrleansSubThreadRoutingTest(ITestOutputHelper output) : OrleansShar
 
     /// <summary>
     /// Verifies that access context propagates correctly when creating and accessing
-    /// nodes at deeply nested paths. Uses the real submission flow (SubmitMessage Ã¢â€ â€™ cells)
+    /// nodes at deeply nested paths. Uses the real submission flow (SubmitMessage → cells)
     /// to create intermediate nodes, then creates a sub-thread under them.
     /// </summary>
     [Fact(Timeout = 60000)]

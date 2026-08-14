@@ -398,7 +398,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     // MeshOperations.TryResolveUnifiedPathAsync splits the path into addressPart="Acme/AIConsulting"
     // and remainder="content/Diskussion Thomas Final Report.docx", then posts
     //   GetDataRequest(new UnifiedReference("content/Diskussion Thomas Final Report.docx"))
-    // to the address. The user observed a 10-second AwaitResponse timeout â€” symptom said
+    // to the address. The user observed a 10-second AwaitResponse timeout — symptom said
     // "no response received". These tests pin down whether the GetDataRequest handler returns at
     // all for the slash-format default-collection lookup, with and without spaces.
 
@@ -414,7 +414,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var host = GetHostWithFileProvider(testDir, defaultCollection: true);
             var client = GetClient();
 
-            // Slash format with NO collection segment â€” what the agent actually emits.
+            // Slash format with NO collection segment — what the agent actually emits.
             var response = await client.Observe(new GetDataRequest(new UnifiedReference("content/report.txt")), o => o.WithTarget(CreateHostAddress())).Should().Emit();
 
             response.Message.Error.Should().BeNull();
@@ -479,7 +479,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
     public async Task GetDataRequest_ContentSlashFormat_MissingDefaultCollection_ReturnsErrorNotTimeout()
     {
         // The prod hub for /Acme/AIConsulting may not have AddContentCollections() registered
-        // under the default "content" name. The handler must return a clear error response â€” not
+        // under the default "content" name. The handler must return a clear error response — not
         // hang and force AwaitResponse to time out.
         GetHost(); // baseline host with NO file content provider configured
         var client = GetClient();

@@ -24,7 +24,7 @@ namespace MeshWeaver.AI.Test;
 /// Unit coverage for the new <see cref="PatchDataRequest"/> + handler. This is the
 /// user-facing partial-update primitive: a caller posts a JSON merge patch against
 /// a <see cref="WorkspaceReference"/> on some target hub; the handler applies the
-/// merge to the stream's current value and commits via <c>stream.Update</c> â€” no
+/// merge to the stream's current value and commits via <c>stream.Update</c> — no
 /// pre-existing subscription required, no client-side read needed.
 ///
 /// Covers: applies a partial patch, leaves omitted fields intact, post-patch
@@ -67,7 +67,7 @@ public class PatchDataRequestTest : MonolithMeshTestBase
 
         var path = $"ACME/{id}";
 
-        // Post the PatchDataRequest with only { name: "Patched" } â€” the hub handler
+        // Post the PatchDataRequest with only { name: "Patched" } — the hub handler
         // applies this as a merge patch on its own MeshNode workspace stream.
         var patchJson = JsonSerializer.Serialize(new { name = "Patched" });
         var patchResp = (await Mesh.Observe(
@@ -86,9 +86,9 @@ public class PatchDataRequestTest : MonolithMeshTestBase
         node!.Name.Should().Be("Patched",
             because: "PatchDataRequest merged only the 'name' field");
         node.NodeType.Should().Be(TestNodeType,
-            because: "NodeType was not in the patch â€” must be preserved");
+            because: "NodeType was not in the patch — must be preserved");
         node.Content.Should().NotBeNull(
-            because: "Content was not in the patch â€” must be preserved");
+            because: "Content was not in the patch — must be preserved");
     }
 
     /// <summary>

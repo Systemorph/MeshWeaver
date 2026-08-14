@@ -29,7 +29,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// End-to-end integration test for the full thread â†’ agent â†’ response flow.
+/// End-to-end integration test for the full thread → agent → response flow.
 /// Uses a fake IChatClient to avoid real AI API calls while testing
 /// the complete pipeline: thread creation, message persistence,
 /// agent initialization, streaming response, and reply storage.
@@ -57,7 +57,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
 
     public ThreadAgentIntegrationTest(ITestOutputHelper output) : base(output) { }
 
-    // Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.
+    // Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.
     protected override bool ShareMeshAcrossTests => true;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -425,7 +425,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         response1.ToString().Trim().Should().NotBeNullOrEmpty();
         response2.ToString().Trim().Should().NotBeNullOrEmpty();
 
-        // Thread persistence is now via MeshNodes â€” no separate IChatPersistenceService
+        // Thread persistence is now via MeshNodes — no separate IChatPersistenceService
     }
 
     #endregion

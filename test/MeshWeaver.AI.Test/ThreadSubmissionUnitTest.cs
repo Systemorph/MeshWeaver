@@ -15,7 +15,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class ThreadSubmissionUnitTest
 {
-    // â”€â”€â”€ FindUnprocessedUserMessages â”€â”€â”€
+    // ─── FindUnprocessedUserMessages ───
 
     [Fact]
     public void FindUnprocessedUserMessages_NoUsers_ReturnsEmpty()
@@ -85,7 +85,7 @@ public class ThreadSubmissionUnitTest
         result.Should().ContainInOrder("u3");
     }
 
-    // â”€â”€â”€ PlanNextRound â”€â”€â”€
+    // ─── PlanNextRound ───
 
     [Fact]
     public void PlanNextRound_Busy_ReturnsNull()

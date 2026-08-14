@@ -16,7 +16,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Tests that UserActivity dashboard queries return results across partitions.
-/// Covers: Latest Threads, Activity Feed, Recently Viewed â€” all of which use
+/// Covers: Latest Threads, Activity Feed, Recently Viewed — all of which use
 /// satellite tables (threads, activities, user_activities) that require
 /// per-partition fan-out instead of the cross-schema stored proc.
 /// </summary>
@@ -299,7 +299,7 @@ public class UserActivityCrossPartitionTests
         return results;
     }
 
-    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Helpers ──────────────────────────────────────────────────────
 
     private async Task PopulateSearchableSchemasAsync(IEnumerable<string> schemas, CancellationToken ct)
     {

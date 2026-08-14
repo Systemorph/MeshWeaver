@@ -66,7 +66,7 @@ public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithM
         var resolution = await PathResolver.ResolvePath("FutuRe").Should().Emit();
 
         Output.WriteLine($"Resolution: {resolution?.Prefix ?? "NULL"}, Remainder: {resolution?.Remainder ?? "NULL"}");
-        resolution.Should().NotBeNull("FutuRe should resolve â€” it has an index.md in the data directory");
+        resolution.Should().NotBeNull("FutuRe should resolve — it has an index.md in the data directory");
         resolution!.Prefix.Should().Be("FutuRe");
         resolution.Remainder.Should().BeNull();
     }

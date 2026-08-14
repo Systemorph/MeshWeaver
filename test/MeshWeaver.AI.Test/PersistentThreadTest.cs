@@ -17,7 +17,7 @@ namespace MeshWeaver.AI.Test;
 
 public class PersistentThreadTest
 {
-    #region Thread Record â€” PersistentThreadId & ProviderType
+    #region Thread Record — PersistentThreadId & ProviderType
 
     [Fact]
     public void Thread_PersistentThreadId_DefaultIsNull()

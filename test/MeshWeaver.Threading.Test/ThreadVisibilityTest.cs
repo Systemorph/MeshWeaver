@@ -44,7 +44,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Content = new MeshThread()
         }).Should().Emit();
 
-        // Query by path â€” should find it
+        // Query by path — should find it
         var result = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(
             $"path:User/{RolandId}/_Thread/test-thread-1"))
             .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.FirstOrDefault();
@@ -65,7 +65,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Content = new MeshThread()
         }).Should().Emit();
 
-        // Query as Roland â€” scope:descendants matches the real portal fan-out behavior.
+        // Query as Roland — scope:descendants matches the real portal fan-out behavior.
         // Accumulate live deltas so a node arriving in a post-Initial Added emission
         // still satisfies the assertion (eventual-consistency safe).
         var threads = await AccumulateQuery("nodeType:Thread scope:descendants",
@@ -78,7 +78,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact]
     public async Task QueryThreads_SamuelCannotSeeRolandsThread()
     {
-        // Create thread under Roland (as admin â€” self-access allows creation under own scope)
+        // Create thread under Roland (as admin — self-access allows creation under own scope)
         await NodeFactory.CreateNode(new MeshNode("private-thread", $"User/{RolandId}/_Thread")
         {
             Name = "Roland private thread",
@@ -87,7 +87,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Content = new MeshThread()
         }).Should().Emit();
 
-        // Switch to Samuel â€” RLS self-access only grants User/Samuel/... scope,
+        // Switch to Samuel — RLS self-access only grants User/Samuel/... scope,
         // not User/Roland/... scope. PublicAdminAccess gives broad admin
         // so in this test we just verify the thread path is under Roland's scope.
         // Full RLS isolation requires ConfigureMeshBase (no PublicAdminAccess).

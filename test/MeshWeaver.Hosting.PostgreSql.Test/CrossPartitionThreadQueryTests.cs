@@ -23,7 +23,7 @@ public class CrossPartitionThreadQueryTests
 {
     private readonly PostgreSqlFixture _fixture;
 
-    // Must use CamelCase to match hub serialization (Thread.CreatedBy â†’ "createdBy" in JSONB)
+    // Must use CamelCase to match hub serialization (Thread.CreatedBy → "createdBy" in JSONB)
     private readonly JsonSerializerOptions _options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase

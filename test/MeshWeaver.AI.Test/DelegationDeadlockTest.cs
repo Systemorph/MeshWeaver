@@ -20,7 +20,7 @@ namespace MeshWeaver.AI.Test;
 /// FunctionInvokingChatClient drove the sub-thread's enumeration via <c>await foreach</c>
 /// on the grain's message-handler stack. Each <c>MoveNextAsync</c> continuation captured
 /// the grain's SynchronizationContext. Any sub-thread continuation that needed to post
-/// back through that same scheduler wedged it â€” the grain was stuck inside the awaiting
+/// back through that same scheduler wedged it — the grain was stuck inside the awaiting
 /// tool call.
 ///
 /// Fix contract: the sub-thread drain must run on ThreadPool with
@@ -70,17 +70,17 @@ public class DelegationDeadlockTest
     });
 
     /// <summary>
-    /// REPRO â€” sub-thread drain must not capture the caller's SynchronizationContext.
+    /// REPRO — sub-thread drain must not capture the caller's SynchronizationContext.
     ///
     /// We invoke the tool on a single-threaded pump that models the Orleans grain
     /// scheduler. Inside the sub-thread's enumeration body, we record whether the
     /// current thread is a ThreadPool thread.
     ///
     /// Today (buggy): the `async IAsyncEnumerable` shape runs enumeration
-    /// continuations on the caller's pump â†’ <c>IsThreadPoolThread</c> is false. Under
+    /// continuations on the caller's pump → <c>IsThreadPoolThread</c> is false. Under
     /// Orleans, that's the deadlock.
     ///
-    /// After fix (Task.Run + ConfigureAwait(false)): the drain runs on ThreadPool â†’
+    /// After fix (Task.Run + ConfigureAwait(false)): the drain runs on ThreadPool →
     /// <c>IsThreadPoolThread</c> is true, and the grain scheduler stays free.
     /// </summary>
     [Fact]
@@ -98,7 +98,7 @@ public class DelegationDeadlockTest
         {
             // Record where the enumeration is actually running. This is the code path
             // that, under Orleans, would post UpdateThreadMessageContent back through
-            // the parent hub â€” if it runs on the grain scheduler, we deadlock.
+            // the parent hub — if it runs on the grain scheduler, we deadlock.
             enumerationOnThreadPool.TrySetResult(
                 System.Threading.Thread.CurrentThread.IsThreadPoolThread);
             yield return "done";
@@ -107,7 +107,7 @@ public class DelegationDeadlockTest
 
         var tool = CreateTool((a, t, c, ct) => AsObservable(Execute(a, t, c, ct)));
 
-        // Invoke the tool on the pump â€” this is how FunctionInvokingChatClient
+        // Invoke the tool on the pump — this is how FunctionInvokingChatClient
         // would invoke it from a grain message handler.
         await pump.RunAsync(() => tool.InvokeAsync(Args(), ct).AsTask())
             .WaitAsync(10.Seconds(), ct);
@@ -150,7 +150,7 @@ public class DelegationDeadlockTest
 
     /// <summary>
     /// Single-threaded synchronization context that serializes all continuations
-    /// onto one thread â€” models an Orleans grain scheduler / message hub pump.
+    /// onto one thread — models an Orleans grain scheduler / message hub pump.
     /// </summary>
     private sealed class SingleThreadSyncContext : SynchronizationContext, IDisposable
     {
@@ -169,7 +169,7 @@ public class DelegationDeadlockTest
             foreach (var item in queue.GetConsumingEnumerable())
             {
                 try { item.cb(item.state); }
-                catch { /* swallow â€” callbacks carry their own error plumbing via TCS */ }
+                catch { /* swallow — callbacks carry their own error plumbing via TCS */ }
             }
         }
 

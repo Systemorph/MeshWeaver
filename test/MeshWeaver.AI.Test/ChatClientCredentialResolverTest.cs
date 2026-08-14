@@ -59,8 +59,8 @@ public class ChatClientCredentialResolverTest : AITestBase
         var modelPath = $"{modelNs}/{modelId}";
 
         // Legacy shape: a LanguageModel node carrying the key directly on
-        // its content (no ProviderRef). The resolver's last rung â€”
-        // "model-node" â€” picks this up.
+        // its content (no ProviderRef). The resolver's last rung —
+        // "model-node" — picks this up.
         await MeshService.CreateNode(new MeshNode(modelId, modelNs)
         {
             NodeType = LanguageModelNodeType.NodeType,
@@ -72,7 +72,7 @@ public class ChatClientCredentialResolverTest : AITestBase
                 Provider = "Anthropic",
                 ApiKeySecretRef = "sk-legacy-on-model-node",
                 Endpoint = "https://legacy.example/v1/messages",
-                // No ProviderRef â€” resolver should fall through to model fields.
+                // No ProviderRef — resolver should fall through to model fields.
                 ProviderRef = null,
             }
         }).Should().Within(15.Seconds()).Emit();
@@ -84,7 +84,7 @@ public class ChatClientCredentialResolverTest : AITestBase
 
         var resolver = Mesh.ServiceProvider.GetRequiredService<ChatClientCredentialResolver>();
         resolver.EnsureSubscription();
-        // Poll the resolver's public surface â€” robust against OnNext
+        // Poll the resolver's public surface — robust against OnNext
         // ordering vs the warmup observable above.
         var resolution = await Observable.Interval(TimeSpan.FromMilliseconds(50))
             .Select(_ => resolver.Resolve(modelId))

@@ -25,7 +25,7 @@ namespace MeshWeaver.AI.Test;
 /// truly-async Post + RegisterCallback + TCS pattern (see
 /// <c>Doc/Architecture/AsynchronousCalls</c>). Routing failures propagate back through
 /// the callback as a <c>DeliveryFailure</c> and the plugin returns a user-actionable
-/// error string â€” never <c>hub.AwaitResponse</c>, which would deadlock the hub.
+/// error string — never <c>hub.AwaitResponse</c>, which would deadlock the hub.
 /// </summary>
 public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -96,7 +96,7 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     }
 
     /// <summary>
-    /// Plugin-level coverage for <c>AddComment</c> â€” same early-exit contract as
+    /// Plugin-level coverage for <c>AddComment</c> — same early-exit contract as
     /// <see cref="SuggestEdit_NonResolvablePath_ReturnsDocumentNotFound"/>.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -116,7 +116,7 @@ public class CollaborationPluginGrainFailureTest(ITestOutputHelper output) : Mon
     }
 
     /// <summary>
-    /// Minimal <see cref="IAgentChat"/> stub â€” <c>CollaborationPlugin</c> only reads
+    /// Minimal <see cref="IAgentChat"/> stub — <c>CollaborationPlugin</c> only reads
     /// <c>Context</c> (possibly null) and <c>Context.Path</c> for the author field.
     /// All other members throw.
     /// </summary>

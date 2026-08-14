@@ -45,7 +45,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .AddGraph()
             // AddAI registers Agent NodeType + AgentConfiguration content type so
-            // .md files with `nodeType: Agent` deserialise into AgentConfiguration â€”
+            // .md files with `nodeType: Agent` deserialise into AgentConfiguration —
             // without this AgentPickerProjection.ProjectAgents filters them all out.
             .AddAI()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
@@ -68,7 +68,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         var expectedNodeType = "ACME/Project";
         var expectedTodoAgentPath = "ACME/Project/TodoAgent";
 
-        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        // Static node read — no write before, catalog read is correct (no CQRS lag).
         var productLaunchNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist in test data");
 
@@ -80,7 +80,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Act - Create AgentChatClient using the mesh's service provider
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
 
-        // 1. Initialize then SetContext â€” SetContext re-inits the subscription with
+        // 1. Initialize then SetContext — SetContext re-inits the subscription with
         //    the context node's space partition, which is what brings in that space's
         //    own agents at namespace:{space}/Agent (exact membership, no scope walk).
         chatClient.Initialize(contextPath);
@@ -121,7 +121,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Arrange - Use a path that should have agents in hierarchy
         var contextPath = "ACME";
 
-        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        // Static node read — no write before, catalog read is correct (no CQRS lag).
         var acmeNode = await MeshQuery.QueryAsync<MeshNode>($"path:{contextPath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         acmeNode.Should().NotBeNull("ACME node should exist in test data");
 
