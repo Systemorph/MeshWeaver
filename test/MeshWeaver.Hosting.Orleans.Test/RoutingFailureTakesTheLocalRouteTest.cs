@@ -48,11 +48,15 @@ public class RoutingFailureTakesTheLocalRouteTest(ITestOutputHelper output) : Te
     {
         var routing = CreateRouter();
         var delivered = 0;
-        using var _ = routing.RegisterStream(CoHostedSender, (d, _) =>
+        // 🚨 Counted on SUBSCRIPTION, not on Invoke. A counter bumped in the delegate body would
+        // also read 1 for a route whose returned observable is never subscribed — i.e. it would
+        // pass without the NACK ever being handed over. Deferring makes the assertion mean what it
+        // says, and matches how PostFailure calls it: Invoke(...).Subscribe(...).
+        using var _ = routing.RegisterStream(CoHostedSender, (d, _) => Observable.Defer(() =>
         {
             delivered++;
             return Observable.Return(d);
-        });
+        }));
 
         var route = routing.TryGetLocalRoute(CoHostedSender);
 
@@ -61,7 +65,12 @@ public class RoutingFailureTakesTheLocalRouteTest(ITestOutputHelper output) : Te
             + "same path — publishing to a stream instead is what made the failure leg the weakest "
             + "inbound path");
 
-        route!.Invoke(NewDelivery(CoHostedSender), CancellationToken.None).Subscribe();
+        var pending = route!.Invoke(NewDelivery(CoHostedSender), CancellationToken.None);
+        delivered.Should().Be(0,
+            "the route is cold — nothing is delivered until someone subscribes, which is precisely "
+            + "why a caller that only posts and walks away cannot know the NACK landed");
+
+        pending.Subscribe();
         delivered.Should().Be(1, "resolving the route must actually deliver, not merely find an entry");
     }
 
