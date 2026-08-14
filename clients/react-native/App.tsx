@@ -129,7 +129,7 @@ function AppInner() {
         setEmbedFactory(() => createGrpcEmbeddedFactory(l.connection));
         // The full MeshOps over the same connection — renderMarkdown (server Markdig) + the per-view kernel
         // anchor the interactive markdown + runnable code cells; the kernel activity lives in CHAT's partition.
-        setMeshOps(buildMeshOps(l.connection, inst.url, CHAT?.namespacePath ?? ""));
+        setMeshOps(buildMeshOps(l.connection, inst.url, CHAT?.namespacePath ?? "", inst.token));
       })
       .catch((e) => { console.warn("[live] connect failed:", e?.message ?? String(e)); /* shell stays on the last-good source */ });
     return () => {

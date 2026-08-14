@@ -35,25 +35,47 @@ export function ownerOfNamespace(namespace: string): string {
 export class Mesh {
   private readonly conn: MeshConnection;
   private readonly meshAddress: string;
+  private readonly restUrl: string;
+  private readonly token?: string;
 
-  private constructor(conn: MeshConnection, meshAddress: string) {
+  private constructor(conn: MeshConnection, meshAddress: string, restUrl: string, token?: string) {
     this.conn = conn;
     this.meshAddress = meshAddress;
+    this.restUrl = restUrl;
+    this.token = token;
   }
 
   static async connect(url: string, opts: MeshOptions = {}): Promise<Mesh> {
     const conn = await connectTransport(url, opts);
-    return new Mesh(conn, opts.meshAddress ?? "mesh/main");
+    return new Mesh(conn, opts.meshAddress ?? "mesh/main", url, opts.token);
   }
 
   close(): void {
     this.conn.close();
   }
 
-  /** Free-text / structured mesh query (routes to vector or SQL server-side). */
+  /**
+   * Free-text / structured mesh query (routes to vector or SQL server-side). Goes over REST
+   * (`POST /api/mesh/query-nodes`) — the gRPC `QueryRequest` this used to post has NO server
+   * handler (issue #1473: every call waited out the observe timeout and returned empty). The
+   * protocol-native replacement is the planned live-subscribable `MeshQueryReference`; until it
+   * exists, REST is the one working query surface. `basePath` narrows via the mesh query syntax
+   * (`path:<base> scope:subtree`).
+   */
   async search(query: string, basePath?: string, limit = 50): Promise<Record<string, unknown>[]> {
-    const resp = await this.conn.observe(this.meshAddress, "QueryRequest", { query, basePath, limit }); // WIRE: confirm query request type
-    return ((resp.message["results"] ?? resp.message["Results"]) as Record<string, unknown>[]) ?? [];
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (this.token) headers["authorization"] = `Bearer ${this.token}`;
+    const composed = basePath ? `${query} path:${basePath} scope:subtree` : query;
+    const resp = await fetch(`${this.restUrl.replace(/\/+$/, "")}/api/mesh/query-nodes`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query: composed, limit }),
+    });
+    if (!resp.ok) throw new Error(`query-nodes failed (${resp.status})`);
+    const text = await resp.text();
+    if (text.startsWith("Error:") || text.startsWith("Not found:")) throw new Error(text);
+    const parsed = JSON.parse(text) as { results?: Record<string, unknown>[] };
+    return Array.isArray(parsed.results) ? parsed.results : [];
   }
 
   /** Read a single node's current state (one snapshot off its live stream). */

@@ -22,6 +22,9 @@ const repoDir = resolve(process.cwd(), "../..");
 const repoRoot = repoDir.split(sep).join("/");
 const workflow = readFileSync(resolve(repoDir, ".github/workflows/clients.yml"), "utf8");
 
+/** Top-level trees OUTSIDE clients/ that a client test may legitimately read as a guard input. */
+const CROSS_TREE_ROOTS = ["src", "memex"];
+
 /**
  * The `paths:` list under each trigger. Parsed without a YAML dependency: find a `paths:` key, then
  * take the `- "…"` items that follow at a deeper indent.
@@ -71,7 +74,10 @@ function crossTreeReads(): string[] {
         // Compare in POSIX form — resolve() yields "\" on Windows, where a "/"-based startsWith
         // would silently match nothing and report every input as uncovered.
         const posix = abs.split(sep).join("/");
-        if (!posix.startsWith(`${repoRoot}/src/`)) return; // only reads that leave clients/
+        // Only reads that leave clients/. `memex/` counts as much as `src/`: the REST-parity guard
+        // reads the endpoint maps of BOTH backends (the portal's and the local sidecar's), and a
+        // verb removed there must redden the client that calls it.
+        if (!CROSS_TREE_ROOTS.some((root) => posix.startsWith(`${repoRoot}/${root}/`))) return;
         if (!statSync(abs, { throwIfNoEntry: false })) return; // and only ones that really resolve
         found.add(posix.slice(repoRoot.length + 1));
       };

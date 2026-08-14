@@ -5,11 +5,31 @@ import { fakeMeshTransport } from "./testTransport";
 // Drives the ergonomic Mesh ops surface against the same in-memory Connect+Deliver fake the connection
 // tests use — proving search/get/watch/patch/create/delete/move/copy compose correctly over the transport.
 describe("Mesh ops (gRPC-web, in-memory)", () => {
-  it("search returns the query results", async () => {
-    const mesh = await Mesh.connect("memory://", { transport: fakeMeshTransport() });
+  it("search posts REST query-nodes with Bearer auth (the gRPC QueryRequest has no server handler — #1473)", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fakeFetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ results: [{ path: "ACME/Stories/1" }] }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    const mesh = await Mesh.connect("https://portal.example", {
+      transport: fakeMeshTransport(),
+      token: "mw_test",
+      fetch: fakeFetch,
+    });
     const results = await mesh.search("nodeType:Story namespace:ACME");
     expect(results).toHaveLength(1);
     expect(results[0].path).toBe("ACME/Stories/1");
+    expect(calls[0].url).toBe("https://portal.example/api/mesh/query-nodes");
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers["authorization"]).toBe("Bearer mw_test");
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ query: "nodeType:Story namespace:ACME", limit: 50 });
+
+    // basePath folds into the mesh query syntax rather than a body field QueryNodesBody lacks.
+    await mesh.search("laptop", "ACME/Products", 10);
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({
+      query: "laptop path:ACME/Products scope:subtree",
+      limit: 10,
+    });
     mesh.close();
   });
 
@@ -114,6 +134,13 @@ describe("Mesh ops (gRPC-web, in-memory)", () => {
     expect(sent.get("DeleteNodeRequest")).toMatchObject({ path: "ACME/Old" });
     expect(sent.get("MoveNodeRequest")).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/B" });
     expect(sent.get("CopyNodeRequest")).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/C" });
+    // …and the old names are GONE. toMatchObject alone would still pass if `source`/`target` rode
+    // along beside the right ones, which is the shape a half-applied fix leaves behind.
+    for (const type of ["MoveNodeRequest", "CopyNodeRequest"]) {
+      const body = sent.get(type)!;
+      expect(Object.keys(body), `${type} still carries the unbound names`).not.toContain("source");
+      expect(Object.keys(body), `${type} still carries the unbound names`).not.toContain("target");
+    }
     // PatchDataRequest(Reference, Patch) — the reference needs its polymorphic $type or it resolves
     // against nothing, and execute()'s trigger lives on the CONTENT (MeshNode has no RequestedStatus).
     // The map keeps the last PatchDataRequest, which is execute()'s.

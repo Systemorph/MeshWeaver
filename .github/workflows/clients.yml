@@ -38,6 +38,10 @@ name: Clients
 #   src/MeshWeaver.Mesh.Contract/MeshNodeReference.cs     names are checked against — a rename here
 #   src/MeshWeaver.Data.Contract/Messages.cs              must turn the client red, because the hub
 #   src/MeshWeaver.Data.Contract/PatchDataRequest.cs      DROPS an unmatched member silently)
+#   memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs   → clients/grpc-web/src/restContract.test.ts
+#   memex/Memex.LocalMesh/LocalMeshApiEndpoints.cs        (BOTH backends must serve every /api/mesh
+#                                                         verb the client SDK posts to — an unmapped
+#                                                         one answers the SPA fallback with a 200)
 #
 # Filtering on "clients/**" alone made every one of those guards blind to the side that actually
 # changes: a server-only PR adds a key (or a control, or a proto field), CI stays green because
@@ -66,6 +70,8 @@ on:
       - "src/MeshWeaver.Mesh.Contract/MeshNodeReference.cs"
       - "src/MeshWeaver.Data.Contract/Messages.cs"
       - "src/MeshWeaver.Data.Contract/PatchDataRequest.cs"
+      - "memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs"
+      - "memex/Memex.LocalMesh/LocalMeshApiEndpoints.cs"
   push:
     branches: [main]
     paths:
@@ -80,6 +86,8 @@ on:
       - "src/MeshWeaver.Mesh.Contract/MeshNodeReference.cs"
       - "src/MeshWeaver.Data.Contract/Messages.cs"
       - "src/MeshWeaver.Data.Contract/PatchDataRequest.cs"
+      - "memex/Memex.Portal.Shared/Api/MeshApiEndpoints.cs"
+      - "memex/Memex.LocalMesh/LocalMeshApiEndpoints.cs"
 
 jobs:
   react:
