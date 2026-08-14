@@ -69,7 +69,7 @@ jobs:
       # (those are production cost contract). Surfaces the watcher/messaging trace.
       Logging__LogLevel__Default: ${{ inputs.loglevel || 'Debug' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # Mirror dotnet-test.yml: reclaim preinstalled tooling a .NET+Postgres run never
       # touches so the build output + Testcontainers image fit the ~14 GB runner disk.
       - name: Free disk space
@@ -83,7 +83,7 @@ jobs:
           docker-images: true
           swap-storage: true
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       - name: Restore workloads
@@ -207,7 +207,7 @@ jobs:
           echo "Collected:"; ls -lh repro-diagnostics/ || true
       - name: Upload repro diagnostics
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: flake-repro-diagnostics
           path: repro-diagnostics/
