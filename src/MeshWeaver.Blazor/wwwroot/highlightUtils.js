@@ -1,5 +1,6 @@
-const HLJS_VERSION = '11.11.1';
-const HLJS_CDN = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/${HLJS_VERSION}`;
+// Vendored, pinned 11.11.1 — a CDN reference dies on locked-down corporate networks and
+// adds a third-party runtime dependency to every code block. Bump = replace lib/highlightjs.
+const HLJS_CDN = '_content/MeshWeaver.Blazor/lib/highlightjs';
 const HLJS_SCRIPT_URL = `${HLJS_CDN}/highlight.min.js`;
 const HLJS_THEME_LIGHT = `${HLJS_CDN}/styles/github.min.css`;
 const HLJS_THEME_DARK = `${HLJS_CDN}/styles/github-dark.min.css`;

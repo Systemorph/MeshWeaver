@@ -63,7 +63,9 @@ function ensureMermaidLoaded() {
 
         // Programmatically load the script
         const script = document.createElement('script');
-        script.src = 'https://unpkg.com/mermaid/dist/mermaid.min.js'; // Alternative CDN
+        // Vendored, pinned (11.12.1): the old unpkg URL was UNPINNED — every visitor got
+        // whatever mermaid shipped last — and any CDN reference dies on locked-down networks.
+        script.src = '_content/MeshWeaver.Blazor/lib/mermaid/mermaid.min.js';
         script.onload = () => {
             setTimeout(resolve, 100); // Small delay to ensure initialization
         };
