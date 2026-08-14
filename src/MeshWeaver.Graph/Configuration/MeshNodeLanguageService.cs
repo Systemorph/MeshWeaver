@@ -93,8 +93,12 @@ internal sealed class MeshNodeLanguageService(
             {
                 NodeReadStatus.Present => WorkspaceFor(nodeTypePath, outcome.Node!)
                     .SelectMany(cached => cached is null
-                        // The node is real and resolved — it simply has no compilation. A caller
-                        // asking a Markdown node for diagnostics gets told that, not "clean".
+                        // The node resolved but no compilation inputs could be assembled — which
+                        // GetCompilationInputsAsync does for exactly one shape, a node whose
+                        // NodeType is unset. 🚨 NOT the case for a node with some other NodeType:
+                        // a Markdown node assembles an EMPTY compilation and reports Compiled with
+                        // no diagnostics, which is outside #1592's failure (the mandated sweep
+                        // enumerates nodeType:NodeType) but is not what this branch means.
                         ? Observable.Return(NodeDiagnosticsOutcome.NotCompilable)
                         : _ioPool.Run(ct => GetDiagnosticsAsync(cached, ct))
                             .Select(NodeDiagnosticsOutcome.Compiled)),

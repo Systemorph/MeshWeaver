@@ -38,9 +38,15 @@ public enum NodeDiagnosticsStatus
     Absent,
 
     /// <summary>
-    /// A node resolved, but it has no compilation: not a NodeType, or a NodeType with no sources.
-    /// Distinct from <see cref="Absent"/> because the path is real — the caller is asking the
-    /// wrong kind of node.
+    /// A node resolved, but no compilation inputs could be assembled for it. Distinct from
+    /// <see cref="Absent"/> because the path is real — the caller is asking the wrong kind of node.
+    ///
+    /// <para>🚨 Narrower than it sounds, and worth stating exactly because the obvious reading is
+    /// wrong: <c>GetCompilationInputsAsync</c> refuses exactly one shape — a node whose
+    /// <c>NodeType</c> is unset. A node with SOME other NodeType (a Markdown node, say) does NOT
+    /// land here; it assembles an empty compilation and reports <see cref="Compiled"/> with no
+    /// diagnostics. Nor does a NodeType with zero sources — empty <c>Sources</c> is still valid
+    /// input. Pinned by <c>DiagnosticsCannotAnswerGreenForAMissingNodeTest</c>.</para>
     /// </summary>
     NotCompilable,
 
@@ -117,8 +123,8 @@ public sealed record NodeDiagnosticsOutcome
             $"Not found: {nodeTypePath} — no node resolved at this path, so nothing was checked. "
             + "It may be renamed, mistyped, deleted, or in a partition this replica does not hold.",
         NodeDiagnosticsStatus.NotCompilable =>
-            $"Not compilable: {nodeTypePath} — the node exists but has no compilation "
-            + "(not a NodeType, or a NodeType with no sources).",
+            $"Not compilable: {nodeTypePath} — the node exists but no compilation inputs could be "
+            + "assembled for it (its NodeType is unset).",
         _ =>
             $"Unavailable: {nodeTypePath} — the diagnostics could not be obtained"
             + (Failure is null ? "." : $": {Failure.Message}")
