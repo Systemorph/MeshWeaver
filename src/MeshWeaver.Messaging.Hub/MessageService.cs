@@ -650,8 +650,30 @@ public class MessageService : IMessageService
         }
         else
         {
-            logger.LogWarning("Suppressing DeliveryFailure reporting for response-less control message {MessageType} (ID: {MessageId}) in {Address}",
-                delivery.Message.GetType().Name, delivery.Id, Address);
+            // 🚨 Debug, and the level is part of the #1485 fix rather than a debugging tweak.
+            //
+            // COST: this branch used to be reached only by TYPED control traffic, because a packaged
+            // delivery could not match the CLR-type test above — so it was rare, and Warning was the
+            // right price. Now that the contract is read off the envelope it is reached once per
+            // SUPPRESSED delivery, and the moment that happens in bulk is precisely a pod shutdown:
+            // the Orleans shutdown branch fails every in-flight delivery, and prod (2026-08-10)
+            // measured 944 on a single dying pod. At Warning that is ~1k Loki lines per shutdown,
+            // billed forever, emitted exactly when the process has least capacity.
+            //
+            // VALUE: near zero. Suppression here is the DESIGNED outcome for a DeliveryFailure or a
+            // [CanBeIgnored] message, both of which are provably response-less — MayAnswer() is
+            // false for nothing else — so the line reports normal behaviour, not an anomaly. The
+            // storm it replaces (a posted NACK per message, each itself routed and logged) is the
+            // thing that was expensive; keeping a per-message Warning in its place would bank a
+            // fraction of the same bill for no diagnostic gain.
+            //
+            // 🚨 GetMessageType, not GetType().Name: the payload here is RawJson by construction, so
+            // the old call printed the literal string "RawJson" for every one of those lines. This
+            // reads the $type out of the JSON, which is the only way the line names what was
+            // actually suppressed.
+            if (logger.IsEnabled(LogLevel.Debug))
+                logger.LogDebug("Suppressing DeliveryFailure reporting for response-less control message {MessageType} (ID: {MessageId}) in {Address}",
+                    GetMessageType(delivery), delivery.Id, Address);
         }
 
         return delivery;
