@@ -134,4 +134,56 @@ public class DeckSlidesCacheTest
         subscriptions.Keys.Should().Contain(k => k.Contains("namespace:DeckB"));
         subscriptions.Values.Should().OnlyContain(count => count == 1);
     }
+
+    /// <summary>
+    /// The sibling pipeline is suffix-aware end to end: the query carries NO
+    /// <c>nodeType:</c> term (that filter is EQUALITY, so it silently excluded every
+    /// plugin-typed slide — education's <c>Publish/Slide</c> nodes rendered
+    /// "Slide 1 / 1" with no Prev/Next), the fold keeps built-in AND <c>*/Slide</c>
+    /// types while dropping non-slide children, and a plugin-typed parent
+    /// (<c>*/Deck</c>) still gets its manifest order applied.
+    /// </summary>
+    [Fact]
+    public void BuildOrderedSlides_PluginTypedSlidesAndDeck_AreSuffixAware()
+    {
+        MeshQueryRequest? seen = null;
+        var mesh = Substitute.For<IMeshService>();
+        mesh.Query<MeshNode>(Arg.Any<MeshQueryRequest>())
+            .Returns(call =>
+            {
+                seen = call.Arg<MeshQueryRequest>();
+                return Observable
+                    .Return(new QueryResultChange<MeshNode>
+                    {
+                        ChangeType = QueryChangeType.Initial,
+                        Items =
+                        [
+                            new MeshNode("s1", "DeckA") { NodeType = "Publish/Slide", Order = 2 },
+                            new MeshNode("s2", "DeckA") { NodeType = SlideNodeType.NodeType, Order = 1 },
+                            new MeshNode("notes", "DeckA") { NodeType = "Markdown" },
+                        ]
+                    })
+                    .Concat(Observable.Never<QueryResultChange<MeshNode>>());
+            });
+
+        var parent = new MeshNode("DeckA", "")
+        {
+            NodeType = "Publish/Deck",
+            Content = new DeckContent { Slides = ["s1", "s2"] }
+        };
+
+        var lists = new List<IReadOnlyList<MeshNode>>();
+        using var sub = DeckSlidesCache.BuildOrderedSlides(
+                mesh,
+                Observable.Return<MeshNode?>(parent),
+                "DeckA",
+                new JsonSerializerOptions(),
+                accessService: null)
+            .Subscribe(lists.Add);
+
+        seen!.Query.Should().Be("namespace:DeckA",
+            "the sibling query must not carry an equality nodeType filter");
+        lists.Should().NotBeEmpty();
+        lists[^1].Select(n => n.Path).Should().Equal("DeckA/s1", "DeckA/s2");
+    }
 }

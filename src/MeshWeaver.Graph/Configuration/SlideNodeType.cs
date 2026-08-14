@@ -24,6 +24,19 @@ public static class SlideNodeType
     public const string NodeType = "Slide";
 
     /// <summary>
+    /// True when <paramref name="nodeType"/> is a slide type: the built-in <c>Slide</c> OR any
+    /// plugin-installed variant whose dynamic type identity ends in <c>/Slide</c> (a dynamic
+    /// NodeType's identity is its install path, e.g. <c>Publish/Slide</c> — instances carry it
+    /// verbatim). Every compiled gate that used to compare against <see cref="NodeType"/> with
+    /// <c>==</c> must use this instead: an equality gate silently excludes all plugin-typed
+    /// slides (education's 116 <c>Publish/Slide</c> nodes were invisible to the deck sibling
+    /// query). Same precedent as <c>MarkdownFileParser.IsSlideNodeType</c>.
+    /// </summary>
+    public static bool Matches(string? nodeType) =>
+        nodeType == NodeType
+        || nodeType?.EndsWith("/" + NodeType, StringComparison.Ordinal) == true;
+
+    /// <summary>
     /// Registers the built-in "Slide" MeshNode on the mesh builder.
     /// </summary>
     public static TBuilder AddSlideType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
