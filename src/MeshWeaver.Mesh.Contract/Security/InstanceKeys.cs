@@ -47,7 +47,18 @@ public static class InstanceKeys
 
     /// <summary>
     /// Extracts the raw key from an <c>Authorization</c> header, or null when the header is
-    /// missing, not <c>Bearer</c>, or does not carry an instance key.
+    /// missing or does not carry an instance key.
+    ///
+    /// <para>Accepts <c>Bearer mwi_…</c> — what MeshWeaver's own clients send — and
+    /// <c>Basic base64(user:mwi_…)</c>, because a <b>NuGet client cannot send Bearer</b>: its
+    /// <c>packageSourceCredentials</c> speak Basic, and the only alternative is shipping a
+    /// credential-provider plugin. Accepting both keeps ONE credential and ONE validator; the
+    /// username half is ignored, since the key is the whole secret.</para>
+    ///
+    /// <para>🚨 The key stays in the header either way. Putting it in a URL — a query string or a
+    /// path segment — would leak it into every access log, proxy log and browser history along the
+    /// route, which is what makes the Basic form worth supporting rather than the easier
+    /// <c>?apiKey=</c>.</para>
     ///
     /// <para>Shape is checked here; whether the key is <i>valid</i> is decided by hashing it and
     /// resolving the index — never by string comparison against a configured list.</para>
@@ -57,10 +68,57 @@ public static class InstanceKeys
         if (string.IsNullOrWhiteSpace(authorizationHeader))
             return null;
         var trimmed = authorizationHeader.Trim();
-        if (!trimmed.StartsWith(Scheme + " ", StringComparison.OrdinalIgnoreCase))
+
+        if (trimmed.StartsWith(Scheme + " ", StringComparison.OrdinalIgnoreCase))
+        {
+            var key = trimmed[(Scheme.Length + 1)..].Trim();
+            return key.StartsWith(KeyPrefix, StringComparison.Ordinal) ? key : null;
+        }
+
+        if (trimmed.StartsWith(BasicScheme + " ", StringComparison.OrdinalIgnoreCase))
+            return ExtractFromBasic(trimmed[(BasicScheme.Length + 1)..].Trim());
+
+        return null;
+    }
+
+    /// <summary>The HTTP auth scheme a NuGet client travels under.</summary>
+    public const string BasicScheme = "Basic";
+
+    /// <summary>Largest Basic payload considered; see <see cref="ExtractFromBasic"/>.</summary>
+    private const int MaxBasicPayloadChars = 1024;
+
+    /// <summary>Decode buffer for <see cref="MaxBasicPayloadChars"/> (base64 is 4 chars per 3 bytes).</summary>
+    private const int MaxBasicPayloadBytes = MaxBasicPayloadChars / 4 * 3;
+
+    /// <summary>
+    /// The password half of a Basic credential, when it is an instance key. Malformed base64 and a
+    /// missing colon are treated as "no key" rather than throwing: an unparsable header is an
+    /// unauthenticated caller (401), never a 500.
+    /// </summary>
+    private static string? ExtractFromBasic(string encoded)
+    {
+        // 🚨 No exception on the reject path. This runs on an UNAUTHENTICATED request with
+        // attacker-controlled input, so a throwing parse would let anyone make the registry raise
+        // and unwind an exception per request — avoidable overhead, and a cheap amplifier. The
+        // length cap bounds the decode buffer for the same reason: a real credential is a username
+        // plus a 32-byte key (~43 base64 chars), so anything near this bound is already not one.
+        if (encoded.Length is 0 or > MaxBasicPayloadChars)
             return null;
-        var key = trimmed[(Scheme.Length + 1)..].Trim();
-        return key.StartsWith(KeyPrefix, StringComparison.Ordinal) ? key : null;
+
+        Span<byte> buffer = stackalloc byte[MaxBasicPayloadBytes];
+        if (!Convert.TryFromBase64String(encoded, buffer, out var written))
+            return null;
+
+        // UTF8.GetString uses replacement fallback, so invalid bytes become U+FFFD rather than
+        // throwing — and a key containing U+FFFD simply fails the prefix check below.
+        var decoded = Encoding.UTF8.GetString(buffer[..written]);
+
+        var separator = decoded.IndexOf(':');
+        if (separator < 0)
+            return null;
+
+        var password = decoded[(separator + 1)..].Trim();
+        return password.StartsWith(KeyPrefix, StringComparison.Ordinal) ? password : null;
     }
 
     /// <summary>
