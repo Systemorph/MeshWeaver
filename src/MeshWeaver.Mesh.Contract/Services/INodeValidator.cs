@@ -133,6 +133,14 @@ public record NodeValidationResult(bool IsValid, string? ErrorMessage = null, No
     /// </summary>
     public static NodeValidationResult NotFound(string? path = null)
         => new(false, path != null ? $"Node not found at path: {path}" : "Node not found", NodeRejectionReason.NodeNotFound);
+
+    /// <summary>
+    /// Creates a "could not be established" result — the validator reached NO decision because a
+    /// read it depends on did not answer. See <see cref="NodeRejectionReason.Unavailable"/> for why
+    /// this must never be collapsed into <see cref="Unauthorized"/>.
+    /// </summary>
+    public static NodeValidationResult Unavailable(string message)
+        => new(false, message, NodeRejectionReason.Unavailable);
 }
 
 /// <summary>
@@ -215,7 +223,23 @@ public enum NodeRejectionReason
     /// <summary>
     /// The node is hidden from the user.
     /// </summary>
-    NodeHidden
+    NodeHidden,
+
+    /// <summary>
+    /// The validator reached NO decision: a read it depends on could not be established (#1446).
+    ///
+    /// <para>🚨 Deliberately distinct from <see cref="Unauthorized"/>, and the distinction is the
+    /// whole point. "Denied" is a statement about the caller's entitlements; this is a statement
+    /// about the infrastructure. Collapsing the two sends a correctly-entitled user to request
+    /// permissions they already hold, and — worse — makes an availability incident look like a
+    /// policy decision, so nobody goes looking for the read that starved. Same reasoning, and the
+    /// same vocabulary, as <c>CompilationStatus.Unavailable</c> (#1218) and
+    /// <c>PermissionCheckOutcome.Undetermined</c>.</para>
+    ///
+    /// <para>Still fail-CLOSED: the operation does not proceed. It simply stops claiming to know
+    /// why.</para>
+    /// </summary>
+    Unavailable
 }
 
 /// <summary>

@@ -58,6 +58,19 @@ public sealed record ValidateDeleteResponse
     /// </summary>
     public ImmutableList<string> Warnings { get; init; } = ImmutableList<string>.Empty;
 
+    /// <summary>
+    /// Why the delete was refused, when it was. Meaningless while <see cref="IsValid"/> is true.
+    ///
+    /// <para>🚨 It exists because a descendant's refusal is not always a VERDICT — issue #1198. A
+    /// validator whose permission fold never answered reports
+    /// <see cref="Services.NodeRejectionReason.Unavailable"/>, and collapsing that into
+    /// <see cref="NodeDeletionRejectionReason.ValidationFailed"/> on the way back to the caller
+    /// files an availability incident as a policy decision, which is precisely the mis-reporting
+    /// #1446 removed one level further in. The caller re-raises whatever arrives here.</para>
+    /// </summary>
+    public NodeDeletionRejectionReason Reason { get; init; } =
+        NodeDeletionRejectionReason.ValidationFailed;
+
     /// <summary>True when there are no blocking errors.</summary>
     public bool IsValid => Errors.IsEmpty;
 
@@ -68,8 +81,10 @@ public sealed record ValidateDeleteResponse
     public static ValidateDeleteResponse Ok() => new();
 
     /// <summary>Response with a single blocking error.</summary>
-    public static ValidateDeleteResponse FromError(string error) =>
-        new() { Errors = [error] };
+    public static ValidateDeleteResponse FromError(
+        string error,
+        NodeDeletionRejectionReason reason = NodeDeletionRejectionReason.ValidationFailed) =>
+        new() { Errors = [error], Reason = reason };
 
     /// <summary>Response with a single advisory warning.</summary>
     public static ValidateDeleteResponse FromWarning(string warning) =>

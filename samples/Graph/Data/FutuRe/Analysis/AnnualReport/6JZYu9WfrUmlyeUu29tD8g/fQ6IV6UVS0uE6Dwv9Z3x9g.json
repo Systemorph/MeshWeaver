@@ -1,6 +1,7 @@
 {
   "$type": "MeshNode",
-  "id": "FutuRe/Analysis/AnnualReport/6JZYu9WfrUmlyeUu29tD8g/fQ6IV6UVS0uE6Dwv9Z3x9g",
+  "id": "fQ6IV6UVS0uE6Dwv9Z3x9g",
+  "namespace": "FutuRe/Analysis/AnnualReport/6JZYu9WfrUmlyeUu29tD8g",
   "path": "FutuRe/Analysis/AnnualReport/6JZYu9WfrUmlyeUu29tD8g/fQ6IV6UVS0uE6Dwv9Z3x9g",
   "nodeType": "ThreadMessage",
   "icon": "/static/NodeTypeIcons/message.svg",

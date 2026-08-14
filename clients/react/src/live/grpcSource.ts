@@ -232,7 +232,7 @@ export class MeshAreaRegistry {
   private static key(address: string, reference: EmbeddedAreaReference): string {
     const area = reference.area ?? "";
     const id = reference.id == null ? "" : String(reference.id);
-    return `${address} ${area} ${id}`;
+    return `${address}\u001f${area}\u001f${id}`;
   }
 
   /** The shared source for (address, area, id) — created and started ONCE, reused thereafter. */

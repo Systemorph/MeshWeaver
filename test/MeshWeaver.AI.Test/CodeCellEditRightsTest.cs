@@ -80,7 +80,8 @@ public class CodeCellEditRightsTest(ITestOutputHelper output) : MonolithMeshTest
         return match!;
     }
 
-    private async Task<ButtonControl> RenderEditButton(string codePath)
+    private async Task<(ISynchronizationStream<JsonElement> Stream, StackControl Cell, StackControl Toolbar)>
+        RenderCell(string codePath)
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference(CodeLayoutAreas.ContentArea);
@@ -98,21 +99,40 @@ public class CodeCellEditRightsTest(ITestOutputHelper output) : MonolithMeshTest
         var toolbar = (StackControl)(await stream
             .GetControlStream(FindArea(cell, CodeLayoutAreas.CellToolbarArea))
             .Should().Within(10.Seconds()).Match(c => c is StackControl))!;
+        return (stream, cell, toolbar);
+    }
+
+    private async Task<ButtonControl> RenderEditButton(string codePath)
+    {
+        var (stream, _, toolbar) = await RenderCell(codePath);
         var edit = await stream
             .GetControlStream(FindArea(toolbar, CodeLayoutAreas.EditButtonArea))
             .Should().Within(10.Seconds()).Match(c => c is ButtonControl);
         return (ButtonControl)edit!;
     }
 
+    private static bool HasArea(IContainerControl container, string id) =>
+        container.Areas.Any(a => a.Area?.ToString() is { } s
+            && (s == id || s.EndsWith("/" + id, StringComparison.Ordinal)));
+
     [Fact(Timeout = 60000)]
-    public async Task Editor_Gets_Direct_Edit_Navigation()
+    public async Task Editor_Gets_Inline_Editor_And_No_Edit_Button()
     {
-        // Default circuit: the DevLogin admin (claim role Admin ⇒ Update).
+        // Default circuit: the DevLogin admin (claim role Admin ⇒ Update). Edit mode IS the
+        // mode for an editor: the cell's code segment is the inline Monaco editor (auto-saving
+        // into this node), and there is NO Edit button — no second mode to navigate to.
         var codePath = await SeedExecutableCode();
-        var edit = await RenderEditButton(codePath);
-        edit.NavigateToHref.Should().NotBeNull(
-            "a viewer with Update permission navigates straight to the Edit area");
-        edit.NavigateToHref!.ToString().Should().Contain(CodeLayoutAreas.EditArea);
+        var (stream, cell, toolbar) = await RenderCell(codePath);
+
+        HasArea(toolbar, CodeLayoutAreas.EditButtonArea).Should().BeFalse(
+            "an editor's cell already IS the editor — a dedicated Edit button is retired");
+
+        var code = await stream
+            .GetControlStream(FindArea(cell, CodeLayoutAreas.CellCodeArea))
+            .Should().Within(10.Seconds()).Match(c => c is CodeEditorControl);
+        code.Should().BeOfType<CodeEditorControl>()
+            .Which.AutoSaveAddress.Should().Be(codePath,
+                "the inline editor persists its debounced text back into THIS node");
     }
 
     [Fact(Timeout = 60000)]
