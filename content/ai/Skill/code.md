@@ -60,7 +60,7 @@ CS1061: 'MessageHubConfiguration' does not contain a definition for 'AddTracking
 Run this whenever you finish NodeType work, and always before a release or a framework upgrade:
 
 1. **Enumerate.** `Search('nodeType:NodeType')` for the whole mesh, or `Search('nodeType:NodeType namespace:{target} scope:descendants')` for one area. That list is the work list — do not sample it.
-2. **Read status without recompiling.** `LspDiagnosticsForNode('@{path}')` returns diagnostics from the *current cached* compilation — far cheaper than `Compile`, and the right tool for a sweep. `GetDiagnostics('@{path}')` gives the `status` flip.
+2. **Read status without recompiling.** `LspDiagnosticsForNode('@{path}')` returns diagnostics from the *current cached* compilation — far cheaper than `Compile`, and the right tool for a sweep. `GetDiagnostics('@{path}')` gives the `status` flip. 🚨 **Check the `status` field, not just `ok`.** Only `status: "Compiled"` means the type was actually examined; `Absent` / `NotCompilable` / `Unavailable` mean it was not, and the `error` field says which. Treat those as sweep failures — an entry that could not be checked is not an entry that passed.
 3. **Triage in dependency order.** A red upstream produces `UpstreamFailed` noise in every dependent, so a flat list badly overstates the damage. Fix the roots first and re-check — most "failures" evaporate.
 4. **Fix, pre-flighted.** `LspCheckNode({nodeTypePath, sourcePath, proposedCode})` until `ok: true` → `Patch`/`Update` → `Compile` + `GetDiagnostics` for the real emit.
 5. **Re-sweep until the whole list reads `Ok`.** A red type you did not author is still an outage waiting for the next deploy. Fix it, or escalate it **by name** — never ship behind "my part is green".
