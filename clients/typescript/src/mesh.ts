@@ -6,6 +6,7 @@
 import { connect as connectTransport, MeshConnection, type ConnectOptions } from "./connection.js";
 import { randomUUID } from "node:crypto";
 import { meshNodeFromChange, type MeshNode } from "./types.js";
+import { foldChange, type NodeState } from "./changeFold.js";
 import {
   activityStatusPatch,
   copyNodeRequest,
@@ -84,12 +85,29 @@ export class Mesh {
     throw new Error("stream closed before first state");
   }
 
-  /** Subscribe to a node's live state — yields on every change (Full, then merge-patches). */
+  /**
+   * Subscribe to a node's live state — yields on every change. Wire: changes arrive as
+   * DataChangedEvent — ChangeType "Full" carries the whole node JSON, "Patch" an RFC 6902 patch
+   * array at the node root (JsonSynchronizationStream.CreateSingleObjectPatch).
+   *
+   * 🚨 This used to yield `meshNodeFromChange(delivery.message)` — it decoded the EVENT as the
+   * NODE (#1496). DataChangedEvent carries `{ changeType, change, streamId }` and none of
+   * `path` / `name` / `nodeType` / `content`, so every emission was
+   * `{ path: undefined, …, content: {} }`: `get()` resolved to "the node exists but is empty"
+   * instead of erroring, and `submitMessage` read `content["userMessageIds"]` off that, saw `[]`,
+   * and patched the thread's id list down to a single id — dropping every earlier message under
+   * RFC 7396 array semantics. The fold now comes from the shared `changeFold`, byte-identical
+   * with the browser SDK's copy, which had it right all along.
+   */
   async *watch(path: string): AsyncIterableIterator<MeshNode> {
     const streamId = randomUUID().replace(/-/g, "");
     const sub = subscribeRequest(path, streamId);
+    let node: NodeState | null = null;
     for await (const delivery of this.conn.watch(path, streamId, sub.type, sub.message)) {
-      yield meshNodeFromChange(delivery.message);
+      const next = foldChange(delivery.message, node);
+      if (next === null) continue;
+      node = next;
+      yield meshNodeFromChange(node);
     }
   }
 

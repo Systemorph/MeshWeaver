@@ -6,7 +6,7 @@
 // underneath is already correct + tested.
 
 import { connect as connectTransport, MeshWebConnection, type ConnectOptions } from "./connection";
-import { applyJsonPatch, type PatchOperation } from "./jsonPatch";
+import { foldChange, type NodeState } from "./changeFold.js";
 import { meshNodeFromChange, type MeshNode } from "./types";
 import { newId } from "./envelope";
 import {
@@ -131,22 +131,13 @@ export class Mesh {
   async *watch(path: string): AsyncIterableIterator<MeshNode> {
     const streamId = newId();
     const sub = subscribeRequest(path, streamId);
-    let node: Record<string, unknown> | null = null;
+    // The fold itself now lives in changeFold.ts, mirrored byte-identically into the Node SDK —
+    // that copy had the decode wrong end to end (#1496) and nothing compared the two.
+    let node: NodeState | null = null;
     for await (const delivery of this.conn.watch(path, streamId, sub.type, sub.message)) {
-      const m = delivery.message;
-      const rawChange = m["change"] ?? m["Change"];
-      if (rawChange === undefined) {
-        // Flat node fields on the message itself (in-memory fakes / legacy shapes).
-        yield meshNodeFromChange(m);
-        continue;
-      }
-      const change = typeof rawChange === "string" ? JSON.parse(rawChange) : rawChange;
-      const changeType = String(m["changeType"] ?? m["ChangeType"] ?? "Full");
-      if (change == null || changeType === "NoUpdate") continue;
-      node =
-        changeType === "Patch" || changeType === "1"
-          ? (applyJsonPatch(node ?? {}, change as PatchOperation[]) as Record<string, unknown>)
-          : (change as Record<string, unknown>);
+      const next = foldChange(delivery.message, node);
+      if (next === null) continue;
+      node = next;
       yield meshNodeFromChange(node);
     }
   }
