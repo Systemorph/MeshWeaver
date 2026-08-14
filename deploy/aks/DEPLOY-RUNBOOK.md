@@ -364,6 +364,36 @@ kubectl -n <env> patch deployment memex-portal-deployment --type json -p \
 `ScaledObject` with `minReplicaCount: 2` — you conclude the heal failed when it never ran.
 `kubectl get scaledobject -n <env>` first, and check `PAUSED`.
 
+#### 🚧 A PAUSED scaler is a FENCE — find out why before you remove it
+
+`autoscaling.keda.sh/paused-replicas: "<n>"` pins the deployment at `n`, **deletes the HPA**, and
+makes `minReplicaCount` inert. Nothing in any chart sets it, `kubectl get deploy` does not show it,
+and it survives every roll — so it reads as "this deployment is just single-replica" long after
+whoever applied it has moved on.
+
+**Nobody applies it for fun.** It is the most direct way to say "stop making new silos", so assume
+it is suppressing a multi-silo defect until you have evidence otherwise. `memex-cloud` carried one
+for **16 days** (2026-07-29 → 2026-08-14): it was applied 87 minutes after the second fix for
+**#694 — *cross-silo posts lose AccessContext: static content 500s on ~50% of requests with 2
+replicas*** — and 29 seconds after KEDA scaled the namespace back up. Removing it without reading
+that history is re-running the incident.
+
+Establish provenance before unpausing — the same way you would for any hand-applied field:
+
+```bash
+kubectl -n <env> get scaledobject <name> -o jsonpath='{range .metadata.managedFields[*]}{.manager} {.operation} {.time}{"\n"}{end}'
+kubectl -n <env> get scaledobject <name> -o jsonpath='{.status.lastActiveTime}{"\n"}'   # when it last scaled
+```
+
+`managedFields` gives you the writer (`kubectl-annotate`) and the timestamp; `lastActiveTime`
+immediately before it is the tell that someone watched it scale and stopped it. Then find what
+shipped or broke that day (`git log --since=<date> --until=<date+1>`, closed issues), and only
+unpause once you can name the defect and point at its fix. Treat the unpause as a **monitored
+experiment** with a rollback trigger, not a config tidy-up — a fix merged while the namespace was
+pinned has only ever been exercised in the transient two-silo window of a rollout, never in steady
+state. `check-chart-drift.sh` reports the annotation as CLUSTER-ONLY drift so it stops being
+invisible.
+
 ### Crash dumps: verify the MOUNT
 `DOTNET_DbgEnableMiniDump` + `DOTNET_DbgMiniDumpName=/data/dumps/…` do nothing without a volume at
 that path — `createdump` does not create directories, so the crash destroys its own evidence. The
