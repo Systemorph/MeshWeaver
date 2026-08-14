@@ -18,8 +18,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans integration test for API token creation and validation.
-/// Uses standard CreateNodeRequest with nodeType=ApiToken Ã¢â‚¬â€ same satellite pattern
-/// as Thread/Comment. The RLS validator maps ApiToken Ã¢â€ â€™ Permission.Api.
+/// Uses standard CreateNodeRequest with nodeType=ApiToken — same satellite pattern
+/// as Thread/Comment. The RLS validator maps ApiToken → Permission.Api.
 /// </summary>
 public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
@@ -44,7 +44,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
         var hash = ValidateTokenRequest.HashToken(rawToken);
         var hashPrefix = hash[..12];
 
-        // Create token as satellite of User node Ã¢â‚¬â€ same pattern as Thread
+        // Create token as satellite of User node — same pattern as Thread
         var userId = "TestUser";
         var tokenNode = new MeshNode(hashPrefix, $"User/{userId}/_Api")
         {
@@ -62,7 +62,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
             }
         };
 
-        // Act Ã¢â‚¬â€ standard CreateNodeRequest (same as Thread creation)
+        // Act — standard CreateNodeRequest (same as Thread creation)
         var response = await client.Observe(new CreateNodeRequest(tokenNode), o => o.WithTarget(meshAddress)).FirstAsync().ToTask(ct);
 
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "");
@@ -92,7 +92,7 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansSharedTestBa
         }
         catch (Exception)
         {
-            // Expected Ã¢â‚¬â€ grain activation fails because node doesn't exist
+            // Expected — grain activation fails because node doesn't exist
         }
     }
 }

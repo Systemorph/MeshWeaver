@@ -85,7 +85,7 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
             data = je.Deserialize<MeshNode>(ClientMesh.JsonSerializerOptions);
         data.Should().NotBeNull("child node should be reachable via routing");
         data!.Path.Should().Be(childPath);
-        Output.WriteLine("PASSED Ã¢â‚¬â€ CreateNode immediately routable");
+        Output.WriteLine("PASSED — CreateNode immediately routable");
     }
 
     /// <summary>
@@ -140,12 +140,12 @@ public class OrleansMeshChangeFeedTest(ITestOutputHelper output) : OrleansShared
         var subThreadPath = await CreateNodeAsync(client, subThreadNode, threadPath, ct);
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
-        // NOW submit to the sub-thread Ã¢â‚¬â€ this is where routing failed before
+        // NOW submit to the sub-thread — this is where routing failed before
         // (stale cache sent the request to the parent message grain)
         client.SubmitMessage(
             subThreadPath,
             "Hello sub-thread",
             contextPath: "TestUser");
-            Output.WriteLine("PASSED Ã¢â‚¬â€ sub-thread AppendUserMessage routed correctly");
+            Output.WriteLine("PASSED — sub-thread AppendUserMessage routed correctly");
     }
 }

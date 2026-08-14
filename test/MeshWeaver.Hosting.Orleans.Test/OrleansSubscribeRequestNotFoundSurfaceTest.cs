@@ -17,14 +17,14 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 ///
 /// <para><b>What we pin:</b></para>
 /// <list type="number">
-///   <item><b>Not-found path</b> â€” subscribing to a layout area on a non-existent
+///   <item><b>Not-found path</b> — subscribing to a layout area on a non-existent
 ///   address must surface <c>OnError</c> within a few seconds with a
 ///   "No node found" message, NOT spin forever. Catches the regression where
 ///   <c>RoutingGrain</c> failed to route <c>DeliveryFailure</c> back to the
 ///   portal/client hub before the portal-type early-exit check was added.</item>
-///   <item><b>Success path</b> â€” subscribing to a layout area on an existing address
+///   <item><b>Success path</b> — subscribing to a layout area on an existing address
 ///   (the seeded "TestUser" node) must produce at least one data emission within a
-///   few seconds. Confirms the full "RoutingGrain â†’ MessageHubGrain â†’ layout area"
+///   few seconds. Confirms the full "RoutingGrain → MessageHubGrain → layout area"
 ///   path works before testing the failure case.</item>
 /// </list>
 ///
@@ -32,7 +32,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// The routing paths differ:</para>
 /// <list type="bullet">
 ///   <item>Monolith: <c>RoutingServiceBase.PostNotFound</c> posts directly back
-///   to the caller's hub â€” no cross-process hop.</item>
+///   to the caller's hub — no cross-process hop.</item>
 ///   <item>Orleans: <c>RoutingGrain.RouteMessage</c> returns <see cref="MessageDeliveryState.Failed"/>;
 ///   <c>OrleansRoutingService.DeliverViaGrainAsync</c> reads the failure and calls
 ///   <c>SendDeliveryFailure</c>; the failure must then route from the mesh hub back
@@ -44,12 +44,12 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output) : OrleansSharedTestBase(output)
 {
     // -------------------------------------------------------------------------
-    // FAILURE path: non-existent address â†’ OnError within a few seconds
+    // FAILURE path: non-existent address → OnError within a few seconds
     // -------------------------------------------------------------------------
 
     /// <summary>
     /// Subscribing to a layout area on a non-existent address must surface
-    /// <c>OnError</c> within a few seconds with a "No node found" message â€”
+    /// <c>OnError</c> within a few seconds with a "No node found" message —
     /// NOT spin forever waiting on the framework's 30 s RequestTimeout. The
     /// test fails closed (20 s timeout on the OnError wait) so a regression
     /// into the swallowed-timeout shape is loud.
@@ -59,7 +59,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
     {
         var client = GetClient("notfound-" + Guid.NewGuid().ToString("N")[..8]);
 
-        // Address with NO node at all and no ancestor â€” catalog resolves to null.
+        // Address with NO node at all and no ancestor — catalog resolves to null.
         var address = new Address("doesnotexist", "missing-instance-" + Guid.NewGuid().ToString("N")[..8]);
         var reference = new LayoutAreaReference("Overview");
 
@@ -80,7 +80,7 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
         firstNotification.Kind.Should().Be(NotificationKind.OnError,
             "the stream must surface OnError (not spin) when the target address routes to NotFound. " +
             "If this fails, OrleansRoutingService.SendDeliveryFailure / RoutingGrain is dropping " +
-            "the DeliveryFailure response and the SubscribeRequest's Observe is timing out â€” " +
+            "the DeliveryFailure response and the SubscribeRequest's Observe is timing out — " +
             "exactly the symptom that caused the /rbuergi Orleans endless-spinner regression.");
 
         var captured = firstNotification.Exception;
@@ -95,13 +95,13 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
     }
 
     // -------------------------------------------------------------------------
-    // SUCCESS path: existing address â†’ data within a few seconds
+    // SUCCESS path: existing address → data within a few seconds
     // -------------------------------------------------------------------------
 
     /// <summary>
     /// Subscribing to a layout area on an existing seeded address ("TestUser")
     /// must produce at least one data emission within a few seconds. This confirms
-    /// the full Orleans routing â†’ grain activation â†’ layout area rendering path
+    /// the full Orleans routing → grain activation → layout area rendering path
     /// works, so a failing not-found test can't be blamed on missing plumbing.
     /// </summary>
     [Fact]
@@ -129,6 +129,6 @@ public class OrleansSubscribeRequestNotFoundSurfaceTest(ITestOutputHelper output
             $"expected data from {address}/Overview, got error: {firstNotification.Exception?.Message}");
         firstNotification.Kind.Should().Be(NotificationKind.OnNext,
             "a layout area stream on an existing address must emit data, not hang. " +
-            "If this fails, the Orleans routing â†’ MessageHubGrain activation â†’ layout area path is broken.");
+            "If this fails, the Orleans routing → MessageHubGrain activation → layout area path is broken.");
     }
 }

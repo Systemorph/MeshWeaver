@@ -24,7 +24,7 @@ using Xunit;
 using System.Reactive.Threading.Tasks;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture Ã¢â‚¬â€ uses GraphDataSiloConfigurator with
+// TODO: needs custom shared fixture — uses GraphDataSiloConfigurator with
 // AddFileSystemPersistence(SamplesGraphData), which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Integration tests that verify Orleans routing works end-to-end

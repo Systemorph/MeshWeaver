@@ -5,7 +5,7 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Provides configuration for Notification nodes in the graph.
-/// Notification nodes are system-generated â€” excluded from search and create contexts.
+/// Notification nodes are system-generated — excluded from search and create contexts.
 /// </summary>
 public static class NotificationNodeType
 {

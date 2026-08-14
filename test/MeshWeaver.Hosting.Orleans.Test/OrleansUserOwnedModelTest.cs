@@ -96,7 +96,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
         modelResp.Message.Success.Should().BeTrue(modelResp.Message.Error ?? "");
         modelResp.Message.Node!.Path.Should().Be(modelPath);
 
-        // 3. Verify the resolver can see both nodes â€” read through the
+        // 3. Verify the resolver can see both nodes — read through the
         //    SAME synced query (AgentPickerProjection-shape) that
         //    ChatClientCredentialResolver subscribes to. Asserting via the
         //    resolver's read path means we're testing what the resolver
@@ -171,7 +171,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
             .FirstAsync().ToTask(ct);
 
         // Subscribe to a synced query scoped to the owner's Model subtree
-        // â€” the picker's default scope:selfAndAncestors query walks UP from
+        // — the picker's default scope:selfAndAncestors query walks UP from
         // currentPath, so a sibling subtree like {userId}/Model isn't
         // visible by default. This explicit subtree query is what
         // ChatClientCredentialResolver.WatchPartition uses internally.
@@ -198,7 +198,7 @@ public class OrleansUserOwnedModelTest(ITestOutputHelper output) : OrleansShared
 
     // The rotate-via-cache.Update flow is now exercised by
     // OrleansCacheUpdateMultiSiloTest under a clean 2-silo (no-client)
-    // fixture â€” that mirrors prod, where a silo issues cache.Update against
+    // fixture — that mirrors prod, where a silo issues cache.Update against
     // a node whose owning per-node hub is activated on a different silo.
     // The previous single-silo+client variant of this test conflated
     // cross-process IDataChangeNotifier scoping with the cache.Update flow

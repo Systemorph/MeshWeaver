@@ -548,7 +548,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var deletedNode = originalNode with { State = MeshNodeState.Deleted };
         await UpdateNodeViaStream(deletedNode).Should().Emit();
 
-        // Verify the state changed (stream read â€” no catalog lag)
+        // Verify the state changed (stream read — no catalog lag)
         var updatedNode = await ReadNode(todoPath)
             .Should().Within(60.Seconds()).Match(n => n is not null && n.State == MeshNodeState.Deleted);
         updatedNode.Should().NotBeNull("Node should still exist after soft delete");
@@ -567,7 +567,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
 
         // Capture the initial active set + the original todo from the same
-        // Query subscription â€” initial emission is the full snapshot.
+        // Query subscription — initial emission is the full snapshot.
         var initialItems = await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
@@ -581,7 +581,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
         await UpdateNodeViaStream(deletedNode).Should().Emit();
 
-        // Wait for the catalog to reflect the state change â€” Query emits a
+        // Wait for the catalog to reflect the state change — Query emits a
         // Removed/Updated delta when DefinePersona stops matching state:Active.
         var paths = await ObserveQueryPathSet(activeQuery)
             .Should().Within(60.Seconds()).Match(set => !set.Contains(todoPath));
@@ -602,7 +602,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
         var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
 
-        // Capture original from the live active set (set query â€” Query is correct).
+        // Capture original from the live active set (set query — Query is correct).
         var initialActive = await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(activeQuery))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
