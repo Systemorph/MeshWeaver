@@ -330,11 +330,57 @@ public static class MeshDataSourceExtensions
         var alreadyFlushed = flushed?.HighWater(node.Path) ?? 0L;
         if (node.Version <= alreadyFlushed)
         {
+            // 🚨 CONFIRMED versus CLAIMED (#1557). A confirmed mark means the row IS durable at or
+            // above this state, so dropping is right. An unresolved CLAIM means the flush has taken
+            // the version but its write is still in flight — whether it lands is not yet known, and
+            // dropping there would lose the write outright if the flush then failed or answered the
+            // "I do not own this path" sentinel. So defer instead: wait for the claim to resolve and
+            // write only if it reports that nothing was persisted.
+            //
+            // The claim is what makes the suppression ORDERED rather than timed. Before it, this
+            // handler could read a not-yet-raised mark, write a stale version over a row that had
+            // moved on, and have MonotonicWriteGuard's base-less merge keep the string SUPERSET —
+            // re-adding deleted text. ~4% of runs on the 2-vCPU runner, each one a real resurrection.
+            var pending = flushed?.PendingClaim(node.Path);
+            if (pending is null)
+            {
+                logger?.LogDebug(
+                    "[SaveMeshNode] skip {Path} at version={Version} — the post-commit flush already "
+                    + "persisted version={PersistedVersion}", node.Path, node.Version, alreadyFlushed);
+                return request.Processed();
+            }
+
             logger?.LogDebug(
-                "[SaveMeshNode] skip {Path} at version={Version} — the post-commit flush already "
-                + "persisted version={PersistedVersion}", node.Path, node.Version, alreadyFlushed);
+                "[SaveMeshNode] defer {Path} at version={Version} — the post-commit flush has CLAIMED "
+                + "version={ClaimedVersion} and its write is still in flight",
+                node.Path, node.Version, alreadyFlushed);
+            pending.Take(1).Subscribe(
+                persisted =>
+                {
+                    if (persisted)
+                        logger?.LogDebug(
+                            "[SaveMeshNode] drop deferred {Path} at version={Version} — the flush persisted it",
+                            node.Path, node.Version);
+                    else
+                        WriteSampledNode(persistence, hub, node, logger);
+                },
+                ex => logger?.LogWarning(ex,
+                    "[SaveMeshNode] deferred write for {Path} (version={Version}) could not resolve its "
+                    + "flush claim", node.Path, node.Version));
             return request.Processed();
         }
+        WriteSampledNode(persistence, hub, node, logger);
+        return request.Processed();
+    }
+
+    /// <summary>
+    /// The sampler's durable write — extracted so the deferred path (a sampled state held behind an
+    /// unresolved post-commit flush claim, see <c>PostCommitFlushRegistry</c>) writes through
+    /// exactly the same code, including the <c>MonotonicWriteGuard</c> refusal contract below.
+    /// </summary>
+    private static void WriteSampledNode(
+        IStorageAdapter persistence, IMessageHub hub, MeshNode node, ILogger? logger)
+    {
         logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
             node.Path, node.Version);
         // Storage adapter's own Changes feed publishes the Updated event
@@ -373,7 +419,6 @@ public static class MeshDataSourceExtensions
                 },
                 ex => logger?.LogWarning(ex, "SaveMeshNode failed for {Path} (version={Version})",
                     node.Path, node.Version));
-        return request.Processed();
     }
 
     /// <summary>
