@@ -151,7 +151,22 @@
         var lspConfig = ViewModel.LanguageServer;
         if (lspConfig != null)
         {
-            var languageService = Services.GetService(typeof(IMeshLanguageService)) as IMeshLanguageService;
+            // 🚨 Resolve from the HUB's provider, not the circuit's (#1601). IMeshLanguageService
+            // is registered inside the MESH hub's configuration (GraphConfigurationExtensions'
+            // `services.AddSingleton<IMeshLanguageService, MeshNodeLanguageService>()`), while
+            // `Services` is the Blazor circuit's ASP.NET provider — which holds circuit-scoped things
+            // like PortalErrorSink and has no view of hub registrations. Asking the wrong provider
+            // returns null, and the `else` below then nulls BOTH callbacks, so the editor silently
+            // falls back to Monaco's built-in word-based suggestions: identifiers scraped out of the
+            // document, alphabetical, with no diagnostics either. That is exactly what #1601
+            // measured. The auto-save block above already resolves its cache from
+            // Hub.ServiceProvider for this reason; this was the one place that did not.
+            //
+            // `Services` is still tried as a fallback so a host that registers the service at the
+            // application root keeps working.
+            var languageService =
+                Hub.ServiceProvider.GetService(typeof(IMeshLanguageService)) as IMeshLanguageService
+                ?? Services.GetService(typeof(IMeshLanguageService)) as IMeshLanguageService;
             if (languageService != null)
             {
                 var nodeTypePath = lspConfig.NodeTypePath;
@@ -173,6 +188,16 @@
             }
             else
             {
+                // 🚨 LOUD, for the same reason the auto-save resolution above is: silently
+                // nulling both callbacks is indistinguishable from "the language service answered
+                // nothing", and that ambiguity is what made #1601 take a live-portal measurement to
+                // diagnose. A control that ASKED for a language server and did not get one is a
+                // misconfiguration worth naming.
+                Logger.LogWarning(
+                    "CodeEditor at {Area}: IMeshLanguageService is not registered on either the hub "
+                    + "or the circuit provider — completions and diagnostics are disabled for "
+                    + "{SourcePath}, and the editor will fall back to word-based suggestions",
+                    Area, lspConfig.SourcePath);
                 diagnosticsCallback = null;
                 diagnosticSourcePath = null;
                 codeCompletionCallback = null;
