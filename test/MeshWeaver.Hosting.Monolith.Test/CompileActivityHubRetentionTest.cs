@@ -177,7 +177,16 @@ public class CompileActivityHubRetentionTest(ITestOutputHelper output) : Monolit
             .Select(_ => remaining = CompileActivityHubs())
             .Where(hubs => hubs.Count == 0)
             .FirstAsync()
-            .Timeout(IdleWindow + 120.Seconds(), Observable.Return(remaining))
+            // On timeout, fall THROUGH rather than throw: the assertion below names which hubs are
+            // still live and why that is the defect, where a bare TimeoutException would say only
+            // that a wait expired. Two things about this line are easy to misread:
+            //   • `.Where` is UPSTREAM of `.Timeout`, so it filters the poll, never the fallback —
+            //     the fallback emits, the await completes, and the assertion reports.
+            //   • `Defer` matters: an eager `Observable.Return(remaining)` captures the population
+            //     as it was when the chain was BUILT, so the fallback would carry the pre-poll
+            //     snapshot instead of the latest one. The emitted value is discarded either way,
+            //     but a fallback that silently disagrees with the variable it names is a trap.
+            .Timeout(IdleWindow + 120.Seconds(), Observable.Defer(() => Observable.Return(remaining)))
             .ToTask();
         clock.Stop();
 
