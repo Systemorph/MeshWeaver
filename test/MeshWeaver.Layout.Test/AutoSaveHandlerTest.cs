@@ -16,6 +16,11 @@ public class AutoSaveHandlerTest
 {
     private static readonly TimeSpan ThrottleInterval = TimeSpan.FromMilliseconds(500);
 
+    // Derived from ThrottleInterval, never hard-coded: these cases mean "before the throttle fired"
+    // and "after it fired", and they must keep meaning that if the interval is ever retuned.
+    private static readonly TimeSpan InsideTheThrottleWindow = ThrottleInterval / 2;
+    private static readonly TimeSpan PastTheThrottleWindow = ThrottleInterval + ThrottleInterval / 5;
+
     [Fact]
     public void SingleEdit_ShouldSaveAfterThrottleInterval()
     {
@@ -424,8 +429,9 @@ public class AutoSaveHandlerTest
         var handler = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
 
         handler.OnValueChanged("the learner's edit");
-        // Less than the throttle interval: the value is still held, nothing has been saved.
-        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(200).Ticks);
+        // INSIDE the window — expressed as a fraction of the interval rather than a literal, so the
+        // case still means "a re-render arrived before the throttle fired" if the interval changes.
+        scheduler.AdvanceBy(InsideTheThrottleWindow.Ticks);
         Assert.Empty(savedValues);
 
         handler.Dispose();
@@ -458,7 +464,7 @@ public class AutoSaveHandlerTest
         var handler = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
 
         handler.OnValueChanged("saved once");
-        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(600).Ticks);
+        scheduler.AdvanceBy(PastTheThrottleWindow.Ticks);
         Assert.Equal(new[] { "saved once" }, savedValues);
 
         handler.Dispose();
@@ -496,12 +502,12 @@ public class AutoSaveHandlerTest
 
         var first = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
         first.OnValueChanged("edit one");
-        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(100).Ticks);
+        scheduler.AdvanceBy(InsideTheThrottleWindow.Ticks);
         first.Dispose();
 
         var second = new AutoSaveHandler(ThrottleInterval, savedValues.Add, scheduler);
         second.OnValueChanged("edit one, edit two");
-        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(100).Ticks);
+        scheduler.AdvanceBy(InsideTheThrottleWindow.Ticks);
         second.Dispose();
 
         Assert.Equal(new[] { "edit one", "edit one, edit two" }, savedValues);
@@ -516,7 +522,7 @@ public class AutoSaveHandlerTest
 
         handler.Dispose();
         handler.OnValueChanged("too late");
-        scheduler.AdvanceBy(TimeSpan.FromMilliseconds(600).Ticks);
+        scheduler.AdvanceBy(PastTheThrottleWindow.Ticks);
 
         Assert.Empty(savedValues);
     }
