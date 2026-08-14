@@ -333,8 +333,9 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task MeshWeaver_HasChildren()
     {
+        // Wait for the snapshot that contains the child asserted below, not the first Initial (#1384).
         var children = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery("namespace:MeshWeaver"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
+            .Should().Match(c => c.Items.Any(n => n.Path == "MeshWeaver/Platform"))).Items;
 
         children.Should().NotBeEmpty("MeshWeaver should have children");
         // MeshWeaver has Documentation and Platform as direct children

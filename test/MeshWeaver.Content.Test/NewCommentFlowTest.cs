@@ -142,9 +142,12 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Retrieved comment: Author={retrievedComment.Author}, Text='{retrievedComment.Text}'");
 
         // Assert Ã¢â‚¬â€ node should appear in namespace: query (this is how ReadView finds comments)
+        // Wait for the snapshot that contains the node just created. This one has a WRITE before it,
+        // so it carries genuine CQRS lag on top of the async catalog hydration — taking the first
+        // Initial here was the least defensible instance of the shape (#1384).
         var children = (await MeshQuery.Query<MeshNode>(
                 MeshQueryRequest.FromQuery($"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
+            .Should().Match(c => c.Items.Any(n => n.Path == createdNode.Path))).Items;
 
         children.Should().Contain(n => n.Path == createdNode.Path,
             "New comment should appear in namespace: query (this is how the sidebar finds comments)");

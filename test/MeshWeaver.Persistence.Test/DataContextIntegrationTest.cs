@@ -239,11 +239,24 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // This test verifies that MeshNode.Content is correctly persisted
         // and can be loaded back from the persistence service
 
-        // Static node read — no write before, catalog read is correct (no CQRS lag).
+        // Wait for the emission that CONTAINS the node, exactly as the sibling
+        // MeshNode_ChildrenAvailable_ViaPersistence does — never the first Initial.
+        //
+        // 🚨 "No write before, so the catalog read is correct" (what this used to say) is the wrong
+        // premise: CQRS lag is not the only way an Initial can be incomplete. The catalog hydrates
+        // ASYNCHRONOUSLY from the storage adapter at startup, so a query subscribed early gets an
+        // Initial that simply does not have graph/story1 yet, and the rest arrives as Added. Taking
+        // .Items.FirstOrDefault() off that snapshot then asserted on null. The 10 s budget only
+        // decided how often the window was wide enough to lose — it is NOT the defect and is
+        // deliberately left where it is (issue #1384).
+        //
+        // The ChangeType filter is dropped rather than combined with the item check: the node may
+        // well arrive in a later Added rather than a second Initial, and requiring both would wait
+        // for an emission that never comes.
         var storyNode = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery("path:graph/story1"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial))
-            .Items.FirstOrDefault();
+            .Should().Match(c => c.Items.Any(n => n.Path == "graph/story1")))
+            .Items.First(n => n.Path == "graph/story1");
 
         // Assert - content should be available
         storyNode.Should().NotBeNull("Story node should exist in persistence");
