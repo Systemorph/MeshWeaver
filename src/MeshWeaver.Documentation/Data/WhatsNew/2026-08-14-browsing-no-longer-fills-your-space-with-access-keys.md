@@ -1,7 +1,7 @@
 ---
 Name: Browsing no longer fills your space with access keys
 Category: Fix
-Description: Every page view used to create two permanent access keys in your own space, and nothing ever removed one. Pages are now read with the sign-in you already have, and keys that have expired are cleared away.
+Description: Every page view used to create two permanent access keys in your own space, and nothing ever removed them. Pages are now read with the sign-in you already have, and keys that have expired are cleared away.
 Icon: Key
 Order: -20260814
 ---
