@@ -200,11 +200,6 @@ public sealed record UiPackFeatureOptions
     /// <summary>Google Maps (GoogleMapControl).</summary>
     public bool GoogleMaps { get; init; } = true;
 
-    /// <summary>
-    /// The education runtime (the course navigation contributor). Course CONTENT ships as the
-    /// Edu plugin regardless; this switches the compiled platform half.
-    /// </summary>
-    public bool Education { get; init; } = true;
 }
 
 public sealed record AiCliFeatureOptions
