@@ -27,8 +27,17 @@ public interface IMeshLanguageService
     /// <c>IMeshNodeCompilationService.CompileAndGetConfigurations</c> which only surfaces
     /// the compile <i>status</i> — this enumerates every <see cref="DiagnosticInfo"/>
     /// (errors + warnings + info) with source location, so a consumer can show squiggles.
+    ///
+    /// <para>🚨 Returns an <see cref="NodeDiagnosticsOutcome"/>, not a bare list, because an empty
+    /// list is not evidence of health: it is equally what a path resolving to NOTHING produces.
+    /// This method used to answer <c>[]</c> for an invented path, so a pre-prod sweep over stale
+    /// or mistyped paths reported all-green having checked nothing
+    /// (Systemorph/MeshWeaver#1592). Read <see cref="NodeDiagnosticsOutcome.Status"/> — or
+    /// <see cref="NodeDiagnosticsOutcome.IsClean"/>, which is false for every status that did not
+    /// actually compile.</para>
     /// </summary>
-    IObservable<IReadOnlyList<DiagnosticInfo>> GetDiagnostics(string nodeTypePath);
+    /// <param name="nodeTypePath">Path of the NodeType to examine.</param>
+    IObservable<NodeDiagnosticsOutcome> GetDiagnostics(string nodeTypePath);
 
     /// <summary>
     /// Emits the QuickInfo (signature + XML doc summary) at the given position, or

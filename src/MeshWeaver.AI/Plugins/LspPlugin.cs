@@ -73,10 +73,12 @@ Returns `{ok: true, diagnostics: []}` when the substituted source compiles clean
 Returns `{ok: true|false, diagnostics: [...]}` — same shape as `LspCheckNode`. Empty `diagnostics` plus `ok:true` means clean.")]
     public Task<string> LspDiagnosticsForNode(
         [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath)
-        => WithContext(() => languageService!.GetDiagnostics(
-                MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodeTypePath))))
-            .Select(diagnostics => FormatDiagnosticsJson(diagnostics))
+    {
+        var resolved = MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodeTypePath));
+        return WithContext(() => languageService!.GetDiagnostics(resolved))
+            .Select(outcome => FormatDiagnosticsJson(outcome, resolved))
             .FirstAsync().ToTask();
+    }
 
     /// <summary>
     /// Agent tool: Roslyn QuickInfo (hover) at a position in a Source Code file, returning the
@@ -157,6 +159,24 @@ Returns `{items: [{label, kind, insertText, detail?, sortText?}, ...]}`. `kind` 
             return work();
         });
 
+    private string FormatDiagnosticsJson(NodeDiagnosticsOutcome outcome, string nodeTypePath)
+    {
+        // 🚨 A non-Compiled status is NEVER ok:true. Answering {"ok":true,"diagnostics":[]}
+        // for a path that resolved to nothing is what made the mandated pre-prod sweep run on no
+        // evidence (#1592) — the error field names WHICH entry could not be checked.
+        if (outcome.Status != NodeDiagnosticsStatus.Compiled)
+            return JsonSerializer.Serialize(
+                new
+                {
+                    ok = false,
+                    status = outcome.Status.ToString(),
+                    error = outcome.DescribeProblem(nodeTypePath),
+                    diagnostics = Array.Empty<object>(),
+                },
+                hub.JsonSerializerOptions);
+        return FormatDiagnosticsJson(outcome.Diagnostics);
+    }
+
     private string FormatDiagnosticsJson(IReadOnlyList<DiagnosticInfo> diagnostics)
     {
         var anyErrors = diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
@@ -164,6 +184,7 @@ Returns `{items: [{label, kind, insertText, detail?, sortText?}, ...]}`. `kind` 
             new
             {
                 ok = !anyErrors,
+                status = nameof(NodeDiagnosticsStatus.Compiled),
                 diagnostics = diagnostics.Select(d => new
                 {
                     id = d.Id,

@@ -743,8 +743,20 @@ Returns `{ok: true|false, diagnostics: [...]}` — same shape as `lsp_check_node
         [Description("Path to the NodeType (e.g., @ACME/Story).")] string nodeTypePath)
     {
         var lang = rootHub.ServiceProvider.GetRequiredService<IMeshLanguageService>();
-        return lang.GetDiagnostics(MeshOperations.ResolvePath(nodeTypePath))
-            .Select(diagnostics => FormatDiagnosticsJson(diagnostics, sessionHub.JsonSerializerOptions))
+        var resolved = MeshOperations.ResolvePath(nodeTypePath);
+        return lang.GetDiagnostics(resolved)
+            .Select(outcome => outcome.Status == NodeDiagnosticsStatus.Compiled
+                ? FormatDiagnosticsJson(outcome.Diagnostics, sessionHub.JsonSerializerOptions)
+                // 🚨 Never ok:true without a compilation behind it — #1592.
+                : JsonSerializer.Serialize(
+                    new
+                    {
+                        ok = false,
+                        status = outcome.Status.ToString(),
+                        error = outcome.DescribeProblem(resolved),
+                        diagnostics = Array.Empty<object>(),
+                    },
+                    sessionHub.JsonSerializerOptions))
             .FirstAsync().ToTask();
     }
 
