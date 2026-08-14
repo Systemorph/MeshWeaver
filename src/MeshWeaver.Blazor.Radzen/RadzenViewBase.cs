@@ -1,6 +1,7 @@
 using MeshWeaver.Blazor;
 using MeshWeaver.Layout;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using Radzen;
 
@@ -40,24 +41,42 @@ public abstract class RadzenViewBase<TControl, TView> : BlazorView<TControl, TVi
         themeService.SetTheme(GetRadzenTheme());
     }
 
+    private bool assetsLoading;
+
     /// <summary>
-    /// Loads the pack's static assets once per document on first interactive render, then
-    /// re-renders with <see cref="AssetsReady"/> set so the Radzen components appear.
+    /// Loads the pack's static assets once per document, then re-renders with
+    /// <see cref="AssetsReady"/> set so the Radzen components appear. NOT gated on
+    /// <c>firstRender</c>: a failed load (network blip, circuit reconnect) is caught and logged,
+    /// and the next render retries — the loader module evicts a failed promise, so retry is real.
+    /// A first-render-only attempt would leave the view permanently blank after one transient
+    /// failure (review finding on the introducing PR).
     /// </summary>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await base.OnAfterRenderAsync(firstRender);
-        if (!firstRender || AssetsReady)
+        if (AssetsReady || assetsLoading)
             return;
-        var loader = await JSRuntime.InvokeAsync<IJSObjectReference>(
-            "import", "./_content/MeshWeaver.Blazor/assetLoader.js");
-        await using (loader)
+        assetsLoading = true;
+        try
         {
-            await loader.InvokeVoidAsync("ensure", "_content/Radzen.Blazor/css/material-base.css", "css");
-            await loader.InvokeVoidAsync("ensure", "_content/Radzen.Blazor/Radzen.Blazor.js", "js");
+            var loader = await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", "./_content/MeshWeaver.Blazor/assetLoader.js");
+            await using (loader)
+            {
+                await loader.InvokeVoidAsync("ensure", "_content/Radzen.Blazor/css/material-base.css", "css");
+                await loader.InvokeVoidAsync("ensure", "_content/Radzen.Blazor/Radzen.Blazor.js", "js");
+            }
+            AssetsReady = true;
+            StateHasChanged();
         }
-        AssetsReady = true;
-        StateHasChanged();
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Radzen pack assets failed to load; retrying on the next render");
+        }
+        finally
+        {
+            assetsLoading = false;
+        }
     }
 
     /// <summary>
