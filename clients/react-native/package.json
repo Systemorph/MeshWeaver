@@ -15,16 +15,16 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@expo/metro-runtime": "~57.0.9",
-    "expo": "~57.0.12",
-    "expo-asset": "~57.0.10",
-    "expo-av": "~16.0.8",
-    "expo-constants": "~57.0.10",
-    "expo-font": "~57.0.1",
-    "expo-status-bar": "~57.0.1",
+    "@expo/metro-runtime": "~4.0.1",
+    "expo": "~52.0.0",
+    "expo-asset": "~11.0.5",
+    "expo-av": "~15.0.1",
+    "expo-constants": "~17.0.8",
+    "expo-font": "~13.0.4",
+    "expo-status-bar": "~2.0.0",
     "marked": "^18.0.5",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "react-native": "0.76.5",
     "react-native-fetch-api": "^3.0.0",
     "react-native-render-html": "^6.3.4",
@@ -35,10 +35,10 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
-    "@types/react": "~19.2.18",
-    "@types/react-test-renderer": "~19.1.0",
-    "react-test-renderer": "19.2.8",
-    "typescript": "^7.0.2",
+    "@types/react": "~18.3.0",
+    "@types/react-test-renderer": "~18.3.0",
+    "react-test-renderer": "18.3.1",
+    "typescript": "^5.6.0",
     "vitest": "^4.1.9"
   },
   "_overrides_note": [
@@ -55,5 +55,30 @@
   ],
   "overrides": {
     "postcss": "^8.5.23"
-  }
+  },
+  "_npm_major_holdback_note": [
+    "This package is deliberately held at the pre-688ce589b versions (expo 52, react 18.3.1,",
+    "typescript 5.6). The npm-major sweep bumped expo 52->57 and react 18->19 HERE but PINNED",
+    "react-native at 0.76.5, and bumped typescript to 7. Both halves break, for different reasons,",
+    "and BOTH were observed on CI rather than reasoned about:",
+    "",
+    "1. react 19 cannot install. react-native@0.76.5 hard-peers react ^18.2.0, so npm ci fails",
+    "   ERESOLVE and BOTH RN jobs die before running a single check. Probed directly: pinning",
+    "   @types/react back to 18 does NOT help — npm still reports",
+    "     Found: react@19.2.8 / peer react@^18.2.0 from react-native@0.76.5",
+    "   so the blocker is the HARD react peer, not the peerOptional @types/react one that the CI",
+    "   log surfaces first. --legacy-peer-deps / overrides would install a combination upstream",
+    "   does not support, and RN web is a Playwright job that actually renders.",
+    "",
+    "2. typescript 7 breaks the web export. @expo/cli (SDK 52) reads tsconfig through the CLASSIC",
+    "   TypeScript compiler API, which TS 7 deleted along with transpileModule (its '.' export is",
+    "   now just lib/version.cjs). expo export dies with",
+    "     TypeError: Cannot read properties of undefined (reading 'getCurrentDirectory')",
+    "       at evaluateTsConfig (@expo/cli/src/utils/tsconfig/evaluateTsConfig.ts)",
+    "   So typescript stays 5.x here until the Expo SDK upgrade. This is the same TS 7 removal",
+    "   that forced clients/typescript off transpileModule onto amaro.",
+    "",
+    "Moving forward is issue #1584: react-native 0.82 peers are exactly react ^19.1.1 — the Expo",
+    "SDK 52->57 upgrade, which also has to port expo-av. Do that deliberately, not by sweep."
+  ]
 }
