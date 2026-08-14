@@ -22,10 +22,10 @@ public static class OpenAIExtensions
     /// binding (<c>OpenAI:</c>) + <see cref="OpenAIChatClientAgentFactory"/>.
     /// Idempotent.
     /// </summary>
-    public static TBuilder AddOpenAI<TBuilder>(this TBuilder builder)
+    public static TBuilder AddOpenAI<TBuilder>(this TBuilder builder, string configSection = "OpenAI")
         where TBuilder : MeshBuilder
     {
-        builder.ConfigureServices(services => services.AddOpenAI());
+        builder.ConfigureServices(services => services.AddOpenAI(configSection));
         return builder;
     }
 
@@ -41,10 +41,10 @@ public static class OpenAIExtensions
     /// <c>OpenAICompatible</c> provider stamp); the factory registration is
     /// idempotent with <see cref="AddOpenAI{TBuilder}"/>.
     /// </summary>
-    public static TBuilder AddOpenAICompatible<TBuilder>(this TBuilder builder)
+    public static TBuilder AddOpenAICompatible<TBuilder>(this TBuilder builder, string configSection = "OpenAICompatible")
         where TBuilder : MeshBuilder
     {
-        builder.ConfigureServices(services => services.AddOpenAICompatible());
+        builder.ConfigureServices(services => services.AddOpenAICompatible(configSection));
         return builder;
     }
 
@@ -58,31 +58,31 @@ public static class OpenAIExtensions
     /// models are listed/added live (or seeded later as mesh data), never
     /// hardcoded here. Requires an API key.
     /// </summary>
-    public static TBuilder AddOpenRouter<TBuilder>(this TBuilder builder)
+    public static TBuilder AddOpenRouter<TBuilder>(this TBuilder builder, string configSection = "OpenRouter")
         where TBuilder : MeshBuilder
     {
-        builder.ConfigureServices(services => services.AddOpenRouter());
+        builder.ConfigureServices(services => services.AddOpenRouter(configSection));
         return builder;
     }
 
     /// <summary>Collection-level form for boot-pack registration (MeshNodeProviderAttribute).</summary>
-    public static IServiceCollection AddOpenAI(this IServiceCollection services)
+    public static IServiceCollection AddOpenAI(this IServiceCollection services, string configSection = "OpenAI")
     {
         services.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
-            SectionName: "OpenAI", ProviderName: "OpenAI", Order: 4,
+            SectionName: configSection, ProviderName: "OpenAI", Order: 4,
             DisplayLabel: "OpenAI", DefaultEndpoint: null,
             DefaultModelIds: ImmutableArray.Create("gpt-4o", "gpt-4o-mini"),
             RequiresApiKey: true));
-        services.AddOptions<OpenAIConfiguration>().BindConfiguration("OpenAI");
+        services.AddOptions<OpenAIConfiguration>().BindConfiguration(configSection);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatClientFactory, OpenAIChatClientAgentFactory>());
         return services;
     }
 
     /// <summary>Collection-level form for boot-pack registration (MeshNodeProviderAttribute).</summary>
-    public static IServiceCollection AddOpenAICompatible(this IServiceCollection services)
+    public static IServiceCollection AddOpenAICompatible(this IServiceCollection services, string configSection = "OpenAICompatible")
     {
         services.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
-            SectionName: "OpenAICompatible", ProviderName: "OpenAICompatible", Order: 5,
+            SectionName: configSection, ProviderName: "OpenAICompatible", Order: 5,
             DisplayLabel: "OpenAI-compatible (custom URL)", DefaultEndpoint: null,
             DefaultModelIds: ImmutableArray<string>.Empty, RequiresApiKey: true));
         // No BindConfiguration: endpoint + key always come from the user's ModelProvider node.
@@ -92,10 +92,10 @@ public static class OpenAIExtensions
     }
 
     /// <summary>Collection-level form for boot-pack registration (MeshNodeProviderAttribute).</summary>
-    public static IServiceCollection AddOpenRouter(this IServiceCollection services)
+    public static IServiceCollection AddOpenRouter(this IServiceCollection services, string configSection = "OpenRouter")
     {
         services.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
-            SectionName: "OpenRouter", ProviderName: "OpenRouter", Order: 6,
+            SectionName: configSection, ProviderName: "OpenRouter", Order: 6,
             DisplayLabel: "OpenRouter", DefaultEndpoint: "https://openrouter.ai/api/v1",
             DefaultModelIds: ImmutableArray<string>.Empty, RequiresApiKey: true));
         services.AddOptions<OpenAIConfiguration>();

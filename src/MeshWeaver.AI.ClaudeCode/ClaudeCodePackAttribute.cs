@@ -32,18 +32,9 @@ public sealed class ClaudeCodePackAttribute : MeshNodeProviderAttribute
             services.AddOptions<ClaudeCodeConfiguration>()
                 .BindConfiguration("ClaudeCode")
                 .PostConfigure<IConfiguration>((config, configuration) =>
-                    config.SkillsDirectory ??= DeriveSkillsDirectory(configuration));
+                    config.SkillsDirectory ??= MeshWeaver.AI.Connect.CliSkillsDirectory.Derive(configuration));
             return services;
         }),
     ];
 
-    /// <summary>The shared skills folder: <c>Skills:Directory</c>, else <c>{ClaudeCode:ConfigDirRoot}/_skills</c>.</summary>
-    public static string? DeriveSkillsDirectory(IConfiguration configuration)
-    {
-        var configured = configuration["Skills:Directory"];
-        if (!string.IsNullOrWhiteSpace(configured))
-            return configured;
-        var claudeRoot = configuration["ClaudeCode:ConfigDirRoot"]?.TrimEnd('/', '\\');
-        return string.IsNullOrEmpty(claudeRoot) ? null : $"{claudeRoot}/_skills";
-    }
 }

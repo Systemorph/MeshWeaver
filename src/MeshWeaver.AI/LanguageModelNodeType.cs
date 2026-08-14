@@ -190,14 +190,10 @@ public static class LanguageModelNodeType
     /// 3-arg overload but carries the provider's bootstrap profile
     /// (display label, default endpoint, default model ids,
     /// RequiresApiKey). Decentralised: each provider package self-
-    /// registers via its own builder extension (see e.g.
-    /// AzureFoundryExtensions.AddAzureClaudeProvider). Idempotent on
-    /// (sectionName, providerName).
-    /// </summary>
-    /// <summary>
-    /// Collection-level registration of a catalog source — the form a boot-loaded provider pack
-    /// carries in its <c>MeshNodeProviderAttribute</c>'s global service configurations. The
-    /// builder overload below delegates here.
+    /// registers via its own extension. Idempotent on (sectionName, providerName).
+    /// This collection-level form is what a boot-loaded provider pack carries in its
+    /// <c>MeshNodeProviderAttribute</c>'s global service configurations; the builder
+    /// overload below delegates here.
     /// </summary>
     public static IServiceCollection AddLanguageModelCatalogSource(
         this IServiceCollection services,
