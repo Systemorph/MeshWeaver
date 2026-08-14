@@ -157,8 +157,20 @@ public class CodeCellOutputCaptureTest(ITestOutputHelper output) : MonolithMeshT
             .First(a => a is not null
                 && (a == CodeLayoutAreas.CellArea
                     || a.EndsWith("/" + CodeLayoutAreas.CellArea, StringComparison.Ordinal)))!;
+        // Since #1468 an unrun cell renders NO output segment at all (the pane appears only once
+        // LastActivityPath is stamped), so the FIRST cell emission after subscribing may still be
+        // the pre-run shape. Wait for the emission that carries the output segment instead of
+        // snapshotting the first StackControl and probing it non-reactively — the old shape of
+        // this assertion turned the deliberate absence into "Sequence contains no matching
+        // element" and reddened main.
         var cell = (StackControl)(await stream.GetControlStream(cellArea)
-            .Should().Within(30.Seconds()).Match(c => c is StackControl))!;
+            .Should().Within(30.Seconds()).Match(c => c is StackControl s
+                && s.Areas.Any(a =>
+                {
+                    var name = a.Area?.ToString();
+                    return name == CodeLayoutAreas.CellOutputArea
+                        || (name?.EndsWith("/" + CodeLayoutAreas.CellOutputArea, StringComparison.Ordinal) ?? false);
+                })))!;
         var outputArea = cell.Areas
             .Select(a => a.Area?.ToString())
             .First(a => a is not null
