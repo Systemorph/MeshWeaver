@@ -5,7 +5,7 @@
 // and (b) render-markdown goes over a plain fetch POST (non-streaming, so the RN global fetch is fine —
 // only the gRPC-web server-stream needs nativeStreamingFetch). renderMarkdown reuses the ONE server Markdig
 // parser; the Markdown leaf hydrates its HTML with the shared splitRenderedHtml — no bespoke parser.
-import { Mesh, type MeshWebConnection } from "@meshweaver/client-web";
+import { Mesh, MeshRest, type MeshWebConnection } from "@meshweaver/client-web";
 import type {
   ContentListing,
   DocumentDownload,
@@ -17,64 +17,6 @@ import type {
   RenderedMarkdown,
   ThreadSubmitOptions,
 } from "@meshweaver/react/core";
-
-/** JSON headers + Bearer when a token is present — `/api/mesh/*` on a remote portal is
- * Bearer-only (issue #1474: RN sent no token, so every REST op 401'd against real portals;
- * the anonymous sidecar keeps working because an empty token adds no header). */
-function jsonHeaders(token: string): Record<string, string> {
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (token) headers["authorization"] = `Bearer ${token}`;
-  return headers;
-}
-
-/** Server-side Markdig render (POST {baseUrl}/api/mesh/render-markdown) — the ONE markdown parser. */
-async function renderMarkdown(baseUrl: string, token: string, markdown: string, nodePath?: string): Promise<RenderedMarkdown> {
-  const resp = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/mesh/render-markdown`, {
-    method: "POST",
-    headers: jsonHeaders(token),
-    body: JSON.stringify({ markdown, nodePath: nodePath ?? null }),
-  });
-  if (!resp.ok) throw new Error(`render-markdown failed (${resp.status})`);
-  const text = await resp.text();
-  if (text.startsWith("Error:")) throw new Error(text);
-  const parsed = JSON.parse(text) as { html?: string; codeSubmissions?: MarkdownCellSubmission[] };
-  return { html: parsed.html ?? "", codeSubmissions: parsed.codeSubmissions ?? [] };
-}
-
-/**
- * Content-collection listing (`POST {baseUrl}/api/mesh/content/list`) — the read half of the file
- * browser. `path` is `{node}/{collection}[/{dir}]`. Same endpoint and same response shaping as
- * portal-next's listContent; the sidecar is same-origin and anonymous (empty token), while a
- * remote portal needs the instance's Bearer token.
- */
-async function listContent(baseUrl: string, token: string, path: string): Promise<ContentListing> {
-  const resp = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/mesh/content/list`, {
-    method: "POST",
-    headers: jsonHeaders(token),
-    body: JSON.stringify({ path }),
-  });
-  const text = await resp.text();
-  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `content list failed (${resp.status})`);
-  const parsed = JSON.parse(text) as ContentListing;
-  return {
-    collection: String(parsed.collection ?? ""),
-    path: String(parsed.path ?? ""),
-    editable: !!parsed.editable,
-    items: Array.isArray(parsed.items) ? parsed.items : [],
-  };
-}
-
-/** Content upload (`POST {baseUrl}/api/mesh/upload`, multipart). */
-async function uploadContent(baseUrl: string, token: string, path: string, file: File): Promise<void> {
-  const form = new FormData();
-  form.append("path", path);
-  form.append("file", file as unknown as Blob, (file as { name?: string }).name ?? "upload");
-  const headers: Record<string, string> = {};
-  if (token) headers["authorization"] = `Bearer ${token}`; // multipart: FormData sets content-type
-  const resp = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/mesh/upload`, { method: "POST", headers, body: form });
-  const text = await resp.text();
-  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `upload failed (${resp.status})`);
-}
 
 /** Decode a byte[] wire value (base64 string, or a number array) to bytes. */
 function decodeBytes(raw: unknown): Uint8Array {
@@ -219,6 +161,12 @@ export function buildMeshOps(connection: MeshWebConnection, baseUrl: string, par
   // The REST reach-back (search + the helpers below) carries the instance's Bearer token; empty
   // = the anonymous sidecar. Without it every REST op 401'd against a remote portal (#1474).
   const mesh = Mesh.from(connection, "mesh/main", { url: baseUrl, token: token || undefined });
+  // The four shared /api/mesh verbs come from ONE implementation (#1497). This shell is the reason
+  // that matters: its copies carried NO Authorization header at all, so every REST op 401'd against
+  // a real portal and the file browser looked merely EMPTY (#1474). MeshRest applies Bearer in one
+  // place — and omits it entirely for the anonymous same-origin sidecar, which is the behaviour this
+  // shell had right and the web shells did not.
+  const rest = new MeshRest({ baseUrl, token });
   return {
     watch: (path: string) => watchNode(mesh, path),
     startThread: (namespacePath: string, userText: string, opts?: ThreadSubmitOptions) =>
@@ -228,15 +176,15 @@ export function buildMeshOps(connection: MeshWebConnection, baseUrl: string, par
     patch: (path: string, fields: Record<string, unknown>) => mesh.patch(path, fields),
     search: (query: string, basePath?: string, limit?: number) =>
       mesh.search(query, basePath, limit).catch(() => [] as Record<string, unknown>[]),
-    renderMarkdown: (markdown: string, nodePath?: string) => renderMarkdown(baseUrl, token, markdown, nodePath),
+    renderMarkdown: (markdown: string, nodePath?: string) => rest.renderMarkdown(markdown, nodePath),
     startMarkdownKernel: (cells: MarkdownCellSubmission[]) => startMarkdownKernel(connection, mesh, partition, cells),
     getNode: (path: string) => mesh.get(path).then((n) => n.raw as Record<string, unknown>).catch(() => null),
     createNode: (node: Record<string, unknown>) => mesh.create(node).then(() => undefined),
     // The file-browser and document-export ops. These are plain REST / mesh-request calls with no
     // browser-only dependency, so RN wires the SAME three the web shells do — without them the
     // FileBrowser and ExportDocument leaves could only ever render their "not available" state.
-    listContent: (path: string) => listContent(baseUrl, token, path),
-    uploadContent: (path: string, file: File) => uploadContent(baseUrl, token, path, file),
+    listContent: (path: string) => rest.listContent(path),
+    uploadContent: (path: string, file: File) => rest.uploadContent(path, file),
     exportDocument: (sourcePath: string, options: DocumentExportOptions) => exportDocument(mesh, sourcePath, options),
   };
 }
