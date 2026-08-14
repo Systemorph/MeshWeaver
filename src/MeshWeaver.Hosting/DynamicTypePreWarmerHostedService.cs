@@ -41,6 +41,15 @@ public sealed class DynamicTypePreWarmerHostedService(
     public const string EnabledConfigKey = "PreWarm:DynamicTypes";
 
     /// <summary>
+    /// How many of the costliest NodeTypes the warm-up summary NAMES (issue #1439). Small on
+    /// purpose: the point is to identify the compile units worth looking at, not to log a table —
+    /// and the per-type lines already carry every type's own cost for anyone who wants the full
+    /// distribution. Not configurable; a knob here would be one more thing to get wrong for a
+    /// diagnostic whose whole value is that it is always on.
+    /// </summary>
+    private const int SlowestReported = 5;
+
+    /// <summary>
     /// Config key overriding the per-type warm budget, as a <see cref="TimeSpan"/> string
     /// (e.g. <c>"00:00:30"</c>). Default: <see cref="DynamicTypePreWarmer.DefaultPerTypeBudget"/>.
     /// The budget only bites on types that never settle — a healthy compile is seconds — so this
@@ -152,6 +161,16 @@ public sealed class DynamicTypePreWarmerHostedService(
         var skipped = 0;
         var faulted = 0;
         var contentBroken = 0;
+
+        // 🚨 WHERE THE SWEEP'S TIME WENT, named — the answer #1439 asks for and nothing could give.
+        // A sweep reported only its TOTAL, so a bootstrap that ran out of budget said nothing about
+        // WHICH compile units were expensive, and the only available response to a type brushing the
+        // deadline was to widen it. Keeping the whole per-type list would be an unbounded allocation
+        // on a 300-type mesh for a line nobody reads in full, so the summary keeps just the costliest
+        // few. Instance-local to this sweep (never static — NoStaticState.md), and taken under the
+        // same lock the ranking uses, because outcomes arrive on the warm subscription's thread.
+        var slowestLock = new object();
+        var slowest = new List<PreWarmOutcome>(SlowestReported + 1);
 
         // The readiness gate reads this. Resolved (not required) so a host that never called
         // AddNodeTypeBakeGate simply warms without gating — the warmer stays a latency optimisation
@@ -298,6 +317,17 @@ public sealed class DynamicTypePreWarmerHostedService(
                         _recoveryWatches.Add(
                             DynamicTypePreWarmer.WatchForRecovery(mesh, gate, outcome.TypePath, logger));
                     }
+                    // Rank by cost before classifying — a type that TIMED OUT is exactly the one
+                    // whose duration the summary must name, so this deliberately does not filter on
+                    // success.
+                    if (outcome.Duration > TimeSpan.Zero)
+                        lock (slowestLock)
+                        {
+                            slowest.Add(outcome);
+                            slowest.Sort((a, b) => b.Duration.CompareTo(a.Duration));
+                            if (slowest.Count > SlowestReported)
+                                slowest.RemoveAt(slowest.Count - 1);
+                        }
                     switch (outcome.Status)
                     {
                         case PreWarmStatus.Compiled: Interlocked.Increment(ref compiled); break;
@@ -364,14 +394,19 @@ public sealed class DynamicTypePreWarmerHostedService(
                 () =>
                 {
                     var elapsed = DateTimeOffset.UtcNow - startedAt;
+                    string costliest;
+                    lock (slowestLock)
+                        costliest = slowest.Count == 0
+                            ? "(nothing was compiled)"
+                            : string.Join(", ", slowest.Select(o => $"{o.TypePath} {o.DescribeCost()}"));
                     logger.LogInformation(
                         "DynamicTypePreWarmer: warm-up complete in {Elapsed} — compiled={Compiled} alreadyBaked={AlreadyBaked} "
                         + "compileErrors={Errored} timedOut={TimedOut} skipped={Skipped} contentBroken={ContentBroken} faulted={Faulted} "
-                        + "— {Memory}",
+                        + "— costliest: {Costliest} — {Memory}",
                         elapsed,
                         Volatile.Read(ref compiled), Volatile.Read(ref alreadyBaked), Volatile.Read(ref errored),
                         Volatile.Read(ref timedOut), Volatile.Read(ref skipped), Volatile.Read(ref contentBroken),
-                        Volatile.Read(ref faulted), sweepMemory);
+                        Volatile.Read(ref faulted), costliest, sweepMemory);
 
                     // MarkComplete keeps a recorded regression red — completion is not absolution.
                     gate?.MarkComplete(
