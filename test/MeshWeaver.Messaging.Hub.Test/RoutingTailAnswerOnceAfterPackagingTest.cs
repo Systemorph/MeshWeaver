@@ -1,5 +1,6 @@
-using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Fixture;
 using Xunit;
@@ -32,9 +33,10 @@ public class RoutingTailAnswerOnceAfterPackagingTest(ITestOutputHelper output) :
     [Fact(Timeout = 60_000)]
     public async Task PackagedFireAndForgetAndNacks_AreNotAnswered_ByTheRoutingTail()
     {
-        var nackedDeliveryIds = new ConcurrentQueue<string>();
-        var controlAnswered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var controlId = string.Empty;
+        // ReplaySubject: the assertion subscribes after the deliveries are submitted and must still
+        // see everything the tail answered.
+        var nacks = new ReplaySubject<string>();
+        var answeredSoFar = nacks.Scan(ImmutableList<string>.Empty, (answered, id) => answered.Add(id));
 
         var router = ServiceProvider.CreateMessageHub(RouterAddress, conf => conf
             .WithPostingIdentity(PostingIdentity.System)
@@ -64,9 +66,7 @@ public class RoutingTailAnswerOnceAfterPackagingTest(ITestOutputHelper output) :
             .WithPostingIdentity(PostingIdentity.System)
             .WithHandler<DeliveryFailure>((_, d) =>
             {
-                nackedDeliveryIds.Enqueue(d.Message.Delivery.Id);
-                if (d.Message.Delivery.Id == controlId)
-                    controlAnswered.TrySetResult();
+                nacks.OnNext(d.Message.Delivery.Id);
                 return d.Processed();
             }));
 
@@ -78,26 +78,25 @@ public class RoutingTailAnswerOnceAfterPackagingTest(ITestOutputHelper output) :
             return delivery;
         }
 
-        // Suppressed first, the positive control LAST: one action block, one queue, so the control's
-        // NACK arriving proves the two before it were fully processed.
+        // Suppressed first, the positive control LAST: one action block, one queue, so the fold at
+        // the moment the control is answered already contains anything the two before it produced.
         var heartBeat = Submit(new HeartBeatEvent());
         var failure = Submit(new DeliveryFailure(
             new MessageDelivery<string>(SenderAddress, UnreachableTarget, "inner", router.JsonSerializerOptions),
             "inner failure"));
-        var control = new MessageDelivery<string>(SenderAddress, UnreachableTarget, "ordinary-payload",
-            router.JsonSerializerOptions);
-        controlId = control.Id;
-        router.DeliverMessage(control);
+        var control = Submit("ordinary-payload");
 
-        await controlAnswered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var answered = await answeredSoFar.Should().Within(30.Seconds())
+            .Match(a => a.Contains(control.Id),
+                "an ordinary request that fails routing must still be reported to its sender");
 
-        var answered = nackedDeliveryIds.Should().ContainSingle(
+        answered.Should().ContainSingle(
             "the routing tail must apply the same answer-once contract as the router it reports for — "
             + "otherwise every suppressed NACK the router declines is simply re-posted here, and a pod "
-            + "shutdown still produces the failure storm").Subject;
-        answered.Should().Be(control.Id);
-        heartBeat.Id.Should().NotBe(control.Id);
-        failure.Id.Should().NotBe(control.Id);
+            + "shutdown still produces the failure storm").Subject
+            .Should().Be(control.Id);
+        answered.Should().NotContain(heartBeat.Id);
+        answered.Should().NotContain(failure.Id);
     }
 
     /// <summary>
