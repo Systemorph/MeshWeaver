@@ -86,6 +86,13 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 20000)]
     public async Task CommentNodes_AreDiscoverableByNamespaceQuery()
     {
+        // 🚨 NOT converted to a wait-for-the-items predicate like its neighbours (#1384). This
+        // asserts a COUNT over a whole namespace, and `Added` carries only the CHANGED items
+        // (MeshQuery.TryFilterDuplicateLiveChange; consumers accumulate — MeshNodeCollectionView
+        // does `current.Concat(change.Items)`). So "wait for one emission holding >= 6" is not
+        // satisfiable if the six trickle in as separate deltas — it would swap a fast, clear
+        // failure for a 20 s hang. Fixing this shape needs accumulation ACROSS emissions, which
+        // changes what the test asserts on; left deliberately for that separate change.
         var comments = (await MeshQuery
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{DocPartitionNamespace} nodeType:{CommentNodeType.NodeType}"))
