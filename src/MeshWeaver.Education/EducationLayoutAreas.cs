@@ -73,6 +73,16 @@ public static class EducationLayoutAreas
         => config.AddLayout(layout => layout.AddEducationLayoutAreas());
 
     /// <summary>
+    /// The pack's one-call opt-in on a mesh builder: the course navigation contributor plus the
+    /// education areas on every node hub. Any host that serves courses — the portal, a test mesh —
+    /// chains this; a host without courses simply doesn't, which is the point of the extraction.
+    /// </summary>
+    public static TBuilder AddEducation<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+        => (TBuilder)builder
+            .AddEducationNavigation()
+            .ConfigureDefaultNodeHub(config => config.AddEducationLayoutAreas());
+
+    /// <summary>
     /// The "Your Turn" landing: ensure the viewing learner has a personal, writable copy of this
     /// exercise's module (<see cref="EnsurePersonalCopy"/>), then open it in the <see cref="Learn"/>
     /// reader shell via an auto-redirect. Idempotent — a second visit just navigates to the existing copy.
