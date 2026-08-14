@@ -287,7 +287,7 @@ function updateMarkdownTheme() {
         : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
     const basePath = '_content/MeshWeaver.Blazor/css/';
-    const cdnPath = 'https://cdn.jsdelivr.net/npm/github-markdown-css@5.8.1/';
+    const cdnPath = '_content/MeshWeaver.Blazor/lib/github-markdown-css/'; // vendored 5.8.1
 
     const localTheme = isDarkMode
         ? basePath + 'github-markdown-dark.css'
