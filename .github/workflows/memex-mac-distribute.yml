@@ -55,10 +55,10 @@ jobs:
   build-maccatalyst:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -78,7 +78,7 @@ jobs:
       # The .app bundle is signed with the "Apple Distribution" cert (same one the iOS pipeline
       # uses). A shared keychain-password (run id) lets the second import target the same keychain.
       - name: Import app code-signing certificate ("Apple Distribution")
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -89,7 +89,7 @@ jobs:
       # SEPARATE certificate from the Apple Distribution one — the Mac App Store requires a signed
       # product archive. create-keychain:false appends it to the keychain created above.
       - name: Import installer certificate ("3rd Party Mac Developer Installer")
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_INSTALLER_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload .pkg artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: memex-maccatalyst-pkg
           path: ${{ steps.pkg.outputs.path }}
