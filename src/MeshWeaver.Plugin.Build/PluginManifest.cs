@@ -36,14 +36,15 @@ public sealed record PluginManifest(
     /// Reads a plugin root's <c>index.json</c>.
     /// </summary>
     /// <param name="pluginDirectory">Directory containing <c>index.json</c>.</param>
-    /// <param name="fallbackVersion">Version to use when the manifest declares none — most do not,
-    /// so in CI this is the build-number-derived version that keeps releases monotonic.</param>
+    /// <param name="fallbackVersion">Version to use when neither <c>manifest.lock</c> nor
+    /// <c>index.json</c> declares one.</param>
     public static PluginManifest Read(string pluginDirectory, string fallbackVersion)
     {
         var name = Path.GetFileName(pluginDirectory.TrimEnd(Path.DirectorySeparatorChar));
         var indexPath = Path.Combine(pluginDirectory, "index.json");
         if (!File.Exists(indexPath))
-            return new PluginManifest(name, IdPrefix + name, fallbackVersion, name, null, []);
+            return new PluginManifest(
+                name, IdPrefix + name, LockVersion(pluginDirectory) ?? fallbackVersion, name, null, []);
 
         using var doc = JsonDocument.Parse(File.ReadAllText(indexPath));
         var root = doc.RootElement;
@@ -52,7 +53,9 @@ public sealed record PluginManifest(
         return new PluginManifest(
             name,
             IdPrefix + name,
-            Normalize(GetString(content, "version")) ?? fallbackVersion,
+            // 🚨 manifest.lock FIRST — it holds the composed release version; index.json holds only
+            // the authored MAJOR.MINOR. See LockVersion.
+            LockVersion(pluginDirectory) ?? Normalize(GetString(content, "version")) ?? fallbackVersion,
             GetString(content, "description") ?? GetString(root, "description") ?? name,
             GetString(content, "minMeshVersion"),
             content.ValueKind == JsonValueKind.Object
@@ -60,6 +63,37 @@ public sealed record PluginManifest(
             && requires.ValueKind == JsonValueKind.Array
                 ? [.. requires.EnumerateArray().Select(e => e.GetString()).Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!)]
                 : []);
+    }
+
+    /// <summary>
+    /// The module's released version from <c>manifest.lock</c> — the number the repo already
+    /// publishes and that dependents pin against.
+    ///
+    /// <para>🚨 <b>Not <c>index.json</c>'s <c>content.version</c>.</b> That field carries only the
+    /// AUTHORED <c>MAJOR.MINOR</c>; the <c>PATCH</c> is DERIVED by <c>gen-manifests.py</c> and
+    /// counts CONTENT changes — it increments when the tree's <c>moduleVersion</c> hash differs
+    /// from the last release. Reading index.json alone therefore silently drops the patch and mints
+    /// a package version the repo never released: ThreeBody reads <c>1.3</c> there while its
+    /// manifest.lock — and its <c>ThreeBody/v1.3.2</c> tag — say <c>1.3.2</c>. Publishing 1.3.0 for
+    /// a 1.3.2 tree would collide with a real earlier release and make every caret pin resolve to
+    /// the wrong content, which is precisely what that versioning exists to prevent.</para>
+    /// </summary>
+    private static string? LockVersion(string pluginDirectory)
+    {
+        var lockPath = Path.Combine(pluginDirectory, "manifest.lock");
+        if (!File.Exists(lockPath))
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(lockPath));
+            return Normalize(GetString(doc.RootElement, "version"));
+        }
+        catch (JsonException)
+        {
+            // A malformed lock falls back to the authored version rather than failing the pack: the
+            // lock is machine-maintained, and a broken one is the generator's problem to report.
+            return null;
+        }
     }
 
     private static string? GetString(JsonElement element, string property) =>
