@@ -111,7 +111,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             PrimaryNodePath = docPath,
             MarkerId = markerId,
             Author = "TestAuthor",
-            Text = "",  // Empty initially Ã¢â‚¬â€ user edits after creation
+            Text = "",  // Empty initially — user edits after creation
             Status = CommentStatus.Active
         };
         var commentNode = new MeshNode(commentId, docPath)
@@ -125,15 +125,15 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         commentNode.Path.Should().Be($"{docPath}/{commentId}",
             "MeshNode(commentId, docPath) should produce Path = docPath/commentId");
 
-        // Act Ã¢â‚¬â€ create the node (same as meshCatalog.CreateNodeAsync in BuildNewCommentForm)
+        // Act — create the node (same as meshCatalog.CreateNodeAsync in BuildNewCommentForm)
         var createdNode = await NodeFactory.CreateNode(commentNode).Should().Emit();
 
-        // Assert Ã¢â‚¬â€ node should be retrievable
+        // Assert — node should be retrievable
         createdNode.Should().NotBeNull("CreateNodeAsync should return the created node");
         createdNode.Path.Should().Be($"{docPath}/{commentId}");
         Output.WriteLine($"Created node path: {createdNode.Path}");
 
-        // Assert Ã¢â‚¬â€ node should be retrievable via per-node stream
+        // Assert — node should be retrievable via per-node stream
         var retrieved = await ReadNode(createdNode.Path!).Should().Emit();
         retrieved.Should().NotBeNull("Comment should be retrievable after creation");
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
@@ -141,7 +141,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         retrievedComment.Text.Should().BeEmpty("Comment was created with empty text");
         Output.WriteLine($"Retrieved comment: Author={retrievedComment.Author}, Text='{retrievedComment.Text}'");
 
-        // Assert Ã¢â‚¬â€ node should appear in namespace: query (this is how ReadView finds comments)
+        // Assert — node should appear in namespace: query (this is how ReadView finds comments)
         // Wait for the snapshot that contains the node just created. This one has a WRITE before it,
         // so it carries genuine CQRS lag on top of the async catalog hydration — taking the first
         // Initial here was the least defensible instance of the shape (#1384).
@@ -262,7 +262,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Sending DataChangeRequest to WRONG address: {docAddress}");
         await client.Observe(new DataChangeRequest().WithUpdates(updatedNode), o => o.WithTarget(docAddress)).Should().Emit(); // BUG: targeting parent instead of comment
 
-        // Verify comment text did NOT change (still empty) Ã¢â‚¬â€ via per-node stream
+        // Verify comment text did NOT change (still empty) — via per-node stream
         // The wrong-target DataChange may race with the comment hub's MeshNodeReference
         // reducer activation — when the doc hub's workspace and the comment hub haven't
         // synced ownership, the cross-path update can fire before being rejected, causing
@@ -352,7 +352,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Full end-to-end test: Create comment Ã¢â€ â€™ Edit text Ã¢â€ â€™ Reload (re-query) Ã¢â€ â€™ Verify persistence.
+    /// Full end-to-end test: Create comment → Edit text → Reload (re-query) → Verify persistence.
     /// This simulates the complete user flow.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -402,9 +402,9 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("3. Updating comment text via NodeFactory.UpdateNodeAsync...");
         await NodeFactory.UpdateNode(editedNode).Should().Emit();
 
-        // 4. "Reload"Ã¢â‚¬â€ read content via the per-node MeshNodeReference stream.
+        // 4. "Reload"— read content via the per-node MeshNodeReference stream.
         // QueryAsync would race the eventually-consistent catalog and return stale.
-        Output.WriteLine("4. Simulating reloadÃ¢â‚¬â€ reading content via per-node stream...");
+        Output.WriteLine("4. Simulating reload— reading content via per-node stream...");
         var reloaded = await Mesh.GetMeshNode(created.Path!, ReadNodeTimeout)
             .Should()
             .Within(ReadNodeTimeout)
@@ -418,7 +418,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         reloadedComment.MarkerId.Should().Be(markerId);
         Output.WriteLine($"   Reloaded comment: Text='{reloadedComment.Text}', Author={reloadedComment.Author}");
 
-        // 5. Also verify via namespace: query (how ReadView finds comments) Ã¢â‚¬â€ wait
+        // 5. Also verify via namespace: query (how ReadView finds comments) — wait
         // for the catalog to surface the comment under the doc namespace.
         Output.WriteLine("5. Verifying via namespace: query...");
         var nsQuery = $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}";

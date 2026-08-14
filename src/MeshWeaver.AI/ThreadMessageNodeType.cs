@@ -11,7 +11,7 @@ namespace MeshWeaver.AI;
 /// <summary>
 /// Constants, configuration, and MeshNode definition for ThreadMessage node types.
 /// ThreadMessage nodes are child nodes of Thread nodes containing individual messages.
-/// Each ThreadMessage hub manages its own persistence exclusively via AddMeshDataSource â€”
+/// Each ThreadMessage hub manages its own persistence exclusively via AddMeshDataSource —
 /// no external code should access ThreadMessage persistence via IMeshService or IMeshQuery.
 /// </summary>
 public static class ThreadMessageNodeType
@@ -60,7 +60,7 @@ public static class ThreadMessageNodeType
 
     /// <summary>
     /// Creates a MeshNode definition for the ThreadMessage node type.
-    /// HubConfiguration includes AddMeshDataSource â€” the hub owns persistence exclusively.
+    /// HubConfiguration includes AddMeshDataSource — the hub owns persistence exclusively.
     /// </summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {

@@ -1030,7 +1030,7 @@ DateTime.Now.ToString()
         roundTripped.CodeSubmissions![0].Code.Should().Be(content.CodeSubmissions[0].Code);
     }
 
-    // RepairMarkdownContent_* tests removed â€” the MarkdownNodeType.RepairMarkdownContent hook
+    // RepairMarkdownContent_* tests removed — the MarkdownNodeType.RepairMarkdownContent hook
     // and MeshDataSource.WithNodeConverter pipeline they covered no longer exist in the codebase.
 
     #endregion

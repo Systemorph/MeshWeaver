@@ -25,7 +25,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// giving them full permissions across all partitions.
 ///
 /// Bug: Onboarding.razor was calling AddUserRoleAsync(username, "PlatformAdmin", "Admin", username)
-/// â€” correct namespace but wrong role ("PlatformAdmin" instead of "Admin").
+/// — correct namespace but wrong role ("PlatformAdmin" instead of "Admin").
 /// Fix: AddUserRoleAsync(username, Role.Admin.Id, "Admin", username)
 /// </summary>
 [Collection("PostgreSql")]
@@ -291,7 +291,7 @@ public class FirstUserOnboardingTests
             "here is what made every onboarder a 'first user' (gate bypass + root-grant misfire)");
     }
 
-    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Helpers ──────────────────────────────────────────────────────
 
     private async Task PopulateSearchableSchemasAsync(IEnumerable<string> schemas, CancellationToken ct)
     {

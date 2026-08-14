@@ -9,7 +9,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// <summary>
 /// Registers <c>Release</c> as a first-class NodeType. Release MeshNodes live
 /// at <c>{nodeTypePath}/Release/{version}</c> and carry a
-/// <see cref="NodeTypeRelease"/> content payload â€” the compiled assembly path,
+/// <see cref="NodeTypeRelease"/> content payload — the compiled assembly path,
 /// the markdown release notes, the source-input snapshot, and a link to the
 /// compile activity that produced them.
 ///

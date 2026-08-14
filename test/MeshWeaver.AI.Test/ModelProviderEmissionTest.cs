@@ -22,7 +22,7 @@ public class ModelProviderEmissionTest
     [Fact]
     public void Emits_OneModelProviderPerCatalogSource_WithFullCredentials()
     {
-        // Config â†’ ModelProvider node: ApiKey, Endpoint, Models all flow in.
+        // Config → ModelProvider node: ApiKey, Endpoint, Models all flow in.
         // ModelProvider is NOT WithPublicRead, so the key is only visible to
         // callers with Permission.Api on the root namespace (system / admin).
         // Public LanguageModel siblings still carry no key (asserted below).
@@ -114,7 +114,7 @@ public class ModelProviderEmissionTest
             var def = node.Content.Should().BeOfType<ModelDefinition>().Subject;
             def.Provider.Should().Be("Anthropic");
             def.ProviderRef.Should().Be("Provider/Anthropic");
-            def.ApiKeySecretRef.Should().BeNull("LanguageModel nodes are publicly readable â€” no secrets here");
+            def.ApiKeySecretRef.Should().BeNull("LanguageModel nodes are publicly readable — no secrets here");
         });
     }
 

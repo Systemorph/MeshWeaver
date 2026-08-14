@@ -34,10 +34,10 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Delegation tests using the PRODUCTION ChatClientAgentFactory pipeline.
 /// The test factory extends ChatClientAgentFactory so delegation tools,
 /// MeshPlugin, and function calling middleware are all registered automatically.
-/// This tests the real delegation flow: agent calls delegate_to_agent â†’
-/// sub-thread created â†’ sub-agent executes â†’ result propagates back.
+/// This tests the real delegation flow: agent calls delegate_to_agent →
+/// sub-thread created → sub-agent executes → result propagates back.
 /// </summary>
-// TODO: needs custom shared fixture â€” uses DelegationProductionSiloConfigurator with
+// TODO: needs custom shared fixture — uses DelegationProductionSiloConfigurator with
 // DelegationTestAgentFactory which extends ChatClientAgentFactory. Per the existing comment,
 // the SwappableChatClientFactory pattern doesn't work for ChatClientAgentFactory subclasses.
 /// <summary>
@@ -249,7 +249,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
 }
 
 /// <summary>
-/// Test factory that extends ChatClientAgentFactory â€” gets delegation tools,
+/// Test factory that extends ChatClientAgentFactory — gets delegation tools,
 /// MeshPlugin, and middleware automatically from the production pipeline.
 /// Only overrides CreateChatClient to return a fake.
 /// </summary>

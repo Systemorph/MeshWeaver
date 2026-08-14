@@ -26,12 +26,12 @@ using Xunit;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture â€” uses CommentSiloConfigurator with AddFileSystemPersistence(SamplesGraphData)
+// TODO: needs custom shared fixture — uses CommentSiloConfigurator with AddFileSystemPersistence(SamplesGraphData)
 // and a CommentClientConfigurator (custom client wiring), which the SharedOrleansFixture does not configure.
 /// <summary>
 /// Orleans integration test for CreateCommentRequest.
 /// Follows the same pattern as OrleansChatTest: GetRemoteStream for reactive verification,
-/// GetDataRequest for content verification â€” no QueryAsync.
+/// GetDataRequest for content verification — no QueryAsync.
 /// </summary>
 public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
 {
@@ -128,7 +128,7 @@ public class OrleansCommentTest(ITestOutputHelper output) : TestBase(output)
                 Author = "TestAuthor"
             }, o => o.WithTarget(docAddress)).FirstAsync().ToTask(ct);
 
-        // 2) Verify response (no deadlock â€” handler is non-blocking)
+        // 2) Verify response (no deadlock — handler is non-blocking)
         var commentResponse = response.Message as CreateCommentResponse;
         commentResponse.Should().NotBeNull("Expected CreateCommentResponse, got {0}", response.Message?.GetType().Name ?? "(null)");
         commentResponse!.Success.Should().BeTrue("Error: {0}", commentResponse.Error ?? "");

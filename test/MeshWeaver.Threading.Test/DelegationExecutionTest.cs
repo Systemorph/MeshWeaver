@@ -89,7 +89,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         }).Should().Emit();
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 
-        // Submit via GUI handler â€” server generates message ids on the sub-thread.
+        // Submit via GUI handler — server generates message ids on the sub-thread.
         var subResponseMsgId = await ThreadFlow.SubmitAndWait(client, subThreadPath,
             "Find documents about reinsurance pricing models", contextPath: ContextPath).Should().Within(30.Seconds()).Emit();
         Output.WriteLine($"Sub-thread response: {subResponseMsgId}");
@@ -118,7 +118,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         subRespContent.Text.Should().NotBeNullOrEmpty();
 
         Output.WriteLine($"Sub-thread response: '{subRespContent.Text}'");
-        Output.WriteLine("Full hierarchy verified: parent â†’ message â†’ sub-thread â†’ sub-messages");
+        Output.WriteLine("Full hierarchy verified: parent → message → sub-thread → sub-messages");
     }
 
     #region Fake LLM

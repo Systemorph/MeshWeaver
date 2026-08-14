@@ -30,14 +30,14 @@ namespace MeshWeaver.AI.Test;
 /// <summary>
 /// Regression coverage for the 2026-04-14 cached-display incident: agent reported a
 /// successful Patch on FinalReport, persistence committed, but the in-memory workspace
-/// stream kept emitting the stale node â€” Blazor views displayed the old content until
+/// stream kept emitting the stale node — Blazor views displayed the old content until
 /// grain deactivation / circuit close re-loaded from persistence.
 ///
-/// Root cause was in <c>HandleUpdateNodeRequest</c> (<c>MeshExtensions.cs:679</c>) â€”
+/// Root cause was in <c>HandleUpdateNodeRequest</c> (<c>MeshExtensions.cs:679</c>) —
 /// the workspace-refresh <c>DataChangeRequest</c> was fire-and-forget, and the
 /// <c>UpdateNodeResponse.Ok</c> went out before the workspace observed the change.
 /// The fix uses Post + RegisterCallback inline (no TCS, no await) so Ok is sent only
-/// after the workspace acks â€” and DataChangeStatus.Failed / DeliveryFailure paths
+/// after the workspace acks — and DataChangeStatus.Failed / DeliveryFailure paths
 /// surface as <c>UpdateNodeResponse.Fail</c> so the caller sees actual errors.
 ///
 /// These tests also stress concurrent patches: a deadlock in the plugin layer would
@@ -53,7 +53,7 @@ namespace MeshWeaver.AI.Test;
 [Collection(ConcurrencyStressCollection.Name)]
 public class PatchWorkspaceAckTest : MonolithMeshTestBase
 {
-    /// <summary>Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
     protected override bool ShareMeshAcrossTests => true;
 
     private const string TestNodeType = nameof(TestProduct);
@@ -91,7 +91,7 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
 
     /// <summary>
     /// The cache-bug regression: after Patch returns Ok, the next Get must reflect the
-    /// new state immediately. Before the HandleUpdateNodeRequest fix this would race â€”
+    /// new state immediately. Before the HandleUpdateNodeRequest fix this would race —
     /// Get could read the stale workspace cache because Ok was returned before the
     /// DataChangeRequest fan-out had been observed by the workspace.
     /// </summary>
@@ -106,7 +106,7 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
         var patched = await plugin.Patch($"@{path}", $"{{\"name\":\"{newName}\"}}");
         patched.Should().StartWith("Patched:", because: "valid patch must succeed");
 
-        // Immediately after Ok, Get must see the new state â€” no fresh page-load required.
+        // Immediately after Ok, Get must see the new state — no fresh page-load required.
         var got = await plugin.Get($"@{path}");
         got.Should().Contain(newName,
             because: "the workspace must already reflect the patch when Ok is returned " +
@@ -166,7 +166,7 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
 
     /// <summary>
     /// Negative scenario: patching with an empty name (which existing validator rejects)
-    /// must surface as a "Error: cannot patch ... 'name' is empty" error â€” not silent
+    /// must surface as a "Error: cannot patch ... 'name' is empty" error — not silent
     /// success, not a deadlock, not a stale workspace.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -234,7 +234,7 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
     /// Stress / deadlock regression: 10 concurrent Patch calls on independent nodes
     /// must all complete within the timeout window. Before the no-await refactor of
     /// the plugin layer (commit d165533c8) the await hub.AwaitResponse pattern would
-    /// deadlock the hub scheduler under any concurrent load â€” this test would hang
+    /// deadlock the hub scheduler under any concurrent load — this test would hang
     /// past its method timeout.
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -254,13 +254,13 @@ public class PatchWorkspaceAckTest : MonolithMeshTestBase
         sw.Stop();
 
         results.Should().AllSatisfy(r => r.Should().StartWith("Patched:",
-            because: "every concurrent patch must complete successfully â€” a deadlock would manifest as timeout"));
+            because: "every concurrent patch must complete successfully — a deadlock would manifest as timeout"));
         sw.Elapsed.Should().BeLessThan(45.Seconds(),
             because: "10 trivial patches in parallel should finish well under the timeout; if it's close, we likely have lock contention even without full deadlock");
     }
 
     /// <summary>
-    /// Minimal IAgentChat stub â€” MeshPlugin only reads ExecutionContext and Context.
+    /// Minimal IAgentChat stub — MeshPlugin only reads ExecutionContext and Context.
     /// </summary>
     private sealed class MinimalChat : IAgentChat
     {

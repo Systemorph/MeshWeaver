@@ -17,8 +17,8 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// <summary>
 /// Verifies the synced-query pipeline shape used by
 /// <see cref="MeshWeaver.Graph.SyncedQueryMeshNodes"/> works against PostgreSQL:
-/// <c>Query</c> â†’ fold Initial / Added / Updated / Removed into a
-/// path â†’ <see cref="MeshNode"/> dictionary â†’ emit values. PG drives the
+/// <c>Query</c> → fold Initial / Added / Updated / Removed into a
+/// path → <see cref="MeshNode"/> dictionary → emit values. PG drives the
 /// Update / Delete events through pg_notify so we can verify the dict folds
 /// correctly without the in-memory race the MeshQueryEngine exhibits.
 /// </summary>

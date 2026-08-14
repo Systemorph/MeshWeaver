@@ -25,29 +25,29 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 ///
 /// Regression for 2026-04-23 incident: the Code piece shipped a broken
 /// <c>string.Join</c> call that hit the new .NET 9 params-Span overload
-/// ambiguity â€” the entire LinkedInProfile NodeType stopped compiling and the
+/// ambiguity — the entire LinkedInProfile NodeType stopped compiling and the
 /// dashboard rendered the raw compiler diagnostic. The existing
 /// <c>LinkedInProfileLayoutAreaTest</c> only covered the simpler stub source
 /// so it stayed green while prod broke.
 ///
 /// The body inlined in <see cref="LinkedInTelemetryImportSource"/> below is the
-/// authoritative production source â€” keep it in lockstep with the Code piece.
+/// authoritative production source — keep it in lockstep with the Code piece.
 /// </summary>
 public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>Share Mesh/SP across [Fact]s â€” see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
+    /// <summary>Share Mesh/SP across [Fact]s — see MonolithMeshTestBase.ShareMeshAcrossTests.</summary>
     protected override bool ShareMeshAcrossTests => true;
 
     // The reactive `.Should().Within(...)` waits below add up to the cold-cache
-    // compile wait (45 s) + the post-compile render wait (45 s) â€” the instance
+    // compile wait (45 s) + the post-compile render wait (45 s) — the instance
     // hub's cold activation (assembly load from the FileSystemAssemblyStore +
     // applying the compiled NodeType Configuration that registers the
     // ImportTelemetry view) is the slow leg on a cold CI agent, so the render
     // wait must be as generous as the compile wait. Widen the dispose watchdog
     // deadlines past that worst case (90 s of waits) so a legitimately slow
     // Roslyn/activation cold start isn't reported as a hung test by DisposeAsync.
-    // ðŸš¨ The [Fact(Timeout=â€¦)] below MUST exceed the SUM of the internal waits
-    // (and sit at/under TestHardDeadline) â€” a 60 s cap fired BEFORE the render
+    // 🚨 The [Fact(Timeout=…)] below MUST exceed the SUM of the internal waits
+    // (and sit at/under TestHardDeadline) — a 60 s cap fired BEFORE the render
     // wait could complete on CI, killing the test mid-activation (the prior
     // 26721963847 failure at the render wait). Keep these three in lockstep.
     protected override TimeSpan TestSoftDeadline => TimeSpan.FromSeconds(110);
@@ -59,10 +59,10 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
     // Per-session cache directory so a stale Systemorph_LinkedInProfile.dll
     // locked by a prior test process can't break compilation. The default
     // bin/.mesh-cache is shared across runs and triggers
-    // UnauthorizedAccessException â†’ IOException("file is being used by
+    // UnauthorizedAccessException → IOException("file is being used by
     // another process") on Windows, after which the dynamic LayoutAreas
     // piece never compiles and Overview falls back to an empty render.
-    // Stable cache directory â€” the timestamped-subdir cache (a3ab9909e)
+    // Stable cache directory — the timestamped-subdir cache (a3ab9909e)
     // gives each compile its own subdir so prior-process DLLs aren't touched.
     private static readonly string CacheDirectory = System.IO.Path.Combine(
         System.IO.Path.GetTempPath(),
@@ -114,7 +114,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
             }
         }).Should().Emit();
 
-        // ðŸš¨ Race workaround: wait for the NodeType compile to reach a terminal
+        // 🚨 Race workaround: wait for the NodeType compile to reach a terminal
         // status BEFORE opening the area's GetRemoteStream. The LayoutAreaHost's
         // WithInitialization fires asynchronously via a posted InitializeHubRequest
         // (LayoutAreaHost.cs:140); if the client's SubscribeRequest is processed
@@ -124,7 +124,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
         // beforehand ensures the per-instance hub + LayoutAreaHost are fully
         // initialised when the test's own subscription lands. Framework-level
         // fix needs the SubscribeRequest reply to await init completion.
-        // 45 s budget for the Roslyn cold-cache compile â€” a cold CI agent (or a
+        // 45 s budget for the Roslyn cold-cache compile — a cold CI agent (or a
         // cold local run) can take that long before the NodeType reaches a terminal
         // CompilationStatus. The class soft/hard deadlines above are widened to give
         // this legitimately-slow path room.
@@ -134,7 +134,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                 && (d.CompilationStatus == CompilationStatus.Ok
                     || d.CompilationStatus == CompilationStatus.Error));
 
-        // The NodeType must compile cleanly â€” render the Import area to trigger
+        // The NodeType must compile cleanly — render the Import area to trigger
         // the compile, then assert we got back a Stack containing the form.
         var control = await RenderArea(instancePath, "ImportTelemetry");
 
@@ -173,9 +173,9 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
         var control = await stream
             .GetControlStream(reference.Area!)
             .Do(c => Output.WriteLine($"[{DateTime.UtcNow:O}] GetControlStream emission: {c?.GetType().Name ?? "null"}"))
-            // 45 s (was 25 s): the cold instance-hub activation â€” assembly load
+            // 45 s (was 25 s): the cold instance-hub activation — assembly load
             // from the FileSystemAssemblyStore plus applying the compiled NodeType
-            // Configuration that registers ImportTelemetry â€” is the slow leg on a
+            // Configuration that registers ImportTelemetry — is the slow leg on a
             // cold CI agent and overran 25 s (CI 26721963847 failed exactly here).
             // The [Fact] timeout + class deadlines above are widened to keep this
             // generous render budget inside the test's hard cap.
@@ -349,7 +349,7 @@ public class LinkedInTelemetryImportTest(ITestOutputHelper output) : MonolithMes
                     catch { skipped++; }
 
                     reportProgress:
-                    // Report progress every row for the first 10, then every 5th â€” keeps the
+                    // Report progress every row for the first 10, then every 5th — keeps the
                     // UI responsive without flooding the data stream on huge CSVs.
                     if (i <= 10 || i % 5 == 0)
                     {

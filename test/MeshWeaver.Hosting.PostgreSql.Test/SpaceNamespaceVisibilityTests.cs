@@ -97,7 +97,7 @@ public class SpaceNamespaceVisibilityTests
         await SeedSpace();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // This is how the namespace picker queries â€” root-level nodes
+        // This is how the namespace picker queries — root-level nodes
         var request = MeshQueryRequest.FromQuery("namespace:", "alice");
         var results = await Query(query, request);
 
@@ -132,7 +132,7 @@ public class SpaceNamespaceVisibilityTests
         var results = await Query(query, request);
 
         results.Should().Contain(n => n.Path == "Acme",
-            "Space root node must appear in context:create queries â€” " +
+            "Space root node must appear in context:create queries — " +
             "otherwise the namespace picker won't show it");
     }
 }

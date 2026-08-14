@@ -283,7 +283,7 @@ public class CrossPartitionSearchTests
         }
     }
 
-    // â”€â”€ Stored Procedure: search_across_schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Stored Procedure: search_across_schemas ──────────────────────
 
     [Fact(Timeout = 60000)]
     public async Task StoredProc_SearchAcrossSchemas_ReturnsAllOrgs()
@@ -643,7 +643,7 @@ public class CrossPartitionSearchTests
             new PostgreSqlStorageOptions { ConnectionString = _fixture.ConnectionString },
             partitions: null);
 
-    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Helpers ──────────────────────────────────────────────────────
 
     private async Task PopulateSearchableSchemasAsync(IEnumerable<string> schemas, CancellationToken ct)
     {

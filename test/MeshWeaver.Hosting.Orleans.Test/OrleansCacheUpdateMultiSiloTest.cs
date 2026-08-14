@@ -18,11 +18,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Two-silo cluster, no client. The test driver issues
-/// <c>cache.Update</c> against a silo's <see cref="IMeshNodeStreamCache"/> â€”
+/// <c>cache.Update</c> against a silo's <see cref="IMeshNodeStreamCache"/> —
 /// the cache hub's <c>UpdateRemote</c> posts <c>PatchDataRequest</c> to the
 /// owning per-node hub, which Orleans hashes onto one of the two silos.
 ///
-/// <para>This pins the cross-silo path of <c>cache.Update</c> â€” the same flow
+/// <para>This pins the cross-silo path of <c>cache.Update</c> — the same flow
 /// a portal silo exercises when it rotates a credential on a node activated
 /// on a different silo. The previous client-based variant of this test
 /// conflated cross-process notifier scoping with the cache.Update flow.</para>
@@ -72,7 +72,7 @@ public class OrleansCacheUpdateMultiSiloTest : IClassFixture<TwoSiloCacheUpdateF
 
         // 2. Rotate the ApiKey via cache.Update on the silo's
         //    IMeshNodeStreamCache. The cache hub posts PatchDataRequest to
-        //    the per-node hub at providerPath â€” Orleans routes to whichever
+        //    the per-node hub at providerPath — Orleans routes to whichever
         //    silo owns that grain key. With AddAI on both silos the
         //    caller's JsonSerializerOptions know ModelProviderConfiguration,
         //    so the lambda receives typed Content.
@@ -85,7 +85,7 @@ public class OrleansCacheUpdateMultiSiloTest : IClassFixture<TwoSiloCacheUpdateF
         }, siloHub.JsonSerializerOptions)
         .Take(1).Timeout(30.Seconds()).ToTask(ct);
 
-        // 3. Read the node back through GetMeshNodeStream â€” the authoritative
+        // 3. Read the node back through GetMeshNodeStream — the authoritative
         //    single-node primitive. The persistence sampler debounces saves
         //    by ~200 ms, so poll until the sk-rotated value surfaces.
         var workspace = siloHub.GetWorkspace();

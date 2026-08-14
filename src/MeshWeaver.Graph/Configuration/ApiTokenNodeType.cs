@@ -15,7 +15,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// Provides configuration for ApiToken nodes in the graph.
 /// Tokens are satellites of User nodes, stored at User/{userId}/_Api/{hashPrefix}.
 /// An index at ApiToken/{hashPrefix} enables fast validation routing.
-/// Creation uses standard CreateNodeRequest with nodeType=ApiToken â€” the RLS validator
+/// Creation uses standard CreateNodeRequest with nodeType=ApiToken — the RLS validator
 /// maps this to Permission.Api via GetPermissionForNodeType.
 /// </summary>
 public static class ApiTokenNodeType
@@ -35,13 +35,13 @@ public static class ApiTokenNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
-        // Access control: GetPermissionForNodeType maps "ApiToken" â†’ Permission.Api
+        // Access control: GetPermissionForNodeType maps "ApiToken" → Permission.Api
         // The RLS validator checks Permission.Api on the MainNode (User path)
-        // Same pattern as Thread â†’ Permission.Thread and Comment â†’ Permission.Comment.
+        // Same pattern as Thread → Permission.Thread and Comment → Permission.Comment.
         //
         // Register all ApiToken domain + message types in the hub's type registry so
         // they serialize correctly across silos (Orleans). Mirrors CommentNodeType /
-        // ThreadNodeType which do the same â€” without this, cross-silo CreateNodeRequest
+        // ThreadNodeType which do the same — without this, cross-silo CreateNodeRequest
         // for nodeType=ApiToken fails with "NodeType 'ApiToken' is not registered"
         // because the receiving silo can't deserialize the typed payload.
         builder.ConfigureHub(config => config
@@ -77,7 +77,7 @@ public static class ApiTokenNodeType
     /// <summary>
     /// Validates an API token. Routes to ApiToken/{hashPrefix}, follows index to User/{userId}/_Api/{hash}.
     /// Results are cached for 5 minutes.
-    /// Sync handler â€” composes via <c>IObservable</c> + <c>Subscribe</c>; no <c>await</c>.
+    /// Sync handler — composes via <c>IObservable</c> + <c>Subscribe</c>; no <c>await</c>.
     /// </summary>
     private static IMessageDelivery HandleValidateToken(
         IMessageHub hub,
@@ -93,7 +93,7 @@ public static class ApiTokenNodeType
 
         var hash = ValidateTokenRequest.HashToken(rawToken);
 
-        // Read own MeshNode via one-shot GetDataRequest â€” true request/response, no
+        // Read own MeshNode via one-shot GetDataRequest — true request/response, no
         // lingering subscription. Posts to self (hub.Address); the handler's Subscribe
         // runs on the event loop after this returns, so no deadlock.
         //
@@ -128,7 +128,7 @@ public static class ApiTokenNodeType
                         return Observable.Empty<Unit>();
                     }
 
-                    // Cross-hub one-shot read for the actual token node â€” GetDataRequest
+                    // Cross-hub one-shot read for the actual token node — GetDataRequest
                     // routes to the owning per-node hub via the mesh. Re-impersonate
                     // as System for this read too: the AsyncLocal context that the
                     // outer Observable.Using set may not be alive when the SelectMany
@@ -175,7 +175,7 @@ public static class ApiTokenNodeType
                     // Include the roles captured on the ApiToken at creation time.
                     // UserContextMiddleware stamps these onto AccessContext.Roles so
                     // SecurityService.GetEffectivePermissions can resolve them via
-                    // the claim-based role path on per-node hubs â€” where the
+                    // the claim-based role path on per-node hubs — where the
                     // synced AccessAssignment query is intentionally not registered
                     // (SecurityServiceExtensions:44-50, recursion avoidance).
                     var response = ValidateTokenResponse.Ok(

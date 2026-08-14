@@ -185,7 +185,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             }
         }).Should().Emit();
 
-        // Navigate the hierarchy: thread Ã¢â€ â€™ message Ã¢â€ â€™ sub-thread Ã¢â€ â€™ sub-messages
+        // Navigate the hierarchy: thread → message → sub-thread → sub-messages
 
         // 1. Find sub-threads under the response message
         var subThreads = (await MeshQuery

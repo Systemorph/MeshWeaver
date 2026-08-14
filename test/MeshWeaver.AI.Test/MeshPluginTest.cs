@@ -822,7 +822,7 @@ public class MeshPluginTest : MonolithMeshTestBase
                 configuration = "config => config.WithContentType<ThisTypeDoesNotExist>()"
             }
         });
-        // Wrap "type" â†’ "$type" for JsonPolymorphic
+        // Wrap "type" → "$type" for JsonPolymorphic
         createJson = createJson.Replace("\"type\":", "\"$type\":");
         await plugin.Create(createJson);
 
@@ -926,7 +926,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         }
         catch { /* expected */ }
 
-        // Get the NodeType itself â€” response should include compilationError.
+        // Get the NodeType itself — response should include compilationError.
         var result = await plugin.Get($"@{nodeTypePath}");
         result.Should().NotBeNullOrEmpty();
 

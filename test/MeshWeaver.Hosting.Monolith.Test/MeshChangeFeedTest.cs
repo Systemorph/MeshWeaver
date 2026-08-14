@@ -94,12 +94,12 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact]
     public async Task CreateNode_PathResolverFindsIt()
     {
-        // Resolve before create Ã¢â‚¬â€ should not find it
+        // Resolve before create — should not find it
         var before = await PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
 
         await CreateTestNode("feed-resolve-1");
 
-        // After create Ã¢â‚¬â€ cache was invalidated/pre-warmed by change event
+        // After create — cache was invalidated/pre-warmed by change event
         var after = await PathResolver.ResolvePath("feed-resolve-1").Should().Emit();
         after.Should().NotBeNull();
         after!.Prefix.Should().Contain("feed-resolve-1");
@@ -117,7 +117,7 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         await DeleteTestNode(created.Path);
 
-        // After delete Ã¢â‚¬â€ cache evicted, resolver should not find it at that exact path
+        // After delete — cache evicted, resolver should not find it at that exact path
         var gone = await PathResolver.ResolvePath(created.Path).Should().Emit();
         (gone == null || gone.Prefix != created.Path).Should().BeTrue(
             "deleted node should not resolve to its exact path");
@@ -129,7 +129,7 @@ public class MeshChangeFeedTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Create parent
         var parent = await CreateTestNode("nest-parent-1");
 
-        // Resolve nested path Ã¢â‚¬â€ caches partial match (parent with remainder)
+        // Resolve nested path — caches partial match (parent with remainder)
         var partial = await PathResolver.ResolvePath($"{parent.Path}/nest-child-1").Should().Emit();
 
         // Create child

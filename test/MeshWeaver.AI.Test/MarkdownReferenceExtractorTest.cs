@@ -10,7 +10,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class MarkdownReferenceExtractorTest
 {
-    #region ExtractReferences â€” Direct @path syntax
+    #region ExtractReferences — Direct @path syntax
 
     [Fact]
     public void ExtractReferences_DirectPath_ExtractsPath()
@@ -62,7 +62,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences â€” Parentheses @(path) syntax
+    #region ExtractReferences — Parentheses @(path) syntax
 
     [Fact]
     public void ExtractReferences_ParenthesesPath_ExtractsPath()
@@ -86,7 +86,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences â€” Quoted @"path" syntax
+    #region ExtractReferences — Quoted @"path" syntax
 
     [Fact]
     public void ExtractReferences_QuotedPath_ExtractsPath()
@@ -100,7 +100,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences â€” Filtering known commands
+    #region ExtractReferences — Filtering known commands
 
     [Fact]
     public void ExtractReferences_AgentCommand_IsFiltered()
@@ -130,7 +130,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences â€” Overlap handling and priority
+    #region ExtractReferences — Overlap handling and priority
 
     [Fact]
     public void ExtractReferences_ParenthesesTakesPriorityOverDirect()
@@ -160,7 +160,7 @@ public class MarkdownReferenceExtractorTest
 
     #endregion
 
-    #region ExtractReferences â€” Edge cases
+    #region ExtractReferences — Edge cases
 
     [Fact]
     public void ExtractReferences_Null_ReturnsEmpty()

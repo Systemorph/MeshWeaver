@@ -159,7 +159,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
-    /// Full workflow: create comment â†’ create reply â†’ update reply text â†’ verify via Query.
+    /// Full workflow: create comment → create reply → update reply text → verify via Query.
     /// </summary>
     [Fact]
     public async Task FullWorkflow_Comment_Reply_Edit()

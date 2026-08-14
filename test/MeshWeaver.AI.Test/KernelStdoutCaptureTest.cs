@@ -15,7 +15,7 @@ namespace MeshWeaver.AI.Test;
 /// Unit tests for the kernel's stdout-capture pipeline: <see cref="LoggerTextWriter"/>
 /// (line-buffered TextWriter that flushes each completed line as a LogInformation
 /// entry) and <see cref="CapturingTextWriter"/> (process-wide Console.Out hook that
-/// routes to an AsyncLocal target). No mesh / no kernel â€” this is a pure check that
+/// routes to an AsyncLocal target). No mesh / no kernel — this is a pure check that
 /// the building blocks behave as <c>KernelExecutor</c> expects.
 /// </summary>
 public class KernelStdoutCaptureTest
@@ -42,7 +42,7 @@ public class KernelStdoutCaptureTest
         writer.Write("Hel");
         writer.Write("lo, ");
         writer.Write("World");
-        logger.Messages.Should().BeEmpty("no newline yet â€” should be buffered");
+        logger.Messages.Should().BeEmpty("no newline yet — should be buffered");
 
         writer.Write('\n');
         logger.Messages.Should().ContainSingle().Which.Should().Contain("Hello, World");
@@ -100,7 +100,7 @@ public class KernelStdoutCaptureTest
     public async Task CapturingTextWriter_AsyncLocal_Isolates_Concurrent_Captures()
     {
         // Two concurrent "scripts" each capture into their own writer. Output
-        // from one must not leak into the other â€” the AsyncLocal target is what
+        // from one must not leak into the other — the AsyncLocal target is what
         // makes this safe across thread-pool continuations. A naive global swap
         // of Console.Out would mix the two streams.
         var captureA = new StringWriter();

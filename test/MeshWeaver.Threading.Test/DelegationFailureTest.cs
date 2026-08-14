@@ -24,7 +24,7 @@ namespace MeshWeaver.Threading.Test;
 /// Verifies that a delegation that cannot complete (broken target) doesn't
 /// trap the parent thread when the user cancels. Submission goes through
 /// <see cref="ThreadSubmission.Submit"/>; cancel flips
-/// <c>RequestedCancellationAt</c> via the thread's MeshNode stream â€” same
+/// <c>RequestedCancellationAt</c> via the thread's MeshNode stream — same
 /// pattern the GUI's Stop button uses.
 /// </summary>
 public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -64,7 +64,7 @@ public class DelegationFailureTest(ITestOutputHelper output) : MonolithMeshTestB
             "Do something that delegates",
             contextPath: ContextPath);
 
-        // Wait until the thread actually starts executing before cancelling â€”
+        // Wait until the thread actually starts executing before cancelling —
         // replaces a fixed Task.Delay(1000); cancelling before the CTS is armed
         // would be a no-op.
         await workspace.GetMeshNodeStream(threadPath)

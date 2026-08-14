@@ -35,7 +35,7 @@ public static class KernelNodeType
             // Register kernel message types at mesh level so JSON deserialization
             // works wherever a kernel-handler hub lives (Activity hub, markdown
             // view sub-hub, future hosts). The legacy
-            // `RouteAddressToHostedHub("kernel", â€¦)` rule is gone â€” kernel work
+            // `RouteAddressToHostedHub("kernel", …)` rule is gone — kernel work
             // runs inside the Activity MeshNode hub, addressed via its node path.
             .ConfigureHub(AddKernelTypes)
             .ConfigureServices(services =>

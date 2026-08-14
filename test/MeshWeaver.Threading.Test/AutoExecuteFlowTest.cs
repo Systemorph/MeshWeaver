@@ -26,7 +26,7 @@ namespace MeshWeaver.Threading.Test;
 ///   <item><see cref="ThreadSubmission.CreateThreadAndSubmit"/> creates the thread
 ///     with the first user message pre-seeded; the server watcher dispatches.</item>
 ///   <item>State is observed via <c>client.GetWorkspace().GetMeshNodeStream(path)</c>
-///     â€” same reactive handle the Blazor view holds.</item>
+///     — same reactive handle the Blazor view holds.</item>
 /// </list>
 /// </summary>
 public class AutoExecuteFlowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)

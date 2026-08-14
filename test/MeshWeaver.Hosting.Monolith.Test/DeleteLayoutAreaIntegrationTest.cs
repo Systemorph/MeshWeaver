@@ -137,7 +137,7 @@ public class DeleteLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Replicates the exact production pattern the Delete click handler must use:
     /// <c>hub.Post(new DeleteNodeRequest(...)) + hub.RegisterCallback(...)</c>.
-    /// No <c>await</c> on the delete path â€” the callback drives a <see cref="TaskCompletionSource{T}"/>
+    /// No <c>await</c> on the delete path — the callback drives a <see cref="TaskCompletionSource{T}"/>
     /// which the test awaits at the xunit boundary only. A blocked hub cannot produce a callback,
     /// so the 10 s WaitAsync guard fails the test instead of hanging forever.
     /// </summary>

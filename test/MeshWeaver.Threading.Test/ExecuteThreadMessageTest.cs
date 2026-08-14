@@ -27,11 +27,11 @@ namespace MeshWeaver.Threading.Test;
 /// Every test here exercises the GUI submission path:
 /// <list type="number">
 ///   <item><see cref="ThreadSubmission.CreateThreadAndSubmit"/> creates the thread node
-///     with the first user message pre-seeded in <c>PendingUserMessages</c> â€” the
+///     with the first user message pre-seeded in <c>PendingUserMessages</c> — the
 ///     server-side watcher generates the response cell id and dispatches the round.</item>
 ///   <item><see cref="ThreadSubmission.Submit"/> posts <see cref="SubmitMessageRequest"/>
 ///     for subsequent messages on an existing thread.</item>
-///   <item>State is observed via <c>client.GetWorkspace().GetMeshNodeStream(path)</c> â€”
+///   <item>State is observed via <c>client.GetWorkspace().GetMeshNodeStream(path)</c> —
 ///     the remote-stream-cache-backed reactive handle, never <c>GetDataRequest</c>
 ///     polling or ad-hoc remote streams.</item>
 /// </list>
@@ -171,7 +171,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>
     /// Pins the prod 2026-05-21 thread-loading invariant: a thread's chat
     /// execution must complete under the user's <see cref="AccessContext"/>
-    /// â€” every message MeshNode the chat flow creates must carry the user's
+    /// — every message MeshNode the chat flow creates must carry the user's
     /// identity in <c>CreatedBy</c>, NOT a hub-self-impersonated address
     /// (<c>sync/...</c>, <c>activity/...</c>, <c>node/...</c>). Pin against the
     /// cross-cutting <see cref="MeshWeaver.Messaging.AccessContextCaptureExtensions.CarryAccessContext"/>
@@ -179,9 +179,9 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     ///
     /// <para>Without the wrap, the per-message-cell <c>CreateNode</c> in
     /// <c>ChatClientAgentFactory.ExecuteAsync</c>'s Subscribe callbacks would
-    /// run on a thread where AsyncLocal AccessContext is wiped â†’ PostPipeline
+    /// run on a thread where AsyncLocal AccessContext is wiped → PostPipeline
     /// (after the 2026-05-21 hub-self-impersonation deletion) would fail closed
-    /// â†’ the chat flow would deadlock at the first persisted write. This test
+    /// → the chat flow would deadlock at the first persisted write. This test
     /// is the canonical pin against that regression.</para>
     /// </summary>
     [Fact]
@@ -199,7 +199,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             "user input + assistant response must both land");
 
         // Drill into the underlying MeshNode rows via the same cache that the
-        // GUI uses â€” the .CreatedBy stamping is what AccessControl would have
+        // GUI uses — the .CreatedBy stamping is what AccessControl would have
         // seen at the moment of write.
         var workspace = client.GetWorkspace();
         foreach (var msgId in thread.Messages)
@@ -210,7 +210,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             // The critical assertion. Pre-2026-05-21, message nodes were stamped
             // with the chat-execution hub's own address (something starting with
             // "node/", "activity/", or "sync/"). Post-fix, every CreateNode runs
-            // under the actual user's AccessContext â€” Roland (the canonical
+            // under the actual user's AccessContext — Roland (the canonical
             // test-base user from AddSampleUsers).
             node.CreatedBy.Should().NotStartWith("node/",
                 $"message {msgPath} must not be written as a per-node hub identity");
@@ -224,7 +224,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// DataChangeRequest is a CLIENT primitive â€” not the canonical thread mutation
+    /// DataChangeRequest is a CLIENT primitive — not the canonical thread mutation
     /// path (the GUI uses <c>workspace.GetMeshNodeStream(path).Update(...)</c>) but
     /// it must still apply correctly when used directly. The thread is observed
     /// through the same remote-stream-cache reactive handle the GUI uses.
@@ -296,7 +296,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var threadPath = await CreateEmptyThread(client, "End-to-end test");
         Output.WriteLine($"Thread created: {threadPath}");
 
-        // Open the layout area â€” same subscription the Blazor ThreadChatView holds.
+        // Open the layout area — same subscription the Blazor ThreadChatView holds.
         var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(threadPath),
             new LayoutAreaReference(ThreadNodeType.ThreadArea));
@@ -347,7 +347,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
     /// <summary>
     /// <c>workspace.GetMeshNodeStream(path)</c> from a client workspace is the
-    /// canonical "live single-MeshNode" read â€” replaces the old
+    /// canonical "live single-MeshNode" read — replaces the old
     /// <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c> ad-hoc pattern.
     /// </summary>
     [Fact]
@@ -366,7 +366,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
     /// <summary>
     /// <c>workspace.GetMeshNodeStream(path).Update(...)</c> from a client routes
-    /// the patch through the remote stream cache to the owning per-node hub â€”
+    /// the patch through the remote stream cache to the owning per-node hub —
     /// same primitive <see cref="ThreadInput.AppendUserInput"/> uses.
     /// </summary>
     [Fact]
@@ -393,7 +393,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
     /// <summary>
     /// Same as <see cref="UpdateMeshNode_Local_UpdatesMessages"/> but the update
-    /// is composed off the latest snapshot â€” verifies <c>.Update(current =&gt; ...)</c>
+    /// is composed off the latest snapshot — verifies <c>.Update(current =&gt; ...)</c>
     /// observes the live node when the lambda runs.
     /// </summary>
     [Fact]

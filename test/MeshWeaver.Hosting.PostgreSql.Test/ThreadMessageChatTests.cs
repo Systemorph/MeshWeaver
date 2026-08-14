@@ -364,7 +364,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             .Should().Within(30.Seconds()).Be(1L);
     }
 
-    #region Query tests â€” verifying PostgreSqlMeshQuery finds threads in satellite tables
+    #region Query tests — verifying PostgreSqlMeshQuery finds threads in satellite tables
 
     /// <summary>
     /// Seeds multiple threads under User/alice/_Thread and verifies that
@@ -377,7 +377,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var ct = TestContext.Current.CancellationToken;
 
         // Seed threads with unique ids so the assertion can target them
-        // specifically â€” the schema is shared across tests in this class and
+        // specifically — the schema is shared across tests in this class and
         // other tests write threads under "User/alice/_Thread" too. Filtering
         // by the ids we just wrote keeps this test isolated from sibling
         // accumulation without paying for a per-test schema cleanup.
@@ -409,7 +409,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
 
         var results = await Query(query, request, ct);
 
-        // Filter to the threads we just wrote, then assert specifics â€” the
+        // Filter to the threads we just wrote, then assert specifics — the
         // assertion is now insensitive to other tests' leftover rows.
         var ours = results.Where(n => n.Id == id1 || n.Id == id2).ToList();
         ours.Should().HaveCount(2, "should find both threads in the satellite table");
@@ -419,7 +419,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
 
     /// <summary>
     /// Verifies that "nodeType:Thread" (without namespace) finds threads in
-    /// the satellite table â€” each user sees their own threads only.
+    /// the satellite table — each user sees their own threads only.
     /// </summary>
     [Fact(Timeout = 30000)]
     public async Task QueryThreads_ByNodeTypeOnly_FindsOwnThreads()
@@ -569,11 +569,11 @@ public class ThreadMessageChatTests : IAsyncLifetime
 
     #endregion
 
-    #region User scope visibility tests â€” users see own threads, not others'
+    #region User scope visibility tests — users see own threads, not others'
 
     /// <summary>
     /// Grants a user Admin (full) access on their own User/{userId} scope
-    /// in the effective permissions table â€” same as UserScopeGrantHandler does at runtime.
+    /// in the effective permissions table — same as UserScopeGrantHandler does at runtime.
     /// </summary>
     private async Task GrantUserScopeAsync(string userId, CancellationToken ct)
     {
@@ -613,7 +613,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Bob cannot see Alice's threads â€” the user scope clause restricts visibility
+    /// Bob cannot see Alice's threads — the user scope clause restricts visibility
     /// to User/{userId}/... paths.
     /// </summary>
     [Fact(Timeout = 30000)]
@@ -629,7 +629,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Content = new MeshThread()
         }, _options).Should().Within(30.Seconds()).Emit();
 
-        // Query as bob â€” should NOT see alice's thread
+        // Query as bob — should NOT see alice's thread
         var query = new PostgreSqlMeshQuery(_threadAdapter);
         var request = MeshQueryRequest.FromQuery(
             "nodeType:Thread namespace:User/alice/_Thread", userId: "bob");
@@ -682,12 +682,12 @@ public class ThreadMessageChatTests : IAsyncLifetime
 
     #endregion
 
-    #region Path resolution â€” FindBestPrefixMatchAsync for ThreadMessage
+    #region Path resolution — FindBestPrefixMatchAsync for ThreadMessage
 
     /// <summary>
     /// Verifies that FindBestPrefixMatchAsync resolves a ThreadMessage path
     /// to the exact ThreadMessage node (not the parent Thread with remainder).
-    /// This is critical for LayoutAreaView routing â€” the message hub must be
+    /// This is critical for LayoutAreaView routing — the message hub must be
     /// created with ThreadMessage configuration, not Thread configuration.
     /// </summary>
     [Fact(Timeout = 30000)]
@@ -733,7 +733,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
 
     #endregion
 
-    #region End-to-end chat flow â€” simulates HandleSubmitMessage persistence
+    #region End-to-end chat flow — simulates HandleSubmitMessage persistence
 
     /// <summary>
     /// Simulates the full HandleSubmitMessage persistence flow:
@@ -862,7 +862,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         GetJsonProp(userJson, "role").Should().Be("user");
         GetJsonProp(userJson, "text").Should().Be("Hello from e2e");
 
-        // Response message content â€” should have streamed text
+        // Response message content — should have streamed text
         var respResults = await Query(query, MeshQueryRequest.FromQuery($"path:{threadPath}/{responseMsgId}", userId: "alice"), ct);
         respResults.Should().HaveCount(1);
         var respJson = respResults[0].Content is JsonElement rje ? rje
@@ -883,7 +883,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         return null;
     }
 
-    #region Table routing â€” Thread and ThreadMessage nodes go to the "threads" table
+    #region Table routing — Thread and ThreadMessage nodes go to the "threads" table
 
     /// <summary>
     /// Verifies that both Thread and ThreadMessage nodes are written to the "threads"
@@ -957,7 +957,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             .Should().Be(0, "Thread should NOT be in mesh_nodes");
 
         // Read back and verify content (Content arrives as JsonElement since _options
-        // doesn't have the MeshWeaver type registry â€” extract properties directly)
+        // doesn't have the MeshWeaver type registry — extract properties directly)
         var readThread = await _threadAdapter.Read(
             $"{threadNs}/{threadId}", _options).Should().Within(30.Seconds()).Emit();
         readThread.Should().NotBeNull();
@@ -965,7 +965,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         readThread.Content.Should().NotBeNull("Thread node should have content");
         var threadJson = readThread.Content is JsonElement tje
             ? tje : JsonSerializer.SerializeToElement(readThread.Content, _options);
-        // Property name depends on serializer â€” try camelCase and PascalCase
+        // Property name depends on serializer — try camelCase and PascalCase
         var hasMsgs = threadJson.TryGetProperty("threadMessages", out var msgsEl)
                       || threadJson.TryGetProperty("Messages", out msgsEl);
         hasMsgs.Should().BeTrue("Thread content should have threadMessages/Messages property");
