@@ -13,7 +13,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// of type <c>Release</c> at <c>{nodeTypePath}/Release/{version}</c>;
 /// immutable once committed.
 ///
-/// <para>Releases are first-class durable artefacts â€” the GUI's Create-Release
+/// <para>Releases are first-class durable artefacts — the GUI's Create-Release
 /// button triggers a compile activity, and on success the watcher writes a
 /// new Release MeshNode with the compiled <see cref="AssemblyPath"/> + the
 /// markdown <see cref="Notes"/> the user authored. Old releases stay on disk
@@ -63,7 +63,7 @@ public record NodeTypeRelease
     public long? AssemblyStoreVersion { get; init; }
 
     /// <summary>
-    /// Author-written release notes â€” free-form markdown body shown at the top
+    /// Author-written release notes — free-form markdown body shown at the top
     /// of the Release detail view and in the release-history list. Sourced from
     /// <c>NodeTypeDefinition.ReleaseNotes</c> at compile time and copied here
     /// so the release is a self-contained snapshot (later edits to the
@@ -99,11 +99,11 @@ public record NodeTypeRelease
     /// <summary>
     /// Filesystem path of the compiled DLL for this release (set when the
     /// compile activity terminated <c>Succeeded</c>; null on failure).
-    /// Stable per <c>(NodeTypePath, Version)</c> â€” overwriting in place is
+    /// Stable per <c>(NodeTypePath, Version)</c> — overwriting in place is
     /// safe; deleting other versions' DLLs is forbidden because their ALCs
     /// may still be holding the file handles for live instances.
     /// <para>
-    /// ðŸš¨ Local-process hint only â€” not cross-silo durable. For cross-silo
+    /// 🚨 Local-process hint only — not cross-silo durable. For cross-silo
     /// activation, use <see cref="AssemblyCollection"/> + <see cref="AssemblyContentPath"/>:
     /// every silo fetches the bytes from the same content-collection blob, no
     /// shared filesystem required.
@@ -148,7 +148,7 @@ public record NodeTypeRelease
 
     /// <summary>
     /// Path to the <c>NodeTypeCompilation</c> activity that produced this
-    /// release â€” link to the live message log + diagnostics. Set even on
+    /// release — link to the live message log + diagnostics. Set even on
     /// failed releases so triagers can drill into the Roslyn output.
     /// </summary>
     public string? CompilationActivityPath { get; init; }

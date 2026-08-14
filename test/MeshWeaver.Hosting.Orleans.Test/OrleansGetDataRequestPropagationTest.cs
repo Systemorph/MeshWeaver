@@ -20,7 +20,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// separate client's repeated <c>GetDataRequest</c> polls?
 ///
 /// <para>
-/// Polling pattern â€” each call creates a fresh per-call reduce stream wrapper.
+/// Polling pattern — each call creates a fresh per-call reduce stream wrapper.
 /// If the framework has a SetCurrentRequest race in the per-call reduce
 /// pipeline, polls return Data=null indefinitely. The monolith counterpart
 /// passes; this checks the Orleans grain boundary doesn't introduce the bug.
@@ -34,7 +34,7 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
         var ct = new CancellationTokenSource(50.Seconds()).Token;
         Output.WriteLine("[test] start");
 
-        // 1. Create node a (plain Markdown â€” same NodeType as the working
+        // 1. Create node a (plain Markdown — same NodeType as the working
         //    Orleans 3-node test). Use a creator client to avoid mixing roles.
         var aId = $"poll-a-{Guid.NewGuid():N}";
         var pathA = $"TestUser/{aId}";
@@ -52,7 +52,7 @@ public class OrleansGetDataRequestPropagationTest(ITestOutputHelper output) : Or
         Output.WriteLine($"[test] CreateNode succeeded: {pathA}");
 
         // 2. Read via polled GetDataRequest from a SEPARATE client. Retry the
-        //    initial read â€” grain activation + MeshDataSource init runs lazily.
+        //    initial read — grain activation + MeshDataSource init runs lazily.
         var reader = GetClient($"reader-{Guid.NewGuid():N}", "TestUser");
         MeshNode? initial = null;
         for (var i = 0; i < 50; i++)

@@ -64,7 +64,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
         // Ensure hub is started
         await client.Observe(new PingRequest(), o => o.WithTarget(nodeAddress)).Should().Emit();
 
-        // Try to subscribe â€” should be denied by AccessControlPipeline
+        // Try to subscribe — should be denied by AccessControlPipeline
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
         var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
@@ -114,7 +114,7 @@ public class AccessControlPipelineTest(ITestOutputHelper output) : MonolithMeshT
 
 /// <summary>
 /// Tests the HubPermissionRuleSet integration with AccessControlPipeline.
-/// Uses Organization hub which has WithPublicRead() â€” this registers
+/// Uses Organization hub which has WithPublicRead() — this registers
 /// a HubPermissionRuleSet that grants Read to all authenticated users.
 /// </summary>
 public class HubPermissionRuleSetTest(ITestOutputHelper output) : MonolithMeshTestBase(output)

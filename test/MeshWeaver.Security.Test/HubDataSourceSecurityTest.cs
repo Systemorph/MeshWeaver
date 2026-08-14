@@ -37,7 +37,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// Link 1: HubDataSource with denied access â†’ workspace stream errors.
+    /// Link 1: HubDataSource with denied access → workspace stream errors.
     /// Verifies: data source stream's OnError propagates through workspace stream to subscriber.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -63,7 +63,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// Link 2: PartitionedHubDataSource â†’ combined stream errors.
+    /// Link 2: PartitionedHubDataSource → combined stream errors.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task PartitionedHubDataSource_WithoutAccess_ShouldErrorStream()
@@ -159,7 +159,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
-    /// Link 5: DataContext failure state â€” when initialization fails, DataContext stores the error.
+    /// Link 5: DataContext failure state — when initialization fails, DataContext stores the error.
     /// Subsequent SubscribeRequests get immediate DeliveryFailure with a meaningful message.
     /// </summary>
     [Fact(Timeout = 20000)]
@@ -183,7 +183,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         Output.WriteLine($"Internal stream errored: {internalEx.GetType().Name}: {internalEx.Message}");
         internalEx.Should().NotBeOfType<TimeoutException>();
 
-        // Now a second client subscribes â€” should get immediate error, not timeout.
+        // Now a second client subscribes — should get immediate error, not timeout.
         // This also gives time for DataContext.OpenInitializationGate's ContinueWith to run.
         var client2 = GetClient(c => c.AddData(d => d));
         var remoteStream2 = client2.GetWorkspace().GetRemoteStream<EntityStore>(

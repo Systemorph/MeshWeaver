@@ -480,7 +480,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         ids.Should().NotContain("TransactionMapping", "Search should not return the TransactionMapping sibling node");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Layout Area Catalog Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Layout Area Catalog ──
 
     [Fact(Timeout = ColdCompileTimeoutMs)]
     public async Task GroupAnalysis_LayoutAreas_ShouldRenderCatalog()
@@ -547,7 +547,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             "Default area for Analysis hub should be 'LayoutAreas' (profitability catalog), not 'Overview'");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Local Analysis Hub (EuropeRe) Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Local Analysis Hub (EuropeRe) ──
 
     [Fact(Timeout = ColdCompileTimeoutMs)]
     public async Task EuropeRe_KeyMetrics_ShouldHaveNonZeroData()
@@ -564,7 +564,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var control = await GetControl("FutuRe/EuropeRe/Analysis", "KeyMetrics", unwrap: true);
         var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe KeyMetrics currency");
         md.Should().Contain(" EUR", "EuropeRe amounts should be labeled with EUR, not CHF");
-        md.Should().NotContain(" CHF", "EuropeRe should not show CHF Ã¢â‚¬â€ its currency is EUR");
+        md.Should().NotContain(" CHF", "EuropeRe should not show CHF — its currency is EUR");
     }
 
     [Fact(Timeout = ColdCompileTimeoutMs)]
@@ -611,7 +611,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         control.Should().BeOfType<ChartControl>("QuarterlyTrend should be a chart");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Group Analysis Hub (FutuRe/Analysis) Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Group Analysis Hub (FutuRe/Analysis) ──
 
     /// <summary>
     /// Diagnostic: check whether PartitionedHubDataSource actually receives data from child hubs.
@@ -707,7 +707,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         await InitializeChildAnalysisHubs();
 
         var control = await GetControl("FutuRe/Analysis", "ProfitabilityTable", unwrap: true);
-        // Group profitability table renders Ã¢â‚¬â€ data may arrive asynchronously from child BU hubs.
+        // Group profitability table renders — data may arrive asynchronously from child BU hubs.
         // Verify the markdown structure (headers and totals) rather than requiring non-zero data,
         // since PartitionedHubDataSource data flow depends on test execution order.
         var mdControl = control.Should().BeOfType<MarkdownControl>(
@@ -773,7 +773,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         control.Should().BeOfType<HtmlControl>("AnnualProfitabilityWaterfall should return an HtmlControl with SVG");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Business Unit Layout Areas Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Business Unit Layout Areas ──
 
     /// <summary>
     /// Verifies that the EuropeRe Search area renders with child nodes.
@@ -828,7 +828,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             + "definitions like LineOfBusiness/TransactionMapping are excluded by design)");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Node Existence Verification Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Node Existence Verification ──
 
     /// <summary>
     /// Verifies that all FutuRe NodeType definitions exist.
@@ -878,7 +878,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         ids.Should().Contain("Group");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Report Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Report ──
 
     /// <summary>
     /// Verifies that the AnnualReport node exists and its Overview area renders.
@@ -905,7 +905,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             "AnnualReport Overview should render the report content");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ AnnualReport Diagnostic Tests Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── AnnualReport Diagnostic Tests ──
 
     /// <summary>
     /// Diagnostic: verify that the AnnualReport Overview contains @@() layout area references
@@ -993,7 +993,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         foreach (var path in paths)
         {
             var resolution = await pathResolver.ResolvePath(path).Should().Emit();
-            Output.WriteLine($"  {path} Ã¢â€ â€™ Prefix='{resolution?.Prefix}', Remainder='{resolution?.Remainder}'");
+            Output.WriteLine($"  {path} → Prefix='{resolution?.Prefix}', Remainder='{resolution?.Remainder}'");
 
             resolution.Should().NotBeNull($"Path '{path}' should resolve");
             resolution!.Prefix.Should().Be("FutuRe/Analysis", $"'{path}' should resolve to FutuRe/Analysis hub");
@@ -1001,7 +1001,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Diagnostic: simulate the full PathBasedLayoutArea chain Ã¢â‚¬â€ resolve path, then get the
+    /// Diagnostic: simulate the full PathBasedLayoutArea chain — resolve path, then get the
     /// chart control at the resolved address/area.
     /// </summary>
     [Fact(Timeout = ColdCompileTimeoutMs)]
@@ -1024,7 +1024,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         control.Should().NotBeNull("KeyMetrics should render when accessed via path resolution");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ EuropeRe AnnualReport Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── EuropeRe AnnualReport ──
 
     /// <summary>
     /// Verifies that the EuropeRe AnnualReport Overview contains @@() layout area references
@@ -1063,7 +1063,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             Output.WriteLine($"  Area '{childKey}': {childControl?.GetType().Name}");
 
             // Accept either MarkdownControl (legacy) or CollaborativeMarkdownControl
-            // (current Overview area output Ã¢â‚¬â€ read+comment+edit container).
+            // (current Overview area output — read+comment+edit container).
             var markdown = childControl switch
             {
                 MarkdownControl mc => mc.Markdown?.ToString(),
@@ -1110,7 +1110,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         foreach (var path in paths)
         {
             var resolution = await pathResolver.ResolvePath(path).Should().Emit();
-            Output.WriteLine($"  {path} Ã¢â€ â€™ Prefix='{resolution?.Prefix}', Remainder='{resolution?.Remainder}'");
+            Output.WriteLine($"  {path} → Prefix='{resolution?.Prefix}', Remainder='{resolution?.Remainder}'");
 
             resolution.Should().NotBeNull($"Path '{path}' should resolve");
             resolution!.Prefix.Should().Be("FutuRe/EuropeRe/Analysis",
@@ -1119,7 +1119,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Simulates the full PathBasedLayoutArea chain for EuropeRe Ã¢â‚¬â€ resolve path, then get the
+    /// Simulates the full PathBasedLayoutArea chain for EuropeRe — resolve path, then get the
     /// chart control at the resolved address/area. Since EuropeRe charts work individually,
     /// this should succeed and proves the @@() embedding pipeline works end-to-end.
     /// </summary>
@@ -1135,7 +1135,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         resolution.Prefix.Should().Be("FutuRe/EuropeRe/Analysis");
         resolution.Remainder.Should().Be("KeyMetrics");
 
-        // Get the control at the resolved address/area Ã¢â‚¬â€ this is what PathBasedLayoutArea does
+        // Get the control at the resolved address/area — this is what PathBasedLayoutArea does
         var control = await GetControl(resolution.Prefix, resolution.Remainder!,
             waitForData: false, timeoutSeconds: 15);
 
@@ -1151,7 +1151,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         }
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Activity Logs Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Activity Logs ──
 
     /// <summary>
     /// Verifies that activity log nodes can be queried via IMeshService.
@@ -1172,7 +1172,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             Output.WriteLine($"  [{log.Category}] {log.User?.DisplayName} - {log.HubPath} ({log.Status})");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Hub Initialization Diagnostic Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Hub Initialization Diagnostic ──
 
     /// <summary>
     /// Reproduces browser behavior: navigates to FutuRe/Analysis WITHOUT pre-initializing
@@ -1182,13 +1182,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = ColdCompileTimeoutMs)]
     public async Task Group_HubInitialization_ShouldSucceedWithoutPreInit()
     {
-        // Do NOT call InitializeChildAnalysisHubs() Ã¢â‚¬â€ reproduce browser behavior
+        // Do NOT call InitializeChildAnalysisHubs() — reproduce browser behavior
         var control = await GetControl("FutuRe/Analysis", "KeyMetrics",
             waitForData: false, timeoutSeconds: 15);
         control.Should().NotBeNull("FutuRe/Analysis hub should initialize without pre-starting child hubs");
     }
 
-    // Ã¢â€â‚¬Ã¢â€â‚¬ Helpers Ã¢â€â‚¬Ã¢â€â‚¬
+    // ── Helpers ──
 
     /// <summary>
     /// Pre-initializes child BU analysis hubs (EuropeRe, AmericasIns) so their data
@@ -1297,7 +1297,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             // Each WithView creates a child area at parentKey/N; Toolbar puts content last.
             // Apply waitForData at every level: HasNonTrivialData returns true for
             // non-MarkdownControl (StackControl passes immediately), so only the leaf
-            // MarkdownControl actually waits Ã¢â‚¬â€ using a single subscription per key.
+            // MarkdownControl actually waits — using a single subscription per key.
             for (var depth = 0; depth < 3 && control is StackControl stack && stack.Areas?.Count > 0; depth++)
             {
                 var childArea = stack.Areas.Last();
@@ -1310,7 +1310,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                     .Should().Within(timeoutSeconds.Seconds())
                     .Match(x => x is not null && !IsNotYetTheArea(x)
                                 && (!waitForData || HasNonTrivialData(x)));
-                Output.WriteLine($"  Ã¢â€ â€™ {control?.GetType().Name}");
+                Output.WriteLine($"  → {control?.GetType().Name}");
             }
         }
         else if (waitForData && !HasNonTrivialData(control))
@@ -1388,7 +1388,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         markdown.Should().NotBeNullOrWhiteSpace($"{context} markdown should not be empty");
 
-        // Extract numbers from the markdown Ã¢â‚¬â€ look for formatted numbers like "78,750,000"
+        // Extract numbers from the markdown — look for formatted numbers like "78,750,000"
         var numbers = System.Text.RegularExpressions.Regex.Matches(markdown, @"[\d,]+\.\d+|[\d,]+")
             .Cast<System.Text.RegularExpressions.Match>()
             .Select(m => m.Value.Replace(",", ""))

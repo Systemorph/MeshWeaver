@@ -44,7 +44,7 @@ public static class RoleNodeType
             .AddDefaultLayoutAreas()
     };
 
-    // Inline SVGs for the four built-in roles â€” rendered directly by MeshNodeImageHelper.IsInlineSvg.
+    // Inline SVGs for the four built-in roles — rendered directly by MeshNodeImageHelper.IsInlineSvg.
     // Each uses a 20x20 rounded-square badge matching shield.svg's visual language, with a distinct
     // hue per role so they read at a glance in menus, thumbnails, and permission pickers.
     private const string AdminIcon =
@@ -79,7 +79,7 @@ public static class RoleNodeType
     {
         private static readonly MeshNode[] Nodes =
         [
-            // Read-only policy for the Role namespace â€” built-in roles are unmodifiable
+            // Read-only policy for the Role namespace — built-in roles are unmodifiable
             new("_Policy", "Role")
             {
                 NodeType = "PartitionAccessPolicy",

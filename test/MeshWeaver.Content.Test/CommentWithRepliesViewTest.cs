@@ -90,7 +90,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Loads the CollaborativeEditing.md document's Overview area.
     /// This triggers the full rendering pipeline including comments sidebar
-    /// where comment c1 has a reply â€” the scenario that caused OperationCanceledException.
+    /// where comment c1 has a reply — the scenario that caused OperationCanceledException.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task CollaborativeEditingDocument_Overview_ShouldRender()
@@ -204,7 +204,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
 
     /// <summary>
     /// Renders the Overview area for a comment (c6) that has NO replies.
-    /// Baseline test â€” should always work. (c2 has replies in the sample data
+    /// Baseline test — should always work. (c2 has replies in the sample data
     /// even though the original test name suggested otherwise — c6 is the only
     /// genuinely childless comment.)
     /// </summary>
@@ -239,7 +239,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 30000)]
     public async Task Persistence_CommentWithReply_ShouldLoadCorrectly()
     {
-        // No hub initialization needed â€” RoutingMeshQueryProvider discovers
+        // No hub initialization needed — RoutingMeshQueryProvider discovers
         // partitions via DiscoverNewProvidersAsync during the query.
 
         // Wait for the emission that CONTAINS the node, never the first Initial: the catalog

@@ -12,7 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for AccessAssignmentLayoutAreas â€” verifies that workspace.RequestChange
+/// Tests for AccessAssignmentLayoutAreas — verifies that workspace.RequestChange
 /// correctly updates the MeshNode stream, enabling reactive UI updates
 /// for ToggleDenied, RemoveRole, and AddRole operations.
 /// </summary>
@@ -88,13 +88,13 @@ public class AccessAssignmentLayoutAreasTest(ITestOutputHelper output) : HubTest
         var initial = AccessControlLayoutArea.DeserializeAssignment(node)!;
         initial.Roles[0].Denied.Should().BeFalse("initial state should be not-denied");
 
-        // Act â€” toggle denied
+        // Act — toggle denied
         var roles = initial.Roles.ToList();
         roles[0] = roles[0] with { Denied = true };
         var updatedNode = node with { Content = initial with { Roles = roles } };
         _ = workspace.RequestChange(DataChangeRequest.Update([updatedNode]));
 
-        // Assert â€” stream should reflect the change
+        // Assert — stream should reflect the change
         var updatedNodes = await nodeStream!
             .Should().Within(5.Seconds()).Match(items =>
             {

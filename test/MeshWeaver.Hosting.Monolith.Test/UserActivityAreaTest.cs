@@ -93,7 +93,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var typeNode = Mesh.ServiceProvider.FindStaticNode("User");
         typeNode.Should().NotBeNull("User node type should be registered as a static node");
         typeNode!.HubConfiguration.Should().NotBeNull(
-            "User node type should be registered via AddGraph() Ã¢â€ â€™ AddUserType() with HubConfiguration");
+            "User node type should be registered via AddGraph() → AddUserType() with HubConfiguration");
     }
 
     /// <summary>
@@ -120,7 +120,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         node.Should().NotBeNull("Oliver user node should exist in samples/Graph/Data/User/TestUser.json");
         node!.NodeType.Should().Be("User");
 
-        // Enrich with node type Ã¢â‚¬â€ this should attach HubConfiguration
+        // Enrich with node type — this should attach HubConfiguration
         var enriched = await resolver.ResolveConfiguration(node).Should().Emit();
         enriched.HubConfiguration.Should().NotBeNull(
             "After resolution, User node should have HubConfiguration from UserNodeType");
@@ -165,7 +165,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
 
         value.Should().NotBe(default(JsonElement),
-            "Activity area should render for User/TestUser Ã¢â‚¬â€ AddUserActivityViews() must be invoked");
+            "Activity area should render for User/TestUser — AddUserActivityViews() must be invoked");
     }
 
     /// <summary>
@@ -221,12 +221,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Simulates the production onboarding flow: creates a User node at runtime
     /// (not pre-registered via AddMeshNodes), then verifies the Activity area resolves.
-    /// This tests the path: persistence Ã¢â€ â€™ MeshCatalog.ResolvePathAsync Ã¢â€ â€™ routing Ã¢â€ â€™ hub creation.
+    /// This tests the path: persistence → MeshCatalog.ResolvePathAsync → routing → hub creation.
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task ActivityArea_WorksForRuntimeCreatedUser()
     {
-        // Arrange Ã¢â‚¬â€ create a user node at runtime (simulating onboarding)
+        // Arrange — create a user node at runtime (simulating onboarding)
         var username = $"RuntimeUser_{Guid.NewGuid():N}"[..20];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -242,7 +242,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
             }).Should().Within(15.Seconds()).Emit();
         }
 
-        // Act Ã¢â‚¬â€ request the Activity area (same as Index.razor does)
+        // Act — request the Activity area (same as Index.razor does)
         var client = GetClient();
         var userAddress = new Address("User", username);
 
@@ -260,12 +260,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Assert
         value.Should().NotBe(default(JsonElement),
-            "Activity area should render for a runtime-created User node Ã¢â‚¬â€ " +
-            "this simulates the production onboarding Ã¢â€ â€™ Index.razor flow");
+            "Activity area should render for a runtime-created User node — " +
+            "this simulates the production onboarding → Index.razor flow");
     }
 
     /// <summary>
-    /// Also verify the Overview area works (baseline Ã¢â‚¬â€ this uses AddDefaultLayoutAreas).
+    /// Also verify the Overview area works (baseline — this uses AddDefaultLayoutAreas).
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task OverviewArea_CanBeResolved_ForUserRoland()
@@ -285,7 +285,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Should().Within(TimeSpan.FromSeconds(15)).Emit();
 
         value.Should().NotBe(default(JsonElement),
-            "Overview area should render for User/TestUser Ã¢â‚¬â€ AddDefaultLayoutAreas() must be invoked");
+            "Overview area should render for User/TestUser — AddDefaultLayoutAreas() must be invoked");
     }
 }
 

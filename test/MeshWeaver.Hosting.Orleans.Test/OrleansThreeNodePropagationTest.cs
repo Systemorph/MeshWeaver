@@ -22,11 +22,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Topology:
 /// </para>
 /// <code>
-///        a (owning per-grain hub at TestUser/a â€” full mesh-node setup
+///        a (owning per-grain hub at TestUser/a — full mesh-node setup
 ///           via the standard Markdown NodeType: AddMeshDataSource +
 ///           AddDefaultLayoutAreas + persistence)
 ///       / \
-///      â†•   â†•   (two streams: bâ†”a, câ†”a â€” both subscribe to a's MeshNode
+///      ↕   ↕   (two streams: b↔a, c↔a — both subscribe to a's MeshNode
 ///     b     c    via workspace.GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;)
 /// </code>
 ///
@@ -34,21 +34,21 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// Flow under test:
 /// </para>
 /// <list type="number">
-///   <item>Create node <c>a</c> via <c>CreateNodeRequest</c> â€” the routing layer
+///   <item>Create node <c>a</c> via <c>CreateNodeRequest</c> — the routing layer
 ///   activates the per-grain hub with the Markdown NodeType's full configuration.</item>
 ///   <item>Two test clients <c>b</c> and <c>c</c> each open a remote
 ///   <see cref="MeshNodeReference"/> stream to <c>a</c>'s address.</item>
-///   <item>Both receive the initial snapshot â€” proves cross-grain subscription works.</item>
-///   <item><c>c</c> calls <c>.Update(...)</c> on its stream â€” the synchronization
+///   <item>Both receive the initial snapshot — proves cross-grain subscription works.</item>
+///   <item><c>c</c> calls <c>.Update(...)</c> on its stream — the synchronization
 ///   protocol carries the patch through Orleans routing to <c>a</c>'s grain hub.</item>
 ///   <item><c>a</c>'s MeshDataSource validates and applies the patch, then
 ///   broadcasts the change.</item>
-///   <item><c>b</c>'s subscription must observe the new state â€” propagation
+///   <item><c>b</c>'s subscription must observe the new state — propagation
 ///   through the owning grain.</item>
 /// </list>
 ///
 /// <para>
-/// Counterpart: <c>ThreeNodePropagationTest</c> in the monolith suite passes â€”
+/// Counterpart: <c>ThreeNodePropagationTest</c> in the monolith suite passes —
 /// proves the bug is Orleans-specific. This test is the focused canary for
 /// the cross-grain stream propagation cluster.
 /// </para>
@@ -71,7 +71,7 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
         //    first inbound message (the GetRemoteStream subscriptions below).
         //    Using Markdown NodeType pulls in the full mesh-node setup
         //    (AddMeshDataSource + AddDefaultLayoutAreas via ConfigureDefaultNodeHub)
-        //    so the per-grain hub has the complete data layer wired up â€” same
+        //    so the per-grain hub has the complete data layer wired up — same
         //    as production.
         var creator = GetClient($"creator-{Guid.NewGuid():N}", "TestUser");
         var createResp = await creator.Observe(
@@ -109,7 +109,7 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
         await WaitFor(() => { lock (bSnapshots) return bSnapshots.Contains("A0"); }, 20.Seconds(), ct);
         Output.WriteLine($"[b] received initial 'A0'");
 
-        // 7. Wait for c's initial snapshot too â€” needed before .Update so the
+        // 7. Wait for c's initial snapshot too — needed before .Update so the
         //    transform sees the latest current.
         var cSnapshots = new List<string?>();
         using var subC = streamFromC
@@ -130,7 +130,7 @@ public class OrleansThreeNodePropagationTest(ITestOutputHelper output) : Orleans
         streamFromC.Update(current => current with { Name = "A1" })
             .Subscribe(_ => { }, ex => Output.WriteLine($"[c] update error: {ex.Message}"));
 
-        // 9. B's subscription must observe the new state â€” propagation via a's grain.
+        // 9. B's subscription must observe the new state — propagation via a's grain.
         await WaitFor(() => { lock (bSnapshots) return bSnapshots.Contains("A1"); }, 30.Seconds(), ct);
         lock (bSnapshots) bSnapshots.Should().Contain("A1",
             "b's subscription must observe c's update via a's grain broadcast");

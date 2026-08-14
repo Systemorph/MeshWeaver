@@ -368,7 +368,7 @@ public class InlineEditingTest(ITestOutputHelper output) : HubTestBase(output)
 
 /// <summary>
 /// Tests for inline editing with actual data persistence via DataChangeRequest.
-/// Verifies the complete flow: UpdatePointer â†’ auto-save â†’ DataChangeRequest â†’ GetDataRequest returns changed value.
+/// Verifies the complete flow: UpdatePointer → auto-save → DataChangeRequest → GetDataRequest returns changed value.
 /// </summary>
 [Collection("InlineEditingPersistenceTests")]
 public class InlineEditingPersistenceTest(ITestOutputHelper output) : HubTestBase(output)
