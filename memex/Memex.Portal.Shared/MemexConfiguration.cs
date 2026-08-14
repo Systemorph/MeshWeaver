@@ -597,6 +597,16 @@ public static class MemexConfiguration
         /// </summary>
         public TBuilder ConfigureMemexMesh(IConfiguration configuration, bool isDevelopment = false)
         {
+            // Boot-time module packs: DLL paths listed under Modules:Assemblies are loaded into
+            // the default ALC BEFORE the container builds, and their MeshNodeProviderAttribute
+            // registrations (services + nodes + hub configuration) fold into this mesh — the
+            // per-deployment "which packs does this instance run" knob (Doc/Architecture/
+            // UiExtensibility). Empty/absent = no-op; a listed path that fails to load should
+            // fail loudly at startup, never silently run without the pack.
+            var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
+            if (moduleAssemblies is { Length: > 0 })
+                builder.InstallAssemblies(moduleAssemblies);
+
             // Read graph storage config
             var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
             if (graphStorageConfig == null)

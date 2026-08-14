@@ -51,7 +51,12 @@ public static class BlazorViewRegistry
         .AddData()
         .AddLayoutClient(c =>
             (configuration ?? (x => x))
-            .Invoke(c.WithView((i, s, a) => DefaultFormatting(c.Hub, i, s, a))))
+            .Invoke(c.WithView((i, s, a) => DefaultFormatting(c.Hub, i, s, a))
+                // The escaped-HTML fallback is the FALLBACK slot, not a view map: it is consulted
+                // only after every registered map — including view packs registered AFTER
+                // AddBlazor() — has declined. As a terminal arm inside DefaultFormatting it made
+                // registration order load-bearing and silently killed late-registered packs.
+                .WithFallbackView((i, s, a) => FallbackHtml(i, s, a))))
         .AddMeshTypes()
         .AddMarkdownTypes()
         .AddMarkdownExportTypes()
@@ -153,7 +158,10 @@ public static class BlazorViewRegistry
                 KpiStripControl kpiStrip => ControlView<KpiStripControl, KpiStripView>(kpiStrip, stream, area),
                 TowerControl tower => ControlView<TowerControl, TowerView>(tower, stream, area),
                 ComparisonBarsControl comparisonBars => ControlView<ComparisonBarsControl, ComparisonBarsView>(comparisonBars, stream, area),
-                _ => FallbackHtml(instance, stream, area),
+                // No match ⇒ DECLINE (null) so later-registered maps — view packs added after
+                // AddBlazor() — get their turn. The escaped-HTML fallback lives in the
+                // configuration's FallbackViewMap slot, consulted after every map declined.
+                _ => null,
             };
         }
         catch (Exception ex)
