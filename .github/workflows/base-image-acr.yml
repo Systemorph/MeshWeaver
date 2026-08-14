@@ -36,21 +36,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # buildx + QEMU: emulate the linux/arm64 RUN steps (apt/node/npm) of the base Dockerfile on this
       # amd64 runner; buildx assembles + pushes the manifest list.
       - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Ensure Azure CLI
-        # GitHub's ubuntu-latest no longer ships the Azure CLI on PATH for azure/login@v2
+        # GitHub's ubuntu-latest no longer ships the Azure CLI on PATH for azure/login@v3
         # ("Unable to locate executable file: az"). Install it if missing (idempotent).
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}

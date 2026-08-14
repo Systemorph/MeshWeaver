@@ -31,10 +31,10 @@ jobs:
   build-ios:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -42,7 +42,7 @@ jobs:
         run: dotnet workload install maui-ios --version ${{ env.DOTNET_VERSION }}
 
       - name: Import signing certificate
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -78,7 +78,7 @@ jobs:
 
       - name: Upload .ipa artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: memex-ios-ipa
           path: ${{ steps.ipa.outputs.path }}
