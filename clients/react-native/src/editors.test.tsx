@@ -39,9 +39,14 @@ const tree: AreaTree = {
     date: { $type: "Date", label: "When", data: ptr("/data/when") },
     dt: { $type: "DateTime", label: "When exactly", data: ptr("/data/when") },
     combo: { $type: "Combobox", label: "City", data: ptr("/data/city"), options: [{ value: "Zurich", text: "Zurich" }, { value: "Bern", text: "Bern" }] },
-    search: { $type: "SearchBox", data: ptr("/data/query"), placeholder: "Find" },
-    code: { $type: "CodeEditor", label: "Code", data: ptr("/data/code") },
-    mdedit: { $type: "MarkdownEditor", label: "Notes", data: ptr("/data/md") },
+    search: { $type: "SearchBox", value: ptr("/data/city"), placeholder: "Find" },
+    // 🚨 `value`, NOT `data` (issue #1498). CodeEditorControl and MarkdownEditorControl carry their
+    // text on `Value` — that is what the SERVER sends and what the Blazor views bind. Building this
+    // tree with `data` was the harness encoding the bug: it exercised the one shape the pack
+    // happened to support instead of the shape it actually receives, so an empty editor on RN
+    // passed here. SearchBoxControl carries `Value` too, so `search` below is value-shaped as well.
+    code: { $type: "CodeEditor", label: "Code", value: ptr("/data/code") },
+    mdedit: { $type: "MarkdownEditor", label: "Notes", value: ptr("/data/md") },
     diff: { $type: "DiffEditor", original: "old line", data: "new line" },
     sample: { $type: "CodeSample", data: "readonly();" },
     err: { $type: "Exception", message: "Boom happened" },
@@ -124,6 +129,15 @@ describe("RN leaf pack renders every editor + resolves its binding", () => {
   it("CodeEditor + MarkdownEditor bind their text into editable TextInputs", () => {
     expect(inputValues.some((v) => v.includes("console.log(x)"))).toBe(true);
     expect(inputValues.some((v) => v.includes("# Notes"))).toBe(true);
+  });
+
+  // The regression guard for #1498. The three assertions above already cover it now that the tree
+  // is value-shaped, but this one names the defect so a future `data`-only binding helper cannot
+  // quietly reintroduce it: a control whose C# record calls the member `Value` must render its
+  // text, not an empty box.
+  it("resolves `value`-shaped controls — the shape the server actually sends (#1498)", () => {
+    expect(inputValues).not.toContain("");
+    expect(inputValues).toContain("Zurich"); // SearchBox, bound via `value`
   });
 
   it("DiffEditor shows original and modified", () => {

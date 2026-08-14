@@ -28,7 +28,17 @@ export interface Field {
 
 /** Bound form field: resolves the value, and writes edits back via UpdatePointer to its /data pointer. */
 export function useField(control: UiControl): Field {
-  const bound = control.data ?? control.isChecked;
+  // 🚨 `value` FIRST (issue #1498). `data ?? isChecked` is right for the form fields whose C# record
+  // names the member `Data`, but several controls name it `Value` — CodeEditorControl,
+  // MarkdownEditorControl, SearchBoxControl — and the Blazor views bind `ViewModel.Value`. A control
+  // arriving from the server with `value` and no `data` therefore resolved to undefined and rendered
+  // an EMPTY editor, with nothing on screen to say the text had simply not been read.
+  //
+  // This is the same precedence the web pack's monaco leaf already applies locally
+  // (`control.value ?? control.data`); putting it in the shared helper is what stops the two packs
+  // from disagreeing about it again. It is a no-op for every `Data`-shaped control, since `value` is
+  // then undefined.
+  const bound = control.value ?? control.data ?? control.isChecked;
   const value = useResolve(bound);
   const pointer = useBindingPointer(bound);
   const disabled = !!useResolve(control.disabled);

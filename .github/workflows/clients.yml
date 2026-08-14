@@ -128,7 +128,7 @@ jobs:
       - run: pytest -q
 
   node-sdk:
-    name: "@meshweaver/client (typecheck)"
+    name: "@meshweaver/client (typecheck + test)"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -142,7 +142,12 @@ jobs:
           node-version: 22
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
-      - run: npm test # node --test: the js/ts Code-node execution core (type stripping → vm → REPL value)
+      # 🚨 The tests MUST run here (issue #1496). This package defined `test` and shipped
+      # test/worker.test.mjs, but the job ran `typecheck` ONLY — so the SDK carried a decode that
+      # returned an empty node for every subscription, and nothing in CI could have noticed. A test
+      # nobody runs is documentation, and the defect it would have caught silently dropped thread
+      # message ids in production.
+      - run: npm test # node --test: the js/ts Code-node execution core (type stripping → vm → REPL value) + the change-event decode
 
   grpc-web:
     name: "@meshweaver/client-web (typecheck + test)"
