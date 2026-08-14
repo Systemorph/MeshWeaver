@@ -731,10 +731,7 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     /// failure this whole service exists to prevent. Failing to resolve must be a startup error, not
     /// a silent downgrade.</para></summary>
     private IObservable<T> AsSystem<T>(Func<IObservable<T>> write)
-    {
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        return Observable.Using(() => accessService.ImpersonateAsSystem(), _ => write());
-    }
+        => hub.ServiceProvider.GetRequiredService<AccessService>().RunAsSystem(write);
 
     // ══════════════════════════════════════════════════════════════════════════
     //  Making it visible

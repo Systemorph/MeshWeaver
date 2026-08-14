@@ -165,6 +165,22 @@ public static class AccessContextCaptureExtensions
     }
 
     /// <summary>
+    /// Subscribes <paramref name="observer"/> to <paramref name="source"/> with every notification
+    /// delivered inside a <see cref="AccessService.SwitchAccessContext"/> scope keyed to
+    /// <paramref name="captured"/> — the same per-callback restore
+    /// <see cref="CarryAccessContext{T}(System.IObservable{T},MeshWeaver.Messaging.AccessService,bool)"/> applies.
+    ///
+    /// <para>🚨 Exists so <see cref="ImpersonationScopeExtensions"/> can SEAL an impersonation scope
+    /// with these exact semantics rather than re-implement them. The difference between the two is
+    /// only WHEN the identity is decided — this helper is handed one, <c>CarryAccessContext</c>
+    /// snapshots the ambient at composition time, and <c>ContainIdentity</c> reads it at Subscribe.
+    /// Keeping one restore implementation is what stops those three drifting apart.</para>
+    /// </summary>
+    internal static IDisposable SubscribeRestoring<T>(
+        IObservable<T> source, IObserver<T> observer, AccessService access, AccessContext? captured) =>
+        source.Subscribe(new RestoringObserver<T>(observer, access, captured));
+
+    /// <summary>
     /// Wraps a cold observable so every emission to the subscriber happens
     /// inside an <see cref="AccessService.SwitchAccessContext"/> scope keyed
     /// to <paramref name="captured"/>. The scope is per-callback (entered on
