@@ -3,12 +3,28 @@
 # deployments (AKS). A single-replica self-host leaves KEDA off, where a PDB would only block node
 # maintenance, so it is templated out there.
 #
-# maxUnavailable: 1 lets a VOLUNTARY disruption (node image-upgrade, a manual drain) take at most
-# one portal pod at a time — the other keeps serving, and the departing silo leaves the Orleans
-# cluster gracefully within the 120s terminationGracePeriod. Together with the
-# cluster-autoscaler.kubernetes.io/safe-to-evict: "false" pod annotation (deployment.yaml), this is
-# what stops the zombie-silo churn: the autoscaler never evicts a portal pod for bin-packing, and
-# what disruption remains is throttled to one-at-a-time and graceful.
+# 🚨 maxUnavailable, NOT minAvailable — and that is the whole point of this file.
+#
+# memex-cloud ran a HAND-APPLIED `minAvailable: 2` (kubectl-client-side-apply, 2026-07-26) against
+# a Deployment stuck at ONE replica. `minAvailable: 2` with one healthy pod means
+# `disruptionsAllowed: 0` — permanently, and by arithmetic rather than by accident. Node
+# image-upgrades and drains simply could not proceed, and nothing reported it: a PDB that blocks
+# everything looks exactly like a PDB nothing has asked to evict.
+#
+# Even at the intended 2 replicas that shape stays wrong. `minAvailable: 2` demands BOTH pods, so
+# it still allows zero voluntary disruptions; you would have to re-tune it on every change to the
+# replica floor. `maxUnavailable: 1` is scale-invariant: exactly one pod may go at a time whether
+# KEDA is holding 2 or has burst to 8. The other keeps serving, and the departing silo leaves the
+# Orleans cluster gracefully within terminationGracePeriodSeconds (portal.drainSeconds, 1800s).
+#
+# Together with the cluster-autoscaler.kubernetes.io/safe-to-evict: "false" pod annotation
+# (deployment.yaml), this is what stops the zombie-silo churn: the autoscaler never evicts a portal
+# pod for bin-packing, and what disruption remains is throttled to one-at-a-time and graceful.
+#
+# ⚠️ A PDB is only ever as good as the replica count underneath it. Fixing the budget on a
+# single-replica deployment does not make it available — it makes the one pod EVICTABLE. Raise
+# replicas first (keda.minReplicas / replicas.portal), then let the budget do its job; the chart
+# renders both from the same `keda.enabled` switch so they cannot drift apart again.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

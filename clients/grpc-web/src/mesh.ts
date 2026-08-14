@@ -35,23 +35,35 @@ export function ownerOfNamespace(namespace: string): string {
   return segments.join("/");
 }
 
+/** REST reach-back for the ops that have no hub-message equivalent yet (search — see issue #1473). */
+export interface RestOptions {
+  /** The portal origin serving `/api/mesh/*` — same origin the gRPC-web transport dials. */
+  url: string;
+  /** Bearer token for `/api/mesh/*` (Bearer-only endpoints); omit for an anonymous sidecar. */
+  token?: string;
+  /** Custom fetch (RN seam); unary REST works with the platform fetch. */
+  fetch?: typeof globalThis.fetch;
+}
+
 export class Mesh {
   private readonly conn: MeshWebConnection;
   private readonly meshAddress: string;
+  private readonly rest?: RestOptions;
 
-  private constructor(conn: MeshWebConnection, meshAddress: string) {
+  private constructor(conn: MeshWebConnection, meshAddress: string, rest?: RestOptions) {
     this.conn = conn;
     this.meshAddress = meshAddress;
+    this.rest = rest;
   }
 
   static async connect(url: string, opts: MeshOptions = {}): Promise<Mesh> {
     const conn = await connectTransport(url, opts);
-    return new Mesh(conn, opts.meshAddress ?? "mesh/main");
+    return new Mesh(conn, opts.meshAddress ?? "mesh/main", { url, token: opts.token, fetch: opts.fetch });
   }
 
   /** Wrap an ALREADY-connected transport (e.g. the one a GrpcAreaSource renders from) in the ops surface. */
-  static from(connection: MeshWebConnection, meshAddress = "mesh/main"): Mesh {
-    return new Mesh(connection, meshAddress);
+  static from(connection: MeshWebConnection, meshAddress = "mesh/main", rest?: RestOptions): Mesh {
+    return new Mesh(connection, meshAddress, rest);
   }
 
   /** The underlying connection — pass to a GrpcAreaSource to render a live layout area. */
@@ -65,10 +77,33 @@ export class Mesh {
 
   // ---- reads ----------------------------------------------------------------
 
-  /** Free-text / structured mesh query (routes to vector or SQL server-side). */
+  /**
+   * Free-text / structured mesh query (routes to vector or SQL server-side). Goes over REST
+   * (`POST /api/mesh/query-nodes`) — the gRPC `QueryRequest` this used to post has NO server
+   * handler (issue #1473: every call waited out the 30 s observe timeout and returned empty;
+   * portal-next had already routed around it the same way). The protocol-native replacement is
+   * the planned live-subscribable `MeshQueryReference`; until it exists, REST is the one working
+   * query surface. `basePath` narrows via the mesh query syntax (`path:<base> scope:subtree`).
+   */
   async search(query: string, basePath?: string, limit = 50): Promise<Record<string, unknown>[]> {
-    const resp = await this.conn.observe(this.meshAddress, "QueryRequest", { query, basePath, limit }); // WIRE: query request type
-    return ((resp.message["results"] ?? resp.message["Results"]) as Record<string, unknown>[]) ?? [];
+    if (!this.rest?.url)
+      throw new Error(
+        "Mesh.search needs the portal's REST origin — construct via Mesh.connect(url, …) or pass Mesh.from(conn, addr, { url, token }).",
+      );
+    const doFetch = this.rest.fetch ?? globalThis.fetch;
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (this.rest.token) headers["authorization"] = `Bearer ${this.rest.token}`;
+    const composed = basePath ? `${query} path:${basePath} scope:subtree` : query;
+    const resp = await doFetch(`${this.rest.url.replace(/\/+$/, "")}/api/mesh/query-nodes`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query: composed, limit }),
+    });
+    if (!resp.ok) throw new Error(`query-nodes failed (${resp.status})`);
+    const text = await resp.text();
+    if (text.startsWith("Error:") || text.startsWith("Not found:")) throw new Error(text);
+    const parsed = JSON.parse(text) as { results?: Record<string, unknown>[] };
+    return Array.isArray(parsed.results) ? parsed.results : [];
   }
 
   /** Read a single node's current state (one snapshot off its live stream). */
@@ -153,12 +188,14 @@ export class Mesh {
 
   /** Move a node (and its satellites) — routed to the SOURCE node's hub (MeshOperations.Move parity). */
   async move(source: string, target: string): Promise<void> {
-    await this.conn.observe(source, "MoveNodeRequest", { source, target });
+    // Field names match the C# record MoveNodeRequest(SourcePath, TargetPath) — `{source,target}`
+    // never bound (no JsonPropertyName aliases; issue #1475).
+    await this.conn.observe(source, "MoveNodeRequest", { sourcePath: source, targetPath: target });
   }
 
   /** Copy a node to a new path — routed to the SOURCE node's hub. */
   async copy(source: string, target: string): Promise<void> {
-    await this.conn.observe(source, "CopyNodeRequest", { source, target });
+    await this.conn.observe(source, "CopyNodeRequest", { sourcePath: source, targetPath: target });
   }
 
   /**
