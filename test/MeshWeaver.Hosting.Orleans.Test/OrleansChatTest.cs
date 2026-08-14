@@ -28,7 +28,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
-// TODO: needs custom shared fixture â€” uses ChatSiloConfigurator with AddFileSystemPersistence(SamplesGraphData),
+// TODO: needs custom shared fixture — uses ChatSiloConfigurator with AddFileSystemPersistence(SamplesGraphData),
 // which the SharedOrleansFixture does not configure.
 /// <summary>
 /// End-to-end chat test on Orleans infrastructure with FileSystem persistence.

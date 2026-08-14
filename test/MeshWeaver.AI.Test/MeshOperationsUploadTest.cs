@@ -23,7 +23,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Integration tests for <see cref="MeshOperations.Upload"/> â€” the shared core
+/// Integration tests for <see cref="MeshOperations.Upload"/> — the shared core
 /// that backs the MCP <c>upload</c> tool and the REST <c>POST /api/mesh/upload</c>
 /// endpoint. Driving the core directly gives full coverage of every payload
 /// shape (picture, document, nested path) without booting a TestServer.
@@ -37,7 +37,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class MeshOperationsUploadTest : MonolithMeshTestBase
 {
-    /// <summary>Share Mesh/SP across [Fact]s â€” same rationale as MeshPluginContentAccessTest.</summary>
+    /// <summary>Share Mesh/SP across [Fact]s — same rationale as MeshPluginContentAccessTest.</summary>
     protected override bool ShareMeshAcrossTests => true;
 
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
@@ -55,7 +55,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
             .AddGraph()
             .AddAI()
             // Per-node FileSystem content collection. IsEditable=true must be set
-            // explicitly â€” the field defaults to false (matches bool type-default to
+            // explicitly — the field defaults to false (matches bool type-default to
             // survive WhenWritingDefault serialization).
             .ConfigureDefaultNodeHub(config =>
             {
@@ -69,7 +69,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
                     BasePath = contentDir,
                     Settings = new Dictionary<string, string> { ["BasePath"] = contentDir },
                 };
-                // Second collection â€” same shape, but read-only. Lets us assert that
+                // Second collection — same shape, but read-only. Lets us assert that
                 // Upload refuses to write into a non-editable collection. IsEditable
                 // defaults to false; we leave it unset.
                 var readOnlyConfig = new ContentCollectionConfig
@@ -88,7 +88,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     // ---- Helpers ---------------------------------------------------------
 
     /// <summary>The hub the upload core resolves <c>IPathResolver</c> /
-    /// <c>IContentService</c> from â€” same one tests use to issue requests.</summary>
+    /// <c>IContentService</c> from — same one tests use to issue requests.</summary>
     private MeshOperations Ops() => new(GetClient());
 
     private async Task<string> CreateTestNode(string suffix)
@@ -105,7 +105,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
 
     private static byte[] MakePng()
     {
-        // 1Ã—1 transparent PNG â€” a real PNG signature is what content-type sniffers
+        // 1×1 transparent PNG — a real PNG signature is what content-type sniffers
         // look at, and any byte-equality assertion still works on this minimal payload.
         return
         [
@@ -164,7 +164,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
         json.GetProperty("bytes").GetInt32().Should().Be(bytes.Length);
         json.GetProperty("path").GetString().Should().Be($"{nodePath}/content/logo.png");
 
-        // Byte-for-byte verification on disk â€” the upload tool's reason for being.
+        // Byte-for-byte verification on disk — the upload tool's reason for being.
         var disk = DiskPath(nodePath, "logo.png");
         File.Exists(disk).Should().BeTrue();
         File.ReadAllBytes(disk).Should().Equal(bytes);
@@ -206,7 +206,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     [Fact]
     public async Task Upload_Docx_RoundTripsBytes()
     {
-        // Random bytes with a .docx extension â€” the upload tool is content-agnostic;
+        // Random bytes with a .docx extension — the upload tool is content-agnostic;
         // we want to prove a "real-sized" document blob survives the round-trip exactly.
         var nodePath = await CreateTestNode("docx");
         var bytes = MakeRandomBytes(64 * 1024); // 64 KB
@@ -237,7 +237,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     public async Task Upload_Pdf_RoundTripsBytes()
     {
         var nodePath = await CreateTestNode("pdf");
-        // Mix a real PDF magic header with random payload â€” exercises the binary path
+        // Mix a real PDF magic header with random payload — exercises the binary path
         // and gives a sniffable signature.
         var pdf = new byte[8 * 1024];
         RandomNumberGenerator.Fill(pdf);
@@ -255,7 +255,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     /// <summary>
     /// MCP's <c>Upload</c> tool decodes <c>base64Content</c> and forwards to the
     /// same <see cref="MeshOperations.Upload"/>. Run the same flow here to prove
-    /// the two transports stay in sync â€” both produce the same on-disk bytes
+    /// the two transports stay in sync — both produce the same on-disk bytes
     /// and the same response shape.
     /// </summary>
     [Fact]
@@ -300,7 +300,7 @@ public class MeshOperationsUploadTest : MonolithMeshTestBase
     public async Task Upload_MissingFilename_ReturnsError()
     {
         var nodePath = await CreateTestNode("nofile");
-        // Path ends in collection only, no filename â€” Upload must reject early.
+        // Path ends in collection only, no filename — Upload must reject early.
         var result = await Ops().Upload($"{nodePath}/content/", MakePng()).Should().Emit();
         result.Should().StartWith("Error:");
     }

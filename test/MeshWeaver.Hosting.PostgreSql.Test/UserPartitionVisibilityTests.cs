@@ -92,7 +92,7 @@ public class UserPartitionVisibilityTests
         var request = MeshQueryRequest.FromQuery("path:User/Alice scope:descendants", "Bob");
         var results = await Query(query, request);
 
-        // Bob should see zero content nodes â€” subnodes require explicit access
+        // Bob should see zero content nodes — subnodes require explicit access
         results
             .Where(n => n.NodeType != "User")
             .Should().BeEmpty("Bob must not see Alice's partition content");

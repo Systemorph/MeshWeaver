@@ -254,7 +254,7 @@ public class DelegationTest
 
         // Assert: Sessions are isolated (different instances)
         childSession.Should().NotBeSameAs(parentSession,
-            "child session should be isolated from parent â€” B runs in its own namespace within A's execution");
+            "child session should be isolated from parent — B runs in its own namespace within A's execution");
 
         // Assert: Delegation was executed with correct parameters
         capturedAgentName.Should().Be("AgentB");
@@ -271,7 +271,7 @@ public class DelegationTest
 
         responseTexts.Should().NotBeEmpty("parent agent A should produce a response after delegation");
 
-        // The parent's final text should contain B's response (relayed via tool result â†’ summary)
+        // The parent's final text should contain B's response (relayed via tool result → summary)
         var fullResponse = string.Join(" ", responseTexts);
         fullResponse.Should().Contain(AgentBResponseText,
             "A's response should include B's delegation result");

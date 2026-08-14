@@ -11,7 +11,7 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Provides configuration for Activity nodes in the graph.
-/// Activity nodes are system-generated satellite nodes â€” excluded from search and create contexts.
+/// Activity nodes are system-generated satellite nodes — excluded from search and create contexts.
 /// Access is delegated to the MainNode (parent) via SatelliteAccessRule.
 /// </summary>
 public static class ActivityNodeType
@@ -54,7 +54,7 @@ public static class ActivityNodeType
         // Activity hubs host the kernel directly: SubmitCodeRequest etc. land here,
         // run inside this hub's action block, and write progress to the same
         // ActivityLog node via DataChangeRequest.Update on the local workspace.
-        // Replaces the legacy `kernel/*` standalone hub addressing â€” replies route
+        // Replaces the legacy `kernel/*` standalone hub addressing — replies route
         // through the standard MeshNode path instead of three special routing rules.
         HubConfiguration = config => config
             .AddActivityViews()

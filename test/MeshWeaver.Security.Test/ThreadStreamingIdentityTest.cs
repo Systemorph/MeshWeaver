@@ -27,7 +27,7 @@ namespace MeshWeaver.Security.Test;
 
 /// <summary>
 /// Tests that thread chat streaming works end-to-end with RLS enabled.
-/// Verifies the identity chain: CreateThread â†’ SubmitMessage â†’ AI streaming â†’ response node update.
+/// Verifies the identity chain: CreateThread → SubmitMessage → AI streaming → response node update.
 /// This is the monolith equivalent of OrleansChatTest but with access control restrictions.
 /// The streaming response should complete even though the _Exec sub-hub runs asynchronously.
 /// </summary>
@@ -121,7 +121,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             .Should().Within(25.Seconds()).Match(tm => tm is not null);
 
         responseMessage.Should().NotBeNull(
-            "AI streaming should produce a response message â€” " +
+            "AI streaming should produce a response message — " +
             "if this fails, the identity chain is broken during async _Exec sub-hub execution");
         responseMessage!.Text.Should().NotBeNullOrEmpty();
         Output.WriteLine($"Response: '{responseMessage.Text}'");
@@ -170,7 +170,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             "Stream incrementally please",
             contextPath: UserPath);
 
-        // Wait reactively for first partial response â€” should arrive within 5 seconds,
+        // Wait reactively for first partial response — should arrive within 5 seconds,
         // NOT after full streaming completes (which would take longer).
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         await AccumulateDescendants(meshQuery, threadPath)
@@ -186,7 +186,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         // The first partial response should arrive within 5 seconds.
         // If updates are blocked (old bug), they'd all arrive at once after streaming completes.
         latency.Should().BeLessThan(5000,
-            "first streaming update should arrive within 5s â€” if it takes longer, " +
+            "first streaming update should arrive within 5s — if it takes longer, " +
             "updates are blocked in the _Exec hub's message buffer (the bug we fixed)");
     }
 
@@ -300,7 +300,7 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
 }
 
 /// <summary>
-/// Fake chat client for testing â€” returns a simple response.
+/// Fake chat client for testing — returns a simple response.
 /// </summary>
 internal class TestChatClientFactory : IChatClientFactory
 {

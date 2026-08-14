@@ -21,10 +21,10 @@ public class ResolveContextPathTest
 {
     /// <summary>Absolute paths (leading <c>@/</c> or multi-segment <c>@</c>) are returned unchanged.</summary>
     [Theory]
-    [InlineData("@/Acme/AIConsulting/FinalReport", "@Acme/AIConsulting/FinalReport")] // absolute @/ â†’ keeps path
-    [InlineData("/Acme/AIConsulting/FinalReport", "@Acme/AIConsulting/FinalReport")] // absolute / â†’ rewrites to @
-    [InlineData("@OrgA/Doc", "@OrgA/Doc")] // multi-segment already looks absolute â†’ returned as-is
-    [InlineData("@Doc/Architecture/content:file.svg", "@Doc/Architecture/content:file.svg")] // colon with slash before â†’ absolute
+    [InlineData("@/Acme/AIConsulting/FinalReport", "@Acme/AIConsulting/FinalReport")] // absolute @/ → keeps path
+    [InlineData("/Acme/AIConsulting/FinalReport", "@Acme/AIConsulting/FinalReport")] // absolute / → rewrites to @
+    [InlineData("@OrgA/Doc", "@OrgA/Doc")] // multi-segment already looks absolute → returned as-is
+    [InlineData("@Doc/Architecture/content:file.svg", "@Doc/Architecture/content:file.svg")] // colon with slash before → absolute
     public void AbsolutePaths_AreReturnedUnchanged(string input, string expected)
     {
         var chat = new StubChat(new AgentContext { Context = "Acme/AIConsulting" });

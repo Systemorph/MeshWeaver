@@ -100,7 +100,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # 22, not 20: jsdom 30 declares engines ^22.22.2 || ^24.15.0 || >=26.0.0 (jsdom 29 still
+          # allowed 20). On Node 20 its undici dependency hits
+          # `webidl.util.markAsUncloneable is not a function` — markAsUncloneable landed in Node 22 —
+          # and EVERY jsdom worker fails to start, so vitest collects ZERO tests and exits 1.
+          # "no tests" is not a pass, which is why this must be the node version and not a fallback.
+          # (Node 20 also went end-of-life 2026-04-30; portal-next has been on 22 all along.)
+          node-version: 22
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test # vitest: renderer core, control gallery, ThreadChat (live thread-node stream), Blazor-parity ratchet
@@ -131,15 +137,17 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # 22, not 20: the worker's runtime type-stripper (amaro — see package.json's _amaro_note)
+          # declares engines node>=22, and Node 20 went end-of-life 2026-04-30.
+          node-version: 22
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       # 🚨 The tests MUST run here (issue #1496). This package defined `test` and shipped
-      # test/worker.test.mjs, but the job ran `typecheck` only — so the SDK had a decode that
+      # test/worker.test.mjs, but the job ran `typecheck` ONLY — so the SDK carried a decode that
       # returned an empty node for every subscription, and nothing in CI could have noticed. A test
       # nobody runs is documentation, and the defect it would have caught silently dropped thread
       # message ids in production.
-      - run: npm test
+      - run: npm test # node --test: the js/ts Code-node execution core (type stripping → vm → REPL value) + the change-event decode
 
   grpc-web:
     name: "@meshweaver/client-web (typecheck + test)"

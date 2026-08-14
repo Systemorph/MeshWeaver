@@ -104,7 +104,7 @@ public static class ExportDocumentLayoutArea
                         };
                         subject.OnNext(enriched);
 
-                        if (node.NodeType != DeckNodeType.NodeType)
+                        if (!DeckNodeType.Matches(node.NodeType))
                             return;
 
                         var renderer = host.Hub.ServiceProvider.GetService<IPixelPdfRenderer>();

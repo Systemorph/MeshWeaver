@@ -322,9 +322,30 @@ public class WebSearchPluginTest
         result.Should().NotContain("\"link\"");
     }
 
-    private static Task<string> FetchAsync(string body, string mediaType)
+    /// <summary>
+    /// A non-success STATUS is an answer, not a fault (#1561). A search result pointing at a page
+    /// the remote site has removed used to reach <c>EnsureSuccessStatusCode</c>, throw
+    /// <c>HttpRequestException</c>, and abort the fetch with a fail-level log — for a condition in
+    /// which nothing here malfunctioned. The status must come back to the caller so the model can
+    /// move on to the other results.
+    /// </summary>
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, "404")]
+    [InlineData(HttpStatusCode.Forbidden, "403")]
+    [InlineData(HttpStatusCode.InternalServerError, "500")]
+    public async Task FetchWebPage_NonSuccessStatus_IsReportedNotThrown(HttpStatusCode status, string expected)
     {
-        var httpClient = new HttpClient(new StubHttpMessageHandler(body, mediaType));
+        var result = await FetchAsync("<html>nope</html>", "text/html", status);
+
+        result.Should().Contain("could not be fetched",
+            "a removed remote page is a result the caller can act on, not an exception");
+        result.Should().Contain(expected, "the caller needs the status to decide what to do next");
+    }
+
+    private static Task<string> FetchAsync(
+        string body, string mediaType, HttpStatusCode status = HttpStatusCode.OK)
+    {
+        var httpClient = new HttpClient(new StubHttpMessageHandler(body, mediaType, status));
         var plugin = new WebSearchPlugin(
             httpClient,
             Options.Create(new WebSearchConfiguration()),
@@ -333,11 +354,12 @@ public class WebSearchPluginTest
         return plugin.FetchWebPageCore("https://feed.example.com/rss").FirstAsync().ToTask();
     }
 
-    private sealed class StubHttpMessageHandler(string body, string mediaType) : HttpMessageHandler
+    private sealed class StubHttpMessageHandler(
+        string body, string mediaType, HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            => Task.FromResult(new HttpResponseMessage(status)
             {
                 Content = new StringContent(body, Encoding.UTF8, mediaType)
             });

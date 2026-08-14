@@ -108,7 +108,7 @@ public class ModelNodeRepoRegistrationTest : AITestBase
 
         snapshot.Should().Contain(n => n.Path == "Provider/Anthropic"
             && n.NodeType == ModelProviderNodeType.NodeType,
-            "the synced query routes through every IMeshQueryProvider â€” static nodes must surface");
+            "the synced query routes through every IMeshQueryProvider — static nodes must surface");
     }
 
     [Fact]

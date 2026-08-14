@@ -19,7 +19,7 @@ namespace MeshWeaver.Threading.Test;
 
 /// <summary>
 /// Verifies tool calls on response messages are visible via the canonical
-/// <c>client.GetWorkspace().GetMeshNodeStream(path)</c> reactive handle â€”
+/// <c>client.GetWorkspace().GetMeshNodeStream(path)</c> reactive handle —
 /// the same primitive the Blazor view consumes. Updates also go through
 /// the same handle (no ad-hoc <c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>).
 /// </summary>
@@ -235,7 +235,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             .Should().Within(10.Seconds()).Match(d => d?.Count > 0);
         delegations.Should().HaveCount(1);
         delegations![0].DelegationPath.Should().Be(subThreadPath);
-        Output.WriteLine($"Phase 2: delegation appeared â€” {delegations[0].DisplayName}");
+        Output.WriteLine($"Phase 2: delegation appeared — {delegations[0].DisplayName}");
 
         var threadStream = workspace.GetMeshNodeStream(threadPath);
         await threadStream.Update(current =>
@@ -293,7 +293,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
-        // Open the layout area â€” activates ThreadMessageLayoutAreas.Overview
+        // Open the layout area — activates ThreadMessageLayoutAreas.Overview
         // subscriptions (text + toolCalls + isExecuting).
         var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(responsePath),
@@ -306,7 +306,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
 
         var responseStream = workspace.GetMeshNodeStream(responsePath);
 
-        // Record version BEFORE the update â€” we read it off the underlying
+        // Record version BEFORE the update — we read it off the underlying
         // sync stream, the same one the Update writes through.
         var emissionCount = 0;
         using var emissionCounter = responseStream.Subscribe(
@@ -345,7 +345,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         var emissionDelta = countAfter - countBefore;
         emissionDelta.Should().BeLessThan(20,
             "a single tool call update should not cause runaway re-emissions. " +
-            $"Delta was {emissionDelta} â€” indicates a feedback loop in layout area subscriptions");
+            $"Delta was {emissionDelta} — indicates a feedback loop in layout area subscriptions");
         Output.WriteLine($"Version delta: {emissionDelta} (no feedback loop)");
 
         await responseStream.Update(current =>

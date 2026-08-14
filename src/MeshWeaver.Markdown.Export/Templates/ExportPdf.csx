@@ -69,7 +69,7 @@ List<ExportChapter> chapters;
 DocumentExportOptions effectiveOptions;
 string title;
 
-if (rootNode.NodeType == DeckNodeType.NodeType)
+if (DeckNodeType.Matches(rootNode.NodeType))
 {
     // ── Deck → PDF: one chapter per slide, in the deck's own order ──────────────
     var deck = rootNode.ContentAs<DeckContent>(jsonOptions);
@@ -78,7 +78,7 @@ if (rootNode.NodeType == DeckNodeType.NodeType)
     // Resolve the deck's slide SELECTION with the SAME logic the live Overview/Present
     // binding uses — the manifest (ordered paths) or, when empty, the deck's query / the
     // default Slide subtree. One source of truth for a deck's order.
-    var (paths, query) = DeckLayoutAreas.ResolveDeckSelection(rootNode, sourcePath, jsonOptions);
+    var (paths, query, filterSlideTypes) = DeckLayoutAreas.ResolveDeckSelection(rootNode, sourcePath, jsonOptions);
 
     var slideNodes = new List<MeshNode>();
     if (paths.Count > 0)
@@ -103,7 +103,10 @@ if (rootNode.NodeType == DeckNodeType.NodeType)
             .ToTask(Ct);
         // Drop the deck root itself and any '_'-prefixed governance node — same
         // filtering the live query binding applies (see DeckLayoutAreas.ObserveQuerySlides).
+        // The DEFAULT selection additionally keeps only slide-typed nodes (suffix-aware,
+        // so plugin types like Publish/Slide count); a custom query decides for itself.
         var matched = slideMatches
+            .Where(n => !filterSlideTypes || SlideNodeType.Matches(n.NodeType))
             .Where(n => !string.Equals(n.Path, sourcePath, StringComparison.Ordinal))
             .Where(n => !n.Segments.Skip(1).Any(s => s.StartsWith('_')));
         slideNodes = matched

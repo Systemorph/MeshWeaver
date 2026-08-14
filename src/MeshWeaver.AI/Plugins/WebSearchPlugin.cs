@@ -183,7 +183,24 @@ public class WebSearchPlugin : IAgentPlugin
                     "text/html,application/xhtml+xml,application/rss+xml,application/atom+xml,application/xml,text/plain");
 
                 using var response = await httpClient.SendAsync(request, ct);
-                response.EnsureSuccessStatusCode();
+
+                // 🚨 A non-success STATUS is an answer, not a fault (#1561). EnsureSuccessStatusCode
+                // turned "that page is gone" into an HttpRequestException, which surfaced as a
+                // fail-level log and aborted the fetch — for a search result pointing at a page the
+                // remote site has removed. Nothing here malfunctioned, so nothing here should error:
+                // report the status back to the model, which can then move on to the other results.
+                //
+                // Genuine transport failures (DNS, TLS, connection reset, timeout) still throw
+                // HttpRequestException out of SendAsync and are still caught + logged below — those
+                // ARE worth a log line, and keeping the two apart is the whole point.
+                if (!response.IsSuccessStatusCode)
+                {
+                    logger.LogInformation(
+                        "FetchWebPage: {Url} answered {StatusCode} ({Reason}) — reporting it to the caller rather than failing",
+                        url, (int)response.StatusCode, response.ReasonPhrase);
+                    return $"The page could not be fetched: the server answered "
+                           + $"{(int)response.StatusCode} {response.ReasonPhrase ?? response.StatusCode.ToString()} for {url}.";
+                }
 
                 var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
                 var content = await response.Content.ReadAsStringAsync(ct);

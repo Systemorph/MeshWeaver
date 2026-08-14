@@ -21,12 +21,29 @@
     "test": "tsc && node --test test/*.test.mjs",
     "demo": "tsc && node dist/worker.js --demo"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@grpc/grpc-js": "^1.12.0",
     "@grpc/proto-loader": "^0.8.1",
-    "typescript": "^7.0.2"
+    "amaro": "^1.1.11"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0"
-  }
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
+  },
+  "_amaro_note": [
+    "amaro replaces `typescript` as the RUNTIME type-stripper for javascript/typescript Code nodes.",
+    "TypeScript 7 removed `ts.transpileModule`: the package's \".\" export is now lib/version.cjs (a",
+    "version string) and the API moved to typescript/unstable/*, which is Project/Program/Checker",
+    "shaped with no single-string transform at all. amaro is the SWC-based stripper Node itself",
+    "bundles for --experimental-strip-types, and its `mode: \"transform\"` keeps the constructs that",
+    "carry runtime semantics (enum, namespace, parameter properties) working — Node's built-in",
+    "module.stripTypeScriptTypes is strip-only and REJECTS those, which would have been a silent",
+    "capability regression for Code nodes that use them.",
+    "amaro declares engines node>=22, hence the engines field and the workflow's node 22 (Node 20",
+    "went end-of-life 2026-04-30). typescript stays, as a devDependency — it is only `tsc` now, so",
+    "the published worker no longer ships the whole compiler."
+  ]
 }

@@ -164,7 +164,7 @@ public class GlobalAdminSpaceSearchTests
             "GammaOrg should be hidden — no partition_access");
     }
 
-    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Helpers ──────────────────────────────────────────────────────
 
     private async Task PopulateSearchableSchemasAsync(IEnumerable<string> schemas, CancellationToken ct)
     {

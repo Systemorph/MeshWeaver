@@ -301,7 +301,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             }
             else
             {
-                Output.WriteLine($"Create area returned {anyControl!.GetType().Name} instead of StackControl â€” acceptable for custom NodeTypes");
+                Output.WriteLine($"Create area returned {anyControl!.GetType().Name} instead of StackControl — acceptable for custom NodeTypes");
             }
         }
         finally

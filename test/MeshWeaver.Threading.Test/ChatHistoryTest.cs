@@ -58,7 +58,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var responseMsgId = await ThreadFlow.SubmitAndWait(client, threadPath, text,
             contextPath: ContextPath, timeout: 60.Seconds()).Should().Within(60.Seconds()).Emit();
 
-        // CompletedAt is the deterministic "streaming finished" signal â€” only set
+        // CompletedAt is the deterministic "streaming finished" signal — only set
         // by the terminal PushToResponseMessage call in ExecuteMessageAsync. Beats
         // text-pattern matching against in-flight placeholders.
         var finalMessage = await ThreadFlow.ReadMessage(client, threadPath, responseMsgId,
@@ -103,7 +103,7 @@ public class ChatHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             "second call: system + 2 history (user+assistant) + 1 new user = 4 total");
     }
 
-    #region Echo LLM â€” responds with message count to verify history is passed
+    #region Echo LLM — responds with message count to verify history is passed
 
     private class EchoChatClient : IChatClient
     {

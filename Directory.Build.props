@@ -63,10 +63,10 @@
          never roll forward again. Keep a pre-release label on the core until 3.0.0 ships clean.
 
          It also has to RESOLVE by the time anything pins content-sync to it: data-sync pulls
-         content from the tag v$(PlatformVersion). v3.0.0-rc1 shipped 2026-08-13; v3.0.0-rc2 is
-         the line NOW BUILDING and its tag is created only when rc2 is released — never tag it
+         content from the tag v$(PlatformVersion). v3.0.0-rc2 shipped 2026-08-14; v3.0.0-rc3 is
+         the line NOW BUILDING and its tag is created only when rc3 is released — never tag it
          early, the v*.*.* tag IS the trigger for the NuGet + image publish. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc2</PlatformVersion>
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc3</PlatformVersion>
   </PropertyGroup>
   <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
        -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK's _PublishMultiArchContainers

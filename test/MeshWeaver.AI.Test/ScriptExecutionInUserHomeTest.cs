@@ -59,7 +59,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         Log.LogInformation("Boom!");
         MeshWeaver.Layout.Controls.Html(
             "<div style='font-size:48px;text-align:center;animation:pulse 1s infinite'>" +
-            "ðŸŽ† ðŸŽ‡ ðŸŽ† ðŸŽ‡ ðŸŽ†" +
+            "🎆 🎇 🎆 🎇 🎆" +
             "</div>")
         """;
 
@@ -132,7 +132,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             .Should().Within(30.Seconds()).Emit();
 
         observations.Should().HaveCountGreaterThanOrEqualTo(3,
-            "subscribers should observe at least 3 distinct snapshots before the terminal one â€” "
+            "subscribers should observe at least 3 distinct snapshots before the terminal one — "
             + "single-tick delivery would mean the executor blocked the activity hub. Observed: ["
             + string.Join(", ", observations.Select(o => $"{o.Count}@{o.ElapsedMs}ms")) + "]");
 
@@ -145,7 +145,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// Cancel-via-property: per the Activity Control Plane pattern
     /// (Doc/Architecture/ActivityControlPlane.md), users cancel a running
     /// activity by patching its content's <c>RequestedStatus = Cancelled</c>
-    /// â€” NOT by posting a CancelXRequest message. The Activity hub watches its
+    /// — NOT by posting a CancelXRequest message. The Activity hub watches its
     /// own MeshNodeReference and dispatches the internal cancellation when it
     /// observes the patch.
     /// </summary>
@@ -155,13 +155,13 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // Script uses Task.Delay(ms, Ct) so the Ct global (rebound per
         // submission) actually interrupts the wait mid-flight when the user
         // patches RequestedStatus = Cancelled. The delay is generous (15 s)
-        // because it is interrupted the instant cancellation lands â€” when the
+        // because it is interrupted the instant cancellation lands — when the
         // cancel path works the script never sleeps the full duration, so a
         // long delay costs ~nothing. The window has to cover the whole cancel
-        // round-trip (test observes "starting" â†’ patch RequestedStatus â†’
-        // control-plane watcher â†’ CancelScriptRequest â†’ CTS trips); the prior
+        // round-trip (test observes "starting" → patch RequestedStatus →
+        // control-plane watcher → CancelScriptRequest → CTS trips); the prior
         // 800 ms raced that chain, especially behind a cold Roslyn compile.
-        // When the cancel mechanism is genuinely broken the test still fails â€”
+        // When the cancel mechanism is genuinely broken the test still fails —
         // via the Status assertion below, just after the delay elapses.
         var (codePath, _) = await SeedExecutableCode("""
             Log.LogInformation("starting");
@@ -198,7 +198,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // the internal cancel, the script throws OperationCanceledException, and
         // the Activity Status flips out of Running.
         // 30 s covers the broken-cancel case too: if cancellation never lands
-        // the script runs its full 15 s delay then completes â€” the terminal
+        // the script runs its full 15 s delay then completes — the terminal
         // emission still arrives and the Status assertion below reports the
         // real failure ("found Succeeded") instead of an opaque timeout.
         var terminal = (await activityStream
@@ -245,7 +245,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         // Code node in `rbuergi` (the test partition), but configured to
         // route activities to the {viewer}'s home. The DevLogin admin user
         // has ObjectId = "Roland" (see TestUsers.Admin), so {viewer}
-        // resolves to "Roland" â€” independent of where the Code node lives.
+        // resolves to "Roland" — independent of where the Code node lives.
         var id = $"viewerdemo-{Guid.NewGuid():N}";
         var path = $"{UserHome}/{id}";
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -287,7 +287,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
             .Should().Within(60.Seconds()).Emit()).Message;
         var activityPath = respMessage.ActivityLog!;
 
-        // Wait for the LastActivityPath stamp to land â€” the workspace.UpdateMeshNode
+        // Wait for the LastActivityPath stamp to land — the workspace.UpdateMeshNode
         // call inside HandleExecuteScript happens after CreateNode acks but
         // doesn't block ExecuteScriptResponse, so subscribe and wait for it.
         var workspace = GetClient().GetWorkspace();
@@ -306,8 +306,8 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// <summary>
     /// End-to-end check that <c>#r "nuget:..."</c> directives still work after
     /// the .NET-Interactive removal. Pulls MathNet.Numerics from nuget.org and
-    /// uses one of its types â€” proves the full pipeline (NuGetDirectiveParser
-    /// â†’ INuGetAssemblyResolver â†’ MetadataReference â†’ CSharpScript +
+    /// uses one of its types — proves the full pipeline (NuGetDirectiveParser
+    /// → INuGetAssemblyResolver → MetadataReference → CSharpScript +
     /// AssemblyLoadContext probing for transitive deps) compiles, resolves,
     /// and runs against a real third-party package.
     ///
@@ -339,7 +339,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
 
         final!.Status.Should().Be(ActivityStatus.Succeeded,
             "MathNet.Numerics should resolve from nuget.org and the script should compile + run");
-        // erf(1) â‰ˆ 0.8427... â€” the script logs this twice (once via Log, once
+        // erf(1) ≈ 0.8427... — the script logs this twice (once via Log, once
         // as the return value which the kernel echoes onto the activity log).
         final.Messages.Select(m => m.Message)
             .Should().Contain(m => m.Contains("0.8427") || m.Contains("erf"),
@@ -351,8 +351,8 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     /// that resolves against the repo's OWN built nupkgs in <c>dist/packages/</c>
     /// (registered as the <c>mesh-local</c> source in <c>nuget.config</c> with a
     /// packageSourceMapping that pins <c>MeshWeaver.*</c> there). This is the
-    /// "our nuget storage" path: scripts can <c>#r "nuget:MeshWeaver.X, â€¦"</c>
-    /// and the resolver picks them up locally â€” no network round-trip, no
+    /// "our nuget storage" path: scripts can <c>#r "nuget:MeshWeaver.X, …"</c>
+    /// and the resolver picks them up locally — no network round-trip, no
     /// nuget.org outage flake, deterministic for CI.
     ///
     /// <para>Skipped when <c>dist/packages/MeshWeaver.Application.Styles.3.0.0-preview1.nupkg</c>
@@ -363,7 +363,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     [Fact]
     public async Task NuGetDirective_ResolvesAgainstLocalMeshFeed_AndScriptUsesIt()
     {
-        // dist/packages/ is gitignored â€” populated locally by `dotnet pack` and on
+        // dist/packages/ is gitignored — populated locally by `dotnet pack` and on
         // CI by the publish workflow's pack step. When absent, surface the reason
         // via the test output and exit cleanly so an unprepared CI run surfaces
         // the missing-artefact signal instead of a misleading resolver error.
@@ -381,7 +381,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
         var (codePath, _) = await SeedExecutableCode("""
             #r "nuget:MeshWeaver.Application.Styles, 3.0.0-preview1"
             using MeshWeaver.Application.Styles;
-            // FluentIcons is a static surface from MeshWeaver.Application.Styles â€”
+            // FluentIcons is a static surface from MeshWeaver.Application.Styles —
             // touching it proves the assembly was actually loaded into the script ALC.
             var icon = FluentIcons.Add();
             Log.LogInformation("Resolved icon: {Name}", icon.Id);
@@ -418,7 +418,7 @@ public class ScriptExecutionInUserHomeTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
-    /// Re-running creates a NEW activity. The previous activity is untouched â€”
+    /// Re-running creates a NEW activity. The previous activity is untouched —
     /// historical runs accumulate as siblings under <c>{codePath}/_Activity/*</c>.
     /// </summary>
     [Fact]

@@ -18,7 +18,7 @@ using Xunit;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>
-/// Tests for <see cref="ModelDiscoveryService"/> â€” the hierarchical
+/// Tests for <see cref="ModelDiscoveryService"/> — the hierarchical
 /// walk over namespace ancestors AND NodeType ancestors. Asserts that:
 /// <list type="bullet">
 ///   <item>(a) <c>GetModelsAtNode</c> returns the satellite at one path.</item>
@@ -92,7 +92,7 @@ public class ModelDiscoveryServiceTest : AITestBase
         var owner = $"org-{Guid.NewGuid():N}";
         var child = $"{owner}/Project1";
 
-        // Two providers â€” one at the org level, one at the child level.
+        // Two providers — one at the org level, one at the child level.
         await CreateUserProvider(owner, "Anthropic", "claude-sonnet-4-6");
         await CreateUserProvider(child, "OpenAI", "gpt-4o-mini");
 
@@ -130,7 +130,7 @@ public class ModelDiscoveryServiceTest : AITestBase
     {
         // Resolving the service from the mesh hub's ServiceProvider must
         // succeed. The contract is that callers reach into the top-level
-        // mesh hub for this â€” never their own per-thread/per-exec hub
+        // mesh hub for this — never their own per-thread/per-exec hub
         // (which may be blocked by an in-flight handler).
         var fromMesh = Mesh.ServiceProvider.GetService<ModelDiscoveryService>();
         fromMesh.Should().NotBeNull("ModelDiscoveryService is registered as a top-level singleton");

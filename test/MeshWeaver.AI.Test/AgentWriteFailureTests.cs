@@ -29,7 +29,7 @@ namespace MeshWeaver.AI.Test;
 /// Comprehensive failure-mode tests for the agent write tools (Create, Update, Patch).
 ///
 /// Rationale: when an agent sends malformed input, the tool MUST return a speaking
-/// error string â€” never an empty string, never a silent success, never a stream-
+/// error string — never an empty string, never a silent success, never a stream-
 /// breaking write. These tests enumerate the failure shapes we see in the wild:
 /// invalid JSON, null content, missing required fields, empty identifiers,
 /// schema-violating content, and unknown paths.
@@ -41,7 +41,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
 
     public AgentWriteFailureTests(ITestOutputHelper output) : base(output) { }
 
-    // Share Mesh/ServiceProvider across all [Fact]s in this class â€” see
+    // Share Mesh/ServiceProvider across all [Fact]s in this class — see
     // MonolithMeshTestBase.ShareMeshAcrossTests for the rationale (~190 MiB native
     // heap leak per per-test mesh otherwise).
     protected override bool ShareMeshAcrossTests => true;
@@ -92,14 +92,14 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         foreach (var input in inputs)
         {
             (await plugin.Create(input)).Should().NotBeNullOrWhiteSpace(
-                because: $"Create('{input}') must never return empty â€” downstream streams depend on non-empty responses");
+                because: $"Create('{input}') must never return empty — downstream streams depend on non-empty responses");
             (await plugin.Update(input)).Should().NotBeNullOrWhiteSpace(
                 because: $"Update('{input}') must never return empty");
             (await plugin.Delete(input)).Should().NotBeNullOrWhiteSpace(
                 because: $"Delete('{input}') must never return empty");
         }
 
-        // Patch has a second argument â€” try each combination too
+        // Patch has a second argument — try each combination too
         foreach (var input in inputs)
         {
             (await plugin.Patch("@ACME/nonexistent", input)).Should().NotBeNullOrWhiteSpace();
@@ -108,7 +108,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
     }
 
     // =========================================================================
-    // CREATE â€” failure modes
+    // CREATE — failure modes
     // =========================================================================
 
     [Fact]
@@ -156,7 +156,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
             @namespace = "ACME",
             name = "Bad Content",
             nodeType = TestNodeType,
-            // TestProduct.Price is decimal â€” passing an object forces a shape mismatch
+            // TestProduct.Price is decimal — passing an object forces a shape mismatch
             content = new { name = "X", price = new { nested = "object" }, quantity = 1 }
         });
 
@@ -168,7 +168,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
     }
 
     // =========================================================================
-    // UPDATE â€” failure modes (each entry failure must NOT halt the batch)
+    // UPDATE — failure modes (each entry failure must NOT halt the batch)
     // =========================================================================
 
     [Fact]
@@ -226,7 +226,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         var result = await plugin.Update(updateJson);
 
         result.Should().Contain("Error");
-        result.Should().Contain("name", because: "empty name corrupts UI â€” error must call it out");
+        result.Should().Contain("name", because: "empty name corrupts UI — error must call it out");
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
         result.Should().Contain("schema", because: "error must include the recovery schema");
         result.Should().Contain("price");
 
-        // Seed is intact â€” rejected update must not overwrite persisted data
+        // Seed is intact — rejected update must not overwrite persisted data
         (await plugin.Get($"@ACME/{uniqueId}")).Should().Contain("Widget");
     }
 
@@ -317,7 +317,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
     }
 
     // =========================================================================
-    // PATCH â€” failure modes
+    // PATCH — failure modes
     // =========================================================================
 
     [Fact]
@@ -350,7 +350,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
 
         var result = await plugin.Patch($"@ACME/{uniqueId}", "{ not json");
 
-        // Either "Invalid JSON:" or a generic "Error:" is acceptable â€” what matters is
+        // Either "Invalid JSON:" or a generic "Error:" is acceptable — what matters is
         // that it's a speaking error and not an empty string or silent success.
         result.Should().NotBeNullOrWhiteSpace();
         (result.Contains("Invalid JSON") || result.Contains("Error")).Should().BeTrue(
@@ -427,7 +427,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
     }
 
     // =========================================================================
-    // STREAM HEALTH â€” rejected writes must leave persisted state unchanged
+    // STREAM HEALTH — rejected writes must leave persisted state unchanged
     // =========================================================================
 
     [Fact]
@@ -457,7 +457,7 @@ public class AgentWriteFailureTests : MonolithMeshTestBase
 
         // After all rejected attempts, the seeded content must still be intact
         var after = await plugin.Get(path);
-        after.Should().Contain("Widget", because: "the seed must survive all rejected writes â€” streams stay healthy");
+        after.Should().Contain("Widget", because: "the seed must survive all rejected writes — streams stay healthy");
     }
 
     // -------------------------------------------------------------------------

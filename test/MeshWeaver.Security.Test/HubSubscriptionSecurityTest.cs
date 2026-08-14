@@ -44,7 +44,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
         => base.ConfigureClient(configuration).AddData(d => d);
 
     /// <summary>
-    /// Skip PublicAdminAccess â€” security tests need granular permissions.
+    /// Skip PublicAdminAccess — security tests need granular permissions.
     /// </summary>
     protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 

@@ -13,7 +13,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 /// <summary>
 /// Tests that access control in the User namespace works correctly with PostgreSQL:
 /// 1) User/<name> (the User node itself) is visible to any authenticated user via public-read.
-/// 2) User/<name>/<subnode> is visible ONLY to the owner (<name>) â€” not to other users.
+/// 2) User/<name>/<subnode> is visible ONLY to the owner (<name>) — not to other users.
 /// 3) When an explicit access grant is added for <subnode>, it becomes visible to others.
 /// </summary>
 [Collection("PostgreSql")]
@@ -103,12 +103,12 @@ public class UserNamespaceAccessTests
         await SeedUserNamespaceData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // Bob queries for User/Alice/MyProject â€” should NOT be visible (no access grant)
+        // Bob queries for User/Alice/MyProject — should NOT be visible (no access grant)
         var request = MeshQueryRequest.FromQuery("path:User/Alice/MyProject", "Bob");
         var results = await Query(query, request);
 
         results.Should().BeEmpty(
-            "User/Alice/MyProject should NOT be visible to Bob â€” " +
+            "User/Alice/MyProject should NOT be visible to Bob — " +
             "subnodes under a User namespace require explicit access");
     }
 
@@ -118,7 +118,7 @@ public class UserNamespaceAccessTests
         await SeedUserNamespaceData();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // Alice queries for her own subnode â€” should be visible (she has Read on User/Alice)
+        // Alice queries for her own subnode — should be visible (she has Read on User/Alice)
         var request = MeshQueryRequest.FromQuery("path:User/Alice/MyProject", "Alice");
         var results = await Query(query, request);
 

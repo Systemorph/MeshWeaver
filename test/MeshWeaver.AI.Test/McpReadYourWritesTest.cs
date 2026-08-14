@@ -36,7 +36,7 @@ namespace MeshWeaver.AI.Test;
 /// not the same as returning correct content. If `MeshOperations` ever reverts
 /// to a query-based content read (which goes through a lagged read-side index),
 /// these tests catch it deterministically in single-process and flake in
-/// distributed setups â€” either way, a real regression signal.
+/// distributed setups — either way, a real regression signal.
 ///
 /// Covers: Get (existing node + post-Create + post-Patch + not-found),
 /// Patch (merges with current content, not cached / indexed value),
@@ -52,7 +52,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
 
     public McpReadYourWritesTest(ITestOutputHelper output) : base(output) { }
 
-    // Share Mesh/ServiceProvider across all [Fact]s in this class â€” saves the
+    // Share Mesh/ServiceProvider across all [Fact]s in this class — saves the
     // ~190 MiB native heap that would otherwise leak per test method.
     protected override bool ShareMeshAcrossTests => true;
 
@@ -92,7 +92,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         var create = await plugin.Create(SeedJson(id, "Original", 1.00m, 1));
         create.Should().StartWith("Created:");
 
-        // Immediate read â€” no artificial delay. A query-based read path would
+        // Immediate read — no artificial delay. A query-based read path would
         // sometimes return "Not found" here because the read-side index hasn't
         // caught up with the write yet. GetRemoteStream goes to the owning hub's
         // workspace so the read always reflects the write.
@@ -123,7 +123,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         var plugin = CreatePlugin();
         var id = $"grim-{Guid.NewGuid():N}";
 
-        // GetRemoteStream is a live subscription â€” without a Timeout guard it
+        // GetRemoteStream is a live subscription — without a Timeout guard it
         // would hang forever on a non-existent node. This test pins the
         // 10-second budget the production code sets.
         var got = await plugin.Get($"@ACME/{id}");
@@ -140,7 +140,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         await plugin.Create(SeedJson(id, "Original", 1.00m, 1));
 
         // The critical window: Patch reads current content to merge with new
-        // fields. A query-based read here races the Create write â€” with stale
+        // fields. A query-based read here races the Create write — with stale
         // data it would fail "node not found" or overwrite with an old version.
         var patched = await plugin.Patch($"@ACME/{id}", "{\"icon\":\"<svg/>\"}");
         patched.Should().StartWith("Patched:",
@@ -186,7 +186,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
         var id = $"upri-{Guid.NewGuid():N}";
         await plugin.Create(SeedJson(id, "Original", 1.00m, 1));
 
-        // Fetch the created node as the agent would â€” then send it back with
+        // Fetch the created node as the agent would — then send it back with
         // updated fields. Update's implementation does not read pre-state
         // (full replacement semantics), so it's here to assert the round-trip
         // still works end-to-end after our CQRS refactor.
@@ -220,13 +220,13 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     {
         var plugin = CreatePlugin();
         // TestProduct is the NodeType; an instance of it exercises the "node has a
-        // NodeType â†’ resolve its diagnostics" path which is the real agent use case.
+        // NodeType → resolve its diagnostics" path which is the real agent use case.
         var id = $"diag-{Guid.NewGuid():N}";
         await plugin.Create(SeedJson(id, "Diag", 1m, 1));
 
         var result = await plugin.GetDiagnostics($"@ACME/{id}");
         result.Should().Contain("nodeTypePath",
-            because: "GetDiagnostics on an instance resolves to its NodeType â€” refactor must preserve this shape");
+            because: "GetDiagnostics on an instance resolves to its NodeType — refactor must preserve this shape");
     }
 
     [Fact]
@@ -260,7 +260,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     public async Task ExecuteScript_ForIsExecutableCodeNode_DispatchesAfterFileSystemRoundTrip()
     {
         // Seed the script directly via IMeshService (the "created through
-        // IMeshService" path per our testing rule â€” script nodes skip the MCP
+        // IMeshService" path per our testing rule — script nodes skip the MCP
         // plugin Create so we're not tangling the test with Create semantics).
         var id = $"exec-{Guid.NewGuid():N}";
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -290,7 +290,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     }
 
     // NOTE: There used to be an `ExecuteScript_ForBrokenScript_ReportsErrorStatus`
-    // test here â€” it was removed because the premise didn't match the API contract.
+    // test here — it was removed because the premise didn't match the API contract.
     // ExecuteScriptResponse only carries dispatch status (Success/Failure of the
     // kernel handing off the work). Runtime exceptions inside the script land in
     // the OUTPUT AREA, not in the response. A test for runtime-error surfacing must
@@ -300,7 +300,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     /// A script that targets a node which is not flagged executable must be rejected
     /// up-front (no kernel dispatch, no silent success). Reject is a synchronous
     /// path: HandleExecuteScript reads the local workspace, sees IsExecutable=false,
-    /// and posts the error response â€” should be milliseconds. Anything slower means
+    /// and posts the error response — should be milliseconds. Anything slower means
     /// an await/deadlock has slipped into the read path.
     ///
     /// <para>Pre-#841 this test asserted the DEFECT: ExecuteScript was fire-and-forget, so
@@ -311,7 +311,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     /// and the "sleep then check nothing happened" probe is gone.</para>
     /// </summary>
     // Timeout includes the cold class init for the first [Fact] in this
-    // ShareMeshAcrossTests class â€” building the SP + AddGraph + AddAI is
+    // ShareMeshAcrossTests class — building the SP + AddGraph + AddAI is
     // ~3-7s alone.
     [Fact]
     public async Task ExecuteScript_ForNonExecutableCodeNode_ReportsError()
@@ -360,7 +360,7 @@ public class McpReadYourWritesTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Minimal IAgentChat stub â€” MeshPlugin only reads ExecutionContext + Context,
+    /// Minimal IAgentChat stub — MeshPlugin only reads ExecutionContext + Context,
     /// so nulls are fine. Duplicated from other tests so each file is self-contained.
     /// </summary>
     private sealed class MinimalChat : IAgentChat
