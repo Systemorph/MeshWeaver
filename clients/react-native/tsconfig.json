@@ -14,12 +14,32 @@
     "noEmit": true,
     "resolveJsonModule": true,
     "baseUrl": ".",
+    // 🚨 ONE React type identity for the whole program — the tsc equivalent of the bundler
+    // dedupe portal-next does with webpack resolve.modules (and Vite's `dedupe`).
+    // "@meshweaver/react/core" below source-aliases the SHARED renderer, whose own
+    // clients/react/node_modules holds a DIFFERENT @types/react. Without the react/* entries the
+    // program carries TWO React type identities and every JSX call site fails with
+    //   TS2786: 'RenderArea' cannot be used as a JSX component
+    //     ... Type 'bigint' is not assignable to type 'ReactNode'
+    // (React 19's ReactNode admits bigint, React 18's does not) — 28 errors, none of them a real
+    // incompatibility. A RESOLUTION fix, not a suppression: it silences nothing, and the shared
+    // core was verified to typecheck cleanly against EITHER copy (18 or 19), so it is not masking
+    // a version requirement. The react-native/Expo upgrade itself is issue #1584.
     "paths": {
       "@meshweaver/react/core": [
         "../react/src/core.ts"
       ],
       "@meshweaver/client-web": [
         "../grpc-web/src/index.ts"
+      ],
+      "react": [
+        "./node_modules/@types/react"
+      ],
+      "react/jsx-runtime": [
+        "./node_modules/@types/react/jsx-runtime"
+      ],
+      "react-dom": [
+        "./node_modules/@types/react-dom"
       ]
     }
   },
