@@ -73,6 +73,16 @@ export {
 // Field/option binding + string coercion — shared by ALL leaf packs (the RN pack used to
 // re-implement these because they weren't exported from the core).
 export { str, useClick, useField, useOptions, useText, type Field } from "./controls/common.js";
+// Auto-saving editors (MarkdownEditorControl / CodeEditorControl `autoSaveAddress`): the debounced
+// write path a node-bound editor needs, shared by every leaf pack so the web and native editors
+// cannot persist differently — or, as before #1476, not at all.
+export {
+  AUTO_SAVE_DEBOUNCE_MS,
+  autoSaveAddressOf,
+  autoSaveContentPatch,
+  useAutoSave,
+  type AutoSaveKind,
+} from "./controls/autoSave.js";
 // .NET-style value formatting and the PURE pivot (cross-tab) model. Renderer-free on purpose: both
 // the Fluent pack and the React Native pack aggregate and format through THESE, so a pivot total is
 // computed by one implementation rather than one per platform.

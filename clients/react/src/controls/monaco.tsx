@@ -20,6 +20,7 @@ import { Text, Textarea } from "@fluentui/react-components";
 import type { Json, UiControl } from "../area/types.js";
 import { useBindingPointer, useEmit, useResolve, useScope } from "../area/context.js";
 import { useThemeMode } from "../theme/themeMode.js";
+import { useAutoSave, type AutoSaveKind } from "./autoSave.js";
 import { str } from "./common.js";
 
 type MonacoModule = typeof import("@monaco-editor/react");
@@ -41,18 +42,30 @@ function useMonaco(): MonacoModule | null {
   return mod;
 }
 
-/** Bound editable value — CodeEditor/MarkdownEditor bind `value` (the Blazor ViewModel.Value), with
- *  `data` tolerated for hand-written trees. Writes go back through the standard update event. */
-function useValueBinding(control: UiControl): { value: string; setValue: (v: string) => void; onBlur: () => void } {
+/**
+ * Bound editable value — CodeEditor/MarkdownEditor bind `value` (the Blazor ViewModel.Value), with
+ * `data` tolerated for hand-written trees. Writes go back through the standard update event.
+ *
+ * When the control opted into AUTO-SAVE (`autoSaveAddress`), the debounced text is ALSO patched into
+ * that node. Such a control carries a literal value and no binding pointer, so the update event
+ * alone wrote nowhere and the edit was silently lost (issue #1476). Both paths run: a control can
+ * legitimately be pointer-bound and auto-saving at once.
+ */
+function useValueBinding(
+  control: UiControl,
+  autoSaveKind: AutoSaveKind,
+): { value: string; setValue: (v: string) => void; onBlur: () => void } {
   const bound = control.value ?? control.data;
   const value = str(useResolve(bound));
   const pointer = useBindingPointer(bound);
+  const autoSave = useAutoSave(control, autoSaveKind);
   const emit = useEmit();
   const { area } = useScope();
   return {
     value,
     setValue: (v: string) => {
       if (pointer) emit({ kind: "update", area, pointer, value: v });
+      autoSave?.(v);
     },
     onBlur: () => emit({ kind: "blur", area }),
   };
@@ -108,10 +121,20 @@ export function monacoSettings(
 
 const monoFallbackStyle: CSSProperties = { fontFamily: "var(--fontFamilyMonospace)", minHeight: 180 };
 
-function MonacoValueEditor({ control, forceLanguage, wordWrapDefault }: { control: UiControl; forceLanguage?: string; wordWrapDefault?: boolean }): ReactNode {
+function MonacoValueEditor({
+  control,
+  autoSaveKind,
+  forceLanguage,
+  wordWrapDefault,
+}: {
+  control: UiControl;
+  autoSaveKind: AutoSaveKind;
+  forceLanguage?: string;
+  wordWrapDefault?: boolean;
+}): ReactNode {
   const monaco = useMonaco();
   const { resolved } = useThemeMode();
-  const binding = useValueBinding(control);
+  const binding = useValueBinding(control, autoSaveKind);
   // Resolve every bindable prop unconditionally (hooks must not be short-circuited).
   const language = useResolve(control.language);
   const theme = useResolve(control.theme);
@@ -171,11 +194,13 @@ function MonacoValueEditor({ control, forceLanguage, wordWrapDefault }: { contro
 }
 
 export function CodeEditorView({ control }: { control: UiControl }): ReactNode {
-  return <MonacoValueEditor control={control} />;
+  // Auto-save target: CodeConfiguration.Code (CodeEditorView.razor's AutoSaveCode).
+  return <MonacoValueEditor control={control} autoSaveKind="code" />;
 }
 
 export function MarkdownEditorView({ control }: { control: UiControl }): ReactNode {
-  return <MonacoValueEditor control={control} forceLanguage="markdown" wordWrapDefault />;
+  // Auto-save target: MarkdownContent.Content (MarkdownEditorView.razor's AutoSaveContentAsync).
+  return <MonacoValueEditor control={control} autoSaveKind="markdown" forceLanguage="markdown" wordWrapDefault />;
 }
 
 export function DiffEditorView({ control }: { control: UiControl }): ReactNode {

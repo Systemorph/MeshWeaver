@@ -22,8 +22,10 @@ import {
   useScope,
   classifyIcon,
   str,
+  useAutoSave,
   useField,
   useOptions,
+  type AutoSaveKind,
   type ControlComponent,
   type EmbeddedAreaHandle,
   type LeafPack,
@@ -475,24 +477,38 @@ const MenuItem: ControlComponent = ({ control }) => {
 // ── code / markdown editors (native twins of controls/editors.tsx). Monaco is DOM-only; the web pack
 //    itself falls back to a plain <textarea> when Monaco isn't loaded — native uses the same shape: a
 //    monospace multiline TextInput, fully bound. ──────────────────────────────────────────────────
-const CodeEditor: ControlComponent = ({ control }) => {
-  const f = useField(control);
-  return (
-    <Labeled label={f.label}>
-      <TextInput
-        style={styles.codeInput}
-        value={s(f.value)}
-        editable={!f.disabled}
-        multiline
-        autoCapitalize="none"
-        autoCorrect={false}
-        spellCheck={false}
-        onChangeText={f.setValue}
-        onBlur={f.onBlur}
-      />
-    </Labeled>
-  );
-};
+//
+// AUTO-SAVE (issue #1476): a control carrying `autoSaveAddress` edits a mesh node IN PLACE and has no
+// binding pointer, so the ordinary field write goes nowhere — the edit stayed on screen and was never
+// persisted. `useAutoSave` (shared with the web pack, so the two cannot diverge) patches the node's
+// content after the typing pause; the two editors differ only in which content field they write.
+function textEditor(autoSaveKind: AutoSaveKind): ControlComponent {
+  return ({ control }) => {
+    const f = useField(control);
+    const autoSave = useAutoSave(control, autoSaveKind);
+    return (
+      <Labeled label={f.label}>
+        <TextInput
+          style={styles.codeInput}
+          value={s(f.value)}
+          editable={!f.disabled}
+          multiline
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
+          onChangeText={(v) => {
+            f.setValue(v);
+            autoSave?.(v);
+          }}
+          onBlur={f.onBlur}
+        />
+      </Labeled>
+    );
+  };
+}
+
+const CodeEditor = textEditor("code"); // → CodeConfiguration.Code
+const MarkdownEditor = textEditor("markdown"); // → MarkdownContent.Content
 
 const DiffEditor: ControlComponent = ({ control }) => {
   const original = s(useResolve(control.original ?? control.originalValue));
@@ -677,7 +693,7 @@ export const rnPack: LeafPack = {
     Date: DateInput,
     DateTime: DateTimeInput,
     MenuItem,
-    MarkdownEditor: CodeEditor,
+    MarkdownEditor,
     CodeEditor,
     Editor: CodeEditor,
     DiffEditor,
