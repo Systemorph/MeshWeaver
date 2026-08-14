@@ -123,6 +123,49 @@ public record PreWarmOutcome(string TypePath, PreWarmStatus Status, string? Deta
     public bool WasHealthyBeforeBake { get; init; } = true;
 
     /// <summary>
+    /// 🚨 WALL-CLOCK COST of this one type's bake — the number that was missing.
+    ///
+    /// <para>Before this existed the only signal a compile unit produced was a binary pass/fail
+    /// against a bootstrap deadline, so "which types are expensive?" and "did that change help?"
+    /// were both unanswerable, and the only available response to a type brushing the budget was to
+    /// widen it (Systemorph/MeshWeaver#1439). A per-type duration turns a budget into a measurement.</para>
+    ///
+    /// <para><see cref="TimeSpan.Zero"/> for an outcome that did no work — a type skipped because
+    /// its upstream failed, or one already on the shared store — so a zero here means "not compiled",
+    /// never "compiled instantly".</para>
+    /// </summary>
+    public TimeSpan Duration { get; init; }
+
+    /// <summary>
+    /// How many source documents this type's compile unit contained, and how many bytes of C# they
+    /// amounted to — the correlate a duration is only interesting NEXT to. A type whose duration
+    /// grows while its unit does not is a different problem from one where both grow together, and
+    /// the whole point of #1439 is that nobody could tell those apart. Zero when the driver did not
+    /// resolve a source set (the activation path, which lets the compiler do its own discovery).
+    /// </summary>
+    public int SourceCount { get; init; }
+
+    /// <inheritdoc cref="SourceCount"/>
+    public long SourceBytes { get; init; }
+
+    /// <summary>
+    /// The cost, rendered for the per-type log line that already exists — e.g.
+    /// <c>"3.4 s over 72 file(s), 1399 KB"</c>, or an empty string for an outcome that compiled
+    /// nothing (so a skip does not gain a misleading "0 s").
+    /// </summary>
+    public string DescribeCost() =>
+        Duration <= TimeSpan.Zero
+            ? string.Empty
+            : SourceCount > 0
+                ? string.Format(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    "{0:F1} s over {1} file(s), {2} KB",
+                    Duration.TotalSeconds, SourceCount, SourceBytes / 1024)
+                : string.Format(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    "{0:F1} s", Duration.TotalSeconds);
+
+    /// <summary>
     /// Evidence that this compile sampled a TORN source snapshot: at least one of the type's
     /// sources was last modified AT OR AFTER the compile started
     /// (<see cref="DynamicTypePreWarmer.SourcesMovedDuringCompile(NodeTypeDefinition)"/>), so the
@@ -1009,7 +1052,14 @@ public static class DynamicTypePreWarmer
         string typePath,
         TimeSpan budget,
         ILogger? logger)
-        => Observable.Using(
+    {
+        // 🚨 What this type's activation-driven bake COST, on the line that already exists —
+        // the activation-path twin of the batch driver's measurement (issue #1439). Note what it
+        // measures HERE: not Roslyn, but the whole round trip — activating the type's own hub,
+        // its compile watcher settling, the state write coming back. That is the number worth
+        // having, because it is the one the bootstrap's liveness deadline is actually spent on.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        return Observable.Using(
                 () => AccessContextScope.AsSystem(accessService),
                 _ => workspace.GetMeshNodeStream(typePath)
                     // Unavailable is terminal too — a driver already gave up determining
@@ -1048,8 +1098,11 @@ public static class DynamicTypePreWarmer
                 ex is TimeoutException
                     ? new PreWarmOutcome(typePath, PreWarmStatus.TimedOut)
                     : new PreWarmOutcome(typePath, PreWarmStatus.Faulted, ex.Message)))
+            .Select(o => o with { Duration = clock.Elapsed })
             .Do(o => logger?.LogInformation(
-                "DynamicTypePreWarmer: {TypePath} → {Status}{Detail}",
+                "DynamicTypePreWarmer: {TypePath} → {Status}{Detail} — {Cost}",
                 o.TypePath, o.Status,
-                string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})"));
+                string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})",
+                o.DescribeCost()));
+    }
 }
