@@ -85,6 +85,13 @@ public static class PluginPacker
                 plugin = manifest.Name,
                 version = manifest.Version,
                 frameworkVersion,
+                // 🚨 The identity an installer must check before seeding these bytes into the
+                // assembly store. The runtime compares MVIDs, not version strings — see
+                // FrameworkIdentity. Null means it could not be established here, and an installer
+                // must then compile rather than seed: a wrong seed is worse than no seed, because
+                // the store hit suppresses the rebuild that was needed and the mismatch surfaces
+                // as a TypeLoadException inside an ALC, with no overlay and no diagnostic.
+                frameworkMvid = FrameworkIdentity.ResolveFrameworkMvid(frameworkVersion),
                 assemblies,
             },
             new JsonSerializerOptions { WriteIndented = true }));
