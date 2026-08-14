@@ -100,6 +100,31 @@ public class OrdinaryJsonIsNotANodeFileTest
     }
 
     /// <summary>
+    /// 🚨 The structural pre-check must be exactly as tolerant as the deserializer it front-runs.
+    /// <c>JsonDocumentOptions</c> defaults REJECT comments and trailing commas, so taking the
+    /// default would have made a node file that parsed yesterday — under a hub whose options skip
+    /// comments — start failing today, in the name of a fix about not failing on files that were
+    /// never nodes. Caught in review on PR #1615.
+    /// </summary>
+    [Theory]
+    [InlineData("{\n  // a hand-authored node with a comment\n  \"id\": \"Commented\"\n}")]
+    [InlineData("{ \"id\": \"TrailingComma\", \"name\": \"x\", }")]
+    public void ATolerantlyAuthoredNodeFileStillParses(string content)
+    {
+        var tolerant = new JsonFileParser(new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true,
+            ReadCommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+        });
+
+        tolerant.Parse("f.json", content, "Space/f.json").Should().NotBeNull(
+            "the pre-check reads the same document the deserializer would — a file the hub's own "
+            + "options accept must not be rejected one layer earlier");
+    }
+
+    /// <summary>
     /// A JSON array or scalar is a document, never a node — and must not throw on the way to
     /// saying so.
     /// </summary>
