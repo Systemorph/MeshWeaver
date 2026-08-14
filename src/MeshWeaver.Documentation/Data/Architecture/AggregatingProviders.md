@@ -268,7 +268,7 @@ DI-registered providers (`INodeMenuProvider`, `IAutocompleteProvider`) are added
 hub.WithServices(services =>
 {
     services.TryAddEnumerable(
-        ServiceDescriptor.Scoped<INodeMenuProvider, MarkdownExportMenuProvider>());
+        ServiceDescriptor.Scoped<INodeMenuProvider, ExportMenuProvider>());
     return services;
 });
 ```
@@ -285,7 +285,7 @@ The node-menu chain also supports **delegate** providers registered via `config.
 
 **Reactive snapshot set** (provider returns `IObservable<IReadOnlyCollection<TItem>>`, aggregator uses `CombineLatest` + per-emission re-render):
 
-- `INodeMenuProvider` + `NodeMenuItemsExtensions.CollectMenuItemStreamsByContext` / `RenderMenus` (`NodeMenuItemsExtensions.cs`) — node / mesh menu aggregator. Implementers: `DefaultNodeMenuProvider`, `DefaultMeshMenuProvider`, `MarkdownExportMenuProvider`, `LinkedInCredentialMenuProvider`, `ApprovalMenuProvider`, the AI thread menu providers.
+- `INodeMenuProvider` + `NodeMenuItemsExtensions.CollectMenuItemStreamsByContext` / `RenderMenus` (`NodeMenuItemsExtensions.cs`) — node / mesh menu aggregator. Implementers: `DefaultNodeMenuProvider`, `DefaultMeshMenuProvider`, `ExportMenuProvider`, `LinkedInCredentialMenuProvider`, `ApprovalMenuProvider`, the AI thread menu providers.
 
 Any new aggregator that gathers items from multiple providers should look like one of these and nothing else. Pick **progressive snapshot** when the consumer repaints as the merged best-list refines (any suggest widget); pick **reactive-snapshot-set** when the consumer renders a whole control from the current set and must re-render when that set changes (a permission-gated menu). If it is tempting to reach for `Where` / `OrderBy` / `Distinct` at the aggregation boundary, stop — put the comparer into the merge (`AutocompleteSnapshots.ByPriorityDescending`) or into the `ImmutableSortedSet` and let it do the work.
 

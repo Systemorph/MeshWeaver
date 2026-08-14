@@ -13,7 +13,7 @@ Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='
 > looking perfectly healthy.
 
 This is the tail of every plugin change (`MeshWeaver.Plugins`, `MeshWeaver.Reinsurance`,
-`MeshWeaver.SocialMedia`, `Systemorph/education`). The repo-side procedure is the `/pullrequest`
+`MeshWeaver.SocialMedia`, `Systemorph/MeshWeaver.Education`). The repo-side procedure is the `/pullrequest`
 skill in each of those repos; this page is the mesh-side half.
 
 ## The three steps
