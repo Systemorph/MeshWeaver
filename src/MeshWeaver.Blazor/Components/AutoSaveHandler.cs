@@ -110,9 +110,12 @@ public class AutoSaveHandler : IDisposable
     }
 
     /// <summary>
-    /// Disposes the handler, FLUSHING any edit still inside the throttle window, then releasing the
-    /// subscription and completing the value subject. Subsequent calls to <c>OnValueChanged</c> are
-    /// silently ignored after disposal.
+    /// Disposes the handler: releases the throttle subscription and disposes the value subject,
+    /// then FLUSHES any edit that was still inside the throttle window. Subsequent calls to
+    /// <c>OnValueChanged</c> are silently ignored after disposal.
+    ///
+    /// <para>That order is deliberate — tearing the throttle down first makes the flush the only
+    /// remaining writer, where flushing first would leave a window in which both could fire.</para>
     ///
     /// <para>🚨 <b>The flush is the point (issue #1606).</b> <c>Throttle</c> holds the last value for
     /// the whole interval, so a dispose inside that window used to DROP it — silently, with no error
