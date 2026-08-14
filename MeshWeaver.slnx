@@ -113,6 +113,7 @@
     <Project Path="src/MeshWeaver.NuGet/MeshWeaver.NuGet.csproj" />
     <Project Path="src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />
     <Project Path="src/MeshWeaver.Observability.Contract/MeshWeaver.Observability.Contract.csproj" />
+    <Project Path="src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj" />
     <Project Path="src/MeshWeaver.PluginCatalog/MeshWeaver.PluginCatalog.csproj" />
     <Project Path="src/MeshWeaver.Reflection/MeshWeaver.Reflection.csproj" />
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>meshweaver-plugin-build</ToolCommandName>
+    <Description>Builds a MeshWeaver plugin's in-mesh C# the way the portal compiles it at runtime, so CI type-checks source that no other build can see.</Description>
+  </PropertyGroup>
+
+</Project>
