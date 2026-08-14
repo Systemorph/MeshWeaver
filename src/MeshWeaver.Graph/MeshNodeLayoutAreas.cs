@@ -199,7 +199,9 @@ public static class MeshNodeLayoutAreas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
             .WithView(ModelArea, DataModelLayoutArea.DataModel)
-            .AddEducationLayoutAreas()
+            // Education areas moved to the MeshWeaver.Education feature pack (AddEducationLayoutAreas
+            // chained in the portal's node-hub config) — core no longer registers course UI on
+            // every node in the mesh.
             .AddDomainLayoutAreas();
 
     /// <summary>
