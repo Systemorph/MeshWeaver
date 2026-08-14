@@ -51,6 +51,9 @@ public class EducationStartExerciseTest(ITestOutputHelper output) : MonolithMesh
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)               // real RLS — no blanket admin grant; already AddGraph()s
+            // The education areas moved from core's every-node defaults into the
+            // MeshWeaver.Education pack — a host serving courses opts in, exactly like the portal.
+            .AddEducation()
             .AddMeshNodes(
                 // Public VIEWER (read-only) on the course: a learner can view + copy it, but NOT edit it.
                 new MeshNode(WellKnownUsers.Public + "_Access", "TestCourse/_Access")

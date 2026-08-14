@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{c2d94e17-6b3a-48f0-9e5d-1a7c8f4b2e60}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- AI carries Graph transitively; both named because both are used directly
+         (EducationLayoutAreas → Graph services/NodeCopyHelper; TrainingSimResponder → AI threads). -->
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- TrainingSimResponderTest pins the internal missing-model heuristic; the grant moved here
+         with the type (it lived in MeshWeaver.AI before the pack extraction). -->
+    <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
+  </ItemGroup>
+</Project>
