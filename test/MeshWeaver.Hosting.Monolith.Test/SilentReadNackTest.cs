@@ -30,6 +30,26 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// dedicated <c>HandleLayoutAreasRequest</c>. The claim must be TRUE, so the completion arm is now
 /// gated on the hub actually winding down, and <see cref="LiveOwner_WithASilentSource_IsNotNacked"/>
 /// pins that a healthy hub is never slandered.</para>
+///
+/// <para>🚨 <b>How the two teardown tests order the read before the recycle — and why there is no
+/// gate.</b> The gate that used to sit here COULD NOT FAIL: it asked, at <c>t = 0</c>, for a pending
+/// <c>GetDataRequest@</c> callback on the reader (true the instant the read is subscribed, before
+/// anything is routed) and for the OWNER's queue to read <c>Queue(buffer=0,deferred=0,exec=0)</c> —
+/// which is what an idle hub looks like BEFORE the delivery ever arrives. Both were satisfied by a
+/// request still in flight, so the <c>DisposeRequest</c> was free to overtake it. Its own comment
+/// claimed it waited for the request-fate ledger to reach <c>HANDLER_EXIT</c>; the code never looked
+/// at the ledger. That is what made
+/// <see cref="OwnerDisposedWithReadOutstanding_IsNacked_NotLeftHanging"/> red on main — the read
+/// landed mid-teardown and exercised a DIFFERENT arm than the one asserted (#1470).</para>
+///
+/// <para>Replacing it with an interval-probe would have been the same mistake in Rx clothing:
+/// polling a snapshot still samples a moment instead of subscribing a source, and the hub's run
+/// level and request-fate ledger have no observable form to subscribe. So the ordering is now
+/// CAUSED — the read and the <c>DisposeRequest</c> are posted from the SAME hub to the SAME target,
+/// and that hub's FIFO puts the read at the owner first. There is no wait left to fall through, and
+/// a violation cannot pass silently: were the recycle ever to overtake the read, the read would be
+/// answered by <c>HandleGetDataRequest</c>'s FAULT arm ("hosted-hub creation is frozen"), so the
+/// <c>"still outstanding"</c> assertion fails by name and says which arm actually ran.</para>
 /// </summary>
 public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -87,10 +107,14 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Timeout(TimeSpan.FromSeconds(30))
             .ToTask(TestContext.Current.CancellationToken);
 
-        await WaitUntilTheHandlerHasRunAndAnsweredNothing(reader);
-        Output.WriteLine("[TEST] handler ran and answered nothing — now recycling the owner");
-
-        Mesh.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
+        // 🔻 ORDER BY CAUSATION, NOT BY WAITING — and post the recycle from the SAME hub that
+        // issued the read, so the two are ordered by that hub's own FIFO rather than by a race
+        // between two senders. The read is therefore handled (and answered with nothing) before
+        // the DisposeRequest is, which is the state this test exists to reach. See
+        // AssertTheHandlerRanAndAnsweredNothing for why the gate that used to sit here was worse
+        // than nothing.
+        Output.WriteLine("[TEST] read is outstanding — now recycling the owner");
+        reader.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
 
         var result = await answer;
         Output.WriteLine($"[TEST] answer: {result}");
@@ -157,11 +181,9 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             .FirstAsync()
             .ToTask(TestContext.Current.CancellationToken);
 
-        // Same ordering gate as above — the read must be genuinely outstanding at a hub that has
-        // already handled it before the teardown starts.
-        await WaitUntilTheHandlerHasRunAndAnsweredNothing(reader);
-
-        Mesh.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
+        // Same ordering as above, caused the same way: the recycle is posted from the hub that
+        // issued the read, so its FIFO puts the read at the owner first.
+        reader.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
 
         var node = await read;
         var elapsed = DateTime.UtcNow - started;
@@ -243,34 +265,4 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             + "same request (the layoutAreas regression)");
     }
 
-    /// <summary>
-    /// Blocks until the framework's OWN record shows the owner's handler ran to completion with no
-    /// reply — the state both teardown tests must reach before they may recycle the owner.
-    ///
-    /// <para>🚨 <b>The gate this replaces could not fail.</b> It asked for two things at
-    /// <c>t = 0</c>: that the reader holds a pending <c>GetDataRequest@</c> callback (true the
-    /// instant the read is subscribed, before anything is routed) and that the OWNER's queue reads
-    /// <c>Queue(buffer=0,deferred=0,exec=0)</c> — which is what an idle hub looks like BEFORE the
-    /// delivery ever arrives. Both were satisfied by a request still in flight, so the
-    /// <c>DisposeRequest</c> was free to overtake it. Its own comment claimed the gate was "the
-    /// request-fate ledger reaching <c>HANDLER_EXIT</c>"; the code never looked at the ledger. That
-    /// is what made <c>OwnerDisposedWithReadOutstanding_IsNacked_NotLeftHanging</c> red on main —
-    /// the read landed mid-teardown and exercised a DIFFERENT arm than the one asserted (#1470).</para>
-    ///
-    /// <para>The ledger IS available, just not through <c>GetPendingRequestDiagnostics</c>: it is
-    /// per hub TREE (a hosted hub shares its root's), and <c>GetDisposalDiagnostics</c> renders the
-    /// handler-side trail for every pending callback. So <c>HANDLER_EXIT</c> appearing there is the
-    /// owner's own record that it entered and left the handler — and the callback still being
-    /// pending is the record that it answered nothing. Polling a public snapshot for a specific,
-    /// positive fact is the sanctioned wait shape; it fails loudly instead of proceeding.</para>
-    /// </summary>
-    private static Task WaitUntilTheHandlerHasRunAndAnsweredNothing(IMessageHub reader) =>
-        Observable.Interval(TimeSpan.FromMilliseconds(25)).StartWith(0L)
-            .Select(_ => reader.GetDisposalDiagnostics())
-            .Where(diagnostics =>
-                diagnostics.Contains("GetDataRequest", StringComparison.Ordinal)
-                && diagnostics.Contains("HANDLER_EXIT", StringComparison.Ordinal))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(TestContext.Current.CancellationToken);
 }
