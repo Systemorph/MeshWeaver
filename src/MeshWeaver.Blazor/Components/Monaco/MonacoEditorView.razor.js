@@ -788,7 +788,7 @@ export function registerCompletionProvider(editorId, config) {
                     // with nothing typed. An index-derived key preserves that order and still lets
                     // Monaco's score lead once the user types. (Same fix as the C# completions'
                     // RankKey — see MeshNodeLanguageService.)
-                    sortText: item.sortKey || String(index).padStart(4, '0')
+                    sortText: item.sortKey || String(index).padStart(6, '0')   // width matches RankKey
                 };
 
                 // Attach command to notify C# when a suggestion is accepted
