@@ -21,6 +21,15 @@
 //   mesh.patch("ACME/Stories/42", { content: { done: true } });
 
 export { Mesh, type MeshOptions } from "./mesh";
+export {
+  MeshRest,
+  type MeshRestOptions,
+  type MeshNodeRow,
+  type ContentItem,
+  type ContentListing,
+  type RenderedMarkdown,
+  type MarkdownCellSubmission,
+} from "./rest";
 export { MeshWebConnection, connect, type ConnectOptions } from "./connection";
 export { type Delivery } from "./envelope";
 export { type MeshNode } from "./types";

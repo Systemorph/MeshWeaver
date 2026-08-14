@@ -27,7 +27,7 @@ import type {
   RenderedMarkdown,
   ThreadSubmitOptions,
 } from "@meshweaver/react/core";
-import { connect, Mesh, type MeshWebConnection } from "@meshweaver/client-web";
+import { connect, Mesh, MeshRest, type MeshWebConnection } from "@meshweaver/client-web";
 
 /** A queried mesh node row — the hub-serialized MeshNode shape (camelCase, $type-tagged content). */
 type MeshNodeRow = Record<string, unknown>;
@@ -70,13 +70,15 @@ export async function connectLive(baseUrl: string = window.location.origin): Pro
   // through /api/mesh/query-nodes — NOT Mesh.search (the gRPC QueryRequest has no server handler,
   // so it would silently return empty). renderMarkdown / startMarkdownKernel light up interactive
   // doc pages in the SPA (previously they showed the "execution unavailable" notice).
-  const runQuery = (query: string, limit = 50) => queryNodes(baseUrl, rawToken, query, limit);
+  // The four shared /api/mesh verbs come from ONE implementation (#1497).
+  const rest = new MeshRest({ baseUrl, token: rawToken });
+  const runQuery = (query: string, limit = 50) => rest.queryNodes(query, limit);
   const runAutocomplete = (query: string, contextPath?: string) => autocomplete(connection, userId, query, contextPath);
-  const runRenderMarkdown = (markdown: string, nodePath2?: string) => renderMarkdown(baseUrl, rawToken, markdown, nodePath2);
+  const runRenderMarkdown = (markdown: string, nodePath2?: string) => rest.renderMarkdown(markdown, nodePath2);
   const runDeleteNode = (path: string) => deleteNode(baseUrl, rawToken, path);
   const runStartKernel = (cells: MarkdownCellSubmission[]) => startMarkdownKernel(connection, mesh, userId, cells, runDeleteNode);
-  const runListContent = (path: string) => listContent(baseUrl, rawToken, path);
-  const runUploadContent = (path: string, file: File) => uploadContent(baseUrl, rawToken, path, file);
+  const runListContent = (path: string) => rest.listContent(path);
+  const runUploadContent = (path: string, file: File) => rest.uploadContent(path, file);
 
   return {
     connection,
@@ -84,34 +86,6 @@ export async function connectLive(baseUrl: string = window.location.origin): Pro
     userId,
     close: () => connection.close(),
   };
-}
-
-/** Content-collection listing (`POST /api/mesh/content/list`). */
-async function listContent(baseUrl: string, token: string, path: string): Promise<ContentListing> {
-  const resp = await fetch(`${baseUrl}/api/mesh/content/list`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ path }),
-  });
-  const text = await resp.text();
-  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `content list failed (${resp.status})`);
-  const parsed = JSON.parse(text) as ContentListing;
-  return {
-    collection: String(parsed.collection ?? ""),
-    path: String(parsed.path ?? ""),
-    editable: !!parsed.editable,
-    items: Array.isArray(parsed.items) ? parsed.items : [],
-  };
-}
-
-/** Content upload (`POST /api/mesh/upload`, multipart). */
-async function uploadContent(baseUrl: string, token: string, path: string, file: File): Promise<void> {
-  const form = new FormData();
-  form.append("path", path);
-  form.append("file", file, file.name);
-  const resp = await fetch(`${baseUrl}/api/mesh/upload`, { method: "POST", headers: { authorization: `Bearer ${token}` }, body: form });
-  const text = await resp.text();
-  if (!resp.ok || text.startsWith("Error:")) throw new Error(text || `upload failed (${resp.status})`);
 }
 
 /**
@@ -217,24 +191,6 @@ async function* watchNode(mesh: Mesh, path: string): AsyncIterable<MeshNodeState
 
 // ---- REST-backed mesh ops (parity with clients/portal-next/src/client/live.ts) -------------------
 
-/** Full-node mesh query (`POST /api/mesh/query-nodes`) — the browser twin of IMeshService.Query. */
-async function queryNodes(baseUrl: string, token: string, query: string, limit: number): Promise<MeshNodeRow[]> {
-  try {
-    const resp = await fetch(`${baseUrl}/api/mesh/query-nodes`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ query, limit }),
-    });
-    if (!resp.ok) return [];
-    const text = await resp.text();
-    if (text.startsWith("Error:") || text.startsWith("Not found:")) return [];
-    const parsed = JSON.parse(text) as { results?: MeshNodeRow[] };
-    return Array.isArray(parsed.results) ? parsed.results : [];
-  } catch {
-    return [];
-  }
-}
-
 /** One-shot @-mention autocomplete — every data-enabled hub handles AutocompleteRequest; the
  *  user's home hub aggregates all providers. Empty on any failure (the composer just shows none). */
 async function autocomplete(
@@ -265,24 +221,6 @@ async function deleteNode(baseUrl: string, token: string, path: string): Promise
   if (!resp.ok) throw new Error(`delete failed (${resp.status})`);
 }
 
-/** Server-side Markdig render (`POST /api/mesh/render-markdown`) — the ONE markdown parser. */
-async function renderMarkdown(
-  baseUrl: string,
-  token: string,
-  markdown: string,
-  nodePath?: string,
-): Promise<RenderedMarkdown> {
-  const resp = await fetch(`${baseUrl}/api/mesh/render-markdown`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ markdown, nodePath: nodePath ?? null }),
-  });
-  if (!resp.ok) throw new Error(`render-markdown failed (${resp.status})`);
-  const text = await resp.text();
-  if (text.startsWith("Error:")) throw new Error(text);
-  const parsed = JSON.parse(text) as { html?: string; codeSubmissions?: MarkdownCellSubmission[] };
-  return { html: parsed.html ?? "", codeSubmissions: parsed.codeSubmissions ?? [] };
-}
 
 /**
  * The per-view interactive-markdown kernel — the client twin of
