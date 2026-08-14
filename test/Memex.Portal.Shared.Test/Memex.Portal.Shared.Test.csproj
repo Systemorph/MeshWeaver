@@ -11,6 +11,9 @@
     <!-- DbVersionHealthCheckTest drives the portal's own db_version health check: whether a
          cancellation raised by the CALLER is reported as a database verdict (#1183). -->
     <ProjectReference Include="..\..\memex\aspire\Memex.Portal.Distributed\Memex.Portal.Distributed.csproj" />
+    <!-- LocalMeshApiRoutesTest asserts the headless sidecar maps the same /api/mesh/* verbs the JS
+         shells call — an unmapped one there answers the SPA fallback with a 200, not a 404 (#1474). -->
+    <ProjectReference Include="..\..\memex\Memex.LocalMesh\Memex.LocalMesh.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <!-- OAuthCodeStoreTest runs against a full monolith mesh (the store persists
          authorization codes as mesh nodes — the multi-replica safety contract). -->

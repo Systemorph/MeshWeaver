@@ -1,8 +1,6 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Web;
+using Memex.LocalMesh;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
 using MeshWeaver.Graph.Configuration;
@@ -10,8 +8,6 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Sqlite;
-using MeshWeaver.Markdown;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Speech;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -102,31 +98,12 @@ app.MapGet("/static/{**path}", (HttpContext ctx, string path) =>
     return Results.Stream(stream, contentType);
 });
 
-// Server-side Markdig render (POST /api/mesh/render-markdown) — the ONE markdown parser (the web portal
-// exposes this via MeshApiEndpoints/MeshOperations.RenderMarkdown, but that surface is MCP-auth-gated and
-// portal-coupled). RenderMarkdown is a thin wrapper over the pure MarkdownViewLogic.Render pipeline, so the
-// headless sidecar calls it directly — anonymous, no hub round-trip. Clients (portal-next + React-Native)
-// POST {markdown, nodePath} and hydrate the returned HTML + codeSubmissions (splitRenderedHtml). This is
-// what makes interactive markdown — inline @@ embeds and runnable code cells — resolve on the RN app.
-app.MapPost("/api/mesh/render-markdown", async (RenderMarkdownBody body, CancellationToken ct) =>
-{
-    var result = MarkdownViewLogic.Render(body.Markdown ?? string.Empty, body.NodePath, body.NodePath);
-    // The pure Markdig pass can't tell `@@node/path` (a node embed) from `@@node/area/id` — it has no
-    // catalog, so it emits a POSITIONAL address/area/id split. Resolve each layout-area marker's raw-path
-    // against the mesh's IPathResolver (the same longest-node-prefix resolution the portal does at runtime):
-    // when the WHOLE raw-path is itself a node (empty remainder), rewrite to a node/default-area embed so the
-    // client subscribes to the right node. Area/content/keyword embeds (non-empty remainder) keep the parser's
-    // resolution untouched. (A CHILD node that isn't independently addressable — e.g. a Code cell — stays a
-    // remainder and is left as-is; rendering those is a separate mesh-model concern.)
-    var resolver = app.Services.GetRequiredService<IMessageHub>().ServiceProvider.GetService<IPathResolver>();
-    var html = resolver is null ? result.Html : await ResolveLayoutAreaMarkers(result.Html, resolver, ct);
-    return Results.Json(new
-    {
-        html,
-        codeSubmissions = (result.CodeSubmissions ?? [])
-            .Select(sub => new { id = sub.Id, language = sub.Language, code = sub.Code }),
-    });
-});
+// The mesh REST verbs the JS shells this host serves reach over plain HTTP — render-markdown,
+// query-nodes, content/list, upload. They live in LocalMeshApiEndpoints so a test can assert the
+// route table without booting the mesh: an /api/mesh/* route that is NOT mapped falls through to
+// MapFallbackToFile below and answers index.html with a 200, which the client can only report as a
+// JSON parse error (issue #1474).
+app.MapLocalMeshApi();
 
 // Speech-to-text (POST /api/speech/transcribe) — the SAME client contract the portal exposes
 // (Memex.Portal.Shared/Api/SpeechEndpoints), here anonymous on the local sidecar. Every shell served by
@@ -172,33 +149,6 @@ app.MapPost("/api/speech/transcribe", async (HttpContext http, ISpeechTranscribe
     }
 });
 
-// Rewrite layout-area markers whose raw-path is a WHOLE node (empty remainder) to a node/default-area embed,
-// using the mesh's IPathResolver (longest-node-prefix). Leaves area/content/keyword markers as the pure
-// Markdig pass emitted them. This makes a regular `@@node` embed resolve to the right node on the client.
-static async Task<string> ResolveLayoutAreaMarkers(string html, IPathResolver resolver, CancellationToken ct)
-{
-    var matches = Regex.Matches(html, @"<div class='layout-area'[^>]*?data-raw-path='([^']*)'[^>]*?></div>");
-    if (matches.Count == 0)
-        return html;
-    var sb = new StringBuilder();
-    var last = 0;
-    foreach (Match m in matches)
-    {
-        sb.Append(html, last, m.Index - last);
-        var rawPath = HttpUtility.HtmlDecode(m.Groups[1].Value);
-        AddressResolution? res = null;
-        try { res = await resolver.ResolvePath(rawPath).FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask(ct); }
-        catch { /* unresolved / timed out — keep the parser's marker */ }
-        if (res is not null && !string.IsNullOrEmpty(res.Prefix) && string.IsNullOrEmpty(res.Remainder))
-            sb.Append($"<div class='layout-area' data-raw-path='{HttpUtility.HtmlAttributeEncode(rawPath)}' data-address='{HttpUtility.HtmlAttributeEncode(res.Prefix)}' data-area='' data-area-id=''></div>");
-        else
-            sb.Append(m.Value);
-        last = m.Index + m.Length;
-    }
-    sb.Append(html, last, html.Length - last);
-    return sb.ToString();
-}
-
 var wwwroot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 if (File.Exists(Path.Combine(wwwroot, "index.html")))
     app.MapFallbackToFile("index.html"); // SPA fallback: any non-gRPC, non-file route → the packaged app
@@ -209,5 +159,8 @@ else
 
 app.Run();
 
-/// <summary>POST body for /api/mesh/render-markdown — mirrors MeshApiEndpoints.RenderMarkdownBody.</summary>
-internal sealed record RenderMarkdownBody(string? Markdown, string? NodePath);
+/// <summary>
+/// Exposed so a test project can reference this host and assert its route table (the mesh REST verbs
+/// in <see cref="Memex.LocalMesh.LocalMeshApiEndpoints"/>) without booting the mesh.
+/// </summary>
+public partial class Program;
