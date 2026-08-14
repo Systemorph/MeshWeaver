@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Graph;
@@ -93,9 +94,18 @@ public abstract class InstanceSyncTestBase(ITestOutputHelper output) : MonolithM
             .Timeout(timeout ?? 30.Seconds())
             .ToTask();
 
-    /// <summary>Polls the fake remote until <paramref name="predicate"/> holds.</summary>
+    /// <summary>
+    /// Waits until <paramref name="predicate"/> holds on the fake remote — SUBSCRIBED to its
+    /// activity, not sampled on a timer (#1508).
+    ///
+    /// <para>This used an <c>Observable.Interval</c> only because <see cref="FakeRemoteMesh"/> had
+    /// no source to observe. It does now, so the predicate is evaluated once immediately (the
+    /// <c>StartWith</c> — the condition may already hold) and then on each actual remote call. A
+    /// fixed sample races CI load in both directions: too short and it flakes, too long and it
+    /// wastes wall-clock across the whole suite.</para>
+    /// </summary>
     protected async Task WaitForRemote(Func<FakeRemoteMesh, bool> predicate, TimeSpan? timeout = null) =>
-        await Observable.Interval(50.Milliseconds()).StartWith(0L)
+        await Remote.Changed.StartWith(Unit.Default)
             .Where(_ => predicate(Remote))
             .FirstAsync()
             .Timeout(timeout ?? 30.Seconds())
