@@ -69,6 +69,15 @@ public static class SkeletonGenerator
             // metadata, copied through.
             NodeType = Text(root, "nodeType") ?? MeshNode.NodeTypePath,
             Icon = Text(root, "icon") ?? string.Empty,
+            // 🚨 Carried through, not defaulted. The generator emits both verbatim into the Nodes
+            // property (`Order = …`, `LastModified = DateTimeOffset.Parse("…")`), so leaving them
+            // unset does not merely lose metadata — it makes the CI-built assembly DECLARE
+            // something different from what the runtime would declare for the same node
+            // (`0001-01-01` for a node the portal knows the real date of). The whole point of
+            // delegating to the framework's generator is that the two outputs agree; feeding it
+            // different inputs defeats that just as surely as reimplementing it.
+            Order = Number(root, "order"),
+            LastModified = Timestamp(root, "lastModified") ?? default,
         };
 
         var source = new DynamicMeshNodeAttributeGenerator().GenerateAttributeSource(
@@ -83,6 +92,26 @@ public static class SkeletonGenerator
         File.WriteAllText(path, source);
         return path;
     }
+
+    private static int? Number(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object
+        && element.TryGetProperty(property, out var value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt32(out var number)
+            ? number
+            : null;
+
+    /// <summary>
+    /// A node timestamp. An unparsable value yields null (and therefore the default) rather than
+    /// throwing: a malformed date must not stop a plugin building, and the value is metadata.
+    /// </summary>
+    private static DateTimeOffset? Timestamp(JsonElement element, string property) =>
+        Text(element, property) is { } text
+        && DateTimeOffset.TryParse(
+            text, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : null;
 
     private static string? Text(JsonElement element, string property) =>
         element.ValueKind == JsonValueKind.Object
