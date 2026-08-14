@@ -43,9 +43,9 @@ jobs:
     name: Chart invariants
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: v3.16.3
       # PyYAML is third-party. It ships on today's hosted runners, so nothing would fail today —
@@ -53,7 +53,7 @@ jobs:
       # by luck of the runner image starts failing on an image bump, for a reason unrelated to the
       # chart it is guarding. The script's preflight also asserts it, so a missing module names
       # itself instead of surfacing as a traceback.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install pyyaml
