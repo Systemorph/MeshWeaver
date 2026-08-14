@@ -189,6 +189,19 @@ public abstract record MessageDelivery : IMessageDelivery
             var serialized = JsonSerializer.Serialize(message, options ?? fallbackOptions);
             var rawJson = new RawJson(serialized);
             var packaged = WithMessage(rawJson);
+            // 🚨 Carry the payload's ANSWERABILITY across the type erasure — issue #1485, and the
+            // exact same reasoning as the IDENTITY stamp below. The routing layer's answer-once
+            // guards ("never NACK a DeliveryFailure, never NACK [CanBeIgnored] fire-and-forget
+            // control traffic") were written as CLR-type tests on delivery.Message; every mesh
+            // delivery reaches the router THROUGH THIS METHOD, so all of them were inspecting
+            // RawJson and none could ever match. The routers therefore NACKed heartbeats to a
+            // departed owner — which, re-posted every heartbeat interval, IS the NotFound storm the
+            // guards' own comments describe — and could answer a DeliveryFailure with a
+            // DeliveryFailure. Only the SUPPRESSED case is stamped, so ordinary traffic pays
+            // nothing and an unstamped delivery degrades to the old CLR-type check, never to
+            // "answer something you must not". See AnswerPolicy.
+            if (AnswerPolicy.IsAnswerSuppressed(message))
+                packaged = packaged.SetProperty(AnswerPolicy.SuppressedProperty, true);
             // 🚨 Carry the payload's IDENTITY across the type erasure. From here on the delivery
             // is `type=RawJson` and nothing downstream can tell WHAT it is about without parsing
             // the payload — which the receiving hub's storm breaker runs far too hot to do (it

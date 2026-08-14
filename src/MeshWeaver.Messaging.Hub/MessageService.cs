@@ -456,7 +456,15 @@ public class MessageService : IMessageService
             && !(delivery.Message is RawJson rawJson
                  && !rawJson.Content.Contains(nameof(DeliveryFailure), StringComparison.Ordinal)))
             return false;
-        if (delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
+        // 🚨 The answer-once contract off the ENVELOPE, not the CLR type (#1485). A cross-hub
+        // delivery arrives here as RawJson — which is exactly the case the RawJson clause above
+        // exists to admit — so the [CanBeIgnored] test this line used to make was dead for every
+        // delivery that had crossed a hub boundary, and a packaged HeartBeatEvent dropped at a
+        // disposing hub was NACKed through the parent: fire-and-forget traffic answered during
+        // teardown, which is precisely the storm shape. The content sniff above is KEPT as the
+        // fallback for a RawJson that never went through Package (an external client's
+        // pre-serialised frame carries no stamp).
+        if (!delivery.MayAnswer())
             return false;
         // The same "ONE request, ONE failure response" rule ReportFailure applies: an
         // authoritative, typed DeliveryFailure has already been posted for this delivery, so a
@@ -615,8 +623,15 @@ public class MessageService : IMessageService
         //    tests, which under the 2-core CI runner saturated the pipeline and timed the
         //    project out). Real requests still fail closed; only response-less control traffic
         //    is suppressed — the same rule the Ignored-handler path already applies below.
-        if (delivery.Message is not DeliveryFailure
-            && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
+        //
+        // 🚨 Read the ENVELOPE, not delivery.Message's CLR type (#1485). This is the ROUTING TAIL's
+        // reporter as well as the on-target one: ReportRoutingFailure lands here with the delivery
+        // the mesh's route handler returned, and that handler is
+        // `IRoutingService.DeliverMessage(delivery.Package(...))` — so its payload is RawJson and
+        // the CLR-type test alone let a fire-and-forget heartbeat through. That mattered most on the
+        // one path where the router returns Failed synchronously: the Orleans shutdown branch. Fixing
+        // only the routers would have moved the very same storm one level up, into this method.
+        if (delivery.MayAnswer())
         {
             try
             {
