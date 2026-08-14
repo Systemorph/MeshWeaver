@@ -47,12 +47,44 @@ internal sealed class StoragePostCommitFlush(IMessageHub hub) : IPostCommitFlush
         // null). Recording it would suppress the sampler's write for a row nobody persisted, which
         // would turn a duplicate-write bug into a lost-write one.
         var flushed = hub.ServiceProvider.GetService<PostCommitFlushRegistry>();
+
+        // 🚨 CLAIM BEFORE THE WRITE, confirm after (#1557). Recording only on the emission left the
+        // suppression TIMED rather than ordered: the sampler's queued SaveMeshNodeRequest can reach
+        // its handler while this round-trip is still in flight, read a mark that has not been raised
+        // yet, and write — landing as a version regression whose base-less merge keeps the string
+        // SUPERSET and re-adds deleted text. Measured at ~4% on the 2-vCPU runner, and each
+        // occurrence is a real resurrection, not just a red test.
+        //
+        // The claim is provisional and is RELEASED on every path that does not persist, so a route
+        // that does not write can never suppress the one that would.
+        flushed?.Claim(node.Path, node.Version);
+        var resolved = false;
+
         return storage.WriteAndPublishUpdated(node, hub.JsonSerializerOptions, changeFeed)
-            .Do(saved =>
-            {
-                if (saved is not null)
-                    flushed?.Record(node.Path, Math.Max(node.Version, saved.Version));
-            })
+            .Do(
+                saved =>
+                {
+                    if (saved is not null)
+                    {
+                        // Persisted — Record confirms the claim and raises the mark to whatever the
+                        // store reports durable (higher than ours when its version-conditional
+                        // upsert kept a newer row).
+                        resolved = true;
+                        flushed?.Record(node.Path, Math.Max(node.Version, saved.Version));
+                    }
+                    else
+                    {
+                        // The null try-then-claim sentinel — "this adapter does not own this path".
+                        // NOT a successful write, so the sampler must stay the writer of record.
+                        resolved = true;
+                        flushed?.Release(node.Path, node.Version);
+                    }
+                },
+                // A fault and an empty sequence are both "nothing was persisted". Releasing tells
+                // the sampler — which is DEFERRED on the claim rather than dropped — to go ahead,
+                // so the ordering fix can never convert a duplicate write into a lost one.
+                _ => { if (!resolved) { resolved = true; flushed?.Release(node.Path, node.Version); } },
+                () => { if (!resolved) { resolved = true; flushed?.Release(node.Path, node.Version); } })
             .Select(_ => true)
             .DefaultIfEmpty(true);
     }

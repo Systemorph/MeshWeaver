@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Graph.Configuration;
@@ -660,9 +661,13 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             expiresAt: DateTimeOffset.UtcNow.AddHours(-1)).Should().Emit();
         var expiredIndexPath = $"ApiToken/{((ApiToken)expired.Node.Content!).TokenHash[..12]}";
 
+        var swept = SweepOf(service, "user1");
+
         // The next mint is what sweeps.
         var fresh = await service.CreateToken(
             "user1", "Test User", "test@example.com", "Fresh").Should().Emit();
+
+        await swept;
 
         (await ObserveNode(expired.Node.Path).Should().Match(n => n is null))
             .Should().BeNull("an expired token is a dead credential — nothing should keep it");
@@ -692,7 +697,11 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             "user1", "Test User", "test@example.com", "Expired",
             expiresAt: DateTimeOffset.UtcNow.AddHours(-1)).Should().Emit();
 
+        var swept = SweepOf(service, "user1");
+
         await service.CreateToken("user1", "Test User", "test@example.com", "Fresh").Should().Emit();
+
+        await swept;
 
         // The expired one going away is the positive signal that the sweep RAN — so the two
         // assertions below are about what it chose not to touch, not about a race it might lose.
@@ -720,7 +729,11 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             "user2", "Other User", "other@example.com", "Theirs expired",
             expiresAt: DateTimeOffset.UtcNow.AddHours(-1)).Should().Emit();
 
+        var swept = SweepOf(service, "user1");
+
         await service.CreateToken("user1", "Test User", "test@example.com", "Fresh").Should().Emit();
+
+        await swept;
 
         (await ObserveNode(mine.Node.Path).Should().Match(n => n is null)).Should().BeNull();
         (await ObserveNode(theirs.Node.Path).Should().Match(n => n is not null))
@@ -741,6 +754,24 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// production <c>ValidateToken</c> reads through it since the resilient-read fix.)
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Arms a wait for the NEXT expiry sweep of <paramref name="userId"/>'s token namespace, and
+    /// returns it. 🚨 Call this BEFORE the mint that triggers the sweep — the subscription has to
+    /// exist first, or a fast sweep completes before anyone is listening and the wait hangs.
+    ///
+    /// <para>The sweep runs off the mint's critical path (deliberately: a user with a backlog must
+    /// not pay for it at sign-in), so <c>CreateToken</c>'s own emission says nothing about whether
+    /// it has finished. Sampling the query index right after the mint is waiting on the wrong
+    /// thing — it passed 11/11 locally and failed under real CI load (#1569).
+    /// <c>ExpirySweepCompleted</c> is the actual condition.</para>
+    /// </summary>
+    private static Task<string> SweepOf(ApiTokenService service, string userId) =>
+        service.ExpirySweepCompleted
+            .Where(ns => ns == $"{userId}/ApiToken")
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask();
+
     private IObservable<MeshNode?> ObserveNode(string path)
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
