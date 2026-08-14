@@ -52,7 +52,18 @@ public class JsonFileParser : IFileFormatParser
         // a node file costs no more than before and a non-node file costs strictly less (it is no
         // longer materialized just to be thrown away). ParseFile runs this under .Merge(8) over
         // every file in a repo, so a second full pass would not be free.
-        using var document = JsonDocument.Parse(content);
+        //
+        // 🚨 The parse must be exactly as tolerant as the deserializer it replaces at the front of
+        // this method. JsonDocumentOptions defaults REJECT comments and trailing commas, so taking
+        // the default here would have made a node file that parsed yesterday — under a hub whose
+        // options skip comments — start failing today, in the name of a fix about not failing on
+        // files that were never nodes. The three tolerances are copied off the hub's own options.
+        using var document = JsonDocument.Parse(content, new JsonDocumentOptions
+        {
+            CommentHandling = _options.ReadCommentHandling,
+            AllowTrailingCommas = _options.AllowTrailingCommas,
+            MaxDepth = _options.MaxDepth,
+        });
         return LooksLikeMeshNode(document.RootElement)
             ? document.RootElement.Deserialize<MeshNode>(_options)
             : null;
@@ -65,9 +76,14 @@ public class JsonFileParser : IFileFormatParser
     ///
     /// <para>🚨 The marker set is empirical, not a guess: all <b>597</b> authored node <c>.json</c>
     /// files across <c>src/MeshWeaver.Documentation/Data</c>, <c>samples/*/Data</c> and
-    /// <c>content/</c> carry one, so nothing that parses today stops parsing. It is deliberately
-    /// checked case-insensitively — the serializer writes camelCase, but a hand-authored file may
-    /// use <c>Id</c>.</para>
+    /// <c>content/</c> carry one, so nothing that parses today stops parsing.</para>
+    ///
+    /// <para><c>id</c> and <c>nodeType</c> are matched case-INsensitively — the serializer writes
+    /// camelCase, but a hand-authored file may use <c>Id</c>. <c>$type</c> is matched EXACTLY,
+    /// deliberately: it is not a property name an author chooses but the serializer's own
+    /// discriminator, emitted verbatim, and <c>System.Text.Json</c> only ever honours it in that
+    /// exact spelling — so accepting <c>$Type</c> here would admit a file the deserializer will
+    /// then treat as untyped.</para>
     ///
     /// <para>Weaker markers are excluded on purpose. <c>name</c> and <c>description</c> are the two
     /// <see cref="MeshNode"/> fields ordinary package manifests also use, so treating either as a
