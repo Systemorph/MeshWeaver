@@ -46,10 +46,22 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// polling a snapshot still samples a moment instead of subscribing a source, and the hub's run
 /// level and request-fate ledger have no observable form to subscribe. So the ordering is now
 /// CAUSED — the read and the <c>DisposeRequest</c> are posted from the SAME hub to the SAME target,
-/// and that hub's FIFO puts the read at the owner first. There is no wait left to fall through, and
-/// a violation cannot pass silently: were the recycle ever to overtake the read, the read would be
-/// answered by <c>HandleGetDataRequest</c>'s FAULT arm ("hosted-hub creation is frozen"), so the
-/// <c>"still outstanding"</c> assertion fails by name and says which arm actually ran.</para>
+/// and that hub's FIFO puts the read at the owner first.</para>
+///
+/// <para>🚨 <b>What that ordering does NOT buy, and the 35% flake it caused (#1599).</b> The FIFO
+/// orders the read ahead of the <c>DisposeRequest</c> at the owner. It does not order the three
+/// terminals of <c>HandleGetDataRequest</c> against each other — the fault arm (hosted-hub creation
+/// frozen), the empty-completion arm and the disposal arm sit behind ONE CAS precisely because they
+/// race, and the frozen-creation fault can legitimately win once teardown of an ancestor has begun.
+/// This class therefore used to assert the disposal arm's own wording and had to win that race:
+/// <b>21 failures in 60</b> on unmodified <c>main</c> (<c>flake-repro</c> rate mode, run
+/// 31818285657) — the highest rate measured on this repo.</para>
+///
+/// <para>The assertion now pins what the caller actually depends on and what a routing NACK cannot
+/// counterfeit: <c>NackSilentRead</c>'s own message prefix, its retry promise, and
+/// <see cref="ErrorType.ShuttingDown"/>. All three arms produce exactly those; only their free text
+/// differs. That is not a weakened assertion — it is the contract, where the old one was a bet on
+/// which of three correct answers arrived first.</para>
 /// </summary>
 public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -60,10 +72,12 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <para>Deterministic by construction, with no sleep: disposing the owner's MeshNode
     /// data-source stream makes every later read of that hub permanently unanswerable (the data
     /// source hands the disposed stream back on every <c>GetStreamForPartition</c>; there is no
-    /// liveness check there), so the read is guaranteed to be outstanding. The teardown is then
-    /// gated on the framework's OWN record that the handler ran — the request-fate ledger reaching
-    /// <c>HANDLER_EXIT</c> — so the disposal cannot race ahead of the handler and let a routing
-    /// NACK stand in for the arm under test. The message assertion pins that arm specifically.</para>
+    /// liveness check there), so the read is guaranteed to be outstanding. The ordering against the
+    /// teardown is caused by the sender's FIFO, not waited for.</para>
+    ///
+    /// <para>The message assertions pin that the answer came from <c>HandleGetDataRequest</c> —
+    /// they do NOT pin which of its three terminals produced it, because that is a race by design.
+    /// See the class remarks.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task OwnerDisposedWithReadOutstanding_IsNacked_NotLeftHanging()
@@ -126,10 +140,28 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
         failure.Should().NotBeNull();
         failure!.ErrorType.Should().Be(ErrorType.ShuttingDown,
             "the owner is going away — this is retry-worthy, NOT an absence");
-        failure.Message.Should().Contain("still outstanding",
-            "this pins HandleGetDataRequest's DISPOSAL arm specifically; the routing-level NACK "
-            + "for an abandoned delivery carries different wording, so a passing assertion here "
-            + "cannot be satisfied by the pre-existing path instead of the one under test");
+        // 🚨 The discriminator is NackSilentRead's OWN prefix, not one arm's free text.
+        //
+        // HandleGetDataRequest has THREE terminals — the fault arm (hosted-hub creation frozen),
+        // the empty-completion arm, and the disposal arm — behind ONE CAS, and which of them wins
+        // is deliberately NOT ordered: the CAS exists precisely because they race. This assertion
+        // used to require the DISPOSAL arm's wording ("still outstanding") and therefore had to win
+        // a coin flip: measured 21 failures in 60 on unmodified main (#1599, run 31818285657).
+        //
+        // Nothing was lost by dropping it, because the three arms are materially IDENTICAL to the
+        // caller — all three go through NackSilentRead, so all three produce a DeliveryFailure with
+        // ErrorType.ShuttingDown, this exact prefix, and the same retry instruction. Only the free
+        // text differs. What the old assertion was FOR — "a routing NACK must not be able to
+        // satisfy this" — is what these two lines actually establish: the routing layer's failures
+        // carry ErrorType.NotFound or a bare exception message (RoutingServiceBase), never this
+        // prefix and never the retry sentence.
+        failure.Message.Should().Contain($"GetDataRequest({new MeshNodeReference()}) at '{path}'",
+            "NackSilentRead formats every one of its three terminals this way, and nothing else "
+            + "does — so this proves the answer came from HandleGetDataRequest rather than from "
+            + "the routing layer, WITHOUT pinning which of the three raced to it first");
+        failure.Message.Should().Contain("Retry against the fresh activation.",
+            "all three handler terminals promise the retry; a routing NACK promises nothing, so "
+            + "this is the second half of the same discrimination");
         failure.Message.Should().Contain("shutting down",
             "MeshNodeStreamCache.IsTransientOwnerFailure classifies by this marker; without it a "
             + "long-lived stream consumer tears down instead of riding the recycle out");
