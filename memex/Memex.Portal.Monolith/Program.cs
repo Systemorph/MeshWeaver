@@ -55,7 +55,7 @@ builder.UseMeshWeaver(
         var storageConfig = builder.Configuration.GetSection("Storage").Get<ContentCollectionConfig>();
 
         config = config
-            .ConfigureMemexPortal()
+            .ConfigureMemexPortal(builder.Configuration)
             .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment());
 
         // Register storage collection at mesh level for static file serving (monolith only)
