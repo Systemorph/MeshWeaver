@@ -1,10 +1,7 @@
 using System.Security.Claims;
-using MeshWeaver.Data;
-using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
+using MeshWeaver.Hosting;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Mcp;
@@ -15,9 +12,10 @@ namespace MeshWeaver.Mcp;
 ///
 /// <para>
 /// Both transports must share this helper so their routing semantics stay
-/// identical — same address shape, same <see cref="DataExtensions.AddData(MessageHubConfiguration)"/>
-/// + <see cref="IRoutingService.RegisterStream(IMessageHub)"/> wiring, and the same
-/// guarantee that the returned hub is ALWAYS a <c>portal/…</c> hub.
+/// identical — same address shape, same wiring. This class is the HTTP half:
+/// it derives the session id from the request and hands off to
+/// <see cref="SessionHubFactory"/>, which owns the hub materialisation and is
+/// shared with the headless surfaces that have no <see cref="HttpContext"/>.
 /// </para>
 ///
 /// <para>
@@ -30,26 +28,6 @@ namespace MeshWeaver.Mcp;
 /// </summary>
 public static class SessionHubResolver
 {
-    /// <summary>
-    /// Process-stable disambiguator appended to every session-hub address. With the
-    /// stateless MCP transport (no ingress affinity), consecutive requests for the
-    /// same caller land on DIFFERENT replicas; without this suffix each replica would
-    /// materialise a hub at the SAME <c>portal/…</c> address and RegisterStream the
-    /// same routed memory stream — every response would fan out to all replicas'
-    /// hubs. The suffix keeps each replica's routing anchor unique. Immutable
-    /// constant initialised once per process (never written at runtime).
-    /// </summary>
-    private static readonly string InstanceId = Guid.NewGuid().ToString("N")[..8];
-
-    /// <summary>
-    /// Session-segment used when no caller / session can be derived from the request.
-    /// Combined with <see cref="InstanceId"/> this yields ONE process-stable shared
-    /// anonymous hub at <c>portal/{prefix}-anon-{instance}</c> — never the root mesh hub,
-    /// and never a fresh hub per request (which would leak a hub + routing registration
-    /// on every anonymous call).
-    /// </summary>
-    private const string AnonymousSession = "anon";
-
     /// <summary>
     /// Materialises (or reuses) a hosted hub for the calling user × protocol session
     /// at address <c>portal/{prefix}-{sessionId}-{instance}</c>. When no caller / session
@@ -75,7 +53,7 @@ public static class SessionHubResolver
             // 🚨 NEVER return rootHub here. It is the root mesh/{id} hub, on which
             // request-shaped work never answers. Anonymous callers share one stable
             // portal hub instead: it has the routing + lifetime mesh operations need.
-            sessionId = AnonymousSession;
+            sessionId = SessionHubFactory.AnonymousSession;
             logger.LogWarning(
                 "No {Prefix} session id resolvable from request — using the shared anonymous "
                 + "portal hub. Callers that authenticate (or send an Mcp-Session-Id header) "
@@ -83,28 +61,7 @@ public static class SessionHubResolver
                 prefix);
         }
 
-        var routingService = rootHub.ServiceProvider.GetRequiredService<IRoutingService>();
-        var address = AddressExtensions.CreatePortalAddress($"{prefix}-{sessionId}-{InstanceId}");
-        logger.LogInformation("Materialising {Prefix} session hub at {Address}", prefix, address);
-
-        // AddData() ensures the session hub has its own IWorkspace so MeshOperations.Compile
-        // can subscribe to the NodeType MeshNode stream and Update its compilationStatus
-        // through the canonical write path. RegisterStream wires routing so every response
-        // (Get / Search / Patch / ExecuteScript / …) lands back here.
-        return rootHub.GetHostedHub(
-            address,
-            sessionConfig => sessionConfig
-                .AddData()
-                // 🚨 Node CRUD from an MCP session runs HERE, not on the mesh router. Without this
-                // opt-in MeshService falls back to the mesh hub and every create/move/delete
-                // executes on the router's action block, starving routing (see
-                // MeshExtensions.NodeOperationTarget).
-                .WithNodeOperationExecution()
-                .WithInitialization(hub =>
-                    hub.RegisterForDisposal(routingService.RegisterStream(hub))),
-            HostedHubCreation.Always)
-            ?? throw new InvalidOperationException(
-                $"Failed to materialise {prefix} session hub at {address}.");
+        return SessionHubFactory.Resolve(rootHub, prefix, sessionId, logger);
     }
 
     /// <summary>
@@ -146,9 +103,5 @@ public static class SessionHubResolver
     /// Sanitises a free-form id into a safe address segment: letters, digits, '-', '_'.
     /// Everything else is replaced with '-' so hosted-hub grain-key lookup stays well-formed.
     /// </summary>
-    public static string Sanitize(string s)
-    {
-        var chars = s.Select(c => char.IsLetterOrDigit(c) || c == '-' || c == '_' ? c : '-').ToArray();
-        return new string(chars);
-    }
+    public static string Sanitize(string s) => SessionHubFactory.Sanitize(s);
 }
