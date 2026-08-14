@@ -20,6 +20,15 @@ public sealed record MemexFeatureOptions
 
     public AiFeatureOptions Ai { get; init; } = new();
 
+    /// <summary>
+    /// Compiled UI view packs (charts/pivot, analysis views, maps) and the education runtime —
+    /// each a self-contained pack a deployment can switch OFF by config. The controls a disabled
+    /// pack would render fall to the escaped-HTML fallback; content plugins that need them should
+    /// declare it. On by default; the boot-time Modules:Assemblies lane later replaces these
+    /// flags with "which packs does this instance load at all".
+    /// </summary>
+    public UiPackFeatureOptions UiPacks { get; init; } = new();
+
     /// <summary>Static-repo → DB sync: which partitions are materialized into and served from the DB.</summary>
     public StaticRepoSyncFeatureOptions StaticRepoSync { get; init; } = new();
 
@@ -178,6 +187,24 @@ public sealed record AiProviderFeatureOptions
     public bool OpenRouter { get; init; } = true;
 
     public bool HasAny => Anthropic || AzureFoundry || AzureOpenAI || OpenAI || OpenAICompatible || OpenRouter;
+}
+
+public sealed record UiPackFeatureOptions
+{
+    /// <summary>Radzen charts + pivot grid (ChartControl / PivotGridControl).</summary>
+    public bool Radzen { get; init; } = true;
+
+    /// <summary>The analysis views (KpiStrip / Tower / ComparisonBars).</summary>
+    public bool Analysis { get; init; } = true;
+
+    /// <summary>Google Maps (GoogleMapControl).</summary>
+    public bool GoogleMaps { get; init; } = true;
+
+    /// <summary>
+    /// The education runtime (the course navigation contributor). Course CONTENT ships as the
+    /// Edu plugin regardless; this switches the compiled platform half.
+    /// </summary>
+    public bool Education { get; init; } = true;
 }
 
 public sealed record AiCliFeatureOptions
