@@ -1,0 +1,132 @@
+name: Chart Drift
+
+# Does the CLUSTER run what the chart describes?
+#
+# The scheduled caller for deploy/aks/scripts/check-chart-drift.sh. That script was written on
+# 2026-08-13 to detect exactly the class of failure that took memex.meshweaver.cloud down the next
+# day — and `git grep` across .github, deploy and tools found NO caller. It had never run once.
+#
+# 🛡️ THIS WORKFLOW MAY NOT SKIP. AGENTS.md → "A gate NEVER tests its own inputs": GitHub paints a
+# skipped job with the same grey tick as a passed one, so a drift check that quietly declines when
+# a credential is missing reports "no drift" on no evidence — strictly worse than not existing,
+# because it also tells you the cluster is fine. Hence:
+#
+#   * `preflight` asserts EVERY external input and fails RED naming exactly what to provision.
+#     It never asks "is the input present?" in order to decide whether to run.
+#   * `drift` runs `needs: [preflight]` with NO input-shaped `if:` and NO `continue-on-error:`.
+#   * check-chart-drift.sh itself treats an unreadable cluster as FAILURE, never as "no drift",
+#     and refuses to report success unless it actually compared a minimum number of fields.
+#
+# ⚠️ EXPECT THIS WORKFLOW TO BE RED UNTIL TWO THINGS ARE PROVISIONED. That is the design, not a
+# defect: the honest report of "drift detection is not wired up" is a failing check that names the
+# missing pieces, not a green one that checked nothing.
+#
+#   1. AKS command access for the CI identity. The AZURE_* OIDC secrets already exist (main-cd.yml
+#      uses them for ACR), but publishing images needs no cluster rights. The app registration
+#      behind secrets.AZURE_CLIENT_ID additionally needs a role granting
+#      `Microsoft.ContainerService/managedClusters/runCommand/action` on the cluster — "Azure
+#      Kubernetes Service Cluster User Role" plus "Azure Kubernetes Service RBAC Reader", scoped to
+#      the cluster resource, is enough (this check only ever issues `kubectl get`).
+#
+#   2. A SECRET-FREE per-env values file, committed. check-chart-drift.sh refuses to render with
+#      chart defaults — comparing against a chart nobody deployed produces confident nonsense — so
+#      it needs each environment's real overlay. Those overlays (values.memexcloud.yaml and its
+#      siblings) exist only on operators' disks today: they are not in this repo, and they are not
+#      committed to the private Systemorph/Memex repo either, because they carry OAuth client
+#      secrets and the Postgres password.
+#      The fix is NOT to commit them. This check compares the ConfigMap and the pod spec — it never
+#      reads a secret value — so what it needs is the non-secret half: commit
+#      `deployments/aks/<env>/values.<env>.public.yaml` to Systemorph/Memex (everything under
+#      `config:`, `persistence:`, `keda:`, `probes:`, `ingress:`; nothing under `secrets:`), and
+#      add a fine-grained read-only PAT for that repo as secrets.MEMEX_DEPLOY_REPO_TOKEN.
+#
+# Until both land, every run fails with the list above and nobody is misled about whether the
+# cluster matches the chart. Drift found by a run that DOES complete is reported the same way: red,
+# with each divergence classified CLUSTER-ONLY / CHART-ONLY / DIFFERS.
+
+on:
+  schedule:
+    # 06:15 UTC daily — before the working day, after the nightly self-update poll has settled.
+    - cron: "15 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AKS_RESOURCE_GROUP: memex-aks-rg
+  AKS_CLUSTER: memexaks-cluster
+  DEPLOY_REPO: Systemorph/Memex
+
+jobs:
+  preflight:
+    name: Assert the inputs exist
+    runs-on: ubuntu-latest
+    steps:
+      # No `if:` anywhere in this job. It asserts and fails; it does not decide whether to run.
+      - name: Every external input, or a red build naming what to provision
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          MEMEX_DEPLOY_REPO_TOKEN: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}
+        run: |
+          missing=()
+          [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID        OIDC app registration for azure/login")
+          [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID        the Systemorph AAD tenant")
+          [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID  the subscription holding $AKS_CLUSTER")
+          [ -n "$MEMEX_DEPLOY_REPO_TOKEN" ] || missing+=("secrets.MEMEX_DEPLOY_REPO_TOKEN  read-only PAT for $DEPLOY_REPO, where the per-env values.<env>.public.yaml overlays live (see this file's header — they must be committed there first, secret-free)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::chart-drift cannot run — provision the following, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+          echo "All external inputs are present."
+
+  drift:
+    name: ${{ matrix.env.ns }}
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env:
+          - { ns: memex,       release: memex }
+          - { ns: memex-cloud, release: memexcloud }
+          - { ns: atioz,       release: atioz }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the per-env overlays
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DEPLOY_REPO }}
+          token: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}
+          path: deploy-repo
+      - name: Install helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Compare ${{ matrix.env.ns }} against the rendered chart
+        run: |
+          ENV_DIR="deploy-repo/deployments/aks/${{ matrix.env.ns }}"
+          VALUES="$ENV_DIR/values.${{ matrix.env.release }}.public.yaml"
+          if [ ! -f "$VALUES" ]; then
+            echo "::error::$VALUES is missing. Commit the SECRET-FREE half of this environment's"
+            echo "  helm overlay there (config/persistence/keda/probes/ingress — nothing under"
+            echo "  secrets:). Rendering with chart defaults instead would compare the cluster"
+            echo "  against a chart nobody deployed, so this is a failure, not a fallback."
+            exit 1
+          fi
+          PATCH_ARG=""
+          [ -f "$ENV_DIR/portal-patch.json" ] && PATCH_ARG="--expect-patch $ENV_DIR/portal-patch.json"
+          deploy/aks/scripts/check-chart-drift.sh \
+            -n "${{ matrix.env.ns }}" -r "${{ matrix.env.release }}" \
+            --via aks-invoke -g "$AKS_RESOURCE_GROUP" --aks "$AKS_CLUSTER" \
+            -f deploy/helm/values.yaml -f "$VALUES" $PATCH_ARG

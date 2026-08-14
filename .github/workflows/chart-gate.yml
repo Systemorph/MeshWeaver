@@ -1,0 +1,52 @@
+name: Chart Gate
+
+# Does the deployment chart describe a shape that can actually work?
+#
+# 🚨 WHY THIS WORKFLOW EXISTS. On 2026-08-14 memex.meshweaver.cloud served every request from ONE
+# pod, so any pod loss was a multi-minute 503 — and the chart in git had described that
+# impossibility for a month, unchallenged by any build:
+#
+#   deploy/aks/values.aks.yaml      keda.enabled: true, keda.minReplicas: 2, replicas.portal: 2
+#   templates/…/scaledobject.yaml   minReplicaCount: 2        ← asks for two pods
+#   templates/…/pdb.yaml            maxUnavailable: 1         ← budgets for two pods
+#   templates/…/deployment.yaml     replicas: 1  HARD-CODED   ← renders one pod
+#
+# `replicas.portal: 2` was consumed by NOTHING. helm renders that set without complaint, because
+# helm validates syntax, not sense. Nothing else in CI opens the chart at all.
+#
+# 🛡️ NO SKIP-TRAPDOOR (AGENTS.md → "A gate NEVER tests its own inputs"). Every input this job reads
+# is in this repository — the chart and the tracked values files. There is no secret, no cluster,
+# no network, and therefore NO condition under which the job may decline to run and still render a
+# tick. It carries no `continue-on-error:` and no input-shaped `if:`, it is not filtered by path
+# (a path filter turns "unrelated PR" into a skipped run, which is the same grey tick again), and
+# the script asserts a minimum number of rendered combinations before it may report success.
+#
+# 🔭 WHAT THIS CANNOT SEE, and what covers it instead. This gate compares the chart against ITSELF.
+# It cannot tell you whether the CLUSTER runs what the chart describes — the live memex-cloud
+# PodDisruptionBudget was a hand-applied `minAvailable: 2` the chart never produced, and its
+# ScaledObject carried `autoscaling.keda.sh/paused-replicas: "1"`, an annotation no chart has heard
+# of. That is deploy/aks/scripts/check-chart-drift.sh, which needs cluster credentials and the
+# private per-env values and so cannot be a pull-request gate; see chart-drift.yml for how it is
+# scheduled, and DeploymentAKS.md for running it by hand.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  invariants:
+    name: Chart invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Render every values combination and assert it is self-consistent
+        run: deploy/aks/scripts/check-chart-invariants.sh

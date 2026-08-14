@@ -384,11 +384,22 @@ in git looks right. Diff live mounts against the chart after every deploy.
   env vars while no pod mounts `/data/dumps`, so every production `exit=139` so far produced no
   dump. Applying the current chart fixes it; until then a `mkdir /data/dumps` on the `/data` PVC is
   a stopgap that puts heap-sized dumps on a shared 16Gi share instead of the size-bounded emptyDir.
-- **Multi-replica HA**: needs Orleans `AzureTables` clustering wired on the Filesystem backend
-  (the portal currently registers the clustering table client only in the Azure-backend branch).
-- **Chart connection string**: `../helm/templates/memex-portal/secrets.yaml` hardcodes the
-  in-cluster pg host/user — hence the post-install secret patch in `deploy.sh`. Fix at the
-  chart-generator (AddMemex) so an external connection string flows from values.
+- ~~**Multi-replica HA**~~ (chart side done 2026-08-14): Orleans **AdoNet** clustering is the HA
+  provider (`Features:Orleans:Clustering`, legacy key `Deployment:Orleans:Clustering`), backed by a
+  dedicated `orleans` database the migration's `OrleansClusteringSetup` creates. The chart now
+  templates the replica count and omits `spec.replicas` entirely under KEDA so the HPA owns it;
+  `deploy/aks/scripts/check-chart-invariants.sh` asserts the prerequisites at render time. What
+  remains is per-environment and per-cluster, not chart work: each env's overlay must set
+  `keda.enabled`, and a paused `ScaledObject` still pins the count regardless (see "Scaling: KEDA
+  wins" above — check `PAUSED` before believing a replica number).
+- ~~**Chart connection string**~~ (fixed 2026-08-14): `../helm/templates/memex-portal/secrets.yaml`
+  and its migration counterpart now take `secrets.memex_{portal,migration}.ConnectionStrings__memex`
+  / `__orleans` from values, falling back to the in-cluster host only when unset. An env that
+  supplies them no longer needs the post-`helm` secret patch in `deploy.sh`. 🚨 Until an env's
+  values file DOES supply them, `helm upgrade` still re-renders the in-cluster host — and for
+  `__orleans` nothing patches it back, so an AdoNet namespace loses cluster membership. The chart
+  `fail`s the render if an external `ConnectionStrings__memex` is supplied without a matching
+  `__orleans`, so the half-configured case cannot ship silently.
 - **Secrets → Key Vault**: move the PG password, master key, and OAuth secrets into
   `meshweaverkeyvault` via the CSI Secrets Store add-on (enabled in `infra/modules/aks.bicep`).
 

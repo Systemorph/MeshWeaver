@@ -29,8 +29,30 @@
 #   ConfigMap  memex-portal-config       every key and value
 #   Deployment memex-portal-deployment   the portal container's inline env (NAMES only — values
 #                                        are never printed, they hold tokens), envFrom refs,
-#                                        lifecycle.preStop, terminationGracePeriodSeconds, and
-#                                        the three probes
+#                                        lifecycle.preStop, terminationGracePeriodSeconds, the
+#                                        three probes, and the AVAILABILITY shape below
+#   PodDisruptionBudget / ScaledObject   existence and shape
+#
+# 🚨 THE AVAILABILITY SHAPE was added 2026-08-14, because the check as first written would have
+# MISSED the incident it was created in response to. On that day memex-cloud served every request
+# from ONE pod, and all three of the reasons were outside what this script looked at:
+#
+#   * spec.replicas               live 1; the chart hard-coded 1 too, so even a comparison agreed —
+#                                 which is why the CHART side of it is now gated separately by
+#                                 check-chart-invariants.sh, on every pull request.
+#   * PodDisruptionBudget         live `minAvailable: 2` over ONE healthy pod ⇒ disruptionsAllowed
+#                                 0 for ever. Hand-applied 2026-07-26 (kubectl-client-side-apply);
+#                                 the chart renders `maxUnavailable: 1`, a different object shape
+#                                 entirely. Nothing compared them.
+#   * ScaledObject                live, minReplicaCount 2 — and carrying the annotation
+#                                 `autoscaling.keda.sh/paused-replicas: "1"`, which PINS the
+#                                 deployment at one pod and deletes the HPA. The chart has never
+#                                 heard of that annotation. It is invisible in `kubectl get deploy`
+#                                 and it silently reverts `kubectl scale`.
+#
+# A drift checker that reads only the ConfigMap and the pod template is a drift checker that cannot
+# see availability. It reads all three now, and it reports a live `disruptionsAllowed: 0` as a
+# finding in its own right — that is an outage condition whether or not the chart agrees with it.
 #
 # Inline `env` and the ConfigMap are BOTH needed and neither is redundant: an inline env entry
 # OVERRIDES envFrom, so `kubectl set env` (defect 3) leaves the ConfigMap matching the render
@@ -148,8 +170,15 @@ fetch() { # $1 = resource
                    --command "kubectl -n $NS get $1 -o json" 2>"$WORK/kubectl.err" ;;
   esac
 }
-for res in "configmap/memex-portal-config" "deployment/memex-portal-deployment"; do
-  out="$WORK/live-$(echo "$res" | tr '/' '-').json"
+# The availability objects are fetched as LISTS, not by name, and that is deliberate. A named GET
+# of an object that does not exist fails, and "it does not exist" is a legitimate, expected answer
+# in a non-KEDA namespace — so a named GET forces the script to treat a real transport failure and
+# a real absence identically. A list GET always returns a valid List document when the transport
+# works (possibly with `items: []`) and invalid output when it does not, which keeps "no PDB here"
+# a POSITIVE finding while a broken connection stays RED.
+for res in "configmap/memex-portal-config" "deployment/memex-portal-deployment" \
+           "poddisruptionbudgets" "scaledobjects.keda.sh"; do
+  out="$WORK/live-$(echo "$res" | tr '/' '-' | tr '.' '-').json"
   if ! fetch "$res" > "$out" || ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$out" 2>/dev/null; then
     echo "::error::could not read $res from namespace '$NS' via --via $VIA. This is a FAILURE, not an absence of drift."
     [ -s "$WORK/kubectl.err" ] && sed 's/^/    /' "$WORK/kubectl.err"
@@ -164,10 +193,13 @@ python3 - \
   "$WORK/desired.yaml" \
   "$WORK/live-configmap-memex-portal-config.json" \
   "$WORK/live-deployment-memex-portal-deployment.json" \
-  "$EXPECT_PATCH" <<'PY'
+  "$EXPECT_PATCH" \
+  "$WORK/live-poddisruptionbudgets.json" \
+  "$WORK/live-scaledobjects-keda-sh.json" <<'PY'
 import json, sys, yaml
 
 desired_path, live_cm_path, live_dep_path, expect_patch = sys.argv[1:5]
+live_pdb_path, live_so_path = sys.argv[5:7]
 
 findings, comparisons = [], 0
 def finding(kind, what, detail=""):
@@ -308,9 +340,95 @@ for label, dv, lv in [
     else:
         finding("DIFFERS", label, f"chart {json.dumps(dv)} vs live {json.dumps(lv)}")
 
+# ---- 5. the AVAILABILITY shape: replicas, the budget, the autoscaler --------
+# Everything above describes ONE pod's configuration. None of it can tell you how many pods there
+# are, or whether anything is allowed to take one away — which is the entire difference between a
+# namespace that survives a node upgrade and one that 503s for minutes.
+def named(path, obj_name):
+    doc = json.load(open(path))
+    for item in doc.get("items", []) if isinstance(doc, dict) else []:
+        if (item.get("metadata") or {}).get("name") == obj_name:
+            return item
+    return None
+
+d_pdb = next((d for d in yaml.safe_load_all(open(desired_path))
+              if d and d.get("kind") == "PodDisruptionBudget"), None)
+d_so = next((d for d in yaml.safe_load_all(open(desired_path))
+             if d and d.get("kind") == "ScaledObject"), None)
+l_pdb = named(live_pdb_path, "memex-portal-pdb")
+l_so = named(live_so_path, "memex-portal-scaler")
+
+# 5a. spec.replicas. Under KEDA the chart renders NO replicas (the HPA owns the field), so a live
+# value is expected and is not drift — what matters then is the autoscaler's floor, checked below.
+comparisons += 1
+d_reps = (d_dep.get("spec") or {}).get("replicas")
+l_reps = (l_dep.get("spec") or {}).get("replicas")
+if d_so is not None and d_reps is not None:
+    finding("DIFFERS", "spec.replicas",
+            f"the chart renders replicas={d_reps} AND a ScaledObject. helm and the HPA would fight "
+            f"over the field on every upgrade — the chart must omit it under KEDA")
+elif d_so is None and d_reps != l_reps:
+    finding("DIFFERS", "spec.replicas", f"chart {d_reps} vs live {l_reps}")
+
+# 5b. the disruption budget — shape AND its live verdict.
+comparisons += 1
+if d_pdb is None and l_pdb is not None:
+    finding("CLUSTER-ONLY", "PodDisruptionBudget memex-portal-pdb",
+            f"live {json.dumps(l_pdb.get('spec'))} — hand-applied; `helm upgrade` DELETES it")
+elif d_pdb is not None and l_pdb is None:
+    finding("CHART-ONLY", "PodDisruptionBudget memex-portal-pdb",
+            "rendered but not running — nothing throttles voluntary disruption today")
+elif d_pdb is not None and l_pdb is not None:
+    d_spec = {k: v for k, v in (d_pdb.get("spec") or {}).items() if k != "selector"}
+    l_spec = {k: v for k, v in (l_pdb.get("spec") or {}).items() if k != "selector"}
+    if d_spec != l_spec:
+        finding("DIFFERS", "PodDisruptionBudget spec",
+                f"chart {json.dumps(d_spec, sort_keys=True)} vs live {json.dumps(l_spec, sort_keys=True)}. "
+                f"minAvailable and maxUnavailable are DIFFERENT OBJECT SHAPES, not two spellings — "
+                f"minAvailable set equal to the replica count allows zero disruptions for ever")
+
+# A live budget that permits nothing is an outage condition on its own terms — report it whether or
+# not the chart happens to agree, because agreeing with it would not make it survivable.
+comparisons += 1
+if l_pdb is not None:
+    st = l_pdb.get("status") or {}
+    if st.get("disruptionsAllowed") == 0:
+        finding("DIFFERS", "PodDisruptionBudget allows NO disruption",
+                f"live disruptionsAllowed=0 (currentHealthy={st.get('currentHealthy')}, "
+                f"desiredHealthy={st.get('desiredHealthy')}). Every node image-upgrade and every "
+                f"drain is blocked, indefinitely and silently. Either the budget is the wrong shape "
+                f"or there are fewer healthy pods than it requires")
+
+# 5c. the autoscaler — including the annotation that silently pins the replica count.
+comparisons += 1
+if d_so is None and l_so is not None:
+    finding("CLUSTER-ONLY", "ScaledObject memex-portal-scaler",
+            "live but not rendered — hand-applied; `helm upgrade` DELETES it (and with it the "
+            "replica floor). Set keda.enabled in the values instead")
+elif d_so is not None and l_so is None:
+    finding("CHART-ONLY", "ScaledObject memex-portal-scaler",
+            "rendered but not running — nothing is holding the replica floor")
+elif d_so is not None and l_so is not None:
+    for key in ("minReplicaCount", "maxReplicaCount"):
+        comparisons += 1
+        dv, lv = (d_so.get("spec") or {}).get(key), (l_so.get("spec") or {}).get(key)
+        if dv != lv:
+            finding("DIFFERS", f"ScaledObject {key}", f"chart {dv} vs live {lv}")
+
+comparisons += 1
+paused = ((l_so or {}).get("metadata") or {}).get("annotations", {}).get(
+    "autoscaling.keda.sh/paused-replicas")
+if paused is not None:
+    finding("CLUSTER-ONLY", "ScaledObject autoscaling.keda.sh/paused-replicas",
+            f"live '{paused}' — KEDA is PAUSED and pins the deployment at {paused} replica(s). The "
+            f"HPA is deleted while this is set, minReplicaCount is not enforced, and `kubectl scale` "
+            f"is silently reverted. Nothing in the chart sets this; remove the annotation to resume "
+            f"autoscaling (`kubectl annotate scaledobject memex-portal-scaler "
+            f"autoscaling.keda.sh/paused-replicas-`)")
+
 # ---- verdict ---------------------------------------------------------------
 # The evidence assertion: a run that compared (almost) nothing must not read as a pass.
-MIN = 20
+MIN = 25
 if comparisons < MIN:
     print(f"::error::only {comparisons} fields were compared (expected at least {MIN}) — the "
           f"objects are not the shape this check understands. Treating as FAILURE rather than "
