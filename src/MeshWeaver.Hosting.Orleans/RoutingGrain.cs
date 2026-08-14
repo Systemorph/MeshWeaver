@@ -55,6 +55,14 @@ internal class RoutingGrain(
         meshHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Routing)
         ?? IoPool.Unbounded;
 
+    // The silo's LOCAL route table — the same one the forward leg short-circuits on. PostFailure
+    // consults it so a NACK to a co-hosted sender takes the route the forward message took, instead
+    // of the Orleans stream that was this leg's only path (#1486). Resolved from the mesh hub's
+    // provider, which is where the routing service singleton lives; null on a host that registered a
+    // different IRoutingService, in which case the stream remains the only option — same as before.
+    private readonly OrleansRoutingService? localRoutes =
+        meshHub.ServiceProvider.GetService<IRoutingService>() as OrleansRoutingService;
+
     /// <summary>
     /// Per-destination FIFO for the stream-routed branch. Instance field — its lifetime is this
     /// activation's, and it holds an entry only while a destination has work in flight.
@@ -418,6 +426,35 @@ internal class RoutingGrain(
                 .WithTarget(delivery.Sender)
                 .WithProperty(PostOptions.RequestId, delivery.Id),
             System.Text.Json.JsonSerializerOptions.Default);
+        // 🚨 THE LOCAL ROUTE FIRST — the same short-circuit the FORWARD leg takes (#1486).
+        //
+        // Every other same-process delivery to a co-hosted hub resolves on the local route table and
+        // never touches a stream. This leg did not: it published to the sender's Orleans stream
+        // unconditionally, which made it the weakest inbound path in the system. A hub whose stream
+        // subscription was never attached — or was attached and then lost, which
+        // SubscribeWhenStreamingReadyAsync can do while the local route stays live — is reachable
+        // for forward traffic and UNREACHABLE for NACKs.
+        //
+        // And the failure is silent by construction: a publish to a stream with no live subscriber
+        // SUCCEEDS. Nothing faults, the continuation below never sees IsFaulted, and the NACK is
+        // simply gone — so the requester waits forever for an answer the router believes it sent.
+        // That is the [STALE-CALLBACK] shape.
+        //
+        // Answering through the local route removes the stream dependency for the co-hosted case,
+        // which is the majority. Only a sender on ANOTHER silo still needs the stream.
+        var localRoute = localRoutes?.TryGetLocalRoute(delivery.Sender);
+        if (localRoute is not null)
+        {
+            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_LOCAL_ROUTE id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
+            localRoute.Invoke(failureDelivery, CancellationToken.None)
+                .Subscribe(
+                    _ => { },
+                    ex => logger.LogWarning(ex,
+                        "[ROUTE] Failed to deliver {ErrorType} failure to co-hosted sender {Sender} over its local route",
+                        errorType, delivery.Sender));
+            return;
+        }
+
         streamProvider.GetStream<IMessageDelivery>(delivery.Sender.ToString())
             .OnNextAsync(failureDelivery)
             .ContinueWith(t =>
@@ -428,7 +465,12 @@ internal class RoutingGrain(
                     logger.LogWarning(t.Exception, "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender}", errorType, delivery.Sender);
                 }
                 else
-                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_OK id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
+                    // 🚨 "OK" here means the PUBLISH did not fault — NOT that anything received it.
+                    // A memory-stream publish with no subscriber succeeds, so this line cannot
+                    // distinguish delivered from discarded. It is only reached for a sender this
+                    // silo does not host; the co-hosted case took the local route above, where
+                    // delivery IS observable.
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_OK_UNCONFIRMED id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
             }, TaskScheduler.Default);
     }
 
