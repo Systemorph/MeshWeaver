@@ -132,9 +132,28 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
     /// <para><b>What is left, and why the bound is 8 rather than ~1.</b> The whole residual is now the
     /// activity's OWN node hub plus the four <c>sync/</c> sub-hubs its data source builds at startup.
     /// Nothing subscribes to it any more, so on Orleans it is finally eligible for the idle
-    /// deactivation that the heartbeat used to keep pushing away; the monolith has no idle collection
-    /// for node hubs at all, which is what this test still counts. That is a host-lifecycle question,
-    /// not a stream one. Do NOT "fix" it by shortening a timer.</para>
+    /// deactivation that the heartbeat used to keep pushing away.</para>
+    ///
+    /// <para><b>🚨 And that residual is a BOUNDED RETENTION, not a leak — measured, and it corrects
+    /// what this comment used to claim.</b> It used to say "the monolith has no idle collection for
+    /// node hubs at all … a host-lifecycle question". The general statement is true (the monolith
+    /// host has no reaper: <c>MonolithRoutingService.CreateHub</c> creates via
+    /// <c>Mesh.GetHostedHub</c> and hosted hubs die only at <c>Quiescing → DisposeHostedHubs</c>) —
+    /// but an <b>Activity</b> node hub is one of the few kinds that DOES get one, monolith included:
+    /// <c>ActivityNodeType.CreateMeshNode</c> → <c>.AddKernelSubHubHandlers()</c> →
+    /// <c>KernelContainer.DisposeOnTimeout</c>, a one-shot idle timer (15 min,
+    /// <c>KernelHubOptions.IdleDisconnectTimeout</c>), registered by <c>KernelNodeType.AddKernel()</c>
+    /// which <c>AddGraph()</c> includes. It never fired for the same reason #1435 fixed: the timer is
+    /// re-armed by EVERY inbound message and the finished activity's warm mirror heart-beat WAS that
+    /// message. With the mirror released, the clock runs — and the hub is disposed exactly one window
+    /// later. Measured unscaled at production values: flat at 15 hubs through t+885s, 5 at t+900s,
+    /// <b>0 at t+915s — 13 hubs reclaimed in 15.25 minutes</b>, with the mesh's total hub count going
+    /// 49 → 32. So what this test counts is a TRANSIENT that this seconds-long repro is simply too
+    /// short to see expire; the ceiling on it is that window, and
+    /// <see cref="CompileActivityHubRetentionTest"/> is the CI-affordable guard on it.</para>
+    ///
+    /// <para>Do NOT "fix" it by shortening a timer — #1324 prohibits it by name, and #1435's lesson
+    /// is precisely that the clocks were correct and something was resetting them.</para>
     ///
     /// <para>So this bound is a RATCHET at the measured value, not an aspiration: it fails the moment
     /// the residual gets worse — 8 sits above the 6.0/6.7 measured here and below the 8.7 the

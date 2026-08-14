@@ -39,7 +39,14 @@ public class KernelContainer(IServiceProvider serviceProvider)
     private IMessageHub? executorHub;
     private readonly object executorHubLock = new();
 
-    private static readonly TimeSpan DisconnectTimeout = TimeSpan.FromMinutes(15);
+    /// <summary>
+    /// Idle window after which a kernel-hosting hub disposes itself. 15 minutes by default; a host
+    /// (or a test that needs to observe the reclamation inside its budget) can override it by
+    /// registering a <see cref="KernelHubOptions"/> singleton. 🚨 NOT a memory tuning knob — see
+    /// <see cref="KernelHubOptions.IdleDisconnectTimeout"/>.
+    /// </summary>
+    private readonly TimeSpan disconnectTimeout =
+        (serviceProvider.GetService<KernelHubOptions>() ?? new KernelHubOptions()).IdleDisconnectTimeout;
 
     /// <summary>
     /// Hub configuration for the standalone kernel-hub (full mesh-types + routes).
@@ -179,13 +186,14 @@ public class KernelContainer(IServiceProvider serviceProvider)
         {
             if (((WeakReference<IMessageHub>)state!).TryGetTarget(out var h))
                 h.Dispose();
-        }, weakHub, DisconnectTimeout, Timeout.InfiniteTimeSpan);
+        }, weakHub, disconnectTimeout, Timeout.InfiniteTimeSpan);
         // Dispose the timer WITH the hub for the normal (activated → disposed) path so
         // the queue drops it promptly rather than waiting on a GC.
         hub.RegisterForDisposal((IDisposable)timer);
+        var idle = disconnectTimeout;
         hub.Register<object>(d =>
         {
-            timer.Change(DisconnectTimeout, Timeout.InfiniteTimeSpan);
+            timer.Change(idle, Timeout.InfiniteTimeSpan);
             return d;
         });
     }
