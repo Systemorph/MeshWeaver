@@ -256,10 +256,13 @@ public record DiagDemo
     public string Id { get; init; } = string.Empty;
 }")).Should().Within(60.Seconds()).Emit();
 
-        var diagnostics = await LanguageService
+        var outcome = await LanguageService
             .GetDiagnostics("type/DiagDemo")
             .Should().Within(60.Seconds()).Emit();
 
+        outcome.Status.Should().Be(NodeDiagnosticsStatus.Compiled,
+            "an empty diagnostic list only means 'clean' when a compilation actually produced it");
+        var diagnostics = outcome.Diagnostics;
         diagnostics.Should().NotContain(d => d.Severity == LspDiagnosticSeverity.Error,
             "clean source should produce no error-severity diagnostics. Got: {0}",
             string.Join("; ", diagnostics.Select(d => $"{d.Id} {d.Severity} {d.Message}")));
