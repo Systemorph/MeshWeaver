@@ -1,0 +1,73 @@
+# Dependabot version updates — the ECOSYSTEM half of dependency maintenance.
+# (The PLATFORM half — plugin repos tracking this repo's version line — is the mesh-native
+# update agent on the registry instance, not Dependabot; see the modularization program.)
+#
+# Grouping: minor+patch bumps arrive as ONE weekly PR per ecosystem so the update tax is a
+# review, not a storm; majors and security fixes arrive individually. Every PR rides the full
+# CI gate (Release -warnaserror, NuGetAudit, the test shards, the Clients workflow), so the
+# merge bar is the same green-only bar as any change.
+version: 2
+updates:
+  # .NET — central package management: every version lives in /Directory.Packages.props.
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 10
+    groups:
+      nuget-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  # JS clients — one update config over all workspaces; grouped the same way.
+  - package-ecosystem: npm
+    directories:
+      - "/clients/react"
+      - "/clients/grpc-web"
+      - "/clients/typescript"
+      - "/clients/portal-next"
+      - "/clients/react-native"
+      - "/clients/portal"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:30"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  # Python SDK.
+  - package-ecosystem: pip
+    directory: "/clients/python"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:30"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+
+  # Actions pins across all workflows.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+
+  # The portal-ai base image (Node + CLI + Playwright layers).
+  - package-ecosystem: docker
+    directory: "/deploy/base-images/portal-ai"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
