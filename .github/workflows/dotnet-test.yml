@@ -867,7 +867,7 @@ jobs:
           exit 1
         fi
     - name: Publish Test Results (this shard)
-      uses: EnricoMi/publish-unit-test-result-action@v2.12.0
+      uses: EnricoMi/publish-unit-test-result-action@v2.24.0
       if: always()
       # Best-effort reporter ONLY — the TRX-summarize step above is the gate.
       # action_fail removed + continue-on-error so a GitHub-API 429 (concurrent
@@ -1265,7 +1265,7 @@ jobs:
           exit 1
         fi
     - name: Publish Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v2.12.0
+      uses: EnricoMi/publish-unit-test-result-action@v2.24.0
       if: always() && needs.precheck.outputs.skip != 'true'
       # Best-effort reporter ONLY (reporting, not gating) — the TRX-summarize step
       # above is the gate. action_fail removed + continue-on-error so a throttled
