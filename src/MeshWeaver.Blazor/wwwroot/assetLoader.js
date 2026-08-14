@@ -8,15 +8,31 @@ const loads = new Map();
 export function ensure(url, kind) {
   let p = loads.get(url);
   if (p) return p;
+  // The asset may already be in the document from OUTSIDE this module — a host page tag or an
+  // earlier non-module load. Appending again would double-execute a script, so detect by the
+  // element's RESOLVED url (el.src / el.href are absolute; the caller's url may be relative).
+  const absolute = new URL(url, document.baseURI).href;
+  const existing =
+    kind === "css"
+      ? [...document.querySelectorAll("link[rel='stylesheet']")].some((el) => el.href === absolute)
+      : [...document.querySelectorAll("script[src]")].some((el) => el.src === absolute);
+  if (existing) {
+    p = Promise.resolve(true);
+    loads.set(url, p);
+    return p;
+  }
   p = new Promise((resolve, reject) => {
     let el;
     if (kind === "css") {
       el = document.createElement("link");
       el.rel = "stylesheet";
       el.href = url;
-    } else {
+    } else if (kind === "js") {
       el = document.createElement("script");
       el.src = url;
+    } else {
+      reject(new Error("assetLoader: unknown kind '" + kind + "' for " + url + " — use 'css' or 'js'"));
+      return;
     }
     el.onload = () => resolve(true);
     el.onerror = () => {
