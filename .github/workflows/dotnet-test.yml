@@ -127,6 +127,8 @@ permissions:
   contents: write
   checks: write
   pull-requests: write
+  # `clients-gate` lists the Clients workflow's runs for this commit — see that job.
+  actions: read
 
 env:
   # How long a green tree stays evidence. Beyond this the marker is ignored (and
@@ -136,6 +138,12 @@ env:
   # Marker refs older than this are deleted, so `git ls-remote refs/ci-green/*`
   # stays a handful of lines rather than an unbounded ref namespace.
   CI_GREEN_PRUNE_SECONDS: 1209600  # 14 d
+  # How many shard jobs the `test` matrix has. STATICALLY known, which is the whole
+  # point: `collect-results` compares the number of shards that REPORTED against this
+  # number, rather than inferring coverage from whatever artifacts happened to arrive.
+  # 🚨 Keep in sync with the `test` job's `matrix.shard` list and the build job's
+  # SHARD_TOTAL. A mismatch is loud (the assertion fails), never silent.
+  CI_SHARD_TOTAL: 6
 
 jobs:
   # 🚨 No `jlumbroso/free-disk-space` in any job — do not re-add it. Removed 2026-08-09 after
@@ -168,6 +176,12 @@ jobs:
       skip: ${{ steps.probe.outputs.skip }}
       tree: ${{ steps.probe.outputs.tree }}
       marker: ${{ steps.probe.outputs.marker }}
+      # PROVENANCE (#1491): the run that ACTUALLY executed the suite on this tree. A green
+      # produced by reuse is honest about the bytes but says nothing about which run gathered
+      # the evidence — and "last green main run" is then not the same thing as "last main run
+      # that executed the tests", which is exactly how a red got attributed to the wrong PR.
+      # Empty for markers written before this was recorded.
+      marker_run: ${{ steps.probe.outputs.marker_run }}
     steps:
     - uses: actions/checkout@v7
       with:
@@ -194,10 +208,13 @@ jobs:
 
         # Newest marker for this tree, if any. Grep locally as well as passing the
         # prefix: never let a server-side pattern match a ref for a DIFFERENT tree.
+        #
+        # Marker leaf is `<epoch>` (legacy) or `<epoch>-<run_id>` (carries provenance,
+        # #1491). Both are accepted; sorting is on the epoch field only.
         newest=$(git ls-remote origin "refs/ci-green/$tree/*" 2>/dev/null \
                  | awk '{print $2}' \
-                 | grep -E "^refs/ci-green/$tree/[0-9]+$" \
-                 | sed 's|.*/||' | sort -n | tail -1 || true)
+                 | grep -E "^refs/ci-green/$tree/[0-9]+(-[0-9]+)?$" \
+                 | sed 's|.*/||' | sort -t- -k1,1n | tail -1 || true)
 
         if [ -z "$newest" ]; then
           echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -205,23 +222,43 @@ jobs:
           exit 0
         fi
 
-        age=$(( $(date +%s) - newest ))
+        epoch="${newest%%-*}"
+        marker_run=""
+        case "$newest" in (*-*) marker_run="${newest#*-}";; esac
+
+        age=$(( $(date +%s) - epoch ))
         if [ "$age" -gt "${CI_GREEN_TTL_SECONDS}" ]; then
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "Marker is ${age}s old (TTL ${CI_GREEN_TTL_SECONDS}s) — stale, running the full suite."
           exit 0
         fi
 
-        echo "skip=true" >> "$GITHUB_OUTPUT"
-        echo "marker=refs/ci-green/$tree/$newest" >> "$GITHUB_OUTPUT"
+        {
+          echo "skip=true"
+          echo "marker=refs/ci-green/$tree/$newest"
+          echo "marker_run=$marker_run"
+        } >> "$GITHUB_OUTPUT"
         echo "Tree already green ${age}s ago — reusing that result."
+        # 🚨 Name the run that ACTUALLY executed the suite (#1491). Without this, a reader
+        # of the run list cannot tell a green that gathered evidence from a green that
+        # inherited it — and taking the bisect window from the latter points at the wrong PR.
+        if [ -n "$marker_run" ]; then
+          provenance="[run ${marker_run}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${marker_run})"
+          echo "The suite was actually executed by run ${marker_run}."
+        else
+          provenance="_unrecorded (marker predates provenance recording)_"
+        fi
         {
           echo "### ✅ Reusing an already-green result"
           echo
           echo "This commit's tree \`$tree\` was tested green **${age}s ago** and nothing in it has changed since, so build + test are skipped."
           echo
           echo "- Marker: \`refs/ci-green/$tree/$newest\`"
+          echo "- Evidence gathered by: ${provenance}"
           echo "- TTL: \`${CI_GREEN_TTL_SECONDS}s\`"
+          echo
+          echo "> This run **did not execute the suite**. If something later goes red, the bisect"
+          echo "> window starts at the last main run that ACTUALLY ran the tests — not at this commit."
         } >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────── PREFLIGHT ───────────────────────────
@@ -1078,6 +1115,133 @@ jobs:
           exit "$status"
         fi
 
+  # ────────────────────────── CLIENTS GATE ──────────────────────────
+  # Folds the `Clients` workflow's verdict into the repo's ONE required status check (#1568).
+  #
+  # 🚨 WHY THIS EXISTS. On 2026-08-14 PR #1555 merged with the ENTIRE Clients workflow red —
+  # all seven jobs, including `Portal-next (typecheck + test + build)`. Nothing blocked it,
+  # because `Consolidate test results` is the only required check and it is green independently
+  # of Clients. The consequence was not confined to the clients: `main-cd`'s portal-next leg
+  # runs the very same `npm run build`, it died in ~1.1 s on every CD run afterwards, and
+  # `promote` is all-or-nothing — so CD published NOTHING for ~1 h. Every self-updating install
+  # stayed on the old image and a production 42P18 fix was stranded. The signal existed and was
+  # advisory; a workflow whose failure can stop image publication has to be a merge gate.
+  #
+  # 🚨 WHY NOT SIMPLY MARK `Clients` REQUIRED. It is path-filtered (clients/** plus the
+  # cross-tree inputs its guards read), so on a server-only PR it never runs — and a required
+  # check that is legitimately skipped blocks merges FOREVER. That is exactly why this repo
+  # keeps `Build solution (once)` and the shards out of the required set. So the gate is this
+  # always-runs job, which REPORTS the filtered workflow's result.
+  #
+  # 🚨 "Clients did not run" is a fact about the DIFF, not missing evidence. Zero runs means the
+  # path filter did not match, i.e. this PR changes none of the inputs those jobs read — the
+  # clients tree under test is byte-identical to the base's. That is categorically different
+  # from the skip-trapdoor AGENTS.md rules out (an `if:` asking whether a SECRET is set, where
+  # "the gate never ran" and "the gate passed" become indistinguishable). This job always runs,
+  # always reports, and never tests its own inputs.
+  clients-gate:
+    name: "Clients workflow verdict"
+    runs-on: ubuntu-latest
+    # Generous relative to the Clients workflow's own wall-clock (its long pole is the
+    # Playwright job at a few minutes) and well under the .NET suite's ~22 min, so this never
+    # becomes the critical path. Hitting it means Clients is WEDGED — which must be red, not
+    # waited out.
+    timeout-minutes: 25
+    outputs:
+      verdict: ${{ steps.gate.outputs.verdict }}
+    steps:
+    - name: "Resolve the Clients workflow's conclusion for this commit"
+      id: gate
+      env:
+        GH_TOKEN: ${{ github.token }}
+        # On a pull_request run, github.sha is the merge commit — the Clients workflow runs on
+        # the PR's HEAD, so that is the sha its runs are keyed by.
+        HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -uo pipefail
+        api="repos/${{ github.repository }}/actions/workflows/clients.yml/runs?head_sha=${HEAD_SHA}&per_page=100"
+        # 🚨 "Zero runs" is only meaningful once GitHub has had time to CREATE the run. Both
+        # workflows fire on the same event, so an immediate zero would be a race, and reading
+        # it as "the path filter did not match" would silently re-open the very hole this gate
+        # closes. So a zero is only believed after this grace period of consecutive zeros.
+        ZERO_GRACE_SECONDS=180
+        started=$(date +%s)
+        # 🚨 A FAILED QUERY IS NOT A ZERO. An auth error, a rate limit or a network blip must never
+        # collapse into "no runs exist" — that would make this gate pass on no evidence, which is
+        # precisely the trapdoor it was written to close (and the reason `gh api ... || echo
+        # '{"total_count":0}'` is NOT what this does). The two are tracked separately: a fetch error
+        # is retried inside the poll, and if the query never succeeds the job goes RED rather than
+        # reporting a verdict it never obtained.
+        fetched=0
+        lastError=""
+        # Poll: Clients starts on the same event and normally finishes long before the .NET
+        # suite, but the two are not ordered.
+        for _ in $(seq 1 60); do
+          if ! json=$(gh api "$api" 2>"$RUNNER_TEMP/clients-gate.err"); then
+            lastError=$(tr '\n' ' ' < "$RUNNER_TEMP/clients-gate.err" | cut -c1-400)
+            echo "Could not query the Clients workflow runs (retrying): ${lastError}"
+            sleep 20
+            continue
+          fi
+          fetched=1
+          total=$(echo "$json" | jq -r '.total_count // 0')
+          if [ "$total" = "0" ] && [ $(( $(date +%s) - started )) -lt "$ZERO_GRACE_SECONDS" ]; then
+            echo "No Clients run for ${HEAD_SHA} yet — within the ${ZERO_GRACE_SECONDS}s creation grace period, waiting."
+            sleep 20
+            continue
+          fi
+          if [ "$total" = "0" ]; then
+            echo "verdict=not-applicable" >> "$GITHUB_OUTPUT"
+            echo "The Clients workflow did not run for ${HEAD_SHA}: this diff touches none of its path filters, so the client tree under test is unchanged from the base."
+            {
+              echo "### ➖ Clients: not applicable"
+              echo
+              echo "No \`Clients\` run for \`${HEAD_SHA}\` — this PR changes none of the paths that workflow watches."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Newest run for this sha (a re-run adds another).
+          status=$(echo "$json" | jq -r '[.workflow_runs[]] | sort_by(.run_number) | last | .status')
+          conclusion=$(echo "$json" | jq -r '[.workflow_runs[]] | sort_by(.run_number) | last | .conclusion // ""')
+          url=$(echo "$json" | jq -r '[.workflow_runs[]] | sort_by(.run_number) | last | .html_url')
+          if [ "$status" = "completed" ]; then
+            echo "Clients run concluded: ${conclusion} (${url})"
+            echo "verdict=${conclusion}" >> "$GITHUB_OUTPUT"
+            if [ "$conclusion" = "success" ] || [ "$conclusion" = "skipped" ]; then
+              {
+                echo "### ✅ Clients: ${conclusion}"
+                echo
+                echo "[Clients run](${url})"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::The Clients workflow concluded '${conclusion}' for this commit — see ${url}. Its Portal-next job builds the same tree main-cd's portal-next image leg builds, and CD's promote is all-or-nothing: merging this red stops ALL image publication."
+            {
+              echo "### ❌ Clients: ${conclusion}"
+              echo
+              echo "[Clients run](${url}) failed. \`main-cd\`'s portal-next leg runs the same build, and"
+              echo "\`promote\` publishes only when every leg succeeds — so merging this stops image"
+              echo "publication for the whole repo, not just the clients."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          sleep 20
+        done
+        if [ "$fetched" = "0" ]; then
+          echo "::error::Could not query the Clients workflow runs for ${HEAD_SHA} even once — last error: ${lastError}. This job reports the Clients verdict into the required check, so an unobtainable verdict is a RED, never a pass: a gate that cannot read its subject has no evidence at all."
+          {
+            echo "### ❌ Clients: verdict unobtainable"
+            echo
+            echo "Every attempt to query the \`Clients\` workflow runs for \`${HEAD_SHA}\` failed."
+            echo "Last error: \`${lastError}\`"
+            echo
+            echo "This is deliberately a failure and not a pass — \"could not fetch\" is not \"no runs exist\"."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+        echo "::error::The Clients workflow for ${HEAD_SHA} has not completed within this job's budget — it is wedged. Refusing to report a verdict on an unfinished run."
+        exit 1
+
   doc-gate:
     name: "Doc content compiles and runs"
     # Unlike plugin-gate this needs no credential and no fork guard: the content under test IS
@@ -1213,7 +1377,10 @@ jobs:
     # is a NEEDS for the same reason one level up: this job is the repo's ONLY required status
     # check, so anything that must block a merge has to be able to fail it. licence-gate is a
     # NEEDS on the same principle: a licensing defect must be able to block a merge.
-    needs: [precheck, preflight, build, test, plugin-gate, doc-gate, licence-gate]
+    # clients-gate is a NEEDS on the same principle as plugin-gate/doc-gate/licence-gate: a red
+    # Clients workflow can stop ALL image publication (#1568), so it must be able to fail the
+    # repo's only required status check.
+    needs: [precheck, preflight, build, test, plugin-gate, doc-gate, licence-gate, clients-gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1227,13 +1394,25 @@ jobs:
     # it keeps the run's conclusion `success` for main-cd's workflow_run gate.
     - name: "Reused: tree already green"
       if: needs.precheck.outputs.skip == 'true'
+      env:
+        MARKER_RUN: ${{ needs.precheck.outputs.marker_run }}
       run: |
         echo "Tree ${{ needs.precheck.outputs.tree }} was already tested green (${{ needs.precheck.outputs.marker }}) — build + test skipped."
+        # 🚨 #1491: state WHOSE evidence this green is. A reused green is sound about the
+        # bytes and silent about the run — and that silence is what made a red land on an
+        # unrelated PR's commit with a bisect window that excluded the real cause.
+        if [ -n "${MARKER_RUN:-}" ]; then
+          echo "Evidence gathered by run ${MARKER_RUN} — THIS run executed no tests."
+          provenance="[run ${MARKER_RUN}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${MARKER_RUN})"
+        else
+          provenance="_unrecorded (marker predates provenance recording)_"
+        fi
         {
           echo "### ✅ Test suite reused"
           echo
           echo "Tree \`${{ needs.precheck.outputs.tree }}\` was already tested green — build and test were skipped."
           echo "Marker: \`${{ needs.precheck.outputs.marker }}\`"
+          echo "Evidence gathered by: ${provenance}"
         } >> "$GITHUB_STEP_SUMMARY"
     - name: Download all shard results
       if: needs.precheck.outputs.skip != 'true'
@@ -1291,6 +1470,67 @@ jobs:
           echo "::error::Failing tests in trx across shards — failing the run."
           exit 1
         fi
+    # 🚨 COVERAGE GATE — "no failures" is not "everything ran" (#1472).
+    #
+    # On 2026-08-14 a GitHub codeload outage made setup-dotnet's tarball unfetchable and
+    # SHARD 0 NEVER RAN. The five surviving shards produced trx with no failures, the
+    # evidence gate above saw a non-zero trx count, and `Consolidate test results` — the
+    # repo's ONLY required status check — reported SUCCESS. `mergeStateStatus` was merely
+    # UNSTABLE, which does not block. A PR could have merged on five sixths of the suite
+    # with nothing in the required signal saying so.
+    #
+    # "The shard produced no results because it never started" and "the shard produced no
+    # failures" are DIFFERENT INPUTS, and counting failures cannot tell them apart. So this
+    # step counts REPORTERS against the statically-known matrix size instead of inferring
+    # coverage from what arrived.
+    #
+    # 🚨 Two ways to get this wrong, both of which reproduce the defect one level up, and
+    # neither of which is used here:
+    #   * an `if:` that skips the assertion when a shard artifact is absent — GitHub renders
+    #     a skipped job with the same tick as a passed one;
+    #   * `continue-on-error` on the step that fetches the shard results.
+    # The only condition on this step is the reuse path, which is a RUN MODE (no shard was
+    # expected to run at all), not a property of the evidence.
+    - name: "Every shard must have reported"
+      if: always() && needs.precheck.outputs.skip != 'true'
+      run: |
+        set -uo pipefail
+        expected="${CI_SHARD_TOTAL}"
+        # download-artifact keeps each artifact under its own directory (no merge-multiple),
+        # so one directory == one shard that uploaded results.
+        reported=$(find all-results -mindepth 1 -maxdepth 1 -type d -name 'testResults-shard*' 2>/dev/null | wc -l | tr -d ' ')
+        echo "Shards reported: ${reported}/${expected}"
+        if [ "$reported" -eq "$expected" ]; then
+          echo "_All ${expected} shards reported._" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        # Name the missing ones so the run says WHICH sixth of the suite is unaccounted for.
+        missing=()
+        for ((i=0; i<expected; i++)); do
+          [ -d "all-results/testResults-shard$i" ] || missing+=("$i")
+        done
+        echo "::error::Only ${reported} of ${expected} shards reported results — shard(s) ${missing[*]} produced nothing. A shard that never ran is an UNVERIFIABLE outcome, not a passing one; refusing to report success on a partially-executed suite."
+        {
+          echo "### ❌ Incomplete test coverage"
+          echo
+          echo "Only **${reported} of ${expected}** shards reported results. Missing: \`${missing[*]}\`."
+          echo
+          echo "A shard that never started produces no failures — which is not the same evidence as"
+          echo "a shard that ran and found none. Check the missing shard job(s) for an infrastructure"
+          echo "failure (runner/download/setup), then re-run them: an infra failure with the same input"
+          echo "is the sanctioned re-run case."
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit 1
+
+    # Defence in depth for the same defect from the other side: a shard job that FAILED to
+    # start, was cancelled, or died before uploading leaves the matrix result non-success.
+    # `needs:` alone cannot express that under `if: always()`.
+    - name: "Fail if any shard job did not succeed"
+      if: always() && needs.precheck.outputs.skip != 'true' && needs.test.result != 'success'
+      run: |
+        echo "::error::The test matrix concluded '${{ needs.test.result }}' — at least one shard did not succeed. See the shard jobs; this run does not cover the whole suite."
+        exit 1
+
     - name: Publish Test Results
       uses: EnricoMi/publish-unit-test-result-action@v2.24.0
       if: always() && needs.precheck.outputs.skip != 'true'
@@ -1338,7 +1578,11 @@ jobs:
       run: |
         set -euo pipefail
         tree="${{ needs.precheck.outputs.tree }}"
-        ref="refs/ci-green/$tree/$(date +%s)"
+        # 🚨 The leaf carries PROVENANCE (#1491): `<epoch>-<run_id>`, so a later run that
+        # REUSES this marker can name the run that actually gathered the evidence instead of
+        # leaving the reader to infer it from a run list that cannot distinguish the two
+        # kinds of green. Readers split on the first `-`; a bare `<epoch>` (legacy) still parses.
+        ref="refs/ci-green/$tree/$(date +%s)-${{ github.run_id }}"
         # github.sha is this run's commit — the merge commit on a pull_request run,
         # which is exactly the commit whose tree we tested. Marker refs live
         # outside refs/heads and refs/tags: invisible in the branch/tag UI, and
@@ -1346,6 +1590,32 @@ jobs:
         git push origin "${{ github.sha }}:$ref"
         echo "Recorded green tree: $ref"
         echo "Green tree recorded: \`$ref\`" >> "$GITHUB_STEP_SUMMARY"
+
+    # ── RECORD THE LAST MAIN COMMIT WHOSE TESTS ACTUALLY RAN ──────────────────────────────
+    # The other half of #1491. `refs/ci-green` is keyed by TREE, so it can say "these bytes
+    # passed" but never "main was verified at this commit" — and the bisect window a human (or
+    # an agent) reaches for is `git log <last-green>..<red>`, taken from the run list. On
+    # 2026-08-14 that window contained exactly one PR, and it was the wrong one: the preceding
+    # main run had REUSED a marker, so main's tip had never been tested as a whole, and the
+    # regression came from the change set BEFORE the one the window named.
+    #
+    # This ref is written only when the suite genuinely executed AND passed on main, so the
+    # newest one is, by construction, the last main commit whose tests actually ran.
+    - name: "Record executed-and-green main commit"
+      if: >-
+        github.ref == 'refs/heads/main' &&
+        github.event_name == 'push' &&
+        needs.precheck.outputs.skip != 'true' &&
+        needs.build.result == 'success' &&
+        needs.test.result == 'success'
+      # Same rationale as the marker push: losing one costs a less precise bisect hint, never
+      # correctness.
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        ref="refs/ci-executed/main/$(date +%s)-${{ github.run_id }}"
+        git push origin "${{ github.sha }}:$ref"
+        echo "Recorded executed-and-green main commit ${{ github.sha }} at $ref"
 
     # Keep the marker namespace small. Anything past the prune horizon is long
     # past the TTL — it can never be honoured again, it only slows the ls-remote.
@@ -1358,12 +1628,14 @@ jobs:
         refspecs=()
         while read -r _sha ref; do
           [ -z "${ref:-}" ] && continue
-          epoch="${ref##*/}"
+          leaf="${ref##*/}"
+          # Leaf is `<epoch>` (legacy) or `<epoch>-<run_id>` (#1491) — take the epoch field.
+          epoch="${leaf%%-*}"
           case "$epoch" in (*[!0-9]*|'') continue;; esac
           if [ $(( now - epoch )) -gt "${CI_GREEN_PRUNE_SECONDS}" ]; then
             refspecs+=(":$ref")
           fi
-        done < <(git ls-remote origin 'refs/ci-green/*' 2>/dev/null || true)
+        done < <(git ls-remote origin 'refs/ci-green/*' 'refs/ci-executed/*' 2>/dev/null || true)
         if [ "${#refspecs[@]}" -eq 0 ]; then
           echo "No stale markers to prune."
           exit 0
@@ -1447,8 +1719,62 @@ jobs:
     # "Consolidate test results" is the repo's only required status check, so an unprovisioned
     # credential would once again read as a green merge-ready PR while the cross-repo gate
     # tested nothing. Same lesson as the step above: `needs:` alone is NOT enough under always().
+    # ── …and a red Clients workflow decides it too ──────────────────────────────────────────
+    # 🚨 `needs:` alone is NOT enough under `if: always()` — same lesson as the steps above.
+    # This is the merge gate #1555 did not have: its Portal-next job was red, naming the exact
+    # build main-cd would later run, and it was advisory.
+    - name: Fail if the clients gate failed
+      if: needs.clients-gate.result != 'success'
+      run: |
+        echo "::error::The Clients workflow verdict is '${{ needs.clients-gate.outputs.verdict }}' (gate job: ${{ needs.clients-gate.result }}) — see the 'Clients workflow verdict' job. main-cd's portal-next image leg runs the same build, and its promote step is all-or-nothing, so merging this would stop ALL image publication."
+        exit 1
+
     - name: Fail if a required CI input is missing
       if: needs.preflight.result != 'success'
       run: |
         echo "::error::A required CI input is missing or the preflight could not run — see the 'Required CI inputs' job. Gates that depend on it did not run, so this run proves nothing about them."
         exit 1
+
+    # ── STATE THE BISECT WINDOW ON A RED ────────────────────────────────────────────────────
+    # #1491's diagnostic half. The natural first move on a red main is
+    # `git log <last-green>..<red>` — and taking "last green" from the run list is WRONG when
+    # the preceding run reused a marker, because that run concluded success without executing
+    # anything. The window it yields can exclude the change set that actually broke the tree.
+    #
+    # `refs/ci-executed/main/*` records only main commits whose suite genuinely RAN and passed,
+    # so the newest one IS the correct left edge. Stating it here means the window is read, not
+    # reconstructed. Never fails the run: it is a diagnostic on an already-red run, and a
+    # missing hint must not mask the failure that prompted it.
+    - name: "State the bisect window"
+      if: failure()
+      continue-on-error: true
+      run: |
+        set -uo pipefail
+        last=$(git ls-remote origin 'refs/ci-executed/main/*' 2>/dev/null \
+               | sed -E 's|^([0-9a-f]+)[[:space:]]+refs/ci-executed/main/([0-9]+)(-([0-9]+))?$|\2 \1 \4|' \
+               | grep -E '^[0-9]+ ' | sort -n | tail -1 || true)
+        {
+          echo "### 🔎 Bisect window"
+          echo
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ -z "$last" ]; then
+          echo "No refs/ci-executed/main marker yet — the window cannot be stated from evidence." \
+            >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        sha=$(echo "$last" | awk '{print $2}')
+        run=$(echo "$last" | awk '{print $3}')
+        {
+          echo "Last main commit whose tests **actually executed** and passed: \`${sha}\`"
+          [ -n "$run" ] && echo "(run [${run}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${run}))"
+          echo
+          echo "So the window to bisect is:"
+          echo
+          echo '```'
+          echo "git log ${sha}..${{ github.sha }}"
+          echo '```'
+          echo
+          echo "> 🚨 This is deliberately NOT \"the last main run that concluded success\". A run that"
+          echo "> reuses an already-green tree marker reports success **without executing the suite**,"
+          echo "> so the window taken from the run list can exclude the change set that actually broke it."
+        } >> "$GITHUB_STEP_SUMMARY"
