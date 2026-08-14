@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Blazor.Analysis;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
