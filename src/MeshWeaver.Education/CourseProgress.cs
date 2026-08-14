@@ -56,7 +56,7 @@ public static class CourseProgress
     /// </summary>
     /// <param name="root">The indexed course root (central or the viewer's copy).</param>
     public static string CourseSlug(string root)
-        => new string(EducationLayoutAreas.LastSegment(root));
+        => new string(EducationHelpers.LastSegment(root));
 
     /// <summary>
     /// The lesson key of the page being read: the first segment UNDER the course root — the lesson
