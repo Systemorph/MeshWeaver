@@ -19,8 +19,9 @@
 // was wrong.
 //
 // So, exactly like wire.ts: this file is import-free and pure, and it is mirrored BYTE-IDENTICALLY
-// into clients/typescript/src/changeFold.ts. wireContract.test.ts asserts the two copies are equal,
-// so a fix can never again land in one SDK only.
+// into the OTHER TypeScript SDK's copy of the same path. (Side-neutral on purpose — the two copies
+// are byte-equal, so a sentence naming one package's path is wrong when read in the other.)
+// wireContract.test.ts asserts they are equal, so a fix can never again land in one SDK only.
 //
 // 🚨 IMPORT-FREE IS LOAD-BEARING, not tidiness. The two SDKs resolve modules differently — the Node
 // SDK is NodeNext (a `.js` specifier is REQUIRED) while grpc-web is bundled — and grpc-web's source
