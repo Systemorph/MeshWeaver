@@ -506,7 +506,7 @@ public sealed class EventSubscriptionRunner(
     /// identity — the runner has no ambient AccessContext, and both reads and writes capture identity
     /// at construction/subscribe. <c>Defer</c> moves construction inside the impersonation scope.</summary>
     private IObservable<T> AsSystem<T>(Func<IObservable<T>> factory)
-        => Observable.Using(accessService.ImpersonateAsSystem, _ => Observable.Defer(factory));
+        => accessService.RunAsSystem(factory);
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken)

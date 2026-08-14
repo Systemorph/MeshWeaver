@@ -370,6 +370,38 @@ A `SynchronizationStream.OnNext` that unconditionally stamps `ImpersonateAsHub(H
 
 > Every `ImpersonateAsSystem` callsite is a deliberate choice to bypass all access checks. Grep for them; review each. If a narrower identity would suffice, use that instead.
 
+### 🚨 An impersonation scope must not ESCAPE the operation it was opened for
+
+`accessService.RunAsSystem(work)` — **not** a hand-written `Observable.Using(access.ImpersonateAsSystem, _ => work)` — wherever the scoped observable is **returned to a caller**.
+
+The hand-written idiom is correct for the work itself and leaks everywhere after it:
+
+```csharp
+// ❌ the scope escapes: Rx forwards OnNext to the subscriber BEFORE Using disposes its resource,
+//    so the write below is CONSTRUCTED while the impersonation is still open — and the write
+//    primitives eager-capture AccessService.Context when they are CALLED.
+Observable.Using(access.ImpersonateAsSystem, _ => ReadGatedSource())
+    .SelectMany(rows => meshService.CreateNodes(Plan(rows)));   // lands as `system-security`
+
+// ✅ the scope covers the read and stops at its boundary
+access.RunAsSystem(ReadGatedSource)
+    .SelectMany(rows => meshService.CreateNodes(Plan(rows)));   // lands as the CALLER
+```
+
+Because those primitives also **re-stamp** the captured identity around their own emissions (`CarryAccessContext` — "MessageHub sets, framework primitive preserves"), a leaked System identity is not merely inherited one hop — it is **re-acquired at every hop after it**. That is how a package install wrote its home root, five copy batches and its manifest as `system-security` while `_UserActivity` — the one write on that path posted directly from the request thread rather than composed on an emission — attributed to the real user (#1444).
+
+**It is an authorization concern, not only an audit one.** `AccessControlPipeline.HandleGetPermission` carries the scar: `SecurityService`'s bootstrap-time system scope leaked past its using-block onto the action-block thread, and trusting the ambient there returned `Permission.All` for **every** caller, anonymous included. That call site defends itself by resolving the identity explicitly; `RunAsSystem` fixes the class at the source so the next one does not have to know Rx's disposal order.
+
+| API | Use it for |
+|---|---|
+| `access.RunAsSystem(work)` | A system read/write whose result a caller composes on. Enters the scope at Subscribe (so the cold work is covered), delivers every notification under the **subscriber's** identity. |
+| `access.RunAsHub(hub, work)` | The same seal for a hub identity. |
+| `source.ContainIdentity(access)` | Sealing an **already-composed** chain — several system calls where the caller builds on the LAST one's emission. |
+
+🚨 **It never invents an identity.** What is restored is exactly what was ambient at Subscribe: a real user for a user-driven flow, `system-security` for a genuinely system-initiated one, and **nothing at all** when the subscriber had no identity — so a background worker that never had a user is not fail-closed by adopting it. The only behaviour that changes is the defect: a caller who *had* an identity, silently continuing as System.
+
+Pinned by `SystemScopeDoesNotEscapeTest` (test/MeshWeaver.Messaging.Hub.Test), whose first case asserts the raw Rx ordering every other case rests on.
+
 ### Implementation: define + grant + test
 
 For each sanctioned identity, you need all three:

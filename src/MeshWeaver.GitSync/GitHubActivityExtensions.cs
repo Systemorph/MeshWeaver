@@ -72,8 +72,7 @@ public static class GitHubActivityExtensions
         if (string.IsNullOrEmpty(userId) || caller?.IsVirtual == true)
             userId = WellKnownUsers.Anonymous;
 
-        IObservable<string> AsSystem() =>
-            Observable.Using(() => accessService.ImpersonateAsSystem(), _ => runActivity());
+        IObservable<string> AsSystem() => accessService.RunAsSystem(runActivity);
 
         if (string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal))
             return AsSystem();
