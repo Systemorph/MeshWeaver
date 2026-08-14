@@ -33,12 +33,23 @@ function fmt(a: unknown): string {
   try { return JSON.stringify(a); } catch { return String(a); }
 }
 
-/** Strip TypeScript types → runnable JavaScript with the bundled compiler (lazy — plain-JS runs pay nothing). */
+/**
+ * Strip TypeScript types → runnable JavaScript (lazy — plain-JS runs pay nothing).
+ *
+ * This used to call `ts.transpileModule` from the `typescript` package. TypeScript 7 removed that:
+ * the package's "." export is now just `lib/version.cjs` (a version string), and the real API moved
+ * to `typescript/unstable/*` — a project/Program/Checker-shaped API with no single-string transform
+ * anywhere in it. So the snippet transform comes from `amaro`, which is the very SWC-based stripper
+ * Node bundles for its own `--experimental-strip-types`.
+ *
+ * `mode: "transform"` (not "strip") is deliberate: strip-only blanks types out and REJECTS the
+ * TS constructs that carry runtime semantics — `enum`, `namespace`, parameter properties — which
+ * `transpileModule` used to compile. Transform mode emits real JS for them, so a Code node that ran
+ * before still runs. (Node's own `module.stripTypeScriptTypes` is strip-only, hence the package.)
+ */
 async function transpileTs(code: string): Promise<string> {
-  const ts = (await import("typescript")).default;
-  return ts.transpileModule(code, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None },
-  }).outputText;
+  const { transformSync } = await import("amaro");
+  return transformSync(code, { mode: "transform" }).code;
 }
 
 /**

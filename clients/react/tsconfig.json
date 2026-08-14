@@ -3,6 +3,12 @@
     "target": "ES2020",
     "useDefineForClassFields": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    // TypeScript 7 no longer auto-includes every package under node_modules/@types the way 5.x did,
+    // so @types/node has to be named explicitly or the test files that read the server catalogs off
+    // disk (i18n/localize, render/parity, ciTrigger) lose `node:fs`, `node:path` and `process`
+    // (TS2591). This is the fix the compiler's own diagnostic prescribes, not a suppression — the
+    // files are still fully checked, and listing it is stricter than 5.x's include-everything.
+    "types": ["node"],
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "Bundler",
