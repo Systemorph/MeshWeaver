@@ -106,17 +106,18 @@ public class CodeCellLayoutTest(ITestOutputHelper output) : MonolithMeshTestBase
         HasArea(cell, CodeLayoutAreas.CellOutputArea).Should().BeTrue(
             "an executable cell always has an output segment attached beneath the code");
 
-        // Order inside the frame: code, then output, then the toolbar LAST —
-        // the toolbar is the composer bar at the foot of the cell.
+        // Order inside the frame: CODE, then the TOOLBAR, then the OUTPUT — Run sits directly
+        // under the code it executes and directly above the result it produced, so a reader never
+        // scrolls past the output to find the button.
         var areaOrder = cell.Areas.Select(a => a.Area?.ToString() ?? "").ToArray();
         int IndexOf(string id) => Array.FindIndex(areaOrder,
             a => a == id || a.EndsWith("/" + id, StringComparison.Ordinal));
         IndexOf(CodeLayoutAreas.CellCodeArea).Should().BeLessThan(
-            IndexOf(CodeLayoutAreas.CellOutputArea),
-            "the output segment attaches directly beneath the code");
-        IndexOf(CodeLayoutAreas.CellOutputArea).Should().BeLessThan(
             IndexOf(CodeLayoutAreas.CellToolbarArea),
-            "the toolbar moved to the BOTTOM of the cell, below the output segment");
+            "the toolbar attaches directly beneath the code it runs");
+        IndexOf(CodeLayoutAreas.CellToolbarArea).Should().BeLessThan(
+            IndexOf(CodeLayoutAreas.CellOutputArea),
+            "the output segment sits below the toolbar that produced it");
 
         // (a) Toolbar contains Run; no Cancel while nothing runs — and NO Edit button for the
         // DevLogin admin: a viewer holding Update renders the cell's code segment as the inline

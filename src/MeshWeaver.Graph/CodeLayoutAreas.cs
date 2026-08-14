@@ -24,9 +24,11 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout views for Code nodes.
-/// - Content (default): the notebook cell. For a viewer holding Update the code segment IS an
-///   inline Monaco editor (edit mode is the mode — no Edit button, auto-saved, Run persists the
-///   buffer first); for everyone else it is the read-only markdown code block.
+/// - Content (default): the notebook cell, stacked CODE → TOOLBAR → OUTPUT. For a viewer holding
+///   Update the code segment IS an inline Monaco editor with code completion (edit mode is the
+///   mode — no Edit button, auto-saved, Run persists the buffer first); for everyone else it is
+///   the read-only markdown code block. Run sits directly under the code it executes and directly
+///   above the result it produced, and all three segments span the frame's full width.
 /// - Overview: Splitter with sibling code list and embedded content view
 /// - Edit: Monaco editor with language support (kept for deep links and metadata edits)
 /// </summary>
@@ -213,10 +215,14 @@ public static class CodeLayoutAreas
         stack = stack.WithView(Controls.H1(title).WithStyle("margin: 0 0 16px 0;"));
 
         // ── Notebook cell ────────────────────────────────────────────────────
-        // One visually framed block: code on top, the run's output attached
-        // directly under it, and the toolbar as a composer-style bar on the
-        // BOTTOM edge (2026-07-03 UX feedback: the controls belong at the foot
-        // of the cell, like a chat composer, not above the code).
+        // One visually framed block, stacked in the order the work happens:
+        //   CODE (an editor for anyone who may edit it)
+        //   TOOLBAR (▶ Run — directly under the code it executes)
+        //   OUTPUT (the run's result — directly under the button that produced it)
+        // Every segment spans the full frame width, so the three read as one
+        // column with a shared left edge rather than three boxes of different
+        // widths. Run in the middle is the point: you edit above it and read the
+        // result below it, never scrolling past the output to find the button.
         var cell = Controls.Stack
             .WithWidth("100%")
             .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; " +
@@ -234,23 +240,30 @@ public static class CodeLayoutAreas
         else if (!string.IsNullOrEmpty(codeConfig?.Code))
         {
             cell = cell.WithView(Controls.Markdown($"```{language}\n{codeConfig.Code}\n```")
-                    .WithStyle("width: 100%; overflow: auto; padding: 0 12px;"),
+                    .WithStyle("width: 100%; box-sizing: border-box; overflow: auto; padding: 0 12px;"),
                 CellCodeArea);
         }
         else
         {
             cell = cell.WithView(Controls.Body(host.Localize("ui.noCodeDefined"))
-                    .WithStyle("display: block; padding: 12px; color: var(--neutral-foreground-hint); font-style: italic;"),
+                    .WithStyle("display: block; width: 100%; box-sizing: border-box; padding: 12px; " +
+                               "color: var(--neutral-foreground-hint); font-style: italic;"),
                 CellCodeArea);
         }
 
+        // Toolbar SECOND — directly under the code it runs.
+        cell = cell.WithView(
+            BuildCellToolbar(hubAddress, codeConfig, isExecutable, language, lastActivity, canEdit),
+            CellToolbarArea);
+
         if (isExecutable)
         {
-            // Output segment: the LATEST activity's Progress area (log + status
-            // badge), directly beneath the code INSIDE the cell frame so the
-            // Run button and its result are visually one unit. Jupyter-esque
-            // left accent + thin separator mark it as the cell's output.
+            // Output segment LAST: the LATEST activity's Progress area (log + status badge),
+            // directly beneath the toolbar that produced it. Jupyter-esque left accent + thin
+            // separator mark it as the cell's output; full width so its left edge lines up with
+            // the code and the toolbar above it.
             const string outputStyle =
+                "width: 100%; box-sizing: border-box; " +
                 "border-top: 1px solid var(--neutral-stroke-rest); " +
                 "border-left: 3px solid var(--accent-fill-rest); " +
                 "background: var(--neutral-layer-2); padding: 10px 12px;";
@@ -272,12 +285,6 @@ public static class CodeLayoutAreas
             }
         }
 
-        // Toolbar LAST — the composer bar at the bottom of the cell frame,
-        // below the output segment.
-        cell = cell.WithView(
-            BuildCellToolbar(hubAddress, codeConfig, isExecutable, language, lastActivity, canEdit),
-            CellToolbarArea);
-
         stack = stack.WithView(cell, CellArea);
 
         // No activity history below the cell (removed 2026-07-02 on UX feedback:
@@ -289,7 +296,7 @@ public static class CodeLayoutAreas
     }
 
     /// <summary>
-    /// The cell's toolbar — the composer bar on the BOTTOM edge of the cell:
+    /// The cell's toolbar — the bar BETWEEN the code and its output:
     /// ▶ Run (accent), ⏹ Cancel (only while the last run is actually running and
     /// no cancel is already in flight — the shared
     /// <see cref="ActivityLayoutAreas.IsCancelButtonVisible"/> predicate),
@@ -313,9 +320,12 @@ public static class CodeLayoutAreas
         // toolbar goes amber, matching the NodeType editor's "Source changed — needs compile" panel,
         // so "what you're looking at is out of date" reads the same way across the product.
         var isStale = isExecutable && IsOutputStale(codeConfig);
+        // Full width + border-box so the bar spans the cell frame and its left edge lines up with
+        // the code above and the output below — the three segments read as one column.
         var toolbar = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("display: flex; align-items: center; gap: 8px; padding: 6px 10px; " +
+            .WithStyle("display: flex; width: 100%; box-sizing: border-box; " +
+                       "align-items: center; gap: 8px; padding: 6px 10px; " +
                        (isStale
                            ? "background: var(--warning-fill-rest, #fef3c7); " +
                              "border-top: 1px solid var(--warning-stroke-rest, #fcd34d);"

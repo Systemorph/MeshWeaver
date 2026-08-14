@@ -184,6 +184,35 @@ public static class AreaErrorClassifier
     }
 
     /// <summary>
+    /// The PATH that could not be resolved, pulled out of an <see cref="IsNodeGoneNotFound"/>
+    /// failure — or <c>null</c> when this is not that failure, or the path cannot be recovered.
+    ///
+    /// <para>Exists so a view can name the broken reference WITHOUT reproducing the framework
+    /// diagnostic around it. The raw message is
+    /// <c>"No node found at 'X'. Closest ancestor is 'Y' (remainder='Z')"</c>; only <c>X</c> means
+    /// anything to an author — "closest ancestor" and "remainder" are routing internals, and the
+    /// whole string is deliberately unlocalized because it is a framework diagnostic, not UI copy.
+    /// Both producers (<c>RoutingServiceBase</c> and <c>RoutingGrain</c>) emit that exact shape.</para>
+    /// </summary>
+    public static string? TryGetMissingNodePath(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            var msg = e.Message ?? string.Empty;
+            if (e is not DeliveryFailureException
+                || !msg.StartsWith("No node found", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var open = msg.IndexOf('\'');
+            if (open < 0)
+                continue;
+            var close = msg.IndexOf('\'', open + 1);
+            if (close > open + 1)
+                return msg[(open + 1)..close];
+        }
+        return null;
+    }
+
+    /// <summary>
     /// True when a raw <see cref="DeliveryFailure"/> message (NOT wrapped in a
     /// <see cref="DeliveryFailureException"/>) is a routing <b>NotFound</b> for a node/hub that no
     /// longer exists — or has not yet been created. This is the <see cref="IsNodeGoneNotFound"/>

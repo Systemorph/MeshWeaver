@@ -60,6 +60,8 @@
   "redirect.dismiss": "Dismiss",
   "error.accessDenied": "Access denied",
   "error.accessDeniedHint": "If you believe you should have access, ask the partition owner to grant it.",
+  "error.missingReference": "Missing reference",
+  "error.missingReferenceHint": "This area refers to an item that does not exist. It may have been deleted, renamed, or never created — ask the author to fix or remove the reference.",
   "error.identityUnavailable": "We could not check your account just now.",
   "error.identityUnavailableHint": "This is a temporary problem on our side, not a problem with your account. You are still signed in — please wait a moment and reload the page. Signing in again will not help.",
   "error.checkUnavailable": "We could not load this just now.",

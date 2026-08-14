@@ -206,8 +206,7 @@ public class Workspace : IWorkspace
         {
             var stream = GetRemoteStreamUnchecked<TReduced, TReference>(owner, reference);
             var lease = LeaseRemoteStream(stream);
-            if (stream.Hub?.RunLevel <= MessageHubRunLevel.Started
-                && stream.Hub is not MessageHub { IsDisposing: true })
+            if (StreamLiveness.IsUsable(stream))
                 return (stream, lease);
             lease.Dispose();
         }
@@ -571,12 +570,10 @@ public class Workspace : IWorkspace
                     "Workspace {WorkspaceId} opened remote stream {StreamId} for {Owner} as {Identity}.",
                     Id, stream.StreamId, key.Item1, key.Item3);
 
-            // Check if cached stream is still alive. Hub.RunLevel alone is not
-            // sufficient because hub shutdown is async: right after stream.Dispose()
-            // is called, RunLevel is still Running even though disposal was triggered.
-            // Cast to the concrete type to access IsDisposing (not on interface).
-            if (stream.Hub?.RunLevel <= MessageHubRunLevel.Started
-                && stream.Hub is not MessageHub { IsDisposing: true })
+            // Check if the cached stream is still alive — the ONE shared predicate, so this cache
+            // cannot drift from the other two (StreamLiveness explains why it is not just a
+            // RunLevel probe, and why the stream's source chain counts too).
+            if (StreamLiveness.IsUsable(stream))
                 return (ISynchronizationStream<TReduced>)stream;
 
             // Dead — remove (if still ours) and retry. The TryRemove guards
@@ -644,10 +641,13 @@ public class Workspace : IWorkspace
 
         while (true)
         {
-            var lazy = _localStreamCache.GetOrAdd(reference,
-                _ => new Lazy<ISynchronizationStream>(
-                    () => ReduceLocalStream(reference, null),
-                    LazyThreadSafetyMode.ExecutionAndPublication));
+            // Constructed BEFORE the GetOrAdd so we can tell, by identity, whether the entry we
+            // ended up with is the one we just made. That single bit is what bounds the loop
+            // below — see the fall-through at the end.
+            var mine = new Lazy<ISynchronizationStream>(
+                () => ReduceLocalStream(reference, null),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            var lazy = _localStreamCache.GetOrAdd(reference, mine);
 
             ISynchronizationStream stream;
             try
@@ -660,21 +660,37 @@ public class Workspace : IWorkspace
                 // failure (e.g. HubDisposingException from a hub that is winding down) would
                 // otherwise poison this reference for the workspace's life. Drop the faulted
                 // entry — only if it is still ours — and let the caller see the original fault.
-                ((ICollection<KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>>)_localStreamCache)
-                    .Remove(new KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>(reference, lazy));
+                Remove(reference, lazy);
                 throw;
             }
 
-            // Same liveness contract as GetExternalClientSynchronizationStream: a cached stream
-            // whose sub-hub is gone (its parent was torn down, or a consumer disposed it) is
-            // replaced rather than handed out dead.
-            if (stream.Hub?.RunLevel <= MessageHubRunLevel.Started
-                && stream.Hub is not MessageHub { IsDisposing: true })
+            // 🚨 The child's OWN hub is never enough — the cached child is its parent's SIBLING.
+            // StreamLiveness.IsUsable walks the whole reduce chain; see its remarks for why, and
+            // for the two failures the child-only predicate produced here (Systemorph/MeshWeaver#1455).
+            if (StreamLiveness.IsUsable(stream))
                 return (ISynchronizationStream<TReduced>)stream;
 
-            ((ICollection<KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>>)_localStreamCache)
-                .Remove(new KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>(reference, lazy));
+            Remove(reference, lazy);
+
+            // 🚨 A FRESH reduce that is ALREADY unusable means the SOURCE is gone, not that the
+            // cache entry went stale — and re-reducing can only mint another corpse. Retrying was
+            // an unbounded spin, each turn allocating a SynchronizationStream and its `sync/{id}`
+            // sub-hub; on a hub action block that is a permanent wedge plus a hub-allocation
+            // storm. Hand this one back instead: it is the plain, uncached reduce, which is
+            // exactly what a disposed source has always produced here and what ReduceShared falls
+            // through to for the same reason (SynchronizationStream.ReduceShared's parent guard).
+            // Its store is already completed, so a reader gets a terminal instead of a stale
+            // replay followed by eternal silence.
+            if (ReferenceEquals(lazy, mine))
+                return (ISynchronizationStream<TReduced>)stream;
+
+            // We lost the add race to another caller's entry and it was dead: drop it and let the
+            // next turn install ours. Every turn removes one entry, so this cannot spin.
         }
+
+        void Remove(WorkspaceReference key, Lazy<ISynchronizationStream> entry) =>
+            ((ICollection<KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>>)_localStreamCache)
+                .Remove(new KeyValuePair<WorkspaceReference, Lazy<ISynchronizationStream>>(key, entry));
     }
 
     private ISynchronizationStream<TReduced> ReduceLocalStream<TReduced>(
