@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
+using System.Reactive.Subjects;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging;
@@ -33,24 +33,25 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <see cref="IHostApplicationLifetime"/> drives the router into its shutdown branch (the branch
 /// that consults the guard), and a real <see cref="IMessageHub"/> sits at the sender's address so
 /// every assertion is made on the actual <see cref="DeliveryFailure"/> the router posts.</para>
+///
+/// <para>🚨 <b>Nothing here polls or samples.</b> The NACKs the router posts are pushed onto a
+/// <see cref="ReplaySubject{T}"/>, and the assertions SUBSCRIBE to a running fold of that stream via
+/// <c>.Should().Within(...).Match(...)</c> — the repo's reactive assertion idiom, which settles on
+/// the first emission satisfying the predicate. No <c>FirstAsync</c>, no <c>Take(1)</c>, no
+/// <c>TaskCompletionSource</c>, no sleep-then-inspect.</para>
 /// </summary>
 public class OrleansRouterAnswerOnceAfterPackagingTest : TestBase
 {
     private static readonly Address SenderAddress = new("portal", "answer-once-sender");
     private static readonly Address TargetAddress = new("SomeNamespace", "SomeNode");
 
-    /// <summary>Delivery ids the router answered with a <see cref="DeliveryFailure"/>.</summary>
-    private readonly ConcurrentQueue<string> nackedDeliveryIds = new();
-
     /// <summary>
-    /// Completes when the POSITIVE CONTROL has been answered. It is dispatched last through the
-    /// same serial path, so its NACK arriving is the proof that the two suppressed deliveries were
-    /// fully processed — no sleep, no "wait and hope".
+    /// Every delivery id the router answered with a <see cref="DeliveryFailure"/>, in order.
+    /// A <see cref="ReplaySubject{T}"/> so an assertion that subscribes AFTER the dispatch still
+    /// sees the whole history — the alternative (subscribe first, then dispatch) would make the
+    /// test's own ordering load-bearing for no benefit.
     /// </summary>
-    private readonly TaskCompletionSource controlAnswered =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    private string controlDeliveryId = string.Empty;
+    private readonly ReplaySubject<string> nacks = new();
 
     private readonly IHostApplicationLifetime lifetime;
 
@@ -62,15 +63,22 @@ public class OrleansRouterAnswerOnceAfterPackagingTest : TestBase
         Services.AddSingleton<IMessageHub>(sp => sp.CreateMessageHub(SenderAddress, conf => conf
             .WithHandler<DeliveryFailure>((_, d) =>
             {
-                nackedDeliveryIds.Enqueue(d.Message.Delivery.Id);
-                if (d.Message.Delivery.Id == controlDeliveryId)
-                    controlAnswered.TrySetResult();
+                nacks.OnNext(d.Message.Delivery.Id);
                 return d.Processed();
             })
             .WithPostingIdentity(PostingIdentity.System)));
     }
 
     private IMessageHub Hub => ServiceProvider.GetRequiredService<IMessageHub>();
+
+    /// <summary>
+    /// The running list of everything answered so far. Subscribing to THIS and matching on
+    /// "the control has been answered" is what makes the assertion a positive signal rather than a
+    /// wait: the control is dispatched last down the same serial path, so the fold at the moment it
+    /// appears is the complete set of answers.
+    /// </summary>
+    private IObservable<ImmutableList<string>> AnsweredSoFar =>
+        nacks.Scan(ImmutableList<string>.Empty, (answered, id) => answered.Add(id));
 
     private OrleansRoutingService CreateRouter() =>
         // grainFactory: null — the shutdown branch never reaches placement (see the shutdown test).
@@ -92,6 +100,10 @@ public class OrleansRouterAnswerOnceAfterPackagingTest : TestBase
         return packaged;
     }
 
+    private IMessageDelivery PackagedInnerFailure() => Packaged(new DeliveryFailure(
+        new MessageDelivery<string>(SenderAddress, TargetAddress, "inner", Hub.JsonSerializerOptions),
+        "inner failure"));
+
     /// <summary>
     /// The mechanism, stated as an assertion so it cannot silently stop being true: after packaging
     /// the CLR-type guards the routing layer was written with are unreachable. Nothing in the fix
@@ -102,9 +114,7 @@ public class OrleansRouterAnswerOnceAfterPackagingTest : TestBase
     public void Packaging_ErasesTheGuardsInput()
     {
         var heartBeat = Packaged(new HeartBeatEvent());
-        var failure = Packaged(new DeliveryFailure(
-            new MessageDelivery<string>(SenderAddress, TargetAddress, "inner", Hub.JsonSerializerOptions),
-            "inner failure"));
+        var failure = PackagedInnerFailure();
 
         (heartBeat.Message is DeliveryFailure).Should().BeFalse();
         heartBeat.Message.GetType().HasAttribute<CanBeIgnoredAttribute>().Should().BeFalse(
@@ -117,9 +127,10 @@ public class OrleansRouterAnswerOnceAfterPackagingTest : TestBase
     /// The regression. A fire-and-forget <see cref="HeartBeatEvent"/> and a
     /// <see cref="DeliveryFailure"/> must NOT be answered, while ordinary traffic still is.
     ///
-    /// <para>Order matters and is the whole determinism story: the control is dispatched LAST
-    /// through the same synchronous branch and the same single-threaded hub, so once its NACK has
-    /// been handled any NACK for the two before it would already be in the queue.</para>
+    /// <para>Order is the whole determinism story: all three go through the same synchronous
+    /// shutdown branch and land on the same single-threaded hub, and the control goes LAST — so the
+    /// fold at the moment the control is answered already contains any answer the two before it
+    /// produced. Nothing waits for time to pass; the assertion settles on a real emission.</para>
     /// </summary>
     [Fact]
     public async Task PackagedFireAndForgetAndNacks_AreNotAnswered_WhileOrdinaryTrafficIs()
@@ -128,23 +139,26 @@ public class OrleansRouterAnswerOnceAfterPackagingTest : TestBase
         lifetime.StopApplication();
 
         var heartBeat = Packaged(new HeartBeatEvent());
-        var failure = Packaged(new DeliveryFailure(
-            new MessageDelivery<string>(SenderAddress, TargetAddress, "inner", Hub.JsonSerializerOptions),
-            "inner failure"));
+        var failure = PackagedInnerFailure();
         var control = Packaged("ordinary-payload");
-        controlDeliveryId = control.Id;
 
-        await routing.DeliverMessage(heartBeat).FirstAsync().ToTask();
-        await routing.DeliverMessage(failure).FirstAsync().ToTask();
-        await routing.DeliverMessage(control).FirstAsync().ToTask();
+        // Cold observables: the subscribe IS the dispatch, and it runs inline here, so the three
+        // reach the hub in this order.
+        routing.DeliverMessage(heartBeat).Subscribe(_ => { });
+        routing.DeliverMessage(failure).Subscribe(_ => { });
+        routing.DeliverMessage(control).Subscribe(_ => { });
 
-        await controlAnswered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var answered = await AnsweredSoFar.Should().Within(10.Seconds())
+            .Match(a => a.Contains(control.Id),
+                "ordinary traffic must still be answered — the fix must not silence real failures");
 
-        var answered = nackedDeliveryIds.Should().ContainSingle(
+        answered.Should().ContainSingle(
             "a [CanBeIgnored] control message has nobody awaiting it — for a permanently-gone owner "
             + "heart-beaten every interval, answering it IS the NotFound storm; and answering a "
-            + "DeliveryFailure with a DeliveryFailure loops. Ordinary traffic must still be answered.").Subject;
-        answered.Should().Be(control.Id);
+            + "DeliveryFailure with a DeliveryFailure loops").Subject
+            .Should().Be(control.Id);
+        answered.Should().NotContain(heartBeat.Id);
+        answered.Should().NotContain(failure.Id);
     }
 
     /// <summary>
@@ -159,9 +173,12 @@ public class OrleansRouterAnswerOnceAfterPackagingTest : TestBase
         var routing = CreateRouter();
         lifetime.StopApplication();
 
-        var result = await routing.DeliverMessage(Packaged(new HeartBeatEvent())).FirstAsync().ToTask();
+        var routed = new ReplaySubject<IMessageDelivery>();
+        routing.DeliverMessage(Packaged(new HeartBeatEvent())).Subscribe(routed.OnNext);
 
-        result.State.Should().Be(MessageDeliveryState.Failed);
+        var result = await routed.Should().Within(10.Seconds())
+            .Match(d => d.State == MessageDeliveryState.Failed);
+
         result.SenderWasNacked.Should().BeFalse(
             "nothing was posted, so the sender has NOT been answered — claiming otherwise suppresses "
             + "the only remaining report of the failure");

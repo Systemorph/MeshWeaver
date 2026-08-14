@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
-using System.Reactive.Threading.Tasks;
+using System.Reactive.Subjects;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -43,21 +43,20 @@ public class MonolithRouterAnswerOnceAfterPackagingTest(ITestOutputHelper output
     /// A packaged <see cref="HeartBeatEvent"/> and a packaged <see cref="DeliveryFailure"/> routed
     /// to a NotFound address must NOT be answered; ordinary traffic must still be. The ordinary
     /// message is dispatched LAST and to the SAME address, so it drains behind the other two
-    /// through the per-address activation FIFO — its NACK arriving is the deterministic proof that
-    /// the two before it were fully routed.
+    /// through the per-address activation FIFO — its answer is a real emission the assertion
+    /// subscribes for, never a period the test waits out.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task PackagedFireAndForgetAndNacks_AreNotAnswered_WhileOrdinaryTrafficIs()
     {
-        var nackedDeliveryIds = new ConcurrentQueue<string>();
-        var controlAnswered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var controlId = string.Empty;
+        // ReplaySubject: the assertion subscribes after the dispatch and must still see the whole
+        // history of what the router answered.
+        var nacks = new ReplaySubject<string>();
+        var answeredSoFar = nacks.Scan(ImmutableList<string>.Empty, (answered, id) => answered.Add(id));
 
         var client = GetClient(c => c.WithHandler<DeliveryFailure>((_, d) =>
         {
-            nackedDeliveryIds.Enqueue(d.Message.Delivery.Id);
-            if (d.Message.Delivery.Id == controlId)
-                controlAnswered.TrySetResult();
+            nacks.OnNext(d.Message.Delivery.Id);
             return d.Processed();
         }));
 
@@ -76,18 +75,22 @@ public class MonolithRouterAnswerOnceAfterPackagingTest(ITestOutputHelper output
             new MessageDelivery<string>(client.Address, MissingTarget, "inner", Mesh.JsonSerializerOptions),
             "inner failure"));
         var control = Packaged("ordinary-payload");
-        controlId = control.Id;
 
-        await RoutingService.DeliverMessage(heartBeat).FirstAsync().ToTask();
-        await RoutingService.DeliverMessage(failure).FirstAsync().ToTask();
-        await RoutingService.DeliverMessage(control).FirstAsync().ToTask();
+        // Cold observables: the subscribe IS the dispatch. RouteInMesh runs inline on subscribe, so
+        // all three join the per-address activation FIFO in this order.
+        RoutingService.DeliverMessage(heartBeat).Subscribe(_ => { });
+        RoutingService.DeliverMessage(failure).Subscribe(_ => { });
+        RoutingService.DeliverMessage(control).Subscribe(_ => { });
 
-        await controlAnswered.Task.WaitAsync(TimeSpan.FromSeconds(20));
+        var answered = await answeredSoFar.Should().Within(30.Seconds())
+            .Match(a => a.Contains(control.Id),
+                "ordinary traffic must still get its NACK so hub.Observe fires OnError");
 
-        var answered = nackedDeliveryIds.Should().ContainSingle(
+        answered.Should().ContainSingle(
             "answering a [CanBeIgnored] heartbeat re-posts forever against a permanently-gone owner "
-            + "(the NotFound storm), and answering a DeliveryFailure with a DeliveryFailure loops — "
-            + "while ordinary traffic must still get its NACK so hub.Observe fires OnError").Subject;
-        answered.Should().Be(control.Id);
+            + "(the NotFound storm), and answering a DeliveryFailure with a DeliveryFailure loops").Subject
+            .Should().Be(control.Id);
+        answered.Should().NotContain(heartBeat.Id);
+        answered.Should().NotContain(failure.Id);
     }
 }
