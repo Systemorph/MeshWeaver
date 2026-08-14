@@ -1128,18 +1128,32 @@ jobs:
           if [ "$status" = "0" ]; then status=1; fi
         fi
         verdict="$(grep -m1 -- '^GATE FAILED' "$log" || true)"
+        # ── Second stage: the samples trees — the "12k lines of C# no build ever type-checks"
+        # from AGENTS.md. Same tester, same mechanics; .github/samples-gate.allow is its own
+        # one-way debt ratchet (seeded with the 8 cross-NodeType source defects the first run
+        # surfaced — a listed entry that starts passing fails the run until removed).
+        SSTAGE="${RUNNER_TEMP:-/tmp}/samples"
+        bash .github/scripts/stage-samples-gate.sh samples/Graph/Data "$SSTAGE"
+        slog="${RUNNER_TEMP:-/tmp}/samples-gate.log"
+        sstatus=0
+        if ! time dotnet "$TESTER" "$SSTAGE" --allow .github/samples-gate.allow 2>&1 | tee "$slog"; then
+          sstatus="${PIPESTATUS[0]}"
+          if [ "$sstatus" = "0" ]; then sstatus=1; fi
+        fi
+        sverdict="$(grep -m1 -- '^GATE FAILED' "$slog" || true)"
+        combined="$(printf '%s\n%s' "$verdict" "$sverdict" | grep . | head -1 || true)"
         {
           echo "failure<<GATE_EOF"
-          echo "$verdict"
+          echo "$combined"
           echo "GATE_EOF"
         } >> "$GITHUB_OUTPUT"
-        if [ "$status" != "0" ]; then
-          if [ -n "$verdict" ]; then
-            echo "::error::$verdict"
-          else
-            echo "::error::The doc gate failed before it produced a verdict — no check was judged. See this job's log."
+        if [ "$status" != "0" ] || [ "$sstatus" != "0" ]; then
+          [ -n "$verdict" ] && echo "::error::Doc stage: $verdict"
+          [ -n "$sverdict" ] && echo "::error::Samples stage: $sverdict"
+          if [ -z "$combined" ]; then
+            echo "::error::The content gate failed before it produced a verdict — no check was judged. See this job's log."
           fi
-          exit "$status"
+          exit 1
         fi
 
   licence-gate:
