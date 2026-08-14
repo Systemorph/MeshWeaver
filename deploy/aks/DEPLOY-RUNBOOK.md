@@ -364,6 +364,36 @@ kubectl -n <env> patch deployment memex-portal-deployment --type json -p \
 `ScaledObject` with `minReplicaCount: 2` — you conclude the heal failed when it never ran.
 `kubectl get scaledobject -n <env>` first, and check `PAUSED`.
 
+#### 🚧 A PAUSED scaler is a FENCE — find out why before you remove it
+
+`autoscaling.keda.sh/paused-replicas: "<n>"` pins the deployment at `n`, **deletes the HPA**, and
+makes `minReplicaCount` inert. Nothing in any chart sets it, `kubectl get deploy` does not show it,
+and it survives every roll — so it reads as "this deployment is just single-replica" long after
+whoever applied it has moved on.
+
+**Nobody applies it for fun.** It is the most direct way to say "stop making new silos", so assume
+it is suppressing a multi-silo defect until you have evidence otherwise. `memex-cloud` carried one
+for **16 days** (2026-07-29 → 2026-08-14): it was applied 87 minutes after the second fix for
+**#694 — *cross-silo posts lose AccessContext: static content 500s on ~50% of requests with 2
+replicas*** — and 29 seconds after KEDA scaled the namespace back up. Removing it without reading
+that history is re-running the incident.
+
+Establish provenance before unpausing — the same way you would for any hand-applied field:
+
+```bash
+kubectl -n <env> get scaledobject <name> -o jsonpath='{range .metadata.managedFields[*]}{.manager} {.operation} {.time}{"\n"}{end}'
+kubectl -n <env> get scaledobject <name> -o jsonpath='{.status.lastActiveTime}{"\n"}'   # when it last scaled
+```
+
+`managedFields` gives you the writer (`kubectl-annotate`) and the timestamp; `lastActiveTime`
+immediately before it is the tell that someone watched it scale and stopped it. Then find what
+shipped or broke that day (`git log --since=<date> --until=<date+1>`, closed issues), and only
+unpause once you can name the defect and point at its fix. Treat the unpause as a **monitored
+experiment** with a rollback trigger, not a config tidy-up — a fix merged while the namespace was
+pinned has only ever been exercised in the transient two-silo window of a rollout, never in steady
+state. `check-chart-drift.sh` reports the annotation as CLUSTER-ONLY drift so it stops being
+invisible.
+
 ### Crash dumps: verify the MOUNT
 `DOTNET_DbgEnableMiniDump` + `DOTNET_DbgMiniDumpName=/data/dumps/…` do nothing without a volume at
 that path — `createdump` does not create directories, so the crash destroys its own evidence. The
@@ -384,11 +414,22 @@ in git looks right. Diff live mounts against the chart after every deploy.
   env vars while no pod mounts `/data/dumps`, so every production `exit=139` so far produced no
   dump. Applying the current chart fixes it; until then a `mkdir /data/dumps` on the `/data` PVC is
   a stopgap that puts heap-sized dumps on a shared 16Gi share instead of the size-bounded emptyDir.
-- **Multi-replica HA**: needs Orleans `AzureTables` clustering wired on the Filesystem backend
-  (the portal currently registers the clustering table client only in the Azure-backend branch).
-- **Chart connection string**: `../helm/templates/memex-portal/secrets.yaml` hardcodes the
-  in-cluster pg host/user — hence the post-install secret patch in `deploy.sh`. Fix at the
-  chart-generator (AddMemex) so an external connection string flows from values.
+- ~~**Multi-replica HA**~~ (chart side done 2026-08-14): Orleans **AdoNet** clustering is the HA
+  provider (`Features:Orleans:Clustering`, legacy key `Deployment:Orleans:Clustering`), backed by a
+  dedicated `orleans` database the migration's `OrleansClusteringSetup` creates. The chart now
+  templates the replica count and omits `spec.replicas` entirely under KEDA so the HPA owns it;
+  `deploy/aks/scripts/check-chart-invariants.sh` asserts the prerequisites at render time. What
+  remains is per-environment and per-cluster, not chart work: each env's overlay must set
+  `keda.enabled`, and a paused `ScaledObject` still pins the count regardless (see "Scaling: KEDA
+  wins" above — check `PAUSED` before believing a replica number).
+- ~~**Chart connection string**~~ (fixed 2026-08-14): `../helm/templates/memex-portal/secrets.yaml`
+  and its migration counterpart now take `secrets.memex_{portal,migration}.ConnectionStrings__memex`
+  / `__orleans` from values, falling back to the in-cluster host only when unset. An env that
+  supplies them no longer needs the post-`helm` secret patch in `deploy.sh`. 🚨 Until an env's
+  values file DOES supply them, `helm upgrade` still re-renders the in-cluster host — and for
+  `__orleans` nothing patches it back, so an AdoNet namespace loses cluster membership. The chart
+  `fail`s the render if an external `ConnectionStrings__memex` is supplied without a matching
+  `__orleans`, so the half-configured case cannot ship silently.
 - **Secrets → Key Vault**: move the PG password, master key, and OAuth secrets into
   `meshweaverkeyvault` via the CSI Secrets Store add-on (enabled in `infra/modules/aks.bicep`).
 
