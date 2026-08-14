@@ -5,11 +5,31 @@ import { fakeMeshTransport } from "./testTransport";
 // Drives the ergonomic Mesh ops surface against the same in-memory Connect+Deliver fake the connection
 // tests use — proving search/get/watch/patch/create/delete/move/copy compose correctly over the transport.
 describe("Mesh ops (gRPC-web, in-memory)", () => {
-  it("search returns the query results", async () => {
-    const mesh = await Mesh.connect("memory://", { transport: fakeMeshTransport() });
+  it("search posts REST query-nodes with Bearer auth (the gRPC QueryRequest has no server handler — #1473)", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fakeFetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ results: [{ path: "ACME/Stories/1" }] }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    const mesh = await Mesh.connect("https://portal.example", {
+      transport: fakeMeshTransport(),
+      token: "mw_test",
+      fetch: fakeFetch,
+    });
     const results = await mesh.search("nodeType:Story namespace:ACME");
     expect(results).toHaveLength(1);
     expect(results[0].path).toBe("ACME/Stories/1");
+    expect(calls[0].url).toBe("https://portal.example/api/mesh/query-nodes");
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers["authorization"]).toBe("Bearer mw_test");
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ query: "nodeType:Story namespace:ACME", limit: 50 });
+
+    // basePath folds into the mesh query syntax rather than a body field QueryNodesBody lacks.
+    await mesh.search("laptop", "ACME/Products", 10);
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({
+      query: "laptop path:ACME/Products scope:subtree",
+      limit: 10,
+    });
     mesh.close();
   });
 
@@ -91,6 +111,23 @@ describe("Mesh ops (gRPC-web, in-memory)", () => {
     expect(targetOf("MoveNodeRequest")).toBe("ACME/A"); // the SOURCE (MeshOperations.Move parity)
     expect(targetOf("CopyNodeRequest")).toBe("ACME/A"); // the SOURCE
     expect(deliveries.some((d) => d.target === "mesh/main")).toBe(false);
+    mesh.close();
+  });
+
+  it("move/copy send the C# record field names SourcePath/TargetPath (issue #1475 — {source,target} never bound)", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const mesh = await Mesh.connect("memory://", {
+      transport: fakeMeshTransport({
+        onDeliver: (d) => {
+          if (d.messageType === "MoveNodeRequest" || d.messageType === "CopyNodeRequest") bodies.push(d.message);
+        },
+      }),
+    });
+    await mesh.move("ACME/A", "ACME/B");
+    await mesh.copy("ACME/A", "ACME/C");
+    expect(bodies[0]).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/B" });
+    expect(bodies[1]).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/C" });
+    expect(bodies.every((b) => !("source" in b) && !("target" in b))).toBe(true);
     mesh.close();
   });
 });
