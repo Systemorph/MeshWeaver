@@ -233,7 +233,9 @@ internal class ApiTokenService(
     /// large backlog of expired tokens drains gently instead of bursting N node deletes onto the
     /// mesh at once. Losing a race against a concurrent sweep or an explicit delete on another
     /// replica is the expected outcome for the loser and only logged at Debug; an unexpected
-    /// sweep failure surfaces as a Warning.
+    /// sweep failure surfaces as a Warning. Each removal is recorded exactly once — by
+    /// <see cref="DeleteToken"/>, which every swept token goes through; this method adds no
+    /// per-token line of its own, so housekeeping costs no extra log volume.
     /// </para>
     /// </summary>
     private void CleanupExpired(string userTokenNamespace)
@@ -244,13 +246,11 @@ internal class ApiTokenService(
             .SelectMany(listing => Observable.Concat(listing.NodePaths
                 .Select(path => storage.Read(path, hub.JsonSerializerOptions)
                     .Where(n => IsExpired(n, now))
-                    .SelectMany(_ =>
-                    {
-                        logger.LogInformation(
-                            "Sweeping expired API token {Path} (expiry has passed; the token is already refused by validation)",
-                            path);
-                        return DeleteToken(path);
-                    })
+                    // No per-token line here: DeleteToken already logs each removal at Information.
+                    // A second line per swept token would double the volume of a purely housekeeping
+                    // path — and the first mint after a large backlog accumulates would emit it in a
+                    // burst — for nothing the delete's own line does not already say.
+                    .SelectMany(_ => DeleteToken(path))
                     .Catch<bool, Exception>(ex =>
                     {
                         logger.LogDebug(ex,
