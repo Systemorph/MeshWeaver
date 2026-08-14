@@ -27,7 +27,7 @@ function updateMarkdownTheme() {
 
     // Use local CSS files with CDN fallback
     const basePath = '_content/MeshWeaver.Blazor/css/';
-    const cdnPath = '_content/MeshWeaver.Blazor/lib/github-markdown-css/'; // vendored 5.8.1
+    const vendoredPath = '_content/MeshWeaver.Blazor/lib/github-markdown-css/'; // vendored 5.8.1
 
     const localTheme = isDarkMode
         ? basePath + 'github-markdown-dark.css'
@@ -38,10 +38,10 @@ function updateMarkdownTheme() {
 
         // Add error handler for fallback to CDN
         themeLink.onerror = function() {
-            const cdnTheme = isDarkMode
-                ? cdnPath + 'github-markdown-dark.min.css'
-                : cdnPath + 'github-markdown-light.min.css';
-            themeLink.href = cdnTheme;
+            const vendoredTheme = isDarkMode
+                ? vendoredPath + 'github-markdown-dark.min.css'
+                : vendoredPath + 'github-markdown-light.min.css';
+            themeLink.href = vendoredTheme;
         };
     }
 }
