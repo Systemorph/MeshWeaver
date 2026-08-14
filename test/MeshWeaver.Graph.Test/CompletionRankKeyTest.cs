@@ -30,6 +30,10 @@ public class CompletionRankKeyTest
             .Should().BeNegative("the first suggestion sorts first");
         string.CompareOrdinal(MeshNodeLanguageService.RankKey(99), MeshNodeLanguageService.RankKey(100))
             .Should().BeNegative("and across every decade boundary");
+        // The width boundary is where padding stops and the contract would invert — the key must
+        // outrun any caller's maxResults, not merely any list a human scrolls.
+        string.CompareOrdinal(MeshNodeLanguageService.RankKey(9_999), MeshNodeLanguageService.RankKey(10_000))
+            .Should().BeNegative("ordering must survive the 9,999 → 10,000 boundary");
     }
 
     [Fact]
@@ -52,7 +56,7 @@ public class CompletionRankKeyTest
         {
             System.Globalization.CultureInfo.CurrentCulture =
                 new System.Globalization.CultureInfo("ar-SA");
-            MeshNodeLanguageService.RankKey(7).Should().Be("0007");
+            MeshNodeLanguageService.RankKey(7).Should().Be("000007");
         }
         finally
         {

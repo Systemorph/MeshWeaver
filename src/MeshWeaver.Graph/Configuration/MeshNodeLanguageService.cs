@@ -656,11 +656,15 @@ internal sealed class MeshNodeLanguageService(
     /// <summary>
     /// The sort key for a ranked completion: its position, zero-padded so a plain STRING compare
     /// (which is all an editor does with <c>sortText</c>) reproduces the numeric order —
-    /// <c>"0002" &lt; "0010"</c>, where <c>"2" &gt; "10"</c> would invert it. Four digits covers any
-    /// list an editor will show; beyond that the tail keeps its relative order under the same
-    /// width. Pure, so the ordering contract is testable without Roslyn.
+    /// <c>"000002" &lt; "000010"</c>, where <c>"2" &gt; "10"</c> would invert it.
+    ///
+    /// <para>The width is what makes that total, so it is chosen to outrun any caller rather than
+    /// any list a human reads: at the width boundary the padding STOPS and the contract inverts
+    /// again (<c>"10000" &lt; "9999"</c> ordinally). Six digits is far past the few hundred a
+    /// completion list is ever asked for, and past any plausible <c>maxResults</c> a caller
+    /// invents. Pure, so the ordering contract is testable without Roslyn.</para>
     /// </summary>
-    internal static string RankKey(int rank) => rank.ToString("D4", CultureInfo.InvariantCulture);
+    internal static string RankKey(int rank) => rank.ToString("D6", CultureInfo.InvariantCulture);
 
     private static CompletionKind MapTagsToKind(ImmutableArray<string> tags)
     {
