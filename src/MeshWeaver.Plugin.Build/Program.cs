@@ -14,7 +14,9 @@ if (args.Length == 0 || args[0] is "-h" or "--help")
         usage: meshweaver-plugin-build <pluginDirectory> [options]
 
           --out <dir>                 where to write generated projects (default: ./obj/plugin-build)
-          --framework-version <v>     MeshWeaver package version to compile against (default: 3.0.0-rc2)
+          --framework-version <v>     MeshWeaver package version to compile against, or `latest`
+                                      to resolve the newest from --source. Required — there is no
+                                      default, because a stale one compiles silently.
           --repo-root <dir>           checkout root for resolving shared= includes (repeatable;
                                       defaults to the plugin's parent directory)
           --no-build                  emit projects only
@@ -34,7 +36,7 @@ if (!Directory.Exists(pluginDirectory))
 }
 
 var outputDirectory = Path.Combine(Environment.CurrentDirectory, "obj", "plugin-build");
-var frameworkVersion = "3.0.0-rc2";
+string? frameworkVersion = null;
 var repoRoots = new List<string>();
 var build = true;
 string? packDirectory = null;
@@ -74,6 +76,34 @@ for (var i = 1; i < args.Length; i++)
 
 if (repoRoots.Count == 0)
     repoRoots.Add(Path.GetDirectoryName(pluginDirectory.TrimEnd(Path.DirectorySeparatorChar))!);
+
+if (restoreSources.Count == 0)
+    restoreSources.Add("https://api.nuget.org/v3/index.json");
+
+// 🚨 No default version. A hard-coded one compiles every plugin against whatever was current when
+// it was written — silently, because that framework is real and the build succeeds. Resolving
+// `latest` records the FULL version including the .ci.<run> suffix, which is the part that says
+// which build the API came from.
+if (string.IsNullOrWhiteSpace(frameworkVersion))
+{
+    Console.Error.WriteLine(
+        "error: --framework-version is required (an explicit version, or `latest` to resolve the "
+        + "newest from --source)");
+    return 2;
+}
+
+using var versionHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+try
+{
+    frameworkVersion = FrameworkVersionResolver.Resolve(frameworkVersion, restoreSources, versionHttp);
+}
+catch (InvalidOperationException ex)
+{
+    Console.Error.WriteLine($"error: {ex.Message}");
+    return 2;
+}
+
+Console.WriteLine($"framework: {frameworkVersion}");
 
 // A malformed node file fails the build deliberately (silently skipping it would report success
 // while testing less than claimed) — but it is an authoring error with an obvious fix, so it is
