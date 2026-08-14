@@ -18,6 +18,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { foldChange } from "../dist/changeFold.js";
+import { applyJsonPatch } from "../dist/jsonPatch.js";
 
 const node = (name) => ({
   path: "acme/Thing",
@@ -27,7 +28,7 @@ const node = (name) => ({
 });
 
 test("Full replaces the state with the node the change carries", () => {
-  const out = foldChange({ changeType: "Full", change: node("first"), streamId: "s" }, null);
+  const out = foldChange({ changeType: "Full", change: node("first"), streamId: "s" }, null, applyJsonPatch);
 
   assert.equal(out.path, "acme/Thing");
   assert.equal(out.name, "first");
@@ -37,20 +38,21 @@ test("Full replaces the state with the node the change carries", () => {
 });
 
 test("a change delivered as a JSON string (RawJson on the wire) decodes", () => {
-  const out = foldChange({ changeType: "Full", change: JSON.stringify(node("stringy")) }, null);
+  const out = foldChange({ changeType: "Full", change: JSON.stringify(node("stringy")) }, null, applyJsonPatch);
   assert.equal(out.name, "stringy");
 });
 
 test("PascalCase members decode identically", () => {
-  const out = foldChange({ ChangeType: "Full", Change: node("pascal") }, null);
+  const out = foldChange({ ChangeType: "Full", Change: node("pascal") }, null, applyJsonPatch);
   assert.equal(out.name, "pascal");
 });
 
 test("Patch folds an RFC 6902 array onto the state so far, at the node root", () => {
-  const first = foldChange({ changeType: "Full", change: node("first") }, null);
+  const first = foldChange({ changeType: "Full", change: node("first") }, null, applyJsonPatch);
   const out = foldChange(
     { changeType: "Patch", change: [{ op: "replace", path: "/name", value: "second" }] },
     first,
+    applyJsonPatch,
   );
 
   assert.equal(out.name, "second");
@@ -58,13 +60,13 @@ test("Patch folds an RFC 6902 array onto the state so far, at the node root", ()
 });
 
 test("NoUpdate and a null change emit nothing", () => {
-  assert.equal(foldChange({ changeType: "NoUpdate", change: {} }, node("prev")), null);
+  assert.equal(foldChange({ changeType: "NoUpdate", change: {} }, node("prev"), applyJsonPatch), null);
   // ABSENT is not NULL: an explicit null Change must not be read as "no change member", which
   // would return the whole EVENT as the node.
-  assert.equal(foldChange({ changeType: "Full", change: null }, null), null);
+  assert.equal(foldChange({ changeType: "Full", change: null }, null, applyJsonPatch), null);
 });
 
 test("a message with no change member is taken as the node itself (test transports)", () => {
-  const out = foldChange(node("flat"), null);
+  const out = foldChange(node("flat"), null, applyJsonPatch);
   assert.equal(out.name, "flat");
 });

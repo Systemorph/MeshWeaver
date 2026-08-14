@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { foldChange } from "./changeFold";
+import { applyJsonPatch } from "./jsonPatch";
 
 // THE DECODE GUARD (issue #1496).
 //
@@ -25,7 +26,7 @@ const node = (name: string, extra: Record<string, unknown> = {}) => ({
 
 describe("foldChange decodes the DataChangedEvent, not the event as the node", () => {
   it("Full replaces the state with the node the change carries", () => {
-    const out = foldChange({ changeType: "Full", change: node("first"), streamId: "s" }, null);
+    const out = foldChange({ changeType: "Full", change: node("first"), streamId: "s" }, null, applyJsonPatch);
 
     expect(out).not.toBeNull();
     expect(out!["path"]).toBe("acme/Thing");
@@ -35,22 +36,23 @@ describe("foldChange decodes the DataChangedEvent, not the event as the node", (
   });
 
   it("accepts a change delivered as a JSON STRING (RawJson on the wire)", () => {
-    const out = foldChange({ changeType: "Full", change: JSON.stringify(node("stringy")) }, null);
+    const out = foldChange({ changeType: "Full", change: JSON.stringify(node("stringy")) }, null, applyJsonPatch);
 
     expect(out!["name"]).toBe("stringy");
   });
 
   it("PascalCase members decode identically", () => {
-    const out = foldChange({ ChangeType: "Full", Change: node("pascal") }, null);
+    const out = foldChange({ ChangeType: "Full", Change: node("pascal") }, null, applyJsonPatch);
 
     expect(out!["name"]).toBe("pascal");
   });
 
   it("Patch folds an RFC 6902 array onto the state so far, at the node root", () => {
-    const first = foldChange({ changeType: "Full", change: node("first") }, null);
+    const first = foldChange({ changeType: "Full", change: node("first") }, null, applyJsonPatch);
     const out = foldChange(
       { changeType: "Patch", change: [{ op: "replace", path: "/name", value: "second" }] },
       first,
+      applyJsonPatch,
     );
 
     expect(out!["name"]).toBe("second");
@@ -59,22 +61,26 @@ describe("foldChange decodes the DataChangedEvent, not the event as the node", (
   });
 
   it("the numeric ChangeType ordinal for Patch folds too", () => {
-    const first = foldChange({ changeType: "Full", change: node("first") }, null);
-    const out = foldChange({ changeType: "1", change: [{ op: "replace", path: "/name", value: "n" }] }, first);
+    const first = foldChange({ changeType: "Full", change: node("first") }, null, applyJsonPatch);
+    const out = foldChange(
+      { changeType: "1", change: [{ op: "replace", path: "/name", value: "n" }] },
+      first,
+      applyJsonPatch,
+    );
 
     expect(out!["name"]).toBe("n");
   });
 
   it("NoUpdate emits nothing", () => {
-    expect(foldChange({ changeType: "NoUpdate", change: {} }, node("prev"))).toBeNull();
+    expect(foldChange({ changeType: "NoUpdate", change: {} }, node("prev"), applyJsonPatch)).toBeNull();
   });
 
   it("a null change emits nothing", () => {
-    expect(foldChange({ changeType: "Full", change: null }, null)).toBeNull();
+    expect(foldChange({ changeType: "Full", change: null }, null, applyJsonPatch)).toBeNull();
   });
 
   it("a message with no `change` member is taken as the node itself (test transports)", () => {
-    const out = foldChange(node("flat"), null);
+    const out = foldChange(node("flat"), null, applyJsonPatch);
 
     expect(out!["name"]).toBe("flat");
   });

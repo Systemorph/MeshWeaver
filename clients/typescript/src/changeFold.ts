@@ -21,23 +21,42 @@
 // So, exactly like wire.ts: this file is import-free and pure, and it is mirrored BYTE-IDENTICALLY
 // into clients/typescript/src/changeFold.ts. wireContract.test.ts asserts the two copies are equal,
 // so a fix can never again land in one SDK only.
-
-// The `.js` specifier is required by the Node SDK's NodeNext resolution and accepted by
-// grpc-web's Bundler resolution — the one spelling under which this file can be byte-identical
-// in both packages.
-import { applyJsonPatch, type PatchOperation } from "./jsonPatch.js";
+//
+// 🚨 IMPORT-FREE IS LOAD-BEARING, not tidiness. The two SDKs resolve modules differently — the Node
+// SDK is NodeNext (a `.js` specifier is REQUIRED) while grpc-web is bundled — and grpc-web's source
+// is additionally bundled by METRO for the React Native web export, which does not remap `.js` to
+// `.ts` at all. A single import here therefore has no spelling that works everywhere: `./jsonPatch`
+// breaks the Node SDK's build and `./jsonPatch.js` breaks the RN bundle ("Unable to resolve module
+// ./changeFold.js"). Taking the patch applier as a PARAMETER removes the question — and it is the
+// same reason wire.ts is import-free.
 
 /** The accumulated node JSON a fold carries between emissions. */
 export type NodeState = Record<string, unknown>;
 
+/** One RFC 6902 operation, as the mesh's sync streams deliver them. */
+export interface PatchOperation {
+  op: string;
+  path: string;
+  value?: unknown;
+  from?: string;
+}
+
+/** Applies an RFC 6902 patch array at the node root — each SDK passes its own `applyJsonPatch`. */
+export type ApplyPatch = (state: unknown, ops: PatchOperation[]) => unknown;
+
 /**
  * Fold one delivery message onto the state so far.
  *
- * @param message  the DataChangedEvent as received (camelCase or PascalCase members).
- * @param previous the node state accumulated from earlier deliveries, or null at stream start.
+ * @param message    the DataChangedEvent as received (camelCase or PascalCase members).
+ * @param previous   the node state accumulated from earlier deliveries, or null at stream start.
+ * @param applyPatch the SDK's RFC 6902 applier (see ApplyPatch — this module stays import-free).
  * @returns the new node state, or null when the delivery carries no update (emit nothing).
  */
-export function foldChange(message: Record<string, unknown>, previous: NodeState | null): NodeState | null {
+export function foldChange(
+  message: Record<string, unknown>,
+  previous: NodeState | null,
+  applyPatch: ApplyPatch,
+): NodeState | null {
   // 🚨 ABSENT is not NULL. Probing with `message["change"] ?? message["Change"]` and testing the
   // result for `undefined` collapses the two: a DataChangedEvent carrying an explicit null Change
   // reads as "no change member at all" and the whole EVENT is then returned as the node — the same
@@ -56,6 +75,6 @@ export function foldChange(message: Record<string, unknown>, previous: NodeState
 
   // "1" is ChangeType.Patch's ordinal — a serializer that writes the enum numerically still folds.
   return changeType === "Patch" || changeType === "1"
-    ? (applyJsonPatch(previous ?? {}, change as PatchOperation[]) as NodeState)
+    ? (applyPatch(previous ?? {}, change as PatchOperation[]) as NodeState)
     : (change as NodeState);
 }

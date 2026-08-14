@@ -7,6 +7,7 @@ import { connect as connectTransport, MeshConnection, type ConnectOptions } from
 import { randomUUID } from "node:crypto";
 import { meshNodeFromChange, type MeshNode } from "./types.js";
 import { foldChange, type NodeState } from "./changeFold.js";
+import { applyJsonPatch } from "./jsonPatch.js";
 import {
   activityStatusPatch,
   copyNodeRequest,
@@ -104,7 +105,7 @@ export class Mesh {
     const sub = subscribeRequest(path, streamId);
     let node: NodeState | null = null;
     for await (const delivery of this.conn.watch(path, streamId, sub.type, sub.message)) {
-      const next = foldChange(delivery.message, node);
+      const next = foldChange(delivery.message, node, applyJsonPatch);
       if (next === null) continue;
       node = next;
       yield meshNodeFromChange(node);

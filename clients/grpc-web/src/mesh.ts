@@ -6,7 +6,8 @@
 // underneath is already correct + tested.
 
 import { connect as connectTransport, MeshWebConnection, type ConnectOptions } from "./connection";
-import { foldChange, type NodeState } from "./changeFold.js";
+import { foldChange, type NodeState } from "./changeFold";
+import { applyJsonPatch } from "./jsonPatch";
 import { meshNodeFromChange, type MeshNode } from "./types";
 import { newId } from "./envelope";
 import {
@@ -135,7 +136,7 @@ export class Mesh {
     // that copy had the decode wrong end to end (#1496) and nothing compared the two.
     let node: NodeState | null = null;
     for await (const delivery of this.conn.watch(path, streamId, sub.type, sub.message)) {
-      const next = foldChange(delivery.message, node);
+      const next = foldChange(delivery.message, node, applyJsonPatch);
       if (next === null) continue;
       node = next;
       yield meshNodeFromChange(node);
