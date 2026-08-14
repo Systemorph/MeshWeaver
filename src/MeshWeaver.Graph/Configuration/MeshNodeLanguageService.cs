@@ -78,11 +78,36 @@ internal sealed class MeshNodeLanguageService(
         hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
         ?? IoPool.Unbounded;
 
-    public IObservable<IReadOnlyList<DiagnosticInfo>> GetDiagnostics(string nodeTypePath)
-        => GetOrBuildWorkspace(nodeTypePath)
-            .SelectMany(cached => cached is null
-                ? Observable.Return<IReadOnlyList<DiagnosticInfo>>(Array.Empty<DiagnosticInfo>())
-                : _ioPool.Run(ct => GetDiagnosticsAsync(cached, ct)));
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 The <see cref="NodeDiagnosticsOutcome"/> exists because this method used to map "no
+    /// workspace" to <c>Array.Empty&lt;DiagnosticInfo&gt;()</c> — byte-identical to "compiled
+    /// clean" — so an invented path answered <c>{"ok":true,"diagnostics":[]}</c> and the pre-prod
+    /// sweep AGENTS.md mandates ran on no evidence (#1592). The distinction was never missing from
+    /// the framework: the read underneath is <see cref="MeshNodeStreamExtensions.GetMeshNodeOutcome"/>,
+    /// which already separates Present / Absent / Unavailable. It was being discarded here.
+    /// </remarks>
+    public IObservable<NodeDiagnosticsOutcome> GetDiagnostics(string nodeTypePath)
+        => ResolveNodeOutcome(nodeTypePath)
+            .SelectMany(outcome => outcome.Status switch
+            {
+                NodeReadStatus.Present => WorkspaceFor(nodeTypePath, outcome.Node!)
+                    .SelectMany(cached => cached is null
+                        // The node is real and resolved — it simply has no compilation. A caller
+                        // asking a Markdown node for diagnostics gets told that, not "clean".
+                        ? Observable.Return(NodeDiagnosticsOutcome.NotCompilable)
+                        : _ioPool.Run(ct => GetDiagnosticsAsync(cached, ct))
+                            .Select(NodeDiagnosticsOutcome.Compiled)),
+
+                // Genuinely not there, or its delete is in flight — either way nothing was checked.
+                NodeReadStatus.Absent or NodeReadStatus.DeleteInProgress =>
+                    Observable.Return(NodeDiagnosticsOutcome.Absent),
+
+                // 🚨 The case that makes this a gate rather than a nicety: a per-node hub that does
+                // not answer inside the budget. That is precisely when a sweep most needs to fail,
+                // and precisely when the old shape was most confidently green.
+                _ => Observable.Return(NodeDiagnosticsOutcome.Unavailable(outcome.Failure)),
+            });
 
     public IObservable<HoverInfo?> GetHover(string nodeTypePath, string sourcePath, SourcePosition position)
         => GetOrBuildWorkspace(nodeTypePath)
@@ -210,14 +235,44 @@ internal sealed class MeshNodeLanguageService(
     /// Returns <c>null</c> when the node or its compilation cannot be resolved.
     /// </summary>
     private IObservable<CachedWorkspace?> GetOrBuildWorkspace(string nodeTypePath)
-        => ResolveNode(nodeTypePath)
-            .SelectMany(node => node is null
-                ? Observable.Return<CachedWorkspace?>(null)
-                : compilationService.GetCompilationInputsAsync(node)
-                    .Select(inputs => inputs is null ? null : BuildOrReuseWorkspace(nodeTypePath, inputs)));
+        => ResolveNodeOutcome(nodeTypePath)
+            .SelectMany(outcome =>
+            {
+                if (outcome.Node is null)
+                {
+                    // 🚨 Hover and completions keep their "null / empty means nothing here"
+                    // contracts (Monaco's shape), so for THEM the reason has to reach the log or it
+                    // reaches nobody: a wedged hub and a mistyped path both render as a silently
+                    // dead editor, which is how #1601 presents. Diagnostics no longer degrade this
+                    // way — it returns an interrogable NodeDiagnosticsOutcome instead.
+                    logger.LogWarning(
+                        "[LSP] No workspace for '{Path}' — read status {Status}{Failure}. "
+                        + "Hover/completions will answer empty; this is NOT evidence the NodeType "
+                        + "is healthy.",
+                        nodeTypePath, outcome.Status,
+                        outcome.Failure is null ? "" : $": {outcome.Failure.Message}");
+                    return Observable.Return<CachedWorkspace?>(null);
+                }
+                return WorkspaceFor(nodeTypePath, outcome.Node);
+            });
 
+    // The workspace half, given an already-resolved node — shared by GetOrBuildWorkspace and by
+    // GetDiagnostics, which needs the READ's outcome and so cannot go through the null-collapsing
+    // path above.
+    private IObservable<CachedWorkspace?> WorkspaceFor(string nodeTypePath, MeshNode node)
+        => compilationService.GetCompilationInputsAsync(node)
+            .Select(inputs => inputs is null ? null : BuildOrReuseWorkspace(nodeTypePath, inputs));
+
+    // 🚨 GetMeshNodeOutcome, not GetMeshNode: the interrogable read. GetMeshNode is the same read
+    // with the distinction discarded, and discarding it here is what let "the hub never answered"
+    // and "there is no such node" both render as a clean bill of health (#1592).
+    private IObservable<NodeReadOutcome> ResolveNodeOutcome(string nodeTypePath)
+        => hub.GetMeshNodeOutcome(nodeTypePath, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull);
+
+    // The same read with the distinction discarded — for the completion/speculative paths, whose
+    // "no node ⇒ no suggestions" contract is deliberate and documented at their call sites.
     private IObservable<MeshNode?> ResolveNode(string nodeTypePath)
-        => hub.GetMeshNode(nodeTypePath, TimeSpan.FromSeconds(15));
+        => ResolveNodeOutcome(nodeTypePath).Select(outcome => outcome.Node);
 
     private CachedWorkspace BuildOrReuseWorkspace(string nodeTypePath, CompilationInputs inputs)
     {
