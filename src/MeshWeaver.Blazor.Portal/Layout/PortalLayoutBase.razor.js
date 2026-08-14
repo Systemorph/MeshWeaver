@@ -287,7 +287,7 @@ function updateMarkdownTheme() {
         : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
 
     const basePath = '_content/MeshWeaver.Blazor/css/';
-    const cdnPath = '_content/MeshWeaver.Blazor/lib/github-markdown-css/'; // vendored 5.8.1
+    const vendoredPath = '_content/MeshWeaver.Blazor/lib/github-markdown-css/'; // vendored 5.8.1
 
     const localTheme = isDarkMode
         ? basePath + 'github-markdown-dark.css'
@@ -296,10 +296,10 @@ function updateMarkdownTheme() {
     if (themeLink.href !== window.location.origin + '/' + localTheme) {
         themeLink.href = localTheme;
         themeLink.onerror = function () {
-            const cdnTheme = isDarkMode
-                ? cdnPath + 'github-markdown-dark.min.css'
-                : cdnPath + 'github-markdown-light.min.css';
-            themeLink.href = cdnTheme;
+            const vendoredTheme = isDarkMode
+                ? vendoredPath + 'github-markdown-dark.min.css'
+                : vendoredPath + 'github-markdown-light.min.css';
+            themeLink.href = vendoredTheme;
         };
     }
 }
