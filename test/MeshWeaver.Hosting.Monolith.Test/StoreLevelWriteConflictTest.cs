@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -158,7 +159,18 @@ public class StoreLevelWriteConflictTest(ITestOutputHelper output) : MonolithMes
         activity.Should().NotBeNull(
             "a conflict whose resolution DROPPED a value must record it in the activity log — a "
             + "resolution nobody can see is the failure mode this whole mechanism exists to stop");
-        activity!.NodeType.Should().Be("ActivityLog");
+        // 🚨 "Activity" — `ActivityNodeType.NodeType`, the ONLY registered activity node type.
+        // "ActivityLog" is the CLR *content* type's TypeRegistry discriminator
+        // (`DataExtensions`: `WithType(typeof(ActivityLog), nameof(ActivityLog))`), never a node
+        // type: nothing calls `AddMeshNodes` with it, so a node stamped "ActivityLog" has no node-
+        // type definition at all — no views, no satellite access rule — and, the point here, it
+        // matches no `nodeType:Activity` query, which is what `RunningActivitiesStripe` and the
+        // activity feed run. A record that exists but that no feed can surface fails the very
+        // requirement asserted three lines above: a resolution nobody can see.
+        activity!.NodeType.Should().Be(ActivityNodeType.NodeType,
+            "a write-conflict record is only 'visible' if the activity feed can find it, and every "
+            + "feed query filters nodeType:Activity — the path landing under _Activity is necessary "
+            + "but not sufficient");
 
         var log = activity.Content.Should().BeOfType<ActivityLog>().Subject;
         log.Category.Should().Be(ActivityCategory.WriteConflict);
