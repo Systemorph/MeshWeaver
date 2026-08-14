@@ -18,7 +18,7 @@ using Xunit;
 namespace MeshWeaver.Security.Test;
 
 /// <summary>
-/// Verifies that <see cref="MarkdownExportMenuProvider"/> contributes "Export to PDF" and "Export to DOCX"
+/// Verifies that <see cref="ExportMenuProvider"/> contributes "Export to PDF" and "Export to DOCX"
 /// items to the Node menu (<c>$Menu:Node</c>) when the focused node is of type "Markdown".
 /// Regression guard for the menu refactor: items must land in the Node context, not the legacy default <c>$Menu</c>.
 /// </summary>
@@ -56,6 +56,19 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
                     Name = "Plugin Deck",
                     NodeType = "Publish/Deck",
                     Content = new DeckContent { Title = "Plugin Deck" }
+                },
+                // A type that DECLARES its exports on its own hub configuration — the
+                // declaration-driven path (#1576): no compiled provider knows this type.
+                new MeshNode("PdfOnly")
+                {
+                    Name = "Pdf-only declared type",
+                    HubConfiguration = config => config
+                        .WithExport(new ExportDeclaration { Formats = ExportFormats.Pdf })
+                },
+                new MeshNode("DeclaredDoc", "TestOrg")
+                {
+                    Name = "Declared Doc",
+                    NodeType = "PdfOnly"
                 }
             )
             .AddMarkdownExport()
@@ -92,7 +105,7 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
 
         // The menu renders incrementally: providers that emit synchronously
         // (e.g. "Request Approval") land in an early menu snapshot, while
-        // MarkdownExportMenuProvider gates its items on the own-node stream and
+        // ExportMenuProvider gates its items on the own-node stream and
         // the viewer's effective permissions (StartWith(null) + CombineLatest),
         // so its export items appear only in a LATER emission once the node
         // loads and Read resolves. Match on the snapshot that actually carries
@@ -101,7 +114,7 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
             .GetControlStream(MenuControl.GetMenuArea(NodeMenuItemsExtensions.NodeMenuContext))
             .Should().Within(10.Seconds()).Match(
                 x => x is MenuControl m
-                     && Flatten(m.Items).Any(i => i.Label == MarkdownExportMenuProvider.PdfLabel));
+                     && Flatten(m.Items).Any(i => i.Label == ExportMenuProvider.PdfLabel));
 
         return menuControl.Should().BeOfType<MenuControl>().Which.Items;
     }
@@ -119,16 +132,16 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         foreach (var item in all)
             Output.WriteLine($"  {item.Label} (Area={item.Area}, Order={item.Order}, Children={item.Children?.Count ?? 0})");
 
-        all.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.PdfLabel,
-            "MarkdownExportMenuProvider should contribute 'Export to PDF' for nodes with NodeType=Markdown");
-        all.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.DocxLabel,
-            "MarkdownExportMenuProvider should contribute 'Export to DOCX' for nodes with NodeType=Markdown");
+        all.Select(i => i.Label).Should().Contain(ExportMenuProvider.PdfLabel,
+            "the export provider should contribute 'Export to PDF' for nodes with NodeType=Markdown");
+        all.Select(i => i.Label).Should().Contain(ExportMenuProvider.DocxLabel,
+            "the export provider should contribute 'Export to DOCX' for nodes with NodeType=Markdown");
 
-        var pdfItem = all.First(i => i.Label == MarkdownExportMenuProvider.PdfLabel);
+        var pdfItem = all.First(i => i.Label == ExportMenuProvider.PdfLabel);
         pdfItem.Area.Should().Be(ExportDocumentLayoutArea.PdfArea,
             "PDF item must navigate to the PDF export layout area");
 
-        var docxItem = all.First(i => i.Label == MarkdownExportMenuProvider.DocxLabel);
+        var docxItem = all.First(i => i.Label == ExportMenuProvider.DocxLabel);
         docxItem.Area.Should().Be(ExportDocumentLayoutArea.DocxArea,
             "DOCX item must navigate to the DOCX export layout area");
     }
@@ -145,25 +158,25 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var items = await FetchNodeMenuItems(client, new Address(MarkdownNodePath));
 
         // The three actions are NOT at the top level any more…
-        items.Select(i => i.Label).Should().NotContain(MarkdownExportMenuProvider.PdfLabel,
+        items.Select(i => i.Label).Should().NotContain(ExportMenuProvider.PdfLabel,
             "the export entries moved into the 'Export' group — a flat PDF row means the grouping regressed");
 
         // …they are the group's children.
-        var group = items.Should().ContainSingle(i => i.Label == MarkdownExportMenuProvider.ExportGroupLabel)
+        var group = items.Should().ContainSingle(i => i.Label == ExportMenuProvider.ExportGroupLabel)
             .Which;
 
-        group.Area.Should().Be(MarkdownExportMenuProvider.ExportGroupArea,
+        group.Area.Should().Be(ExportMenuProvider.ExportGroupArea,
             "a grouping parent carries a _group:{name} area so no client can navigate to it — and so the "
             + "MenuPresentation catalog can still address THIS group by a stable key");
         group.IsGroup.Should().BeTrue();
         group.IsSubmenuParent.Should().BeTrue();
-        group.Icon.Should().Be(MarkdownExportMenuProvider.ExportGroupIcon);
+        group.Icon.Should().Be(ExportMenuProvider.ExportGroupIcon);
         group.LabelKey.Should().Be("menu.exportGroup", "the parent label must translate like every other entry");
         group.TooltipKey.Should().Be("menu.exportGroup.tooltip",
             "once the label is one word the tooltip is the only remaining explanation");
 
         group.Children!.Select(c => c.Label).Should().Equal(
-            [MarkdownExportMenuProvider.PdfLabel, SendDocumentLayoutArea.SendLabel, MarkdownExportMenuProvider.DocxLabel],
+            [ExportMenuProvider.PdfLabel, SendDocumentLayoutArea.SendLabel, ExportMenuProvider.DocxLabel],
             "children are sorted by Order (27 PDF / 28 Email / 29 DOCX) — the block's reading order "
             + "survives the move into the group");
 
@@ -180,10 +193,10 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var client = GetClient();
         var items = await FetchNodeMenuItems(client, new Address(DeckNodePath));
 
-        var group = items.Should().ContainSingle(i => i.Label == MarkdownExportMenuProvider.ExportGroupLabel).Which;
-        group.Area.Should().Be(MarkdownExportMenuProvider.ExportGroupArea);
+        var group = items.Should().ContainSingle(i => i.Label == ExportMenuProvider.ExportGroupLabel).Which;
+        group.Area.Should().Be(ExportMenuProvider.ExportGroupArea);
         group.Children!.Select(c => c.Label).Should().Equal(
-            [MarkdownExportMenuProvider.PdfLabel, SendDocumentLayoutArea.SendLabel]);
+            [ExportMenuProvider.PdfLabel, SendDocumentLayoutArea.SendLabel]);
     }
 
     /// <summary>
@@ -198,9 +211,26 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         var client = GetClient();
         var items = await FetchNodeMenuItems(client, new Address(PluginDeckNodePath));
 
-        var group = items.Should().ContainSingle(i => i.Label == MarkdownExportMenuProvider.ExportGroupLabel).Which;
-        group.Children!.Select(c => c.Label).Should().Contain(MarkdownExportMenuProvider.PdfLabel,
+        var group = items.Should().ContainSingle(i => i.Label == ExportMenuProvider.ExportGroupLabel).Which;
+        group.Children!.Select(c => c.Label).Should().Contain(ExportMenuProvider.PdfLabel,
             "a Publish/Deck node must offer PDF export exactly like the built-in Deck");
+    }
+
+    /// <summary>
+    /// The declaration-driven path end to end: a type whose OWN hub configuration declares
+    /// <c>WithExport(Pdf)</c> gets the Export group with exactly the declared entries — no
+    /// compiled provider names this type anywhere. This is the seam a plugin type uses once
+    /// its build compiles against a platform shipping <see cref="ExportDeclaration"/> (#1576).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task DeclaredType_GetsExactlyItsDeclaredExports()
+    {
+        var client = GetClient();
+        var items = await FetchNodeMenuItems(client, new Address("TestOrg/DeclaredDoc"));
+
+        var group = items.Should().ContainSingle(i => i.Label == ExportMenuProvider.ExportGroupLabel).Which;
+        group.Children!.Select(c => c.Label).Should().Equal([ExportMenuProvider.PdfLabel],
+            "the declaration said Pdf only — no Email, no DOCX");
     }
 
     [Fact(Timeout = 30000)]
@@ -216,14 +246,14 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         foreach (var item in all)
             Output.WriteLine($"  {item.Label} (Area={item.Area}, Order={item.Order})");
 
-        all.Select(i => i.Label).Should().Contain(MarkdownExportMenuProvider.PdfLabel,
-            "DeckExportMenuProvider should contribute 'Export to PDF' for nodes with NodeType=Deck");
+        all.Select(i => i.Label).Should().Contain(ExportMenuProvider.PdfLabel,
+            "the export provider should contribute 'Export to PDF' for nodes with NodeType=Deck");
         // A deck carries no markdown body of its own, so DOCX export (which renders the node's own
         // content) is deliberately NOT offered.
-        all.Select(i => i.Label).Should().NotContain(MarkdownExportMenuProvider.DocxLabel,
+        all.Select(i => i.Label).Should().NotContain(ExportMenuProvider.DocxLabel,
             "a Deck exposes PDF export only — DOCX would render the deck's (empty) own body");
 
-        var pdfItem = all.First(i => i.Label == MarkdownExportMenuProvider.PdfLabel);
+        var pdfItem = all.First(i => i.Label == ExportMenuProvider.PdfLabel);
         pdfItem.Area.Should().Be(ExportDocumentLayoutArea.PdfArea,
             "PDF item must navigate to the PDF export layout area");
     }
@@ -261,9 +291,9 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
             Output.WriteLine($"  {item.Order}: {item.Icon} {item.Label} — \"{item.Tooltip}\"");
 
         group.Select(i => i.Label).Should().Equal(
-            MarkdownExportMenuProvider.PdfLabel,      // "PDF"
+            ExportMenuProvider.PdfLabel,      // "PDF"
             SendDocumentLayoutArea.SendLabel,         // "Email"
-            MarkdownExportMenuProvider.DocxLabel);    // "DOCX"
+            ExportMenuProvider.DocxLabel);    // "DOCX"
 
         group.Where(i => string.IsNullOrWhiteSpace(i.Tooltip)).Select(i => i.Label)
             .Should().BeEmpty(
@@ -299,8 +329,8 @@ public class MarkdownExportMenuTest(ITestOutputHelper output) : MonolithMeshTest
         actionable.Select(i => i.Label).Should().Contain(
             new[]
             {
-                MarkdownExportMenuProvider.PdfLabel,
-                MarkdownExportMenuProvider.DocxLabel,
+                ExportMenuProvider.PdfLabel,
+                ExportMenuProvider.DocxLabel,
                 SendDocumentLayoutArea.SendLabel
             },
             "otherwise the invariant below would pass without ever seeing the group it guards");
