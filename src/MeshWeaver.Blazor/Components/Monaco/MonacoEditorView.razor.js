@@ -763,7 +763,7 @@ export function registerCompletionProvider(editorId, config) {
                 return { suggestions: [] };
             }
 
-            const suggestions = currentItems.map((item) => {
+            const suggestions = currentItems.map((item, index) => {
                 // filterText must match what the user typed (fullQuery includes the trigger char)
                 // Use insertText as filterText since that's what matches the typed pattern
                 const filterText = item.insertText || item.label;
@@ -782,7 +782,13 @@ export function registerCompletionProvider(editorId, config) {
                         value: item.description
                     } : undefined,
                     filterText: filterText,
-                    sortText: item.sortKey || displayLabel.toLowerCase()  // Use sortKey if provided, else alphabetical
+                    // 🚨 The server's ORDER is the ranking — never re-alphabetise it here. Monaco
+                    // sorts by (fuzzy score, sortText, label), so a lowercased label as sortText
+                    // discards whatever relevance the provider computed the moment the list opens
+                    // with nothing typed. An index-derived key preserves that order and still lets
+                    // Monaco's score lead once the user types. (Same fix as the C# completions'
+                    // RankKey — see MeshNodeLanguageService.)
+                    sortText: item.sortKey || String(index).padStart(4, '0')
                 };
 
                 // Attach command to notify C# when a suggestion is accepted

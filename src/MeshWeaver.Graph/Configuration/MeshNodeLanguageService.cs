@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh;
@@ -482,7 +483,17 @@ internal sealed class MeshNodeLanguageService(
         }
         ranked = ranked.Take(maxResults);
 
+        // 🚨 The emitted SortText is OUR RANK, never Roslyn's — and that is the whole point.
+        // Roslyn's SortText is an ALPHABETICAL key (it exists to sort a list A→Z), and Monaco
+        // orders its suggest widget by (fuzzy score, sortText, label). Passing Roslyn's key
+        // through therefore threw away every ranking computed above the moment the widget
+        // opened: with nothing typed there is no fuzzy score to order by, so the list the user
+        // saw was strictly alphabetical — the usage and locality ranking, and the target-typing
+        // priority, all discarded. Emitting the rank as a zero-padded ordinal keeps Monaco in
+        // charge of relevance WHILE the user types (its score still dominates) and makes our
+        // order the tiebreak, which is exactly what a `.`-triggered list needs.
         var result = new List<CompletionEntry>();
+        var rank = 0;
         foreach (var item in ranked)
         {
             result.Add(new CompletionEntry(
@@ -491,7 +502,7 @@ internal sealed class MeshNodeLanguageService(
                 InsertText: item.DisplayText,
                 Detail: item.InlineDescription is { Length: > 0 } ? item.InlineDescription : null,
                 Documentation: null,
-                SortText: item.SortText));
+                SortText: RankKey(rank++)));
         }
 
         // Finally, this user's own history: what they accepted last time in this situation is
@@ -641,6 +652,15 @@ internal sealed class MeshNodeLanguageService(
         }
         return sb.ToString().TrimEnd();
     }
+
+    /// <summary>
+    /// The sort key for a ranked completion: its position, zero-padded so a plain STRING compare
+    /// (which is all an editor does with <c>sortText</c>) reproduces the numeric order —
+    /// <c>"0002" &lt; "0010"</c>, where <c>"2" &gt; "10"</c> would invert it. Four digits covers any
+    /// list an editor will show; beyond that the tail keeps its relative order under the same
+    /// width. Pure, so the ordering contract is testable without Roslyn.
+    /// </summary>
+    internal static string RankKey(int rank) => rank.ToString("D4", CultureInfo.InvariantCulture);
 
     private static CompletionKind MapTagsToKind(ImmutableArray<string> tags)
     {
