@@ -32,5 +32,11 @@
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
+    <!-- Import + GoogleMaps mirror the PORTAL's assembly surface: both portals reference them
+         PRECISELY so in-mesh sample/plugin source (Cornerstone/Pricing's Excel loader + map,
+         Northwind/Product) can compile at runtime. Without them the gate flags content the real
+         host compiles fine — the gate must judge against the surface content actually gets. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.GoogleMaps\MeshWeaver.GoogleMaps.csproj" />
   </ItemGroup>
 </Project>
