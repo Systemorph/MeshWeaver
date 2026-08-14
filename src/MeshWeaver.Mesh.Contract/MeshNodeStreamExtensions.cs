@@ -1778,6 +1778,16 @@ public static class MeshNodeStreamExtensions
     /// </para>
     ///
     /// <para>
+    /// 🚨 The remaining collapse is deliberate and named: "genuinely absent", "being deleted"
+    /// and "could not be read" all arrive here as <c>null</c>, because that IS what most callers
+    /// want and changing this signature would sweep 100+ of them for no gain. A caller for which
+    /// those differ — anything that CREATES, re-applies or persists on absence — must read
+    /// <see cref="GetMeshNodeOutcome"/> instead, which is this same read with the distinction
+    /// kept. <c>InstanceSyncWorker.PullOne</c> is what happens otherwise: it re-created a node
+    /// whose delete was in flight (Systemorph/MeshWeaver#1471).
+    /// </para>
+    ///
+    /// <para>
     /// For a <b>live</b> single-node subscription that re-emits on every change,
     /// use <see cref="GetMeshNodeStream(IWorkspace, string)"/> instead â€” and stay
     /// subscribed (no <c>.Take(1)</c>). See <c>Doc/Architecture/AsynchronousCalls.md</c>.
@@ -1798,7 +1808,44 @@ public static class MeshNodeStreamExtensions
     public static IObservable<MeshNode?> GetMeshNode(this IMessageHub hub, string path,
         TimeSpan? timeout = null,
         ReadTimeoutBehavior onTimeout = ReadTimeoutBehavior.Throw)
-        => Observable.Create<MeshNode?>(observer =>
+        // ONE implementation, so the interrogable read and the convenience read can never drift:
+        // this is GetMeshNodeOutcome with the distinction discarded. Node is non-null exactly for
+        // Present, so every non-Present status maps to the null this method has always emitted.
+        => hub.GetMeshNodeOutcome(path, timeout, onTimeout).Select(outcome => outcome.Node);
+
+    /// <summary>
+    /// The same one-shot read as <see cref="GetMeshNode"/>, but reporting <b>why</b> — see
+    /// <see cref="NodeReadStatus"/>. Use this wherever "not there" would lead to a WRITE:
+    /// a create, an upsert, a replication apply, a re-persist. Those are precisely the callers
+    /// for which "absent", "being deleted" and "I could not read it" must not be the same input.
+    ///
+    /// <para>The mapping, in full:
+    /// <list type="bullet">
+    ///   <item><see cref="NodeReadStatus.Present"/> — a node came back.</item>
+    ///   <item><see cref="NodeReadStatus.Absent"/> — routing said
+    ///     <see cref="ErrorType.NotFound"/>, the owner answered with no data, or a read validator
+    ///     hid it (a hidden node is invisible by contract).</item>
+    ///   <item><see cref="NodeReadStatus.DeleteInProgress"/> — the owner answered with its delete
+    ///     tombstone (<c>GetDataResponse.Absence</c>).</item>
+    ///   <item><see cref="NodeReadStatus.Unavailable"/> — the delivery failed for any other
+    ///     reason, the payload would not materialise, or the budget elapsed under
+    ///     <see cref="ReadTimeoutBehavior.EmitNull"/>.</item>
+    /// </list>
+    /// Errors that <see cref="GetMeshNode"/> already surfaces still surface here as
+    /// <c>OnError</c>: <see cref="ErrorType.Unauthorized"/>, a second consecutive
+    /// <see cref="ErrorType.ShuttingDown"/>, and a timeout under
+    /// <see cref="ReadTimeoutBehavior.Throw"/>.</para>
+    /// </summary>
+    /// <param name="hub">The hub the caller holds (see <see cref="GetMeshNode"/>).</param>
+    /// <param name="path">The mesh path to read.</param>
+    /// <param name="timeout">Wall-clock budget for the read; defaults to 10 seconds.</param>
+    /// <param name="onTimeout">What happens when the budget elapses (see <see cref="GetMeshNode"/>).
+    /// <see cref="ReadTimeoutBehavior.EmitNull"/> yields <see cref="NodeReadStatus.Unavailable"/>
+    /// carrying the <see cref="TimeoutException"/> — indeterminate, never "absent".</param>
+    public static IObservable<NodeReadOutcome> GetMeshNodeOutcome(this IMessageHub hub, string path,
+        TimeSpan? timeout = null,
+        ReadTimeoutBehavior onTimeout = ReadTimeoutBehavior.Throw)
+        => Observable.Create<NodeReadOutcome>(observer =>
         {
             // 🚨 Never issue the read on the ROOT MESH HUB — the router. Mesh-singleton services
             // (plugin-catalog boot, log-incident ingest, credential resolvers) hold the DI-injected
@@ -1828,10 +1875,10 @@ public static class MeshNodeStreamExtensions
             // note above exists to prevent).
             var innerSubscription = new SerialDisposable();
 
-            void EmitOnce(MeshNode? node)
+            void EmitOnce(NodeReadOutcome outcome)
             {
                 if (Interlocked.Exchange(ref emitted, 1) != 0) return;
-                observer.OnNext(node);
+                observer.OnNext(outcome);
                 observer.OnCompleted();
             }
 
@@ -1901,8 +1948,12 @@ public static class MeshNodeStreamExtensions
                 {
                     // Logging must never mask the timeout it is reporting.
                 }
+                // EmitNull's contract is "indeterminate ⇒ the caller treats it as absent" — but the
+                // OUTCOME says what actually happened, so a caller that asked for the distinction
+                // still learns the read never established anything. GetMeshNode maps it to the
+                // null EmitNull has always emitted.
                 if (onTimeout == ReadTimeoutBehavior.EmitNull)
-                    EmitOnce(null);
+                    EmitOnce(NodeReadOutcome.Unavailable(new TimeoutException(message)));
                 else
                     EmitError(new TimeoutException(message));
             });
@@ -1938,12 +1989,21 @@ public static class MeshNodeStreamExtensions
                                 {
                                     if (d.Message is GetDataResponse resp)
                                     {
+                                        // 🚨 The owner said the node's DELETE is in flight — null BY DESIGN,
+                                        // not "there is nothing here" (MeshDataSource.AddReadValidatorPipeline's
+                                        // tombstone). Checked before the Error/absence branches because it is
+                                        // the one absence a caller must never answer with a create (#1471).
+                                        if (resp.Absence == DataAbsenceReason.DeleteInProgress)
+                                        {
+                                            EmitOnce(NodeReadOutcome.DeleteInProgress);
+                                            return;
+                                        }
                                         // A null-Data response carrying an Error is an application-level
                                         // read-validator verdict (INodeValidator → GetDataResponse{Error},
                                         // e.g. NodeHidden / a policy filter — see
                                         // MeshDataSource.AddReadValidatorPipeline). The documented contract is
                                         // that such a filtered node is INVISIBLE to the reader → resolve to
-                                        // null (indistinguishable from "not found", which is the point of
+                                        // absent (indistinguishable from "not found", which is the point of
                                         // hiding). A *genuine* access denial is enforced at the delivery layer
                                         // (AccessControlPipeline → DeliveryFailure{ErrorType.Unauthorized}) and
                                         // surfaces via the OnError branch below — it never arrives as a
@@ -1953,18 +2013,31 @@ public static class MeshNodeStreamExtensions
                                             hub.ServiceProvider.GetService<ILoggerFactory>()
                                                 ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode")
                                                 ?.LogDebug("GetMeshNode read-validator filtered {Path}: {Error}", path, resp.Error);
-                                            EmitOnce(null);
+                                            EmitOnce(NodeReadOutcome.Absent);
+                                            return;
+                                        }
+                                        if (resp.Data is null)
+                                        {
+                                            EmitOnce(NodeReadOutcome.Absent);
                                             return;
                                         }
                                         MeshNode? node = resp.Data as MeshNode;
                                         if (node == null && resp.Data is JsonElement je)
                                             node = je.Deserialize<MeshNode>(hub.JsonSerializerOptions);
-                                        EmitOnce(node);
+                                        // Data came back but would not materialise into a MeshNode. That is a
+                                        // failed read, NOT evidence the node is missing — the two used to be
+                                        // the same null.
+                                        EmitOnce(node is null
+                                            ? NodeReadOutcome.Unavailable(new InvalidOperationException(
+                                                $"GetMeshNode('{path}'): the owner returned data of type "
+                                                + $"'{resp.Data.GetType().Name}' which could not be read as a MeshNode."))
+                                            : NodeReadOutcome.Present(node));
                                     }
                                     else
                                     {
-                                        // Unexpected response — node not found / no handler.
-                                        EmitOnce(null);
+                                        // Not a GetDataResponse at all — the read established nothing.
+                                        EmitOnce(NodeReadOutcome.Unavailable(new InvalidOperationException(
+                                            $"GetMeshNode('{path}'): the answer was not a GetDataResponse.")));
                                     }
                                 }
                                 catch (Exception ex)
@@ -1972,7 +2045,7 @@ public static class MeshNodeStreamExtensions
                                     var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
                                         ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
                                     logger?.LogDebug(ex, "GetMeshNode callback failed for {Path}", path);
-                                    EmitOnce(null);
+                                    EmitOnce(NodeReadOutcome.Unavailable(ex));
                                 }
                             },
                             ex =>
@@ -2034,7 +2107,15 @@ public static class MeshNodeStreamExtensions
                                 }
 
                                 logger?.LogDebug(ex, "GetMeshNode delivery failed for {Path}", path);
-                                EmitOnce(null);
+                                // 🚨 Only NotFound is evidence of absence — routing mints it for a path
+                                // that is not there, and NEVER falls back to an ancestor. Every other
+                                // delivery failure (Exception, Rejected, Failed, RoutingLoop …) means the
+                                // read did not happen, which says nothing about whether the node exists.
+                                // Both collapsed into the same null before, so a broken read was
+                                // indistinguishable from a missing node (#1471).
+                                EmitOnce(ex is DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound }
+                                    ? NodeReadOutcome.Absent
+                                    : NodeReadOutcome.Unavailable(ex));
                             });
                 }
                 catch (Exception ex)
@@ -2042,7 +2123,7 @@ public static class MeshNodeStreamExtensions
                     var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
                         ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode");
                     logger?.LogDebug(ex, "GetMeshNode post failed for {Path}", path);
-                    EmitOnce(null);
+                    EmitOnce(NodeReadOutcome.Unavailable(ex));
                 }
             }
 

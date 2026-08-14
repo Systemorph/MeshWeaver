@@ -485,7 +485,16 @@ public static class MeshDataSourceExtensions
             if (cache?.IsDeleted == true
                 || recentlyDeleted?.IsRecentlyDeleted(hub.Address.Path) == true)
             {
-                hub.Post(new GetDataResponse(null, 0), o => o.ResponseFor(delivery));
+                // 🚨 SAY WHY IT IS NULL. This tombstone is null BY DESIGN, and for years it was
+                // indistinguishable on the wire from "there is nothing at this path" — so
+                // InstanceSyncWorker.PullOne read it as "absent ⇒ create it" and re-applied a node
+                // whose delete was still in flight (#1471). The reason field is what lets a caller
+                // that must not resurrect (a replicator, an importer, an upsert) tell the two
+                // apart; callers that legitimately treat both as absence (GetMeshNode's documented
+                // MeshNode? contract) are unaffected.
+                hub.Post(
+                    new GetDataResponse(null, 0) { Absence = DataAbsenceReason.DeleteInProgress },
+                    o => o.ResponseFor(delivery));
                 return Observable.Return(delivery.Processed());
             }
 
