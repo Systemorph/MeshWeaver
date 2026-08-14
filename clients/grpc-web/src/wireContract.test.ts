@@ -160,13 +160,47 @@ describe("every field the SDK sends exists on the C# record it names", () => {
   });
 });
 
+const WEB_WIRE = "src/wire.ts";
+const NODE_WIRE = "../typescript/src/wire.ts";
+
 describe("the two TypeScript SDKs share ONE copy of the wire shapes", () => {
   // #1475 shipped in both SDKs at once because each hand-mirrored the other. Byte-identical copies
   // (the discipline clients/react/src/i18n uses for the server string catalog) make a one-sided fix
   // impossible: wire.ts is import-free and pure precisely so the two files can be equal.
   it("clients/typescript/src/wire.ts is byte-identical to clients/grpc-web/src/wire.ts", () => {
-    const web = readFileSync(resolve(pkgRoot, "src/wire.ts"), "utf8");
-    const node = readFileSync(resolve(pkgRoot, "../typescript/src/wire.ts"), "utf8");
-    expect(node).toBe(web);
+    const web = readFileSync(resolve(pkgRoot, WEB_WIRE), "utf8").split("\n");
+    const node = readFileSync(resolve(pkgRoot, NODE_WIRE), "utf8").split("\n");
+    // Report the FIRST differing line rather than `expect(a).toBe(b)` on two 77-line strings, whose
+    // failure output is two identical-looking truncated prefixes and tells a reviewer nothing.
+    const at = web.findIndex((line, i) => line !== node[i]);
+    expect(
+      at === -1 && web.length === node.length,
+      at === -1
+        ? `${NODE_WIRE} has ${node.length} lines vs ${web.length} in ${WEB_WIRE} — copy one over the other.`
+        : `${NODE_WIRE} diverged from ${WEB_WIRE} at line ${at + 1}:\n` +
+          `  grpc-web: ${web[at]}\n  node    : ${node[at] ?? "(missing)"}\n` +
+          `The two SDKs must carry ONE copy of the wire shapes — copy one file over the other.`,
+    ).toBe(true);
+  });
+
+  // The byte-identity check only guards what is INSIDE wire.ts. A future edit that builds a message
+  // inline in mesh.ts would bypass both guards, which is precisely the state #1475 shipped from. So:
+  // every message type wire.ts owns must be named ONLY there. Derived from wire.ts itself, so adding
+  // a builder extends the guard automatically — and a type wire.ts does NOT own (a REST-backed verb,
+  // say) is correctly out of scope rather than hard-coded into an exception list.
+  it("neither SDK names a wire.ts-owned message type inline", () => {
+    const owned = [...readFileSync(resolve(pkgRoot, WEB_WIRE), "utf8").matchAll(/type:\s*"(\w+)"/g)].map((m) => m[1]);
+    expect(owned.length, "scraped no message types off wire.ts — the scrape broke").toBeGreaterThan(3);
+
+    for (const meshFile of ["src/mesh.ts", "../typescript/src/mesh.ts"]) {
+      const source = readFileSync(resolve(pkgRoot, meshFile), "utf8");
+      const inlined = owned.filter((type) => source.includes(`"${type}"`));
+      expect(
+        inlined,
+        `${meshFile} names ${inlined.join(", ")} as a string literal. Those shapes belong to wire.ts, ` +
+          `where the field names are checked against the C# records — building the message inline ` +
+          `re-opens exactly the drift #1475 came from.`,
+      ).toEqual([]);
+    }
   });
 });
