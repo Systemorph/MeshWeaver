@@ -442,6 +442,94 @@ public class OAuthConnectControllerTests(ITestOutputHelper output) : MonolithMes
         ((int)t.GetProperty("expires_in")!.GetValue(body)!).Should().BeGreaterThan(0);
     }
 
+    /// <summary>
+    /// Issue #1493 — a re-authorization must REPLACE this client's credential, not add one.
+    ///
+    /// <para>Every `/token` exchange minted a fresh 365-day token and left the previous one live and
+    /// listed. A reinstall, a new device, or a revoked-and-reconnected integration therefore each
+    /// left another usable key behind, for a year. That is what dominated the 86 `ApiToken` rows
+    /// found on the live portal — and every one of them still opens the door.</para>
+    ///
+    /// <para>🚨 The ordering matters as much as the count: mint FIRST, supersede after. Revoking
+    /// before the mint would strand the client with no credential at all if the mint failed. The
+    /// surviving token here is the one from the SECOND exchange, which is what proves that order.</para>
+    /// </summary>
+    [Fact]
+    public async Task Token_SecondAuthorizationForTheSameClient_ReplacesTheCredentialRatherThanAddingOne()
+    {
+        var controller = CreateController(AuthenticatedUser("carol@example.com", "Carol"));
+
+        var reg = ((ObjectResult)controller.RegisterClient(new ClientRegistrationRequest
+        {
+            ClientName = "Reconnecting Client",
+            RedirectUris = ["https://claude.ai/cb"],
+        })!).Value as ClientRegistrationResponse;
+
+        var first = await AuthorizeAndExchange(controller, reg!.ClientId);
+        var second = await AuthorizeAndExchange(controller, reg.ClientId);
+
+        first.Should().NotBe(second, "each authorization mints its own credential");
+
+        // A fresh service instance over the SAME mesh — the token rows live in the mesh, not in the
+        // service, and the controller builds its own provider (see CreateController).
+        var service = new ApiTokenService(
+            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
+            Mesh,
+            Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
+            Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>());
+
+        // The credential just issued must WORK — the superseding runs after the mint, never before,
+        // and this is what would fail if that order were ever reversed.
+        var live = await service.ValidateToken(second).Should().Within(30.Seconds()).Match(v => v is not null);
+        live.Should().NotBeNull();
+
+        var label = $"OAuth: {reg.ClientId}";
+
+        // Wait on the actual condition — exactly one token carrying this client's label.
+        var remaining = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => service.GetTokensForUser(live!.UserId).Take(1))
+            .Select(all => all.Where(t => t.Label == label).ToArray())
+            .Should().Within(30.Seconds()).Match(t => t.Length == 1);
+
+        remaining.Should().HaveCount(1,
+            "a client that re-authorizes must end with ONE live credential, not one per authorization");
+    }
+
+    /// <summary>Runs authorize → token for an already-registered client and returns the raw mw_ token.</summary>
+    private async Task<string> AuthorizeAndExchange(OAuthConnectController controller, string clientId)
+    {
+        var verifier = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+        var challenge = Convert.ToBase64String(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)))
+            .Replace("+", "-").Replace("/", "_").TrimEnd('=');
+
+        var redirect = (RedirectResult)await controller.Authorize(
+            response_type: "code",
+            client_id: clientId,
+            redirect_uri: "https://claude.ai/cb",
+            state: "s",
+            scope: "mcp",
+            code_challenge: challenge,
+            code_challenge_method: "S256",
+            ct: TestContext.Current.CancellationToken);
+
+        var code = Uri.UnescapeDataString(
+            redirect.Url["https://claude.ai/cb?code=".Length..redirect.Url.IndexOf("&state=")]);
+        await AwaitCodeVisible(code);
+
+        var result = await controller.ExchangeToken(new TokenRequest
+        {
+            grant_type = "authorization_code",
+            code = code,
+            client_id = clientId,
+            redirect_uri = "https://claude.ai/cb",
+            code_verifier = verifier,
+        }, TestContext.Current.CancellationToken).ToObservable().Should().Within(30.Seconds()).Emit() as OkObjectResult;
+
+        var body = result!.Value!;
+        return (string)body.GetType().GetProperty("access_token")!.GetValue(body)!;
+    }
+
     [Fact]
     public async Task Token_WithWrongPkceVerifier_Returns400InvalidGrant()
     {
