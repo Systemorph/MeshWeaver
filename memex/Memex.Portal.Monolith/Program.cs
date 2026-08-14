@@ -84,9 +84,7 @@ builder.UseMeshWeaver(
                 .AddFileSystemDataSource("Cornerstone", "Cornerstone",
                     Path.Combine(graphBasePath, "Cornerstone"), "Sample Cornerstone data")
                 .AddFileSystemDataSource("FutuRe", "FutuRe",
-                    Path.Combine(graphBasePath, "FutuRe"), "Sample FutuRe reinsurance data")
-                .AddFileSystemDataSource("SocialMedia", "Social Media",
-                    Path.Combine(graphBasePath, "SocialMedia"), "Social media post planning demo");
+                    Path.Combine(graphBasePath, "FutuRe"), "Sample FutuRe reinsurance data");
         }
 
         return config.UseMonolithMesh();
