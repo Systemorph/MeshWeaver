@@ -63,6 +63,7 @@ if (rootNode is null)
     throw new InvalidOperationException("Source node not found: " + sourcePath);
 
 var jsonOptions = Mesh.JsonSerializerOptions;
+// Phase 2 of #1576 moves this behind ExportDeclaration.Composition; see ExportPdf.csx.
 var isDeck = DeckNodeType.Matches(rootNode.NodeType);
 var title = explicitTitle
             ?? options.Title

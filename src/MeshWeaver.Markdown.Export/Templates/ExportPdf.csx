@@ -69,6 +69,8 @@ List<ExportChapter> chapters;
 DocumentExportOptions effectiveOptions;
 string title;
 
+// Phase 2 of #1576 moves this branch behind ExportDeclaration.Composition (the request will
+// carry the declared composition); until then the suffix-aware type check stays the dispatch.
 if (DeckNodeType.Matches(rootNode.NodeType))
 {
     // ── Deck → PDF: one chapter per slide, in the deck's own order ──────────────

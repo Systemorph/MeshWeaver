@@ -66,6 +66,8 @@ public static class DeckNodeType
         Icon = DeckIcon,
         HubConfiguration = config => config
             .AddDeckViews()
+            // The Export node-menu group + composition: PDF / Email, one page per slide.
+            .WithExport(ExportDeclaration.SlideDeck)
             .AddMeshDataSource(s => s.WithContentType<DeckContent>())
             // Creating a child from a Deck offers Slide — the deck's natural content.
             .AddCreatableTypes(SlideNodeType.NodeType)

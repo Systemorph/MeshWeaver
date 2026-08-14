@@ -46,6 +46,8 @@ public static class MarkdownNodeType
         Icon = "/static/NodeTypeIcons/document.svg",
         HubConfiguration = config => config
             .AddMarkdownViews()
+            // The Export node-menu group + composition: PDF / Email / DOCX over the node's body.
+            .WithExport(ExportDeclaration.Document)
             .AddMeshDataSource(s => s.WithContentType<MarkdownContent>())
             .AddContentCollections()
             .AddComments()
