@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Text;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -528,13 +529,24 @@ internal static class NodeTypeBatchBake
     /// through <c>ContentAs</c>, so a node whose content arrived as untyped JSON still counts;
     /// anything that does not read back as code contributes nothing rather than throwing, because a
     /// diagnostic must never be able to fail the operation it is describing.
+    ///
+    /// <para>Counted as UTF-8 bytes, not <c>string.Length</c>. A .NET string measures UTF-16 code
+    /// units, so a `Length` sum reported as "KB" would disagree with the size of the same source on
+    /// disk, in the repo, and in every other byte figure this line sits next to — and would drift by
+    /// a different amount per type depending on how much non-ASCII each one carries (this codebase's
+    /// sources are full of — and 🚨 in comments). A correlate that is only accidentally right for
+    /// pure-ASCII input is not a measurement.</para>
     /// </summary>
     private static long SourceBytesOf(IMessageHub mesh, IReadOnlyList<MeshNode> sources)
     {
         var options = mesh.JsonSerializerOptions;
         var total = 0L;
         foreach (var node in sources)
-            total += node.ContentAs<CodeConfiguration>(options)?.Code?.Length ?? 0;
+        {
+            var code = node.ContentAs<CodeConfiguration>(options)?.Code;
+            if (!string.IsNullOrEmpty(code))
+                total += Encoding.UTF8.GetByteCount(code);
+        }
         return total;
     }
 
