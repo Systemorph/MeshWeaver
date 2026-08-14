@@ -93,4 +93,45 @@ describe("Mesh ops (gRPC-web, in-memory)", () => {
     expect(deliveries.some((d) => d.target === "mesh/main")).toBe(false);
     mesh.close();
   });
+
+  // The half the address assertions above could not see (issue #1475): WHAT is in the body. The
+  // records are MoveNodeRequest(SourcePath, TargetPath) / CopyNodeRequest(SourcePath, TargetPath),
+  // and an unmatched member is dropped without a word — so a move that "resolved" moved nothing.
+  // wireContract.test.ts checks these names against the C# records; this checks Mesh really sends them.
+  it("move/copy/delete/patch send the record's OWN field names", async () => {
+    const sent = new Map<string, Record<string, unknown>>();
+    const mesh = await Mesh.connect("memory://", {
+      transport: fakeMeshTransport({ onDeliver: (d) => sent.set(d.messageType ?? "", d.message) }),
+    });
+    // patch/execute are fire-and-forget posts; the awaited round-trips below are issued after them
+    // on the same transport, so their responses landing proves the posts were delivered first.
+    mesh.patch("ACME/A", { name: "renamed" });
+    mesh.execute("ACME/Job");
+    await mesh.delete("ACME/Old");
+    await mesh.move("ACME/A", "ACME/B");
+    await mesh.copy("ACME/A", "ACME/C");
+
+    expect(sent.get("DeleteNodeRequest")).toMatchObject({ path: "ACME/Old" });
+    expect(sent.get("MoveNodeRequest")).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/B" });
+    expect(sent.get("CopyNodeRequest")).toMatchObject({ sourcePath: "ACME/A", targetPath: "ACME/C" });
+    // PatchDataRequest(Reference, Patch) — the reference needs its polymorphic $type or it resolves
+    // against nothing, and execute()'s trigger lives on the CONTENT (MeshNode has no RequestedStatus).
+    // The map keeps the last PatchDataRequest, which is execute()'s.
+    expect(sent.get("PatchDataRequest")).toMatchObject({
+      reference: { $type: "MeshNodeReference", path: "ACME/Job" },
+      patch: { content: { requestedStatus: "Running" } },
+    });
+    mesh.close();
+  });
+
+  it("watch subscribes with a $type-carrying MeshNodeReference", async () => {
+    const sent: Record<string, unknown>[] = [];
+    const mesh = await Mesh.connect("memory://", {
+      transport: fakeMeshTransport({ onDeliver: (d) => d.messageType === "SubscribeRequest" && sent.push(d.message) }),
+    });
+    await mesh.get("ACME/Stories/42");
+    expect(sent[0]).toMatchObject({ reference: { $type: "MeshNodeReference", path: "ACME/Stories/42" } });
+    expect(sent[0].streamId).toBeTruthy();
+    mesh.close();
+  });
 });
