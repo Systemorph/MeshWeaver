@@ -54,7 +54,15 @@ ok()      { echo "$1";          summary "- ✅ $1"; }
 # ---------------------------------------------------------------------------
 missing=()
 command -v helm    >/dev/null 2>&1 || missing+=("helm      not on PATH — brew install helm / azure/setup-helm")
-command -v python3 >/dev/null 2>&1 || missing+=("python3   not on PATH — needed to parse the rendered manifests")
+if ! command -v python3 >/dev/null 2>&1; then
+  missing+=("python3   not on PATH — needed to parse the rendered manifests")
+# PyYAML is a THIRD-PARTY module, not part of the standard library. It happens to be present on
+# GitHub's hosted runners today, which is exactly why it is asserted here: an unstated dependency
+# that works by luck breaks on a runner-image bump, and it would break as a Python traceback rather
+# than as a preflight naming what to install. A gate's dependencies are inputs like any other.
+elif ! python3 -c "import yaml" >/dev/null 2>&1; then
+  missing+=("PyYAML    python3 has no 'yaml' module — pip install pyyaml (or apt-get install python3-yaml)")
+fi
 [ -d "$CHART" ] || missing+=("chart     not found at '$CHART'")
 [ -f "$PVCS" ]  || missing+=("pvcs      not found at '$PVCS' — the RWX assertion reads it")
 if [ ${#missing[@]} -gt 0 ]; then

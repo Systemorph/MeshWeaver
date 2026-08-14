@@ -123,7 +123,14 @@ missing=()
 [ -n "$RELEASE" ] || missing+=("-r <release>              the helm release name (e.g. memex, exampledb)")
 [ ${#VALUES[@]} -gt 0 ] || missing+=("-f <values.yaml>          at least one env values file — rendering with chart defaults compares against a chart nobody deployed. These live in the PRIVATE Systemorph/Memex repo.")
 command -v helm    >/dev/null 2>&1 || missing+=("helm                      not on PATH — brew install helm")
-command -v python3 >/dev/null 2>&1 || missing+=("python3                   not on PATH — needed to parse the manifests")
+if ! command -v python3 >/dev/null 2>&1; then
+  missing+=("python3                   not on PATH — needed to parse the manifests")
+# PyYAML is third-party, not stdlib. The compare phase below imports it, so assert it HERE: without
+# this the check dies mid-run with a traceback instead of naming what to install, and a dependency
+# that is present only by luck of the runner image is an unstated input.
+elif ! python3 -c "import yaml" >/dev/null 2>&1; then
+  missing+=("PyYAML                    python3 has no 'yaml' module — pip install pyyaml (or apt-get install python3-yaml)")
+fi
 [ -d "$CHART" ]   || missing+=("-c <chart-dir>            chart not found at '$CHART'")
 for v in ${VALUES[@]+"${VALUES[@]}"}; do
   [ -f "$v" ] || missing+=("-f '$v'                   values file does not exist")

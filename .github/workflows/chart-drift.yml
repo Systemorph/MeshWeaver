@@ -107,6 +107,12 @@ jobs:
         uses: azure/setup-helm@v4
         with:
           version: v3.16.3
+      # PyYAML is third-party — the script's compare phase imports it. Installed explicitly rather
+      # than relied on from the runner image; the script's preflight asserts it either way.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
