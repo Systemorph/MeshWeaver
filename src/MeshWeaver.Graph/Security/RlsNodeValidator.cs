@@ -5,7 +5,6 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Graph.Security;
 
@@ -36,10 +35,16 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator
         _accessRules = accessRules
             .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
-        // Genuinely optional configuration — a host that sets nothing gets the production default.
+        // 🚨 DERIVED from the enclosing mesh-operation budget, never configured on its own — issue
+        // #1198. This bound only earns its keep by firing BEFORE the operation that encloses it,
+        // and the previous shape (its own options class, its own 30 s default) made that ordering
+        // an accident of two numbers happening to be unequal. They were equal, so this bound could
+        // never win and every starved delete reported its caller's impatience instead of the read
+        // that starved. MeshOperationOptions.PermissionEstablishmentBudget is the deepest rung of
+        // a ladder that contracts by construction — see that type.
         _establishmentBudget =
-            (hub.ServiceProvider.GetService<IOptions<RowLevelSecurityOptions>>()?.Value
-                ?? new RowLevelSecurityOptions()).PermissionEstablishmentBudget;
+            (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
     }
 
     /// <summary>

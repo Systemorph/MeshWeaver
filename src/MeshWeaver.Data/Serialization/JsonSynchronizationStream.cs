@@ -1150,7 +1150,8 @@ public static class JsonSynchronizationStream
                     {
                         // Apply patch with correct RFC 6901 unescaping
                         // The json-everything library doesn't properly unescape ~1 -> / in property names
-                        (currentJson, _) = ApplyPatchWithCorrectUnescaping(patchJson, currentJson.Value, stream.Host.JsonSerializerOptions);
+                        currentJson = ApplyPatchWithoutReturningPatch(
+                            patchJson, currentJson.Value, stream.Host.JsonSerializerOptions);
                     }
                     catch (StaleStreamStateException stale)
                     {
@@ -1276,7 +1277,41 @@ public static class JsonSynchronizationStream
         return ApplyPatchWithCorrectUnescaping(request.Change.Content, currentJson.Value, options);
     }
 
-    private static (JsonElement, JsonPatch) ApplyPatchWithCorrectUnescaping(string patchJson, JsonElement currentJson, JsonSerializerOptions options)
+    /// <summary>
+    /// Applies the patch and hands back the parsed patch alongside the result, for the callers that
+    /// forward it on.
+    /// </summary>
+    private static (JsonElement, JsonPatch) ApplyPatchWithCorrectUnescaping(
+        string patchJson, JsonElement currentJson, JsonSerializerOptions options)
+    {
+        var (result, applied) = ApplyPatchCore(patchJson, currentJson, options, wantAppliedPatch: true);
+        // Non-null by construction on this path — the core only returns null when the caller said it
+        // does not want the patch, and the alternative to asserting that here is handing every caller
+        // a nullable they would each have to reason about.
+        return (result, applied!);
+    }
+
+    /// <summary>
+    /// Applies the patch and returns ONLY the result — for the fan-out, which discards the patch.
+    ///
+    /// <para>🚨 A separate entry point rather than a flag returning <c>null!</c>: the parse is real,
+    /// per-subscriber, per-frame work with no consumer on this path (issue #1284), but skipping it
+    /// must not leave a null in a non-nullable tuple slot for the next caller to trip over. An empty
+    /// <c>JsonPatch</c> would be worse than either — it reads as "a patch with no operations", so a
+    /// future caller would get a silently wrong answer instead of a loud one.</para>
+    /// </summary>
+    private static JsonElement ApplyPatchWithoutReturningPatch(
+        string patchJson, JsonElement currentJson, JsonSerializerOptions options)
+        => ApplyPatchCore(patchJson, currentJson, options, wantAppliedPatch: false).Result;
+
+    /// <param name="wantAppliedPatch">
+    /// Whether the caller reads the patch. Re-parsing <paramref name="patchJson"/> for a caller that
+    /// drops it is per-subscriber, per-frame work with no consumer — issue #1284. The already-built
+    /// <c>fallbackPatch</c> branch below costs nothing either way and is returned regardless.
+    /// </param>
+    private static (JsonElement Result, JsonPatch? Applied) ApplyPatchCore(
+        string patchJson, JsonElement currentJson, JsonSerializerOptions options,
+        bool wantAppliedPatch)
     {
         using var doc = JsonDocument.Parse(patchJson);
         var currentNode = JsonSerializer.SerializeToNode(currentJson, options);
@@ -1346,9 +1381,14 @@ public static class JsonSynchronizationStream
 
         // Serialize back to JsonElement
         var resultElement = JsonSerializer.SerializeToElement(currentNode, options);
-        // Create a dummy patch for the return value (we don't use it on the receiving end)
-        var dummyPatch = JsonSerializer.Deserialize<JsonPatch>(patchJson, options)!;
-        return (resultElement, dummyPatch);
+        // 🚨 Re-parsing patchJson into a JsonPatch is only worth doing for a caller that reads it —
+        // issue #1284. This ran on the FAN-OUT path too, once per subscriber per frame, and the
+        // comment beside it ("we don't use it on the receiving end") was describing the very caller
+        // that discards it. For an un-negotiated subscriber the patch still carries whole values, so
+        // the parse it threw away was O(document).
+        return (resultElement, wantAppliedPatch
+            ? JsonSerializer.Deserialize<JsonPatch>(patchJson, options)!
+            : null);
     }
 
     private static string[] ParsePathSegments(string path)

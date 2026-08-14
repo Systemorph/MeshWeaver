@@ -1,6 +1,7 @@
 {
   "$type": "MeshNode",
-  "id": "Cornerstone/Nestle/jx_PROf-kE2V7RFGcc3U8g/OrdcwC3__E2Hi_6ZqEwLnA",
+  "id": "OrdcwC3__E2Hi_6ZqEwLnA",
+  "namespace": "Cornerstone/Nestle/jx_PROf-kE2V7RFGcc3U8g",
   "path": "Cornerstone/Nestle/jx_PROf-kE2V7RFGcc3U8g/OrdcwC3__E2Hi_6ZqEwLnA",
   "nodeType": "ThreadMessage",
   "icon": "/static/NodeTypeIcons/message.svg",

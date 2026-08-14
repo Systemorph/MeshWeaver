@@ -21,7 +21,7 @@ namespace MeshWeaver.Data.Serialization;
 /// and reduced/derived streams are produced through the <see cref="ReduceManager"/>.
 /// </summary>
 /// <typeparam name="TStream">Type of the state carried by the stream.</typeparam>
-public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
+public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, IStreamLivenessSource
 {
     /// <summary>
     /// The stream reference, i.e. the unique identifier of the stream.
@@ -150,10 +150,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 throw;
             }
 
-            // Same liveness contract as Workspace.GetStream: a cached child whose sub-hub is gone
-            // is replaced rather than handed out dead.
-            if (reduced.Hub?.RunLevel <= MessageHubRunLevel.Started
-                && reduced.Hub is not MessageHub { IsDisposing: true })
+            // Same liveness contract as Workspace.GetStream — literally the same predicate, so the
+            // two cannot drift apart again (they did: #1455).
+            if (StreamLiveness.IsUsable(reduced))
                 return (ISynchronizationStream<TReduced>)reduced;
 
             Remove(reference, lazy);
@@ -217,6 +216,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     private bool isDisposed;
     private readonly object disposeLock = new();
     private readonly ILogger<SynchronizationStream<TStream>> logger;
+
+    /// <summary>
+    /// The stream this one was reduced FROM — set by <c>WorkspaceStreams.CreateReducedStream</c>,
+    /// null for a stream that is not a reduce of another. INTERNAL on purpose: it exists so
+    /// <see cref="StreamLiveness.IsUsable"/> can walk the reduce chain in one place, and is exposed
+    /// through <see cref="IStreamLivenessSource"/> rather than the public stream contract.
+    /// </summary>
+    internal ISynchronizationStream? Source { get; init; }
+
+    /// <inheritdoc />
+    ISynchronizationStream? IStreamLivenessSource.Source => Source;
+
+    /// <inheritdoc />
+    bool IStreamLivenessSource.IsDisposed => isDisposed;
 
     // Mirror of MeshWeaver.Mesh.Security.WellKnownUsers.System — Data sits below
     // Mesh.Contract in the project graph and cannot reference it. Same literal

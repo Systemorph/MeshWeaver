@@ -736,6 +736,15 @@ public record LayoutAreaHost : IDisposable
             // being rendered), not an engineering fault — Warning, so error dashboards
             // don't page / auto-file an incident for "user opened a node they cannot read".
             logger.LogWarning(ex, "Rendering denied for area {Area}: {Message}", area, ex.Message);
+        else if (AreaErrorClassifier.IsNodeGoneNotFound(ex))
+            // The area rendered fine; the DATA it points at is absent — a deck manifest naming a
+            // slide nobody created, an embed left behind by a delete, a copied page whose relative
+            // reference does not resolve where it now lives (#1456). That is an authoring fault to
+            // be fixed in content, not an engineering fault, so it logs at Warning for the same
+            // reason a denial does: it must not page or auto-file an incident. It stays LOGGED —
+            // the reference really is broken and somebody should fix it.
+            logger.LogWarning(ex, "Area {Area} references a node that does not exist: {MissingPath}",
+                area, AreaErrorClassifier.TryGetMissingNodePath(ex) ?? "(path not recoverable)");
         else
             logger.LogError(ex, "Rendering failed for area {Area}", area);
         try
@@ -763,11 +772,33 @@ public record LayoutAreaHost : IDisposable
     /// error panel carrying the exception message so the cause stays visible.
     /// </summary>
     private UiControl CreateRenderErrorControl(Exception ex)
-        => AreaErrorClassifier.IsAccessDenied(ex)
-            ? Controls.Markdown(
-                $"**{this.Localize("error.accessDenied")}**\n\n{this.Localize("error.accessDeniedHint")}")
-            : Controls.Markdown(
-                $"⚠️ **This area failed to render.**\n\n```\n{ex.Message}\n```");
+    {
+        if (AreaErrorClassifier.IsAccessDenied(ex))
+            return Controls.Markdown(
+                $"**{this.Localize("error.accessDenied")}**\n\n{this.Localize("error.accessDeniedHint")}");
+
+        // A reference to a node that does not exist is DATA, not a programming error. Render a
+        // localized frame that names the broken path — never the routing diagnostic wrapped around
+        // it ("Closest ancestor is … remainder=…"), which is framework-internal and must not reach
+        // an end user. Stamped with the well-known id so a consumer can tell this THIRD state from
+        // "the area does not exist" (area-not-found) and "the area is still compiling"
+        // (compile-progress) — see AreaFrameClassifier (#1456, following #1420).
+        if (AreaErrorClassifier.IsNodeGoneNotFound(ex))
+        {
+            var missing = AreaErrorClassifier.TryGetMissingNodePath(ex);
+            var body = this.Localize("error.missingReferenceHint");
+            if (!string.IsNullOrEmpty(missing))
+                body = $"{body}\n\n`{missing}`";
+            return new MarkdownControl($"**{this.Localize("error.missingReference")}**\n\n{body}")
+            {
+                Id = AreaFrameClassifier.MissingReferenceId
+            };
+        }
+
+        // `error.areaFailed` already existed in both catalogs; this banner was hard-coded English.
+        return Controls.Markdown(
+            $"⚠️ **{this.Localize("error.areaFailed")}**\n\n```\n{ex.Message}\n```");
+    }
 
     /// <summary>
     /// Reactive render of a top-level area whose generator is an observable of
