@@ -242,9 +242,12 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         // No hub initialization needed â€” RoutingMeshQueryProvider discovers
         // partitions via DiscoverNewProvidersAsync during the query.
 
-        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        // Wait for the emission that CONTAINS the node, never the first Initial: the catalog
+        // hydrates asynchronously, so an early Initial can be empty and the node arrive as Added.
+        // ("No write before, so no CQRS lag" was the premise this carried; CQRS lag is not the only
+        // way an Initial is incomplete — see #1384.)
         var parentNode = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path}"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.FirstOrDefault();
+            .Should().Match(c => c.Items.Any(n => n.Path == CommentC1Path))).Items.First(n => n.Path == CommentC1Path);
         parentNode.Should().NotBeNull("Parent comment c1 should exist");
         parentNode!.Id.Should().Be("c1");
         parentNode.Namespace.Should().Be(DocPath + "/_Comment");
@@ -253,10 +256,10 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         parentComment.Should().NotBeNull();
         Output.WriteLine($"Parent: Id={parentNode.Id}, Path={parentNode.Path}, Author={parentComment!.Author}");
 
-        // Static node read â€” no write before, catalog read is correct (no CQRS lag).
+        // Same wait-for-the-node shape as above.
         // (Per-node hub routing for nested replies returns the parent c1, not reply1.)
         var replyNode = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{ReplyPath}"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items.FirstOrDefault();
+            .Should().Match(c => c.Items.Any(n => n.Path == ReplyPath))).Items.First(n => n.Path == ReplyPath);
         replyNode.Should().NotBeNull("Reply node should exist");
         replyNode!.Id.Should().Be("reply1", "Reply Id should be the local file name, not the full path");
         replyNode.Namespace.Should().Be(CommentC1Path);
@@ -266,8 +269,9 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine($"Reply: Id={replyNode.Id}, Path={replyNode.Path}, Author={replyComment!.Author}");
 
         // Load children of c1 via subtree query
+        // Wait for the snapshot that has reply1 — the assertion below is what we are waiting FOR.
         var children = (await MeshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{CommentC1Path} scope:subtree"))
-            .Should().Match(c => c.ChangeType == QueryChangeType.Initial)).Items;
+            .Should().Match(c => c.Items.Any(n => n.Id == "reply1"))).Items;
         foreach (var child in children)
         {
             Output.WriteLine($"Subtree: Id={child.Id}, Path={child.Path}, NodeType={child.NodeType}");
