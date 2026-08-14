@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using MeshWeaver.Blazor.Infrastructure; // PortalApplication
+using MeshWeaver.Mesh.Security;         // ApiToken (the minted token content)
 using MeshWeaver.Messaging;             // AccessService / AccessContext
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -315,7 +316,8 @@ public class OAuthConnectController(
                     // Ordered mint-THEN-supersede, never the reverse: if the mint fails the client
                     // must keep the credential it already has, so revoking first could strand it
                     // with none at all.
-                    .SelectMany(creation => SupersedePreviousTokens(entry.UserId, label, creation.Node.Path)
+                    .SelectMany(creation => SupersedePreviousTokens(
+                            entry.UserId, label, creation.Node.Path, MintedAt(creation))
                         .Select(_ => creation))
                     .Select(creation =>
                     {
@@ -350,15 +352,29 @@ public class OAuthConnectController(
     /// that could not complete is a Warning and the next authorization tries again.</para>
     /// </summary>
     private IObservable<System.Reactive.Unit> SupersedePreviousTokens(
-        string userId, string label, string keepPath)
+        string userId, string label, string keepPath, DateTimeOffset mintedAt)
     {
         var tokens = TokenService;
         return tokens.GetTokensForUser(userId)
             .Take(1)
             .SelectMany(all =>
             {
+                // 🚨 Supersede only what is strictly OLDER, in a TOTAL order — never "everything
+                // that is not mine". Two concurrent exchanges for the same (user, client_id) each
+                // see the other's freshly-minted token in this listing, and a not-mine rule would
+                // have them delete each other's: both clients then walk away holding a credential
+                // that was removed moments later. Ordering by (CreatedAt, path) makes the outcome
+                // convergent instead — every participant deletes strictly below itself, so the
+                // NEWEST token survives no matter which exchange evaluates last, and there is
+                // still exactly one live credential at the end.
+                //
+                // The path tiebreak matters: CreatedAt is a UTC timestamp and two exchanges can
+                // land on the same tick, where "strictly older by time" would let both survive.
                 var superseded = all
                     .Where(t => t.Label == label && t.NodePath != keepPath)
+                    .Where(t => t.CreatedAt < mintedAt
+                                || (t.CreatedAt == mintedAt
+                                    && string.CompareOrdinal(t.NodePath, keepPath) < 0))
                     .Select(t => t.NodePath)
                     .ToArray();
                 if (superseded.Length == 0)
@@ -389,6 +405,15 @@ public class OAuthConnectController(
                 return Observable.Return(System.Reactive.Unit.Default);
             });
     }
+
+    /// <summary>
+    /// The creation stamp of the token this exchange just minted — the ordering key
+    /// <see cref="SupersedePreviousTokens"/> compares against. Falls back to "now" if the content
+    /// is not the expected shape, which only ever makes the sweep MORE conservative on the tie
+    /// (it can then supersede a token minted in the same instant, never a newer one).
+    /// </summary>
+    private static DateTimeOffset MintedAt(TokenCreationResult creation) =>
+        creation.Node.Content is ApiToken t ? t.CreatedAt : DateTimeOffset.UtcNow;
 
     /// <summary>
     /// Lifetime for OAuth-issued API tokens. Single source of truth — the
