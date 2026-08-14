@@ -1,7 +1,11 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using MeshWeaver.Data;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.InstanceSync.Test;
@@ -107,6 +111,78 @@ public class InstanceSyncPullTest(ITestOutputHelper output) : InstanceSyncTestBa
         await Task.Delay(1000, TestContext.Current.CancellationToken);
         (await ReadNode("pull4/remote-only").Timeout(10.Seconds()).ToTask())
             .Should().BeNull("PushOnly sources must not pull remote changes");
+    }
+
+    /// <summary>
+    /// 🚨 THE RESURRECTION GUARD (#1471). A local node whose DELETE is in flight must not be
+    /// re-applied by the pull sweep — not even when the remote copy is strictly newer.
+    ///
+    /// <para><c>PullOne</c> used to read the local side with
+    /// <c>GetMeshNode(...).Catch(_ =&gt; null)</c> and treat any <c>null</c> as "not there ⇒ create
+    /// it". That single <c>null</c> meant three things: genuine absence, the owner's
+    /// delete-in-progress TOMBSTONE (null by design), and "the read failed". So a delete in flight
+    /// was answered by re-creating the node — and, because the apply registers the path in the
+    /// consume-once echo-suppression slot, it could swallow the very <c>Deleted</c> event the push
+    /// side needs, leaving the remote holding a node the user deleted here
+    /// (<c>Local_delete_propagates_to_remote</c>'s CI timeout).</para>
+    ///
+    /// <para>The window is the production one, created the production way: the delete handler marks
+    /// <c>RecentlyDeletedRegistry</c> SYNCHRONOUSLY before the row goes, so "marked, node still
+    /// there" IS the in-flight state.</para>
+    ///
+    /// <para>🚨 The assertion SUBSCRIBES the local node's own stream and requires that the
+    /// resurrected content never arrives on it — the sanctioned negative shape (<c>NotEmit</c>:
+    /// "the one place a fixed wait is correct — a 'nothing should happen' test has no positive
+    /// signal to await"). No interval probe, no <c>FirstAsync</c>, no sampled property: the window
+    /// spans ~10 pull sweeps at the test's 200 ms interval, and the closing assertion proves from
+    /// the remote's own call log that sweeps really did run — so the negative cannot pass because
+    /// nothing happened at all.</para>
+    /// </summary>
+    [Fact]
+    public async Task Pull_does_not_resurrect_a_node_whose_delete_is_in_flight()
+    {
+        await CreateSpace("pull6");
+        await CreateMarkdown("pull6/doc", "Doc", "local v1");
+        await AddConfiguredSource("pull6");
+        await WaitForConfig("pull6", "partner", c => c.InitialSyncAt is not null);
+        await WaitForRemote(r => r.Node("pull6/doc") is not null);
+
+        // 🔻 Enter the delete-in-flight window BEFORE the remote moves, so the sweep that picks the
+        // hit up can only ever see the tombstone.
+        var tombstones = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        tombstones.MarkDeleted("pull6/doc");
+
+        // A strictly NEWER remote edit: without the fix this is applied unconditionally, because a
+        // null local read short-circuits both the content and the newest-writer comparison.
+        Remote.Seed(Remote.Node("pull6/doc")! with
+        {
+            Content = new MarkdownContent { Content = "remote v2" },
+        }, DateTimeOffset.UtcNow.AddMinutes(1));
+
+        var getsBefore = Remote.Calls.Count(c => c is { Op: "get", Path: "pull6/doc" });
+
+        // Subscribe the node's OWN stream — not GetMeshNode, whose tombstone answer is the thing
+        // under test, and not a sampled read. The resurrected content must never arrive on it.
+        await Mesh.GetHostedHub(new Address("test-reader-pull6"), c => c.AddData())!
+            .GetMeshNodeStream("pull6/doc")
+            .Select(MarkdownBody)
+            .Where(body => body == "remote v2")
+            .Should().NotEmit(3.Seconds(),
+                "the local delete is in flight — re-applying the remote copy resurrects content "
+                + "the user is deleting. 'remote v2' arriving here means PullOne read the delete "
+                + "tombstone as 'absent, therefore create'");
+
+        // …and the window was not empty: the sweep really did fetch this hit and decide about it.
+        // Read after the fact from the remote's own call log — a statement about what happened,
+        // never a gate.
+        Remote.Calls.Count(c => c is { Op: "get", Path: "pull6/doc" }).Should().BeGreaterThan(getsBefore,
+            "without a sweep actually fetching the moved hit the negative assertion above would "
+            + "pass vacuously — nothing would have had the chance to resurrect anything");
+
+        var cfg = await Sync.ReadConfig("pull6", "partner").Should().Within(10.Seconds()).Emit();
+        cfg!.LastError.Should().BeNull(
+            "skipping a hit whose local delete is in flight is a normal, expected decision — not a "
+            + "sync error, and not a reason to abort the sweep");
     }
 
     [Fact]

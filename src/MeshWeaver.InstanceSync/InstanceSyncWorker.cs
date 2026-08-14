@@ -159,7 +159,29 @@ public sealed class InstanceSyncWorker : IDisposable
     {
         if (disposed) return;
         if (!InstanceSyncService.IsSyncablePath(evt.Path, SpacePath)) return;
-        if (appliedInbound.TryRemove(evt.Path, out _)) return;
+        // 🚨 The slot is CONSUMED by whichever event arrives first, but only a NON-delete is
+        // SUPPRESSED. Those two used to be one act, and both couplings are wrong in a different
+        // direction:
+        //
+        //  * Consume-and-suppress together (the original) swallowed a local Deleted as if it were
+        //    the echo of a pull-apply. It never was — ApplyLocal is a CreateOrUpdate and cannot
+        //    produce a Deleted — and the deletion was then dropped from the manifest permanently,
+        //    leaving the remote holding a node the user deleted here.
+        //  * Suppress-and-consume together (leave the slot when a Deleted passes) LEAKS. The slot
+        //    is normally retired by its own echo, but a pull-apply that turns out to be a no-op
+        //    write produces NO echo at all, and the stale slot then swallows the next GENUINE
+        //    local change for that path — silent non-replication, which is worse.
+        //
+        // Consuming on a Deleted means the echo that follows is no longer suppressed and re-enters
+        // the manifest, where Coalesce (per path, latest wins) replaces the Deleted entry with it.
+        // That interleaving IS reachable — the apply's echo is a multi-hop round trip and a user
+        // delete can land inside it. It is nevertheless safe, but for ONE specific reason, which is
+        // therefore load-bearing: DrainOne resolves each entry against the CURRENT local state
+        // rather than trusting the recorded kind, so the node being gone makes the push degrade to
+        // a delete. If that ever changes, this comment is the thread to pull — and
+        // A_pending_content_change_pushes_a_DELETE_when_the_local_node_is_being_deleted pins it.
+        var hadPendingEcho = appliedInbound.TryRemove(evt.Path, out _);
+        if (hadPendingEcho && evt.Kind != MeshChangeKind.Deleted) return;
         if (lastKnownConfig is { Direction: InstanceSyncDirection.PullOnly }) return;
 
         // System scope: feed callbacks carry no ambient AccessContext (fails closed otherwise).
@@ -281,6 +303,25 @@ public sealed class InstanceSyncWorker : IDisposable
             });
     }
 
+    /// <summary>
+    /// Pushes one manifest entry. Same rule as <see cref="PullOne"/>, mirrored: the local read
+    /// decides between PUSH and DELETE-REMOTE, so it may not collapse its failure modes.
+    ///
+    /// <para>🚨 This used to read <c>GetMeshNode(...).Catch(_ =&gt; null)</c> and delete the REMOTE
+    /// node on any <c>null</c> — so a transient local read failure destroyed the remote copy.
+    /// "Deleted here" and "I could not look" are now different inputs: only a real absence (or a
+    /// delete in flight, which is heading for exactly that) degrades to a delete; an unreadable
+    /// local node fails the ENTRY, which keeps it pending and surfaces on the node as LastError
+    /// (see <see cref="DrainPending"/>) instead of silently destroying data.</para>
+    ///
+    /// <para>🚨 <b>Resolving against the CURRENT local state — not the recorded
+    /// <see cref="PendingChange.Kind"/> — is load-bearing beyond this method.</b> It is what makes
+    /// <see cref="OnLocalChange"/> safe to consume its echo-suppression slot on a Deleted: an echo
+    /// that then escapes suppression can coalesce OVER the Deleted manifest entry, and the only
+    /// thing that stops that resurrecting the remote copy is the read below reporting
+    /// <see cref="NodeReadStatus.Absent"/> / <see cref="NodeReadStatus.DeleteInProgress"/> and this
+    /// degrading to a delete. Do not "optimise" that read away for non-delete kinds.</para>
+    /// </summary>
     private IObservable<bool> DrainOne(IRemoteMeshClient remote, InstanceSyncConfig cfg, PendingChange change)
     {
         var remotePath = InstanceSyncService.RemapPath(change.Path, SpacePath, RemoteSpaceOf(cfg));
@@ -289,11 +330,22 @@ public sealed class InstanceSyncWorker : IDisposable
 
         // Push the node's CURRENT content; a node deleted since the change was observed
         // degrades to a delete.
-        return hub.GetMeshNode(change.Path, TimeSpan.FromSeconds(15))
-            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-            .SelectMany(local => local is null
-                ? DeleteRemote(remote, remotePath)
-                : PushNode(remote, cfg, local).Select(_ => true));
+        return hub.GetMeshNodeOutcome(change.Path, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
+            .SelectMany(outcome => outcome.Status switch
+            {
+                NodeReadStatus.Present => PushNode(remote, cfg, outcome.Node!).Select(_ => true),
+                NodeReadStatus.Absent => DeleteRemote(remote, remotePath),
+                // The local delete is in flight; the authoritative next state is "gone", and the
+                // manifest holds a Deleted entry for it too. Pushing the delete now is idempotent.
+                NodeReadStatus.DeleteInProgress => DeleteRemote(remote, remotePath),
+                NodeReadStatus.Unavailable => Observable.Throw<bool>(new InvalidOperationException(
+                    $"Cannot push {change.Path}: the local node could not be read "
+                    + $"({outcome.Failure?.Message}). Leaving the change pending rather than "
+                    + "deleting the remote copy on evidence that does not exist.")),
+                // A status this switch predates — never destroy the remote on it.
+                _ => Observable.Throw<bool>(new InvalidOperationException(
+                    $"Cannot push {change.Path}: unhandled read outcome '{outcome.Status}'.")),
+            });
     }
 
     private static IObservable<bool> DeleteRemote(IRemoteMeshClient remote, string remotePath) =>
@@ -428,6 +480,23 @@ public sealed class InstanceSyncWorker : IDisposable
     /// content is dropped (convergence guard), and the local write registers the path in the
     /// consume-once suppression registry FIRST so its own change-feed echo never re-enters the
     /// manifest. Emits whether a local write happened.
+    ///
+    /// <para>🚨 <b>The local read decides whether to WRITE, so it may not collapse its failure
+    /// modes.</b> This used to read <c>GetMeshNode(...).Catch(_ =&gt; null)</c> and treat any
+    /// <c>null</c> as "not there ⇒ create it" — but that one <c>null</c> meant three different
+    /// things: genuine absence, the owner's delete-in-progress TOMBSTONE (null by design), and
+    /// "the read failed". So a node whose delete was in flight got re-applied — a resurrection of
+    /// what a user had just deleted — and a transient read failure would equally have clobbered a
+    /// live local node with an older remote copy. <see cref="NodeReadStatus"/> keeps the three
+    /// apart, and the switch below has to NAME each one it acts on — with the fall-through arm
+    /// being the one that does not write (Systemorph/MeshWeaver#1471).</para>
+    ///
+    /// <para>🚨 <b><c>lastSeenRemote</c> is stamped only once the hit has actually been dealt
+    /// with.</b> Stamping it up front made every bad decision PERMANENT: the stamp is what
+    /// <see cref="HasRemoteStampMoved"/> uses to skip a hit, so a failed apply — or a hit skipped
+    /// because the local delete was still in flight — was never looked at again, with no path back
+    /// to correctness short of a remote edit. A skip that is not a decision therefore leaves the
+    /// stamp alone and the next sweep re-decides.</para>
     /// </summary>
     private IObservable<bool> PullOne(IRemoteMeshClient remote, InstanceSyncConfig cfg, RemoteSearchHit hit) =>
         remote.Get(hit.Path).SelectMany(remoteNode =>
@@ -437,24 +506,62 @@ public sealed class InstanceSyncWorker : IDisposable
                 lastSeenRemote.TryRemove(hit.Path, out _);
                 return Observable.Return(false);
             }
-            lastSeenRemote[hit.Path] = (remoteNode.Version, remoteNode.LastModified);
             var localPath = InstanceSyncService.RemapPath(hit.Path, RemoteSpaceOf(cfg), SpacePath);
-            return hub.GetMeshNode(localPath, TimeSpan.FromSeconds(15))
-                .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null))
-                .SelectMany(local =>
+            // EmitNull, so an unanswered read arrives as Unavailable (indeterminate) instead of
+            // throwing and aborting the whole sweep. It is still NEVER read as absence.
+            return hub.GetMeshNodeOutcome(localPath, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
+                .SelectMany(outcome => outcome.Status switch
                 {
-                    if (local is not null && service.ContentEquals(local, remoteNode))
-                        return Observable.Return(false);
-                    // Newest writer wins; ties keep the local side (the push direction owns it).
-                    if (local is not null && local.LastModified >= remoteNode.LastModified)
-                        return Observable.Return(false);
-                    var payload = InstanceSyncService.RebaseNode(remoteNode, localPath);
-                    appliedInbound[localPath] = 1;
-                    return ApplyLocal(payload)
-                        .Do(_ => logger?.LogDebug("Instance sync pulled {Path} from {Url}", localPath, cfg.RemoteUrl))
-                        .Select(_ => true)
-                        .Do(_ => { }, ex => appliedInbound.TryRemove(localPath, out _));
+                    NodeReadStatus.Present => Decide(outcome.Node!),
+                    NodeReadStatus.Absent => Apply(),
+                    // The local node is being deleted. Re-applying the remote copy would resurrect
+                    // it, and — because the apply registers the path in the echo-suppression slot —
+                    // could swallow the very Deleted event that has to be pushed to the remote.
+                    // Skip WITHOUT stamping: the next sweep decides against the settled state.
+                    NodeReadStatus.DeleteInProgress => Skip(
+                        "its local delete is still in flight"),
+                    // The read established nothing. "I could not look" is not "it is not there".
+                    NodeReadStatus.Unavailable => Skip(
+                        $"the local node could not be read ({outcome.Failure?.Message})"),
+                    // A status this switch predates. The conservative direction is the one that
+                    // does NOT write — but say so, because silence is how the three-way collapse
+                    // above stayed invisible for so long.
+                    _ => Skip($"unhandled read outcome '{outcome.Status}'"),
                 });
+
+            IObservable<bool> Decide(MeshNode local)
+            {
+                if (service.ContentEquals(local, remoteNode))
+                    return Settled(false);
+                // Newest writer wins; ties keep the local side (the push direction owns it).
+                if (local.LastModified >= remoteNode.LastModified)
+                    return Settled(false);
+                return Apply();
+            }
+
+            IObservable<bool> Apply()
+            {
+                var payload = InstanceSyncService.RebaseNode(remoteNode, localPath);
+                appliedInbound[localPath] = 1;
+                return ApplyLocal(payload)
+                    .Do(_ => logger?.LogDebug("Instance sync pulled {Path} from {Url}", localPath, cfg.RemoteUrl))
+                    .SelectMany(_ => Settled(true))
+                    .Do(_ => { }, ex => appliedInbound.TryRemove(localPath, out _));
+            }
+
+            // This remote stamp has been dealt with — record it so steady-state sweeps skip the hit.
+            IObservable<bool> Settled(bool applied)
+            {
+                lastSeenRemote[hit.Path] = (remoteNode.Version, remoteNode.LastModified);
+                return Observable.Return(applied);
+            }
+
+            IObservable<bool> Skip(string reason)
+            {
+                logger?.LogDebug("Instance sync {Config}: not pulling {Path} — {Reason}; "
+                                 + "the next sweep will re-decide", ConfigPath, localPath, reason);
+                return Observable.Return(false);
+            }
         });
 
     /// <summary>Applies a pulled node under the system identity — an infrastructure write, the
