@@ -10,10 +10,6 @@ using Memex.Portal.Shared.Social;
 using MeshWeaver.Hosting.Embeddings;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.AI.AzureFoundry;
-using MeshWeaver.AI.OpenAI;
-using MeshWeaver.AI.ClaudeCode;
-using MeshWeaver.AI.Copilot;
 using MeshWeaver.Mcp;
 using MeshWeaver.Speech;
 using MeshWeaver.Blazor.GoogleMaps;
@@ -229,19 +225,8 @@ public static class MemexConfiguration
             skillsDir = string.IsNullOrEmpty(claudeRoot) ? null : $"{claudeRoot}/_skills";
         }
 
-        if (features.Ai.Clis.Copilot)
-            services.AddCopilot(config =>
-            {
-                builder.Configuration.GetSection("Copilot").Bind(config);
-                config.SkillsDirectory = skillsDir;
-            });
-
-        if (features.Ai.Clis.ClaudeCode)
-            services.AddClaudeCode(config =>
-            {
-                builder.Configuration.GetSection("ClaudeCode").Bind(config);
-                config.SkillsDirectory = skillsDir;
-            });
+            // The ClaudeCode/Copilot packs bind their own options (incl. the SkillsDirectory
+            // derivation) from configuration when loaded via Modules:Assemblies.
 
         // Reactive skill→file sync: writes AGENTS.md (the base "mesh-is-via-MCP" instructions + a LISTING
         // of the platform nodeType:Skill catalog — name, description, load path) to the shared volume and
@@ -345,8 +330,7 @@ public static class MemexConfiguration
                     o.ConfigDirRoot = builder.Configuration["ClaudeCode:ConfigDirRoot"];
             });
         }
-        if (features.Ai.Clis.Copilot)
-            services.AddSingleton<MeshWeaver.AI.Connect.IConnectStrategy, MeshWeaver.AI.Copilot.CopilotConnectStrategy>();
+        // CopilotConnectStrategy registers from the Copilot pack (Modules:Assemblies).
 
         // Social publishing — minimal registration for the LinkedIn connect + pull endpoints.
         // (The full hosted-service pipeline is gated behind AddSocialPublishing which needs
@@ -606,7 +590,11 @@ public static class MemexConfiguration
             // fail loudly at startup, never silently run without the pack.
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
             if (moduleAssemblies is { Length: > 0 })
-                builder.InstallAssemblies(moduleAssemblies);
+                builder.InstallAssemblies(moduleAssemblies
+                    .Select(path => Path.IsPathRooted(path)
+                        ? path
+                        : Path.Combine(AppContext.BaseDirectory, path))
+                    .ToArray());
 
             // Read graph storage config
             var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
@@ -774,14 +762,11 @@ public static class MemexConfiguration
             // AddCopilot/AddClaudeCode in ConfigureMemexServices). A disabled flag
             // drops the catalog source → the provider vanishes from the model
             // picker and its Model/<id> nodes never seed.
-            if (features.Ai.Providers.Anthropic) mb = mb.AddAnthropic();
-            if (features.Ai.Providers.AzureFoundry) mb = mb.AddAzureFoundry();
-            if (features.Ai.Providers.AzureOpenAI) mb = mb.AddAzureOpenAI();
-            if (features.Ai.Providers.OpenAI) mb = mb.AddOpenAI();
-            if (features.Ai.Providers.OpenAICompatible) mb = mb.AddOpenAICompatible();
-            if (features.Ai.Providers.OpenRouter) mb = mb.AddOpenRouter();
-            if (features.Ai.Clis.ClaudeCode) mb = mb.AddClaudeCode();   // catalog source (factory + config via services.AddClaudeCode)
-            if (features.Ai.Clis.Copilot) mb = mb.AddCopilot();         // catalog source (factory + config via services.AddCopilot)
+            // Language-model providers + CLI harnesses register via boot-loaded module packs
+            // (Modules:Assemblies -> each pack's MeshNodeProviderAttribute). The composition root
+            // carries NO provider type references any more; a deployment picks providers by
+            // editing its module list. Features:Ai flags remain only for the portal-side blocks
+            // that co-host CLI processes (Connect, skills sync).
 
             // Content → vector index (core tech). When embeddings are configured, wire the
             // upload→Activity indexing pipeline (extract→chunk→embed→store), per-file Document nodes

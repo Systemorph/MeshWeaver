@@ -54,6 +54,14 @@ public record MeshBuilder
             });
         }
 
+        // Attribute-carried hub configuration — the surfaces a boot-loaded pack needs beyond
+        // root DI: the mesh hub's own configuration and the every-per-node-hub chain
+        // (Courses/Observability-shaped packs register types + default areas there).
+        foreach (var hubConfiguration in attributes.SelectMany(a => a.HubConfigurations))
+            ConfigureHub(hubConfiguration);
+        foreach (var nodeHubConfiguration in attributes.SelectMany(a => a.DefaultNodeHubConfigurations))
+            ConfigureDefaultNodeHub(nodeHubConfiguration);
+
         return this;
     }
 

@@ -42,6 +42,13 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Export\MeshWeaver.Markdown.Export.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.AzureFoundry\MeshWeaver.AI.AzureFoundry.csproj" />
+    <!-- SHIPS-THE-BITS references: these four flow the provider-pack DLLs + their SDK closures
+         into output/publish, and nothing more — the composition root carries NO provider type
+         references, and registration happens exclusively via Modules:Assemblies -> each pack's
+         MeshNodeProviderAttribute (a deployment drops a provider by editing its module list).
+         ReferenceOutputAssembly=false was tried and rejected: it drops the DLLs from the app
+         output, so the boot loader has nothing to load. Hard decoupling (delete these refs +
+         publish packs into a modules/ folder) is the follow-up once that publish step exists. -->
     <ProjectReference Include="..\..\src\MeshWeaver.AI.OpenAI\MeshWeaver.AI.OpenAI.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.ClaudeCode\MeshWeaver.AI.ClaudeCode.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.Copilot\MeshWeaver.AI.Copilot.csproj" />
