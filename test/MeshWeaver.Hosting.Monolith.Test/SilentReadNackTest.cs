@@ -87,20 +87,7 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             .Timeout(TimeSpan.FromSeconds(30))
             .ToTask(TestContext.Current.CancellationToken);
 
-        // Ordering gate, so the DisposeRequest cannot overtake the read: wait until the reader
-        // holds the outstanding callback AND the owner's action block has gone idle again. Those
-        // two together mean the delivery was accepted, handled, and answered with nothing — the
-        // exact state #1362 shows (HANDLER_EXIT state=Processed, no reply). Interval-probing a
-        // request/response-shaped fact is the sanctioned wait shape (WritingTests.md); it is not
-        // a sleep, and it fails loudly rather than silently proceeding.
-        await Observable.Interval(TimeSpan.FromMilliseconds(25)).StartWith(0L)
-            .Where(_ => reader.GetPendingRequestDiagnostics()
-                            .Contains("GetDataRequest@", StringComparison.Ordinal)
-                        && owner!.GetPendingRequestDiagnostics()
-                            .Contains("Queue(buffer=0,deferred=0,exec=0)", StringComparison.Ordinal))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(TestContext.Current.CancellationToken);
+        await WaitUntilTheHandlerHasRunAndAnsweredNothing(reader);
         Output.WriteLine("[TEST] handler ran and answered nothing — now recycling the owner");
 
         Mesh.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
@@ -172,14 +159,7 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Same ordering gate as above — the read must be genuinely outstanding at a hub that has
         // already handled it before the teardown starts.
-        await Observable.Interval(TimeSpan.FromMilliseconds(25)).StartWith(0L)
-            .Where(_ => reader.GetPendingRequestDiagnostics()
-                            .Contains("GetDataRequest@", StringComparison.Ordinal)
-                        && owner!.GetPendingRequestDiagnostics()
-                            .Contains("Queue(buffer=0,deferred=0,exec=0)", StringComparison.Ordinal))
-            .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(20))
-            .ToTask(TestContext.Current.CancellationToken);
+        await WaitUntilTheHandlerHasRunAndAnsweredNothing(reader);
 
         Mesh.Post(new DisposeRequest(), o => o.WithTarget(new Address(path)));
 
@@ -262,4 +242,35 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
             + "false one both lies and can beat a correct answer from another handler for the "
             + "same request (the layoutAreas regression)");
     }
+
+    /// <summary>
+    /// Blocks until the framework's OWN record shows the owner's handler ran to completion with no
+    /// reply — the state both teardown tests must reach before they may recycle the owner.
+    ///
+    /// <para>🚨 <b>The gate this replaces could not fail.</b> It asked for two things at
+    /// <c>t = 0</c>: that the reader holds a pending <c>GetDataRequest@</c> callback (true the
+    /// instant the read is subscribed, before anything is routed) and that the OWNER's queue reads
+    /// <c>Queue(buffer=0,deferred=0,exec=0)</c> — which is what an idle hub looks like BEFORE the
+    /// delivery ever arrives. Both were satisfied by a request still in flight, so the
+    /// <c>DisposeRequest</c> was free to overtake it. Its own comment claimed the gate was "the
+    /// request-fate ledger reaching <c>HANDLER_EXIT</c>"; the code never looked at the ledger. That
+    /// is what made <c>OwnerDisposedWithReadOutstanding_IsNacked_NotLeftHanging</c> red on main —
+    /// the read landed mid-teardown and exercised a DIFFERENT arm than the one asserted (#1470).</para>
+    ///
+    /// <para>The ledger IS available, just not through <c>GetPendingRequestDiagnostics</c>: it is
+    /// per hub TREE (a hosted hub shares its root's), and <c>GetDisposalDiagnostics</c> renders the
+    /// handler-side trail for every pending callback. So <c>HANDLER_EXIT</c> appearing there is the
+    /// owner's own record that it entered and left the handler — and the callback still being
+    /// pending is the record that it answered nothing. Polling a public snapshot for a specific,
+    /// positive fact is the sanctioned wait shape; it fails loudly instead of proceeding.</para>
+    /// </summary>
+    private static Task WaitUntilTheHandlerHasRunAndAnsweredNothing(IMessageHub reader) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(25)).StartWith(0L)
+            .Select(_ => reader.GetDisposalDiagnostics())
+            .Where(diagnostics =>
+                diagnostics.Contains("GetDataRequest", StringComparison.Ordinal)
+                && diagnostics.Contains("HANDLER_EXIT", StringComparison.Ordinal))
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(20))
+            .ToTask(TestContext.Current.CancellationToken);
 }
