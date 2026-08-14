@@ -19,32 +19,11 @@ public static class AzureOpenAIExtensions
     /// binding (<c>AzureOpenAI:</c>) +
     /// <see cref="AzureOpenAIChatClientAgentFactory"/>. Idempotent.
     /// </summary>
-    public static TBuilder AddAzureOpenAI<TBuilder>(this TBuilder builder, string configSection = "AzureOpenAI")
+    public static TBuilder AddAzureOpenAI<TBuilder>(this TBuilder builder)
         where TBuilder : MeshBuilder
     {
-        builder.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
-            SectionName: configSection,
-            ProviderName: "AzureOpenAI",
-            Order: 3,
-            DisplayLabel: "Azure OpenAI",
-            DefaultEndpoint: null,
-            DefaultModelIds: ImmutableArray<string>.Empty,
-            RequiresApiKey: true));
-        builder.ConfigureServices(services =>
-        {
-            services.AddOptions<AzureOpenAIConfiguration>().BindConfiguration(configSection);
-            services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatClientFactory, AzureOpenAIChatClientAgentFactory>());
-            return services;
-        });
+        builder.ConfigureServices(services => services.AddAzureOpenAI());
         return builder;
-    }
-
-    /// <summary>
-    /// Adds Azure OpenAI services to the service collection
-    /// </summary>
-    public static IServiceCollection AddAzureOpenAI(this IServiceCollection services)
-    {
-        return services.AddSingleton<IChatClientFactory, AzureOpenAIChatClientAgentFactory>();
     }
 
     /// <summary>
@@ -55,6 +34,22 @@ public static class AzureOpenAIExtensions
         Action<AzureOpenAIConfiguration> configure)
     {
         services.Configure(configure);
-        return services.AddSingleton<IChatClientFactory, AzureOpenAIChatClientAgentFactory>();
+        return services.AddAzureOpenAI();
+    }
+
+    /// <summary>
+    /// The one collection-level registration (catalog source + options + factory) — the form a
+    /// boot-loaded pack carries; the builder overload delegates here. TryAddEnumerable keeps it
+    /// idempotent (the legacy bare AddSingleton form double-registered the factory).
+    /// </summary>
+    public static IServiceCollection AddAzureOpenAI(this IServiceCollection services)
+    {
+        services.AddLanguageModelCatalogSource(new LanguageModelCatalogSource(
+            SectionName: "AzureOpenAI", ProviderName: "AzureOpenAI", Order: 3,
+            DisplayLabel: "Azure OpenAI", DefaultEndpoint: null,
+            DefaultModelIds: ImmutableArray<string>.Empty, RequiresApiKey: true));
+        services.AddOptions<AzureOpenAIConfiguration>().BindConfiguration("AzureOpenAI");
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChatClientFactory, AzureOpenAIChatClientAgentFactory>());
+        return services;
     }
 }

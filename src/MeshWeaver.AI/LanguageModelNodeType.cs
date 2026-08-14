@@ -194,13 +194,15 @@ public static class LanguageModelNodeType
     /// AzureFoundryExtensions.AddAzureClaudeProvider). Idempotent on
     /// (sectionName, providerName).
     /// </summary>
-    public static TBuilder AddLanguageModelCatalogSource<TBuilder>(
-        this TBuilder builder,
+    /// <summary>
+    /// Collection-level registration of a catalog source — the form a boot-loaded provider pack
+    /// carries in its <c>MeshNodeProviderAttribute</c>'s global service configurations. The
+    /// builder overload below delegates here.
+    /// </summary>
+    public static IServiceCollection AddLanguageModelCatalogSource(
+        this IServiceCollection services,
         LanguageModelCatalogSource source)
-        where TBuilder : MeshBuilder
     {
-        builder.ConfigureServices(services =>
-        {
             services.TryAddSingleton<LanguageModelCatalogOptions>();
 
             // Get or create the singleton instance and mutate it directly.
@@ -228,7 +230,15 @@ public static class LanguageModelNodeType
 
             instance.Add(source);
             return services;
-        });
+    }
+
+    /// <inheritdoc cref="AddLanguageModelCatalogSource(IServiceCollection, LanguageModelCatalogSource)"/>
+    public static TBuilder AddLanguageModelCatalogSource<TBuilder>(
+        this TBuilder builder,
+        LanguageModelCatalogSource source)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services => services.AddLanguageModelCatalogSource(source));
         return builder;
     }
 

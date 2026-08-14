@@ -21,6 +21,21 @@ public abstract class MeshNodeProviderAttribute : Attribute
     public virtual IEnumerable<KeyValuePair<string, Type>> AddressTypes => [];
 
     /// <summary>
+    /// Configuration applied to the MESH hub itself when this assembly is installed
+    /// (<c>MeshBuilder.InstallAssemblies</c>) — the attribute-carried form of
+    /// <c>builder.ConfigureHub(...)</c>. Empty by default.
+    /// </summary>
+    public virtual IEnumerable<Func<MessageHubConfiguration, MessageHubConfiguration>> HubConfigurations => [];
+
+    /// <summary>
+    /// Configuration applied to EVERY per-node hub — the attribute-carried form of
+    /// <c>builder.ConfigureDefaultNodeHub(...)</c>. This is the registration surface packs like
+    /// Courses/Observability need (type registrations, default areas) and the one an in-mesh
+    /// plugin structurally cannot reach. Empty by default.
+    /// </summary>
+    public virtual IEnumerable<Func<MessageHubConfiguration, MessageHubConfiguration>> DefaultNodeHubConfigurations => [];
+
+    /// <summary>
     /// Creates a mesh node from a hub configuration using a string prefix.
     /// </summary>
     protected MeshNode CreateFromHubConfiguration(string prefix, string name,
