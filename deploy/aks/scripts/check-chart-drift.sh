@@ -374,7 +374,11 @@ elif d_so is None and d_reps != l_reps:
 comparisons += 1
 if d_pdb is None and l_pdb is not None:
     finding("CLUSTER-ONLY", "PodDisruptionBudget memex-portal-pdb",
-            f"live {json.dumps(l_pdb.get('spec'))} — hand-applied; `helm upgrade` DELETES it")
+            f"live {json.dumps(l_pdb.get('spec'))} — hand-applied, and NOT owned by the helm "
+            f"release. A `helm upgrade` whose values later render a PDB of this name does not adopt "
+            f"it: helm refuses an object without its ownership metadata ('invalid ownership "
+            f"metadata') and the upgrade FAILS. Express it in values (keda.enabled) and let the "
+            f"chart own it")
 elif d_pdb is not None and l_pdb is None:
     finding("CHART-ONLY", "PodDisruptionBudget memex-portal-pdb",
             "rendered but not running — nothing throttles voluntary disruption today")
@@ -403,8 +407,10 @@ if l_pdb is not None:
 comparisons += 1
 if d_so is None and l_so is not None:
     finding("CLUSTER-ONLY", "ScaledObject memex-portal-scaler",
-            "live but not rendered — hand-applied; `helm upgrade` DELETES it (and with it the "
-            "replica floor). Set keda.enabled in the values instead")
+            "live but not rendered — hand-applied, and NOT owned by the helm release, so the "
+            "replica floor this namespace depends on is invisible to every deploy. Helm will not "
+            "adopt it either: once values render a ScaledObject of this name the upgrade FAILS on "
+            "'invalid ownership metadata'. Set keda.enabled in the values instead")
 elif d_so is not None and l_so is None:
     finding("CHART-ONLY", "ScaledObject memex-portal-scaler",
             "rendered but not running — nothing is holding the replica floor")
