@@ -24,8 +24,14 @@ public record MeshHostApplicationBuilder : MeshBuilder
         this.RegisterMeshQueryCoreOnMeshHub();
         // Drain the mesh root hub (action blocks + IoPool + AsyncDisposeQueue) during host shutdown,
         // BEFORE the host disposes the scope — otherwise a late continuation hits the disposed Autofac
-        // scope and throws an unobserved ObjectDisposedException. Registered here (first) so it stops
-        // LAST, after dependent hosted services. See MeshTeardownHostedService.
+        // scope and throws an unobserved ObjectDisposedException.
+        //
+        // 🚨 The ordering does NOT come from registering here. Hosted services stop in reverse
+        // registration order, and on an ASP.NET Core host GenericWebHostService is registered by
+        // WebApplication.CreateBuilder — strictly before this ctor can run — so Kestrel and the
+        // Blazor circuits stop AFTER anything registered here. The drain therefore runs in
+        // IHostedLifecycleService.StoppedAsync, which the host invokes only once EVERY StopAsync
+        // has returned. See MeshTeardownHostedService for the full story (#1548 and family).
         Host.Services.AddHostedService<MeshTeardownHostedService>();
     }
 
@@ -56,8 +62,9 @@ public record MeshHostBuilder : MeshBuilder
         // disposed") on a pooled task nobody observes — the pre-existing "Catastrophic failure"
         // in Orleans TestCluster teardown (this legacy IHostBuilder path builds every
         // TestCluster silo and client via UseOrleansMeshServer/UseOrleansMeshClient).
-        // Registered FIRST so it stops LAST — after the silo and the other hosted services
-        // have stopped feeding the mesh. Pinned by MeshHostBuilderTeardownOrderingTest.
+        // The drain runs in IHostedLifecycleService.StoppedAsync — after the silo and EVERY
+        // other hosted service has stopped feeding the mesh, regardless of registration
+        // position. Pinned by MeshHostBuilderTeardownOrderingTest.
         Host.ConfigureServices((_, services) => services.AddHostedService<MeshTeardownHostedService>());
     }
 
