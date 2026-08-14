@@ -9,7 +9,9 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "baseUrl": ".",
+    // No `baseUrl`: TypeScript 7 removed the option. The aliases below are already written
+    // relative to this file, which is exactly how TS resolves `paths` without a baseUrl, so
+    // dropping it changes nothing about what they point at.
     "paths": {
       "@meshweaver/react/core": ["../react/src/core.ts"],
       "@meshweaver/react": ["../react/src/index.tsx"],

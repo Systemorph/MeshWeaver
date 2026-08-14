@@ -13,8 +13,24 @@
     "skipLibCheck": true,
     "noEmit": true,
     "resolveJsonModule": true,
-    "baseUrl": ".",
+    // TypeScript 7 stopped auto-including every @types package, so the Node globals the parity
+    // guard reads (`node:fs`, `node:path`, `process`) had to be named. Same line as the other
+    // client tsconfigs.
+    "types": ["node"],
+    // No `baseUrl`: TypeScript 7 removed the option. The aliases below are already relative to
+    // this file, which is how TS resolves `paths` without a baseUrl — same targets, no change.
     "paths": {
+      // 🚨 ONE React in this program. The aliases below compile the SHARED renderer source
+      // (../react/src) inside the RN program, and that source resolves `react` from the nearest
+      // node_modules — clients/react's. When the two packages hold different @types/react majors,
+      // TS sees two incompatible `ReactNode` types and every shared component becomes "not a valid
+      // JSX element type". react-native 0.76.5 declares peer react ^18.2.0 while clients/react is
+      // on 19 for portal-next (Next 16 requires it), so the two CANNOT be aligned by version.
+      // Pinning the specifier here makes the RN program compile the shared source against RN's own
+      // React, which is the one it actually runs on.
+      "react": [
+        "./node_modules/@types/react"
+      ],
       "@meshweaver/react/core": [
         "../react/src/core.ts"
       ],

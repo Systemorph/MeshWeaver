@@ -10,7 +10,10 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    // See clients/react/tsconfig.json — TypeScript 7 stopped auto-including @types, so the Node
+    // globals restContract/wireContract read had to be named explicitly.
+    "types": ["node"]
   },
   "include": ["src"]
 }

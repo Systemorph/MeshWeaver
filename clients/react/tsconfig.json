@@ -14,7 +14,11 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    // TypeScript 7 no longer pulls every @types package in automatically, so the Node globals the
+    // cross-tree guard tests read (`node:fs`, `node:path`, `process` in ciTrigger / localize /
+    // parity) stopped resolving and `tsc --noEmit` failed with TS2591. Naming `node` restores them.
+    "types": ["node"]
   },
   "include": ["src"]
 }
