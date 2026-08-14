@@ -240,14 +240,12 @@ public partial class MarkdownFileParser : IFileFormatParser
 
     /// <summary>
     /// A slide file may carry the built-in <c>Slide</c> node type or a plugin-namespaced
-    /// variant (e.g. <c>Slides/Slide</c> from the Slides store plugin). Both must build
-    /// SlideContent and round-trip Notes/Background: matching only the bare constant let
-    /// a namespaced slide degrade to MarkdownContent on import, and the next mesh→repo
-    /// export then dropped its Notes/Background frontmatter entirely.
+    /// variant (e.g. <c>Publish/Slide</c>). Both must build SlideContent and round-trip
+    /// Notes/Background: matching only the bare constant let a namespaced slide degrade to
+    /// MarkdownContent on import, and the next mesh→repo export then dropped its
+    /// Notes/Background frontmatter entirely. Delegates to the ONE suffix-aware predicate.
     /// </summary>
-    private static bool IsSlideNodeType(string? nodeType) =>
-        nodeType == SlideNodeType.NodeType
-        || nodeType?.EndsWith("/" + SlideNodeType.NodeType, StringComparison.Ordinal) == true;
+    private static bool IsSlideNodeType(string? nodeType) => SlideNodeType.Matches(nodeType);
 
     /// <inheritdoc />
     public string Serialize(MeshNode node)
