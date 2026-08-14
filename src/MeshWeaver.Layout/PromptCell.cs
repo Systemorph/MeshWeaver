@@ -7,8 +7,8 @@ namespace MeshWeaver.Layout;
 /// <summary>
 /// One faked (or live) agent exchange: the code the "agent" produced and the
 /// output control to render beneath it. Simulated responders author both
-/// fields directly; the live adapter (MeshWeaver.AI's <c>TrainingSimResponder</c>)
-/// projects a real thread round into this shape.
+/// fields directly; a live responder projects a real thread round
+/// (<c>hub.StartThread</c> against the <c>TrainingSim</c> agent node) into this shape.
 /// </summary>
 /// <param name="Code">The code pane's content — rendered as a fenced code block
 /// (language from <see cref="PromptCellConfig.CodeLanguage"/>).</param>
@@ -22,9 +22,10 @@ public record PromptCellResponse(string Code, UiControl Output);
 /// <list type="bullet">
 ///   <item><b>Simulated</b> — <see cref="PromptCell.Simulated"/> wraps a pure
 ///   <c>prompt → (code, output)</c> function; no AI infrastructure involved.</item>
-///   <item><b>Live</b> — MeshWeaver.AI's <c>TrainingSimResponder.Live(hub, ns)</c>
-///   returns a responder that submits the prompt to a real agent thread
-///   (<c>hub.StartThread</c>, agent <c>TrainingSim</c>) and projects the reply.</item>
+///   <item><b>Live</b> — a responder that submits the prompt to a real agent thread
+///   (<c>hub.StartThread</c>, the <c>TrainingSim</c> agent node) and projects the
+///   reply. The old compiled adapter (<c>TrainingSimResponder</c>) is retired; the
+///   agent runs from its mesh node.</item>
 /// </list>
 /// </summary>
 public record PromptCellConfig

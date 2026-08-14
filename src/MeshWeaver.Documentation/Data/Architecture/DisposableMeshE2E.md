@@ -19,7 +19,7 @@ mesh/down.sh          # 3. throw the mesh away (volumes included)
 The mesh under test is **never a shared instance** — suites carry a `CAN_MUTATE` guard that
 refuses mutations against `*.meshweaver.cloud` / `*.systemorph.com`; only read-only smokes may
 point at production. The reference implementation is the **education repo's course suite**
-(`Systemorph/education → e2e/`): it installs the Edu plugin and the AgenticEngineering course
+(`Systemorph/MeshWeaver.Education → e2e/`): it installs the Edu plugin and the AgenticEngineering course
 through the real catalog, installs the exercises as a user and executes all 27 workbenches plus
 all 27 solutions.
 
@@ -119,5 +119,5 @@ stay green:
 
 See the **education repo's** `.github/workflows/ci.yml` for the worked example, and its
 `.claude/skills/course-e2e/SKILL.md` for the step-by-step authoring skill (mirrored on the mesh
-as `Skill/course-e2e`). Both paths are in `Systemorph/education`, not in this repo — MeshWeaver's
+as `Skill/course-e2e`). Both paths are in `Systemorph/MeshWeaver.Education`, not in this repo — MeshWeaver's
 own workflows are `dotnet-test.yml` (CI) and `main-cd.yml` (CD); there is no `ci.yml` here.

@@ -45,7 +45,7 @@ CI builds **Release with warnings-as-errors**: `dotnet build --no-restore -c Rel
    | repo | `strict` | behind-main merges? |
    |---|---|---|
    | MeshWeaver | false (ruleset) | yes |
-   | education | no branch protection | yes |
+   | MeshWeaver.Education (was education) | no branch protection | yes |
    | MeshWeaver.Reinsurance | false | yes |
    | MeshWeaver.SocialMedia | false | yes |
    | **MeshWeaver.Plugins** | **true** | **NO — `mergeStateStatus: BEHIND`, must update the branch** |
