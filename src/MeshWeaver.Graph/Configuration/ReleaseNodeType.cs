@@ -27,6 +27,17 @@ public static class ReleaseNodeType
     public const string NodeType = "Release";
 
     /// <summary>
+    /// The path SEGMENT release records are minted under — <c>{nodeTypePath}/Release/{version}</c>.
+    /// One declaration shared by the writer (<c>MeshDataSourceExtensions.TryCreateReleaseNode</c>)
+    /// and by every reader that has to recognise a mesh-minted release from its path alone: the
+    /// static-repo import's prune guard (a release is absent from EVERY source by construction, so
+    /// its absence is never evidence of a deletion — issues #1326 / #1422) and the sync-ignore
+    /// default. It happens to equal <see cref="NodeType"/>; it is declared separately because they
+    /// are different facts, and code that means "the path segment" must not read as a type name.
+    /// </summary>
+    public const string ReleaseSegment = "Release";
+
+    /// <summary>
     /// Registers the Release node type on the mesh builder by adding its MeshNode definition.
     /// </summary>
     /// <typeparam name="TBuilder">The mesh builder type.</typeparam>

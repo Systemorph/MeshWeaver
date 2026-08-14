@@ -124,6 +124,48 @@ The portal container is `memex-portal` in Deployment `memex-portal-deployment`.
 - **Portal serves:** `curl -sS -o /dev/null -w '%{http_code}' https://<portal-host>/` → `200`. **The host is not derivable from the namespace** — namespace `memex` serves `memex.systemorph.com` (the DNS record `deploy/aks/DEPLOY-RUNBOOK.md` creates), while `memex.meshweaver.cloud` is the *`memex-cloud`* namespace. Read the host off the namespace's own Ingress (`kubectl -n <NS> get ingress -o wide`) rather than templating it, or you will happily verify a portal you did not deploy to.
 - **Schema/index applied** (when the change was a migration): spot-check via `az aks command invoke … "kubectl -n <NS> exec deployment/memex-portal-deployment -- …"` or an MCP query.
 
+### The cluster runs what the chart describes — check it, don't assume it
+
+A green rollout says the pods came up. It says nothing about whether they came up with the
+configuration the chart declares. **An image-tag roll does not apply a chart change — only a
+`helm upgrade` does** — so a fix committed to the chart can sit unapplied indefinitely, and a
+setting applied by hand (`kubectl set env`) runs until the next `helm upgrade` silently deletes
+it. Four such divergences surfaced on one day, none of them detected by anything:
+
+| what diverged | how it went unnoticed |
+|---|---|
+| the drain `preStop` hook | in the chart, never applied — every roll severed live circuits |
+| a `wget` probe | in the chart, contradicted by the image (`curl` present, `wget` absent) |
+| the GitHub App identity | hand-applied to one cluster, never in the chart — other envs never got it |
+| a portal's `PluginCatalog__*` | inline `env:` on the Deployment, not in the ConfigMap |
+
+```bash
+deploy/aks/scripts/check-chart-drift.sh -n <NS> -r <release> \
+  -f <values.yaml> [-f <values.env.yaml>] \
+  --via aks-invoke -g <aks-resource-group> --aks <aks-cluster> \
+  --expect-patch deploy/aks/envs/<env>/portal-patch.json
+```
+
+It renders the chart, reads the live `memex-portal-config` and `memex-portal-deployment`, and
+classifies every difference as **CLUSTER-ONLY** (hand-applied — the next `helm upgrade` deletes
+it), **CHART-ONLY** (described but never applied — nobody is getting it), or **DIFFERS**. Secret
+values are never printed; inline `env` is compared by name only.
+
+Two things to know before you trust a green run:
+
+- **Render with the SAME `-f` list the deploy uses.** Values files are git-ignored and live
+  outside this repo (see "First-time environment setup"). A different `-f` list diffs against a
+  chart nobody deployed, and every unset key reads as drift.
+- **`--expect-patch` is how a post-`helm` patch is *declared*.** An env's `deploy.sh` applies
+  `portal-patch.json` after `helm upgrade` (the CSI `envFrom`, extra volumes); pass it so those
+  additions read as intentional. Anything cluster-only and *not* in that file is undeclared drift.
+
+It is a script and not a CI job on purpose: it needs cluster credentials, and a CI gate that
+skips when credentials are absent renders the same tick as one that passed — that would rebuild
+the very defect it is meant to catch. It fails RED when it cannot compare — an unreachable
+cluster, a failed render, or a rendered ConfigMap with no keys — rather than reporting "no
+drift" on no evidence.
+
 ## Self-update ops — pausing, pinning, and the rules that bite
 
 Operational facts about the in-pod updater (learned the hard way — each cost a debugging session):

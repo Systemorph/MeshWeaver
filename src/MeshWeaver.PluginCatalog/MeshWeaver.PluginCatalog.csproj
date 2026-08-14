@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>Plugin catalog and installer for MeshWeaver: discover, verify, install, and update content packages from git-based registries.</Description>
+  </PropertyGroup>
+
   <!-- The mesh's "app store": browse installable folders in a git repo and install each
        folder's content into the mesh by picking a git commit + folder. Git-based, NO NuGet.
        References GitSync for the git CLI (GitCli) + NodeFileMapper, Graph for node types,

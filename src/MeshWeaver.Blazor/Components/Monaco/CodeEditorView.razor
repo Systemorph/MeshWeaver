@@ -2,6 +2,8 @@
 @using MeshWeaver.Layout.Client
 @using MeshWeaver.Data
 @using MeshWeaver.Blazor.Components.Monaco
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
 @using MeshWeaver.Mesh.Services.LanguageServer
 @using System.Text.Json
 @using System.Reactive.Disposables
@@ -57,6 +59,16 @@
     // Store the data pointer for two-way binding
     private JsonPointerReference? ValuePointer;
 
+    // AUTO-SAVE (opt-in via CodeEditorControl.AutoSaveAddress): the debounced editor text is
+    // persisted into the named Code node's CodeConfiguration.Code through the process-wide
+    // IMeshNodeStreamCache — the same circuit-side seam the markdown editor's auto-save uses
+    // (MarkdownEditorView), so the write carries THIS circuit's identity and every reader on
+    // the path observes the patch in order through the shared upstream handle.
+    private AutoSaveHandler? autoSaveHandler;
+    private IMeshNodeStreamCache? _cache;
+    private string? autoSavePath;
+    private static readonly TimeSpan AutoSaveThrottleInterval = TimeSpan.FromMilliseconds(500);
+
     // ViewModel / Stream / Area / DataContext now come from BlazorView, which is also what binds
     // Id / Class / Style. Re-declaring them as local [Parameter]s is exactly what kept this view
     // outside the contract the registry types it into (#1333) — BindData never ran for it, so the
@@ -106,6 +118,31 @@
         BoundHeight = ResolveValue<string>(ViewModel.Height) ?? "300px";
         BoundReadonly = ResolveValue<bool?>(ViewModel.Readonly) ?? false;
         BoundPlaceholder = ResolveValue<string>(ViewModel.Placeholder) ?? "";
+
+        // AUTO-SAVE opt-in: persist the (debounced) editor text into the Code node the control
+        // names. Created per bind and registered as a binding, so the base disposes it on
+        // re-bind and teardown — exactly the markdown editor's auto-save lifecycle, including the
+        // LOUD resolution failure: a silently-absent cache would read as "auto-save just doesn't
+        // work" with nothing to diagnose by.
+        autoSaveHandler = null;
+        autoSavePath = ViewModel.AutoSaveAddress;
+        if (!string.IsNullOrEmpty(autoSavePath))
+        {
+            try
+            {
+                _cache ??= Hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex,
+                    "Failed to resolve IMeshNodeStreamCache for auto-save at {Address}", autoSavePath);
+            }
+            if (_cache != null)
+            {
+                autoSaveHandler = new AutoSaveHandler(AutoSaveThrottleInterval, AutoSaveCode);
+                AddBinding(autoSaveHandler);
+            }
+        }
 
         // LSP opt-in: when the control specifies LanguageServer, resolve IMeshLanguageService
         // from DI and build a closure that feeds the editor's current text into CheckSpeculative
@@ -234,7 +271,36 @@
             Stream.UpdatePointer(value, GetEffectiveDataContext(), ValuePointer);
         }
 
+        // Feed the auto-save debounce (no-op unless the control opted in via AutoSaveAddress).
+        autoSaveHandler?.OnValueChanged(value);
+
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The auto-save writer — invoked by <see cref="AutoSaveHandler"/> after the debounce window.
+    /// Preserves every other <see cref="CodeConfiguration"/> field: only <c>Code</c> is replaced.
+    /// A node whose content cannot be read as <see cref="CodeConfiguration"/> is deliberately left
+    /// UNTOUCHED (returning it unchanged makes the merge patch empty) — auto-save must never
+    /// clobber content it does not understand.
+    /// </summary>
+    private void AutoSaveCode(string value)
+    {
+        var path = autoSavePath;
+        if (_cache == null || string.IsNullOrEmpty(path))
+            return;
+        // Fire-and-forget like the markdown editor's AutoSaveContentAsync: the cache owns the
+        // write's lifetime; only a failure surfaces.
+        _cache.Update(path!,
+                current =>
+                {
+                    var config = current.ContentAs<CodeConfiguration>(Hub.JsonSerializerOptions);
+                    return config is null || config.Code == value
+                        ? current
+                        : current with { Content = config with { Code = value } };
+                },
+                Hub.JsonSerializerOptions)
+            .Subscribe(_ => { }, ex => SurfaceError(ex, "Code auto-save"));
     }
 
     public async ValueTask<string> GetValueAsync()

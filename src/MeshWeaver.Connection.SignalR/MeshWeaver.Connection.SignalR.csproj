@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>Client-side SignalR connection for MeshWeaver: connect an out-of-process .NET message hub to a running mesh over SignalR.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
   </ItemGroup>

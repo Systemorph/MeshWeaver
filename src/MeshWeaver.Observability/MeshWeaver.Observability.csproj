@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <Description>Log-incident control plane for MeshWeaver: watch logs, fingerprint recurring errors into incident nodes, and drive them to resolution.</Description>
     <ProjectGuid>{7f2c41ab-9d63-4e18-bb70-2a5c8e93d114}</ProjectGuid>
   </PropertyGroup>
 

@@ -35,6 +35,21 @@ public static class AreaFrameClassifier
     /// </summary>
     public const string CompileProgressId = "compile-progress";
 
+    /// <summary>
+    /// <see cref="UiControl.Id"/> of the frame an area serves when its content REFERENCES a node
+    /// that does not exist (<c>LayoutAreaHost.RenderRenderingError</c> on a routing
+    /// <c>ErrorType.NotFound</c>) — a deck manifest naming a slide that was never created,
+    /// an embed left pointing at a deleted node, a copied page whose relative reference does not
+    /// resolve in its new location. TERMINAL.
+    ///
+    /// <para>The THIRD state, and it is genuinely distinct from the other two (#1456). Against
+    /// <see cref="AreaNotFoundId"/>: the area itself is registered and rendering fine — it is the
+    /// DATA it points at that is absent, so "no renderer for this area" would send an author
+    /// looking in exactly the wrong place. Against <see cref="CompileProgressId"/>: nothing is
+    /// going to arrive, so a consumer that waits for this one waits forever.</para>
+    /// </summary>
+    public const string MissingReferenceId = "reference-missing";
+
     // The pre-id signal, kept as a fallback so a frame that lost its id on the way here (an
     // older peer, a control rebuilt from partial JSON) is still recognised. Never localize:
     // BuildNotFoundControl is deliberately English — it is a framework diagnostic, not UI copy.
@@ -59,6 +74,15 @@ public static class AreaFrameClassifier
     /// <param name="control">The rendered control, or <c>null</c>.</param>
     public static bool IsCompileProgress(UiControl? control)
         => HasFrameId(control, CompileProgressId);
+
+    /// <summary>
+    /// True for the frame an area serves when the content it renders REFERENCES a node that does
+    /// not exist. The reference is bad DATA — an author has to fix the manifest, the embed or the
+    /// link — so this is terminal, and deliberately NOT part of <see cref="IsTransientFrame"/>.
+    /// </summary>
+    /// <param name="control">The rendered control, or <c>null</c>.</param>
+    public static bool IsMissingReference(UiControl? control)
+        => HasFrameId(control, MissingReferenceId);
 
     /// <summary>
     /// True for a frame that is not the area's content and will be REPLACED without anyone

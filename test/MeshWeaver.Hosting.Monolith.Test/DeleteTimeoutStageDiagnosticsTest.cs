@@ -30,6 +30,14 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// is precisely the shape the fan-out cannot survive: it posts
 /// <see cref="ValidateDeleteRequest"/> at EVERY descendant and waits for ALL of them under ONE
 /// budget, so one unresponsive hub refuses the whole delete.</para>
+///
+/// <para>🚨 <b>Naming the stage was only half of it.</b> Six SIBLING stages sharing one budget is
+/// fine — one runs at a time and the name tells them apart. A NESTED level sharing that same value
+/// is not: the levels overlap, the outer clock starts first, so the inner one — the only one that
+/// knows which node and which read — could never fire. That is what
+/// <see cref="CascadeLeg_GivesUpOnItsOwnNestedBudget_NamingItsStageAndItsProgress"/> pins, and why
+/// the budget for anything nested is now DERIVED (see <see cref="MeshOperationOptions"/>) instead
+/// of separately configured to the same number.</para>
 /// </summary>
 public class DeleteTimeoutStageDiagnosticsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -38,6 +46,16 @@ public class DeleteTimeoutStageDiagnosticsTest(ITestOutputHelper output) : Monol
     /// test, generous enough that node creation on a cold CI agent is nowhere near it.
     /// </summary>
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// What a level NESTED inside that budget gets — <c>MeshOperationOptions.NestedTimeout</c>,
+    /// derived, never configured (#1198). Named here so the assertions can quote the number the
+    /// cascade leg is supposed to give up on and would NOT have quoted before: one shared constant
+    /// made the leaf's budget exactly equal to the commit stage holding it open, and the outer
+    /// clock starts first, so the leaf could never be the one to speak.
+    /// </summary>
+    private static readonly TimeSpan NestedTimeout =
+        new MeshOperationOptions { Timeout = OperationTimeout }.NestedTimeout;
 
     /// <summary>A node whose validators never answer, on ANY delete leg.</summary>
     private const string SilentSuffix = "-silent";
@@ -84,13 +102,25 @@ public class DeleteTimeoutStageDiagnosticsTest(ITestOutputHelper output) : Monol
     }
 
     /// <summary>
-    /// 🚨 The other half: a commit that times out must report the paths it ALREADY deleted.
-    /// Reporting 0 is not merely imprecise — it is the reading that sent #1198's triage to the
-    /// pre-commit stages, because "partial-deleted=0" was taken to mean "made zero progress".
-    /// Here a healthy sibling is genuinely removed before the stalled leaf holds up the cascade.
+    /// 🚨 THE NESTED BOUND FIRES FIRST — and reports the paths it ALREADY deleted.
+    ///
+    /// <para>Two halves of #1198 meet in this scenario. <b>The ordering:</b> a cascade leaf
+    /// re-enters the delete handler from inside the root's commit stage, so the leaf's own six
+    /// stage bounds are NESTED inside that stage. While both read
+    /// <see cref="MeshOperationOptions.Timeout"/> the leaf could never win — equal budgets, and the
+    /// root's clock starts first — so the answer was always the root's anonymous
+    /// <c>stage=commit</c>, and which leaf stalled, and where, was discarded. The leaf now runs on
+    /// the contracted rung, gives up first, and the response names ITS path and ITS stage.</para>
+    ///
+    /// <para><b>The progress:</b> reporting 0 deleted paths is not merely imprecise — it is the
+    /// reading that sent #1198's triage to the pre-commit stages, because "partial-deleted=0" was
+    /// taken to mean "made zero progress". Here a healthy sibling is genuinely removed before the
+    /// stalled leaf holds up the cascade. Note this half now rides a DIFFERENT exception: once the
+    /// leaf refuses first, the commit fails with the leaf's refusal rather than with its own stage
+    /// timeout, and only the timeout used to carry the deleted-path list.</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task CommitTimesOut_ReportsThePathsItAlreadyDeleted_NotZero()
+    public async Task CascadeLeg_GivesUpOnItsOwnNestedBudget_NamingItsStageAndItsProgress()
     {
         var space = $"{TestPartition}/commitstall";
         var healthy = $"{space}/healthy";
@@ -111,11 +141,28 @@ public class DeleteTimeoutStageDiagnosticsTest(ITestOutputHelper output) : Monol
         Output.WriteLine($"affected: {string.Join(", ", response.Log?.AffectedPaths ?? [])}");
 
         response.Success.Should().BeFalse("the stalled leaf never completed its own delete");
-        response.Error.Should().Contain("commit",
-            "the stage name distinguishes 'nothing was touched' from 'the subtree is half gone' — "
-            + "which is the difference between a retry and an investigation");
+
+        // 1️⃣ The LEAF answered, not the root. Its own stage name is in the message, which can only
+        //    be there if the leaf's bound fired before the commit stage that encloses it.
+        response.Error.Should().Contain("validate-root",
+            "the leaf's own stage name is the whole diagnosis — 'the validator chain on THIS node "
+            + "did not complete' is actionable, 'the commit did not drain' is not");
+        response.Error.Should().Contain(stalled,
+            "an operator staring at a large subtree needs the node that stalled, not a count");
+
+        // 2️⃣ …and it gave up on the CONTRACTED rung, which is the fix itself. Quoting the number
+        //    rules out the leaf having merely been lucky: on the shared budget it would read 15s,
+        //    and it could not have arrived before the root's stage timeout at all.
+        response.Error.Should().Contain($"exceeded {NestedTimeout.TotalSeconds:0}s",
+            "a nested level must run on MeshOperationOptions.NestedTimeout, not on the operation "
+            + "budget its caller is already holding open (#1198)");
+        response.Error.Should().NotContain("did not drain within",
+            "that phrase is the ROOT's commit-stage timeout — the very anonymous answer the "
+            + "contracted rung exists to pre-empt");
+
+        // 3️⃣ The progress survives the leaf's refusal, not just the stage timeout.
         (response.Log?.AffectedPaths ?? []).Should().Contain(healthy,
-            "the healthy sibling WAS deleted before the cascade stalled; a timeout that discards "
+            "the healthy sibling WAS deleted before the cascade stalled; a failure that discards "
             + "that fact reports partial-deleted=0 over a half-deleted subtree (#1198)");
     }
 

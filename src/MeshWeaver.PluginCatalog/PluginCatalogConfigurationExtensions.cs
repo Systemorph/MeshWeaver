@@ -48,6 +48,17 @@ public static class PluginCatalogConfigurationExtensions
                 .AddSingleton<PluginUpdateWatcher>()
                 .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
                     sp => sp.GetRequiredService<PluginUpdateWatcher>())
+                // 🚨 The watcher above is the REGISTRY's input — it needs a GitHub webhook and a
+                // catalog node naming a source repo, so on a registry-only consumer it opens zero
+                // subscriptions and is live-and-inert. That was the whole of #1318: such an
+                // installation could install but could never learn there was anything to install.
+                // This is the CONSUMER's input — it READS the registry feed it already
+                // authenticates to, at boot, instead of waiting for a webhook that cannot arrive.
+                // Both are registered unconditionally and both are inert on a deployment that is
+                // not the shape they serve; they hand the same decision to PackageUpdateReconciler.
+                .AddSingleton<RegistryUpdateReconciler>()
+                .AddSingleton<Microsoft.Extensions.Hosting.IHostedService>(
+                    sp => sp.GetRequiredService<RegistryUpdateReconciler>())
                 // Resolves an inbound instance key to its instance + grant for the /api/plugins
                 // surface. Mesh-scoped singleton so its short-lived cache dies with the mesh
                 // (Doc/Architecture/NoStaticState) — a revoked grant must not outlive a test either.

@@ -220,6 +220,15 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
         // (invalid partition segments). Still NEVER creates a schema.
         => RouteWrite<MeshNode?>(node.Path, a => a.Write(node, options), null);
 
+    /// <summary>
+    /// Routes the atomic compare-and-set to the owning schema's adapter, declining with <c>null</c>
+    /// for a path PG does not route — the same try-then-claim signal <see cref="Write"/> gives.
+    /// Explicit, because the interface default would read-compare-write through <c>this</c> and
+    /// silently strip the per-schema rowcount gate that makes the primitive exclusive.
+    /// </summary>
+    public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => RouteWrite<bool?>(node.Path, a => a.WriteIfVersion(node, expectedVersion, options), null);
+
     public IObservable<string> Delete(string path)
         => AdapterForRead(path) is { } a
             ? a.Delete(path)

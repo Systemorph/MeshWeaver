@@ -133,6 +133,56 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
         });
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Atomic via <see cref="ConcurrentDictionary{TKey,TValue}.TryAdd"/> (expected version 0 —
+    /// "no row") and <see cref="ConcurrentDictionary{TKey,TValue}.TryUpdate"/> against the exact
+    /// snapshot we compared (any other version). Both are single interlocked operations, so N
+    /// concurrent callers holding the same <c>expectedVersion</c> produce exactly ONE <c>true</c> —
+    /// the in-memory twin of the Postgres row-count gate, and the property #1424 needs. The change
+    /// notification fires only for the winner.
+    /// </remarks>
+    public IObservable<bool?> WriteIfVersion(
+        MeshNode node, long expectedVersion, JsonSerializerOptions options)
+        => Observable.Defer(() =>
+        {
+            // Same delegate strip as Write — a store of record must never hold an in-process
+            // HubConfiguration (see the note there).
+            if (node.HubConfiguration is not null)
+                node = node with { HubConfiguration = null };
+            var path = Norm(node.Path);
+            if (string.IsNullOrEmpty(path))
+                return Observable.Return<bool?>(null);
+
+            if (expectedVersion == 0)
+            {
+                if (!_nodes.TryAdd(path, node))
+                {
+                    _logger?.LogDebug(
+                        "[InMemoryAdapter#{Id:X}] WriteIfVersion {Path} REFUSED — a row already exists",
+                        GetHashCode(), path);
+                    return Observable.Return<bool?>(false);
+                }
+                _changes.OnNext(DataChangeNotification.Updated(path, node));
+                return Observable.Return<bool?>(true);
+            }
+
+            if (!_nodes.TryGetValue(path, out var existing) || existing.Version != expectedVersion)
+            {
+                _logger?.LogDebug(
+                    "[InMemoryAdapter#{Id:X}] WriteIfVersion {Path} REFUSED — expected v{Expected}, stored v{Stored}",
+                    GetHashCode(), path, expectedVersion, existing?.Version);
+                return Observable.Return<bool?>(false);
+            }
+            // TryUpdate compares against the instance we just read; a concurrent winner replaced it,
+            // so the CAS fails and this caller learns it lost instead of clobbering the winner.
+            if (!_nodes.TryUpdate(path, node, existing))
+                return Observable.Return<bool?>(false);
+
+            _changes.OnNext(DataChangeNotification.Updated(path, node));
+            return Observable.Return<bool?>(true);
+        });
+
+    /// <inheritdoc />
     public override IObservable<string> Delete(string path)
         => Observable.Defer(() =>
         {

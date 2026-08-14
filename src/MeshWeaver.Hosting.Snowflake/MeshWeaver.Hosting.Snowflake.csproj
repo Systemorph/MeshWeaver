@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>Snowflake storage backend for MeshWeaver: mesh persistence, change feed, cross-schema queries, and access projection on Snowflake.</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Snowflake.Data" />
   </ItemGroup>

@@ -419,7 +419,15 @@ public static class JsonSynchronizationStream
                 () => (isRealUser ? accessService?.SwitchAccessContext(ambient) : accessService?.ImpersonateAsSystem())
                       ?? (IDisposable)System.Reactive.Disposables.Disposable.Empty,
                 _ => hub.Observe(
-                        new SubscribeRequest(reduced.StreamId, reference) { Identity = identityForSubscribe },
+                        new SubscribeRequest(reduced.StreamId, reference)
+                        {
+                            Identity = identityForSubscribe,
+                            // Declared by the assembly that also OWNS the applier
+                            // (ApplyPatchWithCorrectUnescaping below), so the claim can never be
+                            // wrong: whatever version of this code posts the subscribe is the version
+                            // that folds the frames.
+                            AcceptsStringSplice = true,
+                        },
                         o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner))
                     .Take(1))
             .Subscribe(
@@ -994,7 +1002,8 @@ public static class JsonSynchronizationStream
                 // (The client side already applies Fulls unconditionally — UpdateStream's
                 // monotonicity guard is PATCHES-ONLY; this mirrors that contract on the owner.)
                 .ToDataChanged<TReduced, DataChangedEvent>(
-                    c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy))
+                    c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy),
+                    request.AcceptsStringSplice)
                 .Synchronize()
                 .Where(x => x is not null)
                 .Select(x => x!)
@@ -1060,7 +1069,9 @@ public static class JsonSynchronizationStream
         return reduced;
     }
     private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
-        this ISynchronizationStream<TReduced> stream, Func<ChangeItem<TReduced>, bool> predicate) where TChange : JsonChange
+        this ISynchronizationStream<TReduced> stream,
+        Func<ChangeItem<TReduced>, bool> predicate,
+        bool acceptsStringSplice = false) where TChange : JsonChange
     {
         // Loss-detection chain (issue #1081): every emitted frame carries the Version of the frame
         // emitted immediately BEFORE it on this same forwarding subscription (-1 for the first).
@@ -1121,12 +1132,26 @@ public static class JsonSynchronizationStream
                         return null;
                     }
                     var patch = x.Updates.ToJsonPatch(stream.Host.JsonSerializerOptions, stream.Reference as WorkspaceReference);
+                    // 🚨 #1284, the fan-out half. A streaming cell rewrites its whole Text on every
+                    // Sample(100 ms) tick, so a whole-value `replace` costs O(ticks x final length)
+                    // PER SUBSCRIBER — the same quadratic the write path shed in #1414, once more for
+                    // every viewer and every cross-silo mirror. Encoding the changed span against the
+                    // text this subscription is KNOWN to hold (currentJson, the cache this method
+                    // keeps in lockstep with the subscriber) makes it O(chunk).
+                    //
+                    // Only for a subscriber that asked (SubscribeRequest.AcceptsStringSplice). Every
+                    // other one — every JS/Python client, every pod still on the previous image —
+                    // gets exactly the bytes it gets today, because the alternative is a consumer
+                    // that half-applies a frame in silence. See that property for the full argument.
+                    if (acceptsStringSplice)
+                        patch = PatchStringSplice.Compress(patch, currentJson.Value);
                     var patchJson = JsonSerializer.Serialize(patch, stream.Host.JsonSerializerOptions);
                     try
                     {
                         // Apply patch with correct RFC 6901 unescaping
                         // The json-everything library doesn't properly unescape ~1 -> / in property names
-                        (currentJson, _) = ApplyPatchWithCorrectUnescaping(patchJson, currentJson.Value, stream.Host.JsonSerializerOptions);
+                        currentJson = ApplyPatchWithoutReturningPatch(
+                            patchJson, currentJson.Value, stream.Host.JsonSerializerOptions);
                     }
                     catch (StaleStreamStateException stale)
                     {
@@ -1252,7 +1277,41 @@ public static class JsonSynchronizationStream
         return ApplyPatchWithCorrectUnescaping(request.Change.Content, currentJson.Value, options);
     }
 
-    private static (JsonElement, JsonPatch) ApplyPatchWithCorrectUnescaping(string patchJson, JsonElement currentJson, JsonSerializerOptions options)
+    /// <summary>
+    /// Applies the patch and hands back the parsed patch alongside the result, for the callers that
+    /// forward it on.
+    /// </summary>
+    private static (JsonElement, JsonPatch) ApplyPatchWithCorrectUnescaping(
+        string patchJson, JsonElement currentJson, JsonSerializerOptions options)
+    {
+        var (result, applied) = ApplyPatchCore(patchJson, currentJson, options, wantAppliedPatch: true);
+        // Non-null by construction on this path — the core only returns null when the caller said it
+        // does not want the patch, and the alternative to asserting that here is handing every caller
+        // a nullable they would each have to reason about.
+        return (result, applied!);
+    }
+
+    /// <summary>
+    /// Applies the patch and returns ONLY the result — for the fan-out, which discards the patch.
+    ///
+    /// <para>🚨 A separate entry point rather than a flag returning <c>null!</c>: the parse is real,
+    /// per-subscriber, per-frame work with no consumer on this path (issue #1284), but skipping it
+    /// must not leave a null in a non-nullable tuple slot for the next caller to trip over. An empty
+    /// <c>JsonPatch</c> would be worse than either — it reads as "a patch with no operations", so a
+    /// future caller would get a silently wrong answer instead of a loud one.</para>
+    /// </summary>
+    private static JsonElement ApplyPatchWithoutReturningPatch(
+        string patchJson, JsonElement currentJson, JsonSerializerOptions options)
+        => ApplyPatchCore(patchJson, currentJson, options, wantAppliedPatch: false).Result;
+
+    /// <param name="wantAppliedPatch">
+    /// Whether the caller reads the patch. Re-parsing <paramref name="patchJson"/> for a caller that
+    /// drops it is per-subscriber, per-frame work with no consumer — issue #1284. The already-built
+    /// <c>fallbackPatch</c> branch below costs nothing either way and is returned regardless.
+    /// </param>
+    private static (JsonElement Result, JsonPatch? Applied) ApplyPatchCore(
+        string patchJson, JsonElement currentJson, JsonSerializerOptions options,
+        bool wantAppliedPatch)
     {
         using var doc = JsonDocument.Parse(patchJson);
         var currentNode = JsonSerializer.SerializeToNode(currentJson, options);
@@ -1283,6 +1342,9 @@ public static class JsonSynchronizationStream
                     break;
                 case "remove":
                     ApplyRemove(currentNode!, segments);
+                    break;
+                case "splice":
+                    ApplySplice(currentNode!, segments, value, pathString);
                     break;
                 default:
                     // move/copy/test are never produced by ToJsonPatch, so this branch only ever
@@ -1319,9 +1381,14 @@ public static class JsonSynchronizationStream
 
         // Serialize back to JsonElement
         var resultElement = JsonSerializer.SerializeToElement(currentNode, options);
-        // Create a dummy patch for the return value (we don't use it on the receiving end)
-        var dummyPatch = JsonSerializer.Deserialize<JsonPatch>(patchJson, options)!;
-        return (resultElement, dummyPatch);
+        // 🚨 Re-parsing patchJson into a JsonPatch is only worth doing for a caller that reads it —
+        // issue #1284. This ran on the FAN-OUT path too, once per subscriber per frame, and the
+        // comment beside it ("we don't use it on the receiving end") was describing the very caller
+        // that discards it. For an un-negotiated subscriber the patch still carries whole values, so
+        // the parse it threw away was O(document).
+        return (resultElement, wantAppliedPatch
+            ? JsonSerializer.Deserialize<JsonPatch>(patchJson, options)!
+            : null);
     }
 
     private static string[] ParsePathSegments(string path)
@@ -1382,6 +1449,66 @@ public static class JsonSynchronizationStream
         }
     }
 
+    /// <summary>
+    /// Folds a <c>splice</c> (see <see cref="OperationType.Splice"/>) onto a string leaf — but ONLY
+    /// after the carried fingerprint proves the text already there is byte-identical to the text the
+    /// producer diffed against. That is the identical rule the write path follows (#1414): a splice
+    /// is never applied at an offset nothing vouched for, so the result is provably the same string
+    /// a whole-value <c>replace</c> would have written.
+    ///
+    /// <para>On a mismatch the correct reaction is neither to splice blind nor to drop the frame,
+    /// but to stop trusting the local snapshot: <see cref="StaleStreamStateException"/> is what
+    /// <c>SynchronizationStream.UpdateStream</c> already answers with a fresh authoritative Full from
+    /// the owner (storm-gated by <c>_resyncInFlight</c> — one resubscribe per gap, no timer, no
+    /// retry loop). In normal operation it cannot fire: the frame chain resyncs on a LOST frame
+    /// before any patch is applied, so producer and subscriber are in lockstep by construction. It
+    /// exists so that when they are not, the divergence is repaired rather than written into the
+    /// text.</para>
+    /// </summary>
+    private static void ApplySplice(JsonNode root, string[] segments, JsonNode? value, string pathString)
+    {
+        if (segments.Length == 0)
+            throw new InvalidOperationException("Cannot splice at root path");
+        if (!PatchStringSplice.TryDecodeOperation(value, out var delta, out var baseLength, out var fingerprint))
+            throw new InvalidOperationException(
+                $"Malformed splice operation at {pathString}: expected {{\"{PatchStringSplice.Marker}\":[start,removed,\"inserted\"],"
+                + $"\"{PatchStringSplice.BaseMarker}\":[length,\"fingerprint\"]}}");
+
+        var parent = EnsureParentPath(root, segments);
+        var key = segments[^1];
+
+        // Bounds are checked HERE, with the same StaleStreamStateException ApplyReplace/ApplyRemove
+        // raise — not left to the indexer. A splice arrives off the wire, so an index past the end
+        // is a stale-snapshot symptom like any other, and it has to reach the resync path rather
+        // than escape as an ArgumentOutOfRangeException the caller does not catch.
+        var index = -1;
+        if (parent is JsonArray bounds)
+        {
+            if (!int.TryParse(key, out index) || index < 0 || index >= bounds.Count)
+                throw new StaleStreamStateException(
+                    $"Stale patch: splice at {pathString} addresses index {key} but the array has "
+                    + $"{bounds.Count} elements.");
+        }
+
+        var live = parent switch
+        {
+            JsonObject obj => obj[key] as JsonValue,
+            JsonArray arr => arr[index] as JsonValue,
+            _ => null,
+        };
+        var current = live is not null && live.TryGetValue<string>(out var s) ? s : null;
+        if (!PatchStringSplice.BaseMatches(current, baseLength, fingerprint))
+            throw new StaleStreamStateException(
+                $"Stale patch: splice at {pathString} was computed against a different base "
+                + $"(expected length {baseLength}, local length {current?.Length ?? -1}).");
+
+        var spliced = JsonValue.Create(delta.Apply(current));
+        if (parent is JsonObject target)
+            target[key] = spliced;
+        else if (parent is JsonArray array)
+            array[index] = spliced;
+    }
+
     private static void ApplyRemove(JsonNode root, string[] segments)
     {
         if (segments.Length == 0)
@@ -1422,6 +1549,16 @@ public static class JsonSynchronizationStream
             }
             else if (current is JsonArray arr && int.TryParse(segment, out var index))
             {
+                // 🚨 Bounds belong HERE, not at the indexer. An INTERMEDIATE array segment that no
+                // longer addresses an element (`/lines/7/text` against a two-element array) is a
+                // stale-snapshot symptom exactly like a stale leaf index — but left to
+                // JsonArray's indexer it escapes as ArgumentOutOfRangeException, which
+                // SynchronizationStream.UpdateStream does NOT catch, so the divergence faults the
+                // stream instead of taking the RequestFreshSnapshot route it is entitled to.
+                // Shared by add / replace / splice, so all three recover the same way.
+                if (index < 0 || index >= arr.Count)
+                    throw new StaleStreamStateException(
+                        $"Stale patch: segment '{segment}' addresses an element of a {arr.Count}-element array.");
                 current = arr[index];
             }
             else
@@ -1445,6 +1582,11 @@ public static class JsonSynchronizationStream
             }
             else if (current is JsonArray arr && int.TryParse(segment, out var index))
             {
+                // Same rule as EnsureParentPath: a stale INTERMEDIATE index takes the resync
+                // route, never an ArgumentOutOfRangeException the caller cannot recover from.
+                if (index < 0 || index >= arr.Count)
+                    throw new StaleStreamStateException(
+                        $"Stale patch: segment '{segment}' addresses an element of a {arr.Count}-element array.");
                 current = arr[index];
             }
             else

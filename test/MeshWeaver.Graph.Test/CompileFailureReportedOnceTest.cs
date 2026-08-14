@@ -247,4 +247,61 @@ public class CompileFailureReportedOnceTest : IDisposable
             "a reference set that cannot bind a trivial compilation is exactly the "
             + "process-wide-breakage branch, and the canary must say so rather than throw");
     }
+
+    /// <summary>
+    /// 🚨 CALIBRATION for the canary's SECOND leg. Once leg 1 fails, the verdict turns on whether
+    /// the same source emits against a brand-new, minimal reference set. If that pristine set
+    /// could not bind <c>MwEmitCanary&lt;T&gt;</c> on a healthy process, leg 2 would ALWAYS fail
+    /// and every occurrence would be filed <c>canary=BELOW-ROSLYN</c> — a diagnostic that cannot
+    /// return the other answer, i.e. no diagnostic at all.
+    ///
+    /// <para>An empty reference set is the one case where "the references are broken" is true by
+    /// construction, so the verdict must come back <c>canary=REFERENCES</c>: leg 1 fails, leg 2
+    /// succeeds. That is exactly the discrimination #890 needs on its next occurrence.</para>
+    /// </summary>
+    [Fact]
+    public void The_emit_canary_distinguishes_a_broken_reference_set_from_a_broken_process()
+    {
+        var unusable = CSharpCompilation.Create(
+            "Demo_CanaryNoRefs",
+            syntaxTrees: [CSharpSyntaxTree.ParseText("public class X { }")],
+            references: [],
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var verdict = MeshNodeCompilationService.ProbeSharedEmitState(unusable);
+
+        verdict.Should().StartWith("canary=REFERENCES",
+            "the pristine leg must be able to emit on a healthy process — otherwise the "
+            + "BELOW-ROSLYN branch is unfalsifiable and the canary answers the same thing "
+            + "whatever is wrong");
+        verdict.Should().Contain("pristine:OK");
+    }
+
+    /// <summary>
+    /// The verdict vocabulary must be able to say "I could not run the discriminator". Every
+    /// branch of <c>ProbeSharedEmitState</c> is reachable and each means something different —
+    /// in particular <c>BELOW-ROSLYN</c> ("the CLR is broken") must never be reachable by the
+    /// probe merely failing to BUILD its own control, which would send triage after a heap bug
+    /// nothing observed. This asserts the vocabulary is distinct and that the healthy-process
+    /// answer is never the inconclusive one.
+    /// </summary>
+    [Fact]
+    public void The_emit_canary_never_reports_below_roslyn_just_because_it_could_not_build_its_control()
+    {
+        var unusable = CSharpCompilation.Create(
+            "Demo_CanaryVocabulary",
+            syntaxTrees: [CSharpSyntaxTree.ParseText("public class X { }")],
+            references: [],
+            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var verdict = MeshNodeCompilationService.ProbeSharedEmitState(unusable);
+
+        // On any host where this test can run at all, CoreLib is on disk, so the control builds
+        // and the verdict is a real discrimination — never INCONCLUSIVE, never BELOW-ROSLYN.
+        verdict.Should().NotStartWith("canary=INCONCLUSIVE",
+            "CoreLib is on disk in a test host, so the pristine control must have been built");
+        verdict.Should().NotStartWith("canary=BELOW-ROSLYN",
+            "nothing is wrong with this process — reaching the CLR-is-broken verdict here would "
+            + "mean the probe reports its scariest answer whenever its own control fails");
+    }
 }

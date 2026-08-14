@@ -698,7 +698,59 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             _workspace.Hub.ServiceProvider);
     }
 
-    private IObservable<MeshNode> UpdateOwn(Func<MeshNode, MeshNode> update)
+    /// <summary>
+    /// 🚨 ADOPT a state that is ALREADY DURABLE — an OBSERVATION, never a write.
+    ///
+    /// <para>Use this — and ONLY this — when <paramref name="persisted"/> is the node exactly as
+    /// STORAGE holds it, at exactly the <see cref="MeshNode.Version"/> storage holds it under: the
+    /// entity carried by a storage change notification for a write somebody else made (another
+    /// writer, a second silo, a migration, GitSync). It is the *provenance* of the node — off the
+    /// durable change feed — that makes this the right call, not anything about its content; a
+    /// genuine change never arrives that way, so there is no content heuristic to get wrong.</para>
+    ///
+    /// <para><b>Two things it does that <see cref="Update"/> must not.</b>
+    /// (1) It does NOT mint. <c>UpdateOwn</c>'s unconditional
+    /// <c>NextVersion(Math.Max(current.Version, updated.Version))</c> would leave the hub holding
+    /// <c>durable + 1</c> — a revision that exists nowhere, with content identical to the durable
+    /// row (#1432). (2) It records the durable version in <see cref="PostCommitFlushRegistry"/>,
+    /// so the per-node persistence sampler and the dispose-time flush both skip writing the
+    /// adopted state back — the SAME "one change, one durable write" gate #1249 built, and
+    /// sound for the same reason: two DISTINCT own-node states can never share a version.</para>
+    ///
+    /// <para><b>Forward-only</b>, so it stays the lagged-echo defence it replaces: a persisted
+    /// snapshot may replace in-RAM state only when it is STRICTLY NEWER. The durable write and
+    /// its change notification are off-turn, so under a write burst the notification LAGS the
+    /// in-RAM commit; re-applying that stale snapshot silently dropped every field added since
+    /// it was persisted (<c>CrossHubPatchAtomicityTest</c>). At or below the live version this
+    /// completes with the unchanged node and touches nothing.</para>
+    ///
+    /// <para>🚨 NOT <c>AdoptDurableTruth</c> (<c>MeshDataSource</c>), which is the opposite case:
+    /// there a write was REFUSED by the monotonic guard, so the owner must climb strictly ABOVE
+    /// the durable row for its next save to land — that one mints deliberately, through
+    /// <see cref="Update"/>.</para>
+    /// </summary>
+    /// <param name="persisted">The node exactly as persisted, carrying its durable version.</param>
+    /// <returns>A cold observable — the adoption runs on Subscribe — emitting the state the
+    /// node holds afterwards (the adopted node, or the unchanged live node when it is already
+    /// at or past the durable version).</returns>
+    public IObservable<MeshNode> AdoptPersisted(MeshNode persisted)
+    {
+        ArgumentNullException.ThrowIfNull(persisted);
+        if (!IsOwn)
+            throw new InvalidOperationException(
+                $"AdoptPersisted is an OWN-node operation, but this handle targets '{_path}' from "
+                + $"hub '{_workspace.Hub.Address}'. Only the owning hub observes its own node's "
+                + "storage change feed; a cross-hub caller has no durable-version authority.");
+        return new RequireSubscribeObservable<MeshNode>(
+            UpdateOwn(_ => persisted, adoptPersisted: true)
+                // Same clamp as Update — see the comment there.
+                .CarryAccessContext(_workspace.Hub.ServiceProvider, restoreNullCapture: true)
+                .Select(n => EnsureTypedContent(n, _jsonOptions, _contentTypeRegistry)),
+            $"MeshNodeStreamHandle.AdoptPersisted(path='{_path ?? "<own>"}')",
+            _workspace.Hub.ServiceProvider);
+    }
+
+    private IObservable<MeshNode> UpdateOwn(Func<MeshNode, MeshNode> update, bool adoptPersisted = false)
         => Observable.Create<MeshNode>(observer =>
         {
             var refStream = _workspace.GetStream(new MeshNodeReference())
@@ -836,10 +888,37 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     // below the durable row forever. Ordinary lambdas (`current with {…}`)
                     // carry current.Version, so the extra term is a no-op for them; version
                     // restore writes Version = 0 and is likewise unaffected.
-                    updated = updated with
+                    if (adoptPersisted)
                     {
-                        Version = MeshNode.NextVersion(Math.Max(current.Version, updated.Version))
-                    };
+                        // 🚨 ADOPTION — an OBSERVATION of state that is ALREADY durable, so it
+                        // neither mints nor writes. See AdoptPersisted for the full contract.
+                        //
+                        // Forward-only, checked HERE against the authoritative in-turn `current`
+                        // (a caller-side check reads a snapshot that the action block may have
+                        // already moved past): a persisted snapshot may replace in-RAM state only
+                        // when it is STRICTLY NEWER. A lagged echo of our own write completes with
+                        // the unchanged node, so the in-RAM stream only ever moves forward.
+                        if (updated.Version <= current.Version)
+                        {
+                            EmitOnce(current);
+                            return null;
+                        }
+                        // The adopted version IS durable — record it on the same per-path
+                        // high-water HandleSaveMeshNode / FlushPendingOwnSave consult, so neither
+                        // the 200 ms persistence sampler nor the dispose-time flush writes this
+                        // observation back to storage (#1432; mechanism and soundness: #1249 /
+                        // PostCommitFlushRegistry). Recorded inside the commit turn, so an
+                        // adoption that did NOT apply never raises the mark.
+                        _workspace.Hub.ServiceProvider.GetService<PostCommitFlushRegistry>()
+                            ?.Record(updated.Path, updated.Version);
+                    }
+                    else
+                    {
+                        updated = updated with
+                        {
+                            Version = MeshNode.NextVersion(Math.Max(current.Version, updated.Version))
+                        };
+                    }
                     // Stamp BEFORE the commit — the echo subscription above only emits
                     // once it can see this write's Version on the target node.
                     System.Threading.Volatile.Write(ref stampedVersion, updated.Version);
@@ -1139,12 +1218,28 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                 stamped = true;
                             }
                             if (stamped)
-                            {
-                                updatedNode = System.Text.Json.JsonSerializer
-                                    .SerializeToNode(updated, jsonOpts) as System.Text.Json.Nodes.JsonObject
-                                    ?? new System.Text.Json.Nodes.JsonObject();
-                                patch = ComputeMergePatchDiff(currentNode, updatedNode);
-                            }
+                                // 🚨 O(1) in the node — issue #1284. The stamp touches exactly two
+                                // TOP-LEVEL SCALARS, and the answer to "what did that change in the
+                                // patch?" is known before asking. Re-serialising the whole node and
+                                // re-walking the whole merge diff to rediscover it was a second
+                                // full pass over the document on EVERY cross-hub write — for a
+                                // streaming answer cell, 40 kB walked twice per 100 ms tick for the
+                                // length of the answer. The two splice PRs are post-passes over the
+                                // patch this code builds, so neither of them touched it.
+                                //
+                                // 🚨 Worth having, but NOT the 44% #1172's profile indicted:
+                                // WriteConstructionAllocationTest measures this whole prologue at
+                                // ~7-9 bytes per document character against ~85 for the write end
+                                // to end, so under a tenth of the document-proportional cost lives
+                                // here. The rest is downstream — the owner's merge, persistence and
+                                // its version row, and one fan-out per subscriber.
+                                //
+                                // The outcome is IDENTICAL to the re-diff, not merely close: the
+                                // per-key decision is the same DeepEquals against the same
+                                // currentNode that ComputeMergePatchDiff would make, and the stamp
+                                // cannot affect any other key. (`updatedNode` is deliberately left
+                                // pre-stamp — nothing reads it past this point.)
+                                StampAuditFields(patch, currentNode, updated, jsonOpts);
 
                             var patchJson = patch.ToJsonString(jsonOpts);
                             diagLogger?.LogDebug(
@@ -1453,6 +1548,47 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             composite.Add(initialSub);
             return composite;
         });
+
+    /// <summary>
+    /// Writes the audit stamp (<see cref="MeshNode.LastModified"/> /
+    /// <see cref="MeshNode.LastModifiedBy"/>) straight into an already-computed merge patch, in
+    /// O(1) — the cheap half of issue #1284's input side.
+    ///
+    /// <para>Each key is emitted under exactly the condition
+    /// <see cref="MeshNodeStreamHandle.ComputeMergePatchDiff"/> would emit it under: its serialised
+    /// value is not <c>DeepEquals</c> to the same key in <paramref name="currentNode"/>. So this is
+    /// the re-diff's answer for these two keys, arrived at without walking the document — and it
+    /// cannot differ, because a top-level scalar assignment reaches no other key.</para>
+    ///
+    /// <para>Key names are derived the way <c>System.Text.Json</c> derives them (the same
+    /// <c>PropertyNamingPolicy.ConvertName</c> convention as <c>DataExtensions</c>'s content/trigger
+    /// keys), so a naming-policy change carries automatically rather than silently writing a key
+    /// nobody reads. A wrong key is the one failure mode with no runtime signal — the write would
+    /// succeed carrying a property nothing deserialises — so it is pinned end-to-end by
+    /// <c>WriteConstructionAllocationTest.AWriteStillStampsTheAuditFieldsOnTheOwner</c>, which reads
+    /// the TYPED audit fields back off the owner after a cross-hub write.</para>
+    /// </summary>
+    private static void StampAuditFields(
+        System.Text.Json.Nodes.JsonObject patch,
+        System.Text.Json.Nodes.JsonObject currentNode,
+        MeshNode updated,
+        System.Text.Json.JsonSerializerOptions jsonOpts)
+    {
+        Stamp(AuditJsonKey(nameof(MeshNode.LastModified), jsonOpts), updated.LastModified);
+        Stamp(AuditJsonKey(nameof(MeshNode.LastModifiedBy), jsonOpts), updated.LastModifiedBy);
+
+        void Stamp(string key, object? value)
+        {
+            var node = System.Text.Json.JsonSerializer.SerializeToNode(value, jsonOpts);
+            if (!System.Text.Json.Nodes.JsonNode.DeepEquals(currentNode[key], node))
+                patch[key] = node;
+        }
+    }
+
+    /// <summary>The JSON property name <paramref name="clrName"/> serialises to under
+    /// <paramref name="jsonOpts"/>.</summary>
+    private static string AuditJsonKey(string clrName, System.Text.Json.JsonSerializerOptions jsonOpts)
+        => jsonOpts.PropertyNamingPolicy?.ConvertName(clrName) ?? clrName;
 
     /// <summary>
     /// Recursive JSON-merge-patch (RFC 7396) diff between two equally-shaped
