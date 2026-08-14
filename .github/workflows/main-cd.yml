@@ -457,7 +457,7 @@ jobs:
       # The SDK container build + the publish output overflow the runner's ~14 GB; reclaim the
       # ~25 GB of preinstalled tooling a .NET build never touches (same as the test workflow).
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       # The VERSION (3.0.0-rc1.ci.<run#>) is what each install's self-updater (ReleaseStrategy.md)
@@ -540,7 +540,7 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.sha }}
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       # Same $(Version) computation as the portal leg: both jobs run inside ONE
@@ -597,7 +597,7 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.sha }}
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       # Same $(Version) computation as the other legs — GITHUB_RUN_NUMBER is shared across the
