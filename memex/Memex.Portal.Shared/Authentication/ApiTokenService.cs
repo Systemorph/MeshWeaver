@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using MeshWeaver.Data;
@@ -46,6 +47,25 @@ internal class ApiTokenService(
     private const int TokenByteLength = 32;
     private const string NodeTypeApiToken = "ApiToken";
     private const string ApiTokenNamespace = "ApiToken";
+
+    /// <summary>
+    /// Fires the namespace of each expiry sweep as it FINISHES (see <see cref="CleanupExpired"/>).
+    ///
+    /// <para>The sweep is deliberately off the mint's critical path — a user with a backlog must
+    /// not pay for it at sign-in — which means <c>CreateToken</c>'s own emission says nothing about
+    /// whether the sweep has run. Without this signal there is no source to subscribe to, so an
+    /// observer can only SAMPLE and hope: that is what made
+    /// <c>CreateToken_SweepsTheUsersAlreadyExpiredTokens</c> fail under CI load (#1569) while
+    /// passing 11/11 locally — the assertion read the lagged query index before the sweep's deletes
+    /// had landed, and the test had no way to wait for the actual condition.</para>
+    ///
+    /// <para>Instance field on the mesh-scoped singleton — never static, so it dies with the mesh.
+    /// Synchronized because sweeps for different users complete on different threads.</para>
+    /// </summary>
+    public IObservable<string> ExpirySweepCompleted => expirySweepCompleted.AsObservable();
+
+    private readonly ISubject<string> expirySweepCompleted =
+        Subject.Synchronize(new Subject<string>());
 
     /// <summary>
     /// Single-flight recency memo for the LastUsedAt stamp, keyed by token hash:
@@ -260,8 +280,17 @@ internal class ApiTokenService(
                     }))))
             .Subscribe(
                 _ => { },
-                ex => logger.LogWarning(ex,
-                    "Expired API token cleanup sweep failed for {Namespace}", userTokenNamespace));
+                ex =>
+                {
+                    logger.LogWarning(ex,
+                        "Expired API token cleanup sweep failed for {Namespace}", userTokenNamespace);
+                    // Fire on the FAULT path too. An observer waiting for this sweep must be told it
+                    // is over either way — a signal that only fires on success turns a failed sweep
+                    // into an indefinite wait, which is the same "no source to subscribe to" defect
+                    // one level down.
+                    expirySweepCompleted.OnNext(userTokenNamespace);
+                },
+                () => expirySweepCompleted.OnNext(userTokenNamespace));
     }
 
     /// <summary>
