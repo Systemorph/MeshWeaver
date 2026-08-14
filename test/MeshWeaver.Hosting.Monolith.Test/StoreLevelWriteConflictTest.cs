@@ -164,8 +164,8 @@ public class StoreLevelWriteConflictTest(ITestOutputHelper output) : MonolithMes
         // (`DataExtensions`: `WithType(typeof(ActivityLog), nameof(ActivityLog))`), never a node
         // type: nothing calls `AddMeshNodes` with it, so a node stamped "ActivityLog" has no node-
         // type definition at all — no views, no satellite access rule — and, the point here, it
-        // matches no `nodeType:Activity` query, which is what `RunningActivitiesStripe` and the
-        // activity feed run. A record that exists but that no feed can surface fails the very
+        // matches no `nodeType:Activity` query, which is what the activity feed runs. A record
+        // that exists but that no feed can surface fails the very
         // requirement asserted three lines above: a resolution nobody can see.
         activity!.NodeType.Should().Be(ActivityNodeType.NodeType,
             "a write-conflict record is only 'visible' if the activity feed can find it, and every "
