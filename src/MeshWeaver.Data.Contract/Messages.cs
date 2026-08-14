@@ -308,6 +308,36 @@ public record GetDataResponse(object? Data, long Version)
     /// Error message if the request failed.
     /// </summary>
     public string? Error { get; init; }
+
+    /// <summary>
+    /// Why <see cref="Data"/> is null, when the owner knows a reason the caller must be able to
+    /// tell apart from ordinary absence. Defaults to <see cref="DataAbsenceReason.Unspecified"/>,
+    /// which serialises away (<c>DefaultIgnoreCondition=WhenWritingDefault</c>) — only a
+    /// non-default reason travels, so nothing changes for the overwhelming majority of reads.
+    /// </summary>
+    public DataAbsenceReason Absence { get; init; }
+}
+
+/// <summary>
+/// Why a <see cref="GetDataResponse"/> carries no data. Exists because a null
+/// <see cref="GetDataResponse.Data"/> is NOT one fact: "there is nothing here" and "there is
+/// something here and it is being deleted" are different answers, and a caller that treats the
+/// second as the first re-creates what a user just deleted (Systemorph/MeshWeaver#1471).
+/// </summary>
+public enum DataAbsenceReason
+{
+    /// <summary>
+    /// No reason recorded — the ordinary case: data is present, or absent because there is
+    /// nothing at the reference.
+    /// </summary>
+    Unspecified,
+
+    /// <summary>
+    /// The entity exists but its DELETE is in flight, so the owner answered with its tombstone
+    /// rather than the stale content (<c>MeshDataSource.AddReadValidatorPipeline</c>). TRANSIENT
+    /// and directional — the next authoritative answer is "gone", never "here again".
+    /// </summary>
+    DeleteInProgress,
 }
 
 /// <summary>

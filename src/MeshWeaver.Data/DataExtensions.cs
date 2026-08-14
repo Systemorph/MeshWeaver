@@ -1815,6 +1815,17 @@ public static class DataExtensions
     /// <para>Silence on a LIVE hub is therefore preserved exactly as before — this change never
     /// makes a healthy read louder, only a dying one honest. The disposal arm needs no such gate:
     /// it cannot run except during teardown.</para>
+    ///
+    /// <para>🚨 <b>THREE terminals, ONE answer.</b> Besides the empty completion and this hub's
+    /// disposal, the read can FAULT with a <see cref="HubDisposingException"/> — the stream
+    /// refusing to exist because hosted-hub creation is frozen (an ancestor's disposal freezes the
+    /// whole subtree while this hub still reads <c>Started</c>). That fault used to be swallowed by
+    /// the catch-all into a <c>GetDataResponse{Error}</c>, which claimed the answer slot and turned
+    /// a transient teardown into a reported ABSENCE — #1470, and the reason
+    /// <see cref="ErrorType.ShuttingDown"/> never reached the caller in the CI red. It now takes
+    /// the same NACK path as the other two: the <c>Catch</c> re-throws a hub-disposal fault, and the
+    /// Subscribe's error arm answers it. All three terminals go through the SAME CAS, so a
+    /// completion racing a disposal racing a fault still yields exactly one answer.</para>
     /// </summary>
     private static IMessageDelivery HandleGetDataRequest(IMessageHub hub, IMessageDelivery<GetDataRequest> request)
     {
@@ -1839,8 +1850,27 @@ public static class DataExtensions
 
                 return GetDataResponseObservable(hub, request.Message.Reference, request.Message);
             })
-            .Catch<GetDataResponse, Exception>(ex =>
-                Observable.Return(new GetDataResponse(null, 0) { Error = ex.Message }))
+            // 🚨 A TEARDOWN FAULT IS NOT A READ RESULT — it must not be answerable as one.
+            // This Catch used to swallow EVERY exception into a GetDataResponse{Error}, and
+            // that fabricated "success" CLAIMED THE ONCE-ONLY ANSWER SLOT: the NACK below could
+            // no longer fire, GetMeshNode mapped the empty response to null, and its re-probe —
+            // which lives only in the OnError arm — never ran. So a read serviced by a hub whose
+            // hosted-hub creation is frozen was reported to the caller as "this node does not
+            // exist". In CI the message read verbatim `Error = Exception has been thrown by the
+            // target of an invocation` — the reflective Reduce wrapping
+            // SynchronizationStream's HubDisposingException (#1470). That is #1362 reproduced by
+            // its own fix: #1362 closed the case where the request produced NO answer; this was
+            // the same request producing a WRONG one, from the line above.
+            //
+            // A HubDisposingException is PROOF of a teardown (hosted-hub creation being frozen is
+            // the authoritative "this hub is part of a shutdown" signal — IMessageHub.IsShuttingDown
+            // — and the exception names the hub), so unlike the empty-completion arm below it needs
+            // no IsWindingDown gate: there is no healthy-hub case in which it is a lie. Rethrow so
+            // the terminal is decided in exactly one place — the error arm — and the CAS keeps it a
+            // single answer.
+            .Catch<GetDataResponse, Exception>(ex => HubDisposingException.IsHubDisposal(ex)
+                ? Observable.Throw<GetDataResponse>(ex)
+                : Observable.Return(new GetDataResponse(null, 0) { Error = ex.Message }))
             .Subscribe(
                 response =>
                 {
@@ -1848,6 +1878,23 @@ public static class DataExtensions
                     // state at 1 and keep shipping, exactly as before.
                     Interlocked.CompareExchange(ref state, 1, 0);
                     hub.Post(response, o => o.ResponseFor(request));
+                },
+                ex =>
+                {
+                    // Only a hub-disposal fault reaches here — every other exception was converted
+                    // to a value by the Catch above, so this arm cannot swallow an ordinary error.
+                    if (!TryClaimSilentTerminal())
+                        return;
+                    // 🚨 Name the ROOT cause, not the wrapper. The reflective reduce hands us a
+                    // TargetInvocationException whose own message is the useless "Exception has
+                    // been thrown by the target of an invocation" — the exact string the CI red
+                    // reported, which says nothing about what happened.
+                    var cause = FindHubDisposal(ex) ?? ex;
+                    NackSilentRead(hub, request,
+                        "the read faulted because the owning hub is shutting down — its hosted-hub "
+                        + "creation is frozen, so the data stream for this reference could not be "
+                        + $"created ({cause.GetType().Name}: {cause.Message}). Retry against the "
+                        + "fresh activation.");
                 },
                 () =>
                 {
@@ -1882,6 +1929,34 @@ public static class DataExtensions
                     + "shutting down and never produced a value. Retry against the fresh activation.");
         }));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// The <see cref="HubDisposingException"/> inside <paramref name="exception"/> — itself, or the
+    /// first one down its inner-exception chain — or <c>null</c> when there is none. Mirrors
+    /// <see cref="HubDisposingException.IsHubDisposal"/>'s walk (same depth cap, same reason: a
+    /// handler fault reaches us WRAPPED, deepest observed
+    /// <c>TargetInvocationException → HubDisposingException</c>) but returns the exception so the
+    /// NACK can quote a cause that means something.
+    /// </summary>
+    private static Exception? FindHubDisposal(Exception? exception) => FindHubDisposal(exception, depth: 0);
+
+    private static Exception? FindHubDisposal(Exception? exception, int depth)
+    {
+        // depth caps the walk for the same reason IsHubDisposal caps its own: an exception graph is
+        // caller-supplied data, and AggregateException fan-out makes the traversal a tree.
+        if (depth > 16)
+            return null;
+        for (var e = exception; e is not null; e = e.InnerException)
+        {
+            if (e is HubDisposingException)
+                return e;
+            if (e is AggregateException agg)
+                foreach (var inner in agg.InnerExceptions)
+                    if (FindHubDisposal(inner, depth + 1) is { } found)
+                        return found;
+        }
+        return null;
     }
 
     /// <summary>
