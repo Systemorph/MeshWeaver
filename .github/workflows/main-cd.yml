@@ -213,7 +213,7 @@ jobs:
       staging_tag: ${{ steps.target.outputs.staging_tag }}
       reason: ${{ steps.target.outputs.reason }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: "Resolve the target commit"
         id: target
         env:
@@ -450,7 +450,7 @@ jobs:
     outputs:
       version: ${{ steps.vars.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Build the EXACT commit the tests passed on — not whatever main is now.
           ref: ${{ needs.gate.outputs.sha }}
@@ -536,7 +536,7 @@ jobs:
     outputs:
       version: ${{ steps.vars.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
       - name: Setup .NET
@@ -593,7 +593,7 @@ jobs:
     outputs:
       version: ${{ steps.vars.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.sha }}
       - name: Setup .NET
@@ -668,7 +668,7 @@ jobs:
     outputs:
       version: ${{ steps.vars.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Build the EXACT commit the tests passed on — not whatever main is now.
           ref: ${{ needs.gate.outputs.sha }}
@@ -910,7 +910,7 @@ jobs:
       id-token: write
       issues: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Ensure Azure CLI
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       # Reads manifests through ARM (no `az acr login` needed — that one is for docker/push creds).

@@ -169,7 +169,7 @@ jobs:
       tree: ${{ steps.probe.outputs.tree }}
       marker: ${{ steps.probe.outputs.marker }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         # Only HEAD's tree matters; the marker push in collect-results needs
         # nothing deeper either (it points the ref at github.sha).
@@ -329,7 +329,7 @@ jobs:
     timeout-minutes: 25
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
@@ -459,7 +459,7 @@ jobs:
         shard: [0, 1, 2, 3, 4, 5]
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - name: Setup .NET
       uses: actions/setup-dotnet@v5
       with:
@@ -949,7 +949,7 @@ jobs:
     outputs:
       failure: ${{ steps.gate.outputs.failure }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
     - uses: actions/setup-dotnet@v5
       with:
@@ -985,7 +985,7 @@ jobs:
     # Rotate/revoke by deleting the key on the plugins repo (Settings → Deploy keys) and
     # replacing PLUGINS_REPO_SSH_KEY here; nothing else depends on it.
     - name: Check out MeshWeaver.Plugins
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         repository: Systemorph/MeshWeaver.Plugins
         ref: main
@@ -1082,7 +1082,7 @@ jobs:
     outputs:
       failure: ${{ steps.gate.outputs.failure }}
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
     - uses: actions/setup-dotnet@v5
       with:
@@ -1163,7 +1163,7 @@ jobs:
     # is what produces the project.assets.json graph it reads.
     timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with: { fetch-depth: 1 }
     - uses: actions/setup-dotnet@v5
       with:
@@ -1192,7 +1192,7 @@ jobs:
     steps:
     # Needed for the marker push/prune steps below: gives us a git repo whose
     # `origin` carries the run's credentials, and puts github.sha's object in it.
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 1
     # ── Reuse path: build+test skipped because the tree is already green ──

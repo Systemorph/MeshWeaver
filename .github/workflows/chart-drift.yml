@@ -96,9 +96,9 @@ jobs:
           - { ns: memex-cloud, release: memexcloud }
           - { ns: atioz,       release: atioz }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check out the per-env overlays
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.DEPLOY_REPO }}
           token: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}

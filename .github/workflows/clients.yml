@@ -97,7 +97,7 @@ jobs:
       run:
         working-directory: clients/react
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -113,7 +113,7 @@ jobs:
       run:
         working-directory: clients/python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -128,7 +128,7 @@ jobs:
       run:
         working-directory: clients/typescript
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -142,7 +142,7 @@ jobs:
       run:
         working-directory: clients/grpc-web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -157,7 +157,7 @@ jobs:
       run:
         working-directory: clients/react-native
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -191,7 +191,7 @@ jobs:
       run:
         working-directory: clients/portal
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -215,7 +215,7 @@ jobs:
       run:
         working-directory: clients/portal-next
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           # Matches the Dockerfile's node:22-alpine — build the app on the runtime it ships on.
@@ -244,7 +244,7 @@ jobs:
       run:
         working-directory: clients/react-native
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 20
