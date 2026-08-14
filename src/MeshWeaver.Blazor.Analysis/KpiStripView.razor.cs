@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using MeshWeaver.Layout;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.Analysis;
 
 /// <summary>
 /// Renders a <see cref="KpiStripControl"/> as a wrapping row of tiles. Pure projection — the tiles

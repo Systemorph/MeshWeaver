@@ -155,9 +155,9 @@ public static class BlazorViewRegistry
                 DocumentSourceControl docSource => ControlView<DocumentSourceControl, DocumentSourceView>(docSource, stream, area),
                 AppearanceControl appearance => ControlView<AppearanceControl, AppearanceView>(appearance, stream, area),
                 ThreadMessageBubbleControl bubble => ControlView<ThreadMessageBubbleControl, ThreadMessageBubbleView>(bubble, stream, area),
-                KpiStripControl kpiStrip => ControlView<KpiStripControl, KpiStripView>(kpiStrip, stream, area),
-                TowerControl tower => ControlView<TowerControl, TowerView>(tower, stream, area),
-                ComparisonBarsControl comparisonBars => ControlView<ComparisonBarsControl, ComparisonBarsView>(comparisonBars, stream, area),
+                // KpiStrip / Tower / ComparisonBars render from the MeshWeaver.Blazor.Analysis
+                // view pack (AddAnalysisViews) — the first core control set extracted onto the
+                // pack seam. The react parity ratchet lists them under EXTERNALLY_PACKED_CONTROLS.
                 // No match ⇒ DECLINE (null) so later-registered maps — view packs added after
                 // AddBlazor() — get their turn. The escaped-HTML fallback lives in the
                 // configuration's FallbackViewMap slot, consulted after every map declined.

@@ -42,6 +42,9 @@ const BLAZOR_SKINS = blazorTypes("Skin");
 const EXTERNALLY_PACKED_CONTROLS = [
   "Chart", "CodeSample", "Date", "Dialog", "Exception", "LayoutAreaDefinition", "MeshNodeContentEditor",
   "PivotGrid", "Slider", "ThreadChat", "UserProfile",
+  // The analysis pack (MeshWeaver.Blazor.Analysis, AddAnalysisViews) — extracted from the core
+  // registry onto the view-pack seam; the control records stay in MeshWeaver.Layout.
+  "KpiStrip", "Tower", "ComparisonBars",
 ];
 
 // Skins the React renderer covers WITHOUT a registry entry, by design. SplitterPane is read by the

@@ -17,6 +17,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Analysis\MeshWeaver.Blazor.Analysis.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <!-- StaticContentUnmountedTest drives the REAL /static + /api/content endpoints over a real
          monolith mesh (real PermissionEvaluator, real content collections) — no mocks. -->

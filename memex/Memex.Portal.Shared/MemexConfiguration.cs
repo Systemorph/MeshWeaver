@@ -26,6 +26,7 @@ using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Layout;
+using MeshWeaver.Blazor.Analysis;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Indexing;
@@ -991,6 +992,7 @@ public static class MemexConfiguration
             .ConfigureHub(mesh => mesh
                 .AddMeshTypes()
                 .AddRadzenViews()
+                .AddAnalysisViews()
                 .AddGoogleMaps()
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
                 .AddChatViews()   // Register ThreadChatView

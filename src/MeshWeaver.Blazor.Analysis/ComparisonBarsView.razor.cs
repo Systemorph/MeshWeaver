@@ -2,7 +2,7 @@ using System.Globalization;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.Analysis;
 
 /// <summary>
 /// Renders a <see cref="ComparisonBarsControl"/> as two bars per measure on one shared scale.
