@@ -18,6 +18,8 @@ if (args.Length == 0 || args[0] is "-h" or "--help")
           --repo-root <dir>           checkout root for resolving shared= includes (repeatable;
                                       defaults to the plugin's parent directory)
           --no-build                  emit projects only
+          --pack <dir>                after a fully successful build, write a .nupkg here
+          --package-version <v>       version for manifests that declare none (most do not)
         """);
     return 0;
 }
@@ -33,6 +35,8 @@ var outputDirectory = Path.Combine(Environment.CurrentDirectory, "obj", "plugin-
 var frameworkVersion = "3.0.0-rc2";
 var repoRoots = new List<string>();
 var build = true;
+string? packDirectory = null;
+var packageVersion = "0.0.1";
 
 for (var i = 1; i < args.Length; i++)
 {
@@ -49,6 +53,12 @@ for (var i = 1; i < args.Length; i++)
             break;
         case "--no-build":
             build = false;
+            break;
+        case "--pack" when i + 1 < args.Length:
+            packDirectory = Path.GetFullPath(args[++i]);
+            break;
+        case "--package-version" when i + 1 < args.Length:
+            packageVersion = args[++i];
             break;
         default:
             Console.Error.WriteLine($"error: unrecognised argument '{args[i]}'");
@@ -109,4 +119,13 @@ if (failures > 0)
 }
 
 Console.WriteLine($"all {units.Length} unit(s) built");
+
+if (packDirectory is null)
+    return 0;
+
+// Reached only on a fully successful build — see the all-or-nothing note in the help text.
+var manifest = PluginManifest.Read(pluginDirectory, packageVersion);
+var packagePath = PluginPacker.Pack(
+    pluginDirectory, manifest, units, outputDirectory, frameworkVersion, packDirectory);
+Console.WriteLine($"packed {Path.GetFileName(packagePath)}");
 return 0;
