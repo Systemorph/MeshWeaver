@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using Memex.Database.Migration;
 using Memex.Database.Migration.Migrations;
 
 // The single source of truth for versioned migrations. Program runs exactly this list, and
@@ -81,5 +82,15 @@ public static class MigrationRegistry
             throw new InvalidOperationException(
                 "Migration classes exist but are NOT registered in MigrationRegistry.All "
                 + "(they would be silently skipped): " + string.Join(", ", missing.Select(t => t.Name)));
+
+        // Pin the shared DbVersion.Latest constant (also compiled into Memex.Portal.Distributed's
+        // DbVersionGate) to the registry: a new migration registered without bumping the constant
+        // would silently loosen the portal's startup gate — that drift is exactly how the gate sat
+        // at 32 while migrations ran to V52.
+        var highest = All.Max(m => m.Version);
+        if (highest != DbVersion.Latest)
+            throw new InvalidOperationException(
+                $"DbVersion.Latest ({DbVersion.Latest}) does not match the highest registered "
+                + $"migration (V{highest}). Bump DbVersion.Latest in lock-step with the registry.");
     }
 }
