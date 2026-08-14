@@ -116,6 +116,14 @@ internal class ApiTokenService(
         var userTokenNamespace = $"{userId}/{ApiTokenNamespace}";
         var assignmentPath = $"{userId}/_Access/{userId}_Access";
 
+        // Opportunistic, fire-and-forget sweep of THIS user's already-expired tokens. Short-lived
+        // tokens (a browser session's mw_ token is minted with expiresInDays: 1) would otherwise
+        // pile up in the user's partition forever — nothing ever removed a token whose ExpiresAt had
+        // passed (issue #1477). Same shape as OAuthCodeStore.CleanupExpired: no timer, no watchdog,
+        // no background service — it only ever runs on the reactive mint path, and only over the
+        // minting user's own namespace.
+        CleanupExpired(userTokenNamespace);
+
         var rolesObs = ResolveSelfScopeRoles(assignmentPath);
 
         return rolesObs.SelectMany(capturedRoles =>
@@ -198,6 +206,105 @@ internal class ApiTokenService(
                             .SelectMany(__ => ConfirmReadable(created.Path))
                             .Select(___ => new TokenCreationResult(rawToken, created)));
                 });
+        });
+    }
+
+    /// <summary>
+    /// Fire-and-forget sweep of the minting user's EXPIRED token rows, run on the mint path.
+    ///
+    /// <para>
+    /// Enumerates <c>{userId}/ApiToken</c> straight off the AUTHORITATIVE shared store — the same
+    /// reason validation reads <see cref="IStorageAdapter"/> directly: the query index lags, and a
+    /// sweep must decide what to delete from what actually EXISTS, never from a stale snapshot.
+    /// Deletion goes back through <see cref="DeleteToken"/> (the canonical mesh delete), so the
+    /// user's live token list and every workspace mirror see the removal.
+    /// </para>
+    ///
+    /// <para>
+    /// 🚨 The predicate is deliberately narrow: a token is swept ONLY when it carries a
+    /// non-null <see cref="ApiToken.ExpiresAt"/> that is already in the PAST — i.e. a credential
+    /// <see cref="Validate"/> already refuses. A token with no expiry (a user's personal
+    /// long-lived token) is never touched, and neither is one that merely looks unused. Deleting
+    /// a live credential is the one failure mode this must not have.
+    /// </para>
+    ///
+    /// <para>
+    /// Self-paced (<c>Concat</c>, never <c>Merge</c>): one delete at a time, so a user carrying a
+    /// large backlog of expired tokens drains gently instead of bursting N node deletes onto the
+    /// mesh at once. Losing a race against a concurrent sweep or an explicit delete on another
+    /// replica is the expected outcome for the loser and only logged at Debug; an unexpected
+    /// sweep failure surfaces as a Warning.
+    /// </para>
+    /// </summary>
+    private void CleanupExpired(string userTokenNamespace)
+    {
+        var now = DateTimeOffset.UtcNow;
+        storage.ListChildPaths(userTokenNamespace)
+            .Take(1)
+            .SelectMany(listing => Observable.Concat(listing.NodePaths
+                .Select(path => storage.Read(path, hub.JsonSerializerOptions)
+                    .Where(n => IsExpired(n, now))
+                    .SelectMany(_ =>
+                    {
+                        logger.LogInformation(
+                            "Sweeping expired API token {Path} (expiry has passed; the token is already refused by validation)",
+                            path);
+                        return DeleteToken(path);
+                    })
+                    .Catch<bool, Exception>(ex =>
+                    {
+                        logger.LogDebug(ex,
+                            "Expired API token cleanup skipped {Path} (already gone or delete rejected)",
+                            path);
+                        return Observable.Return(false);
+                    }))))
+            .Subscribe(
+                _ => { },
+                ex => logger.LogWarning(ex,
+                    "Expired API token cleanup sweep failed for {Namespace}", userTokenNamespace));
+    }
+
+    /// <summary>
+    /// True when the stored node holds an <see cref="ApiToken"/> whose expiry has already
+    /// passed. A row that carries no token content, or a token with no expiry at all, is
+    /// never expired — both are left alone.
+    /// </summary>
+    private bool IsExpired(MeshNode? node, DateTimeOffset now)
+    {
+        var token = node?.ContentAs<ApiToken>(hub.JsonSerializerOptions);
+        return token?.ExpiresAt is { } expiresAt && expiresAt < now;
+    }
+
+    /// <summary>
+    /// Deletes the global <c>ApiToken/{hashPrefix}</c> index entry under the well-known System
+    /// identity — the SAME identity <see cref="CreateToken"/> writes it with.
+    ///
+    /// <para>
+    /// The global <c>ApiToken/</c> namespace is a separately-gated partition for security
+    /// infrastructure that ordinary users do not hold rights on, so a user-identity delete of
+    /// their own token's index entry can be refused — leaving the index row behind while the
+    /// user-scoped row goes away. That orphan is half of the two-nodes-per-mint pair this
+    /// service creates, so removing the token without it just moves the accumulation (#1477).
+    /// <see cref="Observable.Defer{TResult}(Func{IObservable{TResult}})"/> keeps the System
+    /// scope alive across the cold delete's Subscribe, exactly as the create path does.
+    /// </para>
+    /// </summary>
+    private IObservable<bool> DeleteIndexEntry(string indexPath)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var delete = accessService is null
+            ? nodeFactory.DeleteNode(indexPath)
+            : Observable.Defer(() =>
+            {
+                var disp = accessService.SwitchAccessContext(
+                    new AccessContext { ObjectId = WellKnownUsers.System, Name = "system-security" });
+                return nodeFactory.DeleteNode(indexPath).Finally(() => disp.Dispose());
+            });
+
+        return delete.Select(_ => true).Catch<bool, Exception>(ex =>
+        {
+            logger.LogDebug(ex, "API token index entry {Path} not deleted (already gone or refused)", indexPath);
+            return Observable.Return(false);
         });
     }
 
@@ -657,15 +764,12 @@ internal class ApiTokenService(
 
         // Chain the global-index delete into the returned observable rather
         // than firing a separate Subscribe — see the matching comment in
-        // DeleteToken. A missing index entry is fine: the Catch returns false
-        // and the primary revoke result wins.
+        // DeleteToken. A missing index entry is fine: DeleteIndexEntry swallows
+        // it and the primary revoke result wins.
         if (indexPath == null || indexPath == tokenNodePath)
             return primary;
 
-        return primary.SelectMany(result =>
-            nodeFactory.DeleteNode(indexPath)
-                .Catch<bool, Exception>(_ => Observable.Return(false))
-                .Select(_ => result));
+        return primary.SelectMany(result => DeleteIndexEntry(indexPath).Select(_ => result));
     }
 
     /// <summary>
@@ -695,14 +799,11 @@ internal class ApiTokenService(
         // completes faster, so the dispose-time Quiescing watchdog flags the
         // pending callback as a leaked subscription. Chaining here also makes
         // a missing-index case (token already gone) a non-failure of the whole
-        // operation: the inner Catch swallows it and the primary result wins.
+        // operation: DeleteIndexEntry swallows it and the primary result wins.
         if (indexPath == null || indexPath == tokenNodePath)
             return primary;
 
-        return primary.SelectMany(result =>
-            nodeFactory.DeleteNode(indexPath)
-                .Catch<bool, Exception>(_ => Observable.Return(false))
-                .Select(_ => result));
+        return primary.SelectMany(result => DeleteIndexEntry(indexPath).Select(_ => result));
     }
 
     /// <summary>

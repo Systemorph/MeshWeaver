@@ -2,9 +2,11 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.Blazor.Infrastructure; // PortalApplication
 using MeshWeaver.Mcp;
+using MeshWeaver.Mesh.Security;         // WellKnownUsers
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
+using MeshWeaver.Messaging;             // AccessService
 using Memex.Portal.Shared.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -27,9 +29,13 @@ namespace Memex.Portal.Shared.Api;
 /// </para>
 ///
 /// <para>
-/// <b>Auth</b>: gated by the existing <c>McpAuthenticationExtensions.PolicyName</c>
-/// policy — same <c>Authorization: Bearer mw_…</c> token format as <c>/mcp</c>, validated
-/// by <c>ApiTokenAuthenticationHandler</c>.
+/// <b>Auth</b>: mutating verbs are gated by <c>McpAuthenticationExtensions.PolicyName</c> —
+/// same <c>Authorization: Bearer mw_…</c> token format as <c>/mcp</c>, validated by
+/// <c>ApiTokenAuthenticationHandler</c>. The READ-ONLY verbs additionally accept the
+/// portal's own session cookie (<c>McpAuthenticationExtensions.ReadPolicyName</c>) so a
+/// server-side renderer holding the user's cookie never has to mint an API token — every
+/// mint writes two permanent mesh nodes, which made ordinary page traffic grow a user's
+/// partition without bound (issue #1477).
 /// </para>
 ///
 /// <para>
@@ -54,11 +60,25 @@ public static class MeshApiEndpoints
     /// </summary>
     public static IEndpointRouteBuilder MapMeshApi(this IEndpointRouteBuilder endpoints)
     {
+        // Bearer-only — EVERY verb that mutates, compiles, executes or uploads. A session
+        // cookie must never be able to drive one of these (see ReadPolicyName's remarks).
         var group = endpoints.MapGroup(RoutePrefix)
             .RequireAuthorization(Memex.Portal.Shared.Authentication.McpAuthenticationExtensions.PolicyName);
 
-        group.MapPost("/get", (HttpContext http, IMessageHub rootHub, GetBody body, CancellationToken ct) =>
+        // Cookie-OR-Bearer — the READ-ONLY subset the portal-next server renderer needs to
+        // paint a page for an already-signed-in visitor. 🚨 Only pure reads belong here;
+        // moving a verb into this group is a security decision, not a convenience.
+        var reads = endpoints.MapGroup(RoutePrefix)
+            .RequireAuthorization(Memex.Portal.Shared.Authentication.McpAuthenticationExtensions.ReadPolicyName);
+
+        reads.MapPost("/get", (HttpContext http, IMessageHub rootHub, GetBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Get(body.Path)));
+
+        // Who is calling — the caller's resolved mesh identity ({userId, name, email}), or a
+        // null userId when the request resolved to no real user. Replaces "mint a token and
+        // read the home partition out of its nodePath" as the SSR's way of learning whose
+        // dashboard to render: a read, answered from the identity the request already carries.
+        reads.MapPost("/whoami", HandleWhoAmI);
 
         group.MapPost("/search", (HttpContext http, IMessageHub rootHub, SearchBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Search(body.Query, body.BasePath)));
@@ -105,8 +125,9 @@ public static class MeshApiEndpoints
             RunString(http, rootHub, ct, ops => ops.ExecuteScript(body.Path, body.TimeoutSeconds ?? 120)));
 
         // First-full-frame render of a layout area — the SSR seeding verb (portal-next):
-        // returns {areas, data} EXACTLY as the sync-stream wire delivers it.
-        group.MapPost("/render-area", (HttpContext http, IMessageHub rootHub, RenderAreaBody body, CancellationToken ct) =>
+        // returns {areas, data} EXACTLY as the sync-stream wire delivers it. Read-only, and
+        // on the cookie-or-Bearer policy: this is the verb an SSR page render is FOR.
+        reads.MapPost("/render-area", (HttpContext http, IMessageHub rootHub, RenderAreaBody body, CancellationToken ct) =>
             HandleRenderArea(http, rootHub, body, ct));
 
         // Server-side Markdig render — the ONE markdown parser (the twin of the Blazor MarkdownView
@@ -123,7 +144,7 @@ public static class MeshApiEndpoints
         group.MapPost("/query-nodes", (HttpContext http, IMessageHub rootHub, QueryNodesBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.QueryNodes(body.Query, body.Limit ?? 50)));
 
-        group.MapPost("/resolve", (HttpContext http, IMessageHub rootHub, PathBody body, CancellationToken ct) =>
+        reads.MapPost("/resolve", (HttpContext http, IMessageHub rootHub, PathBody body, CancellationToken ct) =>
             RunString(http, rootHub, ct, ops => ops.Resolve(body.Path)));
 
         // Content-collection directory listing — the read half of the React FileBrowser. Path is
@@ -146,6 +167,44 @@ public static class MeshApiEndpoints
 
         return endpoints;
     }
+
+    /// <summary>
+    /// <c>POST /api/mesh/whoami</c> — the caller's resolved mesh identity, as
+    /// <c>{userId, name, email}</c>. <c>userId</c> is the mesh User node's Id (the caller's
+    /// home partition, e.g. <c>rbuergi</c>) and is <c>null</c> when the request resolved to
+    /// no real user.
+    ///
+    /// <para>
+    /// Reads the identity <c>UserContextMiddleware</c> already stamped on the portal hub's
+    /// <see cref="AccessService"/> — the SAME source <c>ApiTokenController</c> uses, and for the
+    /// same reason: it is the mesh User Id, never the email-shaped <c>preferred_username</c> an
+    /// OIDC provider supplies. An email-shaped id is refused rather than echoed, because a caller
+    /// that routed off it would target a <c>{email}</c> partition owning none of the user's data.
+    /// </para>
+    ///
+    /// <para>
+    /// This exists so a server-side renderer can learn whose home partition to paint WITHOUT
+    /// minting an API token (issue #1477). It is deliberately not an MCP tool: MCP callers
+    /// already know who they are — they presented the token.
+    /// </para>
+    /// </summary>
+    private static IResult HandleWhoAmI(HttpContext http)
+    {
+        var caller = http.RequestServices.GetRequiredService<PortalApplication>()
+            .Hub.ServiceProvider.GetRequiredService<AccessService>().Context;
+
+        var userId = caller?.ObjectId;
+        var resolved = !string.IsNullOrEmpty(userId)
+                       && !userId.Contains('@')
+                       && userId != WellKnownUsers.Anonymous;
+
+        return Results.Json(resolved
+            ? new WhoAmIResponse(userId, caller!.Name, caller.Email)
+            : new WhoAmIResponse(null, null, null));
+    }
+
+    /// <summary>Response shape of <c>POST /api/mesh/whoami</c>.</summary>
+    public record WhoAmIResponse(string? UserId, string? Name, string? Email);
 
     /// <summary>Default budget for <c>/render-area</c>; clamped so a caller can neither hang the
     /// request forever nor force a sub-second flake.</summary>
