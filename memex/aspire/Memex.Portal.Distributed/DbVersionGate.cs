@@ -22,10 +22,12 @@ namespace Memex.Portal.Distributed;
 /// in the Container App revision status (Failed) and prevents traffic from
 /// being routed to a broken portal.</para>
 ///
-/// <para>Bump <see cref="ExpectedDbVersion"/> in lock-step with the highest
-/// <c>Vxx_*.cs</c> migration in <c>Memex.Database.Migration</c>. Mismatch
-/// between the version this portal expects and what the runner produced
-/// fails-loud at startup with a clear diagnostic.</para>
+/// <para><see cref="ExpectedDbVersion"/> is the shared
+/// <see cref="Memex.Database.Migration.DbVersion.Latest"/> constant (linked
+/// source from the migration project), which the migration runner pins to the
+/// highest registered <c>Vxx_*</c> migration at its own startup — the two
+/// numbers cannot drift apart the way the hand-bumped constant did (it sat at
+/// 32 while migrations ran to V52).</para>
 /// </summary>
 public sealed class DbVersionGate(
     NpgsqlDataSource dataSource,
@@ -33,11 +35,11 @@ public sealed class DbVersionGate(
     ILogger<DbVersionGate> logger) : IHostedService
 {
     /// <summary>
-    /// Highest migration version this portal build expects to find in the DB.
-    /// Keep in sync with the highest Vxx_*.cs file in
-    /// <c>memex/aspire/Memex.Database.Migration/Migrations/</c>.
+    /// Highest migration version this portal build expects to find in the DB —
+    /// the shared constant compiled into both this portal and the migration
+    /// runner (see <c>Memex.Database.Migration/DbVersion.cs</c>).
     /// </summary>
-    public const int ExpectedDbVersion = 32;
+    public const int ExpectedDbVersion = Memex.Database.Migration.DbVersion.Latest;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
