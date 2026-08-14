@@ -20,6 +20,8 @@ recompiled.
 > data) see [Creating Node Types](/Doc/DataMesh/CreatingNodeTypes). For the design
 > rationale behind the release model see the
 > [NodeType Release Redesign](/Doc/Architecture/Postmortems/NodeTypeReleaseRedesign) postmortem.
+> For compiling the same source **outside** the portal — in CI, so the bytes can be shipped rather
+> than recomputed — see [Plugin Packaging](/Doc/Architecture/PluginPackaging).
 
 <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
