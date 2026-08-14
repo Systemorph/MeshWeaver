@@ -291,7 +291,7 @@ builder.UseOrleansMeshServer(address, silo =>
                 }
                 : null))
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
-    .ConfigureMemexPortal()
+    .ConfigureMemexPortal(builder.Configuration)
     // 🚨 Register the "storage" SOURCE collection at mesh level — the backing store that every
     // per-node MapContentCollection("x", "storage", …) mapping resolves against
     // (ContentService.ResolveMappedConfig looks the source up on the parent content service and
