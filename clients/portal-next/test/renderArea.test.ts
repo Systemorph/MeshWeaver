@@ -43,15 +43,16 @@ const wireFrame = {
 };
 
 describe("fetchRenderedArea", () => {
-  it("POSTs /api/mesh/render-area with the Bearer token and folds the wire frame", async () => {
+  it("POSTs /api/mesh/render-area with the forwarded session cookie and folds the wire frame", async () => {
     const spy = mockFetch(() => new Response(JSON.stringify(wireFrame), { status: 200 }));
 
-    const result = await fetchRenderedArea("https://portal.example", "mw_abc", "ACME/Pricing");
+    const result = await fetchRenderedArea("https://portal.example", "MemexAuth=abc", "ACME/Pricing");
 
     const [url, init] = spy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://portal.example/api/mesh/render-area");
     expect(init.method).toBe("POST");
-    expect((init.headers as Record<string, string>).authorization).toBe("Bearer mw_abc");
+    expect((init.headers as Record<string, string>).cookie).toBe("MemexAuth=abc");
+    expect((init.headers as Record<string, string>).authorization).toBeUndefined();
     expect(JSON.parse(String(init.body))).toEqual({ path: "ACME/Pricing" });
 
     // Instance keys decoded to PLAIN names (the shape StaticAreaSource / the renderer consume);

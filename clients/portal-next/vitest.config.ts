@@ -22,6 +22,9 @@ export default defineConfig({
       // The app-router hooks need Next's AppRouterContext (absent in a bare render) — stub so
       // LiveArea (useRouter for the access-denied redirect) is unit-testable.
       "next/navigation": path.resolve(here, "test/stubs/next-navigation.ts"),
+      // cookies()/headers() only exist inside Next's server runtime — stub so the page's async
+      // server component (AreaSnapshot) can be driven directly and its round-trips counted.
+      "next/headers": path.resolve(here, "test/stubs/next-headers.ts"),
     },
   },
   test: {

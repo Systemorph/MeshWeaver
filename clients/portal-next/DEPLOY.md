@@ -62,8 +62,8 @@ spec:
           image: meshweaver/portal-next:dev
           ports: [{ containerPort: 3000 }]
           env:
-            # Server-side token mint + snapshot fetch go straight to the portal Service,
-            # skipping the ingress round-trip. The BROWSER still talks same-origin
+            # Server-side snapshot fetches (cookie-forwarded) go straight to the portal
+            # Service, skipping the ingress round-trip. The BROWSER still talks same-origin
             # (cookies + gRPC-web are ingress-routed), so this only affects SSR.
             - name: PORTAL_ORIGIN
               value: "http://memex-portal-service:8080"
@@ -109,7 +109,7 @@ longest prefix first regardless of order, but keeping it first reads correctly):
 The app is built with `basePath: "/next"`, so no rewrite annotation is needed — it expects the
 prefix. TLS terminates at the ingress as today; the portal session cookie flows to `/next/*`
 because it is the SAME host (cookie path `/`), which is what authorizes the per-request
-server-side token mint.
+server-side snapshot reads (forwarded verbatim to the portal's cookie-or-Bearer read verbs).
 
 ## Local development (no k8s)
 
@@ -121,9 +121,10 @@ PORTAL_ORIGIN=http://localhost:5022 npm run dev     # http://localhost:3300/next
 ```
 
 With `PORTAL_ORIGIN` set, `next.config.mjs` adds root-origin rewrites (`/api/*`, the gRPC-web
-service, `/static/*`) proxying to the portal, so the browser's same-origin token mint + live
-gRPC-web connection work exactly like behind the shared ingress. Sign in on the portal origin
-first (e.g. `/login` → dev login) — the session cookie authorizes the mint.
+service, `/static/*`) proxying to the portal, so the server's cookie-forwarded snapshot reads, the
+browser's same-origin token mint and the live gRPC-web connection all work exactly like behind the
+shared ingress. Sign in on the portal origin first (e.g. `/login` → dev login) — the session cookie
+is what authorizes them.
 
 Rewrites are baked at **build** time: `next dev` picks the env up at start, but a local
 `next start` needs `PORTAL_ORIGIN=… npm run build` first. The Docker image builds without
@@ -137,9 +138,11 @@ local-tooling artifact).
 
 ## Notes
 
-- **Stateless by design**: every request mints a short-lived token from the forwarded cookies and
-  fetches a REST snapshot; the server never opens a gRPC/stream subscription. Scale horizontally
-  at will; no sticky sessions.
+- **Stateless by design**: every request forwards the incoming cookies to the portal's cookie-or-
+  Bearer READ verbs (`/api/mesh/whoami`, `/resolve`, `/render-area`, `/get`) and fetches a REST
+  snapshot; the server never opens a gRPC/stream subscription and never mints an API token (each
+  mint would write two permanent `ApiToken` mesh nodes per render — issue #1477). Scale
+  horizontally at will; no sticky sessions.
 - The live layer is browser-only (same-origin `/api/tokens` + gRPC-web at the origin root),
   identical to the Vite SPA at `/app`.
 - `/frontend/blazor` ("Back to classic") and `/frontend/react` remain portal endpoints — the

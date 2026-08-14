@@ -64,7 +64,7 @@ describe("server-side rendering", () => {
       Promise.resolve(new Response(JSON.stringify(wireFrame), { status: 200 })),
     ) as unknown as typeof fetch;
     try {
-      const rendered = await fetchRenderedArea("https://portal.example", "mw_abc", "ACME/Pricing");
+      const rendered = await fetchRenderedArea("https://portal.example", "MemexAuth=abc", "ACME/Pricing");
       expect(rendered.kind).toBe("ok");
       const tree = rendered.kind === "ok" ? rendered.tree : null;
 

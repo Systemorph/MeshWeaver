@@ -639,6 +639,94 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         validated!.UserId.Should().Be("user1");
     }
 
+    // ── Expiry sweep (issue #1477) ────────────────────────────────────────────────
+    //
+    // Every mint writes TWO permanent nodes — {userId}/ApiToken/{hash12} and the global
+    // ApiToken/{hash12} index — and until this sweep NOTHING ever removed either one. Short-lived
+    // tokens (a browser session mints with expiresInDays: 1) therefore accumulated in the user's
+    // partition forever: dead credentials, growing with traffic, cluttering their token list.
+    // The sweep runs on the mint path only (no timer, no watchdog) — the same shape
+    // OAuthCodeStore.CleanupExpired uses for abandoned authorization codes.
+
+    /// <summary>
+    /// A mint removes the minting user's already-expired tokens — BOTH nodes of the pair.
+    /// </summary>
+    [Fact]
+    public async Task CreateToken_SweepsTheUsersAlreadyExpiredTokens()
+    {
+        var service = GetService();
+        var expired = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Expired",
+            expiresAt: DateTimeOffset.UtcNow.AddHours(-1)).Should().Emit();
+        var expiredIndexPath = $"ApiToken/{((ApiToken)expired.Node.Content!).TokenHash[..12]}";
+
+        // The next mint is what sweeps.
+        var fresh = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Fresh").Should().Emit();
+
+        (await ObserveNode(expired.Node.Path).Should().Match(n => n is null))
+            .Should().BeNull("an expired token is a dead credential — nothing should keep it");
+        (await ObserveNode(expiredIndexPath).Should().Match(n => n is null))
+            .Should().BeNull("the global index entry is the OTHER half of the pair; leaving it "
+                             + "behind just moves the accumulation");
+
+        // …and the sweep did not take the token that triggered it.
+        (await ObserveNode(fresh.Node.Path).Should().Match(n => n is not null)).Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// The safety half: only a token whose expiry has ALREADY PASSED is swept. A token with no
+    /// expiry (a user's personal long-lived token) and one that expires in the future are live
+    /// credentials and must survive untouched.
+    /// </summary>
+    [Fact]
+    public async Task CreateToken_LeavesLiveTokensAlone()
+    {
+        var service = GetService();
+        var neverExpires = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Personal").Should().Emit();
+        var expiresLater = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Later",
+            expiresAt: DateTimeOffset.UtcNow.AddDays(30)).Should().Emit();
+        var expired = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Expired",
+            expiresAt: DateTimeOffset.UtcNow.AddHours(-1)).Should().Emit();
+
+        await service.CreateToken("user1", "Test User", "test@example.com", "Fresh").Should().Emit();
+
+        // The expired one going away is the positive signal that the sweep RAN — so the two
+        // assertions below are about what it chose not to touch, not about a race it might lose.
+        (await ObserveNode(expired.Node.Path).Should().Match(n => n is null)).Should().BeNull();
+
+        (await ObserveNode(neverExpires.Node.Path).Should().Match(n => n is not null))
+            .Should().NotBeNull("a token with no expiry never expires — sweeping it would delete a "
+                                + "credential the user is still using");
+        (await ObserveNode(expiresLater.Node.Path).Should().Match(n => n is not null))
+            .Should().NotBeNull("a token that expires in 30 days is live today");
+    }
+
+    /// <summary>
+    /// The sweep is scoped to the minting user's own namespace: one user's mint must never reach
+    /// into another user's partition, expired credentials or not.
+    /// </summary>
+    [Fact]
+    public async Task CreateToken_DoesNotSweepAnotherUsersExpiredTokens()
+    {
+        var service = GetService();
+        var mine = await service.CreateToken(
+            "user1", "Test User", "test@example.com", "Mine expired",
+            expiresAt: DateTimeOffset.UtcNow.AddHours(-1)).Should().Emit();
+        var theirs = await service.CreateToken(
+            "user2", "Other User", "other@example.com", "Theirs expired",
+            expiresAt: DateTimeOffset.UtcNow.AddHours(-1)).Should().Emit();
+
+        await service.CreateToken("user1", "Test User", "test@example.com", "Fresh").Should().Emit();
+
+        (await ObserveNode(mine.Node.Path).Should().Match(n => n is null)).Should().BeNull();
+        (await ObserveNode(theirs.Node.Path).Should().Match(n => n is not null))
+            .Should().NotBeNull("user1 minting a token must not delete anything of user2's");
+    }
+
     /// <summary>
     /// Folds the live <see cref="IMeshService.Query"/> stream for the MeshNode at
     /// <paramref name="path"/> into a single <c>MeshNode?</c> — Initial / Added / Updated /

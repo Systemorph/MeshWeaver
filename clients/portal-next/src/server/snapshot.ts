@@ -2,16 +2,21 @@
 //
 // 🚨 HARD RULE (the whole point of this architecture): the server NEVER opens a gRPC/stream
 // subscription. Everything here is a bounded HTTPS request/response against the portal origin —
-// mint a short-lived token off the INCOMING request's cookies, fetch a snapshot, render, done.
-// Live state is exclusively the CLIENT's job (see client/live.ts — the browser mints its own
-// token same-origin, exactly like the Vite SPA).
+// forward the INCOMING request's cookies, fetch a snapshot, render, done. Live state is
+// exclusively the CLIENT's job (see client/live.ts — the browser joins the mesh over gRPC-web,
+// exactly like the Vite SPA).
+//
+// 🚨 The server MINTS NOTHING. It used to POST /api/tokens per render, and every mint writes TWO
+// PERMANENT mesh nodes ({userId}/ApiToken/{hash} + the global ApiToken/{hash} index) — so plain
+// page traffic grew the visitor's partition without bound, a crawler worse (issue #1477). The
+// portal's read verbs accept the session cookie the request already carries, which is the only
+// credential SSR ever needed: it reads, it never writes.
 //
 // Snapshot surface (investigated against the source):
-//   - Token mint: POST {origin}/api/tokens (cookie-authorized; ApiTokenController in
-//     memex/Memex.Portal.Shared/Authentication/ApiTokenController.cs). Response
-//     { rawToken, nodePath, … } — nodePath is "{userId}/ApiToken/…", which reveals the caller's
-//     home partition (the SPA derives its default route the same way). The token is held in
-//     request-scoped locals ONLY — never persisted, never sent to the client.
+//   - Viewer identity: POST {origin}/api/mesh/whoami (cookie-authorized) → { userId, name, email }.
+//     userId is the caller's mesh User id = their home partition, which is the default route (the
+//     SPA derives the same thing from its own token mint's nodePath). A null userId means the
+//     session is not authenticated — SSR then degrades to the app shell.
 //   - Rendered-area snapshot (PRIMARY): POST {origin}/api/mesh/render-area
 //     (MeshApiEndpoints.HandleRenderArea → MeshOperations.RenderArea). The portal subscribes the
 //     node's DEFAULT layout area server-side, takes the first fully-materialised Full frame, and
@@ -22,7 +27,7 @@
 //     same areas[""] default-area indirection the live subscription uses.
 //   - Node snapshot (FALLBACK — older portals whose /api/mesh has no render-area verb, timeouts,
 //     denials): POST {origin}/api/mesh/get (MeshApiEndpoints.MapMeshApi — the REST
-//     transport-mirror of the MCP tools, Bearer mw_… authorized). Returns the MeshNode JSON, or
+//     transport-mirror of the MCP tools). Returns the MeshNode JSON, or
 //     a bare "Error: …" / "Not found: …" sentinel string (MeshOperations contract); the SSR then
 //     synthesizes an app-shell preview tree (title/type/markdown), replaced by the live
 //     gRPC-web area after hydration.
@@ -42,12 +47,12 @@ import type { AreaTree, Json, UiControl } from "@meshweaver/react/core";
 const requestCache: <T extends (...args: never[]) => unknown>(fn: T) => T =
   (React as { cache?: <T>(fn: T) => T }).cache ?? ((fn) => fn);
 
-export interface MintedToken {
-  rawToken: string;
-  /** "{userId}/ApiToken/…" — the caller's home partition prefix. */
-  nodePath: string;
-  /** The signed-in user's mesh id (home partition) — the default route. */
+/** The signed-in viewer behind the incoming request, as the portal resolved it. */
+export interface Viewer {
+  /** The signed-in user's mesh id (their home partition) — the default route. */
   userId: string;
+  name?: string;
+  email?: string;
 }
 
 /** Resolve the portal origin: PORTAL_ORIGIN env wins; otherwise same host as the incoming
@@ -62,33 +67,44 @@ export function resolvePortalOrigin(headers: Headers, env: NodeJS.ProcessEnv = p
 }
 
 /**
- * Mint a short-lived API token by forwarding the incoming request's cookies to the portal's
- * cookie-authorized mint endpoint. Returns null when the session is not authenticated (or no
- * portal lives on the origin) — SSR then degrades to the app shell and the client still attempts
- * its own takeover. Wrapped in React's per-request `cache` so multiple areas in one render share
- * one mint.
+ * Resolve the signed-in viewer by forwarding the incoming request's cookies to the portal's
+ * cookie-authorized identity read. Returns null when the session is not authenticated (401), when
+ * the portal resolved no real mesh user, or when no portal lives on the origin — SSR then degrades
+ * to the app shell and the client still attempts its own takeover. Wrapped in React's per-request
+ * `cache` so multiple areas in one render share one round-trip.
+ *
+ * 🚨 This REPLACED a token mint (POST /api/tokens), which wrote two permanent ApiToken nodes into
+ * the viewer's partition on EVERY page render (issue #1477). Reading an identity leaves nothing
+ * behind; minting a credential to read one is what made ordinary browsing unbounded growth.
  */
-export const mintToken = requestCache(async (origin: string, cookieHeader: string): Promise<MintedToken | null> => {
+export const fetchViewer = requestCache(async (origin: string, cookieHeader: string): Promise<Viewer | null> => {
   if (!cookieHeader) return null;
   try {
-    const resp = await fetch(`${origin}/api/tokens`, {
+    const resp = await fetch(`${origin}/api/mesh/whoami`, {
       method: "POST",
       cache: "no-store",
       headers: {
         "content-type": "application/json",
-        cookie: cookieHeader, // the incoming request's session cookie authorizes the mint
+        cookie: cookieHeader, // the incoming request's session cookie authorizes the read
       },
-      body: JSON.stringify({ label: "portal-next-ssr", expiresInDays: 1 }),
+      body: "{}",
     });
     if (!resp.ok) return null;
-    const body = (await resp.json()) as { rawToken?: string; nodePath?: string };
-    if (!body.rawToken) return null;
-    const nodePath = body.nodePath ?? "";
-    return { rawToken: body.rawToken, nodePath, userId: nodePath.split("/")[0] ?? "" };
+    const body = (await resp.json()) as { userId?: string | null; name?: string | null; email?: string | null };
+    if (!body.userId) return null;
+    return { userId: body.userId, name: body.name ?? undefined, email: body.email ?? undefined };
   } catch {
     return null; // no portal on this origin / network error — SSR degrades gracefully
   }
 });
+
+/** Headers for a server-side READ against the portal's `/api/mesh` read verbs: the incoming
+ *  request's session cookie, forwarded verbatim. Deliberately NO `authorization: Bearer` — the
+ *  server holds no token and mints none (issue #1477); the cookie the visitor already presented
+ *  is what authorizes the read. */
+function readHeaders(cookieHeader: string): Record<string, string> {
+  return { "content-type": "application/json", cookie: cookieHeader };
+}
 
 /** Tolerant property pick — the hub serializer casing differs between hosts (camel vs Pascal),
  *  exactly like the grpc-web client's `m["change"] ?? m["Change"]` reads. */
@@ -113,14 +129,14 @@ export interface NodeSnapshot {
  */
 export async function fetchNodeSnapshot(
   origin: string,
-  token: string,
+  cookieHeader: string,
   path: string,
 ): Promise<NodeSnapshot | null> {
   try {
     const resp = await fetch(`${origin}/api/mesh/get`, {
       method: "POST",
       cache: "no-store",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      headers: readHeaders(cookieHeader),
       body: JSON.stringify({ path }),
     });
     if (!resp.ok) return null;
@@ -165,7 +181,7 @@ export type RenderedAreaResult =
  */
 export async function fetchRenderedArea(
   origin: string,
-  token: string,
+  cookieHeader: string,
   path: string,
   area?: string,
   id?: string,
@@ -174,7 +190,7 @@ export async function fetchRenderedArea(
     const resp = await fetch(`${origin}/api/mesh/render-area`, {
       method: "POST",
       cache: "no-store",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      headers: readHeaders(cookieHeader),
       body: JSON.stringify({ path, ...(area ? { area } : {}), ...(id ? { id } : {}) }),
     });
     if (!resp.ok) return { kind: "none" }; // 404 = older portal, 504 = render timeout — degrade to preview
@@ -229,14 +245,14 @@ export function splitRemainder(remainder: string | null | undefined): { area: st
  * hazard the Blazor portal avoids by resolving first. Returns the whole-path fallback when the
  * verb is missing (older portal) or resolution fails, matching the pre-resolution behavior.
  */
-export async function fetchAreaTarget(origin: string, token: string, path: string): Promise<AreaTarget> {
+export async function fetchAreaTarget(origin: string, cookieHeader: string, path: string): Promise<AreaTarget> {
   const fallback: AreaTarget = { address: path, area: "", id: "", redirectOnDenied: null };
   if (!path) return fallback;
   try {
     const resp = await fetch(`${origin}/api/mesh/resolve`, {
       method: "POST",
       cache: "no-store",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      headers: readHeaders(cookieHeader),
       body: JSON.stringify({ path }),
     });
     if (!resp.ok) return fallback;

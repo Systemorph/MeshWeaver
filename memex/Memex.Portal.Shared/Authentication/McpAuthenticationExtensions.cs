@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.AspNetCore.Authentication;
@@ -25,6 +26,48 @@ public static class McpAuthenticationExtensions
     public const string PolicyName = "McpAuth";
 
     /// <summary>
+    /// Authorization policy for the READ-ONLY <c>/api/mesh</c> verbs: an
+    /// <c>Authorization: Bearer mw_…</c> token OR the portal's own session cookie.
+    ///
+    /// <para>
+    /// 🚨 Why a browser session must be enough here: a server-side renderer that already
+    /// holds the user's session cookie (portal-next SSR) otherwise has to MINT an API token
+    /// per page render just to read a snapshot back — and every mint writes TWO permanent
+    /// mesh nodes (<c>{userId}/ApiToken/{hash}</c> + the global <c>ApiToken/{hash}</c> index),
+    /// so ordinary page traffic grew a user's partition without bound (issue #1477). The
+    /// credential the caller already has must be sufficient to READ.
+    /// </para>
+    ///
+    /// <para>
+    /// 🚨 READ-ONLY on purpose. Every MUTATING verb stays on <see cref="PolicyName"/>
+    /// (Bearer-only), so a cookie can never drive a write. That keeps the CSRF surface at
+    /// zero by construction rather than by argument: the worst a forged cross-site request
+    /// could do against these endpoints is cause a read whose response the attacker cannot
+    /// see (no CORS grant), and the session cookie is <c>SameSite=Lax</c> so it is not even
+    /// sent on a cross-site POST. Adding a verb here is a security decision — only pure
+    /// reads belong.
+    /// </para>
+    /// </summary>
+    public const string ReadPolicyName = "MeshApiRead";
+
+    /// <summary>
+    /// The composite authentication scheme behind <see cref="ReadPolicyName"/>: a policy
+    /// scheme that forwards AUTHENTICATION to the Bearer/ApiToken scheme when the request
+    /// carries an <c>Authorization: Bearer</c> header and to the cookie scheme otherwise —
+    /// but forwards every CHALLENGE to the MCP scheme unconditionally.
+    ///
+    /// <para>
+    /// The challenge split is the load-bearing part. Letting the cookie scheme challenge
+    /// would answer an unauthenticated API call with <c>302 → /login</c> and an HTML page,
+    /// which is exactly the failure this file exists to prevent (see the type remarks): a
+    /// REST/MCP client sees a 200 full of markup instead of a 401 it can act on. Forwarding
+    /// the challenge keeps the API-shaped <c>401 + WWW-Authenticate: Bearer</c> for every
+    /// anonymous caller, cookie-capable or not.
+    /// </para>
+    /// </summary>
+    public const string CookieOrBearerScheme = "MeshApiCookieOrBearer";
+
+    /// <summary>
     /// Registers the ApiToken + MCP authentication schemes and the <c>McpAuth</c>
     /// authorization policy. Call after the primary (cookie / OIDC) auth has been
     /// registered — this adds to the existing authentication builder without
@@ -35,7 +78,8 @@ public static class McpAuthenticationExtensions
         services.AddAuthentication()
             .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
                 ApiTokenAuthenticationHandler.SchemeName, _ => { })
-            .AddMcp(ConfigureMcpAuth);
+            .AddMcp(ConfigureMcpAuth)
+            .AddPolicyScheme(CookieOrBearerScheme, CookieOrBearerScheme, ConfigureCookieOrBearer);
 
         services.AddAuthorization(options =>
         {
@@ -44,9 +88,36 @@ public static class McpAuthenticationExtensions
                 policy.AddAuthenticationSchemes(McpAuthenticationDefaults.AuthenticationScheme);
                 policy.RequireAuthenticatedUser();
             });
+
+            options.AddPolicy(ReadPolicyName, policy =>
+            {
+                policy.AddAuthenticationSchemes(CookieOrBearerScheme);
+                policy.RequireAuthenticatedUser();
+            });
         });
 
         return services;
+    }
+
+    /// <summary>
+    /// Wires <see cref="CookieOrBearerScheme"/>: pick the scheme by what the request
+    /// actually presents, and never let the cookie scheme write the challenge.
+    /// </summary>
+    private static void ConfigureCookieOrBearer(PolicySchemeOptions options)
+    {
+        options.ForwardDefaultSelector = context =>
+            context.Request.Headers.Authorization.ToString()
+                .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? McpAuthenticationDefaults.AuthenticationScheme
+                : CookieAuthenticationDefaults.AuthenticationScheme;
+
+        // 🚨 NEVER the cookie challenge — see CookieOrBearerScheme's remarks. Both auth
+        // modes the portal composes (unified cookie, and MicrosoftIdentity's OIDC + cookie
+        // sign-in) register CookieAuthenticationDefaults.AuthenticationScheme, so the
+        // selector above always names a scheme that exists; the challenge, however, has to
+        // stay API-shaped regardless of which one authenticated.
+        options.ForwardChallenge = McpAuthenticationDefaults.AuthenticationScheme;
+        options.ForwardForbid = McpAuthenticationDefaults.AuthenticationScheme;
     }
 
     private static void ConfigureMcpAuth(McpAuthenticationOptions options)
