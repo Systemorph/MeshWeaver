@@ -583,7 +583,10 @@ public static class MemexConfiguration
         /// Configures the mesh with Graph domain only.
         ///
         /// Configuration is read from appsettings:
-        /// - Graph:Storage:Type - Storage type: "FileSystem", "AzureBlob", "PostgreSql", or "Cosmos"
+        /// - Graph:Storage:Type - Storage type: "FileSystem", "AzureBlob", "PostgreSql", "Cosmos"
+        ///   or "Snowflake". Cosmos and Snowflake are BOOT PACKS: their factories register only
+        ///   when the matching DLL (MeshWeaver.Hosting.Cosmos / .Snowflake) is listed under
+        ///   Modules:Assemblies — installation runs before this selection, so ordering is safe.
         /// - Graph:Storage:BasePath - Base path for FileSystem storage
         /// - Graph:Storage:ConnectionString - Connection string for AzureBlob/Cosmos
         /// - storage - Content collection configuration (Name, SourceType, BasePath)
