@@ -22,7 +22,7 @@ namespace MeshWeaver.Observability;
 public sealed class LogIncidentIngestService(
     IMessageHub hub,
     IOptions<LogWatchOptions> options,
-    ILogger<LogIncidentIngestService>? logger = null)
+    ILogger<LogIncidentIngestService>? logger = null) : ILogIncidentIngest
 {
     /// <summary>
     /// How long to wait for the incident's node stream to produce its first snapshot before

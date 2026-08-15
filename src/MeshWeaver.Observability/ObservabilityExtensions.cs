@@ -42,10 +42,18 @@ public static class ObservabilityExtensions
                     services.Configure<LogWatchOptions>(
                         configuration.GetSection(LogWatchOptions.SectionName));
                 else
-                    services.Configure<LogWatchOptions>(_ => { });
+                    // No IConfiguration handed in — bind from the HOST's configuration through the
+                    // options pipeline instead. This is what lets the parameterless call work from
+                    // the boot-pack path (ObservabilityProviderAttribute), where no IConfiguration
+                    // is in reach at install time.
+                    services.AddOptions<LogWatchOptions>()
+                        .BindConfiguration(LogWatchOptions.SectionName);
 
                 return services
                     .AddSingleton<LogIncidentIngestService>()
+                    // The Contract seam the portal's compiled endpoint code resolves — same
+                    // instance, so a host with both registrations still has ONE ingest pipeline.
+                    .AddSingleton<ILogIncidentIngest>(sp => sp.GetRequiredService<LogIncidentIngestService>())
                     // Explicit factory, not AddSingleton<T>(): the GitHub dependencies are OPTIONAL.
                     // Ingest is useful without them (incidents are recorded and visible), so a host
                     // that has not wired MeshWeaver.GitSync must still start — the filer then says
