@@ -9,7 +9,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
-using MeshWeaver.GoogleMaps;
+using MeshWeaver.Maps;
 using MeshWeaver.Import.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -234,7 +234,7 @@ public static class PricingLayoutAreas
                         .WithView(Controls.Markdown($"# Risk Map\n\n*No geocoded risks found. {riskList.Count} risk(s) available but none have valid coordinates.*\n\n*Use the geocoding feature to resolve addresses to coordinates.*"));
                 }
 
-                var mapControl = BuildGoogleMapControl(geocodedRisks);
+                var mapControl = BuildMapControl(geocodedRisks);
 
                 return (UiControl?)Controls.Stack
                     .WithView(BuildToolbar(pricingPath, "RiskMap"))
@@ -243,7 +243,7 @@ public static class PricingLayoutAreas
             });
     }
 
-    private static GoogleMapControl BuildGoogleMapControl(IReadOnlyCollection<PropertyRisk> risks)
+    private static MapControl BuildMapControl(IReadOnlyCollection<PropertyRisk> risks)
     {
         var riskList = risks.Where(r => r.GeocodedLocation?.Latitude is not null && r.GeocodedLocation?.Longitude is not null).ToList();
 
@@ -278,7 +278,7 @@ public static class PricingLayoutAreas
             FullscreenControl = true
         };
 
-        return new GoogleMapControl()
+        return new MapControl()
         {
             Options = mapOptions,
             Markers = markers,

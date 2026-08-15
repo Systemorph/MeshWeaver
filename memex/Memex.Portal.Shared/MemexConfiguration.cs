@@ -30,7 +30,7 @@ using MeshWeaver.ContentCollections.Indexing.Graph;
 using MeshWeaver.ContentCollections.Indexing.PostgreSql;
 using MeshWeaver.Courses;
 using MeshWeaver.Documentation;
-using MeshWeaver.GoogleMaps;
+using MeshWeaver.Maps;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;

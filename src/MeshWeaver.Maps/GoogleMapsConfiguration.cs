@@ -1,4 +1,4 @@
-namespace MeshWeaver.GoogleMaps;
+namespace MeshWeaver.Maps;
 
 /// <summary>
 /// Options for loading the Google Maps JavaScript API, typically bound from application configuration.
