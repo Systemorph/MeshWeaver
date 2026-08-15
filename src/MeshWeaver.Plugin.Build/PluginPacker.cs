@@ -4,6 +4,8 @@ using System.Security;
 using System.Text;
 using System.Text.Json;
 
+using MeshWeaver.Plugin.Packaging;
+
 namespace MeshWeaver.Plugin.Build;
 
 /// <summary>
@@ -49,12 +51,9 @@ public static class PluginPacker
         if (File.Exists(packagePath))
             File.Delete(packagePath);
 
-        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create);
-
-        Write(archive, $"{manifest.PackageId}.nuspec", BuildNuspec(manifest, frameworkVersion));
-        Write(archive, "[Content_Types].xml", ContentTypes);
-
+        var entries = new List<NuGetPackageWriter.Entry>();
         var assemblies = new List<object>();
+
         foreach (var unit in units)
         {
             var dll = Path.Combine(buildOutputRoot, unit.UnitName, "bin", "Release", "net10.0", unit.UnitName + ".dll");
@@ -64,7 +63,10 @@ public static class PluginPacker
                     "a package with a partial assembly set is worse than none, because a consumer " +
                     "resolves the gap as a runtime TypeLoadException instead of a compile error");
 
-            archive.CreateEntryFromFile(dll, $"{AssemblyFolder}/{unit.UnitName}.dll");
+            var path = dll;
+            entries.Add(new NuGetPackageWriter.Entry(
+                $"{NuGetPackageWriter.AssemblyFolder}/{unit.UnitName}.dll",
+                () => File.OpenRead(path)));
             assemblies.Add(new { nodePath = unit.NodePath, assembly = $"{unit.UnitName}.dll" });
         }
 
@@ -76,25 +78,26 @@ public static class PluginPacker
                 || relative.StartsWith("bin/", StringComparison.Ordinal)
                 || relative.StartsWith(".worktrees/", StringComparison.Ordinal))
                 continue;
-            archive.CreateEntryFromFile(file, $"{ContentFolder}/{relative}");
+            var path = file;
+            entries.Add(new NuGetPackageWriter.Entry(
+                $"{NuGetPackageWriter.ContentFolder}/{relative}", () => File.OpenRead(path)));
         }
 
-        Write(archive, "meshweaver/manifest.json", JsonSerializer.Serialize(
+        var manifestJson = JsonSerializer.Serialize(
             new
             {
                 plugin = manifest.Name,
                 version = manifest.Version,
                 frameworkVersion,
                 // 🚨 The identity an installer must check before seeding these bytes into the
-                // assembly store. The runtime compares MVIDs, not version strings — see
-                // FrameworkIdentity. Null means it could not be established here, and an installer
-                // must then compile rather than seed: a wrong seed is worse than no seed, because
-                // the store hit suppresses the rebuild that was needed and the mismatch surfaces
-                // as a TypeLoadException inside an ALC, with no overlay and no diagnostic.
+                // assembly store. The runtime compares MVIDs, not version strings.
                 frameworkMvid = FrameworkIdentity.ResolveFrameworkMvid(frameworkVersion),
                 assemblies,
             },
-            new JsonSerializerOptions { WriteIndented = true }));
+            new JsonSerializerOptions { WriteIndented = true });
+
+        using (var output = File.Create(packagePath))
+            NuGetPackageWriter.Write(output, manifest, frameworkVersion, entries, manifestJson);
 
         return packagePath;
     }

@@ -33,7 +33,10 @@ public static class PrebuiltAssemblySeeder
     /// not. So anything short of an exact match declines — including an absent identity, which is
     /// what a producer that predates MVID recording emits.</para>
     /// </summary>
-    internal static string? DeclineReason(string? frameworkMvid) =>
+    /// <para>Public because the consuming side asks it BEFORE unpacking a downloaded bundle — the
+    /// gate below is still the one that holds, but re-seeding a whole bundle only to decline every
+    /// assembly individually wastes the download and buries the one reason in N identical lines.</para>
+    public static string? DeclineReason(string? frameworkMvid) =>
         string.IsNullOrEmpty(frameworkMvid)
             ? $"the producer recorded no framework identity, so it cannot be shown ABI-compatible "
               + $"with the live framework {NodeTypeCompilationHelpers.FrameworkVersion}"

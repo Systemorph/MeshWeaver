@@ -154,3 +154,65 @@ become `<dependency id="MeshWeaver.Plugin.Store" version="[1.0.0,2.0.0)" />`. No
 
 One reserved id prefix (`MeshWeaver.Plugin.`) is what lets `packageSourceMapping` pin every plugin to
 a private feed with a single rule — without it a typo'd id silently resolves against nuget.org.
+
+**The assembly entry path is the node path verbatim**, not slash-replaced. Sanitising is not
+injective — `A/B/C` and `A_B/C` both become `A_B_C`, and mesh paths do contain underscores — so two
+NodeTypes would land on one archive entry and the second would silently adopt the first's bytes. Zip
+entry names take slashes natively and nothing extracts to disk (consumers read entries into memory),
+so there is no traversal concern to trade against it. `NuGetPackageWriter.EntryPathFor` states the
+rule once. **A consumer still reads the node path from the manifest, never from a file name** — that
+is the writer's guarantee to change, not the reader's to assume.
+
+---
+
+## Distribution: bundles served by the portal
+
+A consumer needs three things to skip a compile: the bytes, the framework identity they were built
+against, and which node each belongs to. One bundle carries exactly that, over two routes.
+
+There is no package protocol involved. **Nothing in NodeType compilation restores** — the bake runs
+in-process with Roslyn against `MetadataReference`s, and the only `restore` in the tree is
+`MeshWeaver.NuGet` resolving `#r "nuget:…"` directives against the framework's own baked feed. A
+service index and dependency ranges would be surfaces that can drift with no client to read them.
+
+| Route | Serves |
+|---|---|
+| `GET /api/plugins/bundles/index.json` | This instance's framework MVID, and every plugin it can serve |
+| `GET /api/plugins/bundles/{plugin}/{version}` | That plugin's assemblies + manifest |
+
+Both are gated by the **instance key** (`mwi_`, as `Bearer` or `Basic`) resolving to the admin-owned
+`PluginGrant` — the same gate as `/api/plugins`, deliberately, because that is already what purchases
+are recorded against. They **fail closed**: no anonymous escape hatch, unlike the registry's dev-mode
+one. These are compiled assemblies for paid modules.
+
+**The portal serves the bytes rather than handing out storage access.** `BlobAssemblyStore` is
+already the durable transport — one blob per `(nodeTypePath, version)`, hydrated into a process-local
+cache on demand — so reading through `IAssemblyStore` means the bundle is assembled from the very
+bytes this portal loads and runs. A scoped SAS handed to each consumer would be a second entitlement
+path to keep honest, and revoking it is not the same operation as revoking the install's grant.
+
+**Portal-served bundles carry assemblies only, no node content.** The consumer already installs
+content through the registry (`PackageInstaller`), so shipping it again is weight on every fetch plus
+a second copy that can disagree with the one the installer wrote. (A CI-produced package still
+carries content — it is a full install artifact, not an increment.)
+
+### The consuming side
+
+`PluginBundleClient` (in `MeshWeaver.PluginCatalog`) reads the index once per client — a
+`PromiseSlot`, so concurrent callers share one run and a fault evicts rather than replaying forever —
+compares the framework MVID **once, before any download**, then fetches and seeds each assembly
+through `PrebuiltAssemblySeeder`.
+
+Two ordering rules, both of which fail silently when broken:
+
+1. **Adopt AFTER the content install, never before.** The seeder re-keys each assembly under *this*
+   instance's own node version, so the NodeType node must exist. Run it earlier and every seed
+   declines — not corrupting, but a no-op indistinguishable from a registry serving nothing.
+2. **Take the version from the INDEX, not from the install record.** `PackageManifest.ReleasedVersion`
+   is written by the installer *after* the module's `manifest.lock` arrives, so at the moment an
+   install would ask for a bundle it is routinely absent. Asking with it makes adoption a permanent
+   silent no-op. The serving instance is authoritative about what it can serve anyway.
+
+**Nothing here can fail an install.** Zero adopted is the normal outcome whenever the registry runs a
+different framework build, and compiling is the always-available fallback — so a bundle that is
+missing, refused, or unreadable is logged and stepped over.

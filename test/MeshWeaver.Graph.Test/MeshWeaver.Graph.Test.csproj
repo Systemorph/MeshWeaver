@@ -16,6 +16,7 @@
          a handful of pure functions, and the alternative — a new test project — costs a shard entry
          and a README for less coverage than this one file already carries. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Build\MeshWeaver.Plugin.Build.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
