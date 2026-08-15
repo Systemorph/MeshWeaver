@@ -1,0 +1,141 @@
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using Xunit;
+
+namespace MeshWeaver.Graph.Test;
+
+/// <summary>
+/// The compiled enforcement point of the data-contributed menu lane (#1645). These tests pin the
+/// SECURITY properties the design rests on: a contribution can only ever NARROW its own
+/// visibility — the permission gate is floored at Read and enforced against the viewer's
+/// effective permission, an anonymous viewer (arriving as <see cref="Permission.None"/>) gets
+/// nothing, and every node-shape gate in the closed vocabulary subtracts.
+/// </summary>
+public class UiContributionProjectionTest
+{
+    private static (MeshNode, UiContribution) Contribution(UiContribution content) =>
+        (new MeshNode("c1", "Plugins/Contribs") { Name = "c1", NodeType = UiContributionNodeType.NodeType },
+         content);
+
+    private static readonly MeshNode SomeNode =
+        new("Doc", "Org") { Name = "Doc", NodeType = "Markdown" };
+
+    private static IReadOnlyCollection<NodeMenuItemDefinition> Project(
+        UiContribution content,
+        string context = UiContribution.NodeContext,
+        MeshNode? node = null,
+        Permission perms = Permission.Read,
+        bool isAdmin = false)
+        => UiContributionProjection.ProjectMenu(
+            [Contribution(content)], context, "Org/Doc", node ?? SomeNode, perms, isAdmin);
+
+    [Fact]
+    public void AnonymousViewer_PermissionNone_GetsNothing_EvenWhenTheContributionDemandsNothing()
+    {
+        // The aggregator forces Permission.None for anonymous; the floor (Read) must filter.
+        Assert.Empty(Project(new UiContribution { Area = "MyArea" }, perms: Permission.None));
+    }
+
+    [Fact]
+    public void PermissionFloor_IsRead_AndReadViewerSeesTheEntry()
+    {
+        var item = Assert.Single(Project(new UiContribution { Area = "MyArea", Label = "Mine" }));
+        Assert.Equal("Mine", item.Label);
+        Assert.Equal(Permission.Read, item.RequiredPermission);
+        Assert.Equal("MyArea", item.Area);
+    }
+
+    [Fact]
+    public void DeclaredPermission_IsEnforced_AgainstTheViewersEffectivePermission()
+    {
+        var demandsUpdate = new UiContribution { Area = "MyArea", RequiredPermission = Permission.Update };
+        Assert.Empty(Project(demandsUpdate, perms: Permission.Read));
+        Assert.Single(Project(demandsUpdate, perms: Permission.Read | Permission.Update));
+    }
+
+    [Fact]
+    public void AdminOnly_Subtracts_ForNonAdmins()
+    {
+        var adminEntry = new UiContribution
+        {
+            Area = "AdminArea",
+            Gates = new UiContributionGates { AdminOnly = true },
+        };
+        Assert.Empty(Project(adminEntry, isAdmin: false));
+        Assert.Single(Project(adminEntry, isAdmin: true));
+    }
+
+    [Fact]
+    public void ExcludePartitionRoot_UsesTheSharedProtectedRootPredicate()
+    {
+        var userRoot = new MeshNode("alice", "") { Name = "alice", NodeType = "User" };
+        var gated = new UiContribution
+        {
+            Area = "MyArea",
+            Gates = new UiContributionGates { ExcludePartitionRoot = true },
+        };
+        Assert.Empty(Project(gated, node: userRoot));
+        Assert.Single(Project(gated, node: SomeNode));
+    }
+
+    [Fact]
+    public void NodeTypeGate_IsSuffixAware_LikeEveryPlatformMatches()
+    {
+        var slideOnly = new UiContribution
+        {
+            Area = "MyArea",
+            Gates = new UiContributionGates { NodeTypes = ImmutableList.Create("Slide") },
+        };
+        var pluginSlide = new MeshNode("S1", "Org") { Name = "S1", NodeType = "Publish/Slide" };
+        var bareSlide = new MeshNode("S2", "Org") { Name = "S2", NodeType = "Slide" };
+
+        Assert.Single(Project(slideOnly, node: pluginSlide));
+        Assert.Single(Project(slideOnly, node: bareSlide));
+        Assert.Empty(Project(slideOnly, node: SomeNode));
+    }
+
+    [Fact]
+    public void ContextRouting_IsExact_AndSettingsContributionsNeverLeakIntoTheNodeMenu()
+    {
+        var settingsTab = new UiContribution { Area = "TabArea", Context = UiContribution.SettingsContext };
+        Assert.Empty(Project(settingsTab, context: UiContribution.NodeContext));
+
+        var nodeEntry = new UiContribution { Area = "MyArea" };   // Context unset ⇒ Node
+        Assert.Empty(Project(nodeEntry, context: UiContribution.MeshContext));
+        Assert.Single(Project(nodeEntry, context: UiContribution.NodeContext));
+    }
+
+    [Fact]
+    public void MissingArea_ContributesNothing()
+    {
+        Assert.Empty(Project(new UiContribution { Label = "No target" }));
+    }
+
+    [Fact]
+    public void SettingsTabs_GateOnAdminOnly_AndCarryTheContributedArea()
+    {
+        var contributions = new[]
+        {
+            Contribution(new UiContribution
+            {
+                Context = UiContribution.SettingsContext, Area = "TabArea", Label = "My Tab", Order = 7,
+            }),
+            Contribution(new UiContribution
+            {
+                Context = UiContribution.SettingsContext, Area = "AdminTab",
+                Gates = new UiContributionGates { AdminOnly = true },
+            }),
+        };
+
+        var forUser = UiContributionProjection.ProjectSettingsTabs(contributions, isAdmin: false);
+        var tab = Assert.Single(forUser);
+        Assert.Equal("My Tab", tab.Label);
+        Assert.Equal(7, tab.Order);
+
+        Assert.Equal(2, UiContributionProjection.ProjectSettingsTabs(contributions, isAdmin: true).Count);
+    }
+}

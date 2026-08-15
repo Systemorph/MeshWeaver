@@ -77,6 +77,11 @@ public static class GraphConfigurationExtensions
                 .AddPartitionType()
                 .AddGlobalSettingsType();
 
+            // Data-contributed menu entries (UiContribution nodes, #1645) + the mesh-scoped live
+            // catalog the menu aggregation maps (one query subscription per silo).
+            builder.AddUiContributionType();
+            builder.ConfigureServices(s => s.AddSingleton<UiContributionCatalog>());
+
             // The static-repo importer runs its bulk create/upsert traffic on a DEDICATED
             // hub (import/{meshHubId}) so it never floods the root mesh hub's action block —
             // the router must stay free (prod 2026-06-11 wedge). Declare its address-type as
