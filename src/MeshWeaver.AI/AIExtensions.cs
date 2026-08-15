@@ -205,6 +205,11 @@ public static class AIExtensions
             services.AddTransient<IImageGenerator, ImageGenerator>();
             services.AddTransient<IDescriptionGenerator, DescriptionGenerator>();
 
+            // Live provider model listing (HTTP /models via the I/O pool) — the add-provider
+            // flow and the OpenAI module's model-discovery sync both resolve it. Formerly a
+            // portal-local registration.
+            services.TryAddSingleton<ProviderModelLister>();
+
             // The content-indexing image describer: an OPTIONAL input to ContentIndexingService
             // (sp.GetService<IImageDescriber>()), registered from the AI side because captioning
             // needs the mesh's default multimodal chat model — the indexing module itself carries

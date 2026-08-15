@@ -47,11 +47,15 @@ public static class SpeechEndpoints
     }
 
     private static async Task<IResult> HandleTranscribe(
-        HttpContext http, ISpeechTranscriber transcriber, CancellationToken ct)
+        HttpContext http, CancellationToken ct)
     {
+        // OPTIONAL resolution: the transcriber ships as a module (MeshWeaver.Speech in
+        // Modules:Assemblies) — a deployment without it must answer the same 503 as an
+        // unconfigured one, never a missing-service 500.
+        var transcriber = http.RequestServices.GetService(typeof(ISpeechTranscriber)) as ISpeechTranscriber;
         // Off/unset => tell the caller plainly rather than 500. The mic UI also checks IsConfigured
         // (via /api/mesh base-url / config) and stays hidden, so this is a belt-and-suspenders guard.
-        if (!transcriber.IsConfigured)
+        if (transcriber is null || !transcriber.IsConfigured)
             return Results.Json(
                 new { error = "Speech transcription is not configured (no Whisper endpoint, or disabled)." },
                 statusCode: StatusCodes.Status503ServiceUnavailable);

@@ -13,7 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Models;
+namespace MeshWeaver.AI.OpenAI;
 
 /// <summary>
 /// Keeps the <c>OpenAICompatible</c> provider's <c>LanguageModel</c> catalog in sync with the models
@@ -36,7 +36,7 @@ namespace Memex.Portal.Shared.Models;
 ///     system identity — mirrors <c>EventSubscriptionRunner</c>.</item>
 ///   <item>Writes go through <see cref="IMeshService.CreateOrUpdateNode"/> (idempotent upsert — race-free
 ///     re-runs) and <see cref="IMeshService.DeleteNode"/>. The child nodes match the platform shape
-///     <see cref="ModelProviderService"/> emits (<c>ProviderRef</c> → the parent provider node, no key on
+///     <c>ModelProviderService</c> emits (<c>ProviderRef</c> → the parent provider node, no key on
 ///     the child), so the chat-client factory resolves credentials the same way.</item>
 /// </list>
 /// </para>
