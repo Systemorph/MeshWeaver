@@ -37,6 +37,12 @@ public sealed class OpenAIProvidersAttribute : MeshNodeProviderAttribute
             services.AddOptions<OpenAIConfiguration>().BindConfiguration("OpenAI");
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IChatClientFactory, OpenAIChatClientAgentFactory>());
+            // Endpoint model discovery for the OpenAI-compatible provider (GET /v1/models →
+            // ModelDefinition nodes). Formerly a flag-gated portal registration
+            // (Features:Ai:Providers:OpenAICompatible) — riding the module now: it self-gates on
+            // OpenAICompatible:Endpoint + the opt-in DiscoverModels flag, so listing the module
+            // without that config keeps it inert.
+            services.AddHostedService<OpenAICompatibleModelSync>();
             return services.AddAzureOpenAI().AddOpenAICompatible().AddOpenRouter();
         }),
     ];

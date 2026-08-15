@@ -6,7 +6,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Models;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Fetches the <b>live model list</b> from a provider's HTTP API so the

@@ -10,6 +10,19 @@ namespace MeshWeaver.Speech;
 public static class SpeechServiceExtensions
 {
     /// <summary>
+    /// The module-lane registration: binds <see cref="SpeechConfiguration"/> from the host's
+    /// <c>Speech</c> section through the OPTIONS pipeline (no <see cref="IConfiguration"/> is in
+    /// reach at module-install time) and registers the transcriber. Unconfigured deployments stay
+    /// inert: <see cref="ISpeechTranscriber.IsConfigured"/> is false, the mic UI hides, and the
+    /// transcribe endpoint answers 503.
+    /// </summary>
+    public static IServiceCollection AddSpeechTranscriptionFromConfiguration(this IServiceCollection services)
+    {
+        services.AddOptions<SpeechConfiguration>().BindConfiguration(SpeechConfiguration.SectionName);
+        return services.AddSpeechTranscription();
+    }
+
+    /// <summary>
     /// Binds <see cref="SpeechConfiguration"/> from the <c>Speech</c> section and registers a singleton
     /// <see cref="ISpeechTranscriber"/> backed by the Whisper container. Config is read live via
     /// <see cref="IOptionsMonitor{T}"/>, so a portal edit (reloaded config) takes effect without a restart.
