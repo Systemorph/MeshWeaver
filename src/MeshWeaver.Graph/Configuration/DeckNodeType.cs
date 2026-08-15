@@ -1,22 +1,14 @@
 using System.Collections.Immutable;
-using MeshWeaver.Data;
-using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Provides configuration for Deck node types in the graph.
-/// A <b>Deck</b> is a presentation (or a course sequence) whose slide/page ORDER is
-/// declared EXTERNALLY, on the deck node itself, in <see cref="DeckContent.Slides"/> —
-/// an ordered list of child references. The individual <see cref="SlideNodeType">Slide</see>
-/// nodes stay pure content: they carry no order of their own, so re-sequencing a deck is
-/// a single edit to the deck's manifest, never a sweep across every slide.
-/// <para>
-/// The Deck's Overview renders a hidable side-nav built from that manifest plus a stage
-/// with a "Present" entry point (see <see cref="DeckLayoutAreas"/>). When a Slide's parent
-/// is a Deck, the Slide views resolve prev/next/index/count from the deck's manifest instead
-/// of the sibling <see cref="MeshNode.Order"/> fallback — see <see cref="SlideLayoutAreas"/>.
-/// </para>
+/// The compiled residue of the retired built-in Deck node type. Decks are owned by the
+/// Publish pack (<c>Publish/Deck</c>, a dynamic NodeType with in-mesh layout areas); V53
+/// retyped every bare <c>Deck</c> instance mesh-wide (#1589). What stays compiled: this
+/// type's <see cref="NodeType"/> const and suffix-aware <see cref="Matches"/> (persistence
+/// parser + export gates) and the <see cref="DeckContent"/> record — the EXTERNAL, ordered
+/// slide manifest that <c>DeckSlidesCache</c> and the export templates resolve.
 /// </summary>
 public static class DeckNodeType
 {
@@ -36,42 +28,6 @@ public static class DeckNodeType
     public static bool Matches(string? nodeType) =>
         nodeType == NodeType
         || nodeType?.EndsWith("/" + NodeType, StringComparison.Ordinal) == true;
-
-    /// <summary>
-    /// Inline deck/presentation-screen glyph (SVG data URI). Kept inline so the node
-    /// type needs no static-asset round-trip; it renders directly as an <c>&lt;img src&gt;</c>.
-    /// </summary>
-    private const string DeckIcon =
-        "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='%234f6bed'%3E"
-        + "%3Cpath%20d='M3%204h18a1%201%200%200%201%201%201v10a1%201%200%200%201-1%201h-7v2h3v2H7v-2h3v-2H3a1%201%200%200%201-1-1V5a1%201%200%200%201%201-1zm2%203v6h14V7H5z'/%3E"
-        + "%3C/svg%3E";
-
-    /// <summary>
-    /// Registers the built-in "Deck" MeshNode on the mesh builder.
-    /// </summary>
-    public static TBuilder AddDeckType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-    {
-        builder.AddMeshNodes(CreateMeshNode());
-        return builder;
-    }
-
-    /// <summary>
-    /// Creates a MeshNode definition for the Deck node type.
-    /// This provides HubConfiguration for nodes with nodeType="Deck": the deck views,
-    /// the <see cref="DeckContent"/> data source, and the create-a-Slide menu affordance.
-    /// </summary>
-    public static MeshNode CreateMeshNode() => new(NodeType)
-    {
-        Name = "Deck",
-        Icon = DeckIcon,
-        HubConfiguration = config => config
-            .AddDeckViews()
-            // The Export node-menu group + composition: PDF / Email, one page per slide.
-            .WithExport(ExportDeclaration.SlideDeck)
-            .AddMeshDataSource(s => s.WithContentType<DeckContent>())
-            // Creating a child from a Deck offers Slide — the deck's natural content.
-            .AddCreatableTypes(SlideNodeType.NodeType)
-    };
 }
 
 /// <summary>
@@ -106,7 +62,7 @@ public record DeckContent
     /// <summary>
     /// Optional GitHub-style mesh-node query selecting the deck's slides DYNAMICALLY, as a live
     /// (synced) set — used only when <see cref="Slides"/> is empty. The matched nodes are ordered
-    /// by <see cref="MeshNode.Order"/> (nulls last, ties by path). When BOTH this and
+    /// by <c>MeshNode.Order</c> (nulls last, ties by path). When BOTH this and
     /// <see cref="Slides"/> are empty the deck defaults to <b>its own subtree</b>
     /// (<c>path:{deck} scope:descendants</c>), so a deck with slides as children just works with no
     /// manifest. An explicit <see cref="Slides"/> manifest always wins and is kept in its declared

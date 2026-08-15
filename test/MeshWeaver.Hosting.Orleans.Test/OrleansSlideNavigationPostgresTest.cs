@@ -201,15 +201,15 @@ public class OrleansSlideNavigationPostgresTest(ITestOutputHelper output) : Test
         counterText.Should().Be("Slide 2 / 3",
             "the FIRST rendered counter frame must already carry the deck position — " +
             "an intermediate 'Slide 1 / 1' frame is the flicker regression this test pins");
-        barAreas.Should().Contain(a => a.EndsWith("/" + SlideLayoutAreas.PrevButtonArea),
+        barAreas.Should().Contain(a => a.EndsWith("/" + TestSlideAreas.PrevButtonArea),
             "the first presenter-bar frame must already have Prev");
-        barAreas.Should().Contain(a => a.EndsWith("/" + SlideLayoutAreas.NextButtonArea),
+        barAreas.Should().Contain(a => a.EndsWith("/" + TestSlideAreas.NextButtonArea),
             "the first presenter-bar frame must already have Next");
 
         // ── 2. Warm switch to the LAST slide: shared deck stream ⇒ complete first frame. ──
         var (lastCounter, lastBar) = await RenderContentFirstFrame(workspace, last, ct);
         lastCounter.Should().Be("Slide 3 / 3", "the warm deck switch must render complete immediately");
-        lastBar.Should().Contain(a => a.EndsWith("/" + SlideLayoutAreas.PrevButtonArea));
+        lastBar.Should().Contain(a => a.EndsWith("/" + TestSlideAreas.PrevButtonArea));
 
         // ── 3. Resolution cache: second ask for an already-resolved path is synchronous. ──
         var siloSp = ((InProcessSiloHandle)Cluster!.Primary).SiloHost.Services;
@@ -312,7 +312,7 @@ public class OrleansSlideNavigationPostgresTest(ITestOutputHelper output) : Test
     private static async Task<(string CounterText, string[] BarAreas)> RenderContentFirstFrame(
         IWorkspace workspace, string slidePath, CancellationToken ct)
     {
-        var reference = new LayoutAreaReference(SlideLayoutAreas.ContentArea);
+        var reference = new LayoutAreaReference(TestSlideAreas.ContentArea);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(slidePath), reference);
 
@@ -324,7 +324,7 @@ public class OrleansSlideNavigationPostgresTest(ITestOutputHelper output) : Test
 
         var barPath = root.Areas
             .Select(a => a.Area?.ToString())
-            .First(p => p != null && p.EndsWith("/" + SlideLayoutAreas.PresenterBarArea, StringComparison.Ordinal))!;
+            .First(p => p != null && p.EndsWith("/" + TestSlideAreas.PresenterBarArea, StringComparison.Ordinal))!;
 
         var bar = (StackControl)(await stream.GetControlStream(barPath)
             .Where(c => c is StackControl)
@@ -334,7 +334,7 @@ public class OrleansSlideNavigationPostgresTest(ITestOutputHelper output) : Test
         var barAreas = bar.Areas.Select(a => a.Area?.ToString() ?? "").ToArray();
 
         var counterPath = barAreas.First(p =>
-            p.EndsWith("/" + SlideLayoutAreas.CounterArea, StringComparison.Ordinal));
+            p.EndsWith("/" + TestSlideAreas.CounterArea, StringComparison.Ordinal));
         var counter = (LabelControl)(await stream.GetControlStream(counterPath)
             .Where(c => c is LabelControl)
             .Take(1)
@@ -347,7 +347,7 @@ public class OrleansSlideNavigationPostgresTest(ITestOutputHelper output) : Test
 
 /// <summary>
 /// Production-shape PG wiring for the slide-navigation pipeline — the portal mesh
-/// (slide node types ship with it) over partitioned Postgres with RLS, same shape as
+/// (the Slide node type is TEST-LOCAL — TestSlideAreas — since the core type retired, #1589) over partitioned Postgres with RLS, same shape as
 /// <see cref="ColdLoadPostgresSiloConfigurator"/> minus the AI stack.
 /// </summary>
 public class SlideNavPostgresSiloConfigurator : ISiloConfigurator, IHostConfigurator
@@ -373,6 +373,7 @@ public class SlideNavPostgresSiloConfigurator : ISiloConfigurator, IHostConfigur
         hostBuilder.UseOrleansMeshServer()
             .ConfigureServices(services => services.AddPartitionedPostgreSqlPersistence(connectionString))
             .ConfigurePortalMesh()
+            .AddMeshNodes(TestSlideAreas.CreateTestSlideNode())
             .AddRowLevelSecurity();
     }
 }

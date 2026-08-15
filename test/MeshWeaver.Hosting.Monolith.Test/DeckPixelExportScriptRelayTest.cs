@@ -37,6 +37,7 @@ public class DeckPixelExportScriptRelayTest(ITestOutputHelper output) : Monolith
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            .AddMeshNodes(TestDeckTypes.Slide(), TestDeckTypes.Deck())
             .AddMarkdownExport(cfg => cfg.PixelRendering = cfg.PixelRendering with
             {
                 // The same choice a Linux container deployment has to make, made explicitly here.

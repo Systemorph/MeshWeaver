@@ -35,8 +35,12 @@ public static class GraphConfigurationExtensions
                 .AddReleaseType()
                 .AddBuildType()
                 .AddMarkdownType()
-                .AddSlideType()
-                .AddDeckType()
+                // Slide/Deck are NOT built-in any more: the Publish pack owns them as dynamic
+                // NodeTypes (Publish/Slide, Publish/Deck) with in-mesh layout areas; V53 retyped
+                // every bare instance mesh-wide (#1589). The compiled residue that stays:
+                // SlideNodeType/DeckNodeType consts + Matches (persistence parser, export gates),
+                // the content records (MarkdownFileParser), DeckSlidesCache (export templates),
+                // and SlideShowControl with its Blazor view (the pack emits the control).
                 .AddCommentType()
                 .AddRedirectType()
                 .AddTrackedChangeType()
@@ -301,7 +305,7 @@ public static class GraphConfigurationExtensions
                     // to the root, so consumers here resolve the shared root instance.
                     // Mesh-scoped deck sibling-slide cache: one shared, replayed sibling
                     // query per deck so slide navigation never re-runs the query per
-                    // slide render (see DeckSlidesCache / SlideLayoutAreas.ObserveDeckSlides).
+                    // slide render (see DeckSlidesCache).
                     services.AddSingleton<IDeckSlidesCache, DeckSlidesCache>();
                     return services;
                 })
