@@ -12,7 +12,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Mcp;
 using MeshWeaver.Speech;
-using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Hosting.Grpc;
@@ -22,14 +21,11 @@ using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Layout;
-using MeshWeaver.Blazor.Analysis;
-using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.ContentCollections.Indexing.Graph;
 using MeshWeaver.ContentCollections.Indexing.PostgreSql;
 using MeshWeaver.Documentation;
-using MeshWeaver.Maps;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -70,7 +66,7 @@ public static class MemexConfiguration
     /// <summary>
     /// Conditional fluent step: applies <paramref name="apply"/> only when
     /// <paramref name="condition"/> holds — keeps feature-flagged registrations readable inside
-    /// long builder chains (the Features:UiPacks gates below).
+    /// long builder chains.
     /// </summary>
     public static T If<T>(this T value, bool condition, Func<T, T> apply)
         => condition ? apply(value) : value;
@@ -116,9 +112,6 @@ public static class MemexConfiguration
         // Space invite — grant an existing user now, or schedule the grant (+ create an invitation)
         // for when an unknown email's account is created. Backed by the ScheduledActionRunner.
         services.AddSingleton<MeshWeaver.Graph.SpaceInviteService>();
-
-        // Configure Radzen
-        services.AddRadzenServices();
 
         // AI services — thread persistence is handled via MeshNodes.
         // Anthropic / AzureFoundry / AzureOpenAI registration is now a
@@ -251,9 +244,6 @@ public static class MemexConfiguration
         // Register WebSearch plugin (agents declare it in frontmatter; gracefully degrades without Bing API key)
         services.AddWebSearchPlugin(config =>
             builder.Configuration.GetSection("WebSearch").Bind(config));
-
-        // Configure GoogleMaps
-        services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
 
         services.AddHttpContextAccessor();
         services.AddHttpClient();
@@ -992,13 +982,12 @@ public static class MemexConfiguration
             return (TBuilder)builder
             .ConfigureHub(mesh => mesh
                 .AddMeshTypes()
-                // The compiled view packs — each behind its Features:UiPacks flag so a deployment
-                // can switch it off by config (the AI-provider precedent). Registration order
-                // stopped being load-bearing with the fallback-slot seam, so a disabled pack
-                // simply leaves its controls to the fallback.
-                .If(features.UiPacks.Radzen, c => c.AddRadzenViews())
-                .If(features.UiPacks.Analysis, c => c.AddAnalysisViews())
-                .If(features.UiPacks.GoogleMaps, c => c.AddGoogleMaps())
+                // The optional view packs (Radzen, Analysis, GoogleMaps) are MODULES now: each
+                // DLL's MeshNodeProviderAttribute registers its views + DI twin when the pack is
+                // listed under Modules:Assemblies — drop a line to drop the pack (the AI-provider
+                // pattern; formerly the Features:UiPacks flags). Registration order stopped being
+                // load-bearing with the fallback-slot seam, so an absent pack simply leaves its
+                // controls to the fallback.
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
                 .AddChatViews()   // Register ThreadChatView
                 .AddUserProfileViews() // Register UserProfilePageView
