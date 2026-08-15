@@ -51,12 +51,22 @@ public static class LogIncidentEndpoints
 
         // AllowAnonymous at the ASP.NET auth layer: the caller is a cluster service, not a
         // signed-in user, so the user auth schemes do not apply. The shared secret below IS the gate.
+        // The ingest seam resolves OPTIONALLY: the engine rides the MeshWeaver.Observability
+        // module, so "token configured but module not listed" must answer an actionable 503,
+        // never a missing-service 500.
         endpoints.MapPost(Route, (
                     HttpContext http,
                     LogIncidentReport report,
-                    ILogIncidentIngest ingest,
                     CancellationToken ct) =>
-                Ingest(http, report, ingest, expected, logger, ct))
+                {
+                    var ingest = http.RequestServices.GetService(typeof(ILogIncidentIngest)) as ILogIncidentIngest;
+                    if (ingest is null)
+                        return Task.FromResult(Results.Json(
+                            new { error = "Red-log ingest is not active: LogWatch:IngestToken is configured but the " +
+                                          "MeshWeaver.Observability module is not listed under Modules:Assemblies." },
+                            statusCode: StatusCodes.Status503ServiceUnavailable));
+                    return Ingest(http, report, ingest, expected, logger, ct);
+                })
             .AllowAnonymous();
 
         logger?.LogInformation("Red-log ingest mapped at {Route}.", Route);
