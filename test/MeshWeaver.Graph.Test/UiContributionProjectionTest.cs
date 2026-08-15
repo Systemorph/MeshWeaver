@@ -138,4 +138,40 @@ public class UiContributionProjectionTest
 
         Assert.Equal(2, UiContributionProjection.ProjectSettingsTabs(contributions, isAdmin: true).Count);
     }
+
+    [Fact]
+    public void SettingsTabs_CarryGroupingAndStableId_AndResolveFluentIconNames()
+    {
+        var contributions = new[]
+        {
+            (new MeshNode("Privacy", "Admin/UiContribution")
+                { Name = "Privacy", NodeType = UiContributionNodeType.NodeType },
+             new UiContribution
+             {
+                 Context = UiContribution.SettingsContext,
+                 Area = "SettingsPrivacy",
+                 Label = "Privacy",
+                 LabelKey = "settings.privacy",
+                 Icon = "Shield",
+                 Group = "Administration",
+                 GroupKey = "settings.groupAdministration",
+                 GroupIcon = "Shield",
+                 Order = 330,
+             }),
+        };
+
+        var tab = Assert.Single(UiContributionProjection.ProjectSettingsTabs(contributions, isAdmin: false));
+        // The node's trailing path segment IS the tab id — the /GlobalSettings/{Id} deep link a
+        // compiled tab had before migrating must survive the migration.
+        Assert.Equal("Privacy", tab.Id);
+        Assert.Equal("Administration", tab.Group);
+        Assert.Equal("settings.groupAdministration", tab.GroupKey);
+        Assert.Equal("settings.privacy", tab.LabelKey);
+        // Icon strings go through the platform's total Icon.Parse — a Fluent name becomes a
+        // fluent-provider Icon object (the NavMenu renderer's contract); both slots resolve alike.
+        var icon = Assert.IsType<Domain.Icon>(tab.Icon);
+        Assert.Equal(Domain.Icon.FluentProvider, icon.Provider);
+        Assert.Equal("Shield", icon.Id);
+        Assert.IsType<Domain.Icon>(tab.GroupIcon);
+    }
 }

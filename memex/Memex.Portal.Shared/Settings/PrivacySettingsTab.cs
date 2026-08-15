@@ -23,27 +23,8 @@ public static class PrivacySettingsTab
 {
     public const string TabId = "Privacy";
 
-    public static MessageHubConfiguration AddPrivacySettingsTab(this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetTab));
-
-    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetTab(
-        LayoutAreaHost host, RenderingContext ctx)
-    {
-        var tab = new GlobalSettingsMenuItemDefinition(
-            Id: TabId,
-            Label: "Privacy",
-            ContentBuilder: BuildContent,
-            Group: "Administration",
-            Icon: FluentIcons.Shield(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 330)
-            { LabelKey = "settings.privacy", GroupKey = "settings.groupAdministration" };
-
-        return AdminMenuGate.IsPlatformAdmin(host)
-            .Select(isAdmin => isAdmin
-                ? (IReadOnlyList<GlobalSettingsMenuItemDefinition>)new[] { tab }
-                : []);
-    }
+    // The menu entry is a seeded UiContribution node with Gates.AdminOnly
+    // (PlatformSettingsTabAreas); the SettingsPrivacy layout area re-asserts the admin gate.
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {

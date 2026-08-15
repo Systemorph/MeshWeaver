@@ -725,6 +725,9 @@ public static class MemexConfiguration
                 // RLS for cross-partition operations (list Spaces, create
                 // a new Space, etc.). Empty / missing section = no-op.
                 .AddMeshNodes(Authentication.GlobalAdminSeed.Build(configuration))
+                // What's New / About / Privacy settings-tab entries as seeded UiContribution
+                // nodes — the WS7 lane a plugin's own settings tab arrives through.
+                .AddPlatformSettingsTabContributions()
                 .AddSpaceType()
                 // Generic webhook inbox: the WebhookEvent node type behind
                 // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
@@ -890,15 +893,13 @@ public static class MemexConfiguration
                         // Platform-admin Instances overview: live cluster query (namespaces, versions,
                         // replica health) + Grafana log links + guided create-instance plan generator.
                         .AddInstancesAdminSettingsTab()
-                        // Public privacy statement (Admin/Privacy, served anonymously at /privacy).
-                        .AddPrivacySettingsTab()
+                        // What's New / About / Privacy ride the UiContribution lane (WS7 slice 2):
+                        // content stays compiled, exposed here as layout areas; the menu entries are
+                        // seeded UiContribution nodes (AddPlatformSettingsTabContributions below).
+                        .AddPlatformSettingsTabAreas()
                         // Published to the web: every page a logged-out visitor can open, read from
                         // the SAME enumeration /sitemap.xml renders, so the two cannot drift.
                         .AddPublishedSettingsTab()
-                        // About — exact running build (version + git commit) with a GitHub link. Ungated.
-                        .AddAboutSettingsTab()
-                        // What's New — per-entry release notes shipped as Doc/WhatsNew nodes. Ungated.
-                        .AddWhatsNewSettingsTab()
                         // Token-usage analytics (per-model _Usage satellites): filter by period,
                         // group by model / person / thread, cost from ModelPricing.
                         .AddTokenUsageSettingsTab()
