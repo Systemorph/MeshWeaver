@@ -1,13 +1,14 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Linq;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Graph;
+namespace MeshWeaver.OgCard;
 
 /// <summary>
 /// The <c>OgCard</c> layout area: a link-preview card (image + title + description, the whole

@@ -16,6 +16,7 @@ using MeshWeaver.Markdown.Export.Email;
 using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Handlers;
 using MeshWeaver.Mesh;
+using MeshWeaver.OgCard;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -45,6 +46,7 @@ public class EmailDocumentExportTest(ITestOutputHelper output) : MonolithMeshTes
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
             .AddMarkdownExport()
+            .AddOgCard()   // the embedded card rides the OgCard MODULE in production
             .ConfigureServices(s => s.AddSingleton<IEmailSender>(_email));
 
     [Fact(Timeout = 180000)]

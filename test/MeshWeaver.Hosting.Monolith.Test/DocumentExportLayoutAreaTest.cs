@@ -19,6 +19,7 @@ using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Markdown.Export.Pixel;
 using MeshWeaver.Mesh;
+using MeshWeaver.OgCard;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,7 +59,8 @@ public class DocumentExportLayoutAreaTest(ITestOutputHelper output) : MonolithMe
     private const string CardDescriptionToken = "RECONCILIATIONSENTINEL";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddMarkdownExport();
+        => base.ConfigureMesh(builder).AddMarkdownExport()
+            .AddOgCard();   // the embedded card rides the OgCard MODULE in production
 
     [Fact(Timeout = 180000)]
     public async Task PdfExport_RendersEmbeddedLayoutArea_NotItsSourceText()
