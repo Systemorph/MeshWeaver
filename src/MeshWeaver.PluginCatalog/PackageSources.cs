@@ -28,6 +28,18 @@ public sealed record ConfiguredPackageSource(IPackageSource Source, string GitRe
     /// </summary>
     public string RepoPath { get; init; } = "";
 
+    /// <summary>
+    /// The prebuilt-assembly client for this source, when it is a REMOTE REGISTRY that can serve
+    /// them. Null for every other source shape — a git/GitHub/node-repo source has source files and
+    /// no bake behind it, so there is nothing to adopt and the install compiles as it always has.
+    ///
+    /// <para>Carried here rather than resolved at the install site because the registry URL and this
+    /// installation's instance key are known only where the source is CONSTRUCTED; rediscovering
+    /// them later would mean a second copy of that resolution, which is how a consumer ends up
+    /// silently fetching from the wrong registry.</para>
+    /// </summary>
+    public PluginBundleClient? Bundles { get; init; }
+
     /// <summary>The path prefix inside the repo the modules live under
     /// (<c>PluginCatalog:Sources:N:Subdir</c>); empty = the repository root.</summary>
     public string Subdir { get; init; } = "";

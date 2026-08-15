@@ -585,7 +585,13 @@ public sealed class InstanceAutoRegistrationService(
                     .Select(token => new ConfiguredPackageSource(
                         new RegistryPackageSource(hub, registry.Url, token),
                         string.IsNullOrWhiteSpace(registry.Ref) ? "HEAD" : registry.Ref,
-                        string.IsNullOrWhiteSpace(registry.Name) ? registry.Url : registry.Name)))
+                        string.IsNullOrWhiteSpace(registry.Name) ? registry.Url : registry.Name)
+                    {
+                        // Same URL and same key as the catalog read: a registry entitled to serve
+                        // this instance its package files is exactly the one entitled to serve the
+                        // assemblies compiled from them.
+                        Bundles = new PluginBundleClient(hub, registry.Url, token),
+                    }))
                 .ToObservable()
                 .Concat()
                 .ToList()
@@ -896,6 +902,12 @@ public sealed class InstanceAutoRegistrationService(
                     // place.
                     .SelectMany(result => PackageInstaller
                         .EnsureDeclaredAccess(hub, package, partition, logger)
+                        .Select(_ => result))
+                    // 🚨 AFTER the content install, never before: the seeder re-keys each assembly
+                    // under THIS instance's own node version, so the NodeType node has to exist.
+                    // Run earlier and every seed declines — not corrupting, but a silent no-op that
+                    // looks exactly like a registry serving nothing.
+                    .SelectMany(result => AdoptPrebuilt(candidate, package)
                         .Select(_ => result)))
             .Select(result => new DefaultInstallSummary(
                 Installed: result.Written > 0 ? 1 : 0,
@@ -908,6 +920,33 @@ public sealed class InstanceAutoRegistrationService(
                     "[DefaultInstall] installing package {Id} failed — continuing with the rest; the "
                     + "instance is missing it until the next boot or a manual install", package.Id);
                 return Observable.Return(new DefaultInstallSummary(0, 0, 1, [package.Id]));
+            });
+    }
+
+    /// <summary>
+    /// Adopts the registry's prebuilt assemblies for this package, so the install does not pay for
+    /// a compile it can skip.
+    ///
+    /// <para>Never fails the install. Zero adopted is the NORMAL outcome whenever the registry runs
+    /// a different framework build, and compiling is the correct, always-available fallback — so a
+    /// bundle that is missing, refused or unreadable is logged and stepped over, exactly like a
+    /// registry that serves no bundles at all.</para>
+    /// </summary>
+    private IObservable<int> AdoptPrebuilt(InstallCandidate candidate, PackageManifest package)
+    {
+        var bundles = candidate.Source.Bundles;
+
+        // No registry behind this source: nothing to adopt, and nothing worth a log line on boot.
+        if (bundles is null)
+            return Observable.Return(0);
+
+        return bundles.Adopt(package.Id)
+            .Catch((Exception exception) =>
+            {
+                logger.LogInformation(exception,
+                    "[DefaultInstall] {Id}: no prebuilt assemblies adopted — compiling instead",
+                    package.Id);
+                return Observable.Return(0);
             });
     }
 
