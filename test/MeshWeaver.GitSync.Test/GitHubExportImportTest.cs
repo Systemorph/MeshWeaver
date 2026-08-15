@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.GitSync;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -13,6 +14,18 @@ namespace MeshWeaver.GitSync.Test;
 /// </summary>
 public class GitHubExportImportTest(ITestOutputHelper output) : GitHubSyncTestBase(output)
 {
+    // TEST-LOCAL Slide registration: the production type is the Publish pack's dynamic
+    // Publish/Slide (in-mesh source) since the core built-in retired (#1589). The subject —
+    // the markdown front-matter round-trip of a typed node — is node-type-agnostic.
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddMeshNodes(new MeshNode(SlideNodeType.NodeType)
+            {
+                Name = "Slide (test-local)",
+                HubConfiguration = config => config
+                    .AddMeshDataSource(s => s.WithContentType<SlideContent>()),
+            });
+
     [Fact(Timeout = 120000)]
     public async Task Export_Then_Import_RoundTripsContent()
     {
