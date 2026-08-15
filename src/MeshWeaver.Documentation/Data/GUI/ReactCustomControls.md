@@ -18,7 +18,7 @@ Extending the renderer therefore has exactly two halves:
 
 ## 1. Define the control server-side
 
-A custom control is a record deriving from `UiControl<TControl>`, exactly like the built-in ones. The two constructor arguments name the client module and its API version. This is the same pattern the shipped `GoogleMapControl` uses (`src/MeshWeaver.GoogleMaps`):
+A custom control is a record deriving from `UiControl<TControl>`, exactly like the built-in ones. The two constructor arguments name the client module and its API version. This is the same pattern the shipped `MapControl` uses (`src/MeshWeaver.Maps`):
 
 ```csharp
 using MeshWeaver.Layout;

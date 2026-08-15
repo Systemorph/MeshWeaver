@@ -197,7 +197,7 @@ public sealed record UiPackFeatureOptions
     /// <summary>The analysis views (KpiStrip / Tower / ComparisonBars).</summary>
     public bool Analysis { get; init; } = true;
 
-    /// <summary>Google Maps (GoogleMapControl).</summary>
+    /// <summary>Google Maps (MapControl).</summary>
     public bool GoogleMaps { get; init; } = true;
 
 }
