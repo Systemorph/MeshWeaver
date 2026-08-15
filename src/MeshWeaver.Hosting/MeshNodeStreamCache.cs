@@ -1665,7 +1665,20 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         logger.LogError(ex,
                             "[UpdateQueue] queue pipeline FAULTED path={Path} — evicting dead queue",
                             path);
-                        _updateQueues.Remove(path);
+                        // DISPOSED-CACHE GUARD (fault side): this callback fires asynchronously,
+                        // so a straggling pipeline can fault AFTER Dispose() — MemoryCache.Dispose
+                        // never runs eviction callbacks, so the Concat subscription outlives the
+                        // cache and its late fault lands here. Touching the disposed MemoryCache
+                        // throws a synchronous ObjectDisposedException INSIDE OnError, which is
+                        // unobserved → AppDomain.UnhandledException → xUnit "catastrophic failure"
+                        // on an otherwise-green shard (CI: MeshWeaver.AI.Test MASKED exit=2 on
+                        // e0faf867b). Same Volatile idiom as the UpdateRaw write-side guard above;
+                        // the narrow catch covers the read-flag-then-Dispose race — inside OnError
+                        // nothing may throw, and evicting an already-disposed cache is a no-op by
+                        // definition (the fault stays visible via the LogError above).
+                        if (System.Threading.Volatile.Read(ref _disposed) == 0)
+                            try { _updateQueues.Remove(path); }
+                            catch (ObjectDisposedException) { /* teardown won the race */ }
                     });
                 return new UpdateQueueEntry(subject, sub);
             }, LazyThreadSafetyMode.ExecutionAndPublication);
