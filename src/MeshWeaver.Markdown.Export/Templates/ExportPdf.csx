@@ -80,7 +80,7 @@ if (DeckNodeType.Matches(rootNode.NodeType))
     // Resolve the deck's slide SELECTION with the SAME logic the live Overview/Present
     // binding uses — the manifest (ordered paths) or, when empty, the deck's query / the
     // default Slide subtree. One source of truth for a deck's order.
-    var (paths, query, filterSlideTypes) = DeckLayoutAreas.ResolveDeckSelection(rootNode, sourcePath, jsonOptions);
+    var (paths, query, filterSlideTypes) = DeckSelection.ResolveDeckSelection(rootNode, sourcePath, jsonOptions);
 
     var slideNodes = new List<MeshNode>();
     if (paths.Count > 0)
@@ -104,7 +104,7 @@ if (DeckNodeType.Matches(rootNode.NodeType))
             .FirstAsync()
             .ToTask(Ct);
         // Drop the deck root itself and any '_'-prefixed governance node — same
-        // filtering the live query binding applies (see DeckLayoutAreas.ObserveQuerySlides).
+        // filtering the live query binding applies (the same filtering the live deck views apply).
         // The DEFAULT selection additionally keeps only slide-typed nodes (suffix-aware,
         // so plugin types like Publish/Slide count); a custom query decides for itself.
         var matched = slideMatches

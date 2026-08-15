@@ -749,6 +749,13 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     /// </summary>
     protected bool IsPresentMode => IsPresentRoute(NavigationManager.Uri);
 
+    /// <summary>
+    /// The wire name of the chrome-free presentation area. The area itself is registered by the
+    /// Publish pack's in-mesh source (<c>Publish/Deck/Source/DeckLayoutAreas.cs</c>, which owns
+    /// this value) — the compiled shell only recognizes the route to suppress its chrome.
+    /// </summary>
+    private const string PresentArea = "Present";
+
     /// <summary>True when the URL's node-address path (query/fragment stripped) ends with the <c>/Present</c> area.</summary>
     private bool IsPresentRoute(string uri)
     {
@@ -757,8 +764,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         if (cut >= 0)
             path = path[..cut];
         path = path.Trim('/');
-        return path.Equals(DeckLayoutAreas.PresentArea, StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith($"/{DeckLayoutAreas.PresentArea}", StringComparison.OrdinalIgnoreCase);
+        return path.Equals(PresentArea, StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith($"/{PresentArea}", StringComparison.OrdinalIgnoreCase);
     }
 
     // Side panel is gated on auth — anonymous users see neither toggle nor pane.

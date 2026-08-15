@@ -16,8 +16,10 @@ namespace MeshWeaver.Markdown.Export.Pixel;
 /// the framework's own markdown pipeline (<c>MarkdownViewLogic.Render</c> → the cached
 /// <c>MarkdownExtensions.CreateMarkdownPipeline</c>) — the same renderer the portal uses, so raw
 /// HTML and inline SVG pass through exactly as they do on screen. The stage CSS comes from
-/// <see cref="SlideLayoutAreas.ThemeTokens"/> and the sibling <c>SlidePrint.css</c>, mirroring
-/// <c>SlideLayoutAreas.BuildStage</c>. The document skeleton and the per-slide section are
+/// <see cref="ThemeTokens"/> and the sibling <c>SlidePrint.css</c>, mirroring the live stage the
+/// Publish pack renders (its in-mesh <c>Publish/Slide/Source/SlideLayoutAreas.cs</c> carries the
+/// master copy of these tokens — re-sync on pack theme changes). The document skeleton and the
+/// per-slide section are
 /// <b>template files</b> (<c>SlidePrint.html</c> / <c>SlidePrintSection.html</c>) with named
 /// placeholders — this class interpolates content into templates, it never builds markup.</para>
 ///
@@ -34,6 +36,21 @@ public static partial class SlidePrintComposer
     private const string BodyToken = "{{BODY}}";
 
     /// <summary>
+    /// The slide-stage theme tokens (Deep-Indigo backdrop + accents). The MASTER copy lives in
+    /// the Publish pack's in-mesh source (<c>Publish/Slide/Source/SlideLayoutAreas.cs</c>) — the
+    /// live stage and this print chain must agree, so re-sync this const whenever the pack's
+    /// theme changes. Compiled here because the print composer is pure/offline by design and
+    /// cannot read in-mesh source.
+    /// </summary>
+    public const string ThemeTokens =
+        "--ae-bg: linear-gradient(135deg, #0b1d3a 0%, #3b1d6e 100%);" +
+        "--ae-bg-solid: #0b1d3a;" +
+        "--ae-fg: #f4f7ff;" +
+        "--ae-muted: #9db8ff;" +
+        "--ae-accent: #3b82f6;" +
+        "--ae-accent2: #818cf8;";
+
+    /// <summary>
     /// The stage background used when a slide sets no <see cref="SlideContent.Background"/> —
     /// the same <c>var(--ae-bg)</c> default the live stage falls back to.
     /// </summary>
@@ -44,7 +61,7 @@ public static partial class SlidePrintComposer
 
     /// <summary>
     /// Composes the print document. <paramref name="slides"/> is already in the deck's own order
-    /// (resolved by <c>DeckLayoutAreas.ResolveDeckSelection</c> — one source of truth for order,
+    /// (resolved by <c>DeckSelection.ResolveDeckSelection</c> — one source of truth for order,
     /// shared with the live views and the content-faithful export).
     /// </summary>
     /// <param name="title">Document title; lands in <c>&lt;title&gt;</c> (HTML-encoded).</param>
@@ -58,7 +75,7 @@ public static partial class SlidePrintComposer
 
         return SlidePrintTemplates.Document
             .Replace(TitleToken, WebUtility.HtmlEncode(title))
-            .Replace(StylesToken, SlidePrintTemplates.Styles.Replace(ThemeTokensToken, SlideLayoutAreas.ThemeTokens))
+            .Replace(StylesToken, SlidePrintTemplates.Styles.Replace(ThemeTokensToken, ThemeTokens))
             .Replace(SlidesToken, sections.ToString());
     }
 

@@ -61,7 +61,7 @@ via `SlideAssetInliner` because its print document is loaded from `file://` unde
 
 `Deck → PDF` can additionally render **pixel-faithfully** (`DocumentExportOptions.Fidelity = Pixel`):
 the deck is composed into one self-contained HTML document carrying the *live* stage CSS
-(`SlideLayoutAreas.ThemeTokens` + `Pixel/SlidePrint.css`) and printed by a headless browser, so CSS
+(`SlidePrintComposer.ThemeTokens` + `Pixel/SlidePrint.css`) and printed by a headless browser, so CSS
 gradients, background images, raw-HTML slide bodies, CSS layout and transforms survive — none of
 which the document model can express.
 

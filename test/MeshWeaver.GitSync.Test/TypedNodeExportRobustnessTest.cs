@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using MeshWeaver.Graph;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
@@ -18,6 +19,19 @@ namespace MeshWeaver.GitSync.Test;
 /// </summary>
 public class TypedNodeExportRobustnessTest(ITestOutputHelper output) : GitHubSyncTestBase(output)
 {
+    // TEST-LOCAL Deck registration: the production type is the Publish pack's dynamic
+    // Publish/Deck (in-mesh source) since the core built-in retired (#1589). The subject here —
+    // the universal JSON round-trip of a content type with no bespoke parser — is node-type-
+    // agnostic; a data-source-only registration is all the create path needs.
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddMeshNodes(new MeshNode(DeckNodeType.NodeType)
+            {
+                Name = "Deck (test-local)",
+                HubConfiguration = config => config
+                    .AddMeshDataSource(s => s.WithContentType<DeckContent>()),
+            });
+
     [Fact(Timeout = 120000)]
     public async Task DeckWithManifest_RoundTripsAsJson_NothingDropped()
     {

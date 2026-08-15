@@ -38,7 +38,7 @@ The `Document` model has neither concept. It is a typed element tree — heading
 
 ```
 Deck node                                       Markdown node (content-faithful)
-  └─ DeckLayoutAreas.ResolveDeckSelection         └─ DocumentBuilder.Build
+  └─ DeckSelection.ResolveDeckSelection         └─ DocumentBuilder.Build
        └─ SlidePrintComposer.Compose                   ← Markdig AST → Document model,
             ├─ MarkdownViewLogic.Render                  page-break rules, TOC headings
             └─ SlidePrint.{html,css} templates      └─ DocumentPrintComposer.Compose
@@ -52,7 +52,7 @@ Deck node                                       Markdown node (content-faithful)
 
 Both composers are **pure, synchronous, no IO, no browser**, and both build markup through `MarkupNode` — the one place in the assembly that turns a tree into a string of HTML, escaping text and attribute values on the single path out. Neither builds HTML by string interpolation, and the page furniture lives in real `.html` / `.css` template files rather than in C#.
 
-**Nothing visual is re-invented.** The slide body is rendered by `MarkdownViewLogic.Render` — the very renderer the portal uses, so raw HTML and SVG behave identically. The stage styling comes from `SlideLayoutAreas.ThemeTokens` (made `public` for exactly this consumer) plus a stylesheet that mirrors `BuildStage`: same 16:9 box, same padding ratios, same type scale. Copying the theme into the exporter would have let the printed deck and the on-screen deck drift; referencing the one declaration means they cannot.
+**Nothing visual is re-invented.** The slide body is rendered by `MarkdownViewLogic.Render` — the very renderer the portal uses, so raw HTML and SVG behave identically. The stage styling comes from `SlidePrintComposer.ThemeTokens` plus a stylesheet that mirrors the live stage. The MASTER copy of the tokens lives in the Publish pack's in-mesh source (`Publish/Slide/Source/SlideLayoutAreas.cs`) — the print chain is compiled and cannot read in-mesh source, so the const is a comment-linked twin: re-sync it whenever the pack's theme changes.
 
 **Markup lives in template files**, not in C#. `SlidePrint.{html,css}` / `SlidePrintSection.html` for the deck, `DocumentPrint.{html,css}` for the document, all embedded resources with named placeholders that the composers substitute into. The document stylesheet is where the cover, contents, header, footer and page-break rules are actually written, so they are reviewable as CSS rather than buried in a fluent API.
 
