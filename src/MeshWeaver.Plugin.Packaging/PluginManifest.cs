@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 
-namespace MeshWeaver.Plugin.Build;
+namespace MeshWeaver.Plugin.Packaging;
 
 /// <summary>
 /// The package-shaped view of a plugin's <c>index.json</c>.
