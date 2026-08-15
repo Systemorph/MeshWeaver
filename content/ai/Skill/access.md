@@ -22,7 +22,7 @@ nodeType:    AccessAssignment
 content:     { accessObject, displayName, roles: [ { role, denied? } ] }
 ```
 
-- **`{scope}`** is the node/partition the grant covers: a partition root (`rbuergi`), a space
+- **`{scope}`** is the node/partition the grant covers: a partition root (`amaier`), a space
   (`ACME`), or any subtree (`ACME/Projects`). Grants **inherit downward** — a grant at `ACME`
   covers every node under `ACME/…`.
 - **`accessObject`** is the subject's userId (matched against the login identity) or a Group id.

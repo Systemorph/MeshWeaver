@@ -13,7 +13,7 @@ Navigate the user to a place in the UI. Resolution is **resilient** and applicat
 
 ## Resolution — direct path first, else make sense of the row
 
-- **One argument that looks like a path** (`/navigate Doc/AI/ModelProviderSettings`, `/navigate @/rbuergi`, a pasted URL): resolve it as a **direct path** first. The URL is corrected automatically — a leading `@`, a stray `/node/` segment, a pasted `https://…host/…` prefix, doubled slashes, and percent-encoding are all cleaned up. If the exact node isn't there, fall back to the **best search match** rather than dead-ending.
+- **One argument that looks like a path** (`/navigate Doc/AI/ModelProviderSettings`, `/navigate @/amaier`, a pasted URL): resolve it as a **direct path** first. The URL is corrected automatically — a leading `@`, a stray `/node/` segment, a pasted `https://…host/…` prefix, doubled slashes, and percent-encoding are all cleaned up. If the exact node isn't there, fall back to the **best search match** rather than dead-ending.
 - **Free text** (`/navigate model settings`, `/navigate my notifications`): make sense of the context on the row — match it to a **skill** where one fits (so the user can *do* something, e.g. `/model` to change the model), otherwise **search** the mesh and open the best-matching node.
 
 Never report success for a place that doesn't exist. If nothing resolves, say so and offer the closest matches.
