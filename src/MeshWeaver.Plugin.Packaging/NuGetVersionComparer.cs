@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace MeshWeaver.Plugin.Build;
+namespace MeshWeaver.Plugin.Packaging;
 
 /// <summary>
 /// Orders NuGet/SemVer-2 version strings.
