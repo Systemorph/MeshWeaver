@@ -79,10 +79,17 @@ Two load-bearing rules for pack authors:
 **DI layering.** The only thing a view pack genuinely needs in the *root* container is services its
 components `[Inject]` (the Blazor circuit resolves from the host container) and any hosted
 services. Everything else — view maps, hub services — rides hub configuration, which per-user
-portal hubs re-run on creation. Packs are wired by a `ProjectReference` today; the same entry
-points are consumable by boot-time assembly loading (`MeshBuilder.InstallAssemblies`, which folds a
-pack's registrations in before the container builds) once that loader is wired to configuration —
-the pack does not change between the two.
+portal hubs re-run on creation.
+
+**Activation is a module list, not a compiled call.** Each pack carries an assembly-level
+`MeshNodeProviderAttribute` whose `HubConfigurations` apply the pack's entry point and whose
+`ModuleDefinition` node registers the DI half — `RadzenViewPackModuleAttribute` (views +
+`AddRadzenServices`), `AnalysisViewPackModuleAttribute`, and `GoogleMapsViewPackModuleAttribute`
+(views + the `GoogleMaps` options binding). Listing the DLL under `Modules:Assemblies` is the
+complete activation: `MeshBuilder.InstallAssemblies` folds the attribute's registrations in before
+the container builds, so dropping a line drops the pack (its controls fall to the fallback slot).
+The `ProjectReference` from the portal remains only so the DLL and its static assets ride the
+publish output — the portal's *code* makes no registration call.
 
 ### Lane 3 — core
 
@@ -143,7 +150,7 @@ in its `TypeRegistry` or it degrades to an untyped `JsonElement` and the area re
 | Node-menu entries / presentation | `AddNodeMenuItems(...)`; menu presentation is editable data (`MenuPresentationOverlay`) | hub configuration / mesh data |
 | A home-screen tab | a `HomeTab` node | mesh data — no code at all |
 | Hub behaviour for a node type | `MeshNode.HubConfiguration` | works from in-mesh plugins at runtime |
-| Root services + nodes from a DLL | `MeshNodeProviderAttribute` + `MeshBuilder.InstallAssemblies` | boot time only |
+| Root services, nodes, hub + per-node-hub configuration, or a whole builder extension from a DLL | `MeshNodeProviderAttribute` (`Nodes` / `HubConfigurations` / `DefaultNodeHubConfigurations` / `BuilderConfigurations`) + `MeshBuilder.InstallAssemblies` | boot time only (`Modules:Assemblies`) |
 | Portal-hub config from a plugin (incl. views) | `WithPortalConfiguration(portal => …)` | the plugin's own hub configuration — at runtime |
 
 ## What cannot be extended today
@@ -173,10 +180,11 @@ by lane, and platform configuration decides both:
   [Plugin Update On Green Build](/Doc/Architecture/PluginUpdateOnGreenBuild) the auto-update
   opt-in. A plugin listed in an instance's `PluginCatalog:InstallByDefault` installs unattended on
   first boot — which is how a **new instance** gets its UI without a human clicking Install.
-- **Lane 2 (view pack)**: today the pack rides the image, and whether it *activates* is platform
-  configuration — see [Feature Flags](/Doc/Architecture/FeatureFlags) for the `Features:*` surface
-  the composition consults. Once boot-time loading is wired, the pack list itself becomes per-
-  deployment configuration on the same surface.
+- **Lane 2 (view pack)**: the pack rides the image, and whether it *activates* is the
+  deployment's `Modules:Assemblies` list — the same lane the AI provider packs and the storage
+  boot-packs use. The former `Features:UiPacks:*` flags are gone; drop the DLL's line to drop the
+  pack. (Other feature toggles remain on the `Features:*` surface —
+  [Feature Flags](/Doc/Architecture/FeatureFlags).)
 - **Standing up a new instance end to end** — configuration order, secrets, DNS/TLS, plugin
   wiring — is [Deployment](/Doc/Architecture/Deployment) (index),
   [Deployment Options](/Doc/Architecture/DeploymentOptions), and for the shared cluster
