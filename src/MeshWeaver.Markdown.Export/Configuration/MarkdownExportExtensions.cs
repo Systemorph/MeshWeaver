@@ -29,7 +29,9 @@ public static class MarkdownExportExtensions
     /// </summary>
     public static TBuilder AddCorporateIdentityType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(CorporateIdentityNodeType.CreateMeshNode());
+        // IfAbsent: the pack can arrive twice — compiled-in AND boot-loaded via Modules:Assemblies
+        // (MarkdownExportProviderAttribute) — and the fixed-path static nodes must land once.
+        builder.AddMeshNodesIfAbsent(CorporateIdentityNodeType.CreateMeshNode());
         return builder;
     }
 
@@ -105,7 +107,7 @@ public static class MarkdownExportExtensions
         // .csx with caller-supplied Inputs and writes progress / output to an
         // Activity in the caller's home. See Doc/Architecture/ActivityControlPlane.md
         // → "Operations as scripts". Stateless static helper, no DI provider.
-        builder.AddMeshNodes(MarkdownExportTemplates.GetStaticNodes());
+        builder.AddMeshNodesIfAbsent(MarkdownExportTemplates.GetStaticNodes());
 
         // …and the access grant that lets an ordinary (non-admin) user actually RUN them.
         // ExecuteScriptRequest is gated on Permission.Execute on the template's own path, so

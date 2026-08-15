@@ -36,6 +36,17 @@ public abstract class MeshNodeProviderAttribute : Attribute
     public virtual IEnumerable<Func<MessageHubConfiguration, MessageHubConfiguration>> DefaultNodeHubConfigurations => [];
 
     /// <summary>
+    /// Configuration applied to the <see cref="MeshBuilder"/> itself when this assembly is
+    /// installed — the full builder surface (<c>AddMeshNodes</c>/<c>AddMeshNodesIfAbsent</c>,
+    /// <c>WithMeshType</c>, <c>ConfigureServices</c>, <c>ConfigureDefaultNodeHub</c>, …) in one
+    /// hook. This is how a module whose registration already exists as a builder extension
+    /// (e.g. <c>AddMarkdownExport()</c>) boot-loads WITHOUT decomposing that extension into the
+    /// narrower hooks above — the compiled-in call and the boot-pack path stay one code path,
+    /// so they cannot drift. The narrower hooks remain for declarative packs. Empty by default.
+    /// </summary>
+    public virtual IEnumerable<Func<MeshBuilder, MeshBuilder>> BuilderConfigurations => [];
+
+    /// <summary>
     /// Creates a mesh node from a hub configuration using a string prefix.
     /// </summary>
     protected MeshNode CreateFromHubConfiguration(string prefix, string name,
