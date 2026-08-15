@@ -165,17 +165,15 @@ is the writer's guarantee to change, not the reader's to assume.
 
 ---
 
-## Distribution: bundles served by the portal, not a NuGet feed
+## Distribution: bundles served by the portal
 
-This was briefly a NuGet v3 feed. It is not one any more, and the reason is worth keeping:
-**nothing in NodeType compilation restores.** The bake compiles in-process with Roslyn against
-`MetadataReference`s, and the only `restore` in the tree is `MeshWeaver.NuGet` resolving
-`#r "nuget:…"` directives against the framework's own baked feed. A service index, a flat container
-and version ranges were three surfaces that could fall out of step with the packages, serving a
-client that does not exist.
+A consumer needs three things to skip a compile: the bytes, the framework identity they were built
+against, and which node each belongs to. One bundle carries exactly that, over two routes.
 
-What a consumer actually needs is three things — the bytes, the framework identity they were built
-against, and which node each belongs to. One bundle carries exactly that.
+There is no package protocol involved. **Nothing in NodeType compilation restores** — the bake runs
+in-process with Roslyn against `MetadataReference`s, and the only `restore` in the tree is
+`MeshWeaver.NuGet` resolving `#r "nuget:…"` directives against the framework's own baked feed. A
+service index and dependency ranges would be surfaces that can drift with no client to read them.
 
 | Route | Serves |
 |---|---|

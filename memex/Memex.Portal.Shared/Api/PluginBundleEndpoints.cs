@@ -21,17 +21,14 @@ namespace Memex.Portal.Shared.Api;
 /// Serves a plugin's prebuilt assemblies to another instance — the distribution half of
 /// <c>Doc/Architecture/PluginPackaging</c>.
 ///
-/// <para><b>Why this is not a NuGet feed.</b> It was, briefly, and the protocol bought nothing:
-/// NOTHING in NodeType compilation restores. The bake compiles in-process with Roslyn against
-/// <c>MetadataReference</c>s, and the only <c>restore</c> anywhere in the tree is
-/// <c>MeshWeaver.NuGet</c> resolving <c>#r "nuget:…"</c> directives against the framework's own
-/// baked feed. So a service index, a flat container and version ranges were three surfaces that
-/// could fall out of step with the packages, in service of a client that does not exist. What a
-/// consumer actually needs is three things — the bytes, the framework identity they were built
-/// against, and which node each belongs to — and that is exactly what one bundle carries.</para>
+/// <para>A consumer needs three things to skip a compile: the bytes, the framework identity they
+/// were built against, and which node each belongs to. One bundle carries exactly that, over two
+/// routes — an index and a download. There is no package protocol here because nothing restores:
+/// NodeType compilation runs in-process with Roslyn against <c>MetadataReference</c>s, so a service
+/// index and dependency ranges would be surfaces that can drift with no client to read them.</para>
 ///
-/// <para><b>Why the portal serves it rather than handing out storage access.</b> The assembly store
-/// is already the durable transport: <c>BlobAssemblyStore</c> keeps one blob per
+/// <para><b>The portal serves the bytes rather than handing out storage access.</b> The assembly
+/// store is already the durable transport: <c>BlobAssemblyStore</c> keeps one blob per
 /// <c>(nodeTypePath, version)</c> and hydrates it into a process-local cache on demand. Reading
 /// through <see cref="IAssemblyStore"/> here means the bundle is assembled from the very bytes this
 /// portal loads and runs, and it needs no second credential — a scoped SAS handed to each consumer
