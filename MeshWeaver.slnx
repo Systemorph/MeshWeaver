@@ -55,7 +55,9 @@
     <Project Path="src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <Project Path="src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
+    <Project Path="src/MeshWeaver.Blazor.AppleMaps/MeshWeaver.Blazor.AppleMaps.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Graph/MeshWeaver.Blazor.Graph.csproj" />
+    <Project Path="src/MeshWeaver.Blazor.OpenStreetMap/MeshWeaver.Blazor.OpenStreetMap.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Portal/MeshWeaver.Blazor.Portal.csproj" />
     <Project Path="src/MeshWeaver.Blazor/MeshWeaver.Blazor.csproj" />
     <Project Path="src/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
