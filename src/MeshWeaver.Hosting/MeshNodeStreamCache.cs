@@ -1677,8 +1677,10 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         // nothing may throw, and evicting an already-disposed cache is a no-op by
                         // definition (the fault stays visible via the LogError above).
                         if (System.Threading.Volatile.Read(ref _disposed) == 0)
+                        {
                             try { _updateQueues.Remove(path); }
                             catch (ObjectDisposedException) { /* teardown won the race */ }
+                        }
                     });
                 return new UpdateQueueEntry(subject, sub);
             }, LazyThreadSafetyMode.ExecutionAndPublication);
