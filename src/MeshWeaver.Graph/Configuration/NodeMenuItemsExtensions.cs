@@ -469,9 +469,38 @@ public static class NodeMenuItemsExtensions
                 if ((provider.Context ?? "") == context)
                     providerStreams.Add(SafeProvider(provider.GetItems(host, ctx), host, context));
 
+            // Data-contributed entries (UiContribution nodes, design #1645) — the plugin-content
+            // lane. Gated HERE, in compiled code, against the viewer's live permission stream and
+            // the closed node-shape vocabulary; a contribution can only narrow its visibility.
+            providerStreams.Add(SafeProvider(ContributionStream(host, context), host, context));
+
             result[context] = CombineProviderStreams(providerStreams);
         }
         return result;
+    }
+
+    /// <summary>
+    /// The DATA-contributed slice of one menu context: every <see cref="UiContribution"/> node in
+    /// the shared mesh-scoped catalog whose declared context matches, projected through the CLOSED
+    /// gate vocabulary — the viewer's live effective permission (floored at Read; anonymous is
+    /// already forced to <see cref="Permission.None"/> by <see cref="GetMenuContext"/>, so the
+    /// whole slice fails closed), <c>AdminOnly</c> against the reactive
+    /// <c>IsGlobalAdmin</c> stream, <c>ExcludePartitionRoot</c> against the same predicate the
+    /// built-in suppression uses, and suffix-aware <c>NodeTypes</c> matching. Enforcement lives
+    /// HERE, in compiled code — a contribution can only ever narrow its own visibility (#1645).
+    /// </summary>
+    private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> ContributionStream(
+        LayoutAreaHost host, string context)
+    {
+        var catalog = host.Hub.ServiceProvider.GetService<UiContributionCatalog>();
+        if (catalog is null)
+            return Observable.Return(EmptyItems);
+
+        var adminStream = host.Hub.IsGlobalAdmin().StartWith(false);
+        return catalog.Contributions
+            .CombineLatest(GetMenuContext(host), adminStream,
+                (contributions, menuCtx, isAdmin) => UiContributionProjection.ProjectMenu(
+                    contributions, context, menuCtx.menuPath, menuCtx.menuNode, menuCtx.perms, isAdmin));
     }
 
     /// <summary>
