@@ -143,6 +143,24 @@ public static class CodeLayoutAreas
         return true;
     }
 
+    /// <summary>
+    /// Whether the recorded run can belong to THIS node at all — i.e. it did not happen before the
+    /// node existed.
+    /// <para>🚨 The partition rule alone is not enough, and the case it misses is the AUTHOR's own.
+    /// A master cell carries the run record of whoever last ran it while writing the course; a
+    /// learner's copy inherits that record wholesale. When author and reader are the SAME person,
+    /// the inherited pointer names their own partition, passes "is it mine", and a copy they have
+    /// never run greets them with <c>✓ Done</c>. Reported live: "when not executed, it still says
+    /// Done — should differentiate between never executed and executed and done."</para>
+    /// <para>A run that happened BEFORE this node was created cannot be a run OF this node. That is
+    /// decidable from the node itself — no extra read, no permission question — and it needs no
+    /// data migration: copies already carrying an inherited record read as unrun immediately.</para>
+    /// <para>An absent timestamp cannot prove inheritance, so it is shown: a node last executed
+    /// before this field existed must not go dark.</para>
+    /// </summary>
+    internal static bool RunPostDatesTheNode(DateTimeOffset created, DateTimeOffset? lastExecutedAt)
+        => lastExecutedAt is null || created == default || lastExecutedAt.Value >= created;
+
     /// <summary>The partition a mesh path lives in — its first segment — or null when it has none.</summary>
     private static string? PartitionOf(string? path)
     {
@@ -202,6 +220,19 @@ public static class CodeLayoutAreas
             .GetEffectivePermissions(host.Hub.Address.ToString())
             .DistinctUntilChanged();
 
+        // The run this cell may DISPLAY, or null when it must read as never-run: the recorded
+        // pointer must be showable here (ShowsRecordedRun) AND post-date the node itself
+        // (RunPostDatesTheNode — an inherited record from before the copy existed is not its run).
+        string? VisibleRunPath(MeshNode? node)
+        {
+            var config = node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions);
+            var path = config?.LastActivityPath;
+            return ShowsRecordedRun(viewer, host.Hub.Address.Path, path)
+                   && RunPostDatesTheNode(node?.CreatedDate ?? default, config?.LastExecutedAt)
+                ? path
+                : null;
+        }
+
         // The LAST run's live ActivityLog: keyed off the node's LastActivityPath
         // and re-switched whenever a new run stamps a fresh path. Drives the cell
         // toolbar's Cancel visibility reactively — the toolbar re-renders when the
@@ -210,10 +241,10 @@ public static class CodeLayoutAreas
         // re-rendering the whole Content area (the output pane is a live
         // LayoutAreaControl embed and streams its own messages).
         var lastActivityStream = nodeStream
-            .Select(node => node.ContentAs<CodeConfiguration>(host.Hub.JsonSerializerOptions)?.LastActivityPath)
+            .Select(node => VisibleRunPath(node))
             .DistinctUntilChanged()
-            .Select(path => ShowsRecordedRun(viewer, host.Hub.Address.Path, path)
-                ? host.Workspace.GetMeshNodeStream(path!)
+            .Select(path => path is not null
+                ? host.Workspace.GetMeshNodeStream(path)
                     .Select(n => n.ContentAs<ActivityLog>(host.Hub.JsonSerializerOptions))
                 : Observable.Return<ActivityLog?>(null))
             .Switch()
@@ -328,7 +359,9 @@ public static class CodeLayoutAreas
         // under the accent Run button that is the answer to it. Absence says the same thing and
         // says it quieter (maintainer feedback, 2026-08-13). The moment Run is pressed the node
         // gains a LastActivityPath and the pane appears with the live log in it.
-        if (isExecutable && ShowsRecordedRun(viewer, hubAddress.Path, codeConfig?.LastActivityPath))
+        if (isExecutable
+            && ShowsRecordedRun(viewer, hubAddress.Path, codeConfig?.LastActivityPath)
+            && RunPostDatesTheNode(node?.CreatedDate ?? default, codeConfig?.LastExecutedAt))
         {
             const string outputStyle =
                 "width: 100%; box-sizing: border-box; " +
