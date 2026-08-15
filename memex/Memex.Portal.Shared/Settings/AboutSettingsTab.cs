@@ -41,22 +41,8 @@ public static class AboutSettingsTab
     /// <summary>Data id the plugin grid binds to (rows published via <c>host.UpdateData</c>).</summary>
     private const string PluginsDataId = "aboutPlugins";
 
-    /// <summary>Registers the About tab with the global settings menu (ungated).</summary>
-    public static MessageHubConfiguration AddAboutSettingsTab(this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetTab));
-
-    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetTab(
-        LayoutAreaHost host, RenderingContext ctx)
-        => Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>(new[]
-        {
-            new GlobalSettingsMenuItemDefinition(
-                Id: TabId,
-                Label: "About",
-                ContentBuilder: BuildContent,
-                Icon: FluentIcons.Info(),
-                Order: 900)
-            { LabelKey = "settings.about" }
-        });
+    // The menu entry is a seeded UiContribution node (PlatformSettingsTabAreas) — the tab's
+    // registration surface is the SettingsAbout layout area, not a compiled provider.
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
