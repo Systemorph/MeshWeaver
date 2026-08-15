@@ -48,13 +48,60 @@ public class ApiTokenAuthenticationHandler(
     /// <summary>Retry-After (seconds) advertised on the 503 unavailable challenge.</summary>
     internal const int RetryAfterSeconds = 5;
 
+    /// <summary>
+    /// The API token from an <c>Authorization</c> header — <c>Bearer &lt;token&gt;</c>, or
+    /// <c>Basic base64(user:&lt;token&gt;)</c> — or null when it carries neither.
+    ///
+    /// <para>🚨 Basic is accepted because a <b>NuGet client cannot send Bearer</b>: nuget.config's
+    /// <c>packageSourceCredentials</c> speaks Basic, and the only alternative is shipping a
+    /// credential-provider plugin. Accepting both lets `dotnet restore` read the access-controlled
+    /// content route with the SAME personal token every other API caller uses — one credential,
+    /// one validator, and the route's existing per-node Read check stays the authorization gate.</para>
+    ///
+    /// <para>The username half is ignored (the token is the whole secret); NuGet merely requires
+    /// one to be present. The token stays in the HEADER either way — the easier
+    /// <c>?apiKey=</c> would leak it into every access log and proxy log along the route.</para>
+    ///
+    /// <para>Malformed Basic payloads yield null (→ the normal no-result path), never an
+    /// exception: an unauthenticated caller must not be able to make the handler throw. The length
+    /// cap bounds what such a caller can make us decode.</para>
+    /// </summary>
+    internal static string? ExtractToken(string? authorizationHeader)
+    {
+        if (string.IsNullOrWhiteSpace(authorizationHeader))
+            return null;
+        var header = authorizationHeader.Trim();
+
+        if (header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return header["Bearer ".Length..].Trim() is { Length: > 0 } bearer ? bearer : null;
+
+        if (!header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var encoded = header["Basic ".Length..].Trim();
+        if (encoded.Length is 0 or > MaxBasicPayloadChars)
+            return null;
+
+        Span<byte> buffer = stackalloc byte[MaxBasicPayloadChars / 4 * 3];
+        if (!Convert.TryFromBase64String(encoded, buffer, out var written))
+            return null;
+
+        // UTF8.GetString uses replacement fallback, so invalid bytes become U+FFFD rather than
+        // throwing — and such a token simply fails validation downstream.
+        var decoded = System.Text.Encoding.UTF8.GetString(buffer[..written]);
+        var separator = decoded.IndexOf(':');
+        if (separator < 0)
+            return null;
+
+        return decoded[(separator + 1)..].Trim() is { Length: > 0 } password ? password : null;
+    }
+
+    /// <summary>Largest Basic payload considered; see <see cref="ExtractToken"/>.</summary>
+    private const int MaxBasicPayloadChars = 1024;
+
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        var authHeader = Request.Headers.Authorization.ToString();
-        if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return AuthenticateResult.NoResult();
-
-        var rawToken = authHeader["Bearer ".Length..].Trim();
+        var rawToken = ExtractToken(Request.Headers.Authorization.ToString());
         if (string.IsNullOrEmpty(rawToken))
             return AuthenticateResult.NoResult();
 
