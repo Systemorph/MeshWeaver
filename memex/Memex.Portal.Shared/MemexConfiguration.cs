@@ -1192,7 +1192,7 @@ public static class MemexConfiguration
         // NuGet v3 feed over this instance's plugins — /api/plugins/nuget/v3. Same instance-key
         // gate as the registry above (Bearer or Basic, since a NuGet client cannot send Bearer),
         // but with NO anonymous mode: it hands out compiled assemblies for paid modules.
-        app.MapPluginFeed();
+        app.MapPluginBundles();
 
         // First-startup auto-registration — POST /api/instances/register. A new deployment presents
         // an admin-minted bootstrap key (mwr_) and receives its own instance key (mwi_) once;
