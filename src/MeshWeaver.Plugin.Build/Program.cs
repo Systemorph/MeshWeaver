@@ -1,3 +1,4 @@
+using MeshWeaver.Plugin.Packaging;
 using System.Diagnostics;
 using MeshWeaver.Plugin.Build;
 

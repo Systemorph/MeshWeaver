@@ -12,6 +12,8 @@
          MeshWeaver.Graph). The tool must emit the SAME skeleton the runtime compiles, so it calls
          the framework's generator rather than carrying a second copy of it. -->
     <ProjectReference Include="../MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
+    <!-- The package FORMAT is shared with the portal's feed so both emit the same package. -->
+    <ProjectReference Include="../MeshWeaver.Plugin.Packaging/MeshWeaver.Plugin.Packaging.csproj" />
   </ItemGroup>
 
 </Project>

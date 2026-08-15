@@ -1,5 +1,5 @@
 using System.Linq;
-using MeshWeaver.Plugin.Build;
+using MeshWeaver.Plugin.Packaging;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
