@@ -83,4 +83,36 @@ public class CodeCellOwnRunTest
         CodeLayoutAreas.ShowsRecordedRun("alice", "Alice/RiskTransfer/L/Source/C", "bob/_Activity/abc")
             .Should().BeFalse("the copy is still hers when the path is cased differently");
     }
+
+    // ── never executed vs executed-and-done ────────────────────────────────────────────────
+    // "Don't put Done when it was never executed." The partition rule alone cannot see this case:
+    // the AUTHOR copies a course they themselves ran, so the inherited pointer names their OWN
+    // partition and passes every check above.
+
+    private static readonly DateTimeOffset CopyMade = new(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public void ARunFromBeforeTheNodeExisted_IsNotThisNodesRun()
+        => CodeLayoutAreas.RunPostDatesTheNode(CopyMade, CopyMade.AddHours(-6)).Should().BeFalse(
+            "the copy was made at noon; a run recorded at 06:00 happened on the MASTER and was " +
+            "inherited — the copy has never been executed and must not say Done");
+
+    [Fact]
+    public void ARunAfterTheNodeExists_IsShown()
+        => CodeLayoutAreas.RunPostDatesTheNode(CopyMade, CopyMade.AddMinutes(1)).Should().BeTrue(
+            "this is the learner pressing Run on their own copy — executed and done");
+
+    [Fact]
+    public void TheRunThatCreatedTheRecordAtCreationTime_Counts()
+        => CodeLayoutAreas.RunPostDatesTheNode(CopyMade, CopyMade).Should().BeTrue(
+            "equal timestamps are the boundary, not a violation");
+
+    [Fact]
+    public void NoTimestampAnywhere_StaysVisible()
+    {
+        // Absence cannot prove inheritance: a node executed before LastExecutedAt existed, or one
+        // whose CreatedDate was never stamped, must not go dark.
+        CodeLayoutAreas.RunPostDatesTheNode(CopyMade, null).Should().BeTrue();
+        CodeLayoutAreas.RunPostDatesTheNode(default, CopyMade.AddHours(-6)).Should().BeTrue();
+    }
 }
