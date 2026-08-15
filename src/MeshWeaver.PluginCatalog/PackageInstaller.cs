@@ -1311,6 +1311,11 @@ public static class PackageInstaller
                     // The manifest baseline the NEXT update diffs against (null when the package ships
                     // no manifest.lock — the legacy full path stays in charge then).
                     ModuleVersion = moduleManifest?.ModuleVersion ?? manifest.ModuleVersion,
+                    // The RELEASED SemVer, from the same lock the ModuleVersion above comes from.
+                    // Persisted because nothing else in the mesh carries it: the plugin node holds
+                    // only the AUTHORED major.minor, and the lock is a repo artifact GitSync does
+                    // not import. Without it the portal cannot name the version a module shipped at.
+                    ReleasedVersion = moduleManifest?.Version ?? manifest.ReleasedVersion,
                     InstalledFiles = moduleManifest?.Files ?? manifest.InstalledFiles,
                     // Transport-only: the candidate-side map rides in on the CATALOG entry for the
                     // diff and must not be persisted — the record's baseline is InstalledFiles
