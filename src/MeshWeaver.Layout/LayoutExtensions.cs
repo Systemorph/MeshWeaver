@@ -612,7 +612,11 @@ public static class LayoutExtensions
         return config
             .AddData()
             .AddLayoutTypes()
-            .WithServices(services => services.AddSingleton<ILayoutClient, LayoutClient>())
+            .WithServices(services => services
+                .AddSingleton<ILayoutClient, LayoutClient>()
+                // Lives beside ILayoutClient so it is reachable from exactly the meshes that render
+                // a portal, and absent from headless hosts that have none to configure.
+                .AddPortalConfigurationRegistry())
             .AddViews(configuration ?? (x => x))
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>

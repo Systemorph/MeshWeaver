@@ -103,11 +103,17 @@ public class PortalApplication : IDisposable
         // locale and rendered English for a viewer whose profile says otherwise.
         Func<AccessContext?> circuitUser = () => circuitContextAccessor.UserContext;
 
+        // Static contributions first, then the runtime ones. Statically-referenced view packs are
+        // the platform baseline; a plugin registering the same mapping is the more specific choice
+        // and must therefore win, which with last-writer-wins semantics means it applies later.
+        var layoutConfiguration = hub.ServiceProvider.GetRequiredService<ILayoutClient>().Configuration;
+        var contributed = hub.ServiceProvider.GetService<PortalConfigurationRegistry>()?.Current ?? [];
+
         Hub = hub.GetHostedHub(AddressExtensions.CreatePortalAddress(portalId),
             c =>
-                hub.ServiceProvider.GetRequiredService<ILayoutClient>()
-                    .Configuration
+                layoutConfiguration
                     .PortalConfiguration
+                    .AddRange(contributed.Select(contribution => contribution.Configure))
                     .Aggregate(DefaultPortalConfig(c, routingService, navigationService, circuitUser, errorSink),
                         (cc, ccc) => ccc.Invoke(cc)))!;
     }
