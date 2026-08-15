@@ -15,7 +15,7 @@ namespace Memex.Portal.Shared.Api;
 /// <summary>
 /// Ingest surface for the in-cluster log watcher: <c>POST /api/log-incidents</c> takes one
 /// already-fingerprinted red-log burst and folds it into the mesh (see
-/// <see cref="LogIncidentIngestService"/>). This is the ONLY way a burst enters the portal — the
+/// <see cref="ILogIncidentIngest"/>). This is the ONLY way a burst enters the portal — the
 /// detector runs outside, so that noticing "the portal is throwing errors" never depends on the
 /// portal being healthy.
 ///
@@ -54,7 +54,7 @@ public static class LogIncidentEndpoints
         endpoints.MapPost(Route, (
                     HttpContext http,
                     LogIncidentReport report,
-                    LogIncidentIngestService ingest,
+                    ILogIncidentIngest ingest,
                     CancellationToken ct) =>
                 Ingest(http, report, ingest, expected, logger, ct))
             .AllowAnonymous();
@@ -68,7 +68,7 @@ public static class LogIncidentEndpoints
     private static Task<IResult> Ingest(
         HttpContext http,
         LogIncidentReport report,
-        LogIncidentIngestService ingest,
+        ILogIncidentIngest ingest,
         string expectedToken,
         ILogger? logger,
         CancellationToken ct)

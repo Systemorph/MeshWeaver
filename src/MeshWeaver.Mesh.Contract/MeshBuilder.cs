@@ -62,7 +62,13 @@ public record MeshBuilder
         foreach (var nodeHubConfiguration in attributes.SelectMany(a => a.DefaultNodeHubConfigurations))
             ConfigureDefaultNodeHub(nodeHubConfiguration);
 
-        return this;
+        // Attribute-carried BUILDER configuration — the full-surface hook. Applied last so a
+        // builder-level hook observes the attribute's own nodes/services, mirroring the order a
+        // compiled-in caller would get from `builder.InstallAssemblies(...).AddX()`. MeshBuilder
+        // methods mutate this instance and return it, so the fold cannot lose configuration.
+        return attributes
+            .SelectMany(a => a.BuilderConfigurations)
+            .Aggregate(this, (builder, configure) => configure(builder));
     }
 
     private IEnumerable<MeshNode> InstallServices(IEnumerable<MeshNode> nodes)
