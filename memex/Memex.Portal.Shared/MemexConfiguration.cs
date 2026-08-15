@@ -28,7 +28,6 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.ContentCollections.Indexing;
 using MeshWeaver.ContentCollections.Indexing.Graph;
 using MeshWeaver.ContentCollections.Indexing.PostgreSql;
-using MeshWeaver.Courses;
 using MeshWeaver.Documentation;
 using MeshWeaver.Maps;
 using MeshWeaver.Data;
@@ -750,12 +749,11 @@ public static class MemexConfiguration
                 // Generic webhook inbox: the WebhookEvent node type behind
                 // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
                 .AddWebhookInbox()
-                // Interactive courses: Course/Module/Exercise/ExerciseAttempt
-                // node types + the stream-update validation control plane.
-                .AddCourses()
-                // The whole-course left-hand index for NODE-NATIVE courses now ships IN the Edu
-                // pack (EduCourseNavigationProvider, registered per-hub by the Edu/Lesson,
-                // Edu/Module and Edu/Exercise configuration lambdas) — no compiled registration.
+                // Courses are fully node-native: the Edu pack owns the types (Edu/Lesson,
+                // Edu/Module, Edu/Exercise, Edu/Quiz, Edu/CourseInvite, Edu/CourseCatalog) AND
+                // the whole-course navigation (EduCourseNavigationProvider, registered per-hub
+                // by the type configuration lambdas). The compiled MeshWeaver.Courses types had
+                // zero instances in any repo or reachable mesh and are deleted.
                 .AddPortalType()
                 .AddAI(serveFromPartition);
 
