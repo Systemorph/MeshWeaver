@@ -30,6 +30,25 @@ public static class NuGetPackageWriter
     /// <summary>Where the node-path→assembly map lives inside the package.</summary>
     public const string ManifestEntry = "meshweaver/manifest.json";
 
+    /// <summary>
+    /// The archive entry path for a NodeType's assembly — the node path VERBATIM under
+    /// <see cref="AssemblyFolder"/>.
+    ///
+    /// <para>🚨 Never slash-replaced. Sanitising is not injective: <c>A/B/C</c> and <c>A_B/C</c>
+    /// both become <c>A_B_C</c>, and mesh paths do contain underscores, so two NodeTypes would land
+    /// on one archive entry and the second would silently adopt the first's bytes — a mismatch that
+    /// surfaces only as a <c>TypeLoadException</c> at activation. Zip entry names take slashes
+    /// natively and nothing extracts to disk (consumers read entries into memory), so there is no
+    /// traversal concern to trade against it.</para>
+    ///
+    /// <para>The manifest still carries the mapping. A consumer must read the node path the producer
+    /// wrote, never recover it from a file name.</para>
+    /// </summary>
+    /// <param name="nodePath">Mesh path of the NodeType.</param>
+    /// <param name="extension">File extension including the dot, e.g. <c>.dll</c>.</param>
+    public static string EntryPathFor(string nodePath, string extension = ".dll") =>
+        $"{AssemblyFolder}/{nodePath}{extension}";
+
     /// <summary>One file destined for the package.</summary>
     /// <param name="PathInPackage">Full entry path, e.g. <c>meshweaver/content/index.json</c>.</param>
     /// <param name="OpenRead">Opens the bytes. A factory rather than a byte[] so a large assembly
