@@ -77,4 +77,9 @@
          Open Sans is Apache-2.0, already shipped with the MAUI client. -->
     <EmbeddedResource Include="Seo/OpenSans-Regular.ttf" LogicalName="Memex.Portal.Shared.Seo.OpenSans-Regular.ttf" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- ExtractToken is pinned by tests (Bearer/Basic parsing on an unauthenticated path). -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+  </ItemGroup>
+
 </Project>
