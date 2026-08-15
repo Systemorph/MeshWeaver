@@ -24,11 +24,9 @@ using MeshWeaver.Documentation;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
-using MeshWeaver.Observability;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Blazor;
@@ -693,11 +691,12 @@ public static class MemexConfiguration
                 // admin tab installs from PluginCatalog:RegistryUrl. The options carry the consumer's
                 // registry URL/ref (empty RegistryUrl -> the tab shows a "not configured" note).
                 .AddPluginCatalog()
-                // Red-log ticketing: the LogIncident node type plus the ingest/triage/file control
-                // plane. The DETECTOR is not here — it is a separate service in the cluster's
-                // monitoring namespace that polls Loki and POSTs to /api/log-incidents, so it keeps
-                // working when the portal is the thing throwing errors (Doc/Architecture/LogWatchTriage.md).
-                .AddLogWatch(configuration)
+                // Red-log ticketing rides the MeshWeaver.Observability MODULE
+                // (ObservabilityProviderAttribute → AddLogWatch(); LogWatchOptions binds through
+                // the options pipeline). The DETECTOR is not here either way — it is a separate
+                // service in the cluster's monitoring namespace that polls Loki and POSTs to
+                // /api/log-incidents (Doc/Architecture/LogWatchTriage.md); the compiled endpoint
+                // resolves the ILogIncidentIngest Contract seam optionally.
                 // Bind the whole section so the multi-registry list (PluginCatalog:Registries:N:*)
                 // binds alongside the legacy single RegistryUrl/RegistryRef pair.
                 .ConfigureServices(pcs => pcs.AddSingleton(
@@ -778,7 +777,9 @@ public static class MemexConfiguration
                 // types); off the thread pool so it never blocks startup.
                 .ConfigureServices(services =>
                     services.AddHostedService<ShippedReleaseSeedHostedService>())
-                .AddMarkdownExport()
+                // Markdown export (PDF/DOCX/HTML + share-by-email) rides the
+                // MeshWeaver.Markdown.Export MODULE (MarkdownExportProviderAttribute →
+                // AddMarkdownExport(); node seeding is IfAbsent so the lane switch is idempotent).
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())
                 // Shared NodeType assembly cache (versioned, cross-replica consistent).
