@@ -38,7 +38,8 @@ public static class ContentIndexingPipelineExtensions
         Func<IServiceProvider, IChunkEmbedder> embedderFactory,
         Func<IServiceProvider, ISummarizer>? summarizerFactory = null,
         ContentIndexingOptions? options = null,
-        Func<IServiceProvider, IImageDescriber>? imageDescriberFactory = null)
+        Func<IServiceProvider, IImageDescriber>? imageDescriberFactory = null,
+        Func<IServiceProvider, bool>? enabledWhen = null)
         where TBuilder : MeshBuilder
     {
         ArgumentNullException.ThrowIfNull(storeFactory);
@@ -81,16 +82,42 @@ public static class ContentIndexingPipelineExtensions
             // single instance is the upload reactor. A plain AddSingleton (not TryAddEnumerable) because
             // the latter cannot dedupe a forwarding factory by implementation type; this extension is
             // called once per host, so idempotency isn't needed.
-            services.AddSingleton<ContentIndexingObserver>(sp => new ContentIndexingObserver(
-                sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<ContentIndexingService>(),
-                sp.GetService<ILogger<ContentIndexingObserver>>()));
-            services.AddSingleton<IContentUploadObserver>(sp => sp.GetRequiredService<ContentIndexingObserver>());
+            //
+            // enabledWhen is the RESOLVE-TIME activation gate (a boot-loaded module has no
+            // IConfiguration at install time, so the "is this deployment configured for indexing?"
+            // decision cannot be made at registration). Evaluated once, at first resolution:
+            // disabled ⇒ the upload seam gets a no-op observer (uploads proceed, nothing indexes —
+            // the documented inert-when-unconfigured behavior), while resolving the CONCRETE
+            // observer (the GUI's reindex entry point) fails with an actionable message instead of
+            // a bare missing-dependency error from deep inside the store factory.
+            services.AddSingleton<ContentIndexingObserver>(sp =>
+                enabledWhen is null || enabledWhen(sp)
+                    ? new ContentIndexingObserver(
+                        sp.GetRequiredService<IMessageHub>(),
+                        sp.GetRequiredService<ContentIndexingService>(),
+                        sp.GetService<ILogger<ContentIndexingObserver>>())
+                    : throw new InvalidOperationException(
+                        "Content indexing is not active on this deployment: the pipeline's activation " +
+                        "condition is false (typically no mesh database connection string or no " +
+                        "Embedding:Endpoint/Embedding:ApiKey configuration). Configure both to index content."));
+            services.AddSingleton<IContentUploadObserver>(sp =>
+                enabledWhen is null || enabledWhen(sp)
+                    ? sp.GetRequiredService<ContentIndexingObserver>()
+                    : InertContentUploadObserver.Instance);
 
             return services;
         });
 
         return builder;
+    }
+
+    /// <summary>
+    /// The disabled-pipeline stand-in on the upload seam: uploads proceed, nothing indexes.
+    /// </summary>
+    private sealed class InertContentUploadObserver : IContentUploadObserver
+    {
+        public static readonly InertContentUploadObserver Instance = new();
+        public void OnUploaded(string collectionPath, string filePath) { }
     }
 
     /// <summary>

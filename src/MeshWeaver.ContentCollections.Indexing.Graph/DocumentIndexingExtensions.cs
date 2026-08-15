@@ -100,7 +100,9 @@ public static class DocumentIndexingExtensions
     /// <c>Document</c> node. See <c>PostgreSqlSqlGenerator.GenerateVectorSearchQuery</c> /
     /// <c>GenerateCrossSchemaSelectQuery</c>.</para>
     /// </summary>
-    public static TBuilder AddContentSearch<TBuilder>(this TBuilder builder)
+    public static TBuilder AddContentSearch<TBuilder>(
+        this TBuilder builder,
+        Func<IServiceProvider, bool>? enabledWhen = null)
         where TBuilder : MeshBuilder
     {
         builder.ConfigureServices(services =>
@@ -111,14 +113,32 @@ public static class DocumentIndexingExtensions
             // registered for IAutocompleteProvider". Since AddContentSearch is called exactly once per
             // host, a plain AddScoped into the IAutocompleteProvider enumerable is correct (GetServices
             // returns it alongside the concrete-typed providers).
+            //
+            // enabledWhen mirrors AddContentIndexingPipeline's resolve-time activation gate: a
+            // boot-loaded module can't consult IConfiguration at registration, and an unconfigured
+            // deployment must degrade to "no content suggestions", never a missing-store error
+            // surfacing inside the autocomplete aggregator.
             services.AddScoped<IAutocompleteProvider>(sp =>
-                new ContentChunkAutocompleteProvider(
-                    sp.GetRequiredService<IChunkedContentVectorStore>(),
-                    sp.GetRequiredService<IChunkEmbedder>(),
-                    CollectionScopeFromContext));
+                enabledWhen is null || enabledWhen(sp)
+                    ? new ContentChunkAutocompleteProvider(
+                        sp.GetRequiredService<IChunkedContentVectorStore>(),
+                        sp.GetRequiredService<IChunkEmbedder>(),
+                        CollectionScopeFromContext)
+                    : InertAutocompleteProvider.Instance);
             return services;
         });
         return builder;
+    }
+
+    /// <summary>
+    /// The disabled-search stand-in: settles immediately on the empty snapshot (the contract
+    /// forbids <c>Observable.Empty</c>, which would stall the aggregator's CombineLatest).
+    /// </summary>
+    private sealed class InertAutocompleteProvider : IAutocompleteProvider
+    {
+        public static readonly InertAutocompleteProvider Instance = new();
+        public IObservable<IReadOnlyCollection<AutocompleteItem>> GetItems(string query, string? contextPath = null)
+            => System.Reactive.Linq.Observable.Return(AutocompleteSnapshots.Empty);
     }
 
     /// <summary>
