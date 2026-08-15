@@ -91,6 +91,15 @@ public record UiContribution
     /// <summary>Sort order within the menu (lower = earlier). Default 100 — after the built-ins.</summary>
     public int Order { get; init; } = 100;
 
+    /// <summary>Optional group header (settings tabs) — entries sharing a group nest under it.</summary>
+    public string? Group { get; init; }
+
+    /// <summary>Localization key for <see cref="Group"/>.</summary>
+    public string? GroupKey { get; init; }
+
+    /// <summary>Optional icon for the group header; the first non-null in a group wins.</summary>
+    public string? GroupIcon { get; init; }
+
     /// <summary>
     /// The permission the VIEWER must hold on the node for the entry to appear — enforced by the
     /// compiled aggregator against the live effective-permission stream (never trusted from
