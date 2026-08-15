@@ -1,6 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using MeshWeaver.GoogleMaps;
+using MeshWeaver.Maps;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
@@ -290,7 +290,7 @@ public static class SalesGeographyArea
             MapTypeControl = true
         };
 
-        return new GoogleMapControl
+        return new MapControl
         {
             Options = mapOptions,
             Circles = circles

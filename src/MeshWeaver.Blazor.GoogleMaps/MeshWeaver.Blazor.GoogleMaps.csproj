@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-    <ProjectReference Include="..\MeshWeaver.GoogleMaps\MeshWeaver.GoogleMaps.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
   </ItemGroup>
 
 </Project>

@@ -12,7 +12,7 @@
         <ProjectReference Include="..\..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
         <ProjectReference Include="..\..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
-        <ProjectReference Include="..\..\..\src\MeshWeaver.GoogleMaps\MeshWeaver.GoogleMaps.csproj" />
+        <ProjectReference Include="..\..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
         <ProjectReference Include="..\MeshWeaver.Northwind.Model\MeshWeaver.Northwind.Model.csproj" />
     </ItemGroup>
 

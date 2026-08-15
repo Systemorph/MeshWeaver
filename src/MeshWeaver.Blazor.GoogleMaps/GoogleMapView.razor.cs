@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
 using Microsoft.Extensions.Logging;
-using MeshWeaver.GoogleMaps;
+using MeshWeaver.Maps;
 using MeshWeaver.Layout;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.Options;
@@ -9,9 +9,9 @@ using Microsoft.Extensions.Options;
 namespace MeshWeaver.Blazor.GoogleMaps;
 
 /// <summary>
-/// Blazor view that renders a <c>GoogleMapControl</c>, loading the Google Maps JavaScript module and keeping markers and circles in sync.
+/// Blazor view that renders a <c>MapControl</c>, loading the Google Maps JavaScript module and keeping markers and circles in sync.
 /// </summary>
-public partial class GoogleMapView : BlazorView<GoogleMapControl, GoogleMapView>
+public partial class GoogleMapView : BlazorView<MapControl, GoogleMapView>
 {
     [Inject] private IOptions<GoogleMapsConfiguration> Configuration { get; set; } = null!;
 

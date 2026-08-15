@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Reactive.Subjects;
-using MeshWeaver.GoogleMaps;
+using MeshWeaver.Maps;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Options;
 

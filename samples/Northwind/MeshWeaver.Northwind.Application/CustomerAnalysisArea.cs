@@ -2,7 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
-using MeshWeaver.GoogleMaps;
+using MeshWeaver.Maps;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
@@ -577,7 +577,7 @@ public static class CustomerAnalysisArea
             MapTypeControl = true
         };
 
-        return new GoogleMapControl
+        return new MapControl
         {
             Options = mapOptions,
             Circles = circles

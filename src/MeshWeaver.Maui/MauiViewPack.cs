@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
-using MeshWeaver.GoogleMaps;
+using MeshWeaver.Maps;
 using MeshWeaver.Graph;
 using MeshWeaver.Kernel;
 using MeshWeaver.Maui.Abstractions;
@@ -382,7 +382,7 @@ public static class MauiViewPackExtensions
         // Phase 4 — charts via LiveCharts2 (OSS/MIT).
         .Register<ChartControl, ChartView>()
         // Phase 5 — native map (MAUI Map / MapKit).
-        .Register<GoogleMapControl, GoogleMapView>()
+        .Register<MapControl, MapView>()
         // Phase 4 — notebook cell (notebook itself is an IContainerControl → ContainerView).
         .Register<NotebookCellControl, NotebookCellView>()
         // Phase 4 — editors (markdown / code / diff) — native Editor-based.
@@ -1940,7 +1940,7 @@ public sealed class PivotGridView : MauiView<PivotGridControl>
 /// <summary>Map → a native MAUI <see cref="Microsoft.Maui.Controls.Maps.Map"/> (MapKit on maccatalyst/iOS —
 /// no Google API key): centers + zooms from <c>Options.Center</c>/<c>Zoom</c> and drops a pin per marker.
 /// The AspNetCore-free counterpart of the portal's Google Maps JS embed.</summary>
-public sealed class GoogleMapView : MauiView<GoogleMapControl>
+public sealed class MapView : MauiView<MapControl>
 {
     protected override View CreateView()
     {
