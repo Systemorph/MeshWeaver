@@ -340,10 +340,10 @@ public static class MemexConfiguration
         }
         // CopilotConnectStrategy registers from the Copilot pack (Modules:Assemblies).
 
-        // Social publishing — minimal registration for the LinkedIn connect + pull endpoints.
-        // (The full hosted-service pipeline is gated behind AddSocialPublishing which needs
-        // IApprovalPublishBridge / IStatsRefreshSource / IPastPostIngestSource — those come
-        // in Phase 4. For now the publisher is enough for /connect/linkedin/pull to work.)
+        // Social publishing — the LinkedIn connect + pull endpoints. (The never-wired
+        // hosted-service pipeline around AddSocialPublishing was deleted as unreachable;
+        // if scheduling/ingest ever returns it will be built node-native in the
+        // SocialMedia repo, not compiled here.)
         var linkedInClientId = builder.Configuration["Social:LinkedIn:ClientId"];
         if (!string.IsNullOrEmpty(linkedInClientId))
         {

@@ -23,7 +23,7 @@ namespace MeshWeaver.InstanceSync;
 /// On host start, existing registrations are discovered with one system-identity query so
 /// syncing resumes across restarts (pending manifests drain immediately). Runs as an
 /// <see cref="IHostedService"/> bound to the host lifecycle — the same shape as
-/// <c>ApprovalToPublishHandler</c>.
+/// the retired social-publishing pipeline (deleted as unreachable; the LinkedIn half lives on).
 /// </summary>
 public sealed class InstanceSyncCoordinator(
     IMessageHub hub,
