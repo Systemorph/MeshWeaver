@@ -82,7 +82,7 @@ if (isDeck)
     // compose an empty document. Slide selection uses the SAME resolution the live Overview /
     // Present binding uses, so the email reads in the deck's own order.
     markdown.Clear();
-    var (paths, query, filterSlideTypes) = DeckLayoutAreas.ResolveDeckSelection(rootNode, sourcePath, jsonOptions);
+    var (paths, query, filterSlideTypes) = DeckSelection.ResolveDeckSelection(rootNode, sourcePath, jsonOptions);
     var slides = new List<MeshNode>();
     if (paths.Count > 0)
     {

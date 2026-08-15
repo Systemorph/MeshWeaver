@@ -124,7 +124,7 @@ public class SlidePrintComposerTests
 
         // Same declaration the live stage injects — copied nowhere, referenced once. If the theme
         // ever changes, the printed deck changes with it.
-        html.Should().Contain(SlideLayoutAreas.ThemeTokens);
+        html.Should().Contain(SlidePrintComposer.ThemeTokens);
     }
 
     [Fact]

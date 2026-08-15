@@ -114,7 +114,7 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
 
     /// <summary>
     /// The (uncached) sibling-slide pipeline — shared by the cache above and by
-    /// <see cref="SlideLayoutAreas"/>' no-cache fallback for minimal fixtures.
+    /// the no-cache fallback for minimal fixtures.
     /// Combines the live sibling query (Scan into a path-keyed map so deletions
     /// and updates fold incrementally) with the parent node's Deck manifest and
     /// orders via <see cref="OrderSlides"/>. Deliberately NO <c>StartWith</c> of
@@ -208,7 +208,7 @@ public sealed class DeckSlidesCache : IDeckSlidesCache
             return null;
         return refs
             .Where(r => !string.IsNullOrWhiteSpace(r))
-            .Select(r => DeckLayoutAreas.ResolveSlidePath(parentPath, r))
+            .Select(r => DeckSelection.ResolveSlidePath(parentPath, r))
             .ToImmutableList();
     }
 
