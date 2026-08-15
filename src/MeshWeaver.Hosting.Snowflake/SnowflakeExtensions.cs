@@ -92,7 +92,10 @@ public static class SnowflakeExtensions
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as SnowflakeStorageAdapter
                 ?? throw new InvalidOperationException(
-                    "SnowflakeMeshQuery requires SnowflakeStorageAdapter.");
+                    "The Snowflake storage module is registered but the selected storage adapter " +
+                    "is not Snowflake. Either set Graph:Storage:Type to 'Snowflake' or remove " +
+                    "MeshWeaver.Hosting.Snowflake from Modules:Assemblies (and any direct " +
+                    "AddSnowflakeStorageFactory call).");
             return new SnowflakeMeshQuery(
                 adapter,
                 sp.GetService<AccessService>(),

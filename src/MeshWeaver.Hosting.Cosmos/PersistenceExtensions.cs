@@ -89,8 +89,10 @@ public static class PersistenceExtensions
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as CosmosStorageAdapter
                 ?? throw new InvalidOperationException(
-                    "CosmosMeshQuery requires CosmosStorageAdapter. " +
-                    "Ensure Cosmos storage is configured.");
+                    "The Cosmos storage module is registered but the selected storage adapter is " +
+                    "not Cosmos. Either set Graph:Storage:Type to 'Cosmos' or remove " +
+                    "MeshWeaver.Hosting.Cosmos from Modules:Assemblies (and any direct " +
+                    "AddCosmosStorageFactory call).");
             var meshConfig = sp.GetService<MeshConfiguration>();
             return new CosmosMeshQuery(adapter, meshConfig);
         });

@@ -2,12 +2,15 @@ namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Configuration for graph storage.
-/// Supports FileSystem, AzureBlob, and Cosmos storage types.
+/// Supports FileSystem, AzureBlob, PostgreSql, Cosmos and Snowflake storage types.
 /// </summary>
 public record GraphStorageConfig
 {
     /// <summary>
-    /// Storage type: "FileSystem", "AzureBlob", or "Cosmos"
+    /// Storage type: "FileSystem", "AzureBlob", "PostgreSql", "Cosmos" or "Snowflake".
+    /// Cosmos and Snowflake resolve only when their boot pack (MeshWeaver.Hosting.Cosmos /
+    /// .Snowflake) is loaded via <c>Modules:Assemblies</c> — their assembly attribute registers
+    /// the keyed storage factory during module installation, which runs before this selection.
     /// </summary>
     public string Type { get; init; } = "FileSystem";
 
