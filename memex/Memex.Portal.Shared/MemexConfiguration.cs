@@ -10,7 +10,6 @@ using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Mcp;
-using MeshWeaver.Speech;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Hosting.Grpc;
@@ -268,15 +267,11 @@ public static class MemexConfiguration
         // ModelProviderService backs the Models settings tab — users store
         // their own AI provider credentials as MeshNodes in their namespace.
         services.AddSingleton<Memex.Portal.Shared.Models.ModelProviderService>();
-        // ProviderModelLister fetches a provider's live model list (HTTP /models via
-        // the I/O pool) so the add-provider flow lets users pick which models to bring.
-        services.AddSingleton<Memex.Portal.Shared.Models.ProviderModelLister>();
-        // OpenAI-compatible (Ollama) auto-discovery — keeps the OpenAICompatible provider's
-        // LanguageModel catalog in sync with the models installed on its endpoint, so a locally
-        // pulled model shows up in the picker without editing OpenAICompatible:Models[]. Opt-in
-        // (OpenAICompatible:DiscoverModels=true) and inert otherwise; only when the provider is on.
-        if (features.Ai.Providers.OpenAICompatible)
-            services.AddHostedService<Memex.Portal.Shared.Models.OpenAICompatibleModelSync>();
+        // ProviderModelLister moved to MeshWeaver.AI (AddAgentChatServices registers it) — the
+        // add-provider flow and the OpenAI module's model-discovery sync both resolve it there.
+        // OpenAI-compatible (Ollama) model auto-discovery rides the MeshWeaver.AI.OpenAI MODULE
+        // now (OpenAIProvidersAttribute registers the hosted sync; it self-gates on
+        // OpenAICompatible:Endpoint + DiscoverModels=true) — nothing to register here.
 
         // GitHub sync — per-user OAuth credential (device flow) + bidirectional
         // Space ↔ GitHub sync (export = "sync back"; import = create / re-import a
@@ -453,11 +448,11 @@ public static class MemexConfiguration
         // multipart upload size cap. See MeshApiEndpoints.
         services.AddMeshApi();
 
-        // Centralized speech-to-text: registers ISpeechTranscriber (the Whisper container client)
-        // and binds the `Speech` config section (Endpoint/Language/Enabled). The client-facing
-        // POST /api/speech/transcribe endpoint (MapSpeechApi) forwards audio to the container, so
-        // the model host stays behind portal auth. See Doc/Architecture/CentralizedSpeech.
-        services.AddSpeechTranscription(builder.Configuration);
+        // Centralized speech-to-text is a MODULE now (MeshWeaver.Speech in Modules:Assemblies —
+        // SpeechModuleAttribute binds the `Speech` section via the options pipeline and registers
+        // ISpeechTranscriber). The compiled surface degrades without it: the mic UI resolves the
+        // transcriber optionally and hides, and POST /api/speech/transcribe answers 503. See
+        // Doc/Architecture/CentralizedSpeech.
     }
 
     /// <summary>
