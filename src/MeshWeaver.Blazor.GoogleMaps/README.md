@@ -4,7 +4,7 @@ Blazor Server implementation for MeshWeaver Google Maps integration.
 
 ## Overview
 
-This package provides the Blazor Server rendering layer for MeshWeaver's Google Maps controls. It works in conjunction with `MeshWeaver.GoogleMaps` to deliver interactive map functionality within MeshWeaver applications.
+This package provides the Blazor Server rendering layer for MeshWeaver's Google Maps controls. It works in conjunction with `MeshWeaver.Maps` to deliver interactive map functionality within MeshWeaver applications.
 
 ## Quick Start
 
@@ -42,7 +42,7 @@ Create a map control in your layout areas:
 
 ```csharp
 public static UiControl CreateMap() =>
-    new GoogleMapControl
+    new MapControl
     {
         Options = new MapOptions
         {
@@ -75,12 +75,12 @@ public static UiControl CreateMap() =>
 - Google Maps JavaScript API key
 - .NET 9.0
 - Blazor Server
-- MeshWeaver.GoogleMaps package
+- MeshWeaver.Maps package
 
 ## Dependencies
 
 - MeshWeaver.Blazor
-- MeshWeaver.GoogleMaps
+- MeshWeaver.Maps
 - Microsoft.AspNetCore.Components.Web
 
-For complete documentation and examples, see the main [MeshWeaver.GoogleMaps README](../MeshWeaver.GoogleMaps/README.md).
+For complete documentation and examples, see the main [MeshWeaver.Maps README](../MeshWeaver.Maps/README.md).

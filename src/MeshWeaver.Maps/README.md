@@ -1,14 +1,16 @@
-# MeshWeaver Google Maps Integration
+# MeshWeaver Maps
 
-This library provides Google Maps integration for MeshWeaver applications, offering framework-agnostic map controls with Blazor Server rendering capabilities.
+Provider-neutral map controls for MeshWeaver layout areas: `MapControl` plus the `MapOptions`, `LatLng`, `MapMarker` and `MapCircle` records. The control carries pure geographic data — WHICH map engine renders it is a per-host choice supplied by a provider view package.
 
-## Projects
-
-### MeshWeaver.GoogleMaps
-Core library containing the framework-agnostic Google Maps controls and data models.
+## Providers
 
 ### MeshWeaver.Blazor.GoogleMaps
-Blazor Server implementation providing the rendering layer for Google Maps integration.
+Blazor Server renderer using the Google Maps JavaScript API (needs a `GoogleMaps:ApiKey`).
+
+### MeshWeaver.Maui (built-in MapView)
+Native MAUI renderer using platform maps (MapKit on iOS/Mac Catalyst) — no API key.
+
+OpenStreetMap and Apple MapKit JS provider packages are planned; the control surface stays identical across providers.
 
 ## Features
 
@@ -48,7 +50,7 @@ services.Configure<GoogleMapsConfiguration>(options =>
 
 ```csharp
 public static UiControl CreateMap() =>
-    new GoogleMapControl
+    new MapControl
     {
         Options = new MapOptions
         {
@@ -82,7 +84,7 @@ public static UiControl CreateMap() =>
 
 ## API Reference
 
-### GoogleMapControl
+### MapControl
 
 Main control for rendering Google Maps.
 
@@ -183,12 +185,12 @@ Configuration options for the Google Maps API integration.
 
 ## Dependencies
 
-### MeshWeaver.GoogleMaps
+### MeshWeaver.Maps
 - MeshWeaver.Layout
 
 ### MeshWeaver.Blazor.GoogleMaps
 - MeshWeaver.Blazor
-- MeshWeaver.GoogleMaps
+- MeshWeaver.Maps
 - Microsoft.AspNetCore.Components.Web
 
 ## Integration Example
@@ -205,7 +207,7 @@ public static class MyLayoutAreas
     {
         var locations = GetLocations(); // Your data source
 
-        return new GoogleMapControl
+        return new MapControl
         {
             Options = new MapOptions
             {
@@ -228,7 +230,7 @@ public static class MyLayoutAreas
 The map container automatically adapts to its parent's dimensions. Use CSS styling through the `WithStyle()` method:
 
 ```csharp
-var map = new GoogleMapControl { /* options */ }
+var map = new MapControl { /* options */ }
     .WithStyle("height: 400px; width: 100%; border: 1px solid #ccc;");
 ```
 

@@ -1,7 +1,7 @@
 ﻿using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Data;
-using MeshWeaver.GoogleMaps;
+using MeshWeaver.Maps;
 using MeshWeaver.Insurance.Domain.LayoutAreas.Shared;
 using MeshWeaver.Insurance.Domain.Services;
 using MeshWeaver.Layout;
@@ -44,7 +44,7 @@ public static class RiskMapLayoutArea
                         .WithView(GeocodingArea));
                 }
 
-                var mapControl = BuildGoogleMapControl(geocodedRisks);
+                var mapControl = BuildMapControl(geocodedRisks);
 
                 return Observable.Using(
                     () => new ReplaySubject<string?>(1),
@@ -129,7 +129,7 @@ public static class RiskMapLayoutArea
             .WithView(Controls.Markdown($"**Longitude:** {risk.GeocodedLocation?.Longitude:F6}"));
     }
 
-    private static GoogleMapControl BuildGoogleMapControl(IReadOnlyCollection<PropertyRisk> risks)
+    private static MapControl BuildMapControl(IReadOnlyCollection<PropertyRisk> risks)
     {
         var riskList = risks.Where(r => r.GeocodedLocation?.Latitude is not null && r.GeocodedLocation?.Longitude is not null).ToList();
 
@@ -166,7 +166,7 @@ public static class RiskMapLayoutArea
             FullscreenControl = true
         };
 
-        return new GoogleMapControl()
+        return new MapControl()
         {
             Options = mapOptions,
             Markers = markers,

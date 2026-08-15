@@ -1,11 +1,11 @@
 ﻿using MeshWeaver.Layout;
 
-namespace MeshWeaver.GoogleMaps;
+namespace MeshWeaver.Maps;
 
 /// <summary>
-/// A layout-area control that renders an interactive Google Map, optionally overlaid with markers and circles.
+/// A layout-area control that renders an interactive map (provider-supplied: Google Maps in the portal, MapKit in MAUI), optionally overlaid with markers and circles.
 /// </summary>
-public record GoogleMapControl() : UiControl<GoogleMapControl>("MeshWeaver.GoogleMaps", "1.0.0")
+public record MapControl() : UiControl<MapControl>("MeshWeaver.Maps", "1.0.0")
 {
 
     /// <summary>Map configuration such as center, zoom level and which UI controls are shown.</summary>
