@@ -85,9 +85,9 @@ internal static class UiContributionProjection
             if (contribution.Gates?.AdminOnly == true && !isAdmin)
                 continue;
             items.Add(new GlobalSettingsMenuItemDefinition(
-                // The trailing path segment keeps the tab's /GlobalSettings/{Id} deep link stable
-                // when a compiled tab migrates to a contribution seeded under the same name.
-                Id: node.Path?.Split('/')[^1] is { Length: > 0 } id ? id : area,
+                // The node id (= the trailing path segment) keeps the tab's /GlobalSettings/{Id}
+                // deep link stable when a compiled tab migrates to a same-named seeded contribution.
+                Id: node.Id is { Length: > 0 } id ? id : area,
                 Label: contribution.Label ?? area,
                 // Embed INTO the pane's stack so the contributed tab inherits the same
                 // padding/scroll container every compiled tab renders in.

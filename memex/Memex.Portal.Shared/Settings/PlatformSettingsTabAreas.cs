@@ -39,11 +39,15 @@ public static class PlatformSettingsTabAreas
             // Privacy's tab content is the ADMIN EDITOR of the public statement (the statement
             // itself is served anonymously at /privacy). The contributed entry hides the tab via
             // Gates.AdminOnly, but an area is directly addressable by URL — so the area re-asserts
-            // the same gate instead of trusting the menu to be the only door.
+            // the same gate instead of trusting the menu to be the only door. TakeLast(1) waits for
+            // the gate to RESOLVE (it opens with a synthetic false so menus render ungated tabs
+            // immediately) — a neutral pane shows meanwhile, so an admin never flashes the denial.
             .WithView(PrivacyArea, (host, _) => AdminMenuGate.IsPlatformAdmin(host)
+                .TakeLast(1)
                 .Select(isAdmin => isAdmin
                     ? PrivacySettingsTab.BuildContent(host, PaneStack())
-                    : (UiControl)Controls.Markdown(host.Localize("ui.accessDeniedAdminsOnly")))));
+                    : (UiControl)Controls.Markdown(host.Localize("ui.accessDeniedAdminsOnly")))
+                .StartWith((UiControl)PaneStack())));
 
     /// <summary>
     /// Seeds the tranche's menu entries as platform-static <c>UiContribution</c> nodes under
