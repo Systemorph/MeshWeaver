@@ -84,15 +84,23 @@ public static class PluginBundleEndpoints
             return await next(ctx);
         });
 
-        group.MapGet("/index.json", (HttpContext http, IMessageHub rootHub, CancellationToken ct) =>
-            Index(http, rootHub, ct));
+        // 🚨 The hub is resolved from RequestServices INSIDE the handler, never bound as a
+        // parameter. Minimal-API binds handler arguments BEFORE endpoint filters run, so a bound
+        // IMessageHub makes an UNAUTHENTICATED request depend on the mesh being resolvable — it
+        // throws (500) instead of the 401 the filter would have returned. The rejection path must
+        // not need anything but the header.
+        group.MapGet("/index.json", (HttpContext http, CancellationToken ct) =>
+            Index(http, RootHub(http), ct));
 
         group.MapGet("/{plugin}/{version}",
-            (IMessageHub rootHub, string plugin, string version, CancellationToken ct) =>
-                Bundle(rootHub, plugin, version, ct));
+            (HttpContext http, string plugin, string version, CancellationToken ct) =>
+                Bundle(RootHub(http), plugin, version, ct));
 
         return endpoints;
     }
+
+    private static IMessageHub RootHub(HttpContext http) =>
+        http.RequestServices.GetRequiredService<IMessageHub>();
 
     /// <summary>
     /// What this instance can serve, and the framework identity it serves it for.
