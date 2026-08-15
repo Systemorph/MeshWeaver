@@ -80,7 +80,7 @@ Every user message carries a **"Current Application Context"** header. **You DO 
 ### Output links
 
 **LINKS in markdown output**: Always use **absolute paths** starting with `@/` inside **native markdown link syntax** — `[text](@/OrgA/Projects/my-doc)`. Markdig's `LinkUrlCleanupExtension` strips the leading `@` at render time and produces a clean `/OrgA/Projects/my-doc` URL.
-- Correct: `[Final Report](@/OrgA/Projects/my-doc)`, `[My Page](@/User/rbuergi/my-page)`
+- Correct: `[Final Report](@/OrgA/Projects/my-doc)`, `[My Page](@/User/amaier/my-page)`
 - **Wrong**: `my-doc`, `../Projects/my-doc`, `@my-doc` (relative links break when viewed from another context)
 
 **⚠️ DO NOT put `@/` inside raw HTML `href` attributes.** The link-cleanup extension does not reach inside HTML blocks. A raw `<a href="@/X">` leaks the `@/` to the browser, producing a broken `https://host/@/X` URL. When writing HTML-in-markdown (hero banners, styled cards, etc.), use plain paths: `<a href="/OrgA/Projects/my-doc">`.
@@ -331,9 +331,9 @@ When the user says **"create"** (a page, note, doc, list, plan, space, world, ch
 The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-level nodes).
 
 **CRITICAL: `id` must NEVER contain `/` (slashes). The database enforces this with a CHECK constraint — writes with `/` in the id will FAIL.** Use `namespace` for hierarchy. The `id` is just the final segment (the node's own name), `namespace` is the parent path.
-- Correct: `"id": "PricingTool", "namespace": "User/rbuergi"` (path = `User/rbuergi/PricingTool`)
+- Correct: `"id": "PricingTool", "namespace": "User/amaier"` (path = `User/amaier/PricingTool`)
 - Correct: `"id": "NewPage", "namespace": "MyOrg/Projects"` (path = `MyOrg/Projects/NewPage`)
-- **WRONG**: `"id": "User/rbuergi/PricingTool", "namespace": ""` — **WILL FAIL, slashes in id are forbidden**
+- **WRONG**: `"id": "User/amaier/PricingTool", "namespace": ""` — **WILL FAIL, slashes in id are forbidden**
 - **WRONG**: `"id": "MyOrg/Projects/NewPage"` — **WILL FAIL**
 
 ### Discovering Content Schemas
@@ -397,13 +397,13 @@ Partial update of a single node. Only the specified fields are changed; all othe
 
 ### Parameters
 
-- `path` (string, required) — Path to the node (e.g., `@User/rbuergi/my-node`)
+- `path` (string, required) — Path to the node (e.g., `@User/amaier/my-node`)
 - `fields` (string, required) — JSON object with only the fields to change
 
 ### Examples
 
 ```
-Patch('@User/rbuergi/my-node', '{"icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"#2e6da4\"/></svg>"}')
+Patch('@User/amaier/my-node', '{"icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"#2e6da4\"/></svg>"}')
 Patch('@MyOrg/MyPage', '{"name": "Renamed Page"}')
 Patch('@MyOrg/MyPage', '{"content": {"text": "Updated markdown content"}}')
 ```

@@ -23,7 +23,7 @@ partition** (the matview resolves group access within a schema). Put the group *
 
 - **The group's `accessObject` in the grant is the group's PATH** (`{Space}/{Group}`), and each
   membership's `groups[].group` is that **same path**. They must match exactly — that string is the join key.
-- **`member` is the userId** — the User node's id (its partition-root id, e.g. `rbuergi`), the same value
+- **`member` is the userId** — the User node's id (its partition-root id, e.g. `amaier`), the same value
   `_Access` grants use as `accessObject`. NOT the email, NOT a display name.
 - Everything under `{Space}` so it lands in the space's Postgres schema. A group in another partition
   will not resolve access to this space.
@@ -63,11 +63,11 @@ A `GroupMembership` node as a **child of the group**, id `{userId}_Membership`, 
 
 ```bash
 mcp create --node '{
-  "id": "rbuergi_Membership", "namespace": "YouTube/Team", "name": "rbuergi — Team",
+  "id": "amaier_Membership", "namespace": "YouTube/Team", "name": "amaier — Team",
   "nodeType": "GroupMembership",
   "content": {
     "$type": "GroupMembership",
-    "member": "rbuergi", "displayName": "rbuergi",
+    "member": "amaier", "displayName": "amaier",
     "groups": [ { "$type": "MembershipEntry", "group": "YouTube/Team" } ]
   }
 }'
@@ -85,28 +85,28 @@ restarts (the `EventSubscriptionRunner` reconciles on boot). Both are idempotent
 ```bash
 # (a) the invitation — InvitationEmailSender emails any Pending invitation (see caveat below)
 mcp create --node '{
-  "id": "beat_panimage_ch", "namespace": "Admin/Invitation", "name": "Invitation beat@panimage.ch",
+  "id": "newcomer_example_com", "namespace": "Admin/Invitation", "name": "Invitation newcomer@example.com",
   "nodeType": "Invitation",
-  "content": { "$type": "Invitation", "email": "beat@panimage.ch", "invitedBy": "rbuergi",
+  "content": { "$type": "Invitation", "email": "newcomer@example.com", "invitedBy": "amaier",
                "note": "Invited to group YouTube/Team" }
 }'
 
 # (b) the durable subscriber — add to the group on sign-up. Id: addgroup_{slug(email)}_{slug(groupPath)}
 mcp create --node '{
-  "id": "addgroup_beat_panimage_ch_youtube_team", "namespace": "Admin/EventSubscription",
+  "id": "addgroup_newcomer_example_com_youtube_team", "namespace": "Admin/EventSubscription",
   "name": "NodeChange → AddToGroup", "nodeType": "EventSubscription",
   "content": {
     "$type": "EventSubscription",
-    "id": "addgroup_beat_panimage_ch_youtube_team",
+    "id": "addgroup_newcomer_example_com_youtube_team",
     "triggerType": "NodeChange", "triggerNodeType": "User", "triggerKind": "Created",
-    "matchField": "email", "matchValue": "beat@panimage.ch",
+    "matchField": "email", "matchValue": "newcomer@example.com",
     "continuationType": "AddToGroup", "targetPath": "YouTube/Team",
-    "createdBy": "rbuergi"
+    "createdBy": "amaier"
   }
 }'
 ```
 
-- **`slug(x)`** = lowercase, every non-alphanumeric → `_` (so `beat@panimage.ch` → `beat_panimage_ch`,
+- **`slug(x)`** = lowercase, every non-alphanumeric → `_` (so `newcomer@example.com` → `newcomer_example_com`,
   `YouTube/Team` → `youtube_team`). The invitation node id is `slug(email)`; a re-invite upserts the same
   nodes instead of duplicating.
 - Enums serialise by **name**: `"triggerType": "NodeChange"`, `"triggerKind": "Created"`,
