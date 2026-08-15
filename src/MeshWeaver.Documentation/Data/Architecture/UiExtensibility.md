@@ -101,6 +101,43 @@ composition roughly **every three days**, and one built-in node type was added a
 favour of its plugin within nine days. When in doubt, lanes 1 and 2 are reversible; lane 3 is a
 permanent tax on the composition root.
 
+### Lane 2b — a plugin contributing views at runtime
+
+A view pack is compiled into the image. A **plugin** is not: its assembly is compiled and loaded at
+NodeType activation, long after the layout client was configured. `WithPortalConfiguration` is how it
+reaches the portal hub anyway.
+
+The portal hub is a different hub from the plugin's own — one per browser circuit — so returning a
+modified config cannot reach it. The delegate is routed instead:
+
+```csharp
+// A NodeType's `configuration` lambda. It configures THIS node's hub; the portal is elsewhere.
+config => config
+    .WithType(typeof(HeatmapControl))
+    .WithPortalConfiguration(portal => portal
+        .WithType(typeof(HeatmapControl))
+        .AddViews(layout => layout.WithView<HeatmapControl, HeatmapView>()))
+```
+
+`HeatmapControl` and `HeatmapView` come from the plugin's own assembly, delivered by its bundle
+(see [PluginPackaging](../PluginPackaging)). From the portal's side nothing is special — it is the same
+`WithView` seam `MeshWeaver.Blazor.Radzen` uses.
+
+Three properties worth knowing, because each is invisible when it bites:
+
+- **Re-registration replaces.** The contribution is keyed by the plugin hub's address, so a
+  recompile — which mints a new collectible `AssemblyLoadContext` — replaces the previous delegate
+  instead of stacking one. Stacking would pin the old ALC against unload *and* put two CLR
+  identities of the same view type into one portal.
+- **It applies to the NEXT portal hub.** A portal hub is configured once, at circuit creation, so a
+  plugin installed mid-session takes effect on the viewer's next page load.
+- **A dropped contribution is logged.** On a headless host (the sidecar, a test mesh with no layout
+  client) there is no portal to configure and the contribution is discarded — with a warning naming
+  the address, because otherwise it presents as a view that simply never renders.
+
+Note the type registration on **both** sides: the control travels between hubs, so each end needs it
+in its `TypeRegistry` or it degrades to an untyped `JsonElement` and the area renders empty.
+
 ## The seams, in one table
 
 | You want to contribute… | Seam | Registered on |
@@ -114,6 +151,7 @@ permanent tax on the composition root.
 | A home-screen tab | a `HomeTab` node | mesh data — no code at all |
 | Hub behaviour for a node type | `MeshNode.HubConfiguration` | works from in-mesh plugins at runtime |
 | Root services, nodes, hub + per-node-hub configuration, or a whole builder extension from a DLL | `MeshNodeProviderAttribute` (`Nodes` / `HubConfigurations` / `DefaultNodeHubConfigurations` / `BuilderConfigurations`) + `MeshBuilder.InstallAssemblies` | boot time only (`Modules:Assemblies`) |
+| Portal-hub config from a plugin (incl. views) | `WithPortalConfiguration(portal => …)` | the plugin's own hub configuration — at runtime |
 
 ## What cannot be extended today
 
@@ -124,9 +162,12 @@ Honesty section — these are the known walls, so nobody burns a day rediscoveri
 - **Runtime `.razor` from mesh content.** The in-mesh compile pipeline is C#-only — there is no
   Razor engine at runtime, and collectible recompiles would fight the Blazor renderer's
   type-identity caching. Precompiled packs are the answer, not runtime Razor.
-- **Post-start pack loading.** View-map lists are consulted when a hub builds, but the *sources* of
-  those lists are frozen at startup today. The mutable pack registry that lifts this is planned;
-  until then packs load at boot.
+- **Razor assets from a runtime-loaded assembly.** A plugin can now register views after startup
+  (see below), but an assembly loaded at runtime brings no *static web assets*: an RCL's `wwwroot`
+  is served from a build-time manifest at `_content/<lib>/…`, and `.razor.css` is bundled into
+  `<project>.styles.css` at build. Neither exists for an assembly the image was not built with, so a
+  runtime-contributed view must carry no CSS/JS of its own — inline what it needs, or ship the
+  assets in a compiled pack.
 
 ## Rolling out to deployments
 

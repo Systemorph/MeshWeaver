@@ -63,6 +63,28 @@ public record PackageManifest
     /// </summary>
     public string? ModuleVersion { get; init; }
 
+    /// <summary>
+    /// The module's RELEASED SemVer from its <c>manifest.lock</c>
+    /// (<see cref="ModuleManifest.Version"/>) — the number published as the git tag
+    /// <c>&lt;Module&gt;/vX.Y.Z</c> and the one dependents pin against.
+    ///
+    /// <para>🚨 Distinct from all three neighbours, and none of them substitutes for it:
+    /// <see cref="Version"/> is the whole-repo commit sha, <see cref="ModuleVersion"/> is a content
+    /// HASH (exact but unordered — it cannot express "newer"), and the plugin node's own
+    /// <c>PluginContent.version</c> carries only the AUTHORED <c>MAJOR.MINOR</c>. The PATCH is
+    /// derived by <c>gen-manifests.py</c> from the content hash, so ThreeBody reads <c>1.3</c> on
+    /// its node while its lock and tag say <c>1.3.2</c>.</para>
+    ///
+    /// <para>Persisted because the portal otherwise has no way to name the version a module was
+    /// actually released at: the lock is a repo artifact that GitSync does not carry into the mesh.
+    /// A package feed that invented its own number instead would fork the version namespace away
+    /// from the tags — the exact drift <c>tag-modules.py</c> exists to prevent ("one version, one
+    /// tree — forever").</para>
+    ///
+    /// <para>Null for a package whose manifest predates versioning.</para>
+    /// </summary>
+    public string? ReleasedVersion { get; init; }
+
     /// <summary>The package's folder within the source repo. Set by the source while listing;
     /// not authored in <c>package.json</c>.</summary>
     public string? SourceFolder { get; init; }

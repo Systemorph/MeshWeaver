@@ -65,4 +65,5 @@ Everything — containers, forms, grids, charts, markdown, nav, dialogs, editors
 | [Theming](Theming) | Light/dark/system with the same localStorage contract as Blazor — one preference across both frontends |
 | [Thread Chat](ThreadChat) | The React chat: thread-node watching, message satellites, composer gating, `startThread` / `submitMessage` |
 | [Custom React Controls](../ReactCustomControls) | Extending the renderer with your own control — server-side `UiControl` subclass + a React component for its `$type`, runtime ESM loading |
+| [Custom Blazor Controls](../BlazorCustomControls) | The Blazor half of the same job — a `BlazorView` for the control type |
 | [Testing & Parity](Testing) | The parity ratchet, the vitest suites, and the transport round-trip test |

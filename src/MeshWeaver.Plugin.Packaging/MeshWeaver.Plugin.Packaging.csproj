@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Builds a MeshWeaver plugin's NuGet package — the layout, the nuspec projection of the mesh manifest, and NuGet version ordering. Shared by the CI tool and the portal's feed so both produce the same package.</Description>
+  </PropertyGroup>
+
+</Project>

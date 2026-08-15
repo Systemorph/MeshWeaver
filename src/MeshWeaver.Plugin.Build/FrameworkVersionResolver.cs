@@ -1,5 +1,7 @@
 using System.Text.Json;
 
+using MeshWeaver.Plugin.Packaging;
+
 namespace MeshWeaver.Plugin.Build;
 
 /// <summary>

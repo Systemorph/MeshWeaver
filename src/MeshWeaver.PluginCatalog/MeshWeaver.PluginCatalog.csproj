@@ -17,6 +17,7 @@
     <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
   </ItemGroup>
 
 </Project>
