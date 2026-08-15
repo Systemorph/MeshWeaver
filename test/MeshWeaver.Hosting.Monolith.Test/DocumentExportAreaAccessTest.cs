@@ -14,6 +14,7 @@ using MeshWeaver.Markdown.Export.Configuration;
 using MeshWeaver.Markdown.Export.Html;
 using MeshWeaver.Markdown.Export.Messaging;
 using MeshWeaver.Mesh;
+using MeshWeaver.OgCard;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,6 +60,10 @@ public class DocumentExportAreaAccessTest(ITestOutputHelper output) : MonolithMe
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)          // row-level security on; no PublicAdminAccess
             .AddMarkdownExport()
+            // The embedded-area example below is the OgCard area, which in production rides the
+            // OgCard MODULE (Modules:Assemblies) — a test mesh composes it explicitly, exactly
+            // like AddMarkdownExport above.
+            .AddOgCard()
             .AddMeshNodes(
                 // bob may read the DOCUMENT but has no grant at all on the Secret space.
                 AssignmentNodeFactory.UserRole("bob_viewer_docs", "Viewer", "Docs", accessObject: "bob"),

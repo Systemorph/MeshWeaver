@@ -21,6 +21,21 @@ public sealed class OgCardModuleAttribute : MeshNodeProviderAttribute
 {
     /// <inheritdoc />
     public override IEnumerable<Func<MessageHubConfiguration, MessageHubConfiguration>> DefaultNodeHubConfigurations =>
-        [config => config.AddLayout(layout =>
-            layout.WithView(OgCardLayoutArea.AreaName, OgCardLayoutArea.Render))];
+        [OgCardExtensions.ConfigureHub];
+}
+
+/// <summary>
+/// The module's registration surface. Production installs it via <c>Modules:Assemblies</c>
+/// (<see cref="OgCardModuleAttribute"/>); a mesh that composes it explicitly — a test fixture, a
+/// bespoke host — calls <see cref="AddOgCard"/> for the identical per-node-hub registration.
+/// </summary>
+public static class OgCardExtensions
+{
+    internal static MessageHubConfiguration ConfigureHub(MessageHubConfiguration config)
+        => config.AddLayout(layout =>
+            layout.WithView(OgCardLayoutArea.AreaName, OgCardLayoutArea.Render));
+
+    /// <summary>Registers the <c>OgCard</c> area on every per-node hub of this mesh.</summary>
+    public static MeshBuilder AddOgCard(this MeshBuilder builder)
+        => builder.ConfigureDefaultNodeHub(ConfigureHub);
 }
