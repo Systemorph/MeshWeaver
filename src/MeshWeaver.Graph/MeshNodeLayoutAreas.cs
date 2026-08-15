@@ -192,7 +192,9 @@ public static class MeshNodeLayoutAreas
             .WithView(PinLayoutArea.PinArea, PinLayoutArea.Pin)
             .WithView(PinLayoutArea.UnpinArea, PinLayoutArea.Unpin)
             .WithView(PinLayoutArea.PinnedThumbnailArea, PinLayoutArea.PinnedThumbnail)
-            .WithView(OgCardLayoutArea.AreaName, OgCardLayoutArea.Render)
+            // The OgCard link-preview area rides the MeshWeaver.OgCard MODULE (its attribute
+            // registers on every per-node hub) — delisting it drops the server-side external
+            // URL-fetch surface.
             .WithView(MarkdownOverviewLayoutArea.SuppliedNavArea, MarkdownOverviewLayoutArea.SuppliedNavigationMenu)
             .WithView(StopSyncLayoutArea.StopSyncArea, StopSyncLayoutArea.StopSync)
             // UCR special areas
