@@ -1,8 +1,10 @@
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -55,12 +57,22 @@ public static class GlobalSettingsMenuItemsExtensions
             RenderingContext ctx)
     {
         var collection = config.Get<GlobalSettingsMenuProviderCollection>();
-        if (collection == null || collection.Providers.Count == 0)
-            return Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>([]);
+        var providerDelegates = collection?.Providers
+            ?? (IReadOnlyList<GlobalSettingsMenuItemProvider>)[];
 
-        var streams = collection.Providers.Select(provider =>
+        var streams = providerDelegates.Select(provider =>
             // Skip failing providers so one broken tab can't crash all settings.
             provider(host, ctx).Catch<IReadOnlyList<GlobalSettingsMenuItemDefinition>, Exception>(
+                _ => Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>([])))
+            .ToList();
+
+        // Data-contributed tabs (UiContribution nodes with Context = Settings, design #1645): the
+        // tab's content is the contributed layout area, embedded generically; gating happens HERE
+        // in compiled code — an authenticated viewer always, plus the reactive IsGlobalAdmin
+        // stream when the contribution declares AdminOnly. Node-level RequiredPermission has no
+        // node to bind to on the global settings surface and is deliberately ignored here.
+        streams.Add(ContributedSettingsTabs(host)
+            .Catch<IReadOnlyList<GlobalSettingsMenuItemDefinition>, Exception>(
                 _ => Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>([])));
 
         return Observable.CombineLatest(streams)
@@ -70,6 +82,32 @@ public static class GlobalSettingsMenuItemsExtensions
                 items.Sort((a, b) => a.Order.CompareTo(b.Order));
                 return (IReadOnlyList<GlobalSettingsMenuItemDefinition>)items;
             });
+    }
+
+    /// <summary>
+    /// The DATA-contributed settings tabs: every <see cref="UiContribution"/> in the shared
+    /// mesh-scoped catalog declaring <see cref="UiContribution.SettingsContext"/>, gated in
+    /// compiled code — an authenticated, non-virtual viewer always (the settings surface fails
+    /// closed for anonymous), plus the live <c>IsGlobalAdmin</c> stream for
+    /// <see cref="UiContributionGates.AdminOnly"/>. The tab's content is the contributed layout
+    /// area embedded generically, so contributions never introduce a render surface (#1645).
+    /// </summary>
+    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>>
+        ContributedSettingsTabs(LayoutAreaHost host)
+    {
+        var catalog = host.Hub.ServiceProvider.GetService<UiContributionCatalog>();
+        if (catalog is null)
+            return Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>([]);
+
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewer = accessService?.Context ?? accessService?.CircuitContext;
+        var isAuthenticated = !string.IsNullOrEmpty(viewer?.ObjectId) && viewer?.IsVirtual != true;
+        if (!isAuthenticated)
+            return Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>([]);
+
+        return catalog.Contributions
+            .CombineLatest(host.Hub.IsGlobalAdmin().StartWith(false),
+                UiContributionProjection.ProjectSettingsTabs);
     }
 
     /// <summary>
