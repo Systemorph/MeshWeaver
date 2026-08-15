@@ -13,6 +13,7 @@
     <!-- The storage-agnostic indexing core (IChunkedContentVectorStore / ContentChunk /
          IChunkEmbedder) this adapter implements. -->
     <ProjectReference Include="..\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
+    <ProjectReference Include="..\MeshWeaver.ContentCollections.Indexing.Graph\MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <!-- The framework PG hosting project that owns IEmbeddingProvider (the embedder this
          adapter wraps) and the NpgsqlDataSourceBuilder.UseVector() / pgvector DDL patterns
          this schema mirrors. Brings MeshWeaver.Hosting transitively (MessageHubConfiguration). -->

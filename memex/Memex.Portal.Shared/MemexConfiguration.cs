@@ -7,7 +7,6 @@ using Memex.Portal.Shared.Instances;
 using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
-using MeshWeaver.Hosting.Embeddings;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Mcp;
@@ -22,9 +21,6 @@ using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Layout;
 using MeshWeaver.ContentCollections;
-using MeshWeaver.ContentCollections.Indexing;
-using MeshWeaver.ContentCollections.Indexing.Graph;
-using MeshWeaver.ContentCollections.Indexing.PostgreSql;
 using MeshWeaver.Documentation;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
@@ -767,37 +763,13 @@ public static class MemexConfiguration
             // editing its module list. Features:Ai flags remain only for the portal-side blocks
             // that co-host CLI processes (Connect, skills sync).
 
-            // Content → vector index (core tech). When embeddings are configured, wire the
-            // upload→Activity indexing pipeline (extract→chunk→embed→store), per-file Document nodes
-            // (extractive summary by default — swap in a chat client for AI summaries), and chunk-search
-            // @-autocomplete. The vector store lives IN THE MESH DATABASE, in each partition's OWN schema
-            // (content_chunks/content_files alongside that partition's mesh_nodes) — no separate database.
-            // Inert when there's no mesh Postgres connection (e.g. the FileSystem monolith) or embeddings
-            // aren't set: it compiles in but never activates.
-            var meshConnectionString = configuration.GetConnectionString("memex");
-            var embeddingsConfigured = !string.IsNullOrWhiteSpace(configuration["Embedding:Endpoint"])
-                && !string.IsNullOrWhiteSpace(configuration["Embedding:ApiKey"]);
-            if (!string.IsNullOrWhiteSpace(meshConnectionString) && embeddingsConfigured)
-            {
-                mb = mb
-                    .AddContentIndexingPipeline(
-                        storeFactory: sp => new PostgreSqlChunkedContentVectorStore(
-                            meshConnectionString,
-                            sp.GetService<IoPoolRegistry>(),
-                            sp.GetRequiredService<IEmbeddingProvider>().Dimensions),
-                        embedderFactory: sp => new EmbeddingProviderChunkEmbedder(
-                            sp.GetRequiredService<IEmbeddingProvider>(),
-                            sp.GetService<IoPoolRegistry>()),
-                        summarizerFactory: _ => new ExtractiveSummarizer(),
-                        // Images have no extractable text: caption them on save with the mesh's default
-                        // (multimodal) chat model so the description is embedded for search AND written
-                        // to the file's Document node. Degrades to no-text when no vision model resolves.
-                        imageDescriberFactory: sp => new ChatClientImageDescriber(
-                            () => sp.GetRequiredService<DefaultChatClientProvider>().TryCreate(),
-                            sp.GetRequiredService<IoPoolRegistry>(),
-                            sp.GetService<ILogger<ChatClientImageDescriber>>()))
-                    .AddContentSearch();
-            }
+            // Content → vector index is a MODULE now (MeshWeaver.ContentCollections.Indexing.
+            // PostgreSql in Modules:Assemblies — PostgresContentIndexingModuleAttribute). Its
+            // activation is decided at RESOLVE time on the same conditions this block used to
+            // check at compose time (mesh Postgres connection + Embedding:Endpoint/ApiKey + a
+            // registered IEmbeddingProvider); unconfigured deployments stay inert exactly as
+            // before. The image describer rides the AI package (AddAgentChatServices TryAdds the
+            // optional IImageDescriber off the default multimodal model).
 
             return (TBuilder)mb
                 .AddSelfRegistry()
@@ -955,9 +927,10 @@ public static class MemexConfiguration
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
                         .AddWorkingTreeTab()
                         // Git history tab — read-only git browser (commit log + changes + diffs) over the same working tree.
-                        .AddGitHistoryTab()
-                        // Content Indexing tab — Space nodes, only when the indexing pipeline is active.
-                        .AddContentIndexSettingsTab();
+                        .AddGitHistoryTab();
+                    // The Content Indexing tab rides the indexing MODULE
+                    // (PostgresContentIndexingModuleAttribute's default-node-hub hook) — it
+                    // appears exactly when the deployment lists the pipeline.
                 })
                 // SignalR mesh transport — external participants (native clients) join over a WebSocket.
                 .AddSignalRHub()

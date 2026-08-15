@@ -205,6 +205,18 @@ public static class AIExtensions
             services.AddTransient<IImageGenerator, ImageGenerator>();
             services.AddTransient<IDescriptionGenerator, DescriptionGenerator>();
 
+            // The content-indexing image describer: an OPTIONAL input to ContentIndexingService
+            // (sp.GetService<IImageDescriber>()), registered from the AI side because captioning
+            // needs the mesh's default multimodal chat model — the indexing module itself carries
+            // no AI dependency. Lazy per call via DefaultChatClientProvider.TryCreate, so "no
+            // vision model" degrades to indexing the image as no-text, never an error.
+            services.TryAddSingleton<DefaultChatClientProvider>();
+            services.TryAddSingleton<MeshWeaver.ContentCollections.Indexing.IImageDescriber>(sp =>
+                new MeshWeaver.ContentCollections.Indexing.Graph.ChatClientImageDescriber(
+                    () => sp.GetRequiredService<DefaultChatClientProvider>().TryCreate(),
+                    sp.GetRequiredService<MeshWeaver.Mesh.Threading.IoPoolRegistry>(),
+                    sp.GetService<Microsoft.Extensions.Logging.ILogger<MeshWeaver.ContentCollections.Indexing.Graph.ChatClientImageDescriber>>()));
+
             // Slash-skills are declarative nodeType:Skill mesh nodes (BuiltInSkillProvider, imported to
             // PG), extensible per Space/NodeType/user via namespace inheritance — there is no C# command
             // registry. See SkillNodeType / SkillAutocompleteProvider.
