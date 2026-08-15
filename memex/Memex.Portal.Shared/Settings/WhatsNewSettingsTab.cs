@@ -48,22 +48,8 @@ public static class WhatsNewSettingsTab
     /// </summary>
     public const string FixCategory = "Fix";
 
-    /// <summary>Registers the What's New tab with the global settings menu (ungated).</summary>
-    public static MessageHubConfiguration AddWhatsNewSettingsTab(this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetTab));
-
-    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetTab(
-        LayoutAreaHost host, RenderingContext ctx)
-        => Observable.Return<IReadOnlyList<GlobalSettingsMenuItemDefinition>>(new[]
-        {
-            new GlobalSettingsMenuItemDefinition(
-                Id: TabId,
-                Label: "What's New",
-                ContentBuilder: BuildContent,
-                Icon: FluentIcons.Sparkle(),
-                Order: 910)
-            { LabelKey = "settings.whatsNew" }
-        });
+    // The menu entry is a seeded UiContribution node (PlatformSettingsTabAreas) — the tab's
+    // registration surface is the SettingsWhatsNew layout area, not a compiled provider.
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
