@@ -83,7 +83,6 @@ WEIGHTS=$(cat <<'EOF'
 18 MeshWeaver.Layout.Test
 15 MeshWeaver.Markdown.Test
 15 MeshWeaver.Import.Test
-14 MeshWeaver.Courses.Test
 12 MeshWeaver.PathResolution.Test
 12 MeshWeaver.ContentCollections.Indexing.Graph.Test
 12 MeshWeaver.MemexTemplate.Test
