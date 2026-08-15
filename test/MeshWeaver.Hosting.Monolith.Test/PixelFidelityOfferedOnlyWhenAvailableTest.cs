@@ -38,6 +38,7 @@ public class PixelFidelityOfferedOnlyWhenAvailableTest(ITestOutputHelper output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            .AddMeshNodes(TestDeckTypes.Slide(), TestDeckTypes.Deck())
             .AddMarkdownExport();
 
     [Fact(Timeout = 120000)]

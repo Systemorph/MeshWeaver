@@ -1,20 +1,12 @@
-using MeshWeaver.Data;
-using MeshWeaver.Mesh;
-
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Provides configuration for Slide node types in the graph.
-/// A Slide is one page of a presentation deck: its <see cref="SlideContent"/> carries
-/// the slide body (markdown — raw HTML/SVG passes through the markdown pipeline, so
-/// authors have full visual freedom), optional speaker notes, and an optional CSS
-/// background for the stage.
-/// <para>
-/// A <b>deck</b> is not a node type of its own: any parent node whose children are
-/// Slide nodes is a deck, and the slides play in <see cref="MeshNode.Order"/>
-/// (lower first, null last). The Slide views resolve prev/next from the sibling
-/// Slide nodes of the same parent — see <see cref="SlideLayoutAreas"/>.
-/// </para>
+/// The compiled residue of the retired built-in Slide node type. Slides are owned by the
+/// Publish pack (<c>Publish/Slide</c>, a dynamic NodeType with in-mesh layout areas); V53
+/// retyped every bare <c>Slide</c> instance mesh-wide (#1589). What stays compiled: this
+/// type's <see cref="NodeType"/> const and suffix-aware <see cref="Matches"/> (persistence
+/// parser + export gates) and the <see cref="SlideContent"/> record
+/// (<c>MarkdownFileParser</c> builds it pre-activation).
 /// </summary>
 public static class SlideNodeType
 {
@@ -35,28 +27,6 @@ public static class SlideNodeType
     public static bool Matches(string? nodeType) =>
         nodeType == NodeType
         || nodeType?.EndsWith("/" + NodeType, StringComparison.Ordinal) == true;
-
-    /// <summary>
-    /// Registers the built-in "Slide" MeshNode on the mesh builder.
-    /// </summary>
-    public static TBuilder AddSlideType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-    {
-        builder.AddMeshNodes(CreateMeshNode());
-        return builder;
-    }
-
-    /// <summary>
-    /// Creates a MeshNode definition for the Slide node type.
-    /// This provides HubConfiguration for nodes with nodeType="Slide".
-    /// </summary>
-    public static MeshNode CreateMeshNode() => new(NodeType)
-    {
-        Name = "Slide",
-        Icon = "/static/NodeTypeIcons/presentation.svg",
-        HubConfiguration = config => config
-            .AddSlideViews()
-            .AddMeshDataSource(s => s.WithContentType<SlideContent>())
-    };
 }
 
 /// <summary>

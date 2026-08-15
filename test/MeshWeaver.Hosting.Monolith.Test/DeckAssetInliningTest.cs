@@ -50,6 +50,7 @@ public class DeckAssetInliningTest(ITestOutputHelper output) : MonolithMeshTestB
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            .AddMeshNodes(TestDeckTypes.Slide(), TestDeckTypes.Deck())
             .AddMarkdownExport(cfg => cfg.PixelRendering = cfg.PixelRendering with
             {
                 // Chromium's sandbox needs unprivileged user namespaces, which Ubuntu 24.04 (and

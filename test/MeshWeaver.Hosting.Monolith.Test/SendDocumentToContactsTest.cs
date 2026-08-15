@@ -35,6 +35,7 @@ public class SendDocumentToContactsTest(ITestOutputHelper output) : MonolithMesh
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            .AddMeshNodes(TestDeckTypes.Slide(), TestDeckTypes.Deck())
             .AddMarkdownExport()
             .ConfigureServices(s => s.AddSingleton<IEmailSender>(_email));
 
