@@ -10,7 +10,7 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Server-side reader of a page's Open Graph metadata (<c>og:title</c> / <c>og:description</c> /
-/// <c>og:image</c>) for the <see cref="OgCardLayoutArea"/> link-preview cards — the inbound
+/// <c>og:image</c>) for the <c>OgCard</c> link-preview cards (the MeshWeaver.OgCard module) — the inbound
 /// counterpart of the portal's own outbound SEO head.
 ///
 /// <para><b>Reactive to the I/O boundary.</b> The HTTP leaf runs on the mesh's
