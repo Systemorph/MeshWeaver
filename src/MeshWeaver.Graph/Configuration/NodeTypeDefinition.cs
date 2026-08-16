@@ -539,11 +539,14 @@ public record NodeTypeDefinition
     /// The deployment's installed-MODULE fingerprint the assembly was compiled under —
     /// <see cref="InstalledModulesFingerprint.Hash"/> (sorted module MVIDs; empty string = no
     /// modules; null = stamped before the feature, or by a mesh without the fingerprint
-    /// registered). Recorded by every successful compile (#1644 step 1); it joins the
-    /// usable-build decision when modules ship separately from the image (step 2) — a
-    /// module-only update must invalidate baked builds that could reference it, which the
-    /// framework-MVID rule cannot see. Null compares as MATCH there: a null-hash build predates
-    /// modules in the compile surface and is governed by the framework rule alone.
+    /// registered). Recorded by every successful compile (#1644 step 1) and DECISIVE since
+    /// #1664 Slice A: <c>NodeTypeCompilationHelpers.HasUsableBuild</c> invalidates a build
+    /// stamped with a different non-null hash than the live set, and
+    /// <c>HasStaleFrameworkBuild</c> re-drives the compile for it — a module-only update
+    /// (store-installed modules land in <c>modules/</c> without changing the framework MVID)
+    /// must invalidate baked builds that could reference it, which the framework rule cannot
+    /// see. Null compares as MATCH: a null-hash build predates modules in the compile surface
+    /// and is governed by the framework rule alone.
     /// </summary>
     public string? CompiledModulesHash { get; init; }
 

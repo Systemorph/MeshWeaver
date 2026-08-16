@@ -111,9 +111,12 @@ recipient's own rules** — whether it's worth telling them and through which **
 | `NotificationChannel` | user | `{username}/_NotificationChannel/{id}` | a delivery channel the user has: `InApp` / `Email` / `Teams` (+ optional `target`) |
 | `NotificationRule` | user | `{username}/_NotificationRule/{id}` | a **plain-English** (or lightly structured) rule: which events go to which channel |
 
-All three are registered through static extensions in the `AddGraph()` chain
-(`AddNotificationType` / `AddNotificationChannelType` / `AddNotificationRuleType`) — so they exist in every
-deployment that calls `AddGraph()`, with their content types in the mesh TypeRegistry.
+`Notification` is registered in the `AddGraph()` chain (`AddNotificationType`) — the bell exists in
+every deployment. `NotificationChannel` / `NotificationRule` ride the
+**`MeshWeaver.Notifications.Channels` module** together with the triage watcher
+(`Modules:Assemblies` in production; `AddNotificationChannels()` for explicit composition — see
+[Modules](/Doc/Architecture/Modules)). A deployment without the module keeps the bell and the
+deterministic email preferences; it has no rules/channels lane.
 
 ### Triage agent
 

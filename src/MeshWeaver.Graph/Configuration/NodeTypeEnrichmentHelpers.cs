@@ -407,7 +407,9 @@ internal static class NodeTypeEnrichmentHelpers
         // The Where below is now strict on those fields, so the slow-path
         // Take(1) keeps waiting until the healed emission arrives.
         var healSub = typeStream
-            .Where(t => t?.Content is NodeTypeDefinition stale
+            // ContentAs, never `is NodeTypeDefinition` — the #1669 blindness on un-materialized
+            // JSON emissions; see ArmStaleAssemblySelfHeal's predicate note.
+            .Where(t => t?.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger) is { } stale
                 && stale.CompilationStatus == CompilationStatus.Ok
                 && (string.IsNullOrEmpty(stale.LatestAssemblyCollection)
                     || string.IsNullOrEmpty(stale.LatestAssemblyPath))
@@ -423,7 +425,7 @@ internal static class NodeTypeEnrichmentHelpers
             .SelectMany(_ => Observable.Using(
                 () => AccessContextScope.AsSystem(enrichAccessService),
                 _2 => typeStream.Update(curr =>
-                    curr.Content is NodeTypeDefinition d
+                    curr.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger) is { } d
                     && d.CompilationStatus == CompilationStatus.Ok
                     && (string.IsNullOrEmpty(d.LatestAssemblyCollection)
                         || string.IsNullOrEmpty(d.LatestAssemblyPath))
@@ -902,7 +904,8 @@ internal static class NodeTypeEnrichmentHelpers
                 });
         }
 
-        if (NodeTypeCompilationHelpers.HasUsableBuild(typeNode, def))
+        if (NodeTypeCompilationHelpers.HasUsableBuild(
+                typeNode, def, NodeTypeCompilationHelpers.ModulesHashOf(meshHub)))
         {
             // Hot path for activating per-instance hubs: the NodeType has a
             // usable compile (LatestAssembly{Collection,Path} populated AND
@@ -1204,7 +1207,8 @@ internal static class NodeTypeEnrichmentHelpers
                     : null;
                 return WaitForCompileSettled(typeStream, typeStream
                 .Where(typeNode => IsRecompileSettled(
-                    typeNode, gate, requireUsableBuild, meshHub.JsonSerializerOptions))
+                    typeNode, gate, requireUsableBuild, meshHub.JsonSerializerOptions,
+                    NodeTypeCompilationHelpers.ModulesHashOf(meshHub)))
                 .Take(1),
                 SlowPathTimeout,
                 () => new TimeoutException(
@@ -1265,7 +1269,8 @@ internal static class NodeTypeEnrichmentHelpers
     /// </summary>
     internal static bool IsRecompileSettled(
         MeshNode typeNode, long? staleVersion, bool requireUsableBuild,
-        System.Text.Json.JsonSerializerOptions? options = null)
+        System.Text.Json.JsonSerializerOptions? options = null,
+        string? modulesHash = null)
     {
         // Read the definition through ContentAs — the same accessor ApplyStreamResult uses on
         // whatever this admits. A CLR type test is blind to an un-materialized (JsonElement /
@@ -1294,8 +1299,12 @@ internal static class NodeTypeEnrichmentHelpers
         // ride through to HasUsableBuild rather than giving up. Pinned by
         // FrameworkStaleInstanceRenderTest. If the rebuild genuinely never lands,
         // WaitForCompileSettled's no-progress deadline surfaces the overlay — never a longer hang.
+        // The modules-hash join (#1664 step 11) matters HERE specifically: on a module-only
+        // update the pre-flip stale build still passes the framework-only check, so without the
+        // hash this predicate would settle in ~0 ms on the very state the heal rejected — the
+        // exact burn-the-retry hazard the remarks above describe, in modules-stale clothing.
         if (requireUsableBuild)
-            return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d);
+            return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d, modulesHash);
 
         // The stale pre-flip re-snap (see the remarks above): not news, keep waiting.
         if (staleVersion is { } stale && typeNode.Version <= stale)
@@ -1453,7 +1462,8 @@ internal static class NodeTypeEnrichmentHelpers
                     {
                         instanceHub.RegisterForDisposal(ArmOverlaySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
-                            instanceHub, nodeType, typeVersionAtOverlay, logger));
+                            instanceHub, nodeType, typeVersionAtOverlay, logger,
+                            modulesHash: NodeTypeCompilationHelpers.ModulesHashOf(meshHub)));
                     }
                     catch (Exception ex)
                     {
@@ -1538,7 +1548,8 @@ internal static class NodeTypeEnrichmentHelpers
                     {
                         instanceHub.RegisterForDisposal(ArmStaleAssemblySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
-                            instanceHub, nodeType, boundAssemblyPath, logger));
+                            instanceHub, nodeType, boundAssemblyPath, logger,
+                            modulesHash: NodeTypeCompilationHelpers.ModulesHashOf(meshHub)));
                     }
                     catch (Exception ex)
                     {
@@ -1568,10 +1579,23 @@ internal static class NodeTypeEnrichmentHelpers
         string nodeType,
         string boundAssemblyPath,
         ILogger? logger,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler = null,
+        string? modulesHash = null)
+        // 🚨 ContentAs, never `is NodeTypeDefinition` (#1669): the type node reaches this stream
+        // in UN-MATERIALIZED JSON shape whenever the publication just crossed a sync stream — the
+        // normal shape for exactly the emission this watcher exists to catch. A CLR type test is
+        // blind there, so the watcher ignored the new build and the instance served its stale
+        // (worst case zero-areas) activation until a manual recycle — the ThinkInStreams/Subscribe
+        // + post-roll Store shape. Same divergence class the settle-gate's own doc comment
+        // convicts; typed content short-circuits in ContentAs, so the materialized path pays
+        // nothing.
         => typeStream
-            .Where(t => t?.Content is NodeTypeDefinition d
-                && NodeTypeCompilationHelpers.HasUsableBuild(t, d)
+            // Deserialize ONCE per emission — the Subscribe below reuses the recovered definition
+            // (a second ContentAs would also duplicate its degraded-content warning logs).
+            .Select(t => (Node: t,
+                Def: t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger)))
+            .Where(x => x.Def is { } d
+                && NodeTypeCompilationHelpers.HasUsableBuild(x.Node!, d, modulesHash)
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
                 && !string.Equals(d.LatestAssemblyPath, boundAssemblyPath, StringComparison.Ordinal))
             // 🚨 Wait for the type to stop publishing — see AssemblySettleWindow. An install
@@ -1580,9 +1604,9 @@ internal static class NodeTypeEnrichmentHelpers
             .Throttle(AssemblySettleWindow, scheduler ?? Scheduler.Default)
             .Take(1)
             .Subscribe(
-                t =>
+                x =>
                 {
-                    var published = (t.Content as NodeTypeDefinition)?.LatestAssemblyPath;
+                    var published = x.Def?.LatestAssemblyPath;
                     logger?.LogInformation(
                         "Stale-assembly self-heal: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — recycling instance '{InstancePath}' so it rebinds",
                         nodeType, published, boundAssemblyPath, instanceHub.Address);
@@ -1621,10 +1645,14 @@ internal static class NodeTypeEnrichmentHelpers
         string nodeType,
         long? typeVersionAtOverlay,
         ILogger? logger,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler = null,
+        string? modulesHash = null)
     {
-        var usable = typeStream.Where(t => t?.Content is NodeTypeDefinition d
-            && NodeTypeCompilationHelpers.HasUsableBuild(t, d));
+        // ContentAs, never `is NodeTypeDefinition` — the #1669 blindness on un-materialized JSON
+        // emissions; see ArmStaleAssemblySelfHeal's predicate note.
+        var usable = typeStream.Where(t =>
+            t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger) is { } d
+            && NodeTypeCompilationHelpers.HasUsableBuild(t, d, modulesHash));
 
         // FAST path — the version advanced past the overlay: a genuinely NEW build landed, heal now.
         var advanced = usable.Where(t =>

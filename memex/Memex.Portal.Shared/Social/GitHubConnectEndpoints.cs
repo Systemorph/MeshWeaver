@@ -22,8 +22,9 @@ namespace Memex.Portal.Shared.Social;
 /// <summary>
 /// GitHub OAuth2 authorization-code flow for connecting a user's GitHub identity for
 /// <see cref="MeshWeaver.GitSync">GitHub Sync</see>. Mirrors
-/// <see cref="LinkedInConnectEndpoints"/> — the deployed surface is just the parts that
-/// need browser cookies + a whitelisted callback URL:
+/// <see cref="MeshWeaver.Social.LinkedInConnectEndpoints"/> (now contributed by the Social
+/// module) — the deployed surface is just the parts that need browser cookies + a
+/// whitelisted callback URL:
 ///
 ///   GET /connect/github/me                  — redirect into the flow for the signed-in user
 ///   GET /connect/github?returnPath={path}   — start (CSRF cookie, redirect to GitHub authorize)

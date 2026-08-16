@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>ASP.NET Core host integration for MeshWeaver modules: the endpoint-contribution hook — a module assembly declares HTTP endpoints the host maps at startup (design #1655).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+  </ItemGroup>
+
+</Project>

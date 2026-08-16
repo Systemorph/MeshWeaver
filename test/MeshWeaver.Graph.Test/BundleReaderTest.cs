@@ -150,6 +150,118 @@ public class BundleReaderTest
         Assert.Equal("PDB", Encoding.UTF8.GetString(only.Pdb!));
     }
 
+    // ── the MODULE variant (#1664): one bundle, one reader, a second lane ──
+
+    private static byte[] WriteModuleBundle(
+        object module, params (string FileName, byte[] Bytes)[] moduleFiles)
+    {
+        var entries = moduleFiles.Select(f => new NuGetPackageWriter.Entry(
+            NuGetPackageWriter.ModuleEntryPathFor(f.FileName),
+            () => new MemoryStream(f.Bytes))).ToArray();
+
+        var manifestJson = JsonSerializer.Serialize(new
+        {
+            plugin = "SocialMedia",
+            version = "1.2.0",
+            frameworkMvid = "33f2efb8aaaabbbbccccddddeeeeffff",
+            module,
+        });
+
+        var buffer = new MemoryStream();
+        NuGetPackageWriter.Write(buffer, Manifest, "3.0.0", entries, manifestJson);
+        return buffer.ToArray();
+    }
+
+    [Fact]
+    public void AModuleBundleRoundTrips()
+    {
+        var bundle = WriteModuleBundle(
+            new
+            {
+                assemblyName = "MeshWeaver.Social",
+                assemblies = new[] { "MeshWeaver.Social.dll" },
+                minMeshVersion = "3.0.0",
+            },
+            ("MeshWeaver.Social.dll", "SOCIAL"u8.ToArray()));
+
+        var (manifest, files) = BundleReader.ReadModule(bundle);
+
+        Assert.Equal("MeshWeaver.Social", manifest!.Module!.AssemblyName);
+        // The consumer's landing gate — a platform FLOOR, not the manifest-level frameworkMvid
+        // (which stays the NodeType lane's strict gate and, for the module, diagnostics).
+        Assert.Equal("3.0.0", manifest.Module.MinMeshVersion);
+        var only = Assert.Single(files);
+        Assert.Equal("MeshWeaver.Social.dll", only.FileName);
+        Assert.Equal("SOCIAL", Encoding.UTF8.GetString(only.Bytes));
+    }
+
+    [Fact]
+    public void AMixedBundleServesBothLanes()
+    {
+        // The MeshWeaver.SocialMedia shape: content nodes + NodeType assemblies + a compiled module
+        // in ONE Store product — so one bundle must serve both readers without either seeing the
+        // other's payload.
+        var manifestJson = JsonSerializer.Serialize(new
+        {
+            plugin = "SocialMedia",
+            version = "1.2.0",
+            frameworkMvid = "33f2efb8aaaabbbbccccddddeeeeffff",
+            assemblies = new[] { new { nodePath = "SocialMedia/Post", assembly = "SocialMedia/Post.dll" } },
+            module = new { assemblyName = "MeshWeaver.Social", assemblies = new[] { "MeshWeaver.Social.dll" } },
+        });
+
+        var buffer = new MemoryStream();
+        NuGetPackageWriter.Write(buffer, Manifest, "3.0.0",
+            [
+                new NuGetPackageWriter.Entry(
+                    NuGetPackageWriter.EntryPathFor("SocialMedia/Post"),
+                    () => new MemoryStream("NODETYPE"u8.ToArray())),
+                new NuGetPackageWriter.Entry(
+                    NuGetPackageWriter.ModuleEntryPathFor("MeshWeaver.Social.dll"),
+                    () => new MemoryStream("MODULE"u8.ToArray())),
+            ],
+            manifestJson);
+        var bundle = buffer.ToArray();
+
+        var nodeTypes = Assert.Single(BundleReader.Read(bundle).Assemblies);
+        Assert.Equal("SocialMedia/Post", nodeTypes.NodePath);
+        Assert.Equal("NODETYPE", Encoding.UTF8.GetString(nodeTypes.Assembly));
+
+        var moduleFile = Assert.Single(BundleReader.ReadModule(bundle).Files);
+        Assert.Equal("MODULE", Encoding.UTF8.GetString(moduleFile.Bytes));
+    }
+
+    [Fact]
+    public void AnIncompleteModuleClosureYieldsNoFilesAtAll()
+    {
+        // All-or-nothing, deliberately UNLIKE the NodeType lane's skip: a NodeType with missing
+        // bytes simply compiles, but a module folder missing part of its closure loads and then
+        // faults at first use — a subset must never land.
+        var bundle = WriteModuleBundle(
+            new
+            {
+                assemblyName = "MeshWeaver.Social",
+                assemblies = new[] { "MeshWeaver.Social.dll", "MeshWeaver.Social.Support.dll" },
+            },
+            ("MeshWeaver.Social.dll", "SOCIAL"u8.ToArray()));
+
+        var (manifest, files) = BundleReader.ReadModule(bundle);
+
+        Assert.NotNull(manifest!.Module);
+        Assert.Empty(files);
+    }
+
+    [Fact]
+    public void ANodeTypeOnlyBundleDeclaresNoModule()
+    {
+        var bundle = WriteBundle(("ThreeBody/Physics/Source", "PHYSICS"u8.ToArray()));
+
+        var (manifest, files) = BundleReader.ReadModule(bundle);
+
+        Assert.Null(manifest!.Module);
+        Assert.Empty(files);
+    }
+
     [Fact]
     public void AnArchiveWithoutAManifestYieldsNothing()
     {

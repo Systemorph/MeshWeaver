@@ -9,7 +9,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="2
 
 Publish LinkedIn posts — and pull their engagement — **directly from the mesh**. A [SocialMediaPost](/Doc/DataMesh/SocialMedia) node is drafted in the portal, published to LinkedIn as you, and the returned post URN plus like/comment counts are written back onto the node.
 
-The code lives in the **`MeshWeaver.Social`** module (`LinkedInPostsApi`, `LinkedInPublishService`) with the HTTP surface in `memex/Memex.Portal.Shared/Social` (`LinkedInConnectEndpoints`, `LinkedInPublishEndpoints`, `SocialPostMenuProvider`).
+The code lives in the **`MeshWeaver.Social`** [module](/Doc/Architecture/Modules) — the publish chain (`LinkedInPostsApi`, `LinkedInPublishService`), the HTTP surface (`LinkedInConnectEndpoints`, `LinkedInPublishEndpoints`, contributed through the module endpoint hook), and the node-menu actions (`SocialPostMenuProvider`). The deployment activates it by listing `MeshWeaver.Social.dll` under `Modules:Assemblies`.
 
 > **Scope of this page:** publishing (writing posts) and reading engagement — **including impressions** — on posts you publish. It does not cover DMs; see **Limitations** at the end.
 
