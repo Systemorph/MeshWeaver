@@ -79,9 +79,14 @@ public class GrpcModuleContributionTest
         // (same shape as SocialModuleContributionTest).
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddAuthorization();
-        // The module's DI half in fixture form (two-lane rule): MapGrpcService requires the
-        // gRPC services the same assembly's mesh half registers.
-        builder.Services.AddGrpcHub();
+        // ONLY the gRPC marker services MapGrpcService needs — deliberately NOT AddGrpcHub():
+        // the module's DI half registers GrpcConnectionRegistry, a type-registered singleton
+        // whose ctor takes IMessageHub, and this host has no mesh. Under CI's
+        // DOTNET_ENVIRONMENT=Development, WebApplication.CreateBuilder turns on ValidateOnBuild,
+        // which eagerly validates every such descriptor and fails Build() on the unresolvable
+        // hub (a check Production/local skips — the exact false-local-green this comment pins).
+        // The DI half itself is asserted descriptor-level by InstallingTheAssembly_AppliesAddGrpcHub.
+        builder.Services.AddGrpc();
         builder.Services.AddSingleton(
             new InstalledModuleAssembly(typeof(GrpcModuleAttribute).Assembly));
         using var app = builder.Build();
