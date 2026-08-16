@@ -135,6 +135,20 @@ public class UiContributionProjectionTest
         Assert.Contains("MyArea", derived.Href);
     }
 
+    [Theory]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("https://evil.example/phish")]
+    [InlineData("//evil.example/phish")]
+    [InlineData("data:text/html,x")]
+    public void NonInternalHref_IsDiscarded_AndTheEntryFallsBackToItsAreaUrl(string href)
+    {
+        // Href is mesh DATA reaching navigation — schemes and protocol-relative hosts must never
+        // pass the compiled gate (XSS/phishing surface). The entry degrades to its area link.
+        var item = Assert.Single(Project(new UiContribution { Area = "MyArea", Href = href }));
+        Assert.DoesNotContain(href, item.Href);
+        Assert.Contains("MyArea", item.Href);
+    }
+
     [Fact]
     public void TopBarDeclaration_ProjectsAsAMenuButton_InTheTopBarContextOnly()
     {
