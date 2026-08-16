@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Approval workflows for MeshWeaver — request sign-off on any document node, approve/reject with notifications and activity log, approvals stored as _Approval satellites of the document. Ships as a module: list the DLL under Modules:Assemblies to activate.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+  </ItemGroup>
+
+</Project>

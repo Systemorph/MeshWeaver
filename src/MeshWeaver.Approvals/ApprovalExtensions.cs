@@ -1,5 +1,6 @@
-﻿using System.Reactive.Linq;
+using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -9,12 +10,14 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
 using MeshWeaver.ShortGuid;
 
-namespace MeshWeaver.Graph;
+namespace MeshWeaver.Approvals;
 
 /// <summary>
-/// Extension methods for adding approval support to a message hub.
-/// Approvals are stored per-node as individual JSON files in _Approval/ sub-partition.
-/// Follows the CommentsExtensions pattern.
+/// The Approvals module's registration surface. Production installs it via
+/// <c>Modules:Assemblies</c> (<see cref="ApprovalsModuleAttribute"/>); a mesh that composes it
+/// explicitly — a test fixture, a bespoke host — calls <see cref="AddApprovals"/> for the
+/// identical registration. Approvals are stored per-node as individual satellites in the
+/// <c>_Approval</c> sub-partition (following the Comments pattern).
 /// </summary>
 public static class ApprovalExtensions
 {
@@ -24,15 +27,23 @@ public static class ApprovalExtensions
     public const string ApprovalPartition = "_Approval";
 
     /// <summary>
-    /// Marker type used to detect if approvals are enabled in a hub configuration.
+    /// Registers approval workflows on this mesh: the <c>Approval</c> node type plus — on EVERY
+    /// per-node hub — the Request Approval form, the inline approvals section, the node-menu entry,
+    /// and the <c>ApprovalsEnabled</c> marker the markdown overview's embedded section checks.
+    /// Delisting the module (or not calling this) removes the Approvals UI mesh-wide while the
+    /// <c>Approval</c> data record and its satellite-table mapping stay platform-level.
     /// </summary>
-    public record ApprovalsEnabled;
+    public static MeshBuilder AddApprovals(this MeshBuilder builder)
+        => builder
+            .AddApprovalType()
+            .ConfigureDefaultNodeHub(ConfigureHub);
 
     /// <summary>
-    /// Adds approval support to the message hub configuration.
-    /// Registers the Approval type, adds it to the data source, menu items, and layout views.
+    /// The per-node-hub half of the registration: type + data source + menu entry + the
+    /// RequestApproval/Approvals layout areas + the <see cref="ApprovalsEnabled"/> marker.
+    /// ONE code path shared by the module attribute and <see cref="AddApprovals"/>.
     /// </summary>
-    public static MessageHubConfiguration AddApprovals(this MessageHubConfiguration configuration)
+    internal static MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     {
         return configuration
             .WithType<Approval>(nameof(Approval))
@@ -45,12 +56,6 @@ public static class ApprovalExtensions
                 .WithView("RequestApproval", ApprovalsView.RequestApproval)
                 .WithView("Approvals", ApprovalsView.InlineApprovals));
     }
-
-    /// <summary>
-    /// Checks if approvals are enabled in the configuration.
-    /// </summary>
-    public static bool HasApprovals(this MessageHubConfiguration configuration)
-        => configuration.Get<ApprovalsEnabled>() != null;
 
     /// <summary>
     /// Reactive menu provider that emits "Request Approval" for users with Update permission.

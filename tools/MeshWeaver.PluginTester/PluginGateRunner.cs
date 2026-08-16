@@ -3,6 +3,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.Approvals;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -443,6 +444,11 @@ public static class PluginGateRunner
                 .AddRowLevelSecurity()
                 .AddGraph()
                 .AddSpaceType()
+                // The Approval node type rides the MeshWeaver.Approvals module (every portal
+                // lists it under Modules:Assemblies) — content trees ship Approval satellites
+                // (samples FutuRe …/_Approval/a1); without this those installs are refused
+                // "NodeType 'Approval' is not registered" by CreateNode's type-existence check.
+                .AddApprovals()
                 // The AI node types (Agent / Skill / Model / …) — plugin packages ship Agent
                 // and Skill nodes (LinkedIn, Feedback, ExplainerVideo), and a portal always
                 // registers these; without them those installs are refused "not registered".

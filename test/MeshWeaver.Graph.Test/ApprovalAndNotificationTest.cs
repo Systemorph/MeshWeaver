@@ -9,8 +9,9 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Tests for Approval, Notification data models, node type registration,
-/// extension methods, and related infrastructure.
+/// Tests for the Approval and Notification data models (platform-level, MeshWeaver.Mesh.Contract),
+/// the Notification node type, and related infrastructure. The Approvals MODULE surface
+/// (node type registration, extensions) is covered in <see cref="ApprovalModuleTest"/>.
 /// </summary>
 public class ApprovalAndNotificationTest
 {
@@ -231,24 +232,6 @@ public class ApprovalAndNotificationTest
     #region Node Type Configuration Tests
 
     [Fact]
-    public void ApprovalNodeType_HasCorrectNodeType()
-    {
-        ApprovalNodeType.NodeType.Should().Be("Approval");
-    }
-
-    [Fact]
-    public void ApprovalNodeType_CreateMeshNode_HasCorrectProperties()
-    {
-        var node = ApprovalNodeType.CreateMeshNode();
-
-        node.Name.Should().Be("Approval");
-        node.Icon.Should().Contain("checkmark.svg");
-        node.ExcludeFromContext.Should().Contain("search");
-        node.ExcludeFromContext.Should().Contain("create");
-        node.HubConfiguration.Should().NotBeNull();
-    }
-
-    [Fact]
     public void NotificationNodeType_HasCorrectNodeType()
     {
         NotificationNodeType.NodeType.Should().Be("Notification");
@@ -269,18 +252,6 @@ public class ApprovalAndNotificationTest
     #endregion
 
     #region MeshNode Integration Tests
-
-    [Fact]
-    public void MeshNode_WithMainNode_GetPrimaryPath_ReturnsMainNode()
-    {
-        var node = new MeshNode("approval1", "org/project/doc/_approvals")
-        {
-            MainNode = "org/project/doc",
-            NodeType = ApprovalNodeType.NodeType
-        };
-
-        node.GetPrimaryPath().Should().Be("org/project/doc");
-    }
 
     [Fact]
     public void MeshNode_WithNullMainNode_GetPrimaryPath_ReturnsNodePath()
@@ -499,16 +470,6 @@ public class ApprovalAndNotificationTest
         };
 
         notification.NotificationType.Should().Be(NotificationType.ApprovalRejected);
-    }
-
-    #endregion
-
-    #region ApprovalExtensions Configuration Tests
-
-    [Fact]
-    public void ApprovalExtensions_ApprovalPartition_HasCorrectValue()
-    {
-        ApprovalExtensions.ApprovalPartition.Should().Be("_Approval");
     }
 
     #endregion

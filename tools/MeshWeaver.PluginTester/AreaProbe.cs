@@ -241,10 +241,39 @@ public static class AreaProbe
     private static bool IsCompiling(IReadOnlyList<string> strings)
         => strings.Any(s => string.Equals(s, CompileProgressMarker, StringComparison.Ordinal));
 
+    // CONTENT strings only: the framework's global renderers write chrome into EVERY area
+    // subscription's store — the header menus ($Menu, $Menu:{context}), dialogs ($Dialog), nav
+    // ($NavMenu) — under the reserved '$'-prefixed area keys. Chrome strings are labels and
+    // ICONS, never test output: the Approvals module's node-menu entry carries the ✅ emoji as
+    // its icon, and classifying it as a test row latched an early menu-bearing frame into a
+    // premature "all rendered cases green" verdict before the real "N/M passed" markdown arrived
+    // (PR #1654 shard-4 red) — and a ❌-shaped icon would red a green run the same way.
     private static IReadOnlyList<string> CollectStrings(JsonElement element)
     {
         var strings = new List<string>();
-        Walk(element, strings);
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, LayoutAreaReference.Areas, StringComparison.Ordinal)
+                    && property.Value.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var area in property.Value.EnumerateObject())
+                    {
+                        if (!IsChromeArea(area.Name))
+                            Walk(area.Value, strings);
+                    }
+                }
+                else
+                {
+                    Walk(property.Value, strings);
+                }
+            }
+        }
+        else
+        {
+            Walk(element, strings);
+        }
         return strings;
 
         static void Walk(JsonElement node, List<string> into)
@@ -266,6 +295,12 @@ public static class AreaProbe
             }
         }
     }
+
+    // Area keys ride JSON-encoded on the wire ("$Menu" → property "\"$Menu\"" — see
+    // TryGetWireInstance); the synthetic test seam uses plain keys. Cover both encodings.
+    private static bool IsChromeArea(string areaKey)
+        => areaKey.StartsWith("$", StringComparison.Ordinal)
+           || areaKey.StartsWith("\"$", StringComparison.Ordinal);
 
     // The ❌ rows (plus the summary) of a red table — the actionable lines, not the whole page.
     private static string FailingRows(string markdown)

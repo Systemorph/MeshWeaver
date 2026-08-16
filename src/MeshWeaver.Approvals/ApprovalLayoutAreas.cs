@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -9,11 +10,12 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Graph;
+namespace MeshWeaver.Approvals;
 
 /// <summary>
 /// Overview and Thumbnail views for individual Approval nodes.
-/// Registered via ApprovalNodeType's AddApprovalViews().
+/// Registered via ApprovalNodeType's AddApprovalViews(). Ships with the Approvals module:
+/// delisting it removes these views mesh-wide while approval data stays platform-level.
 /// </summary>
 public static class ApprovalLayoutAreas
 {
@@ -53,37 +55,38 @@ public static class ApprovalLayoutAreas
 
         container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
 
-        if (node?.Content is not Approval approval)
+        var approval = node?.ContentAs<Approval>(host.Hub.JsonSerializerOptions);
+        if (approval is null)
         {
-            container = container.WithView(Controls.Html(
-                "<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No approval data.</p>"));
+            container = container.WithView(Controls.Body(host.Localize("approval.noData"))
+                .WithStyle("color: var(--neutral-foreground-hint); font-style: italic;"));
             return container;
         }
 
-        // Approval details
+        // Approval details — typed label rows, never hand-built HTML strings.
         var details = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
 
-        details = details.WithView(Controls.Html(
-            $"<div><strong>Status:</strong> <span style=\"{GetStatusStyle(approval.Status)}\">{approval.Status}</span></div>"));
-        details = details.WithView(Controls.Html(
-            $"<div><strong>Requester:</strong> {EscapeHtml(approval.Requester)}</div>"));
-        details = details.WithView(Controls.Html(
-            $"<div><strong>Approver:</strong> {EscapeHtml(approval.Approver)}</div>"));
+        details = details.WithView(DetailRow(host,
+            "approval.status", StatusBadge(host, approval.Status)));
+        details = details.WithView(DetailRow(host,
+            "approval.requester", Controls.Body(approval.Requester)));
+        details = details.WithView(DetailRow(host,
+            "approval.approver", Controls.Body(approval.Approver)));
 
         if (!string.IsNullOrEmpty(approval.Purpose))
-            details = details.WithView(Controls.Html(
-                $"<div><strong>Purpose:</strong> {EscapeHtml(approval.Purpose)}</div>"));
+            details = details.WithView(DetailRow(host,
+                "approval.purpose", Controls.Body(approval.Purpose)));
 
         if (approval.DueDate.HasValue)
-            details = details.WithView(Controls.Html(
-                $"<div><strong>Due:</strong> {approval.DueDate.Value:yyyy-MM-dd}</div>"));
+            details = details.WithView(DetailRow(host,
+                "approval.due", Controls.Body($"{approval.DueDate.Value:yyyy-MM-dd}")));
 
         if (approval.ApprovalDate.HasValue)
-            details = details.WithView(Controls.Html(
-                $"<div><strong>Decision Date:</strong> {approval.ApprovalDate.Value:yyyy-MM-dd HH:mm}</div>"));
+            details = details.WithView(DetailRow(host,
+                "approval.decisionDate", Controls.Body($"{approval.ApprovalDate.Value:yyyy-MM-dd HH:mm}")));
 
-        details = details.WithView(Controls.Html(
-            $"<div><strong>Created:</strong> {approval.CreatedAt:yyyy-MM-dd HH:mm}</div>"));
+        details = details.WithView(DetailRow(host,
+            "approval.created", Controls.Body($"{approval.CreatedAt:yyyy-MM-dd HH:mm}")));
 
         container = container.WithView(details);
 
@@ -118,8 +121,9 @@ public static class ApprovalLayoutAreas
         // Link to primary document
         if (!string.IsNullOrEmpty(approval.PrimaryNodePath))
         {
-            container = container.WithView(Controls.Html(
-                $"<div style=\"margin-top: 12px;\"><a href=\"/{approval.PrimaryNodePath}\">Go to document</a></div>"));
+            container = container.WithView(
+                Controls.NavLink(host.Localize("ui.goToDocument"), $"/{approval.PrimaryNodePath}")
+                    .WithStyle("margin-top: 12px;"));
         }
 
         return container;
@@ -127,7 +131,8 @@ public static class ApprovalLayoutAreas
 
     private static void UpdateApprovalStatus(LayoutAreaHost host, MeshNode node, ApprovalStatus newStatus)
     {
-        if (node.Content is not Approval approval)
+        var approval = node.ContentAs<Approval>(host.Hub.JsonSerializerOptions);
+        if (approval is null)
             return;
 
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
@@ -221,28 +226,33 @@ public static class ApprovalLayoutAreas
         return Controls.Stack.WithView((h, c) => host.Workspace.GetMeshNodeStream()
             .Select(node =>
         {
-            if (node?.Content is Approval approval)
+            var approval = node?.ContentAs<Approval>(host.Hub.JsonSerializerOptions);
+            if (approval is not null)
             {
                 var card = Controls.Stack.WithStyle("padding: 8px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; gap: 4px;");
-                card = card.WithView(Controls.Html(
-                    $"<div style=\"display: flex; align-items: center; gap: 8px;\">" +
-                    $"<span style=\"{GetStatusStyle(approval.Status)}; font-size: 0.8rem; padding: 2px 8px; border-radius: 4px;\">{approval.Status}</span>" +
-                    $"<span style=\"font-weight: 600;\">{EscapeHtml(approval.Purpose)}</span></div>"));
+                card = card.WithView(Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithHorizontalGap(8)
+                    .WithStyle("align-items: center;")
+                    .WithView(StatusBadge(host, approval.Status))
+                    .WithView(Controls.Body(approval.Purpose).WithStyle("font-weight: 600;")));
 
                 if (approval.Status == ApprovalStatus.Approved || approval.Status == ApprovalStatus.Rejected)
                 {
-                    var verb = approval.Status == ApprovalStatus.Approved ? "Approved" : "Rejected";
-                    card = card.WithView(Controls.Html(
-                        $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">{verb} by: {EscapeHtml(approval.Approver)}" +
-                        (approval.ApprovalDate.HasValue ? $" on {approval.ApprovalDate.Value:yyyy-MM-dd}" : "") +
-                        "</div>"));
+                    var byLine = approval.Status == ApprovalStatus.Approved
+                        ? host.Localize("approval.approvedBy")
+                        : host.Localize("approval.rejectedBy");
+                    card = card.WithView(HintLine(
+                        $"{byLine}: {approval.Approver}" +
+                        (approval.ApprovalDate.HasValue ? $" · {approval.ApprovalDate.Value:yyyy-MM-dd}" : "")));
                 }
                 else
                 {
-                    card = card.WithView(Controls.Html(
-                        $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">From: {EscapeHtml(approval.Requester)}" +
-                        (approval.DueDate.HasValue ? $" · Due: {approval.DueDate.Value:yyyy-MM-dd}" : "") +
-                        "</div>"));
+                    card = card.WithView(HintLine(
+                        $"{host.Localize("approval.from")}: {approval.Requester}" +
+                        (approval.DueDate.HasValue
+                            ? $" · {host.Localize("approval.due")}: {approval.DueDate.Value:yyyy-MM-dd}"
+                            : "")));
 
                     if (string.Equals(approval.Approver, currentUser, StringComparison.OrdinalIgnoreCase))
                     {
@@ -262,14 +272,38 @@ public static class ApprovalLayoutAreas
         }));
     }
 
-    private static string GetStatusStyle(ApprovalStatus status) => status switch
-    {
-        ApprovalStatus.Pending => "color: #b8860b; background: #fff8e1",
-        ApprovalStatus.Approved => "color: #2e7d32; background: #e8f5e9",
-        ApprovalStatus.Rejected => "color: #c62828; background: #ffebee",
-        _ => ""
-    };
+    /// <summary>Bold label + value on one line — the typed replacement for the old HTML strings.</summary>
+    private static UiControl DetailRow(LayoutAreaHost host, string labelKey, UiControl value)
+        => Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(6)
+            .WithView(Controls.Body($"{host.Localize(labelKey)}:").WithStyle("font-weight: 600;"))
+            .WithView(value);
 
-    private static string EscapeHtml(string? text)
-        => System.Net.WebUtility.HtmlEncode(text ?? "");
+    private static UiControl HintLine(string text)
+        => Controls.Body(text).WithStyle("font-size: 0.85rem; color: var(--neutral-foreground-hint);");
+
+    private static UiControl StatusBadge(LayoutAreaHost host, ApprovalStatus status)
+    {
+        var (background, foreground) = status switch
+        {
+            ApprovalStatus.Pending => ("#fff8e1", "#b8860b"),
+            ApprovalStatus.Approved => ("#e8f5e9", "#2e7d32"),
+            ApprovalStatus.Rejected => ("#ffebee", "#c62828"),
+            _ => ("var(--neutral-fill-rest)", "var(--neutral-foreground-rest)")
+        };
+        return Controls.Badge(LocalizeStatus(host, status)) with
+        {
+            BackgroundColor = background,
+            Color = foreground
+        };
+    }
+
+    private static string LocalizeStatus(LayoutAreaHost host, ApprovalStatus status) => status switch
+    {
+        ApprovalStatus.Pending => host.Localize("approval.statusPending"),
+        ApprovalStatus.Approved => host.Localize("approval.statusApproved"),
+        ApprovalStatus.Rejected => host.Localize("approval.statusRejected"),
+        _ => status.ToString()
+    };
 }
