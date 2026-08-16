@@ -133,6 +133,10 @@ public static class PluginBundleEndpoints
                         // a module section that will not be there. Additive: an older client's
                         // BundleRef simply ignores it.
                         module = modules.TryGetValue(p.PluginId, out var moduleName) ? moduleName : null,
+                        // The module's declared platform FLOOR — the consumer's gate (a semver
+                        // floor, never MVID equality; the index-level frameworkMvid above stays
+                        // the NodeType lane's strict gate and, for modules, diagnostics).
+                        minMeshVersion = modules.ContainsKey(p.PluginId) ? p.MinMeshVersion : null,
                     }).ToArray(),
                 })))
             .FirstAsync()
@@ -142,8 +146,9 @@ public static class PluginBundleEndpoints
     /// <summary>
     /// Which of the installed packages' declared modules this instance can serve right now:
     /// plugin id → module assembly name, for exactly the entries whose bytes exist under
-    /// <c>modules/&lt;name&gt;/</c> and pass the framework gate (<see cref="ModuleBundleSource"/>).
-    /// One activation-sidecar read for the whole index.
+    /// <c>modules/&lt;name&gt;/</c> and pass the platform-floor gate (<see cref="ModuleBundleSource"/>
+    /// — the same <see cref="ModulePlatformFloor"/> check boot applies, so a registry never serves
+    /// a landing its own boot skips). One activation-sidecar read for the whole index.
     /// </summary>
     private static IObservable<IReadOnlyDictionary<string, string>> ServableModules(
         IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
@@ -158,7 +163,7 @@ public static class PluginBundleEndpoints
             .Select(activation => (IReadOnlyDictionary<string, string>)declaring
                 .Where(p => ModuleBundleSource.Collect(
                         landing.BaseDirectory, p.Module!, activation,
-                        PrebuiltAssemblySeeder.DeclineReason)
+                        ModulePlatformFloor.DeclineReason)
                     .DeclineReason is null)
                 .ToDictionary(p => p.PluginId, p => p.Module!, StringComparer.OrdinalIgnoreCase));
     }
@@ -256,7 +261,7 @@ public static class PluginBundleEndpoints
             {
                 var (files, decline) = ModuleBundleSource.Collect(
                     landing.BaseDirectory, package.Module!, activation,
-                    PrebuiltAssemblySeeder.DeclineReason);
+                    ModulePlatformFloor.DeclineReason);
                 if (decline is not null)
                     logger?.LogInformation(
                         "Plugin bundles: {Plugin} declares module '{Module}' but it is not served: {Reason}",
@@ -329,13 +334,16 @@ public static class PluginBundleEndpoints
                 assemblies = assemblyRecords,
                 // The module section — the manifest names every closure file; a consumer reads
                 // this list, never the folder (BundleReader.ReadModule). Null (omitted) when the
-                // bundle carries no module.
+                // bundle carries no module. minMeshVersion is the consumer's landing gate (a
+                // semver floor — MVID equality is the NodeType lane's gate, and the frameworkMvid
+                // above is, for the module, diagnostics).
                 module = moduleFiles.Count == 0
                     ? null
                     : new
                     {
                         assemblyName = package.Module,
                         assemblies = moduleFiles.Select(Path.GetFileName).ToArray(),
+                        minMeshVersion = package.MinMeshVersion,
                     },
             },
             new JsonSerializerOptions
@@ -373,12 +381,15 @@ public static class PluginBundleEndpoints
                     rootHub.JsonSerializerOptions))
                 .Where(m => m is not null && !string.IsNullOrWhiteSpace(m.ReleasedVersion))
                 .Select(m => new BundleEntry(
-                    PackagingManifest.IdPrefix + m!.Id, m.ReleasedVersion!, m.Id, m.Module))
+                    PackagingManifest.IdPrefix + m!.Id, m.ReleasedVersion!, m.Id, m.Module,
+                    m.MinMeshVersion))
                 .OrderBy(e => e.PluginId, StringComparer.OrdinalIgnoreCase)
                 .ToArray());
 
-    /// <summary>One servable bundle: its package id, its released version, the plugin it is, and
-    /// the compiled module the plugin's install record declares (null for content-only plugins).</summary>
+    /// <summary>One servable bundle: its package id, its released version, the plugin it is, the
+    /// compiled module the plugin's install record declares (null for content-only plugins), and
+    /// that module's declared platform floor.</summary>
     private sealed record BundleEntry(
-        string PackageId, string Version, string PluginId, string? Module = null);
+        string PackageId, string Version, string PluginId, string? Module = null,
+        string? MinMeshVersion = null);
 }

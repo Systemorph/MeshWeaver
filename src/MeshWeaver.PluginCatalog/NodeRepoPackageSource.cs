@@ -157,8 +157,10 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // free package's public read to.
                         PublicSegments = peeked.PublicSegments,
                         // The compiled-module declaration (#1664) — what routes this package
-                        // through the module bundle funnel on top of its content install.
+                        // through the module bundle funnel on top of its content install — and
+                        // its declared platform floor, the module lane's landing gate.
                         Module = peeked.Module,
+                        MinMeshVersion = peeked.MinMeshVersion,
                     });
                 }
                 return (IReadOnlyList<PackageManifest>)manifests
@@ -188,7 +190,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
         string? NodeType, string? Name, string? Description,
         string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
         bool PreInstalled, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
-        string? License, string? ContactEmail, string? Module);
+        string? License, string? ContactEmail, string? Module, string? MinMeshVersion);
 
     // Reads the node's type/name/description — plus the storefront card fields (category/icon on
     // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
@@ -209,6 +211,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             string? license = null;
             var publicSegments = ImmutableList<string>.Empty;
             string? module = null;
+            string? minMeshVersion = null;
             if (r.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object)
             {
                 if (content.TryGetProperty("price", out var p) && p.ValueKind == JsonValueKind.Number
@@ -258,6 +261,12 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 if (content.TryGetProperty("module", out var mod) && mod.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(mod.GetString()))
                     module = mod.GetString();
+                // The declared platform FLOOR ("minMeshVersion" — the field authors already
+                // write): the module lane's landing gate. Same dead-metadata rationale as above.
+                if (content.TryGetProperty("minMeshVersion", out var floor)
+                    && floor.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(floor.GetString()))
+                    minMeshVersion = floor.GetString();
             }
             return new PeekedRoot(
                 r.TryGetProperty("nodeType", out var nt) ? nt.GetString() : null,
@@ -266,7 +275,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
                 price, currency, poster, preInstalled, requires, publicSegments, license,
-                contactEmail, module);
+                contactEmail, module, minMeshVersion);
         }
         catch (JsonException ex)
         {

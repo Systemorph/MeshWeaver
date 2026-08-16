@@ -527,20 +527,23 @@ public static class MemexConfiguration
             //
             // #1664 step 9 — the effective set is the appsettings baseline ∪ the ENABLED entries
             // of the modules/activation.json sidecar (store-installed modules landed by
-            // ModuleLandingService), deduped by name. Sidecar entries are guarded: a recorded
-            // framework MVID that mismatches the running framework (an image roll happened since
-            // the install) or a missing DLL SKIPS the entry with a loud stderr line — never a
-            // crash, the deployment must boot; the entry stays for the post-roll re-install.
-            // Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship to Loki regardless).
+            // ModuleLandingService), deduped by name. Sidecar entries are guarded: a declared
+            // minMeshVersion FLOOR the running platform no longer satisfies (a rollback below the
+            // module's requirement) or a missing DLL SKIPS the entry with a loud stderr line —
+            // never a crash, the deployment must boot; the entry stays for when the platform
+            // moves forward again. A landed module's built-against MVID is diagnostic only:
+            // modules bind by simple name across platform builds (the strict MVID gate is the
+            // NodeType bake lane's). Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
+            // to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
             var persistedActivation = ModuleActivationSidecar.Read(AppContext.BaseDirectory,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
                 moduleAssemblies,
                 persistedActivation,
-                // The ONE framework-identity gate (PrebuiltAssemblySeeder) — never a second
-                // notion of framework version.
-                PrebuiltAssemblySeeder.DeclineReason,
+                // The ONE module platform gate (ModulePlatformFloor) — never a second notion of
+                // the module platform requirement.
+                ModulePlatformFloor.DeclineReason,
                 // 🚨 modules/<name>/<name>.dll SPECIFICALLY — never ResolveModulePath, whose
                 // BaseDirectory fallback would let a sidecar entry with a lost modules/ folder
                 // silently bind a same-named app-closure DLL instead of being skipped. Baseline

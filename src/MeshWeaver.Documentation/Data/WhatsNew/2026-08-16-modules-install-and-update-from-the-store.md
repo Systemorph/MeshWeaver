@@ -13,8 +13,8 @@ one install. Installing such a package lands the module next to the portal, and 
 at the next restart (the portal tells you a restart is pending).
 
 From then on the module keeps itself current: whenever your instance checks its registry, a newer
-build of an installed module is picked up automatically — under the same update policy that
+version of an installed module is picked up automatically — under the same update policy that
 already governs platform updates (Settings → Updates). Continuous, the default, updates modules
 unattended; Stable or Manual leaves them untouched until you update from the catalog yourself. A
-module built for a different platform version than yours is never installed — it simply waits
-until your platform has rolled forward, then arrives on its own.
+module that requires a newer platform than yours is never installed early — it simply waits until
+your platform has caught up, then arrives on its own.

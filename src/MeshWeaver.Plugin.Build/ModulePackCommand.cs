@@ -5,7 +5,7 @@ namespace MeshWeaver.Plugin.Build;
 
 /// <summary>
 /// The <c>module-pack</c> mode (#1664 Slice B): produces a MODULE bundle from a built module
-/// project's output, keyed to the framework MVID the module was actually compiled against.
+/// project's output.
 ///
 /// <para><b>Reusable from any node repo by design.</b> The maintainer's constraint on the bundle
 /// lane is that SocialMedia (and every other satellite repo that owns a module) drives the same
@@ -14,7 +14,7 @@ namespace MeshWeaver.Plugin.Build;
 ///
 /// <code>
 /// dotnet run --project src/MeshWeaver.Plugin.Build -- module-pack ./artifacts/modules/MeshWeaver.Social \
-///     --plugin SocialMedia --package-version 1.2.0 --out ./artifacts/bundles
+///     --plugin SocialMedia --package-version 1.2.0 --min-mesh-version 3.0.0 --out ./artifacts/bundles
 /// </code>
 ///
 /// <para><b>The closure is an explicit statement, never a scrape.</b> A publish output contains the
@@ -24,10 +24,13 @@ namespace MeshWeaver.Plugin.Build;
 /// <c>.pdb</c> when present) plus ONLY the files the caller names with <c>--with</c> — mirroring
 /// the modules/&lt;Name&gt;/ layout rule that for most modules the DLL alone is the closure.</para>
 ///
-/// <para><b>The MVID is read, never assumed.</b> The framework identity is the MVID of the
-/// <c>MeshWeaver.Graph.dll</c> the module restored against (its copy rides the build output);
-/// there is no default and no version-string fallback, because a bundle keyed to the wrong MVID is
-/// declined everywhere and a bundle keyed to a GUESSED one would land and fault at the next boot.</para>
+/// <para><b>The consumer's gate is the <c>minMeshVersion</c> FLOOR, not an MVID.</b> A module is a
+/// plain assembly binding by simple name; its contract is API compatibility, so the bundle records
+/// the platform floor the module requires (absent = no constraint) and the consumer lands anything
+/// whose floor it satisfies — one bundle serves every compatible platform build, and nothing needs
+/// rebundling per CI build. The MVID of the <c>MeshWeaver.Graph.dll</c> in the build output is
+/// still recorded when found, as DIAGNOSTIC metadata naming the exact build behind the bytes;
+/// MVID equality remains the NodeType (bake) lane's gate only.</para>
 /// </summary>
 public static class ModulePackCommand
 {
@@ -52,9 +55,15 @@ public static class ModulePackCommand
                                               manifest.lock version); there is no default, because
                                               a bundle at an invented version collides with the
                                               repo's immutable release numbering
+                  --min-mesh-version <v>      the platform FLOOR the module requires — the
+                                              consumer's landing gate (API compatibility as a
+                                              semver floor). Omit for no constraint; mirror the
+                                              package's content.minMeshVersion when it declares one
                   --graph-dll <path>          the MeshWeaver.Graph.dll the module was built against
-                                              (default: <moduleOutputDir>/MeshWeaver.Graph.dll);
-                                              its MVID keys the bundle
+                                              (default: <moduleOutputDir>/MeshWeaver.Graph.dll).
+                                              Its MVID is recorded as DIAGNOSTIC metadata — the
+                                              exact build behind the bytes — never a gate; a
+                                              missing DLL warns and records none
                   --with <fileName>           an additional closure file from <moduleOutputDir>
                                               (repeatable). <name>.dll is always included, and its
                                               .pdb rides along when present.
@@ -73,6 +82,7 @@ public static class ModulePackCommand
         var moduleName = Path.GetFileName(moduleDirectory.TrimEnd(Path.DirectorySeparatorChar));
         string? plugin = null;
         string? packageVersion = null;
+        string? minMeshVersion = null;
         string? graphDll = null;
         var extras = new List<string>();
         var outputDirectory = Environment.CurrentDirectory;
@@ -89,6 +99,9 @@ public static class ModulePackCommand
                     break;
                 case "--package-version" when i + 1 < args.Length:
                     packageVersion = args[++i];
+                    break;
+                case "--min-mesh-version" when i + 1 < args.Length:
+                    minMeshVersion = args[++i];
                     break;
                 case "--graph-dll" when i + 1 < args.Length:
                     graphDll = Path.GetFullPath(args[++i]);
@@ -127,19 +140,20 @@ public static class ModulePackCommand
             return 2;
         }
 
+        // The MVID is DIAGNOSTIC metadata (which exact platform build produced these bytes) —
+        // recorded when the restored MeshWeaver.Graph.dll is at hand, warned-and-omitted when not.
+        // It is deliberately not required and never a gate: the consumer lands on the
+        // minMeshVersion floor (API compatibility), and MVID equality stays with the NodeType
+        // bake lane.
         graphDll ??= Path.Combine(moduleDirectory, FrameworkIdentity.IdentityAssembly + ".dll");
-        if (!File.Exists(graphDll))
-        {
+        string? frameworkMvid = null;
+        if (File.Exists(graphDll))
+            frameworkMvid = FrameworkIdentity.ReadMvid(graphDll);
+        else
             Console.Error.WriteLine(
-                $"error: {FrameworkIdentity.IdentityAssembly}.dll not found at {graphDll} — the "
-                + "bundle is keyed to the framework MVID the module was BUILT against, and there "
-                + "is no default: a guessed identity lands bytes that fault at the next boot. "
-                + "Point --graph-dll at the restored framework assembly (it rides the module's "
-                + "build output when CopyLocal is on).");
-            return 2;
-        }
-
-        var frameworkMvid = FrameworkIdentity.ReadMvid(graphDll);
+                $"warning: {FrameworkIdentity.IdentityAssembly}.dll not found at {graphDll} — the "
+                + "bundle records no built-against framework MVID (diagnostic metadata only; the "
+                + "landing gate is --min-mesh-version).");
 
         // The closure: entry DLL (+ symbols when present) + exactly the files the caller named.
         var closure = new List<string> { moduleName + ".dll" };
@@ -173,12 +187,16 @@ public static class ModulePackCommand
             {
                 plugin,
                 version = packageVersion,
-                // 🚨 The identity a consumer verifies before landing a single byte. The runtime
-                // compares MVIDs, never version strings.
+                // Diagnostic: the exact platform build behind these bytes. The consumer's GATE is
+                // the module section's minMeshVersion floor below.
                 frameworkMvid,
-                module = new { assemblyName = moduleName, assemblies = closure },
+                module = new { assemblyName = moduleName, assemblies = closure, minMeshVersion },
             },
-            new JsonSerializerOptions { WriteIndented = true });
+            new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            });
 
         var entries = closure
             .Select(fileName =>
@@ -199,7 +217,8 @@ public static class ModulePackCommand
 
         Console.WriteLine(
             $"packed {Path.GetFileName(bundlePath)} — module {moduleName}, "
-            + $"{closure.Count} file(s), framework MVID {frameworkMvid}");
+            + $"{closure.Count} file(s), floor {minMeshVersion ?? "(none)"}, "
+            + $"built-against MVID {frameworkMvid ?? "(unrecorded)"}");
         return 0;
     }
 }

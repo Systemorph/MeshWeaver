@@ -6,10 +6,10 @@ namespace MeshWeaver.PluginCatalog;
 /// What a REGISTRY instance can serve as a module bundle (#1664 Slice C, the serving half): the
 /// files under its own <c>modules/&lt;name&gt;/</c> — the very bytes this deployment loads and runs,
 /// which is the same philosophy the NodeType bundle lane established ("the inputs ARE the storage").
-/// A module laid out by the image's publish (`MeshModulesPublish.targets`) was compiled with the
-/// image and therefore matches the RUNNING framework MVID by construction; a module the registry
-/// itself store-landed carries its recorded MVID in the activation sidecar, and stale bytes are
-/// refused here so a registry can never fan out assemblies it could not load itself.
+/// A module is servable exactly when this deployment's own boot would load it: not uninstalled,
+/// its declared platform FLOOR satisfied here, its entry DLL present. The MVID a landing recorded
+/// is diagnostic and never withholds a serve — modules bind by simple name, and a consumer's own
+/// floor gate (against the floor this serve surfaces) is what protects IT.
 ///
 /// <para>Pure decision + one directory listing — no mesh, no HTTP — so the serve rules are
 /// pinnable with a temp directory.</para>
@@ -25,15 +25,16 @@ public static class ModuleBundleSource
     /// <param name="moduleName">The module's entry-assembly name without extension.</param>
     /// <param name="activation">The deployment's activation sidecar list (empty for a module that
     /// ships with the image — image modules have no sidecar entry).</param>
-    /// <param name="frameworkGate">Returns WHY a recorded framework identity may not load in THIS
-    /// process, or null when it may — production passes
-    /// <c>PrebuiltAssemblySeeder.DeclineReason</c>.</param>
+    /// <param name="platformGate">Returns WHY a recorded platform FLOOR is not satisfied by THIS
+    /// process, or null when it is (an absent floor is always satisfied) — production passes
+    /// <see cref="ModulePlatformFloor.DeclineReason(string?)"/>, the same gate boot applies, so a
+    /// registry never serves a landing its own boot skips.</param>
     /// <returns>Absolute file paths (entry DLL first) or the decline reason.</returns>
     public static (IReadOnlyList<string> Files, string? DeclineReason) Collect(
         string baseDirectory,
         string moduleName,
         ModuleActivationList activation,
-        Func<string?, string?> frameworkGate)
+        Func<string?, string?> platformGate)
     {
         if (string.IsNullOrWhiteSpace(moduleName)
             || moduleName is "." or ".."
@@ -45,11 +46,11 @@ public static class ModuleBundleSource
             string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
         if (entry is { Enabled: false })
             return ([], $"module '{moduleName}' is uninstalled on this instance");
-        if (entry is not null && frameworkGate(entry.FrameworkMvid) is { } stale)
-            // The landed bytes did not survive this instance's own image roll — they are exactly
-            // the ABI-stale assemblies the boot union skips, and serving them would hand a consumer
-            // bytes stamped with a framework NEITHER side runs.
-            return ([], $"module '{moduleName}' is landed for a stale framework here: {stale}");
+        if (entry is not null && platformGate(entry.MinMeshVersion) is { } unsatisfied)
+            // The landed module's declared floor is not satisfied HERE (the platform rolled back
+            // below it) — these are exactly the bytes this instance's own boot union skips, and a
+            // registry must never fan out a module it could not load itself.
+            return ([], $"module '{moduleName}' is not loadable on this instance: {unsatisfied}");
 
         var folder = Path.Combine(baseDirectory, "modules", moduleName);
         var entryDll = Path.Combine(folder, moduleName + ".dll");

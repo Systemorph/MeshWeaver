@@ -39,7 +39,12 @@ public static class BundleReader
     /// <c>modules/&lt;name&gt;/</c> folders use.</param>
     /// <param name="Assemblies">File names inside <see cref="NuGetPackageWriter.ModuleFolder"/> —
     /// the module's private closure (for most modules just <c>&lt;AssemblyName&gt;.dll</c>).</param>
-    public sealed record ModuleRef(string? AssemblyName, IReadOnlyList<string>? Assemblies);
+    /// <param name="MinMeshVersion">The module's declared platform FLOOR — the consumer's landing
+    /// gate (a plain .NET assembly binding by simple name is compatible by API, expressed as a
+    /// semver floor). Null = no constraint. The manifest-level <see cref="Manifest.FrameworkMvid"/>
+    /// stays the NodeType lane's strict gate and, for the module, DIAGNOSTIC metadata only.</param>
+    public sealed record ModuleRef(
+        string? AssemblyName, IReadOnlyList<string>? Assemblies, string? MinMeshVersion = null);
 
     /// <summary>One landed-to-be module file: its name and bytes.</summary>
     /// <param name="FileName">File name as the manifest declared it.</param>

@@ -12,9 +12,9 @@ namespace MeshWeaver.PluginCatalog.Test;
 /// <summary>
 /// The boot-time effective-set computation of #1664 Slice A, step 9 —
 /// <see cref="ModuleActivationBoot.ComputeEffectiveModuleEntries"/>, pure: appsettings baseline ∪
-/// enabled persisted store installs, deduped by name, with the two loud skip rules (framework-MVID
-/// mismatch, missing DLL) that keep an image roll or a lost volume from crashing boot. Plus the
-/// sidecar's read/write round-trip and its corrupt-file loudness.
+/// enabled persisted store installs, deduped by name, with the two loud skip rules (unsatisfied
+/// platform floor, missing DLL) that keep a platform rollback or a lost volume from crashing
+/// boot. Plus the sidecar's read/write round-trip and its corrupt-file loudness.
 /// </summary>
 public class ModuleActivationBootTest
 {
@@ -24,8 +24,9 @@ public class ModuleActivationBootTest
     private static ModuleActivationList List(params ModuleActivationEntry[] entries) =>
         new() { Entries = [.. entries] };
 
-    private static ModuleActivationEntry Store(string name, bool enabled = true, string? mvid = "m1") =>
-        new() { Name = name, FrameworkMvid = mvid, Enabled = enabled };
+    private static ModuleActivationEntry Store(
+        string name, bool enabled = true, string? floor = null) =>
+        new() { Name = name, FrameworkMvid = "m1", MinMeshVersion = floor, Enabled = enabled };
 
     [Fact]
     public void EffectiveSet_IsBaselineUnionEnabledPersisted_InOrder()
@@ -67,41 +68,41 @@ public class ModuleActivationBootTest
     }
 
     [Fact]
-    public void FrameworkMvidMismatch_SkipsWithLoudReason_NeverCrashes()
+    public void UnsatisfiedPlatformFloor_SkipsWithLoudReason_NeverCrashes()
     {
+        // The PRODUCTION gate (ModulePlatformFloor.DeclineReason), bound to a fixed running
+        // version — the platform rolled BACK below one module's declared requirement. Deliberately
+        // a FLOOR and not an MVID check: modules bind by simple name, so a landed module keeps
+        // loading across ordinary platform updates; only a rollback below its floor skips it.
         var skips = new List<(string Module, string Reason)>();
         var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
             ["MeshWeaver.OgCard.dll"],
-            List(Store("Acme.Widgets", mvid: "stale-mvid"), Store("Acme.Reports", mvid: "live")),
-            // The gate is injected — production passes PrebuiltAssemblySeeder.DeclineReason, so
-            // there is never a second notion of framework identity to test here, only the skip.
-            mvid => mvid == "live" ? null : $"built against framework {mvid}, live framework is live",
+            List(Store("Acme.Widgets", floor: "9.0.0"), Store("Acme.Reports", floor: "1.0.0")),
+            floor => ModulePlatformFloor.DeclineReason(floor, "3.2.0"),
             AllDllsExist,
             (m, r) => skips.Add((m, r)));
 
         effective.Should().Equal("MeshWeaver.OgCard.dll", "Acme.Reports.dll");
         var skip = skips.Should().ContainSingle().Subject;
         skip.Module.Should().Be("Acme.Widgets");
-        skip.Reason.Should().Contain("stale-mvid").And.Contain("live",
-            "the skip must name both identities — the entry stays for the post-roll re-install");
+        skip.Reason.Should().Contain("9.0.0").And.Contain("3.2.0",
+            "the skip must name both versions — the entry stays for when the platform moves forward");
     }
 
     [Fact]
-    public void NullRecordedMvid_IsSkipped_WhenTheGateDeclinesAbsentIdentity()
+    public void NoRecordedFloor_Loads_AbsenceIsNoConstraint()
     {
-        // Production's gate (PrebuiltAssemblySeeder.DeclineReason) declines an ABSENT identity —
-        // "cannot be shown ABI-compatible" — and the boot union inherits that: an unverifiable
-        // store entry never loads on faith.
-        var skips = new List<(string Module, string Reason)>();
+        // An entry landed without a declared minMeshVersion (most modules; every entry written
+        // before the field existed) has stated no requirement — the production gate reads absence
+        // as satisfied, so such landings keep loading across platform builds. The recorded MVID
+        // is diagnostic and deliberately not consulted.
         var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
             [],
-            List(Store("Acme.Widgets", mvid: null)),
-            mvid => mvid is null ? "no recorded framework identity" : null,
-            AllDllsExist,
-            (m, r) => skips.Add((m, r)));
+            List(Store("Acme.Widgets")),
+            floor => ModulePlatformFloor.DeclineReason(floor, "3.2.0"),
+            AllDllsExist);
 
-        effective.Should().BeEmpty();
-        skips.Should().ContainSingle().Which.Module.Should().Be("Acme.Widgets");
+        effective.Should().Equal("Acme.Widgets.dll");
     }
 
     [Fact]
