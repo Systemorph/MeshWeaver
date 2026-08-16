@@ -38,30 +38,9 @@ public static class PublishedSettingsTab
     /// <summary>The tab's stable id.</summary>
     public const string TabId = "PublishedToTheWeb";
 
-    /// <summary>Registers the "Published to the web" tab on the global settings menu.</summary>
-    public static MessageHubConfiguration AddPublishedSettingsTab(this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetPublishedTab));
-
-    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetPublishedTab(
-        LayoutAreaHost host, RenderingContext ctx)
-    {
-        var tab = new GlobalSettingsMenuItemDefinition(
-            Id: TabId,
-            Label: "Published to the web",
-            ContentBuilder: BuildContent,
-            Group: "Administration",
-            Icon: FluentIcons.Globe(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 320)
-        { LabelKey = "settings.published", GroupKey = "settings.groupAdministration" };
-
-        // Reactive, gated like its sibling admin tabs: the published surface is not secret, but
-        // "what is public" is an administration question.
-        return AdminMenuGate.IsPlatformAdmin(host)
-            .Select(isAdmin => isAdmin
-                ? (IReadOnlyList<GlobalSettingsMenuItemDefinition>)new[] { tab }
-                : []);
-    }
+    // The menu entry is a seeded UiContribution node with Gates.AdminOnly
+    // (PlatformSettingsTabAreas) — the published surface is not secret, but "what is public" is
+    // an administration question; the SettingsPublished layout area re-asserts the admin gate.
 
     /// <summary>One published page, as a plain row the grid binds to.</summary>
     public sealed record PublishedRow
@@ -78,7 +57,7 @@ public static class PublishedSettingsTab
         public DateTime Changed { get; init; }
     }
 
-    private static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
+    internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
         => stack
             .WithView(Controls.Markdown(host.Localize("ui.mdPublishedIntro")))
             .WithView((h, _) => LivePublishedList(h), "PublishedList");
