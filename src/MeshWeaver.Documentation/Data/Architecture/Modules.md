@@ -23,6 +23,17 @@ A module carries one assembly-level attribute deriving from `MeshNodeProviderAtt
 | `DefaultNodeHubConfigurations` | Configuration applied to EVERY per-node hub (layout areas, type registrations) |
 | `BuilderConfigurations` | The full-surface hook — a `MeshBuilder → MeshBuilder` fold, applied last |
 
+HTTP endpoints ride a SEPARATE assembly attribute — `MeshEndpointProviderAttribute`
+(`MeshWeaver.Hosting.AspNetCore`), applied by the host's `app.MapMeshModuleEndpoints()` at
+endpoint-mapping time. The split is layering (the mesh contract never references ASP.NET) and
+timing (endpoints map after the auth middleware). Every contribution maps inside an
+authenticated-by-default group — a route is anonymous only where the module explicitly opts out —
+and duplicate (verb, pattern) registrations refuse the app loudly at startup. Delisting the
+module removes its routes wholesale: a 404, not a compiled optional-service 503.
+`MeshWeaver.Social` is the first consumer — its LinkedIn connect/publish/page-sync routes ride
+this hook, with the two OAuth callback routes opting out via `AllowAnonymous` (LinkedIn's
+redirect must not bounce through a login challenge; the CSRF state cookie is the guard).
+
 Module DI options bind through the options pipeline —
 `services.AddOptions<T>().BindConfiguration("Section")` — never `services.Configure(section)`:
 there is no `IConfiguration` instance at install time. A module whose activation depends on
@@ -53,7 +64,11 @@ current first-party inventory and each module's configuration section:
 | `MeshWeaver.Markdown.Export.dll` | Document export (PDF/DOCX/HTML/email) | — |
 | `MeshWeaver.Observability.dll` | Red-log ticketing / log watch | `LogWatch` |
 | `MeshWeaver.OgCard.dll` | Link-preview (og-card) layout area | — |
+<<<<<<< HEAD
 | `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
+=======
+| `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
+>>>>>>> origin/main
 
 Boot packs select by OTHER configuration too: `Graph:Storage:Type` `Cosmos`/`Snowflake` requires
 the matching `MeshWeaver.Hosting.Cosmos`/`.Snowflake` DLL in this list — installation runs before
@@ -74,6 +89,13 @@ Flipping a module's reference off (one module at a time, its entry upgraded to a
 correct for that module) is what makes the folder carry real content; which modules EXIST then
 becomes a publish decision while which ACTIVATE stays `Modules:Assemblies`. Skip the whole
 target with `-p:PublishMeshModules=false`.
+
+The first flipped module is `MeshWeaver.Markdown.Export`: no host references it any more — its
+targets entry runs a full closure publish pruned against the app root AND the shared-framework
+targeting packs, so its folder carries the engine assembly (measured private deps beyond it:
+none; the engine's package closure still rides the app via other references). Because a flipped
+DLL exists nowhere else, the closure lane also lays it into a plain build's output
+(`bin/…/modules/`), keeping `dotnet run` on a host working without a publish step.
 
 ## Modules and the in-mesh compiler
 
