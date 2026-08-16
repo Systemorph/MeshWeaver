@@ -3064,8 +3064,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private void SetupMyThreadsSubscription()
     {
         myThreadsSubscription?.Dispose();
-        // 🚨 Ownership is decided by the QUERY (content.createdBy). The client pass this replaces
-        // (`n.CreatedBy == me`) could never match: threads live in the _Thread satellite table, whose
+        // 🚨 Ownership is decided by the QUERY (content.createdBy). The client-side filter this
+        // replaces (`n.CreatedBy == me`) could never match: threads live in the _Thread satellite table, whose
         // reads project NULL for the authorship columns, so MeshNode.CreatedBy is null on every thread
         // that arrives and the list came out empty for every signed-in user. See ThreadQueries.
         myThreadsSubscription = Hub.GetQuery("my-threads", ThreadQueries.MyOpenThreads(_userHome))

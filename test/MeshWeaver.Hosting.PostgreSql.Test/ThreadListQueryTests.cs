@@ -98,7 +98,15 @@ public class ThreadListQueryTests(PostgreSqlFixture fixture, ITestOutputHelper o
         return thread.Path!;
     }
 
-    private async Task CreatePartitionRoot(string owner)
+    /// <summary>
+    /// <paramref name="owner"/>'s partition, provisioned the way a real user's is. Creating the User
+    /// root is enough: onboarding writes the <c>{owner}/_Access/{owner}_Access</c> assignment itself
+    /// (adding it here fails with "Node already exists"). That grant is what lets the reads below run
+    /// as <paramref name="owner"/> rather than as system — without it RLS hides the partition from
+    /// everyone, since a platform admin is NOT a data superuser, and every assertion would have to be
+    /// made from an identity production never uses.
+    /// </summary>
+    private async Task CreateUserPartition(string owner)
     {
         await MeshService.CreateNode(new MeshNode(owner)
         {
@@ -106,6 +114,14 @@ public class ThreadListQueryTests(PostgreSqlFixture fixture, ITestOutputHelper o
             Name = owner,
             State = MeshNodeState.Active,
         }).Should().Within(30.Seconds()).Emit();
+    }
+
+    /// <summary>Runs <paramref name="read"/> as <paramref name="owner"/> — a real circuit user on the
+    /// secured, per-result RLS path, exactly as the chat calls <c>Hub.GetQuery</c>.</summary>
+    private async Task<T> AsUser<T>(string owner, Func<Task<T>> read)
+    {
+        using var _ = Access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner });
+        return await read();
     }
 
     private async Task CreateNode(string id, string ns)
@@ -122,6 +138,12 @@ public class ThreadListQueryTests(PostgreSqlFixture fixture, ITestOutputHelper o
     /// Subscribes the query the way the chat lists do and waits for the first snapshot satisfying
     /// <paramref name="until"/> — never a fixed delay. The cache id is per-call so no test inherits
     /// a sibling's snapshot (GetQuery caches by id + caller identity).
+    ///
+    /// <para>🚨 Every read runs through <see cref="AsUser"/>, NOT under <c>ImpersonateAsSystem</c>.
+    /// System impersonation is scoped to SEEDING (writing into a partition before its owner exists);
+    /// the assertions then run as the owning user on the secured, per-result RLS path the chat takes.
+    /// Reading as system would let an RLS regression — a user who cannot see their own threads — pass
+    /// silently, which is the same class of failure this suite exists for.</para>
     /// </summary>
     private Task<IEnumerable<MeshNode>> Snapshot(
         string id, string query, Func<IEnumerable<MeshNode>, bool> until) =>
@@ -143,38 +165,51 @@ public class ThreadListQueryTests(PostgreSqlFixture fixture, ITestOutputHelper o
     public async Task MyThreads_FindsAThreadStartedOnAnyNode()
     {
         var owner = NewOwner();
-        using var _ = Access.ImpersonateAsSystem();
-        await CreatePartitionRoot(owner);
-        await CreateNode("Docs", owner);
-        await CreateNode("Page", $"{owner}/Docs");
+        string onHome, onPage;
+        using (Access.ImpersonateAsSystem())
+        {
+            await CreateUserPartition(owner);
+            await CreateNode("Docs", owner);
+            await CreateNode("Page", $"{owner}/Docs");
 
-        var onHome = await CreateThread(owner, owner, "Thread on my home");
-        var onPage = await CreateThread(owner, $"{owner}/Docs/Page", "Thread on a doc page");
+            onHome = await CreateThread(owner, owner, "Thread on my home");
+            onPage = await CreateThread(owner, $"{owner}/Docs/Page", "Thread on a doc page");
+        }
 
-        var snapshot = await Snapshot(
-            $"any-node-{owner}", ThreadQueries.MyThreads(owner), s => Paths(s).Count() >= 2);
+        var snapshot = await AsUser(owner, () => Snapshot(
+            $"any-node-{owner}", ThreadQueries.MyThreads(owner), s => Paths(s).Count() >= 2));
 
         Paths(snapshot).Should().Contain(onHome).And.Contain(onPage,
             "a thread is created under the node it was started from — the list is the USER's, not the page's");
     }
 
-    /// <summary>Someone else's thread is not mine, in any partition.</summary>
+    /// <summary>
+    /// Someone else's thread is not mine — and the exclusion has to come from the QUERY.
+    ///
+    /// <para>🚨 Both threads deliberately live in the SAME partition, one created by each user. Put
+    /// the other user's thread in a partition of their own and RLS hides it anyway, so the assertion
+    /// would pass without the ownership term ever being evaluated — a vacuous pass dressed as
+    /// coverage.</para>
+    /// </summary>
     [Fact(Timeout = 120_000)]
     public async Task MyThreads_ExcludesAnotherUsersThread()
     {
         var owner = NewOwner();
         var other = NewOwner();
-        using var _ = Access.ImpersonateAsSystem();
-        await CreatePartitionRoot(owner);
-        await CreatePartitionRoot(other);
+        string mine, theirs;
+        using (Access.ImpersonateAsSystem())
+        {
+            await CreateUserPartition(owner);
 
-        var mine = await CreateThread(owner, owner, "Mine");
-        var theirs = await CreateThread(other, other, "Theirs");
+            mine = await CreateThread(owner, owner, "Mine");
+            theirs = await CreateThread(other, owner, "Theirs");
+        }
 
-        var snapshot = await Snapshot(
-            $"others-{owner}", ThreadQueries.MyThreads(owner), s => Paths(s).Contains(mine));
+        var snapshot = await AsUser(owner, () => Snapshot(
+            $"others-{owner}", ThreadQueries.MyThreads(owner), s => Paths(s).Contains(mine)));
 
-        Paths(snapshot).Should().NotContain(theirs);
+        Paths(snapshot).Should().NotContain(theirs,
+            "the other user's thread is readable here — only the ownership term keeps it out");
     }
 
     /// <summary>
@@ -187,19 +222,22 @@ public class ThreadListQueryTests(PostgreSqlFixture fixture, ITestOutputHelper o
     public async Task MyOpenThreads_ExcludesDone_WhileMyThreadsKeepsIt()
     {
         var owner = NewOwner();
-        using var _ = Access.ImpersonateAsSystem();
-        await CreatePartitionRoot(owner);
+        string open, done;
+        using (Access.ImpersonateAsSystem())
+        {
+            await CreateUserPartition(owner);
 
-        var open = await CreateThread(owner, owner, "Still open");
-        var done = await CreateThread(owner, owner, "Finished", ThreadExecutionStatus.Done);
+            open = await CreateThread(owner, owner, "Still open");
+            done = await CreateThread(owner, owner, "Finished", ThreadExecutionStatus.Done);
+        }
 
-        var all = await Snapshot(
-            $"all-{owner}", ThreadQueries.MyThreads(owner), s => Paths(s).Count() >= 2);
+        var all = await AsUser(owner, () => Snapshot(
+            $"all-{owner}", ThreadQueries.MyThreads(owner), s => Paths(s).Count() >= 2));
         Paths(all).Should().Contain(open).And.Contain(done,
             "the picker resumes any of my threads, done or not");
 
-        var openOnly = await Snapshot(
-            $"open-{owner}", ThreadQueries.MyOpenThreads(owner), s => Paths(s).Contains(open));
+        var openOnly = await AsUser(owner, () => Snapshot(
+            $"open-{owner}", ThreadQueries.MyOpenThreads(owner), s => Paths(s).Contains(open)));
         Paths(openOnly).Should().NotContain(done);
     }
 
@@ -222,12 +260,15 @@ public class ThreadListQueryTests(PostgreSqlFixture fixture, ITestOutputHelper o
     public async Task ThreadOwnership_ArrivesWithNoEnvelopeAuthorship_SoTheClientCannotFilterOnIt()
     {
         var owner = NewOwner();
-        using var _ = Access.ImpersonateAsSystem();
-        await CreatePartitionRoot(owner);
-        var mine = await CreateThread(owner, owner, "Mine");
+        string mine;
+        using (Access.ImpersonateAsSystem())
+        {
+            await CreateUserPartition(owner);
+            mine = await CreateThread(owner, owner, "Mine");
+        }
 
-        var byContent = await Snapshot(
-            $"content-{owner}", ThreadQueries.MyThreads(owner), s => Paths(s).Contains(mine));
+        var byContent = await AsUser(owner, () => Snapshot(
+            $"content-{owner}", ThreadQueries.MyThreads(owner), s => Paths(s).Contains(mine)));
 
         byContent.Single(n => n.Path == mine).CreatedBy.Should().BeNull(
             "satellite reads project NULL::text AS created_by — see PostgreSqlStorageAdapter.AuthorCols");
