@@ -27,6 +27,16 @@ public static class NuGetPackageWriter
     /// <summary>Node content, shipped verbatim so install stays a copy rather than a re-render.</summary>
     public const string ContentFolder = "meshweaver/content";
 
+    /// <summary>
+    /// A compiled MODULE's closure files (#1664). Distinct from <see cref="AssemblyFolder"/> on
+    /// purpose: NodeType assemblies are payload for the assembly store (per-node ALC, no restart),
+    /// while module files land beside the app in <c>modules/&lt;name&gt;/</c> and load into the
+    /// DEFAULT ALC at the next restart. Mixing the two folders would let a consumer seed a module
+    /// DLL as a NodeType assembly — correct bytes in the wrong lane, surfacing only as a
+    /// <c>TypeLoadException</c> at activation.
+    /// </summary>
+    public const string ModuleFolder = "meshweaver/modules";
+
     /// <summary>Where the node-path→assembly map lives inside the package.</summary>
     public const string ManifestEntry = "meshweaver/manifest.json";
 
@@ -48,6 +58,17 @@ public static class NuGetPackageWriter
     /// <param name="extension">File extension including the dot, e.g. <c>.dll</c>.</param>
     public static string EntryPathFor(string nodePath, string extension = ".dll") =>
         $"{AssemblyFolder}/{nodePath}{extension}";
+
+    /// <summary>
+    /// The archive entry path for one of a MODULE's closure files — the file name verbatim under
+    /// <see cref="ModuleFolder"/>. Module files are flat (a bundle carries at most ONE module, and
+    /// its manifest names every file), so unlike <see cref="EntryPathFor"/> there is no path
+    /// component to preserve — but the same rule holds: a consumer reads the file list from the
+    /// MANIFEST, never by enumerating the folder.
+    /// </summary>
+    /// <param name="fileName">The closure file's name, e.g. <c>MeshWeaver.Social.dll</c>.</param>
+    public static string ModuleEntryPathFor(string fileName) =>
+        $"{ModuleFolder}/{fileName}";
 
     /// <summary>One file destined for the package.</summary>
     /// <param name="PathInPackage">Full entry path, e.g. <c>meshweaver/content/index.json</c>.</param>

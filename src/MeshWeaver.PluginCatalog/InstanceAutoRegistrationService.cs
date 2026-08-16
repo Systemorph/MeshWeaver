@@ -582,15 +582,23 @@ public sealed class InstanceAutoRegistrationService(
                                 "Installing defaults from {Url} with NO instance key — only an open "
                                 + "dev/e2e registry will answer.", registry.Url);
                     })
-                    .Select(token => new ConfiguredPackageSource(
-                        new RegistryPackageSource(hub, registry.Url, token),
-                        string.IsNullOrWhiteSpace(registry.Ref) ? "HEAD" : registry.Ref,
-                        string.IsNullOrWhiteSpace(registry.Name) ? registry.Url : registry.Name)
+                    .Select(token =>
                     {
                         // Same URL and same key as the catalog read: a registry entitled to serve
                         // this instance its package files is exactly the one entitled to serve the
-                        // assemblies compiled from them.
-                        Bundles = new PluginBundleClient(hub, registry.Url, token),
+                        // assemblies compiled from them. ONE client, carried on BOTH handles: the
+                        // ConfiguredPackageSource's (the NodeType adopt after a default install)
+                        // and the RegistryPackageSource's own (the module landing inside
+                        // InstallOrUpdate, #1664) — so every lane reads the same promise-cached
+                        // bundle index.
+                        var bundles = new PluginBundleClient(hub, registry.Url, token);
+                        return new ConfiguredPackageSource(
+                            new RegistryPackageSource(hub, registry.Url, token) { Bundles = bundles },
+                            string.IsNullOrWhiteSpace(registry.Ref) ? "HEAD" : registry.Ref,
+                            string.IsNullOrWhiteSpace(registry.Name) ? registry.Url : registry.Name)
+                        {
+                            Bundles = bundles,
+                        };
                     }))
                 .ToObservable()
                 .Concat()
@@ -948,6 +956,11 @@ public sealed class InstanceAutoRegistrationService(
                     package.Id);
                 return Observable.Return(0);
             });
+        // A package's compiled MODULE (#1664) is deliberately NOT adopted here: the module branch
+        // lives inside CatalogLayoutAreas.InstallOrUpdate — the one orchestrator this lane (and the
+        // manual click, and the content auto-update) already funnels through — riding the
+        // RegistryPackageSource's own Bundles handle. A second call here would land drift the
+        // update policy is supposed to gate (the reconciler's module pass owns drift).
     }
 
     /// <summary>One package the default install should carry, and the source it came from.</summary>

@@ -119,18 +119,48 @@ public static class PluginBundleEndpoints
         var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}";
 
         return InstalledPackages(rootHub, ct)
-            .Select(packages => Results.Json(new
-            {
-                frameworkMvid = FrameworkMvid,
-                bundles = packages.Select(p => new
+            .SelectMany(packages => ServableModules(rootHub, packages)
+                .Select(modules => Results.Json(new
                 {
-                    plugin = p.PluginId,
-                    version = p.Version,
-                    url = $"{baseUrl}/{Uri.EscapeDataString(p.PluginId)}/{Uri.EscapeDataString(p.Version)}",
-                }).ToArray(),
-            }))
+                    frameworkMvid = FrameworkMvid,
+                    bundles = packages.Select(p => new
+                    {
+                        plugin = p.PluginId,
+                        version = p.Version,
+                        url = $"{baseUrl}/{Uri.EscapeDataString(p.PluginId)}/{Uri.EscapeDataString(p.Version)}",
+                        // The compiled module this bundle carries (#1664) — stamped ONLY when this
+                        // instance can actually serve its bytes, so a consumer never downloads for
+                        // a module section that will not be there. Additive: an older client's
+                        // BundleRef simply ignores it.
+                        module = modules.TryGetValue(p.PluginId, out var moduleName) ? moduleName : null,
+                    }).ToArray(),
+                })))
             .FirstAsync()
             .ToTask(ct);
+    }
+
+    /// <summary>
+    /// Which of the installed packages' declared modules this instance can serve right now:
+    /// plugin id → module assembly name, for exactly the entries whose bytes exist under
+    /// <c>modules/&lt;name&gt;/</c> and pass the framework gate (<see cref="ModuleBundleSource"/>).
+    /// One activation-sidecar read for the whole index.
+    /// </summary>
+    private static IObservable<IReadOnlyDictionary<string, string>> ServableModules(
+        IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
+    {
+        var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
+        var declaring = packages.Where(p => !string.IsNullOrWhiteSpace(p.Module)).ToArray();
+        if (landing is null || declaring.Length == 0)
+            return Observable.Return<IReadOnlyDictionary<string, string>>(
+                new Dictionary<string, string>());
+
+        return landing.GetActivation().Take(1)
+            .Select(activation => (IReadOnlyDictionary<string, string>)declaring
+                .Where(p => ModuleBundleSource.Collect(
+                        landing.BaseDirectory, p.Module!, activation,
+                        PrebuiltAssemblySeeder.DeclineReason)
+                    .DeclineReason is null)
+                .ToDictionary(p => p.PluginId, p => p.Module!, StringComparer.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -199,7 +229,39 @@ public static class PluginBundleEndpoints
                     ? Observable.Return(Array.Empty<(string NodePath, string? Path)>())
                     : lookups.CombineLatest().Select(x => x.ToArray());
 
-                return assemblies.Select(found => BuildResult(package, found));
+                return assemblies.SelectMany(found => ModuleFiles(rootHub, package)
+                    .Select(moduleFiles => BuildResult(package, found, moduleFiles)));
+            });
+    }
+
+    /// <summary>
+    /// The MODULE closure files this bundle carries (#1664) — the instance's own
+    /// <c>modules/&lt;name&gt;/</c> bytes, resolved through <see cref="ModuleBundleSource"/> (which
+    /// refuses uninstalled and framework-stale landings). Empty for a package that declares no
+    /// module or whose bytes this instance cannot serve — the bundle then simply has no module
+    /// section, which a consumer reads as "nothing to land".
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>> ModuleFiles(
+        IMessageHub rootHub, BundleEntry package)
+    {
+        var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
+        if (landing is null || string.IsNullOrWhiteSpace(package.Module))
+            return Observable.Return<IReadOnlyList<string>>([]);
+
+        var logger = rootHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(PluginBundleEndpoints));
+
+        return landing.GetActivation().Take(1)
+            .Select(activation =>
+            {
+                var (files, decline) = ModuleBundleSource.Collect(
+                    landing.BaseDirectory, package.Module!, activation,
+                    PrebuiltAssemblySeeder.DeclineReason);
+                if (decline is not null)
+                    logger?.LogInformation(
+                        "Plugin bundles: {Plugin} declares module '{Module}' but it is not served: {Reason}",
+                        package.PluginId, package.Module, decline);
+                return files;
             });
     }
 
@@ -225,7 +287,8 @@ public static class PluginBundleEndpoints
     /// </summary>
     private static IResult BuildResult(
         BundleEntry package,
-        IReadOnlyList<(string NodePath, string? Path)> assemblies)
+        IReadOnlyList<(string NodePath, string? Path)> assemblies,
+        IReadOnlyList<string> moduleFiles)
     {
         var entries = new List<NuGetPackageWriter.Entry>();
         var assemblyRecords = new List<object>();
@@ -241,6 +304,17 @@ public static class PluginBundleEndpoints
             assemblyRecords.Add(new { nodePath, assembly = $"{nodePath}.dll" });
         }
 
+        // The module closure, under its own folder (#1664): these bytes land beside the consumer's
+        // app via ModuleLandingService, a different lane than the assembly store above — the two
+        // must never mix (a module DLL seeded as a NodeType assembly fails only at activation).
+        foreach (var moduleFile in moduleFiles)
+        {
+            var local = moduleFile;
+            entries.Add(new NuGetPackageWriter.Entry(
+                NuGetPackageWriter.ModuleEntryPathFor(Path.GetFileName(local)),
+                () => File.OpenRead(local)));
+        }
+
         var manifest = new PackagingManifest(
             package.PluginId, package.PackageId, package.Version, package.PluginId, null, []);
 
@@ -249,12 +323,26 @@ public static class PluginBundleEndpoints
             {
                 plugin = package.PluginId,
                 version = package.Version,
-                // The framework this instance RUNS — these assemblies came out of its bake, so that
-                // is the only framework they are known good against.
+                // The framework this instance RUNS — these assemblies came out of its bake (and its
+                // own modules/ tree), so that is the only framework they are known good against.
                 frameworkMvid = FrameworkMvid,
                 assemblies = assemblyRecords,
+                // The module section — the manifest names every closure file; a consumer reads
+                // this list, never the folder (BundleReader.ReadModule). Null (omitted) when the
+                // bundle carries no module.
+                module = moduleFiles.Count == 0
+                    ? null
+                    : new
+                    {
+                        assemblyName = package.Module,
+                        assemblies = moduleFiles.Select(Path.GetFileName).ToArray(),
+                    },
             },
-            new JsonSerializerOptions { WriteIndented = true });
+            new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            });
 
         var buffer = new MemoryStream();
         NuGetPackageWriter.Write(buffer, manifest, "3.0.0", entries, manifestJson);
@@ -285,10 +373,12 @@ public static class PluginBundleEndpoints
                     rootHub.JsonSerializerOptions))
                 .Where(m => m is not null && !string.IsNullOrWhiteSpace(m.ReleasedVersion))
                 .Select(m => new BundleEntry(
-                    PackagingManifest.IdPrefix + m!.Id, m.ReleasedVersion!, m.Id))
+                    PackagingManifest.IdPrefix + m!.Id, m.ReleasedVersion!, m.Id, m.Module))
                 .OrderBy(e => e.PluginId, StringComparer.OrdinalIgnoreCase)
                 .ToArray());
 
-    /// <summary>One servable bundle: its package id, its released version, and the plugin it is.</summary>
-    private sealed record BundleEntry(string PackageId, string Version, string PluginId);
+    /// <summary>One servable bundle: its package id, its released version, the plugin it is, and
+    /// the compiled module the plugin's install record declares (null for content-only plugins).</summary>
+    private sealed record BundleEntry(
+        string PackageId, string Version, string PluginId, string? Module = null);
 }

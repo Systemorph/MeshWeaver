@@ -9,9 +9,10 @@ namespace MeshWeaver.PluginCatalog;
 /// <summary>
 /// The runtime writer into <c>modules/</c> (#1664 step 7) — the ONE code path that lands a
 /// compiled module's assemblies beside the app at runtime and records its activation, so the next
-/// restart loads it (restart-as-activation, #1664 step 8). This is the seam Slice C's
-/// <c>PackageInstaller</c> binary branch calls after fetching a module bundle; nothing in Slice A
-/// invokes it from the install funnel yet.
+/// restart loads it (restart-as-activation, #1664 step 8). Slice C's install funnel calls it
+/// through <see cref="PluginBundleClient.AdoptModule"/> (bundle-fetch → MVID gate → here), from
+/// the install orchestrator (<c>CatalogLayoutAreas.InstallOrUpdate</c>) and the boot reconcile
+/// (<see cref="RegistryUpdateReconciler"/>).
 ///
 /// <para><b>The MVID gate holds at placement.</b> Landing verifies the caller's declared
 /// framework identity through <see cref="PrebuiltAssemblySeeder.DeclineReason"/> — the SAME pure
@@ -56,6 +57,11 @@ public sealed class ModuleLandingService : IDisposable
         this.baseDirectory = baseDirectory ?? AppContext.BaseDirectory;
     }
 
+    /// <summary>The deployment root the <c>modules/</c> tree lives under — exposed so the serving
+    /// side (<see cref="ModuleBundleSource"/> callers) reads the SAME tree this service writes,
+    /// tests included.</summary>
+    public string BaseDirectory => baseDirectory;
+
     /// <summary>
     /// Lands a module: verifies the framework MVID, writes the assemblies atomically into
     /// <c>modules/&lt;name&gt;/</c>, and appends/updates the activation entry in the
@@ -72,16 +78,29 @@ public sealed class ModuleLandingService : IDisposable
     /// <param name="frameworkMvid">The framework MVID (MeshWeaver.Graph's ModuleVersionId) the
     /// assemblies were built against, as recorded by the producer.</param>
     /// <param name="packagePath">The install record's mesh path, when the store lane calls.</param>
+    /// <param name="version">The package version the bundle was served at — recorded on the
+    /// activation entry so the auto-update reconcile can answer "already landed" without a
+    /// download (<see cref="ModuleActivationEntry.Version"/>).</param>
     public IObservable<Unit> LandModule(
         string name,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
         string frameworkMvid,
-        string? packagePath = null)
+        string? packagePath = null,
+        string? version = null)
         => pool.InvokeBlocking(_ =>
         {
-            LandCore(name, assemblies, frameworkMvid, packagePath);
+            LandCore(name, assemblies, frameworkMvid, packagePath, version);
             return Unit.Default;
         });
+
+    /// <summary>
+    /// Reads the current activation list on this service's IO pool — the runtime counterpart of the
+    /// boot-time <see cref="ModuleActivationSidecar.Read"/>, serialized behind the same cap-1 pool
+    /// as the writes so a read never observes a landing halfway through its read-modify-write.
+    /// </summary>
+    public IObservable<ModuleActivationList> GetActivation()
+        => pool.InvokeBlocking(_ => ModuleActivationSidecar.Read(baseDirectory,
+            msg => logger?.LogError("{Message}", msg)));
 
     /// <summary>
     /// Uninstalls a module landed by <see cref="LandModule"/>: disables its activation entry
@@ -101,7 +120,8 @@ public sealed class ModuleLandingService : IDisposable
         string name,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
         string frameworkMvid,
-        string? packagePath)
+        string? packagePath,
+        string? version)
     {
         ValidateFileName(name, "module name");
         if (assemblies is not { Count: > 0 })
@@ -172,6 +192,7 @@ public sealed class ModuleLandingService : IDisposable
             Source = ModuleActivationSources.Store,
             PackagePath = packagePath,
             FrameworkMvid = frameworkMvid,
+            Version = version,
             Enabled = true,
         };
         ModuleActivationSidecar.Write(baseDirectory, list with

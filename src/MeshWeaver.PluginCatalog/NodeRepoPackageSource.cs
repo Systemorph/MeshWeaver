@@ -156,6 +156,9 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // The declared public surface — what the installer's access step scopes a
                         // free package's public read to.
                         PublicSegments = peeked.PublicSegments,
+                        // The compiled-module declaration (#1664) — what routes this package
+                        // through the module bundle funnel on top of its content install.
+                        Module = peeked.Module,
                     });
                 }
                 return (IReadOnlyList<PackageManifest>)manifests
@@ -185,7 +188,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
         string? NodeType, string? Name, string? Description,
         string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
         bool PreInstalled, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
-        string? License, string? ContactEmail);
+        string? License, string? ContactEmail, string? Module);
 
     // Reads the node's type/name/description — plus the storefront card fields (category/icon on
     // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
@@ -205,6 +208,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             var requires = ImmutableList<string>.Empty;
             string? license = null;
             var publicSegments = ImmutableList<string>.Empty;
+            string? module = null;
             if (r.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object)
             {
                 if (content.TryGetProperty("price", out var p) && p.ValueKind == JsonValueKind.Number
@@ -247,6 +251,13 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         .Where(e => e.ValueKind == JsonValueKind.String)
                         .Select(e => e.GetString()!)
                         .ToImmutableList();
+                // The package's compiled-module declaration ("module": the entry-assembly name,
+                // #1664). Read here because the INSTALL funnel and the registry's bundle index both
+                // key on the manifest — leaving it unread would make it dead metadata, the defect
+                // class `preInstalled`/`publicSegments`/`contactEmail` each had.
+                if (content.TryGetProperty("module", out var mod) && mod.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(mod.GetString()))
+                    module = mod.GetString();
             }
             return new PeekedRoot(
                 r.TryGetProperty("nodeType", out var nt) ? nt.GetString() : null,
@@ -255,7 +266,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
                 price, currency, poster, preInstalled, requires, publicSegments, license,
-                contactEmail);
+                contactEmail, module);
         }
         catch (JsonException ex)
         {
