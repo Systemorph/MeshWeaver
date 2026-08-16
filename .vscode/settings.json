@@ -1,0 +1,33 @@
+{
+  // 🚨 Point the C# tooling at the solution EXPLICITLY. Discovery cannot be relied on here: the
+  // plain C# extension (ms-dotnettools.csharp) globs `{**/*.sln,**/*.slnf,**/*.csproj,...}` — the
+  // string "slnx" does not appear anywhere in it — so with no .sln in this repo it silently falls
+  // back to loading the 159 .csproj files one by one. This setting is read before any globbing and
+  // is handed straight to openSolution, so it works whichever extension is installed.
+  "dotnet.defaultSolution": "MeshWeaver.slnx",
+
+  // Keep the file tree free of build output: with 159 projects the bin/obj noise buries the source,
+  // and stale folders left behind by deleted projects read as if those projects still existed.
+  "files.exclude": {
+    "**/bin": true,
+    "**/obj": true
+  },
+  "search.exclude": {
+    "**/bin": true,
+    "**/obj": true,
+    "**/TestResults": true,
+    "**/node_modules": true
+  },
+  // Watching bin/obj across 159 projects is what pins a core at 100% after a build.
+  "files.watcherExclude": {
+    "**/bin/**": true,
+    "**/obj/**": true,
+    "**/TestResults/**": true,
+    "**/node_modules/**": true
+  },
+
+  "dotnet.server.useOmnisharp": false,
+  "editor.formatOnSave": false,
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true
+}
