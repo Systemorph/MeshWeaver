@@ -9,9 +9,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
     <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
-    <!-- The Approvals module's views compose the shared node chrome (GetContainerStyle,
-         BuildHeader) — internal layout plumbing, deliberately not public API. -->
-    <InternalsVisibleTo Include="MeshWeaver.Approvals" />
+    <!-- The build/bake pipeline drives NodeType compilation (MeshNodeCompilationService,
+         NodeTypeCompilationHelpers, TryCreateReleaseNode) — a live internal coupling,
+         tracked for retirement separately from the (removed) Approvals grant. -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
     <!-- The build-time packer calls DynamicMeshNodeAttributeGenerator directly. A prebuilt
