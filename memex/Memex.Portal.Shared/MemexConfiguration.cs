@@ -29,6 +29,7 @@ using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.PostgreSql;
@@ -1126,6 +1127,11 @@ public static class MemexConfiguration
         // gate as the registry above (Bearer or Basic, since a NuGet client cannot send Bearer),
         // but with NO anonymous mode: it hands out compiled assemblies for paid modules.
         app.MapPluginBundles();
+
+        // Module endpoint contributions (design #1655): every Modules:Assemblies DLL carrying a
+        // MeshEndpointProviderAttribute maps its routes here — authenticated by default, loud
+        // startup failure on route collisions. Delisting a module removes its routes wholesale.
+        app.MapMeshModuleEndpoints();
 
         // First-startup auto-registration — POST /api/instances/register. A new deployment presents
         // an admin-minted bootstrap key (mwr_) and receives its own instance key (mwi_) once;
