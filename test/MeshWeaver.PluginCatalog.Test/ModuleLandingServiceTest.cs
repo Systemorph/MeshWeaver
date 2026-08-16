@@ -14,7 +14,7 @@ namespace MeshWeaver.PluginCatalog.Test;
 /// <summary>
 /// The runtime <c>modules/</c> writer (#1664 Slice A, step 7): a landed module's files + its
 /// activation entry, the MVID gate at placement (the SAME
-/// <see cref="PrebuiltAssemblySeeder.DeclineReason"/> identity every other prebuilt lane gates
+/// <see cref="PrebuiltAssemblySeeder.DeclineReason(string?)"/> identity every other prebuilt lane gates
 /// on), the app-closure same-identity refusal, and uninstall (disable + delete,
 /// restart-as-activation).
 /// </summary>

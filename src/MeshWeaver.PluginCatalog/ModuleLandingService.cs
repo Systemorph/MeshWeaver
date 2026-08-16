@@ -14,7 +14,7 @@ namespace MeshWeaver.PluginCatalog;
 /// invokes it from the install funnel yet.
 ///
 /// <para><b>The MVID gate holds at placement.</b> Landing verifies the caller's declared
-/// framework identity through <see cref="PrebuiltAssemblySeeder.DeclineReason"/> — the SAME pure
+/// framework identity through <see cref="PrebuiltAssemblySeeder.DeclineReason(string?)"/> — the SAME pure
 /// function the prebuilt-assembly seeder and the bundle client gate on, so there is never a
 /// second notion of framework version. A mismatch REFUSES the landing (the observable errors,
 /// naming both MVIDs); declined bytes never reach disk.</para>

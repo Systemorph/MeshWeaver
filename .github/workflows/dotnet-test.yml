@@ -1084,9 +1084,16 @@ jobs:
         # 🚨 The run is TEED, not swallowed: the log still streams to the job, and the copy is read
         # afterwards for the tester's verdict line. `if !` (not `set +e`) so `set -e` stays armed
         # for everything else, and PIPESTATUS[0] is the TESTER's code — tee always exits 0.
+        # 🚨 Since #1660 WS1 the gate also PERSISTS what it compiled (--bake-output): one
+        # MVID-keyed prebuilt bundle per vital module, with the plugins-repo commit it was synced
+        # from recorded in each manifest (--source-sha) so the artifact's provenance is auditable.
+        # Same adoption caveat as the content bake: only consumers sharing THIS run's build (its
+        # Graph.dll MVID) can adopt; anything else declines wholesale until #1660 WS3.
+        PLUGINS_SHA="$(git -C "$GITHUB_WORKSPACE/plugins-repo" rev-parse HEAD)"
         log="${RUNNER_TEMP:-/tmp}/plugin-gate.log"
         status=0
-        if ! time dotnet "$TESTER" "$STAGE" --allow "$STAGE/plugin-gate.allow" 2>&1 | tee "$log"; then
+        if ! time dotnet "$TESTER" "$STAGE" --allow "$STAGE/plugin-gate.allow" \
+            --bake-output "$RUNNER_TEMP/bake-plugins" --source-sha "$PLUGINS_SHA" 2>&1 | tee "$log"; then
           status="${PIPESTATUS[0]}"
           # tee always exits 0, so a non-zero pipeline with a zero head means tee itself failed.
           if [ "$status" = "0" ]; then status=1; fi
@@ -1114,6 +1121,31 @@ jobs:
           fi
           exit "$status"
         fi
+    # Same postcondition contract as doc-gate's bake: a green gate with no bake identity is a
+    # bake-stage regression — RED, never a skip.
+    - name: "Bake summary + identity"
+      id: bake
+      run: |
+        set -euo pipefail
+        mvid_file="$RUNNER_TEMP/bake-plugins/framework-mvid.txt"
+        if [ ! -s "$mvid_file" ]; then
+          echo "::error::the plugins gate ran green but wrote no bake identity ($mvid_file) — the bake stage regressed."
+          exit 1
+        fi
+        echo "mvid=$(cat "$mvid_file")" >> "$GITHUB_OUTPUT"
+        {
+          echo "### 📦 Baked plugin bundles (framework $(cat "$mvid_file"))"
+          echo
+          echo '```'
+          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/plugin-gate.log" || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: "Upload artifact: baked plugin bundles"
+      uses: actions/upload-artifact@v7
+      with:
+        name: baked-plugins-${{ steps.bake.outputs.mvid }}
+        path: ${{ runner.temp }}/bake-plugins
+        retention-days: 7
 
   # ────────────────────────── CLIENTS GATE ──────────────────────────
   # Folds the `Clients` workflow's verdict into the repo's ONE required status check (#1568).
@@ -1273,6 +1305,14 @@ jobs:
         set -euo pipefail
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
+    # 🚨 Since #1660 WS1 this job is not verdict-only: the SAME tester run that proves the content
+    # compiles also PERSISTS the compiled assemblies (--bake-output) as MVID-keyed prebuilt
+    # bundles, uploaded below as `baked-assemblies-<mvid>`. Consumers inside THIS run (test lanes,
+    # a future thin containerize step) can adopt them because every job reuses the ONE solution
+    # build — same Graph.dll, same MVID. A consumer built ANYWHERE else (today's main-cd legs
+    # recompile with their own run number as a version input) has a different MVID and correctly
+    # declines the whole set — that is the seeder's ABI gate, not a bug; #1660 WS3 (framework-
+    # identity determinism) is what will make cross-workflow adoption possible.
     - name: "Compile + run the Doc content against this PR"
       id: gate
       run: |
@@ -1282,6 +1322,7 @@ jobs:
           echo "::error::mw-plugin-test.dll not in the build output — the doc gate cannot run."
           exit 1
         fi
+        BAKE="${RUNNER_TEMP:-/tmp}/bake"
         # Stage src/MeshWeaver.Documentation/Data as a package root named Doc/. The tree has no
         # index.json of its own (index.md is the partition's root PAGE, and committing a JSON
         # root would ship a duplicate root node in the embedded partition), so the root is
@@ -1299,7 +1340,8 @@ jobs:
         # passing fails the PR until its line is removed — the list can only shrink.
         log="${RUNNER_TEMP:-/tmp}/doc-gate.log"
         status=0
-        if ! time dotnet "$TESTER" "$STAGE" --allow .github/doc-gate.allow 2>&1 | tee "$log"; then
+        if ! time dotnet "$TESTER" "$STAGE" --allow .github/doc-gate.allow \
+            --bake-output "$BAKE" --source-sha "$GITHUB_SHA" 2>&1 | tee "$log"; then
           status="${PIPESTATUS[0]}"
           # tee always exits 0, so a non-zero pipeline with a zero head means tee itself failed.
           if [ "$status" = "0" ]; then status=1; fi
@@ -1313,7 +1355,8 @@ jobs:
         bash .github/scripts/stage-samples-gate.sh samples/Graph/Data "$SSTAGE"
         slog="${RUNNER_TEMP:-/tmp}/samples-gate.log"
         sstatus=0
-        if ! time dotnet "$TESTER" "$SSTAGE" --allow .github/samples-gate.allow 2>&1 | tee "$slog"; then
+        if ! time dotnet "$TESTER" "$SSTAGE" --allow .github/samples-gate.allow \
+            --bake-output "$BAKE" --source-sha "$GITHUB_SHA" 2>&1 | tee "$slog"; then
           sstatus="${PIPESTATUS[0]}"
           if [ "$sstatus" = "0" ]; then sstatus=1; fi
         fi
@@ -1332,6 +1375,34 @@ jobs:
           fi
           exit 1
         fi
+    # A green gate that produced no bake identity is a bake-stage REGRESSION — fail RED, never
+    # upload a partial or unnamed artifact (no continue-on-error, no "is the file there?" skip:
+    # the gate above already proved the tester ran green, so the identity file is a POSTcondition).
+    - name: "Bake summary + identity"
+      id: bake
+      run: |
+        set -euo pipefail
+        mvid_file="$RUNNER_TEMP/bake/framework-mvid.txt"
+        if [ ! -s "$mvid_file" ]; then
+          echo "::error::the content gate ran green but wrote no bake identity ($mvid_file) — the bake stage regressed."
+          exit 1
+        fi
+        echo "mvid=$(cat "$mvid_file")" >> "$GITHUB_OUTPUT"
+        {
+          echo "### 📦 Baked shipped-content assemblies (framework $(cat "$mvid_file"))"
+          echo
+          echo '```'
+          grep -h '^bake: ' "$RUNNER_TEMP/doc-gate.log" "$RUNNER_TEMP/samples-gate.log" || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+    # The MVID-keyed artifact every lane of THIS run can adopt (same solution build ⇒ same
+    # Graph.dll ⇒ the seeder's gate accepts it). Stable name shape: baked-assemblies-<mvid>.
+    - name: "Upload artifact: baked shipped-content assemblies"
+      uses: actions/upload-artifact@v7
+      with:
+        name: baked-assemblies-${{ steps.bake.outputs.mvid }}
+        path: ${{ runner.temp }}/bake
+        retention-days: 7
 
   licence-gate:
     name: "Dependency licences"
