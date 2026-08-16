@@ -38,10 +38,12 @@ public class NotificationChannelsModuleTest
         // pipelines double-escalating.
         Assert.Contains(services, d =>
             d.ServiceType == typeof(NotificationTriageService) && d.Lifetime == ServiceLifetime.Singleton);
-        Assert.Contains(services, d =>
-            d.ServiceType == typeof(IHostedService) && d.ImplementationFactory is not null);
-        Assert.DoesNotContain(services, d =>
-            d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(NotificationTriageService));
+        // Exactly ONE hosted-service registration, and it is a singleton FACTORY forward (never a
+        // second type-based construction, which would run two triage pipelines double-escalating).
+        var hosted = Assert.Single(services, d => d.ServiceType == typeof(IHostedService));
+        Assert.Equal(ServiceLifetime.Singleton, hosted.Lifetime);
+        Assert.NotNull(hosted.ImplementationFactory);
+        Assert.Null(hosted.ImplementationType);
 
         // The node types ride the same install: the static-node provider registered by the
         // builder must now carry both definitions.
