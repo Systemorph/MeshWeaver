@@ -300,7 +300,14 @@ public static class MeshNodeLayoutAreas
                 }));
     }
 
-    internal static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null, string? maxWidthOverride = null)
+    /// <summary>
+    /// The standard node-page container style: centered, padded, constrained to the page max
+    /// width (node-type override → <see cref="PageLayoutOptions"/> → 1200px default).
+    /// Public module-facing contract: out-of-tree modules (e.g. Approvals) apply this to their
+    /// own layout-area roots so module pages share the built-in node-page geometry instead of
+    /// duplicating the style string. Changing the returned style reflows every module page.
+    /// </summary>
+    public static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null, string? maxWidthOverride = null)
     {
         var pageMaxWidth = maxWidthOverride
             ?? typeDef?.PageMaxWidth
@@ -380,8 +387,11 @@ public static class MeshNodeLayoutAreas
     /// link and the Created/LastModified/LastModifiedBy timestamps.
     /// Clicking the icon opens an icon-picker dialog; clicking the title (when the
     /// content has a Title property and the user can edit) switches it to inline edit.
+    /// Public module-facing contract: out-of-tree modules (e.g. Approvals) compose this header
+    /// atop their own layout areas so module pages carry the same icon/title/action/meta chrome
+    /// as built-in node pages — the alternative is a hand-built copy that drifts.
     /// </summary>
-    internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
+    public static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
     {
         // Chrome-less pages: a node excluded from the "header" context ships without the
         // icon/title/meta block — the content (a marketing hero, a landing page) starts

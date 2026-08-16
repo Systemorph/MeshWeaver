@@ -38,9 +38,29 @@
        dev `dotnet run` has no publish step and the flipped DLL exists nowhere else.
   -->
   <ItemGroup>
+    <!-- View packs (#1644 step 2, final wave): thin-lane BLOCKED on static web assets. Each pack's CSS/JS
+         reaches the browser only through the HOST's build-time static-web-assets graph — i.e.
+         through the ProjectReference this lane exists to remove:
+           - Radzen self-loads _content/Radzen.Blazor/{css/material-base.css,Radzen.Blazor.js}
+             (RadzenViewBase.OnAfterRenderAsync) — package assets that enter the host manifest
+             only via the host's reference graph;
+           - GoogleMaps imports ./_content/MeshWeaver.Blazor.GoogleMaps/GoogleMapView.razor.js
+             (GoogleMapView.razor.cs) — a collocated-JS static web asset;
+           - Analysis/GoogleMaps scoped .razor.css bundles into the host's <App>.styles.css at
+             HOST build (App.razor links only that aggregate).
+         Nothing serves modules/<Name>/wwwroot: UseStaticFiles/MapStaticAssets read the host's
+         build-time manifests, and a standalone RCL publish lays the pack's own assets at
+         wwwroot/ ROOT, not _content/<pack>/ — the URLs its components request. Flipping needs
+         the module static-asset provider (path-convention mapping + fingerprint/precompressed
+         endpoint variants; see UiExtensibility.md "Razor assets from a runtime-loaded
+         assembly"), not just this list. -->
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
+    <!-- Service modules NOT flippable for compile-time coupling (reasons: PR #1681) — Speech
+         (ISpeechTranscriber lives in the module; no contract split), Social (ApiCredentialNodeType
+         compiles against PlatformCredential; registration deliberately host-side), Hosting.Grpc
+         (UseMeshWeaverGrpcWebWhenInstalled is middleware-order-coupled, cannot ride the endpoint hook). -->
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
