@@ -17,36 +17,16 @@ namespace Memex.Portal.Shared.Settings;
 /// <summary>
 /// Admin <b>Inbox</b> tab in the platform-wide GlobalSettings (Admin) menu — lists mail received from
 /// <i>non-users</i> (filed into <c>Admin/Inbox</c> by the inbound processor). Known-user mail is
-/// handled by an agent thread and never lands here. Gated on root <see cref="Permission.All"/>.
+/// handled by an agent thread and never lands here.
+///
+/// <para>Platform admins only: the menu entry is a seeded <c>UiContribution</c> node with
+/// <c>Gates.AdminOnly</c> (<see cref="PlatformSettingsTabAreas"/>), and the <c>SettingsInbox</c>
+/// layout area re-asserts the admin gate for direct URLs.</para>
 /// </summary>
 public static class InboxSettingsTab
 {
     public const string TabId = "Inbox";
     private const string ResultDataId = "inboxResult";
-
-    public static MessageHubConfiguration AddInboxSettingsTab(this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetInboxTab));
-
-    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetInboxTab(
-        LayoutAreaHost host, RenderingContext ctx)
-    {
-        var tab = new GlobalSettingsMenuItemDefinition(
-            Id: TabId,
-            Label: "Inbox",
-            ContentBuilder: BuildInboxContent,
-            Group: "Administration",
-            Icon: FluentIcons.Mail(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 320)
-            { LabelKey = "settings.inbox", GroupKey = "settings.groupAdministration" };
-
-        // Reactive: AdminMenuGate.IsPlatformAdmin emits false first (tab hidden), then true once the
-        // platform-admin grant surfaces → the tab appears. No async/await/IAsyncEnumerable.
-        return AdminMenuGate.IsPlatformAdmin(host)
-            .Select(isAdmin => isAdmin
-                ? (IReadOnlyList<GlobalSettingsMenuItemDefinition>)new[] { tab }
-                : []);
-    }
 
     internal static UiControl BuildInboxContent(LayoutAreaHost host, StackControl stack)
     {

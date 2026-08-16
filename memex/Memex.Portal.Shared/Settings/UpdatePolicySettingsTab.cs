@@ -16,38 +16,20 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Memex.Portal.Shared.Settings;
 
 /// <summary>
-/// Admin settings tab for the platform auto-update strategy (<c>Admin/UpdatePolicy</c>). Gated to
-/// platform admins (<see cref="AdminMenuGate.IsPlatformAdmin"/>). Edits the policy through the
-/// STANDARD node-content editor bound directly to the node stream (the <c>Policy</c> enum renders as
-/// a dropdown — no /data replica, no save subscription), shows the running version + the latest tag
-/// the poller has seen, and offers a manual "apply now" for installs that can self-patch.
+/// Admin settings tab for the platform auto-update strategy (<c>Admin/UpdatePolicy</c>). Edits the
+/// policy through the STANDARD node-content editor bound directly to the node stream (the
+/// <c>Policy</c> enum renders as a dropdown — no /data replica, no save subscription), shows the
+/// running version + the latest tag the poller has seen, and offers a manual "apply now" for
+/// installs that can self-patch.
+///
+/// <para>Platform admins only: the menu entry is a seeded <c>UiContribution</c> node with
+/// <c>Gates.AdminOnly</c> (<see cref="PlatformSettingsTabAreas"/>), and the
+/// <c>SettingsUpdatePolicy</c> layout area re-asserts the admin gate for direct URLs.</para>
 /// </summary>
 public static class UpdatePolicySettingsTab
 {
     public const string TabId = "UpdatePolicy";
     private const string ResultId = "updatePolicyResult";
-
-    public static MessageHubConfiguration AddUpdatePolicySettingsTab(this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetTab));
-
-    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetTab(
-        LayoutAreaHost host, RenderingContext ctx)
-    {
-        var tab = new GlobalSettingsMenuItemDefinition(
-            Id: TabId,
-            Label: "Updates",
-            ContentBuilder: BuildContent,
-            Group: "Administration",
-            Icon: FluentIcons.ArrowSync(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 320)
-        { LabelKey = "settings.updates", GroupKey = "settings.groupAdministration" };
-
-        return AdminMenuGate.IsPlatformAdmin(host)
-            .Select(isAdmin => isAdmin
-                ? (IReadOnlyList<GlobalSettingsMenuItemDefinition>)new[] { tab }
-                : []);
-    }
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {
