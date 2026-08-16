@@ -22,41 +22,15 @@ namespace Memex.Portal.Shared.Settings;
 /// <see cref="Invitation"/>s and lets an admin invite an email (which creates the invitation
 /// node and sends a no-reply email via <see cref="IEmailSender"/>) or revoke one.
 ///
-/// <para>Gated exactly like the "Global Administration" tab
-/// (<c>UserNodeType.GetGlobalAdminTabAsync</c>): the provider yields the tab ONLY when the
-/// viewer is the node owner AND holds root-level <see cref="Permission.All"/>. Registered via
-/// <c>ConfigureDefaultNodeHub</c> (like <c>ModelsSettingsTab</c>), so combined with the gate it
-/// surfaces only on a platform admin's own User Settings page — not on every node.</para>
+/// <para>Platform admins only: the menu entry is a seeded <c>UiContribution</c> node with
+/// <c>Gates.AdminOnly</c> (<see cref="PlatformSettingsTabAreas"/>), and the
+/// <c>SettingsInvitations</c> layout area re-asserts the admin gate for direct URLs.</para>
 /// </summary>
 public static class InvitationsSettingsTab
 {
     public const string TabId = "Invitations";
     private const string ResultDataId = "invitationResult";
     private const string FormDataId = "invitationForm";
-
-    public static MessageHubConfiguration AddInvitationsSettingsTab(
-        this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetInvitationsTab));
-
-    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetInvitationsTab(
-        LayoutAreaHost host, RenderingContext ctx)
-    {
-        var tab = new GlobalSettingsMenuItemDefinition(
-            Id: TabId,
-            Label: "Invitations",
-            ContentBuilder: BuildInvitationsContent,
-            Group: "Administration",
-            Icon: FluentIcons.Mail(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 310)
-            { LabelKey = "settings.invitations", GroupKey = "settings.groupAdministration" };
-
-        // Reactive: gated tab appears once the platform-admin grant surfaces. No async/await.
-        return AdminMenuGate.IsPlatformAdmin(host)
-            .Select(isAdmin => isAdmin
-                ? (IReadOnlyList<GlobalSettingsMenuItemDefinition>)new[] { tab }
-                : []);
-    }
 
     internal static UiControl BuildInvitationsContent(
         LayoutAreaHost host, StackControl stack)

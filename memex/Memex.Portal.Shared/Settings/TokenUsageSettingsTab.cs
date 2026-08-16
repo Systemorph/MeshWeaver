@@ -23,8 +23,10 @@ namespace Memex.Portal.Shared.Settings;
 /// model's catalog node first, the built-in <see cref="ModelPricing.Defaults"/> table as fallback
 /// (<see cref="ModelPriceCatalog"/>) — and never stored, so a price edit re-prices history.
 ///
-/// <para>Gated like the other Administration tabs via <c>AdminMenuGate.IsPlatformAdmin</c>; the
-/// query is RLS-scoped to what the viewer can read. Rendered with framework controls
+/// <para>Platform admins only — the menu entry is a seeded <c>UiContribution</c> node with
+/// <c>Gates.AdminOnly</c> (<see cref="PlatformSettingsTabAreas"/>), and the
+/// <c>SettingsTokenUsage</c> layout area re-asserts the admin gate for direct URLs; the query is
+/// RLS-scoped to what the viewer can read. Rendered with framework controls
 /// (<see cref="DataGridControl"/> + a button toolbar) — no hand-built HTML.</para>
 /// </summary>
 public static class TokenUsageSettingsTab
@@ -39,28 +41,6 @@ public static class TokenUsageSettingsTab
         [(7, "Last 7 days"), (30, "Last 30 days"), (90, "Last 90 days"), (0, "All time")];
 
     private static FilterState Default => new("Model", 30);
-
-    public static MessageHubConfiguration AddTokenUsageSettingsTab(this MessageHubConfiguration config)
-        => config.AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(GetTab));
-
-    private static IObservable<IReadOnlyList<GlobalSettingsMenuItemDefinition>> GetTab(
-        LayoutAreaHost host, RenderingContext ctx)
-    {
-        var tab = new GlobalSettingsMenuItemDefinition(
-            Id: TabId,
-            Label: "Token Usage",
-            ContentBuilder: BuildContent,
-            Group: "Administration",
-            Icon: FluentIcons.Database(),
-            GroupIcon: FluentIcons.Shield(),
-            Order: 320)
-            { LabelKey = "settings.tokenUsage", GroupKey = "settings.groupAdministration" };
-
-        return AdminMenuGate.IsPlatformAdmin(host)
-            .Select(isAdmin => isAdmin
-                ? (IReadOnlyList<GlobalSettingsMenuItemDefinition>)new[] { tab }
-                : []);
-    }
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack)
     {

@@ -699,8 +699,9 @@ public static class MemexConfiguration
                 // RLS for cross-partition operations (list Spaces, create
                 // a new Space, etc.). Empty / missing section = no-op.
                 .AddMeshNodes(Authentication.GlobalAdminSeed.Build(configuration))
-                // What's New / About / Privacy settings-tab entries as seeded UiContribution
-                // nodes — the WS7 lane a plugin's own settings tab arrives through.
+                // The platform's settings-tab menu entries (What's New / About / Privacy and the
+                // admin tabs Invitations / Inbox / Updates / Published / Token Usage) as seeded
+                // UiContribution nodes — the WS7 lane a plugin's own settings tab arrives through.
                 .AddPlatformSettingsTabContributions()
                 // The AI menu's navigation entries (Threads/Models/Tiers/Providers/Agents/Skills)
                 // as seeded UiContribution nodes — same lane a plugin's AI-menu entry (or a whole
@@ -863,25 +864,18 @@ public static class MemexConfiguration
                         // where the concern is defined shows as its own section. Per-item configurable
                         // (label / icon / order / tooltip / href); register more under the same AI context.
                         .AddNodeMenuItems(NodeMenuItemsExtensions.AiMenuContext, [.. AiMenuItems])
-                        // Dedicated Admin menu (platform-wide GlobalSettings area), gated on root
-                        // Permission.All: Invitations + Inbox.
-                        .AddInvitationsSettingsTab()
-                        .AddInboxSettingsTab()
-                        // Platform auto-update strategy (Admin/UpdatePolicy) — stable/continuous/none.
-                        .AddUpdatePolicySettingsTab()
                         // Platform-admin Instances overview: live cluster query (namespaces, versions,
                         // replica health) + Grafana log links + guided create-instance plan generator.
                         .AddInstancesAdminSettingsTab()
-                        // What's New / About / Privacy ride the UiContribution lane (WS7 slice 2):
-                        // content stays compiled, exposed here as layout areas; the menu entries are
-                        // seeded UiContribution nodes (AddPlatformSettingsTabContributions below).
+                        // The platform's global settings tabs ride the UiContribution lane (WS7):
+                        // What's New / About / Privacy (slice 2) plus the Administration tabs —
+                        // Invitations + Inbox (invitation-only onboarding, non-user mail), Updates
+                        // (the Admin/UpdatePolicy auto-update strategy), Published to the web (the
+                        // /sitemap.xml enumeration, rendered) and Token Usage (per-model _Usage
+                        // analytics) — all in slice 4. Content stays compiled, exposed here as
+                        // layout areas; the menu entries are seeded UiContribution nodes
+                        // (AddPlatformSettingsTabContributions on the mesh builder above).
                         .AddPlatformSettingsTabAreas()
-                        // Published to the web: every page a logged-out visitor can open, read from
-                        // the SAME enumeration /sitemap.xml renders, so the two cannot drift.
-                        .AddPublishedSettingsTab()
-                        // Token-usage analytics (per-model _Usage satellites): filter by period,
-                        // group by model / person / thread, cost from ModelPricing.
-                        .AddTokenUsageSettingsTab()
                         // GitHub Sync tab — shows only on Space nodes (self-filtered).
                         .AddGitHubSyncSettingsTab()
                         // GitHub Issues & PRs tab — browse/act on the repo's issues + pull requests.

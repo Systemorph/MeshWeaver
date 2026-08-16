@@ -186,8 +186,10 @@ The full field surface:
 
 **Settings tabs** (`Context: Settings`): the contributed area is embedded into the pane's styled
 stack; the tab id is the NODE id, so `/GlobalSettings/{id}` deep links stay stable when a compiled
-tab migrates to a same-named seed. The platform's own What's New / About / Privacy tabs ship this
-way (`Admin/UiContribution/*` seeds) — the reference implementation.
+tab migrates to a same-named seed. The platform's own global tabs ship this way — What's New /
+About / Privacy plus the admin tabs Invitations / Inbox / Updates / Published to the web / Token
+Usage (`Admin/UiContribution/*` seeds); every admin tab's AREA re-asserts the admin gate, because
+an area is directly URL-addressable and `Gates.AdminOnly` only hides the menu entry.
 
 **Whole top-bar menus** (`Context: TopBar`): the contribution declares a NEW dropdown — its `Area`
 names the menu's own context key, `Label`/`Icon`/`Order`/`Tooltip` style the button, and its
