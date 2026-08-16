@@ -38,7 +38,7 @@
        dev `dotnet run` has no publish step and the flipped DLL exists nowhere else.
   -->
   <ItemGroup>
-    <!-- View packs (task #67): thin-lane BLOCKED on static web assets. Each pack's CSS/JS
+    <!-- View packs (#1644 step 2, final wave): thin-lane BLOCKED on static web assets. Each pack's CSS/JS
          reaches the browser only through the HOST's build-time static-web-assets graph — i.e.
          through the ProjectReference this lane exists to remove:
            - Radzen self-loads _content/Radzen.Blazor/{css/material-base.css,Radzen.Blazor.js}
