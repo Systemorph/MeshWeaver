@@ -101,9 +101,22 @@ public static class GrpcHostingExtensions
         // Assembly.LoadFrom, which normally dedupes onto the compiled reference the host already
         // loaded (double-ship), but a modules/-folder copy must gate identically.
         var moduleName = typeof(GrpcHostingExtensions).Assembly.GetName().Name;
-        if (app.ApplicationServices.GetServices<InstalledModuleAssembly>()
-            .Any(m => m.Assembly.GetName().Name == moduleName))
+        var installed = app.ApplicationServices.GetServices<InstalledModuleAssembly>()
+            .Any(m => m.Assembly.GetName().Name == moduleName);
+        // LOUD either way: gRPC silently off is indistinguishable from a broken transport —
+        // every "React GUI / py client cannot connect" triage starts by grepping for this line.
+        var logger = app.ApplicationServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+            ?.CreateLogger(typeof(GrpcHostingExtensions).FullName!);
+        if (installed)
+        {
+            if (logger is not null)
+                Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(logger,
+                    "gRPC transport ENABLED: {Module} is installed — gRPC-web middleware active, mesh gRPC endpoints map via the module hook", moduleName);
             app.UseMeshWeaverGrpcWeb();
+        }
+        else if (logger is not null)
+            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(logger,
+                "gRPC transport OFF: {Module} is NOT in this deployment's module set (Modules:Assemblies) — the React GUI and py/node participants cannot connect. List the DLL to enable.", moduleName);
         return app;
     }
 }
