@@ -18,7 +18,7 @@ namespace MeshWeaver.Social;
 /// The mesh-facing LinkedIn member-publish chain: read the target <c>SocialMediaPost</c> node → check
 /// the caller's access → read the caller's stored LinkedIn credential → publish via
 /// <see cref="LinkedInPostsApi"/> → write <c>Status</c>/<c>PublishedUrn</c> back onto the post node.
-/// The HTTP endpoints (<c>Memex.Portal.Shared.Social.LinkedInPublishEndpoints</c>) are thin adapters
+/// The HTTP endpoints (<see cref="LinkedInPublishEndpoints"/>, contributed by the Social module) are thin adapters
 /// that construct this service from the request's <see cref="IMessageHub"/> + <see cref="IMeshService"/>
 /// and map its outcome to a redirect / JSON — so the whole credential-read → publish → write-back path
 /// is one testable unit (see <c>LinkedInPublishServiceTest</c>).

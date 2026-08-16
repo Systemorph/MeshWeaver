@@ -548,6 +548,9 @@ public sealed class LinkedInPublisher : IPlatformPublisher
 /// </summary>
 public sealed record LinkedInOptions
 {
+    /// <summary>The configuration section these options bind from (<c>Social:LinkedIn</c>).</summary>
+    public const string SectionName = "Social:LinkedIn";
+
     /// <summary>The OAuth app client identifier.</summary>
     public required string ClientId { get; init; }
 

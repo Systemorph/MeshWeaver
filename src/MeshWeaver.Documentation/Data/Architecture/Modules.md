@@ -30,6 +30,9 @@ timing (endpoints map after the auth middleware). Every contribution maps inside
 authenticated-by-default group — a route is anonymous only where the module explicitly opts out —
 and duplicate (verb, pattern) registrations refuse the app loudly at startup. Delisting the
 module removes its routes wholesale: a 404, not a compiled optional-service 503.
+`MeshWeaver.Social` is the first consumer — its LinkedIn connect/publish/page-sync routes ride
+this hook, with the two OAuth callback routes opting out via `AllowAnonymous` (LinkedIn's
+redirect must not bounce through a login challenge; the CSRF state cookie is the guard).
 
 Module DI options bind through the options pipeline —
 `services.AddOptions<T>().BindConfiguration("Section")` — never `services.Configure(section)`:
@@ -61,6 +64,7 @@ current first-party inventory and each module's configuration section:
 | `MeshWeaver.Markdown.Export.dll` | Document export (PDF/DOCX/HTML/email) | — |
 | `MeshWeaver.Observability.dll` | Red-log ticketing / log watch | `LogWatch` |
 | `MeshWeaver.OgCard.dll` | Link-preview (og-card) layout area | — |
+| `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
 
 Boot packs select by OTHER configuration too: `Graph:Storage:Type` `Cosmos`/`Snowflake` requires
 the matching `MeshWeaver.Hosting.Cosmos`/`.Snowflake` DLL in this list — installation runs before
