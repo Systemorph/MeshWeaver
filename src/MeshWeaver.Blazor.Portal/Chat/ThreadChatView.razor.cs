@@ -2973,17 +2973,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private Task SwitchToResumeModeAsync()
     {
-        var ns = NavigationService.CurrentNamespace;
-        if (string.IsNullOrEmpty(ns))
-        {
-            var accessService = Hub.ServiceProvider.GetService<AccessService>();
-            var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-            ns = userId;
-        }
-
-        var query = string.IsNullOrEmpty(ns)
-            ? "nodeType:Thread sort:LastModified-desc select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content"
-            : $"nodeType:Thread namespace:{ns}/_Thread sort:LastModified-desc select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content";
+        // 🚨 MY threads, every partition — NOT the page I happen to be on. This used to ask for
+        // `namespace:{NavigationService.CurrentNamespace}/_Thread`, and CurrentNamespace is the PAGE's
+        // node path (LayoutArea stamps the top area's Address), so on every page that has never hosted
+        // a thread of its own — nearly all of them — the picker queried a namespace that holds nothing
+        // and rendered "No threads yet". Ownership comes from content.createdBy; the envelope column
+        // does not exist on the satellite table threads live in (see ThreadQueries).
+        var query = ThreadQueries.MyThreads(_userHome);
 
         viewMode = ChatViewMode.ResumeThreads;
         resumeLoading = true;
@@ -2997,7 +2993,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         // Removed that dropped the just-used thread from the list until a full reload (F5). Same
         // surface + pattern the agent/model pickers use (AgentPickerProjection.ObserveSnapshot).
         resumeSubscription?.Dispose();
-        resumeSubscription = Hub.GetQuery($"resume-threads|{ns}", query)
+        resumeSubscription = Hub.GetQuery("resume-threads", query)
             .Subscribe(
                 snapshot => InvokeAsync(() =>
                 {
@@ -3068,17 +3064,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private void SetupMyThreadsSubscription()
     {
         myThreadsSubscription?.Dispose();
-        var me = _userHome;
-        myThreadsSubscription = Hub.GetQuery("my-threads", "nodeType:Thread -content.status:Done sort:LastModified-desc select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content")
+        // 🚨 Ownership is decided by the QUERY (content.createdBy). The client pass this replaces
+        // (`n.CreatedBy == me`) could never match: threads live in the _Thread satellite table, whose
+        // reads project NULL for the authorship columns, so MeshNode.CreatedBy is null on every thread
+        // that arrives and the list came out empty for every signed-in user. See ThreadQueries.
+        myThreadsSubscription = Hub.GetQuery("my-threads", ThreadQueries.MyOpenThreads(_userHome))
             .Subscribe(
                 snapshot => InvokeAsync(() =>
                 {
                     if (_isDisposed) return;
                     var projected = snapshot
                         .Where(n => !string.IsNullOrEmpty(n.Path)
-                            && string.Equals(n.NodeType, ThreadNodeType.NodeType, StringComparison.OrdinalIgnoreCase)
-                            && (string.IsNullOrEmpty(me)
-                                || string.Equals(n.CreatedBy, me, StringComparison.OrdinalIgnoreCase)))
+                            && string.Equals(n.NodeType, ThreadNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
                         .OrderByDescending(n => n.LastModified)
                         .ToList();
                     if (!VisibleThreadListChanged(ref _myThreadsKey, projected)) return;
@@ -3140,8 +3137,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         childThreads = [];
         if (string.IsNullOrEmpty(path))
             return;
-        childThreadsSubscription = Hub.GetQuery($"child-threads|{path}",
-                $"namespace:{path} scope:descendants nodeType:Thread sort:LastModified-desc select:path,id,namespace,name,description,nodeType,icon,order,createdBy,lastModified,content")
+        childThreadsSubscription = Hub.GetQuery($"child-threads|{path}", ThreadQueries.ThreadsUnder(path))
             .Subscribe(
                 snapshot => InvokeAsync(() =>
                 {
