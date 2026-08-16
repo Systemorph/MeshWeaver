@@ -1,7 +1,7 @@
 ---
 Name: Local installs auto-update from the registry
 Category: Feature
-Description: memex-local autoroll --acr keeps a local install tracking every promoted build — images, modules, and plugin content roll in automatically.
+Description: memex-local autoroll up --acr keeps a local install tracking every promoted build — images, modules, and plugin content roll in automatically.
 Icon: Sparkle
 Order: -20260816
 ---
