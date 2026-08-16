@@ -14,6 +14,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Analysis\MeshWeaver.Blazor.Analysis.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.GoogleMaps\MeshWeaver.Blazor.GoogleMaps.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.OgCard\MeshWeaver.OgCard.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Approvals\MeshWeaver.Approvals.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.OpenStreetMap\MeshWeaver.Blazor.OpenStreetMap.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AppleMaps\MeshWeaver.Blazor.AppleMaps.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Graph\MeshWeaver.Blazor.Graph.csproj" />

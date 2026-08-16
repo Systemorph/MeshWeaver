@@ -1,17 +1,21 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Messaging;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Approvals;
 
 /// <summary>
 /// Provides configuration for Approval nodes in the graph.
 /// Approval nodes are system-generated — excluded from search and create contexts.
 /// Access is delegated to the MainNode (parent) via SatelliteAccessRule.
+/// <para>Ships with the Approvals module (<see cref="ApprovalsModuleAttribute"/>): delisting the
+/// module removes this node type's views mesh-wide, while the <c>Approval</c> content record and
+/// the <c>_Approval</c> satellite-table mapping stay platform-level in MeshWeaver.Mesh.Contract.</para>
 /// </summary>
 public static class ApprovalNodeType
 {
