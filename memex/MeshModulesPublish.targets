@@ -140,7 +140,7 @@
            Text="LayoutMeshModuleClosures: %(MeshModuleClosure.Filename).dll is in the app publish root, but that module ships via modules/ only (#1644 step 2). Remove the re-added ProjectReference, or clean a stale publish directory." />
 
     <!-- 🚨 RID-agnostic by design: every invocation below strips the outer publish's
-         RuntimeIdentifier/Container* globals (see RemoveProperties). Modules are portable IL —
+         RuntimeIdentifier(s), SelfContained, ContainerRuntimeIdentifier(s) and publish-mode globals (the exact RemoveProperties list below). Modules are portable IL —
          the app's shared framework provides the runtime, Assembly.LoadFrom never consults RID
          trees (the prune below deletes them), and a flipped module is OUTSIDE the host's restore
          graph, so a RID flowing in from CD's per-arch container publish fails NETSDK1047 (no
