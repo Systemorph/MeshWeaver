@@ -173,7 +173,7 @@ The full field surface:
 |---|---|
 | `Context` | Which menu: `Node` (default), `Mesh`, `Settings`, `AI`, `SidePanel`, `GitHub`, any registered context — or `TopBar` (below) |
 | `Area` | The layout area the entry opens (settings: embedded into the pane; menus: the link target) |
-| `Href` | Optional explicit URL overriding the derived area link — catalog-style entries (`/search?…`, type-root pages) |
+| `Href` | Optional explicit link overriding the derived area URL — **portal-internal only** (a single-slash-rooted path like `/search?…`; schemes and `//host` forms are discarded by the compiled gate and the entry falls back to its area link) |
 | `Label` / `LabelKey` | Display text; the key resolves against the shared localization catalog |
 | `Icon` | String icon — settings tabs parse it via `Icon.Parse` (Fluent name/SVG/URL/emoji); menus render emoji or image URLs |
 | `Tooltip` / `TooltipKey` | Hover text (menus and top-bar buttons) |
