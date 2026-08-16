@@ -568,7 +568,11 @@ public static class MemexConfiguration
                 // The ONE framework-identity gate (PrebuiltAssemblySeeder) — never a second
                 // notion of framework version.
                 PrebuiltAssemblySeeder.DeclineReason,
-                entry => File.Exists(MeshBuilder.ResolveModulePath(entry)),
+                // 🚨 modules/<name>/<name>.dll SPECIFICALLY — never ResolveModulePath, whose
+                // BaseDirectory fallback would let a sidecar entry with a lost modules/ folder
+                // silently bind a same-named app-closure DLL instead of being skipped. Baseline
+                // entries below keep ResolveModulePath (both locations are legitimate for them).
+                name => ModuleActivationBoot.LandedModuleDllExists(AppContext.BaseDirectory, name),
                 (module, reason) => Console.Error.WriteLine(
                     $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"));
             if (effectiveModules.Count > 0)
