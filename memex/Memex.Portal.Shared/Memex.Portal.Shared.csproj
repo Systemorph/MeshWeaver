@@ -49,7 +49,11 @@
          + embeddings are configured (so the monolith compiles it but never activates it). -->
     <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.Graph\MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.PostgreSql\MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
+    <!-- MeshWeaver.ContentCollections.Indexing.PostgreSql is deliberately NOT referenced (#1644
+         step 2): it ships via the modules/<Name>/ closure layout in MeshModulesPublish.targets
+         and activates via Modules:Assemblies -> PostgresContentIndexingModuleAttribute (which
+         self-gates enabledWhen the mesh database connection resolves). -->
+
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     <!-- AI Services -->
