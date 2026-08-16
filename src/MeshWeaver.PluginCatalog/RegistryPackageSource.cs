@@ -50,6 +50,16 @@ public sealed class RegistryPackageSource : IPackageSource
             ?.CreateClient(InstanceRegistrationClient.HttpClientName) ?? SharedHttp;
     }
 
+    /// <summary>
+    /// The prebuilt-bundle client for the SAME registry, same key (#1664) — set where this source
+    /// is constructed, because that is the only place the URL and this installation's instance key
+    /// are both known. Non-null is what lets the install orchestrator
+    /// (<see cref="CatalogLayoutAreas.InstallOrUpdate"/>) land a module-declaring package's
+    /// compiled module as part of the install; null (a test stub, an exotic host) simply means the
+    /// module lands on the next boot's reconcile instead.
+    /// </summary>
+    public PluginBundleClient? Bundles { get; init; }
+
     private sealed record ListResponse(IReadOnlyList<PackageManifest>? Packages);
     private sealed record FilesResponse(IReadOnlyList<PackageFile>? Files);
 
