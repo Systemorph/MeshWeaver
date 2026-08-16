@@ -185,6 +185,8 @@ public partial class LayoutAreaView
     private const string MeshMenuContext = "Mesh";
     private const string AiMenuContext = "AI";
     private const string GitHubMenuContext = "GitHub";
+    // Must match UiContribution.TopBarContext (MeshWeaver.Graph) — same Blazor → Graph decoupling.
+    private const string TopBarMenuContext = "TopBar";
 
     private void BindStream()
     {
@@ -241,6 +243,7 @@ public partial class LayoutAreaView
                 // configured (the provider self-gates); the slot stays empty otherwise. (Instance
                 // sync is in the Node menu as "Synchronizations", not a separate dropdown.)
                 SubscribeMenu(GitHubMenuContext, GitHubMenuContext);
+                SubscribeContributedTopBarMenus();
             }
         }
     }
@@ -321,6 +324,31 @@ public partial class LayoutAreaView
         AreaStream!.RegisterForDisposal(AreaStream!.GetMenu(menuContext).Subscribe(
             items => MenuItemsProvider.Update(providerContext, items),
             ex => OnReducedStreamError(ex, $"{providerContext} menu")));
+    }
+
+    /// <summary>
+    /// The data-declared top-bar menus (UiContribution Context="TopBar", design #1645): pump the
+    /// declaration list itself, and subscribe each declared menu's OWN context key the first time
+    /// it appears — a contributed dropdown's entries then flow exactly like a compiled context's.
+    /// Every subscription registers on <see cref="AreaStream"/>, so teardown is the same as the
+    /// fixed menus above.
+    /// </summary>
+    private void SubscribeContributedTopBarMenus()
+    {
+        if (!IsNotPreRender)
+            return;
+        var subscribedKeys = new HashSet<string>(StringComparer.Ordinal);
+        AreaStream!.RegisterForDisposal(AreaStream!.GetMenu(TopBarMenuContext).Subscribe(
+            menus =>
+            {
+                MenuItemsProvider.Update(TopBarMenuContext, menus);
+                foreach (var menu in menus)
+                    if (menu.Area is { Length: > 0 } key
+                        && key != TopBarMenuContext
+                        && subscribedKeys.Add(key))
+                        SubscribeMenu(key, key);
+            },
+            ex => OnReducedStreamError(ex, "TopBar menu")));
     }
 
     private void OnDialogStreamChanged(JsonElement dialogData)

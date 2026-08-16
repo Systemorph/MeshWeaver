@@ -26,11 +26,14 @@ public class AiMenuNewThreadTest
 
         // Order 0 → it sorts ahead of every other AI entry (Threads 10, Models 20, …). The menu
         // aggregator inserts into an ImmutableSortedSet keyed on Order, so this IS the positioning
-        // contract — there is no post-hoc OrderBy to fall back on.
+        // contract — there is no post-hoc OrderBy to fall back on. The navigation entries live in
+        // AiMenuContributions.Seeds now (WS7 slice 3), so the ordering contract spans both lists.
         Assert.Equal(0, newThread.Order);
         Assert.All(
-            items.Where(i => i.Area != PortalLayoutBase.AiNewThreadAction),
-            i => Assert.True(i.Order > 0, $"'{i.Label}' must sort after New thread"));
+            AiMenuContributions.Seeds,
+            seed => Assert.True(
+                Assert.IsType<MeshWeaver.Graph.Configuration.UiContribution>(seed.Content).Order > 0,
+                $"'{seed.Name}' must sort after New thread"));
     }
 
     [Fact]
@@ -73,19 +76,35 @@ public class AiMenuNewThreadTest
     [Fact]
     public void Every_Other_AiMenu_Entry_Navigates_By_Href()
     {
-        // The inverse of the sentinel contract: everything that is NOT the imperative entry must be a
-        // plain navigation, so it works identically from any page and needs no client state.
-        Assert.All(
-            MemexConfiguration.AiMenuItems.Where(i => i.Area != PortalLayoutBase.AiNewThreadAction),
-            i => Assert.False(string.IsNullOrEmpty(i.Href), $"'{i.Label}' must navigate by Href"));
+        // The inverse of the sentinel contract: everything that is NOT the imperative entry must be
+        // a plain navigation, so it works identically from any page and needs no client state.
+        // Those entries are seeded UiContribution nodes (WS7 slice 3) — data, because they carry no
+        // behavior; only the imperative "New thread" stays in the compiled list.
+        Assert.Single(MemexConfiguration.AiMenuItems);
+        Assert.NotEmpty(AiMenuContributions.Seeds);
+        Assert.All(AiMenuContributions.Seeds, seed =>
+        {
+            var contribution = Assert.IsType<MeshWeaver.Graph.Configuration.UiContribution>(seed.Content);
+            Assert.Equal("AI", contribution.Context);
+            Assert.False(string.IsNullOrEmpty(contribution.Href), $"'{seed.Name}' must navigate by Href");
+            Assert.False(string.IsNullOrEmpty(contribution.LabelKey), $"'{seed.Name}' must localize its label");
+        });
     }
 
     [Fact]
     public void AiMenu_Entries_Are_Uniquely_Keyed()
     {
         // The aggregator dedupes on (Order, Label, Area) via ImmutableSortedSet — two entries
-        // colliding on all three would silently drop one from the rendered menu.
-        var keys = MemexConfiguration.AiMenuItems.Select(i => (i.Order, i.Label, i.Area)).ToList();
+        // colliding on all three would silently drop one from the rendered menu. Spans the compiled
+        // imperative entry AND the seeded navigation contributions.
+        var keys = MemexConfiguration.AiMenuItems
+            .Select(i => (i.Order, Label: (string?)i.Label, Area: (string?)i.Area))
+            .Concat(AiMenuContributions.Seeds.Select(s =>
+            {
+                var c = Assert.IsType<MeshWeaver.Graph.Configuration.UiContribution>(s.Content);
+                return (c.Order, Label: c.Label, Area: c.Area);
+            }))
+            .ToList();
         Assert.Equal(keys.Count, keys.Distinct().Count());
     }
 }

@@ -114,6 +114,38 @@
                             </FluentButton>
                         }
 
+                        @* Data-declared top-bar menus (UiContribution Context="TopBar") — one dropdown per
+                           declaration, entries from the declaration's own context key. Hidden while the
+                           key has no visible entries, like the GitHub menu. *@
+                        @foreach (var contributedMenu in GetTopBarMenus())
+                        {
+                            var menuKey = contributedMenu.Area;
+                            if (string.IsNullOrEmpty(menuKey) || GetContributedMenuItems(menuKey).Count == 0)
+                                continue;
+                            var anchorId = $"contrib-menu-{menuKey}";
+                            <FluentMenu Anchor="@anchorId" Open="@IsContributedMenuOpen(menuKey)"
+                                OpenChanged="@(open => OnContributedMenuOpenChanged(menuKey, open))">
+                                <NodeMenuItemList Items="@GetContributedMenuItems(menuKey)" OnItemClick="@HandleMenuItemClick" />
+                            </FluentMenu>
+                            <FluentButton Id="@anchorId" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                                Title="@(contributedMenu.Tooltip ?? contributedMenu.Label)"
+                                aria-label="@(contributedMenu.Tooltip ?? contributedMenu.Label)"
+                                OnClick="@(() => ToggleContributedMenu(menuKey))">
+                                @if (IsEmoji(contributedMenu.Icon))
+                                {
+                                    <span class="contrib-menu-icon">@contributedMenu.Icon</span>
+                                }
+                                else if (!string.IsNullOrEmpty(contributedMenu.Icon))
+                                {
+                                    <img class="contrib-menu-icon" src="@contributedMenu.Icon" alt="" />
+                                }
+                                else
+                                {
+                                    <FluentIcon Value="@(new Icons.Regular.Size20.Apps())" Color="Color.FillInverse" />
+                                }
+                            </FluentButton>
+                        }
+
                         @* Settings — direct navigation *@
                         <FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
                             Title="@Access.Localize("common.settings")" aria-label="@Access.Localize("common.settings")"
