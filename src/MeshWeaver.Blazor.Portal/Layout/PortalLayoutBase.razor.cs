@@ -156,6 +156,17 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private IDisposable? _aiMenuSubscription;
     private IDisposable? _gitHubMenuSubscription;
 
+    // Data-declared top-bar menus (UiContribution Context="TopBar", design #1645). Each
+    // declaration is a NodeMenuItemDefinition whose Area names the menu's own context key; its
+    // entries arrive on that key's stream like any compiled context's. One dropdown per
+    // declaration renders after the compiled menus, hidden while it has no visible entries.
+    private const string TopBarMenuContext = "TopBar";
+    private IReadOnlyList<NodeMenuItemDefinition> _topBarMenus = [];
+    private IDisposable? _topBarMenusSubscription;
+    private readonly Dictionary<string, IReadOnlyList<NodeMenuItemDefinition>> _contributedMenuItems = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IDisposable> _contributedMenuSubscriptions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, bool> _contributedMenuOpen = new(StringComparer.Ordinal);
+
 
     // Editable content collections
     /// <summary>
@@ -204,7 +215,56 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             _gitHubMenuItems = items;
             InvokeAsync(StateHasChanged);
         });
+        _topBarMenusSubscription = MenuItemsProvider.GetMenu(TopBarMenuContext).Subscribe(menus =>
+        {
+            _topBarMenus = menus;
+            SyncContributedMenuSubscriptions(menus);
+            InvokeAsync(StateHasChanged);
+        });
     }
+
+    /// <summary>
+    /// Keeps one entry-stream subscription per declared top-bar menu key: subscribes keys that
+    /// appeared, disposes keys whose declaration went away (plugin uninstalled / gated out).
+    /// </summary>
+    private void SyncContributedMenuSubscriptions(IReadOnlyList<NodeMenuItemDefinition> menus)
+    {
+        var live = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var menu in menus)
+            if (menu.Area is { Length: > 0 } key && key != TopBarMenuContext)
+                live.Add(key);
+
+        foreach (var stale in _contributedMenuSubscriptions.Keys.Where(k => !live.Contains(k)).ToList())
+        {
+            _contributedMenuSubscriptions[stale].Dispose();
+            _contributedMenuSubscriptions.Remove(stale);
+            _contributedMenuItems.Remove(stale);
+            _contributedMenuOpen.Remove(stale);
+        }
+
+        foreach (var key in live)
+            if (!_contributedMenuSubscriptions.ContainsKey(key))
+                _contributedMenuSubscriptions[key] = MenuItemsProvider.GetMenu(key).Subscribe(items =>
+                {
+                    _contributedMenuItems[key] = items;
+                    InvokeAsync(StateHasChanged);
+                });
+    }
+
+    /// <summary>The declared top-bar menus, in declaration Order.</summary>
+    private IReadOnlyList<NodeMenuItemDefinition> GetTopBarMenus() => _topBarMenus;
+
+    private IReadOnlyList<NodeMenuItemDefinition> GetContributedMenuItems(string key)
+        => _contributedMenuItems.TryGetValue(key, out var items) ? items : [];
+
+    private bool IsContributedMenuOpen(string key)
+        => _contributedMenuOpen.TryGetValue(key, out var open) && open;
+
+    private void ToggleContributedMenu(string key)
+        => _contributedMenuOpen[key] = !IsContributedMenuOpen(key);
+
+    private void OnContributedMenuOpenChanged(string key, bool open)
+        => _contributedMenuOpen[key] = open;
 
     /// <summary>
     /// Initializes the navigation service, snapshots the authentication state, and forces the
@@ -1007,6 +1067,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         _meshMenuSubscription?.Dispose();
         _aiMenuSubscription?.Dispose();
         _gitHubMenuSubscription?.Dispose();
+        _topBarMenusSubscription?.Dispose();
+        foreach (var subscription in _contributedMenuSubscriptions.Values)
+            subscription.Dispose();
+        _contributedMenuSubscriptions.Clear();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();
     }

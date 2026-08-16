@@ -116,6 +116,49 @@ public class UiContributionProjectionTest
     }
 
     [Fact]
+    public void DeclaredHref_Overrides_TheDerivedAreaUrl_AndTooltipsCarryThrough()
+    {
+        var item = Assert.Single(Project(new UiContribution
+        {
+            Context = "AI",
+            Area = "AiThreads",
+            Href = "/search?q=nodeType%3AThread&groupBy=Namespace",
+            Tooltip = "Conversation threads",
+            TooltipKey = "menu.threadsTooltip",
+        }, context: "AI"));
+        Assert.Equal("/search?q=nodeType%3AThread&groupBy=Namespace", item.Href);
+        Assert.Equal("Conversation threads", item.Tooltip);
+        Assert.Equal("menu.threadsTooltip", item.TooltipKey);
+
+        // Without a declared Href the entry opens its area on the anchoring node, as before.
+        var derived = Assert.Single(Project(new UiContribution { Area = "MyArea" }));
+        Assert.Contains("MyArea", derived.Href);
+    }
+
+    [Fact]
+    public void TopBarDeclaration_ProjectsAsAMenuButton_InTheTopBarContextOnly()
+    {
+        // A whole NEW top-bar menu is itself a contribution in the TopBar context: Area names the
+        // menu's context key, Label/Icon/Order style the button, and the closed gate vocabulary
+        // applies (an AdminOnly menu disappears wholesale for non-admins).
+        var declaration = new UiContribution
+        {
+            Context = UiContribution.TopBarContext,
+            Area = "Reinsurance",
+            Label = "Reinsurance",
+            Icon = "📊",
+            Order = 60,
+            Gates = new UiContributionGates { AdminOnly = true },
+        };
+
+        Assert.Empty(Project(declaration));                                     // not in the Node menu
+        Assert.Empty(Project(declaration, context: UiContribution.TopBarContext)); // non-admin: hidden
+        var button = Assert.Single(Project(declaration, context: UiContribution.TopBarContext, isAdmin: true));
+        Assert.Equal("Reinsurance", button.Area);
+        Assert.Equal(60, button.Order);
+    }
+
+    [Fact]
     public void SettingsTabs_GateOnAdminOnly_AndCarryTheContributedArea()
     {
         var contributions = new[]

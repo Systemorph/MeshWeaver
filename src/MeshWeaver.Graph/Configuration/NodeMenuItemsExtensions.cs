@@ -452,6 +452,22 @@ public static class NodeMenuItemsExtensions
             if (provider.Context is { Length: > 0 } c)
                 contexts.Add(c);
 
+        // Contexts DECLARED BY DATA (design #1645): any context a UiContribution targets, plus
+        // every top-bar menu key (a TopBar declaration's Area names a NEW context whose entries
+        // arrive as contributions targeting that key). Snapshot at render time — this renderer
+        // re-runs on every area render, so a freshly installed plugin's menu appears on the next
+        // render; its ENTRIES then flow reactively through the context's contribution stream.
+        var contributionCatalog = host.Hub.ServiceProvider.GetService<UiContributionCatalog>();
+        if (contributionCatalog is not null)
+            foreach (var (_, contribution) in contributionCatalog.Current)
+            {
+                if (contribution.Context is { Length: > 0 } declared)
+                    contexts.Add(declared);
+                if (contribution.Context == UiContribution.TopBarContext
+                    && contribution.Area is { Length: > 0 } menuKey)
+                    contexts.Add(menuKey);
+            }
+
         var result = new Dictionary<string, IObservable<IReadOnlyCollection<NodeMenuItemDefinition>>>(StringComparer.Ordinal);
         foreach (var context in contexts)
         {

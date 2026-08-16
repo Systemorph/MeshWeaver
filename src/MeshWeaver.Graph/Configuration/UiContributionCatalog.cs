@@ -54,6 +54,21 @@ public sealed class UiContributionCatalog : IDisposable
         }
     }
 
+    /// <summary>
+    /// Synchronous snapshot of the current set — for callers that enumerate contexts at RENDER
+    /// time (the menu renderer's context list). First access starts the shared subscription, so a
+    /// cold snapshot may be empty; the renderer re-runs on every area render, which picks up the
+    /// warmed set.
+    /// </summary>
+    public ImmutableList<(MeshNode Node, UiContribution Content)> Current
+    {
+        get
+        {
+            EnsureSubscribed();
+            return state.Value.Values.ToImmutableList();
+        }
+    }
+
     private void EnsureSubscribed()
     {
         if (subscription is not null)

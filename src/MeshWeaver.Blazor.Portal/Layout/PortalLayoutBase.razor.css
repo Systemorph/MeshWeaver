@@ -550,3 +550,18 @@
     margin-left: 4px;
     color: var(--neutral-foreground-hint);
 }
+
+/* Data-declared top-bar menu buttons (UiContribution Context="TopBar"): string icons — an emoji
+   span or an svg/img URL — sized to match the FluentIcon Size20 the compiled buttons use. The
+   invert keeps a dark single-color svg legible on the dark header, mirroring Color.FillInverse. */
+::deep .contrib-menu-icon {
+    width: 20px;
+    height: 20px;
+    font-size: 16px;
+    line-height: 20px;
+    display: inline-block;
+}
+
+::deep img.contrib-menu-icon {
+    filter: invert(1);
+}
