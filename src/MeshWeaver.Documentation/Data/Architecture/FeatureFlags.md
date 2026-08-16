@@ -61,9 +61,13 @@ Configuration is layered (last wins):
 | `Features:Onboarding:InvitationOnly` | bool | `false` | When `true`, only an email with a Pending invitation may onboard. See [Invitation-Only Onboarding](/Doc/Architecture/InvitationOnlyOnboarding). |
 | `Features:Orleans:Clustering` | string | `AzureTables` | Cluster-membership provider: `AzureTables`, `AdoNet` (PostgreSQL), or `Localhost` (single in-process silo; dev only). |
 | `Features:SignalR` | bool | `true` | Opens the SignalR mesh transport (`/signalr`) for external participants (native clients). `false` closes the connection surface. |
-| `Features:Grpc` | bool | `true` | Opens the gRPC mesh transport (`meshweaver.v1.Mesh/Open` + gRPC-web) for foreign-language participants and the React GUI. Symmetric with `SignalR`. |
 | `Features:StaticRepoSync:Partitions` | string[] | `[]` | Partitions whose build-time static content is **materialized into and served from the database** instead of the in-memory read-only static provider (e.g. `["Doc","Agent","Provider","Harness","Skill"]` — what the default Helm deployment sets). Empty = every partition keeps the in-memory provider. Matching is case-insensitive; `Model` is a legacy alias for `Provider`. See [Static Repo Import](/Doc/Architecture/StaticRepoImport). |
 | `Features:StaticRepoSync:Modes:{Partition}` | enum | *(source default)* | Per-partition prune policy for that import: `FullReplace` (mirror), `Additive` (keep user-added nodes), `UpsertOnly` (never prune). Unlisted partitions use their source's default — `FullReplace` for most, but the built-in AI catalogs (Skill/Agent/Provider/Harness) default to `Additive`. Distinct from the per-**node** `SyncBehavior`. |
+
+There is no `Features:Grpc` any more: the gRPC mesh transport (`meshweaver.v1.Mesh` + gRPC-web —
+foreign-language participants AND the React GUI's browser data plane) is the
+`MeshWeaver.Hosting.Grpc` **module**, switched by listing/delisting the DLL under
+`Modules:Assemblies` — default-on everywhere, see [Modules](/Doc/Architecture/Modules).
 
 A related, separate section — `Email` — configures outbound system mail (used by invitations). It
 is documented in [Invitation-Only Onboarding → Email](/Doc/Architecture/InvitationOnlyOnboarding#sending-email-microsoft-graph).
