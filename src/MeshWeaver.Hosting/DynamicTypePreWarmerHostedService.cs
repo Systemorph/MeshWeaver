@@ -293,6 +293,14 @@ public sealed class DynamicTypePreWarmerHostedService(
             Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid,
             Graph.Configuration.FrameworkBuildIdentity.StampedIdentityOf(
                 typeof(Graph.Configuration.FrameworkBuildIdentity).Assembly) ?? "(unstamped)");
+        // A degraded identity resolution (torn/unusable surface manifest → stamp/MVID fallback)
+        // is safe — conservative key, everything rebakes under it — but it silently costs the
+        // whole CI-bake benefit, so it must be SAID where the identity is announced.
+        if (Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkIdentityWarning is { } identityWarning)
+            logger.LogWarning(
+                "DynamicTypePreWarmer: framework identity resolution DEGRADED: {Warning} — "
+                + "CI-published bakes will decline against the fallback identity and this pod "
+                + "compiles its content itself", identityWarning);
         // Shipped prebuilt bundles seed BEFORE the sweep decides what to build (#1660 WS1): a
         // NodeType whose CI-baked bytes match this image's framework identity is stamped +
         // uploaded to the assembly store here, so the sweep's store probe reports it AlreadyBaked

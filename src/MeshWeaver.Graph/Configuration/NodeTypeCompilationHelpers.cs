@@ -1002,10 +1002,15 @@ internal static class NodeTypeCompilationHelpers
     /// MVID (content-exact for a dirty working tree). A mismatch against a NodeType's
     /// <c>CompiledFrameworkVersion</c> means "recompile". Computed once per process.
     /// </summary>
-    internal static string FrameworkVersion => _frameworkVersion.Value;
+    internal static string FrameworkVersion => _frameworkVersion.Value.Identity;
+
+    /// <summary>Degradation warning from the identity resolution (a torn/unusable surface
+    /// manifest fell back to the stamp/MVID layer), or null on the happy path — cached with the
+    /// identity itself so the pre-warmer can log it beside the identity it announces.</summary>
+    internal static string? FrameworkVersionWarning => _frameworkVersion.Value.Warning;
 
     // Resolution once per process, through the ONE chain (FrameworkBuildIdentity
-    // .ResolveProcessIdentity): surface manifest → commit stamp → Graph MVID. The MVID fallback
+    // .ResolveProcessIdentityWithDiagnostics): surface manifest → commit stamp → Graph MVID. The MVID fallback
     // rationale (local builds): the MVID is part of the compiled module, so it is STABLE whenever
     // the DLL bytes are identical and CHANGES whenever Graph is rebuilt with different content.
     // The surface identity supersedes both where a manifest ships because the commit key
@@ -1015,8 +1020,8 @@ internal static class NodeTypeCompilationHelpers
     // framework). The ref-assembly-based surface hash sits exactly between: it moves when — and
     // only when — the API surface content compiles against changes (plus the Graph-impl
     // exception for the compile pipeline's own emitters).
-    private static readonly Lazy<string> _frameworkVersion = new(() =>
-        FrameworkBuildIdentity.ResolveProcessIdentity(
+    private static readonly Lazy<(string Identity, string? Warning)> _frameworkVersion = new(() =>
+        FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics(
             AppContext.BaseDirectory,
             typeof(NodeTypeCompilationHelpers).Assembly));
 

@@ -62,6 +62,15 @@ public static class PrebuiltAssemblySeeder
     public static string LiveFrameworkMvid => NodeTypeCompilationHelpers.FrameworkVersion;
 
     /// <summary>
+    /// Degradation warning from the live identity's resolution (a torn or unusable surface
+    /// manifest fell back to the stamp/MVID layer — see
+    /// <see cref="FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics"/>), or null on
+    /// the happy path. Public beside <see cref="LiveFrameworkMvid"/> so the process that
+    /// announces the identity (the pre-warmer) can announce the degradation with it.
+    /// </summary>
+    public static string? LiveFrameworkIdentityWarning => NodeTypeCompilationHelpers.FrameworkVersionWarning;
+
+    /// <summary>
     /// Seeds <paramref name="assemblyBytes"/> as the build for <paramref name="nodeTypePath"/>.
     ///
     /// <para>Cold: the write runs on Subscribe. Emits <c>true</c> when the assembly was adopted and

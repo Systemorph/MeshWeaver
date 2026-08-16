@@ -179,6 +179,66 @@ public class FrameworkBuildIdentityTest
     }
 
     [Fact]
+    public void ProcessIdentity_DegradesToTheFallback_WhenTheManifestIsUnreadable()
+    {
+        // A torn/unreadable manifest must cost a conservative fallback identity + a warning —
+        // NEVER a throw: the resolution runs on the boot path (Copilot finding, PR #1696).
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("stages unreadability via unix file modes — POSIX hosts only (CI is linux)");
+            return;
+        }
+        var graph = typeof(NodeTypeCompilationHelpers).Assembly;
+        var dir = Path.Combine(Path.GetTempPath(), "mw-torn-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var manifest = Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName);
+        File.WriteAllText(manifest, "MeshWeaver.Data=abc");
+        try
+        {
+            File.SetUnixFileMode(manifest, UnixFileMode.None);
+            // Root (or a non-POSIX host) can still read it — then this scenario cannot be staged.
+            var unreadable = false;
+            try { File.ReadAllText(manifest); } catch { unreadable = true; }
+            Assert.SkipWhen(!unreadable, "cannot stage an unreadable file on this host");
+
+            var (identity, warning) =
+                FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics(dir, graph);
+            identity.Should().Be(FrameworkBuildIdentity.Resolve(
+                    FrameworkBuildIdentity.StampedIdentityOf(graph),
+                    graph.ManifestModule.ModuleVersionId.ToString("N")),
+                "an unreadable manifest degrades to the stamp/MVID layer");
+            warning.Should().NotBeNullOrEmpty("the degradation must be sayable where the identity is announced");
+        }
+        finally
+        {
+            File.SetUnixFileMode(manifest, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ProcessIdentity_DegradesToTheFallback_WhenTheManifestHoldsNothingUsable()
+    {
+        var graph = typeof(NodeTypeCompilationHelpers).Assembly;
+        var dir = Path.Combine(Path.GetTempPath(), "mw-empty-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName),
+                "not-a-pair\n\n");
+            var (identity, warning) =
+                FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics(dir, graph);
+            identity.Should().NotStartWith("s");
+            warning.Should().NotBeNullOrEmpty();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ProcessIdentity_FallsBackToStampThenMvid_WithoutAManifest()
     {
         var graph = typeof(NodeTypeCompilationHelpers).Assembly;
