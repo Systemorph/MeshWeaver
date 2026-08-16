@@ -345,7 +345,11 @@ else
                                     {
                                         var delHeader = GetDelegationHeader(call.DelegationPath);
                                         var title = delHeader?.Title ?? callSummary;
-                                        var icon = delHeader?.Icon ?? "/static/NodeTypeIcons/chat.svg";
+                                        @* The sub-thread's own icon is a ThreadIconGenerator identicon —
+                                           raw inline <svg>, not a URL — so it goes through NodeIcon, which
+                                           picks the right element and falls back to the standard chat glyph
+                                           for anything it cannot render. *@
+                                        var icon = delHeader?.Icon;
                                         var stateIcon = isPending
                                             ? "↗"
                                             : (call.IsSuccess ? "✓" : "✗");
@@ -360,7 +364,8 @@ else
                                            class="thread-msg-tool-delegation @stateClass"
                                            title="@title">
                                             <span class="thread-msg-tool-delegation-state">@stateIcon</span>
-                                            <img src="@icon" alt="" class="thread-msg-tool-delegation-icon" />
+                                            <NodeIcon Icon="@icon" Fallback="@ThreadNodeType.DefaultIcon" Size="14"
+                                                      Class="thread-msg-tool-delegation-icon" />
                                             <span class="thread-msg-tool-delegation-title">@title</span>
                                             <span class="thread-msg-tool-delegation-agent">@callSummary</span>
                                             @* Live elapsed while the sub-thread runs — makes "it's running"
@@ -583,13 +588,14 @@ else
                     <div class="thread-runtime-section-label">@Access.Localize("chat.runningSubThreads")</div>
                     @foreach (var (path, header) in runningSubThreads)
                     {
-                        var subIcon = header.Icon ?? "/static/NodeTypeIcons/chat.svg";
+                        var subIcon = header.Icon;
                         var subTitle = header.Title ?? path;
                         var preview = !string.IsNullOrWhiteSpace(header.StreamingText)
                             ? TruncateText(header.StreamingText.Trim(), 200)
                             : (header.ExecutionStatus ?? Access.Localize("chat.working"));
                         <a class="thread-runtime-subthread-card" href="/@path" title="@subTitle">
-                            <img src="@subIcon" alt="" class="thread-runtime-subthread-icon" />
+                            <NodeIcon Icon="@subIcon" Fallback="@ThreadNodeType.DefaultIcon" Size="24"
+                                      Class="thread-runtime-subthread-icon" />
                             <div class="thread-runtime-subthread-body">
                                 <div class="thread-runtime-subthread-title">
                                     <span class="thread-runtime-subthread-title-text">@subTitle</span>
@@ -889,9 +895,11 @@ else
                             @* Non-selectable group title (e.g. a model provider). Its models
                                render as selectable items underneath. *@
                             <div class="thread-chat-widget-group">
-                                @if (!string.IsNullOrEmpty(node.Icon) && !node.Icon.TrimStart().StartsWith("<"))
+                                @* Used to skip inline-<svg> icons outright (an <img src="<svg …>"> renders
+                                   broken); NodeIcon renders each form with the element it needs. *@
+                                @if (!string.IsNullOrEmpty(node.Icon))
                                 {
-                                    <img class="thread-chat-widget-group-icon" src="@node.Icon" alt="" />
+                                    <NodeIcon Icon="@node.Icon" Size="14" Class="thread-chat-widget-group-icon" />
                                 }
                                 <span class="thread-chat-widget-group-name">@(node.Name ?? LastSegment(node.Path))</span>
                             </div>
@@ -903,14 +911,7 @@ else
                                     @onclick="@(() => SelectFromPicker(picker, node))">
                                 @if (!string.IsNullOrEmpty(node.Icon))
                                 {
-                                    @if (node.Icon.TrimStart().StartsWith("<"))
-                                    {
-                                        <span class="thread-chat-widget-item-icon">@((MarkupString)node.Icon)</span>
-                                    }
-                                    else
-                                    {
-                                        <img class="thread-chat-widget-item-icon" src="@node.Icon" alt="" />
-                                    }
+                                    <NodeIcon Icon="@node.Icon" Size="18" Class="thread-chat-widget-item-icon" />
                                 }
                                 <span class="thread-chat-widget-item-text">
                                     <span class="thread-chat-widget-item-name">@(node.Name ?? node.Id)</span>

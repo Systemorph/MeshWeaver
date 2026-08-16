@@ -1,8 +1,35 @@
 using System.Collections.Immutable;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
+using DomainIcon = MeshWeaver.Domain.Icon;
 
 namespace MeshWeaver.Graph;
+
+/// <summary>
+/// How an icon value has to be put on the page. A node's <c>Icon</c> is a single string that can
+/// legitimately hold three mutually-incompatible things, and rendering one through the other's
+/// element is what produces a BROKEN icon — an <c>&lt;img src="&lt;svg …"&gt;</c> (the identicon every
+/// thread gets from <c>ThreadIconGenerator</c>) or an <c>&lt;img src="Document"&gt;</c> (a Fluent name).
+/// </summary>
+public enum IconRenderKind
+{
+    /// <summary>An image URL or <c>data:</c> URI — render as <c>&lt;img src="…"&gt;</c>.</summary>
+    Image,
+
+    /// <summary>Raw inline <c>&lt;svg&gt;</c> markup — render verbatim, NEVER as an img source.</summary>
+    InlineSvg,
+
+    /// <summary>A text glyph (emoji) — render as text.</summary>
+    Glyph,
+}
+
+/// <summary>
+/// An icon value together with the element it has to be rendered with. Produced by
+/// <see cref="MeshNodeImageHelper.ResolveRenderable"/>, which guarantees the pair is renderable.
+/// </summary>
+/// <param name="Kind">The element the value has to be rendered with.</param>
+/// <param name="Value">The icon value — a URL, inline svg markup, or a text glyph, per <paramref name="Kind"/>.</param>
+public readonly record struct RenderableIcon(IconRenderKind Kind, string Value);
 
 /// <summary>
 /// Helper for resolving and classifying a mesh node's icon for rendering. Resolves
@@ -43,7 +70,7 @@ public static class MeshNodeImageHelper
             : ResolveContentPath(node.Icon, node.Path)
               ?? ShippedIconFor(node.Icon)
               ?? DefaultIconForNodeType(node.NodeType)
-              ?? $"/static/NodeTypeIcons/{NeutralNodeIcon}.svg";
+              ?? NeutralIconUrl;
 
     /// <summary>
     /// The shipped glyph matching a FLUENT ICON NAME, or null when none is shipped under that name.
@@ -80,6 +107,51 @@ public static class MeshNodeImageHelper
 
     /// <summary>The neutral glyph used when a node has no own icon and its NodeType has no mapping.</summary>
     private const string NeutralNodeIcon = "box";
+
+    /// <summary>
+    /// The URL of <see cref="NeutralNodeIcon"/> — the last-resort glyph that makes
+    /// <see cref="ResolveRenderable"/> total. A constant, not a cache: written once, never at runtime.
+    /// </summary>
+    public static readonly string NeutralIconUrl = $"/static/NodeTypeIcons/{NeutralNodeIcon}.svg";
+
+    /// <summary>
+    /// The first of <paramref name="icon"/> → <paramref name="fallback"/> → <see cref="NeutralIconUrl"/>
+    /// that can ACTUALLY be rendered, paired with the element to render it with. Total: it always
+    /// returns something renderable, so no caller can produce a broken icon.
+    ///
+    /// <para>🚨 This exists because a <c>MeshNode.Icon</c> is ONE string holding four different things
+    /// (<see cref="DomainIcon.Parse"/>), and the obvious <c>&lt;img src="@node.Icon"&gt;</c> is correct for
+    /// exactly one of them. Every thread carries a <c>ThreadIconGenerator</c> identicon — raw inline
+    /// <c>&lt;svg&gt;</c> — so a sub-thread chip built that way rendered the browser's broken-image glyph,
+    /// and the picker "fixed" it by dropping the icon entirely. A legacy Fluent NAME breaks the same
+    /// way; it resolves here only when this assembly ships a glyph of that name
+    /// (<see cref="ShippedIconFor"/>), otherwise the fallback wins rather than a broken image.</para>
+    /// </summary>
+    /// <param name="icon">The node's own icon value (any of the four forms; null/empty is fine).</param>
+    /// <param name="fallback">The icon to use when <paramref name="icon"/> is absent or unrenderable —
+    /// typically the NodeType's standard glyph (e.g. <c>/static/NodeTypeIcons/chat.svg</c> for a thread).</param>
+    public static RenderableIcon ResolveRenderable(string? icon, string? fallback = null)
+        => TryClassify(icon)
+           ?? TryClassify(fallback)
+           ?? new RenderableIcon(IconRenderKind.Image, NeutralIconUrl);
+
+    /// <summary>
+    /// Classifies one candidate, or null when it cannot be rendered at all (empty, or a Fluent icon
+    /// name this assembly ships no glyph for) and the next candidate should be tried.
+    /// </summary>
+    private static RenderableIcon? TryClassify(string? value)
+    {
+        var parsed = DomainIcon.Parse(value);
+        return parsed?.Provider switch
+        {
+            DomainIcon.InlineSvgProvider => new RenderableIcon(IconRenderKind.InlineSvg, parsed.Id),
+            DomainIcon.UrlProvider => new RenderableIcon(IconRenderKind.Image, parsed.Id),
+            DomainIcon.TextProvider => new RenderableIcon(IconRenderKind.Glyph, parsed.Id),
+            DomainIcon.FluentProvider when ShippedIconFor(parsed.Id) is { } url
+                => new RenderableIcon(IconRenderKind.Image, url),
+            _ => null,
+        };
+    }
 
     /// <summary>
     /// A default icon for a node that carries none of its own, keyed by its NodeType (the type node's
