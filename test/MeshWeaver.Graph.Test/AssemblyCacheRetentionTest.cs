@@ -342,6 +342,11 @@ public class AssemblyCacheRetentionTest : IDisposable
     [InlineData("v7-22825f59-9f4455cd1122.dll", "22825f59")]
     [InlineData("v7-22825F59-9F4455CD1122.pdb", "22825f59")]
     [InlineData("v1234567890-2f9763d7-abcdef012345.dll", "2f9763d7")]
+    // The commit-identity tag shape (#1660 WS3): CI builds' FrameworkVersion is g<sha>, so their
+    // store tag is 'g' + 7 hex — these generations must be attributable, or CI-baked files would
+    // be unrecognised forever and the sweep could never reclaim them.
+    [InlineData("v7-g22825f5-9f4455cd1122.dll", "g22825f5")]
+    [InlineData("v7-G22825F5-9F4455CD1122.pdb", "g22825f5")]
     public void ATaggedAssembly_IsAttributedToItsGeneration(string fileName, string expected) =>
         AssemblyCacheGenerations.TagOf(fileName).Should().Be(expected);
 
@@ -352,6 +357,8 @@ public class AssemblyCacheRetentionTest : IDisposable
     [InlineData(".bake-lease-22825f59")]          // the lease
     [InlineData("vX-22825f59-9f4455cd1122.dll")]  // no version
     [InlineData("v7-zzzzzzzz-9f4455cd1122.dll")]  // tag is not hex
+    [InlineData("v7-gz2825f5-9f4455cd1122.dll")]  // g-tag whose remainder is not hex
+    [InlineData("v7-g2825f5-9f4455cd1122.dll")]   // g-tag one char short
     // 🚨 The WIDTHS are the deletion boundary, not decoration: the store always writes an 8-char
     // tag and a 12-char hash, so a foreign name that merely happens to be hex must not be
     // attributed — attribution is what makes a file deletable.

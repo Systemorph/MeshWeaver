@@ -76,15 +76,21 @@ public static class ShippedReleaseSeed
     public const string PlatformVersionNodePath = $"{AdminPartition}/{PlatformVersionId}";
 
     /// <summary>
-    /// The installed platform version — the entry assembly's
-    /// <see cref="AssemblyInformationalVersionAttribute"/> (set centrally from the
-    /// <c>PlatformVersion</c> MSBuild property; see <c>Directory.Build.props</c>), falling back to the
-    /// numeric assembly version, then <c>"unknown"</c>.
+    /// The installed platform version. The FULL run-numbered version (<c>3.0.0-rc3.ci.N</c>) is no
+    /// longer compiled into any assembly — CI builds are commit-deterministic so the bake identity
+    /// holds across CI jobs (#1660 WS3) — so this reads the
+    /// <see cref="MeshWeaver.Mesh.PlatformBuildInfo.PlatformVersionEnvironmentVariable"/> the
+    /// container publish injects FIRST (the self-updater's version comparison against registry
+    /// tags depends on the run number), then falls back to the entry assembly's
+    /// <see cref="AssemblyInformationalVersionAttribute"/> (<c>PlatformVersion+&lt;sha&gt;</c> on a
+    /// CI build), the numeric assembly version, then <c>"unknown"</c>.
     /// </summary>
     public static string InstalledPlatformVersion
     {
         get
         {
+            if (MeshWeaver.Mesh.PlatformBuildInfo.RuntimePlatformVersion is { } injected)
+                return injected;
             var asm = Assembly.GetEntryAssembly() ?? typeof(ShippedReleaseSeed).Assembly;
             return asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
                 ?? asm.GetName().Version?.ToString()

@@ -69,20 +69,24 @@ The `PublicRelease` flag picks the channel (think **CI** vs **CD**):
   Version=3.0.0.280` while the packaged DLL carried another number →
   `FileNotFoundException` at startup → the migration CrashLoopBackOff'd and Space
   creation failed. **Do not reintroduce a per-build `AssemblyVersion`.**
-- **`FileVersion` keeps the per-build number** (`3.0.0.<build>`). It does not
-  participate in binding, and changing every build is what drives MSBuild's
-  `CopyToOutputDirectory` heuristic so test bins don't hold a stale framework DLL.
-  Both are numeric — the `-rc1` pre-release label is illegal in either.
-- **`<build>` is not one number.** The `.ci.N` suffix uses `$(GITHUB_RUN_NUMBER)` when
-  present (**monotonic** — the self-updater picks the newest version, and the
-  seconds-since-midnight value resets at midnight); `FileVersion` uses that
-  seconds-since-midnight value; **locally both are a stable `0`**, so a dev rebuild
-  doesn't regenerate `AssemblyInfo.cs` and destroy incremental builds.
-- **`InformationalVersion`** carries `+build.<ticks>` **only under `CIRun=true`**;
-  locally it equals `$(Version)`. NodeType ABI identity no longer depends on it —
-  `NodeTypeCompilationHelpers.FrameworkVersion` is the **`MeshWeaver.Graph` assembly's
-  MVID** (a content hash of the compiled module), so it is stable across rebuilds that
-  don't change Graph's bytes and changes whenever they do.
+- **`FileVersion` is pinned** (`3.0.0.0`) for the same reason `AssemblyVersion` is:
+  it is a *compiled* attribute, and CI compile inputs are **commit-deterministic**
+  ([#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3) so two CI builds
+  of the same commit produce ABI-identical assemblies — that is what lets the CI
+  NodeType bake seed at portal boot. Both are numeric — the `-rc1` pre-release label
+  is illegal in either.
+- **The `.ci.N` suffix** uses `$(GITHUB_RUN_NUMBER)` when present (**monotonic** —
+  the self-updater picks the newest version, and the seconds-since-midnight fallback
+  resets at midnight); **locally it is a stable `0`**. It reaches ONLY `$(Version)` —
+  NuGet package versions and image tags — never a compiled attribute. The runtime
+  still sees it: the container publish injects `$(Version)` as the
+  `MESHWEAVER_PLATFORM_VERSION` environment variable (image config, not bytes).
+- **`InformationalVersion`** is `$(PlatformVersion)` under `CIRun=true` (the SDK
+  appends `+<commit-sha>`); locally it equals `$(Version)`. NodeType ABI identity is
+  `NodeTypeCompilationHelpers.FrameworkVersion`: for CI builds the **stamped commit
+  identity** (`g<sha>`, `AssemblyMetadata("MeshWeaverFrameworkIdentity")`), locally
+  the **`MeshWeaver.Graph` assembly's MVID** (a content hash of the compiled module,
+  stable across rebuilds that don't change Graph's bytes).
 - **`-p:Version=…`** still overrides everything (escape hatch) — and it is what the
   tag-driven release workflows actually pass.
 

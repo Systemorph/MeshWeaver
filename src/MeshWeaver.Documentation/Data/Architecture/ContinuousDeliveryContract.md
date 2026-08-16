@@ -178,6 +178,42 @@ a published tag shape would break whatever is pinned today. It is documented at 
 produces it rather than silently "fixed". This is also why `check-image-set.sh` identifies the set by
 **short SHA** and not by version tag: the SHA is the one identity all four images share.
 
+## After the promote — the bake publication and the dependent-repo dispatch
+
+Two post-promote legs ride every armed release (#1660 WS3):
+
+**`publish-bake`** copies the Build-and-Test run's CI NodeType bake (the
+`baked-assemblies-<framework-identity>` artifact its doc-gate produced with
+`mw-plugin-test --bake-output`) onto the portals' shared storage, laid out
+`prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip`
+(`.github/scripts/publish-bake-bundles.sh`). CI builds are **commit-deterministic**, so the
+identity the bake was keyed under equals the identity of the images promote just armed — each
+booting pod seeds its own identity's bundles (`PreWarm:PrebuiltBundleRoot` →
+`ShippedPrebuiltBundles.SeedPublishedRoot`) before its NodeType sweep, and compiles only what CI
+did not bake. Its configuration is **preflighted red, never skipped**: repo variable
+`BAKE_PUBLISH_TARGETS` names the Azure Files targets (`<account>/<share>[/<base-path>]`,
+whitespace-separated), and a missing value fails the job naming exactly that — a grey skip here
+would silently restore the every-pod-rebakes-everything regression (#1347). A missing bake
+*artifact* only warns: a reuse-green run legitimately skips the doc-gate, and that run simply has
+nothing to publish.
+
+**`notify-dependents`** sends one `repository_dispatch` (`meshweaver-framework-released`, payload:
+commit, identity, version) to each repo in `BAKE_SUBSCRIBER_REPOS`, using
+`DEPENDENT_DISPATCH_TOKEN`. A node repo subscribes with
+
+```yaml
+on:
+  repository_dispatch:
+    types: [meshweaver-framework-released]
+```
+
+on its gate workflow and answers by re-running its compile gate + bake + publish against the new
+framework identity — the cross-repo half of "a dependency released, rebuild". (The in-repo half
+needs no event at all: a dependency bump lands as a commit, and a commit IS a new framework
+identity, so the next CI run re-bakes by construction.) Reporter-class like the platform-update
+webhook: an unconfigured or lost dispatch is a loud notice, never a red — the next release
+re-notifies, and nothing downstream certifies anything on it.
+
 ## See also
 
 - [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy) — the two channels, the update policy node, and how each install applies an update.

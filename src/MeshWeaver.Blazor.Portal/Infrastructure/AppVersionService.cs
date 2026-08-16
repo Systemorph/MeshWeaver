@@ -18,11 +18,17 @@ public class AppVersionService : IAppVersionService
     }
 
     /// <summary>
-    /// Reads the assembly's informational version, trimming any trailing build metadata to a short commit hash.
+    /// Reads the deployment's injected run-numbered platform version
+    /// (<see cref="MeshWeaver.Mesh.PlatformBuildInfo"/> — CI assemblies are commit-deterministic,
+    /// so the <c>.ci.N</c> run number rides the image config, not the compiled attribute), falling
+    /// back to the assembly's informational version with any trailing build metadata trimmed to a
+    /// short commit hash.
     /// </summary>
     /// <returns>The version string, or an empty string when no version attribute is present.</returns>
     public static string GetVersionFromAssembly()
     {
+        if (MeshWeaver.Mesh.PlatformBuildInfo.RuntimePlatformVersion is { } injected)
+            return injected;
         var strVersion = string.Empty;
         var versionAttribute = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>();
         if (versionAttribute != null)

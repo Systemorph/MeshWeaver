@@ -97,10 +97,11 @@ else
     // default. (A file lease beside the assembly cache used to serialise this; it is deleted, its
     // one-builder and steal-on-stale properties carried by the claim arbiter.)
 
-    // 🚨 …and ONE WHOLE GENERATION of that cache is written per deploy, because the store keys every
-    // file by the MeshWeaver.Graph MVID and a CI build stamps a fresh InformationalVersion into
-    // every assembly. That is deliberate ABI safety; what was missing is anything that ever removes
-    // an old generation. Measured on memex 2026-08-12: 7817 DLLs across 93 generations, 3.2 GB — of
+    // 🚨 …and ONE WHOLE GENERATION of that cache is written per DEPLOYED COMMIT, because the store
+    // keys every file by the framework identity (the commit for CI builds — #1660 WS3; images of
+    // the SAME commit now share a generation, and the CI bake pre-fills it). That is deliberate
+    // ABI safety; what was missing is anything that ever removes an old generation. Measured on
+    // memex 2026-08-12 (when every BUILD was its own generation): 7817 DLLs across 93 generations, 3.2 GB — of
     // which 83 files (1%) were loadable by the running image — on the SAME 16 GiB share that holds
     // the DataProtection key ring below, so filling it takes auth-adjacent state down with it.
     //

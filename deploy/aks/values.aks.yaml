@@ -182,6 +182,16 @@ config:
     # environment that cannot answer the enumeration, accepting lazy compilation; it can never
     # waive a real regression, and /health keeps reporting the bake as unproven.
     PreWarm__AllowUnprovenBake: "false"
+    # ---- CI-published bake bundles (#1660 WS3) -----------------------------
+    # main-cd's publish-bake job copies the Build-and-Test run's baked NodeType assemblies onto
+    # this portal's /data share as prebuilt-bundles/<framework-identity>/<source>/*.zip; the pod
+    # seeds its OWN identity's directory before the sweep (ShippedPrebuiltBundles.
+    # SeedPublishedRoot), so shipped content boots with zero Roslyn. CI builds are
+    # commit-deterministic, so the identity CI baked under equals this image's. Inert while CI
+    # has published nothing (the directory is simply absent and the sweep compiles as before).
+    # Producer side: repo variable BAKE_PUBLISH_TARGETS must name this share
+    # (.github/scripts/publish-bake-bundles.sh).
+    PreWarm__PrebuiltBundleRoot: "/data/prebuilt-bundles"
     # ---- Assembly-cache retention ------------------------------------------
     # Every roll above writes a WHOLE NEW GENERATION of NodeType assemblies into
     # /data/assembly-cache (the framework MVID changes per image, by design), and

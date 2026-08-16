@@ -1306,13 +1306,14 @@ jobs:
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
     # 🚨 Since #1660 WS1 this job is not verdict-only: the SAME tester run that proves the content
-    # compiles also PERSISTS the compiled assemblies (--bake-output) as MVID-keyed prebuilt
-    # bundles, uploaded below as `baked-assemblies-<mvid>`. Consumers inside THIS run (test lanes,
-    # a future thin containerize step) can adopt them because every job reuses the ONE solution
-    # build — same Graph.dll, same MVID. A consumer built ANYWHERE else (today's main-cd legs
-    # recompile with their own run number as a version input) has a different MVID and correctly
-    # declines the whole set — that is the seeder's ABI gate, not a bug; #1660 WS3 (framework-
-    # identity determinism) is what will make cross-workflow adoption possible.
+    # compiles also PERSISTS the compiled assemblies (--bake-output) as identity-keyed prebuilt
+    # bundles, uploaded below as `baked-assemblies-<identity>`. Since #1660 WS3 the framework
+    # identity is COMMIT-DETERMINISTIC (for CI builds: g<sha>, stamped by Directory.Build.props —
+    # no run number or ticks reach any compiled attribute), so consumers are no longer limited to
+    # this run: main-cd's publish-bake job copies these bundles to the portals' shared storage,
+    # where every pod built from the SAME COMMIT seeds them at boot
+    # (ShippedPrebuiltBundles.SeedPublishedRoot) instead of recompiling. The seeder's identity
+    # gate still declines anything from another commit — that is the ABI gate, not a bug.
     - name: "Compile + run the Doc content against this PR"
       id: gate
       run: |
