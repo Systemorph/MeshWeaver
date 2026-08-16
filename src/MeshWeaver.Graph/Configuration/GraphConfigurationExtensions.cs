@@ -51,7 +51,9 @@ public static class GraphConfigurationExtensions
                 .AddGroupType()
                 .AddRoleType()
                 .AddGroupMembershipType()
-                .AddApprovalType()
+                // Approval moved to the MeshWeaver.Approvals module (Modules:Assemblies /
+                // builder.AddApprovals()) — the Approval record + _Approval satellite mapping
+                // stay platform-level in MeshWeaver.Mesh.Contract.
                 .AddNotificationType()
                 .AddNotificationSettingsType()
                 .AddCompletionMemoryType()
