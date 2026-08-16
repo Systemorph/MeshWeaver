@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -1115,6 +1116,15 @@ internal class MeshNodeCompilationService(
             });
 
         return discoverCodeFiles
+            // Stage: the cell-surface single-home gate (issue #1649 part 3) — refuses to
+            // recompile another NodeType's `cellSurface: true` Source into THIS assembly.
+            // Runs on the discovered snapshot (matchedCodePaths is populated by the Select
+            // above), before any include resolution or Roslyn work is spent. The thrown
+            // CompilationException propagates to RunCompile's terminal write-back
+            // (CompilationStatus=Error, CompilationError = the naming message).
+            .SelectMany(codeFiles =>
+                ValidateCellSurfaceSingleHome(node.Path, selfPath, matchedCodePaths)
+                    .Select(_ => codeFiles))
             .SelectMany(codeFiles =>
             {
                 // Stage: resolve @@ include references reactively. Each include lookup
@@ -1246,6 +1256,53 @@ internal class MeshNodeCompilationService(
                             .Finish((int)hub.Version, ActivityStatus.Failed);
                         return Observable.Return<(string?, ActivityLog)>((null, failedLog));
                     });
+            });
+    }
+
+    /// <summary>
+    /// The cell-surface single-home gate (issue #1649 part 3): a NodeType whose resolved source
+    /// set reaches into ANOTHER NodeType's <c>Source/</c>/<c>Test/</c> subtree (a <c>shared=</c>
+    /// consumption) must not compile when that owner declares
+    /// <see cref="NodeTypeDefinition.CellSurface"/> — <c>shared=</c> recompiles the owner's
+    /// public types into this assembly, and with the owner's assembly on the kernel's cell
+    /// surface every bare-name cell call would be ambiguous between the two copies
+    /// (<c>CS0433</c>, observed live in Education#171). Failing the CONSUMER's compile with a
+    /// message naming the owner prevents the duplicate copy from ever existing.
+    ///
+    /// <para>Zero-cost for the common case: a source set that never leaves <paramref name="selfPath"/>
+    /// derives no foreign owners and performs no reads. Owner reads are bounded
+    /// (<see cref="ReadTimeoutBehavior.EmitNull"/>) and degrade OPEN — a stalled/absent owner
+    /// read cannot park an innocent consumer on a transient mesh stall; the persistent
+    /// misconfiguration still fails deterministically on the next healthy compile.</para>
+    /// </summary>
+    private IObservable<Unit> ValidateCellSurfaceSingleHome(
+        string nodePath, string selfPath, IReadOnlyList<string> sourcePaths)
+    {
+        var owners = NodeTypeDependencyGraph.ForeignSourceOwners(selfPath, sourcePaths);
+        if (owners.IsEmpty)
+            return Observable.Return(Unit.Default);
+
+        return owners
+            .Select(owner => ReadCompileSourceNode(owner, ReadTimeoutBehavior.EmitNull)
+                .Take(1)
+                .Select(ownerNode => (Owner: owner,
+                    IsCellSurface: ownerNode.ContentAs<NodeTypeDefinition>(JsonOptions)?.CellSurface == true)))
+            .Merge()
+            .Where(t => t.IsCellSurface)
+            .ToList()
+            .SelectMany(violations =>
+            {
+                if (violations.Count == 0)
+                    return Observable.Return(Unit.Default);
+                var names = string.Join(", ", violations
+                    .Select(v => $"'{v.Owner}'")
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
+                return Observable.Throw<Unit>(new CompilationException(nodePath,
+                    $"Cell-surface single-home violation: '{selfPath}' consumes Source/Test code owned by "
+                    + $"cell-surface NodeType {names}. A `cellSurface: true` NodeType's source is "
+                    + "single-home: a `shared=` consumer recompiles the same public types into a second "
+                    + "assembly, making every bare-name kernel-cell call ambiguous (CS0433). Remove the "
+                    + $"shared= source entry on '{selfPath}', or clear cellSurface on the owning type."));
             });
     }
 

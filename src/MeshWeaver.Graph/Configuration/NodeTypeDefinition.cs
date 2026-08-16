@@ -160,6 +160,24 @@ public record NodeTypeDefinition
     public List<string>? RestrictedToNamespaces { get; init; }
 
     /// <summary>
+    /// When <c>true</c>, this NodeType's CURRENT baked assembly joins the kernel's
+    /// cell-scripting surface (issue #1649): every kernel session resolves it per session
+    /// through the compilation cache — metadata reference for compile-time visibility plus a
+    /// session-scoped runtime bind into its collectible load context — so <c>--render</c> /
+    /// executable cells can call the type's <c>Source/</c> API by bare name. Authored in the
+    /// pack's <c>index.json</c> as <c>cellSurface: true</c>; explicit opt-in keeps the script
+    /// surface a declaration instead of a load-order accident.
+    ///
+    /// <para>🚨 Single-home rule, enforced at compile time: a cell-surface NodeType's
+    /// <c>Source/</c> must not be <c>shared=</c>-consumed by any other NodeType. <c>shared=</c>
+    /// recompiles the source INTO each consumer's assembly, so a consumer would put the same
+    /// public types into a second assembly — and with both in a session's reference set every
+    /// bare-name cell call is ambiguous (<c>CS0433</c>). The compile of such a consumer fails
+    /// with a message naming this type (see <c>MeshNodeCompilationService</c>).</para>
+    /// </summary>
+    public bool CellSurface { get; init; }
+
+    /// <summary>
     /// When <c>true</c>, a top-level instance of this type OWNS its own partition — a
     /// dedicated backing store (a Postgres schema). The partition is provisioned, and the
     /// creator made its Admin, when the top-level instance is created (the NodeType is
