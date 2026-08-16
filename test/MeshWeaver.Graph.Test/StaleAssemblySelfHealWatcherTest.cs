@@ -109,6 +109,37 @@ public class StaleAssemblySelfHealWatcherTest
         hub.Received(1).Post(
             Arg.Any<DisposeRequest>(), Arg.Any<Func<PostOptions, PostOptions>>());
 
+    /// <summary>
+    /// 🚨 The #1669 regression: the publication arrives in UN-MATERIALIZED JSON shape — the normal
+    /// shape for a node that just crossed a sync stream, and exactly how the emission reached the
+    /// watcher in the ThinkInStreams/Subscribe + post-roll Store incidents. The old
+    /// <c>is NodeTypeDefinition</c> predicate was blind here, so the instance kept its stale
+    /// (worst case zero-areas) activation until a manual recycle. The watcher must recover the
+    /// definition via <c>ContentAs</c> and fire.
+    /// </summary>
+    [Fact]
+    public void UnmaterializedJsonEmission_StillRecyclesTheInstance()
+    {
+        var hub = BuildInstanceHub(out var capturedOptions);
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        hub.JsonSerializerOptions.Returns(options);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        using var watcher = NodeTypeEnrichmentHelpers.ArmStaleAssemblySelfHeal(
+            typeStream, hub, NodeTypePath, BoundAssembly, logger: null, scheduler);
+
+        // The same publication NewlyPublishedAssembly_… fires on — but serialized to a raw
+        // JsonElement, as the sync stream delivers it before materialization re-types it.
+        var typed = TypeNode(version: 12, assemblyPath: "TestData_StaleAssemblyType/v12-abc-222222222222.dll");
+        var json = System.Text.Json.JsonSerializer.SerializeToElement(
+            (NodeTypeDefinition)typed.Content!, options);
+        typeStream.OnNext(typed with { Content = json });
+
+        Settle(scheduler);
+        AssertDisposedExactlyOnce(hub);
+        AssertTargetsItself(capturedOptions);
+    }
+
     [Fact]
     public void NewlyPublishedAssembly_RecyclesTheInstance_ExactlyOnce()
     {
