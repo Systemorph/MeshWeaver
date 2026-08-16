@@ -74,15 +74,24 @@ public class ApprovalsLegacySurfaceCompileTest(ITestOutputHelper output) : Monol
                 Configuration = "config => config"
             },
             ("wiring", """
+                using System;
                 using MeshWeaver.Graph;
+                using MeshWeaver.Graph.Configuration;
+                using MeshWeaver.Layout;
+                using MeshWeaver.Layout.Composition;
                 using MeshWeaver.Messaging;
 
                 public static class LegacyApprovalsWiring
                 {
                     public const string Partition = ApprovalExtensions.ApprovalPartition;
+                    public const string TypeName = ApprovalNodeType.NodeType;
+                    public const string Area = ApprovalLayoutAreas.OverviewArea;
 
                     public static MessageHubConfiguration Wire(MessageHubConfiguration configuration)
-                        => configuration.AddApprovals();
+                        => configuration.AddApprovals().AddApprovalViews();
+
+                    public static IObservable<UiControl?> Views(LayoutAreaHost host, RenderingContext context)
+                        => ApprovalsView.InlineApprovals(host, context);
                 }
                 """));
 
