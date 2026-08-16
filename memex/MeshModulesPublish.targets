@@ -38,23 +38,23 @@
        dev `dotnet run` has no publish step and the flipped DLL exists nowhere else.
   -->
   <ItemGroup>
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.OpenAI/MeshWeaver.AI.OpenAI.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Notifications.Channels/MeshWeaver.Notifications.Channels.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
 
-    <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2, flip #1). -->
+    <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2). -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Notifications.Channels/MeshWeaver.Notifications.Channels.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.OpenAI/MeshWeaver.AI.OpenAI.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
   </ItemGroup>
 
   <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
