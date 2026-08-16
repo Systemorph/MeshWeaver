@@ -231,11 +231,20 @@ public static class AssemblyCacheGenerations
         // `v1-ab-cd.dll` be attributed to a generation — and attribution is what makes a file
         // deletable. Matching exactly what the writer emits is what keeps "only files this store
         // wrote are ever deleted" literally true.
-        return parts[1].Length == FrameworkTagLength && IsHex(parts[1])
+        return IsGenerationTag(parts[1])
                && parts[2].Length == ContentHashLength && IsHex(parts[2])
             ? parts[1].ToLowerInvariant()
             : null;
     }
+
+    // The two tag shapes the store has ever written (FrameworkVersion[..8], see
+    // FileSystemAssemblyStore.FrameworkTag): 8 hex chars for an MVID identity (local builds, and
+    // every build before #1660 WS3), or 'g' + 7 hex chars for a commit identity (CI builds since
+    // #1660 WS3 — FrameworkVersion is g<sha> there). Anything else stays unattributed and
+    // therefore undeletable.
+    private static bool IsGenerationTag(string s) =>
+        s.Length == FrameworkTagLength
+        && (IsHex(s) || ((s[0] == 'g' || s[0] == 'G') && IsHex(s[1..])));
 
     private static bool IsHex(string s) =>
         s.Length > 0 && s.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');

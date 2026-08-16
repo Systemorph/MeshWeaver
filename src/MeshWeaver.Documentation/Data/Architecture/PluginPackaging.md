@@ -90,35 +90,42 @@ environment, is narrower, and reintroduces the `CS0616` above.
 
 ---
 
-## 🚨 The framework identity is an MVID, not a version string
+## 🚨 The framework identity is a build fact, not a version string
 
 `HasUsableBuild` skips a compile only when `CompiledFrameworkVersion` equals the live
-`NodeTypeCompilationHelpers.FrameworkVersion` — and that value is the **Module Version Id of the
-MeshWeaver.Graph assembly**, not a semver.
+`NodeTypeCompilationHelpers.FrameworkVersion` — never a semver. Since
+[#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3 that value has two shapes, one
+resolution (`FrameworkBuildIdentity`): for a **CI-built framework** it is the **commit identity**
+`g<sha>` (stamped as `AssemblyMetadata("MeshWeaverFrameworkIdentity")`; CI builds are
+commit-deterministic, so every CI build of a commit shares it — including the separate workflow
+runs that bake content and build the image); for a **local build** it is the **Module Version Id
+of the MeshWeaver.Graph assembly** — a content identity.
 
-It is a *content* identity on purpose. Deriving it from `AssemblyInformationalVersion` forced
-`Directory.Build.props` to stamp a fresh version into every build, which regenerated `AssemblyInfo`
-every time and destroyed incremental compilation. The MVID decouples the two: the version string can
-stay stable across local rebuilds while ABI invalidation stays correct. For a deployed build it is
-fixed in the shipped DLL and changes only when framework content actually changes — so it recompiles
-*less* than a per-build-version scheme, not more.
+Neither is derived from `AssemblyInformationalVersion`, on purpose. Deriving identity from the
+version string once forced `Directory.Build.props` to stamp a fresh version into every build,
+which regenerated `AssemblyInfo` every time and destroyed incremental compilation. The identity
+decouples the two: the version string serves packages and image tags while ABI invalidation stays
+correct — and a commit-scoped CI identity recompiles *less* than the per-build scheme did (two
+builds of one commit now agree), never more.
 
 Three things follow.
 
-**A package must record the MVID.** `3.0.0-rc2` is not something the runtime ever compares. Two
-builds can share a version string and differ in content; the MVID is what says whether the bytes are
-ABI-compatible with the running process.
+**A package must record the identity.** `3.0.0-rc2` is not something the runtime ever compares.
+Two builds can share a version string and differ in content; the identity is what says whether the
+bytes are ABI-compatible with the running process. Producers read it with
+`FrameworkIdentity.ReadIdentity` (metadata-only PE read: the stamp when present, the MVID
+otherwise) — exactly what the consuming gate resolves in-process.
 
-**An installer that cannot establish the MVID must compile, never seed.** A wrong seed is worse than
-no seed: the assembly-store key carries the live framework tag
+**An installer that cannot establish the identity must compile, never seed.** A wrong seed is
+worse than no seed: the assembly-store key carries the live framework tag
 (`v{version}-{FrameworkTag}-{hash}.dll`, `FrameworkTag = FrameworkVersion[..8]`), so seeding
 foreign bytes under it suppresses the rebuild that was needed and the mismatch surfaces as a
 `TypeLoadException` inside an ALC at activation — no overlay, no diagnostic, nothing to grep.
 
-**Relaxing the check to a compatible semver range is the wrong trade.** It replaces a content fact
+**Relaxing the check to a compatible semver range is the wrong trade.** It replaces a build fact
 with a declared claim, and is only as good as whatever enforces the claim. The alternative needs no
-weakening at all: build plugin packages against the framework build that ships in the image, and the
-MVIDs match by construction.
+weakening at all: bake against the same commit the image is built from, and the identities match
+by construction.
 
 ## Why pre-filling the store works
 

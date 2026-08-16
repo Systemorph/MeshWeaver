@@ -49,40 +49,39 @@ older code would mint a higher `-ci.<n>` and roll installs backwards.
 
 > **The `memex-bake` leg is RETIRED (#1347).** It took **12m23s** of that 28m38s
 > *(measured 2026-07-28)* — a full portal-sized dependency closure, because reference fidelity
-> required it to reference `Memex.Portal.Shared` — and it could never have contributed a single
-> usable assembly. A separately-published image cannot share the portal image's framework identity:
-> `InformationalVersion` carries `+build.<UtcNow.Ticks>` under `CIRun`
-> (`Directory.Build.props`), stamped independently by **each** `dotnet publish`, so the bake
-> image's `MeshWeaver.Graph` and the portal image's differ in MVID even when built from the same
-> commit in the same CD run. The bake therefore wrote assemblies under a framework tag no portal
-> would ever look up — and, worse, its compile write-back flipped live NodeType records, which is
-> what stopped the one AKS attempt (memex-cloud, 2026-07-30). The pod-side sweep has the right
-> fingerprint *by construction* (it IS the serving process) and measures 76 s for 280 types.
+> required it to reference `Memex.Portal.Shared` — and, at the time, it could never have
+> contributed a single usable assembly: `InformationalVersion` then carried
+> `+build.<UtcNow.Ticks>` under `CIRun`, stamped independently by **each** `dotnet publish`, so
+> the bake image's `MeshWeaver.Graph` and the portal image's differed in MVID even when built from
+> the same commit in the same CD run. The bake therefore wrote assemblies under a framework tag no
+> portal would ever look up — and, worse, its compile write-back flipped live NodeType records,
+> which is what stopped the one AKS attempt (memex-cloud, 2026-07-30). #1660 WS3 removed the ticks
+> stamp and made the framework identity **commit-scoped** (`g<sha>`, see below) — the CI bake now
+> rides the Build-and-Test run's `mw-plugin-test --bake-output` artifact, which `main-cd`'s
+> `publish-bake` job copies to the portals' storage; the pod-side sweep then adopts it at boot
+> (`ShippedPrebuiltBundles.SeedPublishedRoot`) and compiles only what CI did not bake.
 
-### Every core release invalidates the compile cache — plan for the bake on all of them
+### Every core release still invalidates the compile cache — but CI pre-pays the bake
 
-This page used to claim the opposite: that a release touching only, say, `MeshWeaver.Blazor.Portal`
-leaves Graph's bytes identical, so "every cached assembly stays valid and there is no bake at all".
-**That is false, and it is false twice over.** Do not plan a release around it.
+The compile cache keys on the **framework identity** (`NodeTypeCompilationHelpers.FrameworkVersion`).
+Since #1660 WS3 that identity is **the commit** for CI builds (`g<sha>`, stamped as
+`AssemblyMetadata("MeshWeaverFrameworkIdentity")` by `Directory.Build.props`; local builds keep
+Graph's MVID). Two consequences, replacing the per-build-ticks scheme this section used to
+describe:
 
-The compile cache keys on **Graph's MVID** (`NodeTypeCompilationHelpers.FrameworkVersion` — the
-`MeshWeaver.Graph` module's content hash). Both halves of the old claim break down:
-
-1. **The MVID is not content-stable in CI.** `Directory.Build.props` stamps the
-   `InformationalVersion` property with `$([System.DateTime]::UtcNow.Ticks)` under `CIRun`, and that
-   attribute is compiled *into* every assembly — Graph included. So **Graph's MVID changes on every
-   CI build regardless of which source files the release touched**, and every cached assembly is
-   invalidated on every core release. That stamp is deliberate and load-bearing (see point 2); the
-   mistake was reasoning about the MVID as if it were a pure content hash of Graph's *source*.
-2. **Graph's dependency closure is not the ABI boundary anyway.** A NodeType compiles against
+1. **Every core release is still a full invalidation** — a release is a new commit, so the
+   identity changes even when the release touches only, say, `MeshWeaver.Blazor.Portal`. That
+   breadth is deliberate: a NodeType compiles against
    `AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")` — **every assembly in the image**, not just
-   what Graph references (`MeshNodeCompilationService.GetDefaultReferences`). So a breaking change
-   in an assembly Graph never references is still inside a NodeType's reference set, and a
-   content-stable Graph MVID would happily declare those stale assemblies valid and load them.
-
-Together: the ticks stamp is what keeps invalidation *conservative* over that wider reference set.
-**Budget every core release as a full bake** — which, at the real measured cost below, is minutes,
-not the hours this page used to imply.
+   Graph's dependency closure (`MeshNodeCompilationService.GetDefaultReferences`) — and a commit
+   names the entire tree, so any reference-assembly change flips the identity. (Graph's bare MVID
+   would not: it only covers Graph's own compile inputs.)
+2. **The invalidation no longer implies pod-side Roslyn.** CI compile inputs are
+   commit-deterministic (no run number or timestamp reaches any compiled attribute), so the
+   Build-and-Test bake, the CD-built images, and the booting pods all agree on the identity for a
+   given commit — the pods adopt the CI-baked assemblies instead of recompiling. The bake tax
+   below is still the truth for anything CI did not bake (user-partition NodeTypes, a reuse-green
+   run that skipped the bake job, a deployment without `PreWarm__PrebuiltBundleRoot`).
 
 ---
 
@@ -131,9 +130,12 @@ Cost is dominated by that repo's own CI, not by the mesh. Only if the change tou
 
 ## The bake tax
 
-When the framework MVID *does* change, every dynamic NodeType must be recompiled against the new
-framework — by design, for ABI safety (assemblies built against the old framework may reference
-members whose signatures moved).
+When the framework identity *does* change, every dynamic NodeType must be recompiled against the
+new framework — by design, for ABI safety (assemblies built against the old framework may reference
+members whose signatures moved). Since #1660 WS3 the CI bake pre-pays this for shipped content
+(the pod adopts the published bundles at boot); the figures below are what any REMAINING compile
+costs — user-partition types, and the whole fleet wherever the published-bundle lane is not
+provisioned.
 
 **This cost is not new and the bake does not add it.** Without the bake it is paid *lazily*:
 unordered, on user requests, on a pod already serving, ~2.4 s at a time in front of whoever arrives

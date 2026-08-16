@@ -41,6 +41,20 @@ public static class ShippedPrebuiltBundles
     /// Default: <see cref="DefaultDirectory"/>.</summary>
     public const string DirectoryConfigKey = "PreWarm:PrebuiltDirectory";
 
+    /// <summary>
+    /// Config key naming the CI-PUBLISHED bundle root (issue #1660 WS3) — a mounted storage
+    /// directory (on AKS, a path under the shared <c>/data</c> Azure Files share) that CI fills
+    /// with framework-identity-keyed bundle directories:
+    /// <c>&lt;root&gt;/&lt;frameworkIdentity&gt;/&lt;source&gt;/&lt;bundle&gt;.zip</c>
+    /// (written by <c>.github/scripts/publish-bake-bundles.sh</c> from the
+    /// <c>mw-plugin-test --bake-output</c> artifact). At boot the pod seeds ONLY its own
+    /// identity's subdirectory — CI builds are commit-deterministic, so the bake published for
+    /// commit X is found by exactly the images built from commit X. Unset (the default) the lane
+    /// is inert. Distinct from <see cref="DirectoryConfigKey"/>, which names bundles the IMAGE
+    /// itself ships.
+    /// </summary>
+    public const string PublishedRootConfigKey = "PreWarm:PrebuiltBundleRoot";
+
     /// <summary>The conventional location — <c>prebuilt/</c> beside the app binaries, which is
     /// where the publish lays <c>$(PrebuiltBakeDir)</c> bundles into the image.</summary>
     public static string DefaultDirectory => Path.Combine(AppContext.BaseDirectory, "prebuilt");
@@ -67,6 +81,50 @@ public static class ShippedPrebuiltBundles
         => Observable.Defer(() =>
         {
             var dir = string.IsNullOrWhiteSpace(directory) ? DefaultDirectory : directory;
+            return SeedDirectory(mesh, dir, SearchOption.TopDirectoryOnly, logger);
+        });
+
+    /// <summary>
+    /// Seeds the CI-published bundles for THIS process's framework identity from the configured
+    /// published root (<see cref="PublishedRootConfigKey"/>): the pod resolves its own
+    /// <c>FrameworkVersion</c> and seeds <c>&lt;root&gt;/&lt;identity&gt;/**/*.zip</c> — the
+    /// layout CI's publish step writes, one <c>&lt;source&gt;</c> subdirectory per producing repo.
+    /// Emits the number of assemblies adopted; inert (0, debug-logged) when the root is not
+    /// configured, and loud-but-degrading like <see cref="SeedAll"/> everywhere else — a missing
+    /// or partial publication only ever costs what today costs, a compile.
+    /// </summary>
+    /// <param name="mesh">The mesh hub (supplies the workspace, the I/O pool and the services).</param>
+    /// <param name="publishedRoot">The published bundle root, or null/blank when the deployment
+    /// does not consume CI bakes.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static IObservable<int> SeedPublishedRoot(IMessageHub mesh, string? publishedRoot, ILogger? logger)
+        => Observable.Defer(() =>
+        {
+            if (string.IsNullOrWhiteSpace(publishedRoot))
+            {
+                logger?.LogDebug(
+                    "ShippedPrebuiltBundles: no published bundle root configured ({Key}) — "
+                    + "CI-published bakes are not consumed here", PublishedRootConfigKey);
+                return Observable.Return(0);
+            }
+            var identity = PrebuiltAssemblySeeder.LiveFrameworkMvid;
+            var dir = Path.Combine(publishedRoot, identity);
+            if (!Directory.Exists(dir))
+                // Info, not debug: on a deployment that HAS opted in, "CI published nothing for
+                // this identity" is the one line that explains why the sweep is compiling.
+                logger?.LogInformation(
+                    "ShippedPrebuiltBundles: no CI-published bundles for framework identity "
+                    + "{Identity} under {Root} — the sweep compiles instead",
+                    identity, publishedRoot);
+            return SeedDirectory(mesh, dir, SearchOption.AllDirectories, logger);
+        });
+
+    /// <summary>The shared seeding core: every <c>*.zip</c> under <paramref name="dir"/>
+    /// (recursively for the published-root lane), through the one bundle pipeline.</summary>
+    private static IObservable<int> SeedDirectory(
+        IMessageHub mesh, string dir, SearchOption searchOption, ILogger? logger)
+        => Observable.Defer(() =>
+        {
             if (!Directory.Exists(dir))
             {
                 logger?.LogDebug(
@@ -91,7 +149,7 @@ public static class ShippedPrebuiltBundles
                     () => AccessContextScope.AsSystem(accessService),
                     _ => pool
                         .InvokeBlocking(_ => Directory
-                            .EnumerateFiles(dir, "*.zip")
+                            .EnumerateFiles(dir, "*.zip", searchOption)
                             .OrderBy(f => f, StringComparer.Ordinal)
                             .ToList())
                         .SelectMany(bundles =>
