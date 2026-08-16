@@ -103,7 +103,12 @@ public static class PluginCatalogConfigurationExtensions
                 // (Doc/Architecture/CandidateReleaseProtocol). A plain singleton, NOT a hosted
                 // service: it is a pull-on-demand READER — it starts nothing, subscribes to nothing,
                 // and writes nothing, so it costs an instance that never calls it exactly nothing.
-                .AddSingleton<InstanceComboReader>())
+                .AddSingleton<InstanceComboReader>()
+                // The runtime modules/ writer (#1664 step 7) — lands a compiled module's
+                // assemblies + activation record; restart-as-activation. Inert until called:
+                // Slice C's PackageInstaller binary branch is its caller. Mesh-scoped so its
+                // bounded IO pool dies with the mesh.
+                .AddSingleton<ModuleLandingService>())
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();

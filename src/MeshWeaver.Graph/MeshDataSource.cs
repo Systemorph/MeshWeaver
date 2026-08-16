@@ -1820,6 +1820,13 @@ public static class MeshDataSourceExtensions
     /// forever) and degrade rather than fail.</para>
     ///
     /// <para>Non-NodeType nodes answer <c>true</c>, so this is safe to ask about any MeshNode.</para>
+    ///
+    /// <para>🚨 Deliberately a NULL caller of the modules-hash join (#1664 step 11): this is a
+    /// pure <see cref="MeshNode"/> predicate with no hub in scope, so it cannot resolve the mesh's
+    /// live <c>InstalledModulesFingerprint</c> and passes <c>null</c> — the framework rule alone
+    /// governs it. Acceptable because its callers (PackageInstaller's post-install waits) run on
+    /// the very mesh that just compiled the build, where the stamped hash IS the live hash; the
+    /// hash-decisive gates are the kickoff/enrichment paths, which all pass the live hash.</para>
     /// </summary>
     /// <param name="node">The NodeType MeshNode to judge.</param>
     /// <returns>False only while the node is mid-compile or is advertising an unloadable build.</returns>
