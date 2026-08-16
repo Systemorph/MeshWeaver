@@ -15,9 +15,10 @@
          shells call — an unmapped one there answers the SPA fallback with a 200, not a 404 (#1474). -->
     <ProjectReference Include="..\..\memex\Memex.LocalMesh\Memex.LocalMesh.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
-    <!-- Direct on purpose (#1644 step 2): the export engine left Memex.Portal.Shared's closure
-         (it ships via modules/), so ModuleLaneSwitchTest anchors the real DLL itself. -->
+    <!-- Direct on purpose (#1644 step 2): these modules left Memex.Portal.Shared's closure
+         (they ship via modules/), so the module-fold tests anchor the real DLLs themselves. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Export\MeshWeaver.Markdown.Export.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.OgCard\MeshWeaver.OgCard.csproj" />
     <!-- MigrationRegistryTest runs the migration runner's own start-up guard (VerifyComplete) in
          `dotnet test`. It only ever ran INSIDE the migration container before, so a registry/
          DbVersion.Latest drift shipped a dead image while main stayed green (V53, 2026-08-14). -->

@@ -13,7 +13,9 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Radzen\MeshWeaver.Blazor.Radzen.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Analysis\MeshWeaver.Blazor.Analysis.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.GoogleMaps\MeshWeaver.Blazor.GoogleMaps.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.OgCard\MeshWeaver.OgCard.csproj" />
+    <!-- MeshWeaver.OgCard is deliberately NOT referenced (#1644 step 2): it ships via the
+         modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
+         Modules:Assemblies -> OgCardModuleAttribute. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Approvals\MeshWeaver.Approvals.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.OpenStreetMap\MeshWeaver.Blazor.OpenStreetMap.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AppleMaps\MeshWeaver.Blazor.AppleMaps.csproj" />
