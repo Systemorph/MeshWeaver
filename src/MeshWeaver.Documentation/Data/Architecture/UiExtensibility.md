@@ -208,8 +208,10 @@ deliberately cannot express.
 
 Honesty section — these are the known walls, so nobody burns a day rediscovering them:
 
-- **HTTP endpoints.** There is no endpoint-contribution seam; `app.Map*()` calls live in the portal
-  composition. (This is what keeps the course-asset endpoint compiled in the portal.)
+- ~~**HTTP endpoints.**~~ No longer a wall: a MODULE contributes routes via
+  `MeshEndpointProviderAttribute` (`MeshWeaver.Hosting.AspNetCore`) — authenticated by default,
+  loud startup refusal on route collisions; see [Modules](/Doc/Architecture/Modules). Mesh DATA
+  (plugins' nodes) still cannot contribute endpoints — trusted compiled code only.
 - **Runtime `.razor` from mesh content.** The in-mesh compile pipeline is C#-only — there is no
   Razor engine at runtime, and collectible recompiles would fight the Blazor renderer's
   type-identity caching. Precompiled packs are the answer, not runtime Razor.

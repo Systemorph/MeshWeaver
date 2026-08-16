@@ -23,6 +23,14 @@ A module carries one assembly-level attribute deriving from `MeshNodeProviderAtt
 | `DefaultNodeHubConfigurations` | Configuration applied to EVERY per-node hub (layout areas, type registrations) |
 | `BuilderConfigurations` | The full-surface hook — a `MeshBuilder → MeshBuilder` fold, applied last |
 
+HTTP endpoints ride a SEPARATE assembly attribute — `MeshEndpointProviderAttribute`
+(`MeshWeaver.Hosting.AspNetCore`), applied by the host's `app.MapMeshModuleEndpoints()` at
+endpoint-mapping time. The split is layering (the mesh contract never references ASP.NET) and
+timing (endpoints map after the auth middleware). Every contribution maps inside an
+authenticated-by-default group — a route is anonymous only where the module explicitly opts out —
+and duplicate (verb, pattern) registrations refuse the app loudly at startup. Delisting the
+module removes its routes wholesale: a 404, not a compiled optional-service 503.
+
 Module DI options bind through the options pipeline —
 `services.AddOptions<T>().BindConfiguration("Section")` — never `services.Configure(section)`:
 there is no `IConfiguration` instance at install time. A module whose activation depends on

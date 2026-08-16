@@ -81,6 +81,7 @@
     <Project Path="src/MeshWeaver.Fixture/MeshWeaver.Fixture.csproj" />
     <Project Path="src/MeshWeaver.Reactive.Assertions/MeshWeaver.Reactive.Assertions.csproj" />
     <Project Path="src/MeshWeaver.Maps/MeshWeaver.Maps.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.AspNetCore/MeshWeaver.Hosting.AspNetCore.csproj" />
     <Project Path="src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
     <Project Path="src/MeshWeaver.Approvals/MeshWeaver.Approvals.csproj" />
     <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
