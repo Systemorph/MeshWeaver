@@ -282,15 +282,41 @@ jobs:
       # stalled queue — AGENTS.md's trap #1), the check reads `missing`, nothing can publish that
       # commit, and without this the reconciler would go quiet about it every 3 h forever.
       - name: Ensure Azure CLI
-        if: steps.target.outputs.reason == 'reconcile'
+        if: steps.target.outputs.reason == 'reconcile' || vars.CD_BATCH_WINDOW_MINUTES != ''
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
-        if: steps.target.outputs.reason == 'reconcile'
+        if: steps.target.outputs.reason == 'reconcile' || vars.CD_BATCH_WINDOW_MINUTES != ''
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # ── BATCHING (push path only, opt-in via repo var CD_BATCH_WINDOW_MINUTES) ─────────────
+      # Maintainer 2026-08-16: "batch updates are ok." A merge landing while the NEWEST published
+      # version tag is younger than the window does not publish; the 3-hourly reconciler then
+      # publishes main's tip on its next tick (its registry-first probe sees the missing set and
+      # heals it — that machinery predates batching and re-checks the required check itself).
+      # `workflow_dispatch` bypasses the window by construction (it enters via the reconcile
+      # branch), so an urgent fix ships immediately with one manual run.
+      # 🚨 FAILS OPEN: if the registry cannot be read, the age reports 999999 and the merge
+      # publishes — a broken batching probe must cost at most one extra image build, never a
+      # missed publish. Unset/empty var = publish every merge (the historical behavior).
+      - name: "Age of the newest published set (batching probe)"
+        id: freshness
+        if: steps.target.outputs.reason == 'push' && vars.CD_BATCH_WINDOW_MINUTES != ''
+        run: |
+          set -uo pipefail
+          newest=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
+            --orderby time_desc --detail --top 20 \
+            --query "[?contains(name, 'ci.')] | [0].lastUpdateTime" -o tsv 2>/dev/null || true)
+          if [ -n "$newest" ]; then
+            age_min=$(( ( $(date -u +%s) - $(date -u -d "$newest" +%s) ) / 60 ))
+          else
+            age_min=999999
+            echo "::warning::Batching probe could not read the registry — failing OPEN (this merge publishes)."
+          fi
+          echo "Newest published ci tag: ${newest:-<none>} (${age_min} min ago)"
+          echo "age_min=$age_min" >> "$GITHUB_OUTPUT"
       - name: "Does main's HEAD already have a complete image set?"
         id: acr
         if: steps.target.outputs.reason == 'reconcile'
@@ -328,6 +354,8 @@ jobs:
           COMPLETE: ${{ steps.acr.outputs.complete }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           MAX_ATTEMPTS: "3"
+          BATCH_WINDOW: ${{ vars.CD_BATCH_WINDOW_MINUTES }}
+          FRESH_AGE_MIN: ${{ steps.freshness.outputs.age_min }}
         run: |
           set -euo pipefail
           decision() { echo "publish=$1" >> "$GITHUB_OUTPUT"; echo "### $2" >> "$GITHUB_STEP_SUMMARY"; echo "$2"; }
@@ -340,10 +368,15 @@ jobs:
           }
 
           if [ "$REASON" = "push" ]; then
-            if [ "$GREEN" = "true" ]; then
-              decision true "✅ Required check green — publishing the full image set for \`$SHORT\`"
-            else
+            if [ "$GREEN" != "true" ]; then
               decision false "⛔ \`Consolidate test results\` on $SHORT is \`$CONCL\` — nothing will be built"
+            # Batching window (see the freshness probe above): a green merge inside the window
+            # defers to the reconciler's next tick. Deliberately SILENT beyond the summary — this
+            # is intentional cadence, not a fault, and the reconciler self-heals it by design.
+            elif [ -n "${BATCH_WINDOW:-}" ] && [ "${FRESH_AGE_MIN:-999999}" -lt "$BATCH_WINDOW" ]; then
+              decision false "🕐 Batched: newest published set is ${FRESH_AGE_MIN} min old (< ${BATCH_WINDOW} min window) — the 3-hourly reconciler will publish main's tip; run this workflow manually to ship now"
+            else
+              decision true "✅ Required check green — publishing the full image set for \`$SHORT\`"
             fi
             exit 0
           fi
