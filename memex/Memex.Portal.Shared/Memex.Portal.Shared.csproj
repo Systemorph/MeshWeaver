@@ -31,6 +31,9 @@
     <!-- The package FORMAT, shared with the CI tool so the feed and a CI pack cannot disagree. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Plugin.Packaging\MeshWeaver.Plugin.Packaging.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Observability\MeshWeaver.Observability.csproj" />
+    <!-- Notification delivery channels module (double-ship transition state: the bits ride this
+         ProjectReference; activation is the hosts' Modules:Assemblies listing). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Notifications.Channels\MeshWeaver.Notifications.Channels.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.InstanceSync\MeshWeaver.InstanceSync.csproj" />
     <!-- Content → vector index (core tech): chunk/embed/store on a separate Postgres vector DB,
          per-file Document nodes, chunk-search autocomplete. Inert unless ConnectionStrings:contentindex

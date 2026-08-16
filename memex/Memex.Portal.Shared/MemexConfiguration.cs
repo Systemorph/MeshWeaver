@@ -144,9 +144,9 @@ public static class MemexConfiguration
             // permission). EaGraphAuth drives the consent/token flow; the plugin uses the per-user token.
             services.AddHttpClient<Authentication.IEaGraphAuth, Authentication.EaGraphAuth>();
             services.AddSingleton<MeshWeaver.AI.Plugins.IAgentPlugin, ExecutiveAssistantPlugin>();
-            // Notification triage runner — escalates in-app notifications to email/Teams per each
-            // recipient's NotificationRules, via the cheap triage agent (only fires for users with rules).
-            services.AddHostedService<Memex.Portal.Shared.Notifications.NotificationTriageService>();
+            // The notification triage runner (escalates in-app notifications to email/Teams per each
+            // recipient's NotificationRules) rides the MeshWeaver.Notifications.Channels module
+            // (Modules:Assemblies); its hosted service self-skips unless Email:Enabled.
         }
         else
             services.AddSingleton<IEmailSender, NoOpEmailSender>();
