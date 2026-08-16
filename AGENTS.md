@@ -189,6 +189,14 @@ gh pr merge PR_NUMBER --merge
 
 ### 🚨 A merged fix can look SHIPPED while producing no image — verify the IMAGE, never the tick
 
+**Publishes are BATCHED (maintainer, 2026-08-16).** When repo var `CD_BATCH_WINDOW_MINUTES` is set,
+a green merge whose newest published set is younger than the window does NOT publish — the 3-hourly
+reconciler publishes main's tip on its next tick instead. The decision step's summary says
+`🕐 Batched` when this happened, so "merged + green + no new tag" inside the window is INTENTIONAL,
+not the trap below. To ship a specific fix immediately: `gh workflow run main-cd.yml --ref main`
+(the manual path bypasses the window by construction). The probe fails OPEN — an unreadable
+registry publishes rather than blocks.
+
 `main-cd.yml` builds and pushes the deployment images. Its `workflow_run` path is still gated on
 `event == 'push' && head_branch == 'main'` — that gate is what stops a **fork's** pull_request run
 (whose `head_branch` can also be "main") from publishing untrusted code with this repo's secrets,
