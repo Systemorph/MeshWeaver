@@ -81,6 +81,9 @@ public static class GraphConfigurationExtensions
             // catalog the menu aggregation maps (one query subscription per silo).
             builder.AddUiContributionType();
             builder.ConfigureServices(s => s.AddSingleton<UiContributionCatalog>());
+            // The installed-module fingerprint (#1644): resolves the mesh's InstalledModuleAssembly
+            // set (empty when no modules) — stamped by compile write-backs as CompiledModulesHash.
+            builder.ConfigureServices(s => s.AddSingleton<InstalledModulesFingerprint>());
 
             // The static-repo importer runs its bulk create/upsert traffic on a DEDICATED
             // hub (import/{meshHubId}) so it never floods the root mesh hub's action block —

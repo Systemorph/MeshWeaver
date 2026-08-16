@@ -61,4 +61,6 @@
     <PackageReference Include="Microsoft.Orleans.Sdk" />
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" />
   </ItemGroup>
+
+  <Import Project="..\..\MeshModulesPublish.targets" />
 </Project>

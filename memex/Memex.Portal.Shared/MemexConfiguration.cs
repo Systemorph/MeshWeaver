@@ -579,10 +579,10 @@ public static class MemexConfiguration
             // fail loudly at startup, never silently run without the pack.
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
             if (moduleAssemblies is { Length: > 0 })
+                // ResolveModulePath probes the modules/<name>/ publish layout first (#1644),
+                // then falls back to the classic BaseDirectory-relative location.
                 builder.InstallAssemblies(moduleAssemblies
-                    .Select(path => Path.IsPathRooted(path)
-                        ? path
-                        : Path.Combine(AppContext.BaseDirectory, path))
+                    .Select(MeshBuilder.ResolveModulePath)
                     .ToArray());
 
             // Read graph storage config
