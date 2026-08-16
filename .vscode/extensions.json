@@ -1,0 +1,10 @@
+{
+  // C# Dev Kit is what gives VS Code a Solution Explorer, the .NET: Build commands and .slnx
+  // support. Without it the plain C# extension contributes no build command and no task provider
+  // at all (`taskDefinitions: []`), which is why "dotnet build" is missing from every menu.
+  "recommendations": [
+    "ms-dotnettools.csdevkit",
+    "ms-dotnettools.csharp",
+    "ms-dotnettools.vscode-dotnet-runtime"
+  ]
+}

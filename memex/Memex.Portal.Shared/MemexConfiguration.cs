@@ -29,6 +29,7 @@ using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.PostgreSql;
@@ -318,41 +319,13 @@ public static class MemexConfiguration
         }
         // CopilotConnectStrategy registers from the Copilot pack (Modules:Assemblies).
 
-        // Social publishing — the LinkedIn connect + pull endpoints. (The never-wired
-        // hosted-service pipeline around AddSocialPublishing was deleted as unreachable;
-        // if scheduling/ingest ever returns it will be built node-native in the
-        // SocialMedia repo, not compiled here.)
-        var linkedInClientId = builder.Configuration["Social:LinkedIn:ClientId"];
-        if (!string.IsNullOrEmpty(linkedInClientId))
-        {
-            services.AddHttpClient<MeshWeaver.Social.LinkedInPublisher>();
-            services.AddSingleton(new MeshWeaver.Social.LinkedInOptions
-            {
-                ClientId = linkedInClientId!,
-                ClientSecret = builder.Configuration["Social:LinkedIn:ClientSecret"] ?? ""
-            });
-
-            // Add the menu provider so "Connect LinkedIn" + "Pull LinkedIn posts"
-            // appear on the viewer's own user page.
-            services.TryAddEnumerable(
-                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
-                    MeshWeaver.Mesh.INodeMenuProvider,
-                    Memex.Portal.Shared.Social.LinkedInCredentialMenuProvider>());
-
-            // Add the Publish/Refresh-engagement actions to a social-media Post node's menu.
-            services.TryAddEnumerable(
-                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
-                    MeshWeaver.Mesh.INodeMenuProvider,
-                    Memex.Portal.Shared.Social.SocialPostMenuProvider>());
-
-            // (Removed: SocialMediaUserMenuProvider — hardcoded a NodeType
-            // ("Systemorph/SocialMediaHub") that isn't registered anywhere in
-            // the codebase. NodeTypes belong in the database (NodeTypeDefinition
-            // MeshNodes), not as DLL-side string constants. The SocialMedia
-            // hub feature should be added back when its NodeType is defined
-            // through the regular mesh node creation flow rather than wired
-            // through a DLL-time CreateNode that fails on the receiver.)
-        }
+        // Social publishing (LinkedIn connect/publish/page-sync + node-menu providers) rides the
+        // MeshWeaver.Social MODULE (Modules:Assemblies): SocialMeshModuleAttribute registers the
+        // DI services + menu providers, SocialModuleAttribute contributes the endpoints via
+        // app.MapMeshModuleEndpoints() below. Only the ApiCredential NodeType registration
+        // (AddApiCredentialType) and the LinkedIn SIGN-IN scheme (AddLinkedInAuthentication)
+        // stay compiled here — existing credential nodes must deserialize and auth schemes
+        // configure before the host builds, module or no module.
 
         // Configure authentication
         var authSection = builder.Configuration.GetSection(PortalAuthOptions.SectionName);
@@ -1072,7 +1045,7 @@ public static class MemexConfiguration
         app.UseCookiePolicy();
 
         // User-context middleware MUST run BEFORE the terminal endpoint maps
-        // (MapMeshMcp / MapMeshWeaver / MapLinkedInConnect). Once a request
+        // (MapMeshMcp / MapMeshWeaver / MapGitHubConnect). Once a request
         // matches a terminal endpoint, no further `app.UseMiddleware<…>()`
         // registered AFTER the Map* call ever sees it. With UserContextMiddleware
         // after MapMeshMcp, MCP-Bearer requests skipped it entirely →
@@ -1127,6 +1100,11 @@ public static class MemexConfiguration
         // but with NO anonymous mode: it hands out compiled assemblies for paid modules.
         app.MapPluginBundles();
 
+        // Module endpoint contributions (design #1655): every Modules:Assemblies DLL carrying a
+        // MeshEndpointProviderAttribute maps its routes here — authenticated by default, loud
+        // startup failure on route collisions. Delisting a module removes its routes wholesale.
+        app.MapMeshModuleEndpoints();
+
         // First-startup auto-registration — POST /api/instances/register. A new deployment presents
         // an admin-minted bootstrap key (mwr_) and receives its own instance key (mwi_) once;
         // PluginCatalog:DefaultGrants seeding applies. The bootstrap key in the body IS the auth.
@@ -1157,19 +1135,8 @@ public static class MemexConfiguration
         // override cookie and redirects — the reversible switch both shells link to.
         app.MapFrontendSelection();
 
-
-        // Social publishing — LinkedIn connect/pull endpoints. Must be AFTER
-        // UseAuthentication so HttpContext.User is populated.
-        app.MapLinkedInConnect();
-
-        // LinkedIn company-Page sync (Community Management API) — org-scope OAuth +
-        // posts/statistics pull. Same ordering requirement (needs HttpContext.User).
-        app.MapLinkedInPageSync();
-
-        // LinkedIn member publishing + engagement — POST /linkedin/publish (JSON API) plus
-        // GET /linkedin/publish and GET /linkedin/engagement triggers surfaced from the Post
-        // node menu (w_member_social scope). Same ordering requirement (needs HttpContext.User).
-        app.MapLinkedInPublish();
+        // (LinkedIn connect/publish/page-sync endpoints ride the MeshWeaver.Social module —
+        // contributed through app.MapMeshModuleEndpoints() above via SocialModuleAttribute.)
 
         // GitHub Sync — OAuth authorization-code connect endpoints (same ordering
         // requirement: needs HttpContext.User). Stores the per-user token at

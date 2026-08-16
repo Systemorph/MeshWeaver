@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.OgCard\MeshWeaver.OgCard.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Approvals\MeshWeaver.Approvals.csproj" />
     <!-- The packer's manifest projection is pinned here rather than in a project of its own: it is
          a handful of pure functions, and the alternative — a new test project — costs a shard entry
          and a README for less coverage than this one file already carries. -->

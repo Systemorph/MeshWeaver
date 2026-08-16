@@ -1,16 +1,13 @@
-using System.Linq;
 using System.Reactive.Linq;
-using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.Social;
+using Microsoft.Extensions.Options;
 
-namespace Memex.Portal.Shared.Social;
+namespace MeshWeaver.Social;
 
 /// <summary>
 /// Adds two contextual menu items for the LinkedIn publishing integration:
@@ -26,9 +23,17 @@ namespace Memex.Portal.Shared.Social;
 ///
 /// Both items require Update permission on the target node, which the viewer
 /// has by definition on their own user + satellites.
+///
+/// <para>The credential-presence and node-shape predicates are beyond the closed
+/// <c>UiContribution</c> vocabulary, so this stays a DI provider — registered by the
+/// Social module's <see cref="SocialExtensions.AddSocial"/> configure path. It emits
+/// nothing while <c>Social:LinkedIn:ClientId</c> is unconfigured, preserving the
+/// pre-module behaviour where the provider was only registered when configured.</para>
 /// </summary>
-public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
+/// <param name="options">LinkedIn app options; an empty ClientId keeps the provider inert.</param>
+public sealed class LinkedInCredentialMenuProvider(IOptions<LinkedInOptions> options) : INodeMenuProvider
 {
+    /// <inheritdoc />
     public string Context => NodeMenuItemsExtensions.NodeMenuContext;
 
     /// <summary>
@@ -40,6 +45,9 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
     public IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> GetItems(
         LayoutAreaHost host, RenderingContext ctx)
     {
+        if (string.IsNullOrEmpty(options.Value.ClientId))
+            return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>([]);
+
         var hubPath = host.Hub.Address.ToString();
         var accessService = host.Hub.ServiceProvider.GetService(typeof(AccessService)) as AccessService;
         var viewerId = accessService?.Context?.ObjectId
@@ -67,8 +75,8 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
             return Observable.Return(empty);
 
         // Case 1: viewer's own User node.
-        if (hubPath.Equals($"User/{viewerId}", System.StringComparison.OrdinalIgnoreCase)
-            && string.Equals(node.NodeType, "User", System.StringComparison.OrdinalIgnoreCase))
+        if (hubPath.Equals($"User/{viewerId}", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(node.NodeType, "User", StringComparison.OrdinalIgnoreCase))
         {
             // Only show "Link LinkedIn" when no credential exists yet. Synced query via
             // workspace.GetQuery — bypasses RLS, gated on Initial, deduped by path. Live, so the
@@ -91,10 +99,12 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
         }
 
         // Case 2: an ApiCredential node for LinkedIn.
-        if (string.Equals(node.NodeType, ApiCredentialNodeType.NodeType, System.StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(node.NodeType, PlatformCredential.ApiCredentialNodeType, StringComparison.OrdinalIgnoreCase))
         {
-            var platform = ExtractPlatform(node);
-            if (!string.Equals(platform, LinkedInPublisher.PlatformId, System.StringComparison.OrdinalIgnoreCase))
+            // ContentAs, never a direct cast: on a hub without the type registered the content
+            // degrades to a JsonElement, which the accessor recovers (ObjectAsExtensions).
+            var platform = node.ContentAs<PlatformCredential>(host.Hub.JsonSerializerOptions)?.Platform;
+            if (!string.Equals(platform, LinkedInPublisher.PlatformId, StringComparison.OrdinalIgnoreCase))
                 return Observable.Return(empty);
 
             // The credential node lives at {userPath}/_ApiCredentials/{platform} — the
@@ -112,27 +122,17 @@ public sealed class LinkedInCredentialMenuProvider : INodeMenuProvider
                     Icon: "ArrowDownload",
                     RequiredPermission: Permission.Update,
                     Order: 10,
-                    Href: $"/connect/linkedin/pull?profile={System.Uri.EscapeDataString(userPath)}"),
+                    Href: $"/connect/linkedin/pull?profile={Uri.EscapeDataString(userPath)}"),
                 new NodeMenuItemDefinition(
                     Label: "Re-authorize",
                     Area: "ReAuthorizeLinkedIn",
                     Icon: "ArrowSync",
                     RequiredPermission: Permission.Update,
                     Order: 20,
-                    Href: $"/connect/linkedin?profile={System.Uri.EscapeDataString(userPath)}"),
+                    Href: $"/connect/linkedin?profile={Uri.EscapeDataString(userPath)}"),
             ]);
         }
 
         return Observable.Return(empty);
-    }
-
-    private static string? ExtractPlatform(MeshNode node)
-    {
-        if (node.Content is PlatformCredential typed) return typed.Platform;
-        if (node.Content is System.Text.Json.JsonElement je
-            && je.TryGetProperty("platform", out var p)
-            && p.ValueKind == System.Text.Json.JsonValueKind.String)
-            return p.GetString();
-        return null;
     }
 }

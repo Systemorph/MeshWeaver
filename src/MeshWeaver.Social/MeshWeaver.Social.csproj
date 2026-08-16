@@ -1,8 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Description>Social publishing for MeshWeaver: platform publisher abstraction with a LinkedIn implementation, approval-gated publishing, and analytics.</Description>
+    <Description>Social publishing module for MeshWeaver: LinkedIn connect/publish/page-sync endpoints and node-menu actions riding the module lane, platform publisher abstraction with a LinkedIn implementation, approval-gated publishing, and analytics.</Description>
     <ProjectGuid>{d5c9f8a1-2b7e-4c9a-9f43-6d8f2a0e7b41}</ProjectGuid>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The endpoint contributions (LinkedIn connect/publish/page-sync) are ASP.NET minimal APIs. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
@@ -11,6 +16,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Graph carries the menu-provider surface (synced queries, node-menu context) and brings
+         Layout/Data/Mesh.Contract/Messaging.Hub transitively. -->
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <!-- The endpoint-contribution hook (MeshEndpointProviderAttribute, design #1655). -->
+    <ProjectReference Include="..\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
   </ItemGroup>
