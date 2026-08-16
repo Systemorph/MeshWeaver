@@ -1,16 +1,12 @@
-using System;
-using System.Net.Http;
-using System.Threading.Tasks;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.Social;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Social;
+namespace MeshWeaver.Social;
 
 /// <summary>
 /// Member <b>publishing + engagement</b> endpoints for the LinkedIn integration — the
@@ -23,14 +19,14 @@ namespace Memex.Portal.Shared.Social;
 ///   GET  /linkedin/engagement?postPath=… UI trigger — refresh like/comment counts for a published Post node
 /// </code>
 ///
-/// These are thin ASP.NET minimal-API adapters over <see cref="LinkedInPublishService"/> (in
-/// <c>MeshWeaver.Social</c>), which owns the credential-read → publish → node-write-back chain and its
-/// access gates. <c>async</c>/<c>HttpClient</c> is fine here (endpoint handlers are NOT hub code); the
-/// service carries the request's AccessContext through the mesh reads/writes — it NEVER runs as system,
-/// so a caller who lacks access to the post (or to the credential) is denied by the normal mesh
-/// permission checks before any LinkedIn call is made. The versioned <c>/rest/*</c> calls require the
-/// app to be granted <c>w_member_social</c> and the member to have re-consented after that scope was
-/// added; a missing scope surfaces as <c>reason=missing-w_member_social-reconnect</c>.
+/// These are thin ASP.NET minimal-API adapters over <see cref="LinkedInPublishService"/>, which owns
+/// the credential-read → publish → node-write-back chain and its access gates. <c>async</c>/<c>HttpClient</c>
+/// is fine here (endpoint handlers are NOT hub code); the service carries the request's AccessContext
+/// through the mesh reads/writes — it NEVER runs as system, so a caller who lacks access to the post
+/// (or to the credential) is denied by the normal mesh permission checks before any LinkedIn call is
+/// made. The versioned <c>/rest/*</c> calls require the app to be granted <c>w_member_social</c> and
+/// the member to have re-consented after that scope was added; a missing scope surfaces as
+/// <c>reason=missing-w_member_social-reconnect</c>.
 /// </summary>
 public static class LinkedInPublishEndpoints
 {
@@ -39,14 +35,17 @@ public static class LinkedInPublishEndpoints
     /// <summary>Registers the publish + engagement endpoints. Call alongside <c>MapLinkedInConnect()</c>.</summary>
     public static IEndpointRouteBuilder MapLinkedInPublish(this IEndpointRouteBuilder endpoints)
     {
+        // DI parameters are EXPLICIT ([FromServices]) throughout — see LinkedInConnectEndpoints:
+        // a module's endpoints must not depend on host-container inference to classify them
+        // (only the PublishRequest below is genuinely body-bound).
         // 1) JSON publish API — body { postPath?, profilePath?, text?, visibility? }.
         endpoints.MapPost("/linkedin/publish", async (
             HttpContext http,
-            PublishRequest body,
-            IMessageHub hub,
-            IMeshService mesh,
-            IHttpClientFactory httpFactory,
-            ILoggerFactory loggers) =>
+            [Microsoft.AspNetCore.Mvc.FromBody] PublishRequest body,
+            [Microsoft.AspNetCore.Mvc.FromServices] IMessageHub hub,
+            [Microsoft.AspNetCore.Mvc.FromServices] IMeshService mesh,
+            [Microsoft.AspNetCore.Mvc.FromServices] IHttpClientFactory httpFactory,
+            [Microsoft.AspNetCore.Mvc.FromServices] ILoggerFactory loggers) =>
         {
             if (!http.User.Identity?.IsAuthenticated ?? true)
                 return Results.Unauthorized();
@@ -81,10 +80,10 @@ public static class LinkedInPublishEndpoints
         endpoints.MapGet("/linkedin/publish", async (
             HttpContext http,
             [Microsoft.AspNetCore.Mvc.FromQuery] string postPath,
-            IMessageHub hub,
-            IMeshService mesh,
-            IHttpClientFactory httpFactory,
-            ILoggerFactory loggers) =>
+            [Microsoft.AspNetCore.Mvc.FromServices] IMessageHub hub,
+            [Microsoft.AspNetCore.Mvc.FromServices] IMeshService mesh,
+            [Microsoft.AspNetCore.Mvc.FromServices] IHttpClientFactory httpFactory,
+            [Microsoft.AspNetCore.Mvc.FromServices] ILoggerFactory loggers) =>
         {
             if (!http.User.Identity?.IsAuthenticated ?? true)
                 return Results.Challenge(new AuthenticationProperties { RedirectUri = http.Request.Path + http.Request.QueryString });
@@ -100,10 +99,10 @@ public static class LinkedInPublishEndpoints
         endpoints.MapGet("/linkedin/engagement", async (
             HttpContext http,
             [Microsoft.AspNetCore.Mvc.FromQuery] string postPath,
-            IMessageHub hub,
-            IMeshService mesh,
-            IHttpClientFactory httpFactory,
-            ILoggerFactory loggers) =>
+            [Microsoft.AspNetCore.Mvc.FromServices] IMessageHub hub,
+            [Microsoft.AspNetCore.Mvc.FromServices] IMeshService mesh,
+            [Microsoft.AspNetCore.Mvc.FromServices] IHttpClientFactory httpFactory,
+            [Microsoft.AspNetCore.Mvc.FromServices] ILoggerFactory loggers) =>
         {
             if (!http.User.Identity?.IsAuthenticated ?? true)
                 return Results.Challenge(new AuthenticationProperties { RedirectUri = http.Request.Path + http.Request.QueryString });

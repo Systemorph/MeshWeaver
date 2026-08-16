@@ -1,33 +1,26 @@
-using System;
-using System.Collections.Generic;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.Social;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Social;
+namespace MeshWeaver.Social;
 
 /// <summary>
 /// OAuth2 authorization-code flow for connecting a LinkedIn publishing identity
-/// to a profile in the mesh. The deployed surface is intentionally tiny — just
-/// the parts that need to live in the portal binary because they involve
-/// browser cookies, HTTP routing, and a callback URL whitelisted on LinkedIn:
+/// to a profile in the mesh. This is the Social module's endpoint contribution
+/// (<see cref="SocialModuleAttribute"/>) — just the parts that need to live in a
+/// compiled binary because they involve browser cookies, HTTP routing, and a
+/// callback URL whitelisted on LinkedIn:
 ///
 ///   GET /connect/linkedin/me                    — convenience: redirect into the flow for the signed-in user
 ///   GET /connect/linkedin?profile={path}        — start the flow (sets CSRF cookie, redirects to LinkedIn)
@@ -40,9 +33,11 @@ namespace Memex.Portal.Shared.Social;
 /// </summary>
 public static class LinkedInConnectEndpoints
 {
+    /// <summary>Name of the CSRF state cookie set when starting the connect flow.</summary>
     public const string StateCookieName = "lnkd_connect_state";
     private const string CallbackPath = "/connect/linkedin/callback";
 
+    /// <summary>Registers the LinkedIn connect endpoints.</summary>
     public static IEndpointRouteBuilder MapLinkedInConnect(this IEndpointRouteBuilder endpoints)
     {
         // Convenience: bind the credential to the authenticated user's own User node.
@@ -57,7 +52,7 @@ public static class LinkedInConnectEndpoints
         endpoints.MapGet("/connect/linkedin", (
             HttpContext http,
             [Microsoft.AspNetCore.Mvc.FromQuery] string profile,
-            IConfiguration config) =>
+            [Microsoft.AspNetCore.Mvc.FromServices] IConfiguration config) =>
         {
             if (!http.User.Identity?.IsAuthenticated ?? true)
                 return Results.Challenge(new AuthenticationProperties { RedirectUri = http.Request.Path + http.Request.QueryString });
@@ -103,16 +98,21 @@ public static class LinkedInConnectEndpoints
             return Results.Redirect(url);
         }).RequireAuthorization();
 
+        // DI parameters are EXPLICIT ([FromServices]) throughout these module-contributed
+        // endpoints: parameter inference classifies a service parameter by asking the host's
+        // container (IServiceProviderIsService) at endpoint-materialization time, and a module
+        // must not depend on what the host happens to have registered to keep its parameters
+        // from degrading into inferred-body binding.
         endpoints.MapGet(CallbackPath, async (
             HttpContext http,
             [Microsoft.AspNetCore.Mvc.FromQuery] string? code,
             [Microsoft.AspNetCore.Mvc.FromQuery] string? state,
             [Microsoft.AspNetCore.Mvc.FromQuery] string? error,
-            IConfiguration config,
-            IHttpClientFactory httpFactory,
-            IMeshService mesh,
-            IMessageHub hub,
-            ILoggerFactory loggers) =>
+            [Microsoft.AspNetCore.Mvc.FromServices] IConfiguration config,
+            [Microsoft.AspNetCore.Mvc.FromServices] IHttpClientFactory httpFactory,
+            [Microsoft.AspNetCore.Mvc.FromServices] IMeshService mesh,
+            [Microsoft.AspNetCore.Mvc.FromServices] IMessageHub hub,
+            [Microsoft.AspNetCore.Mvc.FromServices] ILoggerFactory loggers) =>
         {
             var logger = loggers.CreateLogger("LinkedInConnect");
 
@@ -198,7 +198,7 @@ public static class LinkedInConnectEndpoints
             var credentialNode = new MeshNode("linkedin", profilePath + "/_ApiCredentials")
             {
                 Name = "LinkedIn credential",
-                NodeType = ApiCredentialNodeType.NodeType,
+                NodeType = PlatformCredential.ApiCredentialNodeType,
                 Content = credential,
                 State = MeshNodeState.Active,
             };
@@ -290,7 +290,13 @@ public static class LinkedInConnectEndpoints
                     });
 
             return await tcs.Task;
-        });
+        })
+        // ANONYMOUS BY DESIGN, exactly as before the module move: this is LinkedIn's OAuth
+        // redirect target — routing it through the module group's authenticated-by-default
+        // policy could bounce the redirect into a login challenge and drop the code/state
+        // query. The CSRF state cookie (set by the authenticated /connect/linkedin start)
+        // is the guard; without it the request is rejected before any token exchange.
+        .AllowAnonymous();
 
         return endpoints;
     }

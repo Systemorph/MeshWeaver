@@ -14,6 +14,14 @@ namespace MeshWeaver.Social;
 /// </summary>
 public sealed record PlatformCredential
 {
+    /// <summary>
+    /// The NodeType name credentials persist under (<c>{profile}/_ApiCredentials/{platform}</c>).
+    /// The NodeType REGISTRATION itself deliberately lives with the host (Memex
+    /// <c>ApiCredentialNodeType</c>), not this module — existing credential nodes must keep
+    /// deserializing even when the Social module is delisted.
+    /// </summary>
+    public const string ApiCredentialNodeType = "ApiCredential";
+
     /// <summary>Platform identifier matching <see cref="IPlatformPublisher.Platform"/>.</summary>
     public required string Platform { get; init; }
 

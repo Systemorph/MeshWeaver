@@ -1,17 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.Social;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -20,7 +14,7 @@ using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Social;
+namespace MeshWeaver.Social;
 
 /// <summary>
 /// LinkedIn <b>Community Management API</b> sync for company Pages the signed-in user
@@ -63,11 +57,13 @@ public static class LinkedInPageSyncEndpoints
     /// <summary>Registers the org-connect + Page-sync endpoints. Call alongside <c>MapLinkedInConnect()</c>.</summary>
     public static IEndpointRouteBuilder MapLinkedInPageSync(this IEndpointRouteBuilder endpoints)
     {
+        // DI parameters are EXPLICIT ([FromServices]) throughout — see LinkedInConnectEndpoints:
+        // a module's endpoints must not depend on host-container inference to classify them.
         // 1) Start the org OAuth flow for a specific Page node.
         endpoints.MapGet("/connect/linkedin/org", (
             HttpContext http,
             [Microsoft.AspNetCore.Mvc.FromQuery] string page,
-            IConfiguration config) =>
+            [Microsoft.AspNetCore.Mvc.FromServices] IConfiguration config) =>
         {
             if (!http.User.Identity?.IsAuthenticated ?? true)
                 return Results.Challenge(new AuthenticationProperties { RedirectUri = http.Request.Path + http.Request.QueryString });
@@ -105,10 +101,10 @@ public static class LinkedInPageSyncEndpoints
             [Microsoft.AspNetCore.Mvc.FromQuery] string? code,
             [Microsoft.AspNetCore.Mvc.FromQuery] string? state,
             [Microsoft.AspNetCore.Mvc.FromQuery] string? error,
-            IConfiguration config,
-            IHttpClientFactory httpFactory,
-            IMeshService mesh,
-            ILoggerFactory loggers) =>
+            [Microsoft.AspNetCore.Mvc.FromServices] IConfiguration config,
+            [Microsoft.AspNetCore.Mvc.FromServices] IHttpClientFactory httpFactory,
+            [Microsoft.AspNetCore.Mvc.FromServices] IMeshService mesh,
+            [Microsoft.AspNetCore.Mvc.FromServices] ILoggerFactory loggers) =>
         {
             var logger = loggers.CreateLogger("LinkedInPageSync");
 
@@ -187,7 +183,7 @@ public static class LinkedInPageSyncEndpoints
             var credentialNode = new MeshNode("linkedin", pagePath + "/_ApiCredentials")
             {
                 Name = "LinkedIn credential",
-                NodeType = ApiCredentialNodeType.NodeType,
+                NodeType = PlatformCredential.ApiCredentialNodeType,
                 Content = credential,
                 State = MeshNodeState.Active,
             };
@@ -204,16 +200,22 @@ public static class LinkedInPageSyncEndpoints
 
             logger.LogInformation("Stored LinkedIn org credential for {Page} (org {Org})", pagePath, orgUrn ?? "(undiscovered)");
             return result;
-        });
+        })
+        // ANONYMOUS BY DESIGN, exactly as before the module move: this is LinkedIn's OAuth
+        // redirect target — routing it through the module group's authenticated-by-default
+        // policy could bounce the redirect into a login challenge and drop the code/state
+        // query. The CSRF state cookie (set by the authenticated /connect/linkedin/org
+        // start) is the guard; without it the request is rejected before any token exchange.
+        .AllowAnonymous();
 
         // 3) Sync — pull the Page's posts + share statistics into Post nodes under the Page.
         endpoints.MapGet("/connect/linkedin/sync", async (
             HttpContext http,
             [Microsoft.AspNetCore.Mvc.FromQuery] string page,
-            IHttpClientFactory httpFactory,
-            IMessageHub hub,
-            IMeshService mesh,
-            ILoggerFactory loggers) =>
+            [Microsoft.AspNetCore.Mvc.FromServices] IHttpClientFactory httpFactory,
+            [Microsoft.AspNetCore.Mvc.FromServices] IMessageHub hub,
+            [Microsoft.AspNetCore.Mvc.FromServices] IMeshService mesh,
+            [Microsoft.AspNetCore.Mvc.FromServices] ILoggerFactory loggers) =>
         {
             var logger = loggers.CreateLogger("LinkedInPageSync");
             if (!http.User.Identity?.IsAuthenticated ?? true)
@@ -221,12 +223,14 @@ public static class LinkedInPageSyncEndpoints
             if (!IsSafePagePath(page))
                 return Results.BadRequest("page must be a mesh node path, e.g. LinkedIn/Systemorph.");
 
-            // Read the stored org credential (typed — ApiCredentialNodeType registers PlatformCredential).
+            // Read the stored org credential (typed — the host's ApiCredential NodeType registers
+            // PlatformCredential). ContentAs, never a direct cast: a hub whose registry misses the
+            // type hands back a degraded JsonElement, which the accessor recovers (ObjectAsExtensions).
             PlatformCredential? credential;
             try
             {
                 credential = await hub.GetMeshNodeStream(page + "/_ApiCredentials/linkedin")
-                    .Select(n => n?.Content as PlatformCredential)
+                    .Select(n => n?.ContentAs<PlatformCredential>(hub.JsonSerializerOptions, logger))
                     .Where(c => c is not null)
                     .Take(1)
                     .Timeout(TimeSpan.FromSeconds(10))
