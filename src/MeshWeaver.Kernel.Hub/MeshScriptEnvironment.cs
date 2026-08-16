@@ -3,6 +3,7 @@ using System.Reflection;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,8 +60,15 @@ public static class MeshScriptEnvironment
     public static MetadataReferenceResolver MetadataResolver => SharedScriptMetadataResolver.Instance;
 
     /// <summary>
-    /// The curated assembly anchors plus the DI-contributed module assemblies
-    /// (<see cref="KernelScriptAssembly"/>) for one script session.
+    /// The curated assembly anchors plus the DI-contributed assemblies for one script session:
+    /// every explicit <see cref="KernelScriptAssembly"/> registration AND every boot-installed
+    /// module (<see cref="InstalledModuleAssembly"/>, #1653). Modules join the cell surface
+    /// per-session by construction (issue #1649 part 1): a module published into
+    /// <c>modules/&lt;name&gt;/</c> is a Default-ALC file-backed assembly, so the runtime bind is
+    /// free — only its metadata reference has to be guaranteed here, immune to the process-wide
+    /// snapshot freeze in <see cref="KernelScriptReferences"/>. De-duplication against the
+    /// snapshot and the anchors happens by file path in
+    /// <see cref="KernelScriptReferences.GetReferences"/>.
     /// </summary>
     public static IReadOnlyCollection<Assembly> SessionAssemblies(IServiceProvider serviceProvider)
     {
@@ -81,6 +89,8 @@ public static class MeshScriptEnvironment
         };
         foreach (var contrib in serviceProvider.GetServices<KernelScriptAssembly>())
             assemblies.Add(contrib.Assembly);
+        foreach (var module in serviceProvider.GetServices<InstalledModuleAssembly>())
+            assemblies.Add(module.Assembly);
         return assemblies;
     }
 
