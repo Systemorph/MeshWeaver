@@ -50,6 +50,7 @@
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Notifications.Channels/MeshWeaver.Notifications.Channels.csproj" />
 
     <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2, flip #1). -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
