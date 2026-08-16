@@ -2,6 +2,7 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -163,7 +164,11 @@ public sealed class RegistryUpdateReconciler(
                         + "registry will answer, so installed packages may not be reconciled.",
                         registry.Url);
 
-                var source = new RegistryPackageSource(hub, registry.Url, token);
+                // ONE bundle client for the pass, shared by the source (a content apply lands its
+                // module inside InstallOrUpdate) and the module pass below — so the promise-cached
+                // bundle index is read once per registry per boot.
+                var bundles = new PluginBundleClient(hub, registry.Url, token);
+                var source = new RegistryPackageSource(hub, registry.Url, token) { Bundles = bundles };
                 return source.ListPackages(gitRef)
                     // 🚨 The ONE attempt the design allots must actually get a fair chance (#1500).
                     //
@@ -197,8 +202,16 @@ public sealed class RegistryUpdateReconciler(
                             + "reconciling this installation's records against them.",
                             name, packages.Count, gitRef);
                         return PackageUpdateReconciler.ReconcileInstalled(
-                            hub, source, gitRef, packages,
-                            $"Served by registry '{name}'", logger);
+                                hub, source, gitRef, packages,
+                                $"Served by registry '{name}'", logger)
+                            // The MODULE lane of the same reconcile (#1664): for installed
+                            // packages that declare a compiled module, consult the registry's
+                            // bundle index and land what is newer FOR THE RUNNING framework.
+                            // AFTER the content reconcile, so a content update and its module
+                            // land in one pass; keyed on the bundle index, NOT the content
+                            // hash — a bundle rebuilt for a new framework MVID has unchanged
+                            // content, and this lane is what heals it after an image roll.
+                            .SelectMany(_ => ReconcileModules(bundles, name, packages));
                     });
             })
             .Catch((Exception ex) =>
@@ -213,5 +226,61 @@ public sealed class RegistryUpdateReconciler(
                     name, registry.Url, FeedReadRetries + 1);
                 return Observable.Return(Unit.Default);
             });
+    }
+
+    /// <summary>
+    /// The module half of the boot reconcile (#1664 Slice C): for each of the registry's packages
+    /// that declares a compiled module AND has an install record here, run the one module-update
+    /// decision (<see cref="ModuleUpdateDecision"/>) via <see cref="PluginBundleClient.AdoptModule"/>
+    /// — which lands a newer bundle for the RUNNING framework MVID through
+    /// <see cref="ModuleLandingService"/> and flags <c>PendingRestart</c>, skips an up-to-date one
+    /// without a download, and skips a foreign-framework registry silently-with-log (it becomes
+    /// relevant after the next image roll).
+    ///
+    /// <para><b>The policy gate is the deployment's EXISTING update policy</b>
+    /// (<see cref="IModuleUpdatePolicy"/> — the memex portals wire it to <c>Admin/UpdatePolicy</c>):
+    /// this lane passes <c>unattended: true</c>, so Continuous (the platform default, and the
+    /// default when no policy is registered) lands unattended while Stable/None decline. There is
+    /// deliberately NO module-specific knob.</para>
+    ///
+    /// <para>Sequential, and failure-tolerant per package — one unreachable bundle must not
+    /// withhold the rest, and <see cref="PluginBundleClient.AdoptModule"/> already absorbs its own
+    /// failures into a logged zero.</para>
+    /// </summary>
+    private IObservable<Unit> ReconcileModules(
+        PluginBundleClient bundles,
+        string registryName,
+        IReadOnlyList<PackageManifest> packages)
+    {
+        var declaring = packages
+            .Where(p => !string.IsNullOrWhiteSpace(p.Module))
+            .ToArray();
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (declaring.Length == 0 || storage is null)
+            return Observable.Return(Unit.Default);
+
+        return declaring
+            .Select(pkg =>
+            {
+                var recordPath = $"{PackageInstaller.InstalledPartition}/{pkg.Id}";
+                return storage.Read(recordPath, hub.JsonSerializerOptions)
+                    .Take(1)
+                    .SelectMany(record => record is null
+                        // Not installed here → somebody else's module; nothing to reconcile.
+                        ? Observable.Return(0)
+                        : bundles.AdoptModule(pkg.Id, pkg.Module!, recordPath, unattended: true))
+                    .Catch((Exception ex) =>
+                    {
+                        logger.LogWarning(ex,
+                            "[RegistryUpdate] module reconcile of {Id} against {Name} failed — "
+                            + "its landed module is unchanged.", pkg.Id, registryName);
+                        return Observable.Return(0);
+                    })
+                    .Select(_ => Unit.Default);
+            })
+            .ToObservable()
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .LastAsync();
     }
 }

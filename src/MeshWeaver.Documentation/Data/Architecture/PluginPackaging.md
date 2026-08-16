@@ -155,6 +155,49 @@ become `<dependency id="MeshWeaver.Plugin.Store" version="[1.0.0,2.0.0)" />`. No
 One reserved id prefix (`MeshWeaver.Plugin.`) is what lets `packageSourceMapping` pin every plugin to
 a private feed with a single rule — without it a typo'd id silently resolves against nuget.org.
 
+### The module variant (#1664)
+
+A package that delivers a **compiled module** (its root's `content.module` names the entry
+assembly) carries the module's closure in the SAME bundle, under its own folder:
+
+```
+├── meshweaver/manifest.json          … + module: { assemblyName, assemblies[], minMeshVersion }
+├── meshweaver/assemblies/<Unit>.dll  NodeType lane (assembly store, per-node ALC)
+└── meshweaver/modules/<File>.dll     module lane (modules/<name>/ beside the app, default ALC)
+```
+
+The folders are deliberately separate — the two lanes have different destinations and different
+failure modes, and a module DLL seeded as a NodeType assembly fails only at activation. One reader
+(`BundleReader`) serves both: `Read` for the NodeType payloads, `ReadModule` for the module files —
+both manifest-driven, and the module side is **all-or-nothing** (a NodeType with missing bytes
+simply compiles; a module missing part of its closure loads and then faults at first use, so an
+incomplete closure yields no files at all).
+
+**The module gate is a `minMeshVersion` FLOOR, not the MVID.** The MVID-equality rule above is
+*bake* semantics: a NodeType assembly is compiled in-process against exact framework references,
+so only the identical build is known-good. A module is an ordinary assembly binding by **simple
+name**; its contract is API compatibility, which the semver floor expresses. So the consumer lands
+any bundle whose floor its platform satisfies — one bundle serves every compatible platform build
+(nothing is rebundled per CI build), and a module can be installed **ex post** onto a platform
+newer than the one it was built with. The bundle still records its built-against `frameworkMvid`
+as **diagnostic metadata** — logged at landing, surfaced in the index — never a refusal. The one
+gate is `ModulePlatformFloor.DeclineReason`, applied at the index, at the manifest, at placement,
+and again at boot.
+
+Producing a module bundle in CI — from any node repo:
+
+```
+dotnet run --project src/MeshWeaver.Plugin.Build -- module-pack ./bin/Release/net10.0 \
+    --module-name MeshWeaver.Social --plugin SocialMedia --package-version 1.2.0 \
+    --min-mesh-version 3.0.0 --out ./artifacts/bundles
+```
+
+The closure is an explicit statement: `<name>.dll` (+ `.pdb`), plus only the files named with
+`--with` — mirroring the `modules/<Name>/` rule that for most modules the DLL alone is the
+closure. The portal-served side assembles the module section from its own `modules/<name>/` tree
+(the bytes it runs), and the consuming side lands it through `ModuleLandingService`
+(restart-as-activation) — see [Modules](/Doc/Architecture/Modules) → "The bundle lane".
+
 **The assembly entry path is the node path verbatim**, not slash-replaced. Sanitising is not
 injective — `A/B/C` and `A_B/C` both become `A_B_C`, and mesh paths do contain underscores — so two
 NodeTypes would land on one archive entry and the second would silently adopt the first's bytes. Zip

@@ -502,11 +502,28 @@ public static class CatalogLayoutAreas
         IMessageHub hub, IPackageSource source, string sourceRef, PackageManifest pkg, ILogger? logger,
         string? authorizingUserId)
     {
+        // The module branch of the install funnel (#1664 Slice C): a package that DECLARES a
+        // compiled module routes its binary payload — AFTER the content lands — to bundle-fetch →
+        // MVID gate → ModuleLandingService (restart-as-activation), never through the node parse.
+        // Riding here, on the ONE orchestrator, means every install path gets it identically: the
+        // catalog card's click, the content auto-update apply, and the boot default install. Only
+        // a registry source can serve a bundle (a git source has repo files and no bake behind
+        // it — the registry instance itself runs its modules from its own image/modules tree), and
+        // AdoptModule absorbs every failure into a logged zero, so this can never fail an install.
+        IObservable<InstallResult> WithModule(IObservable<InstallResult> install) =>
+            string.IsNullOrWhiteSpace(pkg.Module)
+            || (source as RegistryPackageSource)?.Bundles is not { } bundles
+                ? install
+                : install.SelectMany(result => bundles
+                    .AdoptModule(pkg.Id, pkg.Module!,
+                        $"{PackageInstaller.InstalledPartition}/{pkg.Id}")
+                    .Select(_ => result));
+
         IObservable<InstallResult> Full() =>
-            source.FetchPackageFiles(pkg, sourceRef)
+            WithModule(source.FetchPackageFiles(pkg, sourceRef)
                 .SelectMany(files => PackageInstaller.Install(
                     hub, pkg, files, sourceRef, logger,
-                    authorizingUserId: authorizingUserId));
+                    authorizingUserId: authorizingUserId)));
 
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (pkg.Kind != PackageKind.NodeRepo || string.IsNullOrEmpty(pkg.ModuleVersion) || persistence is null)
@@ -529,7 +546,7 @@ public static class CatalogLayoutAreas
                 }
                 if (record?.InstalledFiles is not { Count: > 0 })
                     return Full();
-                return IncrementalUpdate(hub, source, sourceRef, pkg, record, logger, authorizingUserId)
+                return WithModule(IncrementalUpdate(hub, source, sourceRef, pkg, record, logger, authorizingUserId))
                     .Catch<InstallResult, Exception>(ex =>
                     {
                         // A REFUSAL is not a failure to fall back from — the full install would be
