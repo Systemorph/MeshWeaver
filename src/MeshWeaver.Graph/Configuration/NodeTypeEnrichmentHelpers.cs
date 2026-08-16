@@ -902,7 +902,8 @@ internal static class NodeTypeEnrichmentHelpers
                 });
         }
 
-        if (NodeTypeCompilationHelpers.HasUsableBuild(typeNode, def))
+        if (NodeTypeCompilationHelpers.HasUsableBuild(
+                typeNode, def, NodeTypeCompilationHelpers.ModulesHashOf(meshHub)))
         {
             // Hot path for activating per-instance hubs: the NodeType has a
             // usable compile (LatestAssembly{Collection,Path} populated AND
@@ -1204,7 +1205,8 @@ internal static class NodeTypeEnrichmentHelpers
                     : null;
                 return WaitForCompileSettled(typeStream, typeStream
                 .Where(typeNode => IsRecompileSettled(
-                    typeNode, gate, requireUsableBuild, meshHub.JsonSerializerOptions))
+                    typeNode, gate, requireUsableBuild, meshHub.JsonSerializerOptions,
+                    NodeTypeCompilationHelpers.ModulesHashOf(meshHub)))
                 .Take(1),
                 SlowPathTimeout,
                 () => new TimeoutException(
@@ -1265,7 +1267,8 @@ internal static class NodeTypeEnrichmentHelpers
     /// </summary>
     internal static bool IsRecompileSettled(
         MeshNode typeNode, long? staleVersion, bool requireUsableBuild,
-        System.Text.Json.JsonSerializerOptions? options = null)
+        System.Text.Json.JsonSerializerOptions? options = null,
+        string? modulesHash = null)
     {
         // Read the definition through ContentAs — the same accessor ApplyStreamResult uses on
         // whatever this admits. A CLR type test is blind to an un-materialized (JsonElement /
@@ -1294,8 +1297,12 @@ internal static class NodeTypeEnrichmentHelpers
         // ride through to HasUsableBuild rather than giving up. Pinned by
         // FrameworkStaleInstanceRenderTest. If the rebuild genuinely never lands,
         // WaitForCompileSettled's no-progress deadline surfaces the overlay — never a longer hang.
+        // The modules-hash join (#1664 step 11) matters HERE specifically: on a module-only
+        // update the pre-flip stale build still passes the framework-only check, so without the
+        // hash this predicate would settle in ~0 ms on the very state the heal rejected — the
+        // exact burn-the-retry hazard the remarks above describe, in modules-stale clothing.
         if (requireUsableBuild)
-            return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d);
+            return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d, modulesHash);
 
         // The stale pre-flip re-snap (see the remarks above): not news, keep waiting.
         if (staleVersion is { } stale && typeNode.Version <= stale)
@@ -1453,7 +1460,8 @@ internal static class NodeTypeEnrichmentHelpers
                     {
                         instanceHub.RegisterForDisposal(ArmOverlaySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
-                            instanceHub, nodeType, typeVersionAtOverlay, logger));
+                            instanceHub, nodeType, typeVersionAtOverlay, logger,
+                            modulesHash: NodeTypeCompilationHelpers.ModulesHashOf(meshHub)));
                     }
                     catch (Exception ex)
                     {
@@ -1538,7 +1546,8 @@ internal static class NodeTypeEnrichmentHelpers
                     {
                         instanceHub.RegisterForDisposal(ArmStaleAssemblySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
-                            instanceHub, nodeType, boundAssemblyPath, logger));
+                            instanceHub, nodeType, boundAssemblyPath, logger,
+                            modulesHash: NodeTypeCompilationHelpers.ModulesHashOf(meshHub)));
                     }
                     catch (Exception ex)
                     {
@@ -1568,10 +1577,11 @@ internal static class NodeTypeEnrichmentHelpers
         string nodeType,
         string boundAssemblyPath,
         ILogger? logger,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler = null,
+        string? modulesHash = null)
         => typeStream
             .Where(t => t?.Content is NodeTypeDefinition d
-                && NodeTypeCompilationHelpers.HasUsableBuild(t, d)
+                && NodeTypeCompilationHelpers.HasUsableBuild(t, d, modulesHash)
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
                 && !string.Equals(d.LatestAssemblyPath, boundAssemblyPath, StringComparison.Ordinal))
             // 🚨 Wait for the type to stop publishing — see AssemblySettleWindow. An install
@@ -1621,10 +1631,11 @@ internal static class NodeTypeEnrichmentHelpers
         string nodeType,
         long? typeVersionAtOverlay,
         ILogger? logger,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler = null,
+        string? modulesHash = null)
     {
         var usable = typeStream.Where(t => t?.Content is NodeTypeDefinition d
-            && NodeTypeCompilationHelpers.HasUsableBuild(t, d));
+            && NodeTypeCompilationHelpers.HasUsableBuild(t, d, modulesHash));
 
         // FAST path — the version advanced past the overlay: a genuinely NEW build landed, heal now.
         var advanced = usable.Where(t =>

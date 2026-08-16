@@ -418,7 +418,8 @@ internal static class NodeTypeContractHandler
                     // stuck on an undetermined state forever.
                     if (def.CompilationStatus is not null and not CompilationStatus.Unavailable)
                         return curr;
-                    if (NodeTypeCompilationHelpers.HasUsableBuild(curr, def)) return curr;
+                    if (NodeTypeCompilationHelpers.HasUsableBuild(
+                            curr, def, NodeTypeCompilationHelpers.ModulesHashOf(hub))) return curr;
                     if (NodeTypeCompilationHelpers.IsStaticOnlyNodeType(curr, def)) return curr;
                     return curr with
                     {
