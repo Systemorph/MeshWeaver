@@ -55,8 +55,10 @@ public static class GraphConfigurationExtensions
                 .AddNotificationType()
                 .AddNotificationSettingsType()
                 .AddCompletionMemoryType()
-                .AddNotificationRuleType()
-                .AddNotificationChannelType()
+                // NotificationRule/NotificationChannel ride the MeshWeaver.Notifications.Channels
+                // MODULE (Modules:Assemblies / AddNotificationChannels()) together with the triage
+                // watcher — the bell + deterministic email above stay core. The compiled residue
+                // that stays here: the NodeType const classes and NotificationService.HasRoutingRules.
                 .AddInvitationType()
                 .AddEventSubscriptionType()
                 .AddScheduledActionType()   // legacy — kept so existing Admin/ScheduledAction nodes still deserialize + migrate

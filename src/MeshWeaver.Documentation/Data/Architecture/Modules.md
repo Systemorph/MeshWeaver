@@ -53,6 +53,7 @@ current first-party inventory and each module's configuration section:
 | `MeshWeaver.Markdown.Export.dll` | Document export (PDF/DOCX/HTML/email) | — |
 | `MeshWeaver.Observability.dll` | Red-log ticketing / log watch | `LogWatch` |
 | `MeshWeaver.OgCard.dll` | Link-preview (og-card) layout area | — |
+| `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
 
 Boot packs select by OTHER configuration too: `Graph:Storage:Type` `Cosmos`/`Snowflake` requires
 the matching `MeshWeaver.Hosting.Cosmos`/`.Snowflake` DLL in this list — installation runs before
