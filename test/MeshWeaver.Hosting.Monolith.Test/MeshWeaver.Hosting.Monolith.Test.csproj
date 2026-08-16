@@ -60,6 +60,7 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.OgCard\MeshWeaver.OgCard.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
         <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
     </ItemGroup>
 
