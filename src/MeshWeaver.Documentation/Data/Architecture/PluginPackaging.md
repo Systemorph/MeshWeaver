@@ -259,3 +259,7 @@ Two ordering rules, both of which fail silently when broken:
 **Nothing here can fail an install.** Zero adopted is the normal outcome whenever the registry runs a
 different framework build, and compiling is the always-available fallback — so a bundle that is
 missing, refused, or unreadable is logged and stepped over.
+
+The other producer/consumer pair of the same bundle format — CI baking the image's own shipped
+content, adopted at boot from `prebuilt/` — is described in
+[CI Content Bake](/Doc/Architecture/CiContentBake).
