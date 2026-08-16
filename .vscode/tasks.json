@@ -1,0 +1,63 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // ⇧⌘B. The whole solution is 159 projects — reach for "build project" below while iterating.
+      "label": "build (solution)",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "MeshWeaver.slnx"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      // 🚨 CI's exact flags. A plain Debug build passes while CI fails, because warnings are
+      // promoted to errors there (the classic miss is CS9107). Run this before pushing — see
+      // AGENTS.md, "make CI green LOCALLY first".
+      "label": "build (CI flags: Release + warnaserror)",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "MeshWeaver.slnx", "-c", "Release", "-warnaserror"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      // One project per invocation: `dotnet build a.csproj b.csproj` is an MSB1008 no-op that
+      // builds nothing and reads like a transient error.
+      "label": "build project",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "${input:project}", "-c", "Release", "-warnaserror"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      // No --no-build here on purpose: against a project this worktree has never built, a
+      // --no-build/--no-restore run exits 0 with no output and no .trx — a pass that ran nothing.
+      "label": "test project",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["test", "${input:testProject}", "--logger", "trx"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": "$msCompile"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "project",
+      "type": "promptString",
+      "description": "Project to build (path to the .csproj)",
+      "default": "src/MeshWeaver.Blazor.Portal/MeshWeaver.Blazor.Portal.csproj"
+    },
+    {
+      "id": "testProject",
+      "type": "promptString",
+      "description": "Test project to run",
+      "default": "test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj"
+    }
+  ]
+}
