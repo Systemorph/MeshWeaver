@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Export\MeshWeaver.Markdown.Export.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.OgCard\MeshWeaver.OgCard.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Observability\MeshWeaver.Observability.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Notifications.Channels\MeshWeaver.Notifications.Channels.csproj" />
     <!-- MigrationRegistryTest runs the migration runner's own start-up guard (VerifyComplete) in
          `dotnet test`. It only ever ran INSIDE the migration container before, so a registry/
          DbVersion.Latest drift shipped a dead image while main stayed green (V53, 2026-08-14). -->

@@ -40,9 +40,10 @@
          app closure (LogIncidentEndpoints resolves ILogIncidentIngest optionally and answers an
          actionable 503 when the module is not listed). -->
     <ProjectReference Include="..\..\src\MeshWeaver.Observability.Contract\MeshWeaver.Observability.Contract.csproj" />
-    <!-- Notification delivery channels module (double-ship transition state: the bits ride this
-         ProjectReference; activation is the hosts' Modules:Assemblies listing). -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Notifications.Channels\MeshWeaver.Notifications.Channels.csproj" />
+    <!-- MeshWeaver.Notifications.Channels is deliberately NOT referenced (#1644 step 2): it
+         ships via the modules/<Name>/ closure layout in MeshModulesPublish.targets and activates
+         via Modules:Assemblies -> NotificationChannelsModuleAttribute (the triage watcher
+         self-skips unless Email:Enabled). -->
     <ProjectReference Include="..\..\src\MeshWeaver.InstanceSync\MeshWeaver.InstanceSync.csproj" />
     <!-- Content → vector index (core tech): chunk/embed/store on a separate Postgres vector DB,
          per-file Document nodes, chunk-search autocomplete. Inert unless ConnectionStrings:contentindex
