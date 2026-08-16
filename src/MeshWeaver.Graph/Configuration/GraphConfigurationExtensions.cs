@@ -238,6 +238,11 @@ public static class GraphConfigurationExtensions
                 services.AddSingleton(new MeshWeaver.Kernel.Hub.KernelScriptAssembly(
                     typeof(GraphImportTemplates).Assembly));
 
+                // The pack-scripting seam (issue #1649): per-session resolution of every
+                // `cellSurface: true` NodeType's current baked assembly for kernel cells.
+                services.AddSingleton<MeshWeaver.Kernel.Hub.ICellSurfaceAssemblyProvider,
+                    CellSurfaceAssemblyProvider>();
+
                 return services;
             });
 

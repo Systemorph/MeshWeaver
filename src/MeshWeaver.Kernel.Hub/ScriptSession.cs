@@ -41,14 +41,27 @@ namespace MeshWeaver.Kernel.Hub;
 /// the context alive until those references die, then everything is reclaimed. Even without
 /// Dispose, an abandoned session's context island is garbage-collected once unreferenced —
 /// the weak map is what makes that possible.</para>
+///
+/// <para><b>The cell-surface bind (issue #1649 part 4).</b> <paramref name="externalResolver"/>
+/// is the session's SCOPED runtime bind for cell-surface pack assemblies: the executor records
+/// name → <see cref="Assembly"/> for exactly the <c>DynamicNode_*</c> assemblies this session's
+/// reference set declared, and <see cref="SessionLoadContext.Load"/> consults it AFTER the
+/// submission map and BEFORE falling through to the Default ALC — which cannot resolve those
+/// names, because node assemblies live in collectible per-NodeType contexts. This is
+/// deliberately NOT a blanket <c>Resolving</c> hook on the Default ALC: only the session that
+/// declared a cell-surface reference can bind it, and it binds the exact generation it compiled
+/// against. The resolver's strong references (held by the executor, alongside the load-context
+/// leases) pin that collectible generation until the session dies — sessions are short-lived,
+/// and a recompile mid-session keeps old sessions on the old generation while new sessions bind
+/// the new one.</para>
 /// </summary>
-internal sealed class ScriptSession(object globals) : IDisposable
+internal sealed class ScriptSession(object globals, Func<string, Assembly?>? externalResolver = null) : IDisposable
 {
     /// <summary>The session context's <see cref="AssemblyLoadContext.Name"/> — asserted gone
     /// after mesh disposal by <c>KernelScriptMemoryLeakTest</c>.</summary>
     public const string LoadContextName = "kernel-script-session";
 
-    private readonly SessionLoadContext loadContext = new();
+    private readonly SessionLoadContext loadContext = new(externalResolver);
     private readonly List<object?> submissionStates = [globals];
     private Script<object>? previousScript;
     private bool disposed;
@@ -137,7 +150,8 @@ internal sealed class ScriptSession(object globals) : IDisposable
         loadContext.Unload();
     }
 
-    private sealed class SessionLoadContext() : AssemblyLoadContext(LoadContextName, isCollectible: true)
+    private sealed class SessionLoadContext(Func<string, Assembly?>? externalResolver)
+        : AssemblyLoadContext(LoadContextName, isCollectible: true)
     {
         // 🚨 WeakReference values — see the class doc; a strong Assembly ref here recreates the
         // GC-handle cycle that makes the context permanent.
@@ -152,13 +166,19 @@ internal sealed class ScriptSession(object globals) : IDisposable
             return assembly;
         }
 
-        // Later submissions reference earlier ones by assembly identity; everything else falls
+        // Later submissions reference earlier ones by assembly identity; a declared cell-surface
+        // pack assembly (DynamicNode_*, in its own collectible context — invisible to the Default
+        // ALC) resolves through the session's scoped externalResolver; everything else falls
         // through (null) to the default context — host assemblies, NuGet-restored packages, …
+        // The external resolver does NOT root anything here: its strong references live with the
+        // executor, whose leases tie the resolved generation to the session's lifetime.
         protected override Assembly? Load(AssemblyName assemblyName)
-            => assemblyName.Name is not null
-               && submissions.TryGetValue(assemblyName.Name, out var weak)
-               && weak.TryGetTarget(out var assembly)
-                ? assembly
-                : null;
+        {
+            if (assemblyName.Name is not { } name)
+                return null;
+            if (submissions.TryGetValue(name, out var weak) && weak.TryGetTarget(out var assembly))
+                return assembly;
+            return externalResolver?.Invoke(name);
+        }
     }
 }
