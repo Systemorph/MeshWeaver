@@ -33,6 +33,12 @@ module removes its routes wholesale: a 404, not a compiled optional-service 503.
 `MeshWeaver.Social` is the first consumer — its LinkedIn connect/publish/page-sync routes ride
 this hook, with the two OAuth callback routes opting out via `AllowAnonymous` (LinkedIn's
 redirect must not bounce through a login challenge; the CSRF state cookie is the guard).
+`MeshWeaver.Hosting.Grpc` is the second: the whole `meshweaver.v1.Mesh` service maps through the
+hook, `AllowAnonymous` on every route because the transport authenticates each connection itself
+(Bearer API token in gRPC call metadata, or the trusted loopback port). One piece cannot ride the
+hook: the gRPC-web MIDDLEWARE must run between `UseRouting` and the endpoint maps, so the host
+keeps a single compiled `UseMeshWeaverGrpcWebWhenInstalled()` line that self-gates on the module
+being listed — the module listing stays the only switch.
 
 Module DI options bind through the options pipeline —
 `services.AddOptions<T>().BindConfiguration("Section")` — never `services.Configure(section)`:
@@ -108,6 +114,17 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
 =======
 | `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
+<<<<<<< HEAD
+| `MeshWeaver.Hosting.Grpc.dll` | The mesh gRPC transport: `meshweaver.v1.Mesh` + gRPC-web, `py`/`node` foreign participants AND the React GUI's browser data plane | `Grpc` (`TrustedPort`) |
+
+🚨 **`MeshWeaver.Hosting.Grpc` is DEFAULT-ON in every deployment.** Its endpoint is not just the
+foreign-participant (`py/*`, `node/*`) transport — the React GUI connects over the very same
+grpc-web `Connect`+`Deliver` split at the origin root (`clients/portal-next`, `clients/portal`).
+Delist it only in a deployment with NO React GUI and NO foreign participants; anywhere else a
+delist silently breaks the React frontend's live connection. (The former `Features:Grpc` flag is
+gone — the module listing is the switch.)
+=======
+>>>>>>> origin/main
 >>>>>>> origin/main
 
 Boot packs select by OTHER configuration too: `Graph:Storage:Type` `Cosmos`/`Snowflake` requires

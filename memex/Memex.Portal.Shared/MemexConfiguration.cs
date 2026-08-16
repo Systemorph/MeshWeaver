@@ -731,11 +731,16 @@ public static class MemexConfiguration
                 .AddPortalType()
                 .AddAI(serveFromPartition);
 
-            // gRPC mesh transport (foreign participants py/*, node/*, and the React GUI's
-            // browser Connect+Deliver split). Registers the service + declares the
-            // participant address types stream-routed. Symmetric with Features:SignalR.
-            if (features.Grpc)
-                mb = mb.AddGrpcHub();
+            // The gRPC mesh transport is a MODULE (MeshWeaver.Hosting.Grpc.dll under
+            // Modules:Assemblies — GrpcMeshModuleAttribute folds AddGrpcHub over this builder:
+            // the transport services + the py/node stream-routed participant address types; its
+            // GrpcModuleAttribute maps the meshweaver.v1.Mesh endpoint via
+            // MapMeshModuleEndpoints). 🚨 DEFAULT-ON in every deployment: the endpoint is the
+            // React GUI's browser data plane (grpc-web Connect+Deliver at the origin root), not
+            // just the foreign-participant (py/*, node/*) transport — delist only where there is
+            // no React GUI and no foreign participant. The former Features:Grpc flag is gone;
+            // the module listing IS the switch. Only the pipeline-order-bound gRPC-web
+            // middleware stays compiled (UseMeshWeaverGrpcWebWhenInstalled, below).
 
             // Each AI provider self-registers everything (catalog source +
             // IOptions binding + IChatClientFactory) via one builder extension.
@@ -1074,9 +1079,11 @@ public static class MemexConfiguration
 
         // gRPC-web middleware — lets browsers / React Native reach the mesh gRPC service
         // (Connect+Deliver split) without HTTP/2 bidi. Must sit between UseRouting and the
-        // endpoint maps. Inert for non-grpc-web requests.
-        if (features.Grpc)
-            app.UseMeshWeaverGrpcWeb();
+        // endpoint maps — the one gRPC piece that CANNOT ride the module's endpoint hook — so
+        // this compiled line stays and self-gates on the MeshWeaver.Hosting.Grpc module being
+        // listed under Modules:Assemblies (the endpoint itself maps via MapMeshModuleEndpoints).
+        // Inert for non-grpc-web requests.
+        app.UseMeshWeaverGrpcWebWhenInstalled();
         app.UseAuthentication();
         app.UseAuthorization();
         app.UseAntiforgery();
@@ -1116,10 +1123,11 @@ public static class MemexConfiguration
         if (features.SignalR)
             app.MapMeshWeaverSignalRHubs();
 
-        // gRPC mesh endpoint (meshweaver.v1.Mesh/Open, grpc-web enabled) — foreign-language
-        // workers and the React GUI connect here.
-        if (features.Grpc)
-            app.MapMeshWeaverGrpc();
+        // The gRPC mesh endpoint (meshweaver.v1.Mesh, grpc-web enabled — foreign-language
+        // workers AND the React GUI) rides MapMeshModuleEndpoints below: the
+        // MeshWeaver.Hosting.Grpc module's GrpcModuleAttribute maps it, AllowAnonymous by
+        // explicit opt-out (the transport authenticates connections itself — Bearer token in
+        // gRPC metadata / trusted loopback port).
 
         // Map MCP endpoint
         app.MapMeshMcp();

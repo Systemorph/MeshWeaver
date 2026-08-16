@@ -27,6 +27,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- MeshEndpointProviderAttribute — the endpoint half of the module lane (GrpcModuleAttribute). -->
+    <ProjectReference Include="..\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
   </ItemGroup>
