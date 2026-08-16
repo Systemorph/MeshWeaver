@@ -45,8 +45,9 @@
     <FLUENTASSERTIONS_SUPPRESS_WARNING>true</FLUENTASSERTIONS_SUPPRESS_WARNING>
     <!-- Maintained platform version — the ONE number, set centrally here. Override at
          build time (Docker image / CI) with -p:PlatformVersion=3.0.1 (the next patch) or
-         3.1.0-rc1 (to start the next pre-release line). Clean release; the per-build
-         +build.<ticks> suffix below keeps every build distinct (NodeType cache invalidation).
+         3.1.0-rc1 (to start the next pre-release line). Clean release; CI builds are
+         COMMIT-DETERMINISTIC (issue #1660 WS3 — see the InformationalVersion note below), and
+         NodeType cache invalidation keys on the commit identity, not on a per-build stamp.
          It is also the content-version for static-repo / GitHub data-sync
          (Doc/Architecture/DataSyncSetup.md §3): a release tagged v$(PlatformVersion) is what
          a deployed binary syncs from.
@@ -168,19 +169,21 @@
        • CONTINUOUS (default — CI pipeline and local dev): append a build number, e.g.
          3.0.0-rc1.ci.21901, so continuous packages are DISTINGUISHABLE from the release and a
          local-deploy build always carries a build number.
-       Under CIRun — released or continuous alike — InformationalVersion carries +build.<ticks> so
-       NodeTypeCompilationHelpers.FrameworkVersion is distinct every build (NodeType cache
-       invalidation); local builds keep it stable to preserve incremental. See the 🚨 note on the
-       InformationalVersion property below before touching that stamp. A direct -p:Version=… still
-       overrides everything (escape hatch). -->
+       🚨 $(Version) — the run-numbered string — feeds NuGet package versions and Docker image
+       tags ONLY. It must NOT reach any COMPILED attribute: under CIRun every compiled input is
+       COMMIT-DETERMINISTIC (issue #1660 WS3), so two CI builds of the same commit — the
+       Build-and-Test run that bakes NodeType assemblies and the main-cd run that builds the
+       image — produce ABI-identical assemblies and share one framework identity
+       (NodeTypeCompilationHelpers.FrameworkVersion; see the 🚨 note on InformationalVersion
+       below). The runtime still shows the run-numbered version: the container publish injects
+       $(Version) as the MESHWEAVER_PLATFORM_VERSION environment variable (see
+       Memex.Portal.Distributed.csproj), which rides the image CONFIG, not the assemblies.
+       A direct -p:Version=… still overrides everything (escape hatch). -->
   <PropertyGroup Condition="'$(Version)' == ''">
-    <!-- Build number. CI (CIRun=true): seconds-since-midnight / 2 (~2s granularity) so continuous
-         packages are distinguishable. LOCAL DEV: a STABLE 0 — a per-build number re-stamps
-         AssemblyVersion/FileVersion/InformationalVersion every build, regenerating AssemblyInfo.cs
-         and DESTROYING incremental builds (full rebuild every time → hot machine). NodeType ABI
-         invalidation no longer depends on the version string (it uses the Graph assembly MVID —
-         NodeTypeCompilationHelpers.FrameworkVersion), so a stable local version is correct; CI does
-         clean builds so incremental doesn't apply there anyway. -->
+    <!-- Fallback build number for the .ci.N suffix when CIRun is set OFF GitHub Actions (no
+         $(GITHUB_RUN_NUMBER)): seconds-since-midnight / 2 (~2s granularity) so such packages are
+         still distinguishable. LOCAL DEV: a STABLE 0. Feeds ONLY _CiBuildNumber → $(Version) —
+         never a compiled attribute (FileVersion is pinned below; see the channel note above). -->
     <_SecondsToday>$([System.DateTime]::UtcNow.TimeOfDay.TotalSeconds.ToString("F0"))</_SecondsToday>
     <_BuildNumber Condition="'$(CIRun)' == 'true'">$([MSBuild]::Divide($(_SecondsToday), 2).ToString("F0"))</_BuildNumber>
     <_BuildNumber Condition="'$(CIRun)' != 'true'">0</_BuildNumber>
@@ -205,32 +208,35 @@
     <_CiSep Condition="'$(_VersionDash)' != '-1'">.</_CiSep>
     <Version Condition="'$(PublicRelease)' == 'true'">$(PlatformVersion)</Version>
     <Version Condition="'$(PublicRelease)' != 'true'">$(PlatformVersion)$(_CiSep)ci.$(_CiBuildNumber)</Version>
-    <!-- CI appends +build.<ticks> so each continuous build's InformationalVersion is unique; LOCAL
-         keeps it stable (= $(Version)) so AssemblyInfo isn't regenerated every build (a per-build
-         stamp regenerates AssemblyInfo.cs and destroys incremental builds — see _BuildNumber above).
+    <!-- 🚨 CIRun compiles NOTHING per-build into InformationalVersion — commit-determinism IS the
+         point (issue #1660 WS3, the fix the memex-bake retirement #1347 demanded). The property is
+         the bare $(PlatformVersion); the SDK's AddSourceRevisionToInformationalVersion target then
+         appends +<SourceRevisionId> (the CHECKED-OUT commit — identical in every CI job that
+         builds the same commit), so the compiled attribute is e.g. `3.0.0-rc3+<sha>`: the same
+         bytes whether the Build-and-Test run or the main-cd image build compiled them. That is
+         what lets the CI NodeType bake (mw-plugin-test's bake-output stage) produce assemblies
+         the deployed portal ADOPTS instead of recompiling — the bake artifact and the image agree on
+         NodeTypeCompilationHelpers.FrameworkVersion.
 
-         🚨 THIS TICKS STAMP IS LOAD-BEARING ABI SAFETY, NOT COSMETICS. It is easy to read the MVID
-         switch as "the version string no longer affects ABI identity" and delete the stamp. It does
-         affect it: this attribute is compiled INTO every assembly, MeshWeaver.Graph included, so
-         under CIRun the ticks are exactly what makes Graph's MVID — and therefore
-         NodeTypeCompilationHelpers.FrameworkVersion — differ on every CI build. That is what forces
-         a full NodeType recompile on every deployed build.
-
-         Removing the stamp would make the MVID content-stable, and a content-stable MVID is NOT a
-         sufficient staleness signal, for two independent reasons:
-           • A NodeType's compile reference set is AppContext's TRUSTED_PLATFORM_ASSEMBLIES — EVERY
-             assembly in the image (MeshNodeCompilationService.GetDefaultReferences), not just
-             Graph's dependency closure. A breaking change in an assembly Graph never references is
-             still inside that reference set, and a stable Graph MVID would declare the stale
-             NodeType assemblies valid and LOAD them across it.
-           • AssemblyVersion is pinned at 3.0.0.0 (issue #143, below), so runtime assembly binding
-             will not catch the mismatch either — nothing else stands between a stale NodeType
-             assembly and being loaded.
-         So: anyone removing the ticks stamp MUST, in the SAME change, widen FrameworkVersion to
-         cover the WHOLE reference set (e.g. a hash over the TPA closure). Do not remove one without
-         the other. Cost/benefit of the current scheme: deploy/CHANGE-PROPAGATION.md#the-bake-tax
-         (a full bake is ~10 min on the largest mesh — measured, not the hours once assumed). -->
-    <InformationalVersion Condition="'$(CIRun)' == 'true'">$(Version)+build.$([System.DateTime]::UtcNow.Ticks)</InformationalVersion>
+         🚨 HISTORY — this line used to be `$(Version)+build.<UtcNow.Ticks>` (a fresh stamp per
+         build), and that stamp was load-bearing then: FrameworkVersion was Graph's MVID alone,
+         Graph's MVID only covers Graph's own compile inputs, and a NodeType's compile reference
+         set is the WHOLE TPA (MeshNodeCompilationService.GetDefaultReferences) — so per-build
+         uniqueness was the only thing forcing stale NodeType builds out after a deploy that
+         changed an assembly Graph never references. The pairing that replaced it:
+           • Under CIRun, FrameworkVersion is now the COMMIT identity (the
+             `MeshWeaverFrameworkIdentity` assembly metadata stamped by AddCommitHashMetadata
+             below — `g<sha>`). A commit names the ENTIRE tree — every source file and every
+             package pin — so ANY reference-assembly change still flips the identity (a superset
+             of the old guarantee), while two builds of the SAME commit now share it.
+           • Local (non-CIRun) builds carry no identity stamp and keep the Graph-MVID scheme —
+             content-correct for a dirty working tree, incremental-friendly.
+           • AssemblyVersion stays pinned (issue #143, below), so runtime binding still catches
+             nothing — the identity gate remains the ONLY thing between a stale NodeType assembly
+             and being loaded. Do not weaken it.
+         Cost/benefit: deploy/CHANGE-PROPAGATION.md#the-bake-tax — with the commit identity the
+         full bake runs ONCE per commit, on CI; pods adopt. -->
+    <InformationalVersion Condition="'$(CIRun)' == 'true'">$(PlatformVersion)</InformationalVersion>
     <InformationalVersion Condition="'$(CIRun)' != 'true'">$(Version)</InformationalVersion>
     <!-- 🔴 AssemblyVersion is STABLE (3.0.0.0) — it is the RUNTIME ASSEMBLY-BINDING identity, so it
          MUST be identical across every assembly in a coherent build. `_BuildNumber` is
@@ -240,12 +246,16 @@
          Version=3.0.0.280` while the packaged DLL had a different `3.0.0.<other>` → FileNotFoundException
          at startup → the migration CrashLoopBackOff'd, the schema stuck at v39, and Space creation
          failed (issue #143). Binding identity must not depend on wall-clock time.
-         FileVersion KEEPS the per-build number — that (plus build timestamps) drives MSBuild's
-         CopyToOutputDirectory heuristic so test bins don't hold stale framework DLLs; it does NOT
-         participate in assembly binding, so it can vary freely. NodeType ABI identity uses the Graph
-         MVID and the self-updater keys on the image tag (ci.N) — neither uses AssemblyVersion. -->
+         FileVersion is pinned for the same commit-determinism reason as InformationalVersion
+         above: it is a COMPILED attribute, so a per-build number would fork the MVIDs of two CI
+         builds of the same commit and break the bake identity. (It used to carry $(_BuildNumber)
+         to nudge MSBuild's CopyToOutputDirectory heuristic on incremental test builds — but local
+         builds always had 0 there anyway, and CI builds from clean, so the heuristic never
+         actually relied on it.) NodeType ABI identity is FrameworkVersion (commit under CIRun,
+         Graph MVID locally) and the self-updater keys on the image tag (ci.N) — neither uses
+         AssemblyVersion or FileVersion. -->
     <AssemblyVersion>$(_VersionNumeric).0</AssemblyVersion>
-    <FileVersion>$(_VersionNumeric).$(_BuildNumber)</FileVersion>
+    <FileVersion>$(_VersionNumeric).0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
@@ -265,15 +275,32 @@
        declare an HTML parser and two crypto packages and pushed a High advisory onto every
        downstream consumer. Prefer fixing the source package over adding one. -->
   <!-- Bake the git commit SHA into every assembly as AssemblyMetadata("CommitHash") so the About
-       page can show EXACTLY which build is running and link to the GitHub commit. This is kept
-       SEPARATE from InformationalVersion on purpose: CI overrides InformationalVersion to
-       $(Version)+build.<ticks> (above), which drops the SDK's default +<sha> suffix — so the SHA
-       has to ride on its own metadata attribute to survive a CI build.
+       page can show EXACTLY which build is running and link to the GitHub commit — a stable,
+       explicit carrier independent of whatever shape InformationalVersion has.
        SHA source, in order: the SDK's source-control $(SourceRevisionId) (populated locally and in
        any git checkout by InitializeSourceControlInformation), else $(GITHUB_SHA) — MSBuild imports
        environment variables as properties, so the GitHub Actions commit SHA is available with NO
        workflow change. When neither is set (a git-less source drop) the attribute is simply omitted
-       and the About page falls back to the version string. -->
+       and the About page falls back to the version string.
+
+       🚨 Under CIRun the SAME resolved SHA is ALSO stamped as
+       AssemblyMetadata("MeshWeaverFrameworkIdentity", "g<sha>") — THE framework build identity
+       (issue #1660 WS3). NodeTypeCompilationHelpers.FrameworkVersion reads this attribute off
+       MeshWeaver.Graph and uses it VERBATIM as the ABI-staleness key for every dynamic NodeType
+       (assembly-store filename tag, CompiledFrameworkVersion stamps, the CI bake artifact key,
+       PrebuiltAssemblySeeder's adoption gate). Two CI builds of the same commit therefore share
+       one identity — which is what lets the CI-baked NodeType assemblies seed at portal boot —
+       while ANY code or package-pin change mints a new one (a commit names the entire tree, a
+       strict superset of the old per-build-ticks guarantee's scope; see the InformationalVersion
+       note above). Stamped ONLY for CIRun builds ON GitHub Actions (GITHUB_ACTIONS=true), ON
+       PURPOSE: a CI checkout is always CLEAN at the named commit, while a local working tree can
+       be DIRTY at it — and AGENTS.md has developers reproduce CI locally with -p:CIRun=true, so
+       a CIRun-alone condition would give two different local builds (same commit, different
+       edits) one identity and let a stale NodeType assembly be adopted across them. Local builds
+       (CIRun or not) therefore carry no stamp and fall back to the Graph MVID (content-exact).
+       SourceRevisionId is preferred over GITHUB_SHA because it names the CHECKED-OUT commit; on
+       a workflow_run-triggered CD job GITHUB_SHA can be the branch tip rather than the commit
+       being built, which would fork the identity. -->
   <Target Name="AddCommitHashMetadata"
           BeforeTargets="CoreGenerateAssemblyInfo"
           DependsOnTargets="InitializeSourceControlInformation"
@@ -286,6 +313,12 @@
       <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
         <_Parameter1>CommitHash</_Parameter1>
         <_Parameter2>$(_CommitHash)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+    <ItemGroup Condition="'$(_CommitHash)' != '' and '$(CIRun)' == 'true' and '$(GITHUB_ACTIONS)' == 'true'">
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>MeshWeaverFrameworkIdentity</_Parameter1>
+        <_Parameter2>g$(_CommitHash)</_Parameter2>
       </AssemblyAttribute>
     </ItemGroup>
   </Target>

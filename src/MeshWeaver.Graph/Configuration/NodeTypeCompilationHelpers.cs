@@ -992,34 +992,30 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
-    /// The live MeshWeaver framework identity a compiled NodeType release is pinned to — the
-    /// <c>MeshWeaver.Graph</c> assembly's MVID (a content hash of the compiled module). It is
-    /// identical on every server running the same build, stable across local rebuilds that don't
-    /// change Graph's bytes, and changes whenever the framework is rebuilt with different content
-    /// — so a mismatch against a NodeType's <c>CompiledFrameworkVersion</c> means "recompile".
-    /// (MVID rationale below.) Computed once per process.
+    /// The live MeshWeaver framework identity a compiled NodeType release is pinned to — see
+    /// <see cref="FrameworkBuildIdentity"/> for the scheme. CI builds resolve the stamped COMMIT
+    /// identity (<c>g&lt;sha&gt;</c> — identical for every CI build of the same commit, which is
+    /// what lets CI-baked assemblies seed at boot, #1660 WS3); local builds resolve the
+    /// <c>MeshWeaver.Graph</c> assembly's MVID (a content hash of the compiled module, exact for
+    /// a dirty working tree). A mismatch against a NodeType's <c>CompiledFrameworkVersion</c>
+    /// means "recompile". Computed once per process.
     /// </summary>
     internal static string FrameworkVersion => _frameworkVersion.Value;
 
-    // Content-based framework identity: the Graph assembly's MVID (Module Version Id). It is
-    // part of the compiled module, so it is STABLE whenever the DLL bytes are identical (an
+    // Resolution once per process. The MVID fallback rationale (local builds): the MVID is part
+    // of the compiled module, so it is STABLE whenever the DLL bytes are identical (an
     // incremental build that skips recompiling Graph, or a deterministic rebuild of unchanged
     // source) and CHANGES whenever Graph — or any dependency, which forces Graph's recompile —
-    // is rebuilt with different content. That is exactly the "did the framework ABI change?"
-    // signal a compiled NodeType release pins to.
-    //
-    // Why MVID and not AssemblyInformationalVersion: deriving this from the version STRING forced
-    // Directory.Build.props to stamp a fresh version into EVERY build (so the string changed on a
-    // local rebuild), which regenerated AssemblyInfo every build and DESTROYED incremental builds
-    // (full rebuild every time → hot machine). The MVID decouples the two — the version string can
-    // now stay stable across local rebuilds (incremental restored) while ABI invalidation stays
-    // correct. An earlier scheme appended the DLL's last-write time, but that drifted on
-    // copies/touches even when the bytes were identical; the MVID does not. For a deployed build
-    // the MVID is fixed in the shipped DLL (identical on every server) and changes only when a
-    // redeploy actually changes framework content — so it also recompiles LESS than the old
-    // per-build-version scheme, which invalidated on every deploy whether or not anything changed.
+    // is rebuilt with different content. Deriving identity from the version STRING (the scheme
+    // before the MVID) forced a fresh stamp into EVERY build and destroyed incremental builds;
+    // appending the DLL's last-write time (the scheme before that) drifted on copies/touches.
+    // The commit identity (CI) supersedes the MVID there because the MVID only covers Graph's
+    // OWN compile inputs, while a NodeType compiles against the WHOLE TPA — a commit covers the
+    // entire tree, so any reference-assembly change still invalidates (see FrameworkBuildIdentity).
     private static readonly Lazy<string> _frameworkVersion = new(() =>
-        typeof(NodeTypeCompilationHelpers).Assembly.ManifestModule.ModuleVersionId.ToString("N"));
+        FrameworkBuildIdentity.Resolve(
+            FrameworkBuildIdentity.StampedIdentityOf(typeof(NodeTypeCompilationHelpers).Assembly),
+            typeof(NodeTypeCompilationHelpers).Assembly.ManifestModule.ModuleVersionId.ToString("N")));
 
     /// <summary>
     /// True when a NodeType's persisted compile state is backed by a compiled

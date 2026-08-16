@@ -117,14 +117,16 @@ generation; bake = pre-compiling every dynamic NodeType for the NEW framework fi
    generation early. Everything else transitions smoothly: activity-pinned on the old silo until
    idle, re-placed on the new one on its next activation.
 
-**Where reality stands against this (2026-08-12):** the roll is a single-Deployment rolling update
+**Where reality stands against this (2026-08-16):** the roll is a single-Deployment rolling update
 — the old pod is torn down grains-and-all (rule 1 violated: every active hub dies with its pod);
-there is no pre-run image bake at all, and there structurally cannot be one
-([#1347](https://github.com/Systemorph/MeshWeaver/issues/1347) — every `dotnet publish` mints a
-fresh Graph MVID via the `+build.<ticks>` stamp, so a separately-published bake image can never
-share the portal's framework identity; the separate image has been retired), so the new pod boots
-cold and its own 76-second prewarm sweep races the first visitors (rules 2–4 approximated only by
-the readiness gate). The sweep no longer warms the most user-visible types last — the
+the pre-run bake IMAGE stays retired
+([#1347](https://github.com/Systemorph/MeshWeaver/issues/1347)), but since
+[#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3 the framework identity is
+commit-scoped (`g<sha>` — CI builds are commit-deterministic, so the old "every `dotnet publish`
+mints a fresh Graph MVID" barrier is gone) and the Build-and-Test run's NodeType bake is published
+to the portals' storage, where the booting pod adopts it before its sweep — the sweep compiles
+only what CI did not bake, instead of racing the first visitors with a cold 76-second full bake
+(rules 2–4 approximated only by the readiness gate). The sweep no longer warms the most user-visible types last — the
 `Store/Coupon → Store/Order → Store/Plugin` cycle trio and the store chain behind it are now warmed
 FIRST (#1347) — but "warmed first" is still not "warmed before anyone can ask". The policy above is
 the target the pod-side bake, the readiness gate, and a two-generation silo topology are building

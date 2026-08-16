@@ -125,6 +125,75 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
         }
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task PublishedRoot_SeedsOwnIdentitysDirectory_AndIgnoresOtherIdentities()
+    {
+        // The CI-side write → portal-side read round trip (#1660 WS3): the publish step lays
+        // bundles at <root>/<framework-identity>/<source>/<bundle>.zip
+        // (.github/scripts/publish-bake-bundles.sh), and the pod seeds ONLY its own identity's
+        // subtree. A bundle filed under ANOTHER identity — another commit's bake — must not even
+        // be read: the directory name is the first gate (the manifest MVID gate stays as belt
+        // and braces underneath).
+        var typePath = $"{TestPartition}/PublishedThing";
+        await CreateNodeType("PublishedThing");
+
+        var root = CreateBundleDirectory();
+        try
+        {
+            var mine = Path.Combine(root, PrebuiltAssemblySeeder.LiveFrameworkMvid, "meshweaver-content");
+            Directory.CreateDirectory(mine);
+            WriteBundle(
+                Path.Combine(mine, "shipped.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream(new byte[] { 9, 9, 9 })));
+
+            // Another commit's publication beside it — same node path, must be invisible.
+            var other = Path.Combine(root, "gdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "meshweaver-content");
+            Directory.CreateDirectory(other);
+            WriteBundle(
+                Path.Combine(other, "shipped.zip"),
+                "gdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream(new byte[] { 1 })));
+
+            var adopted = await ShippedPrebuiltBundles.SeedPublishedRoot(Mesh, root, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            adopted.Should().Be(1,
+                "the pod seeds its own identity's directory (recursively, one source subdir), "
+                + "and never another identity's");
+
+            var node = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+                .Where(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
+                    ?.CompilationStatus == CompilationStatus.Ok)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+            var def = node!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+            def.CompiledFrameworkVersion.Should().Be(PrebuiltAssemblySeeder.LiveFrameworkMvid);
+
+            var store = Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>();
+            var storePath = await store
+                .TryGetAssemblyPath(typePath, def.LastCompiledVersion!.Value)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            storePath.Should().NotBeNullOrEmpty(
+                "a CI-published bake must be FOUND by the sweep's store probe — pending=0");
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task PublishedRoot_Unconfigured_IsInert()
+    {
+        var adopted = await ShippedPrebuiltBundles.SeedPublishedRoot(Mesh, null, null)
+            .FirstAsync()
+            .ToTask(TestContext.Current.CancellationToken);
+        adopted.Should().Be(0, "a deployment that does not consume CI bakes seeds nothing");
+    }
+
     /// <summary>A durable NodeType node nested under the base's test partition — the shape the
     /// static repo import produces for shipped content, created under the platform identity.</summary>
     private Task<MeshNode> CreateNodeType(string id)

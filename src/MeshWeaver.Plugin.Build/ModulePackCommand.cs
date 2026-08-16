@@ -177,15 +177,16 @@ public static class ModulePackCommand
             return 2;
         }
 
-        // The MVID is DIAGNOSTIC metadata (which exact platform build produced these bytes) —
-        // recorded when the restored MeshWeaver.Graph.dll is at hand, warned-and-omitted when not.
-        // It is deliberately not required and never a gate: the consumer lands on the
-        // minMeshVersion floor (API compatibility), and MVID equality stays with the NodeType
-        // bake lane.
+        // The framework identity is DIAGNOSTIC metadata (which exact platform build produced these
+        // bytes) — recorded when the restored MeshWeaver.Graph.dll is at hand, warned-and-omitted
+        // when not. It is deliberately not required and never a gate: the consumer lands on the
+        // minMeshVersion floor (API compatibility), and identity equality stays with the NodeType
+        // bake lane. ReadIdentity (not ReadMvid) so a CI-built Graph records its stamped commit
+        // identity — the value the runtime actually compares (#1660 WS3).
         graphDll ??= Path.Combine(moduleDirectory, FrameworkIdentity.IdentityAssembly + ".dll");
         string? frameworkMvid = null;
         if (File.Exists(graphDll))
-            frameworkMvid = FrameworkIdentity.ReadMvid(graphDll);
+            frameworkMvid = FrameworkIdentity.ReadIdentity(graphDll);
         else
             Console.Error.WriteLine(
                 $"warning: {FrameworkIdentity.IdentityAssembly}.dll not found at {graphDll} — the "

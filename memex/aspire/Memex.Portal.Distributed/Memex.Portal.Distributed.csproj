@@ -65,6 +65,17 @@
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The run-numbered platform version ($(Version), e.g. 3.0.0-rc3.ci.3961) rides the container
+       IMAGE CONFIG, never a compiled attribute: CI compile inputs are commit-deterministic
+       (#1660 WS3 — the framework identity that lets CI-baked NodeType assemblies seed at boot
+       must be equal between the Build-and-Test bake and this image build), so the run number
+       cannot be baked into the assemblies. The runtime reads this variable first
+       (PlatformBuildInfo / ShippedReleaseSeed.InstalledPlatformVersion) — the self-updater's
+       tag comparison and the Admin/PlatformVersion node depend on the run number being visible. -->
+  <ItemGroup Condition="'$(CIRun)' == 'true'">
+    <ContainerEnvironmentVariable Include="MESHWEAVER_PLATFORM_VERSION" Value="$(Version)" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Aspire.Azure.Npgsql" />
     <PackageReference Include="Aspire.Azure.Storage.Blobs" />

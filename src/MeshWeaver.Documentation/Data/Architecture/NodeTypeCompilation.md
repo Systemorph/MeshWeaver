@@ -365,17 +365,24 @@ assemblies change and the cached DLL may be ABI-incompatible — so a release is
 only usable while the framework version matches.
 
 `RunCompile` stamps `NodeTypeDefinition.CompiledFrameworkVersion` with
-`NodeTypeCompilationHelpers.FrameworkVersion` on every success. That value is:
+`NodeTypeCompilationHelpers.FrameworkVersion` on every success. That value is
+resolved once per process (`FrameworkBuildIdentity`,
+[#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3):
 
-- **Deployed builds** — the semver baked into `AssemblyInformationalVersion` by
-  the NuGet pack process (e.g. `3.0.0-preview2`). It is identical on every server
-  running the same deployed build — a file write-time would differ per machine and
-  is therefore *not* used.
-- **Un-packed dev builds** — the version stays the frozen default (`1.0.0`) across
-  every local `dotnet build`, so the `MeshWeaver.Graph` assembly's last-write time
-  is folded in (`1.0.0+{timestamp}`). On the single dev machine that is
-  "frozen per build" — stable within a run, changes on rebuild — exactly the
-  dev-iteration signal we want.
+- **CI builds** — the **commit identity** `g<sha>`, stamped into every assembly as
+  `AssemblyMetadata("MeshWeaverFrameworkIdentity")` by `Directory.Build.props`.
+  CI compile inputs are commit-deterministic (no run number or timestamp reaches
+  any compiled attribute), so every CI build of the same commit — the
+  Build-and-Test run that bakes NodeType assemblies and the main-cd run that
+  builds the image — shares one identity; that is what lets the CI bake seed at
+  portal boot instead of recompiling. Any code or package-pin change is a new
+  commit and therefore a new identity — a commit names the whole tree, covering
+  the full TPA reference set a NodeType compiles against, not just Graph's own
+  dependency closure.
+- **Local builds** — the `MeshWeaver.Graph` assembly's **MVID** (a content hash
+  of the compiled module; no stamp is present). Content-exact for a dirty
+  working tree — stable across rebuilds that don't change Graph's bytes,
+  changed whenever they do.
 
 On a framework-version mismatch the NodeType recompiles and **mints a new release**
 for the new framework. The old release is left intact as history so instances still

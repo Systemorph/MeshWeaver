@@ -65,11 +65,35 @@ public sealed partial class UpdateNotificationService(ILogger<UpdateNotification
 
     /// <summary>True if <paramref name="remote"/> is a strictly newer platform version than
     /// <paramref name="local"/> (SemVer2). Unparseable local version → false (never nag on an
-    /// unstamped build).</summary>
-    public static bool IsNewer(string remote, string local) =>
-        NuGetVersion.TryParse(remote, out var r)
-        && NuGetVersion.TryParse(local, out var l)
-        && r > l;
+    /// unstamped build). A local version WITHOUT a <c>.ci.N</c> run number — CI assemblies are
+    /// commit-deterministic (#1660 WS3), so the run number is injected per-deployment and a client
+    /// app carries only <c>PlatformVersion+sha</c> — is compared at RELEASE granularity (the
+    /// remote's trailing ci counter stripped): a current client must not be nagged on every
+    /// connect just because the portal's version carries a build counter.</summary>
+    public static bool IsNewer(string remote, string local)
+    {
+        if (!NuGetVersion.TryParse(remote, out var r) || !NuGetVersion.TryParse(local, out var l))
+            return false;
+        if (!HasCiCounter(l) && HasCiCounter(r))
+            r = StripCiCounter(r);
+        return r > l;
+    }
+
+    /// <summary>Whether the version carries the continuous-build <c>ci</c> release label.</summary>
+    private static bool HasCiCounter(NuGetVersion version) =>
+        version.ReleaseLabels.Any(l => string.Equals(l, "ci", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The version with its <c>ci</c> label and everything after it removed
+    /// (<c>3.0.0-rc3.ci.3961</c> → <c>3.0.0-rc3</c>).</summary>
+    private static NuGetVersion StripCiCounter(NuGetVersion version)
+    {
+        var labels = version.ReleaseLabels
+            .TakeWhile(l => !string.Equals(l, "ci", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return new NuGetVersion(
+            version.Major, version.Minor, version.Patch,
+            labels, metadata: null);
+    }
 
     private void Notify(string meshId, string remoteVersion)
     {
