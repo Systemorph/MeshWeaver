@@ -6,7 +6,9 @@ families (riding `MeshEndpointProviderAttribute`, design #1655/#1667), and the L
 node-menu providers. Ships as a mesh MODULE: `Modules:Assemblies` + the thin module lane
 (`memex/MeshModulesPublish.targets`).
 
-## 🚨 Relocating to Systemorph/MeshWeaver.SocialMedia (task #63) — this copy is the MASTER until the flip
+## 🚨 Relocating to Systemorph/MeshWeaver.SocialMedia — this copy is the MASTER until the flip
+
+(Task 63 of the 2026-08 modularization program — a program-plan task, not a GitHub issue number.)
 
 This module's sources ALSO live in
 [MeshWeaver.SocialMedia `src/MeshWeaver.Social`](https://github.com/Systemorph/MeshWeaver.SocialMedia/tree/main/src/MeshWeaver.Social),
@@ -27,7 +29,8 @@ During the double-ship transition:
      and NodeType compilation references only TRUSTED_PLATFORM_ASSEMBLIES, so a modules/-only
      assembly is invisible to it (the #1683/#1685 `AddApprovals` breakage class). Re-sweep
      `content/ samples/*/Data`, node JSON, AND the live meshes before deleting any symbol.
-  3. Task #74's satellite-bundle rollout, so consumers land the SocialMedia-built bundle
+  3. The modularization program's satellite-bundle rollout (program-plan task 74, not a GitHub
+     issue), so consumers land the SocialMedia-built bundle
      automatically (until then the registry's thin-lane `modules/MeshWeaver.Social/` is empty by
      construction and serves nothing).
   When it flips: remove this project + the `Memex.Portal.Shared` reference + the `@(MeshModule)`
