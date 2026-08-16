@@ -58,8 +58,13 @@ internal static class UiContributionProjection
                 contribution.Icon,
                 required,
                 contribution.Order,
-                Href: MeshNodeLayoutAreas.BuildUrl(menuPath, area))
-                { LabelKey = contribution.LabelKey });
+                // A declared Href wins (catalog-style absolute links); otherwise the entry opens
+                // its area on the anchoring node, like every built-in node-menu item.
+                Href: contribution.Href is { Length: > 0 } href
+                    ? href
+                    : MeshNodeLayoutAreas.BuildUrl(menuPath, area),
+                Tooltip: contribution.Tooltip)
+                { LabelKey = contribution.LabelKey, TooltipKey = contribution.TooltipKey });
         }
         return items ?? (IReadOnlyCollection<NodeMenuItemDefinition>)[];
     }
