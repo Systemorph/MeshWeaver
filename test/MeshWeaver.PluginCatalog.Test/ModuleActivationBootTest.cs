@@ -112,13 +112,101 @@ public class ModuleActivationBootTest
             ["MeshWeaver.OgCard.dll"],
             List(Store("Acme.Widgets"), Store("Acme.Reports")),
             AcceptAll,
-            entry => entry != "Acme.Widgets.dll",
+            name => name != "Acme.Widgets",
             (m, r) => skips.Add((m, r)));
 
         effective.Should().Equal("MeshWeaver.OgCard.dll", "Acme.Reports.dll");
         var skip = skips.Should().ContainSingle().Subject;
         skip.Module.Should().Be("Acme.Widgets");
         skip.Reason.Should().Contain("Acme.Widgets.dll");
+    }
+
+    // ---- The landed-DLL check is modules-folder-SPECIFIC (Copilot review on PR #1668) ---------
+    //
+    // ResolveModulePath falls back to AppContext.BaseDirectory, which is correct for baseline
+    // entries but would let a sidecar entry whose modules/<name>/ folder is gone silently BIND a
+    // same-named app-closure DLL instead of being skipped. These pins exercise the PRODUCTION
+    // check (LandedModuleDllExists) against real files.
+
+    [Fact]
+    public void SidecarEntry_WithLandedModulesFolderDll_IsIncluded()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mw-landed-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "modules", "Acme.Widgets"));
+            File.WriteAllBytes(
+                ModuleActivationBoot.LandedDllPath(dir, "Acme.Widgets"), [1]);
+
+            var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+                [],
+                List(Store("Acme.Widgets")),
+                AcceptAll,
+                name => ModuleActivationBoot.LandedModuleDllExists(dir, name));
+
+            effective.Should().Equal("Acme.Widgets.dll");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SidecarEntry_WithOnlyASameNamedAppClosureDll_IsSkippedLoudly_NeverBindsTheFallback()
+    {
+        // THE gap: the DLL exists in the app's base directory — where ResolveModulePath would
+        // happily fall back to — but modules/Acme.Orphan/ is gone. A store-installed entry must
+        // SKIP, not bind the app-closure binary.
+        var dir = Path.Combine(Path.GetTempPath(), "mw-landed-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllBytes(Path.Combine(dir, "Acme.Orphan.dll"), [1]);
+
+            var skips = new List<(string Module, string Reason)>();
+            var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+                [],
+                List(Store("Acme.Orphan")),
+                AcceptAll,
+                name => ModuleActivationBoot.LandedModuleDllExists(dir, name),
+                (m, r) => skips.Add((m, r)));
+
+            effective.Should().BeEmpty("a same-named app-closure DLL must never satisfy a store-installed entry");
+            var skip = skips.Should().ContainSingle().Subject;
+            skip.Module.Should().Be("Acme.Orphan");
+            skip.Reason.Should().Contain("modules/Acme.Orphan/Acme.Orphan.dll");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BaselineEntry_WithBaseDirectoryDll_IsIncluded_NoLandedFolderRequired()
+    {
+        // Baseline entries keep today's contract: both the modules/ layout and the classic
+        // BaseDirectory location are legitimate (ResolveModulePath handles the probing at
+        // install time), so the union includes them without a landed-folder check.
+        var dir = Path.Combine(Path.GetTempPath(), "mw-landed-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllBytes(Path.Combine(dir, "MeshWeaver.OgCard.dll"), [1]);
+
+            var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+                ["MeshWeaver.OgCard.dll"],
+                new ModuleActivationList(),
+                AcceptAll,
+                name => ModuleActivationBoot.LandedModuleDllExists(dir, name));
+
+            effective.Should().Equal("MeshWeaver.OgCard.dll");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     [Fact]

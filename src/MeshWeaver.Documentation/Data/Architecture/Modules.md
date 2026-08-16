@@ -62,8 +62,11 @@ folder is deleted, and the change likewise takes effect at restart.
   stays in the sidecar, waiting for a re-install against the new framework. The gate is the same
   pure function every prebuilt lane uses (`PrebuiltAssemblySeeder.DeclineReason`) — there is one
   notion of framework identity, never two.
-- **Missing DLL** — the entry's `modules/<name>/<name>.dll` does not resolve (lost volume, manual
-  deletion). Skipped loudly; re-install to heal.
+- **Missing DLL** — the entry's `modules/<name>/<name>.dll` does not exist (lost volume, manual
+  deletion). Skipped loudly; re-install to heal. The check is that path SPECIFICALLY — a
+  same-named DLL in the app closure never satisfies a store-installed entry (the
+  `ResolveModulePath` base-directory fallback applies to baseline entries only, so a tampered
+  sidecar can never silently bind the platform's own binaries).
 
 The landing service itself gates twice more, at placement: the same MVID check (declined bytes
 never reach disk), and a refusal of any module whose entry DLL name collides with an app-closure

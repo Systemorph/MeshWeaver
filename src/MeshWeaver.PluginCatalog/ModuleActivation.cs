@@ -157,9 +157,10 @@ public static class ModuleActivationBoot
     ///     duplicates a baseline (or earlier persisted) module name — dedupe, silent, the module
     ///     is simply already activated; its recorded <see cref="ModuleActivationEntry.FrameworkMvid"/>
     ///     is refused by <paramref name="frameworkGate"/> (an image roll changed the framework —
-    ///     SKIPPED with a loud report, the entry stays for the post-roll re-install); or its DLL
-    ///     is missing per <paramref name="entryDllExists"/> (a lost volume / manual deletion —
-    ///     SKIPPED loudly). A skip is never a crash: the deployment must boot.</item>
+    ///     SKIPPED with a loud report, the entry stays for the post-roll re-install); or its
+    ///     LANDED DLL is missing per <paramref name="landedModuleDllExists"/> (a lost volume /
+    ///     manual deletion — SKIPPED loudly; a same-named app-closure DLL does not count).
+    ///     A skip is never a crash: the deployment must boot.</item>
     ///   <item>Disabled entries (uninstalled) contribute nothing and report nothing.</item>
     /// </list>
     /// </summary>
@@ -169,15 +170,21 @@ public static class ModuleActivationBoot
     /// the running framework, or null when it may — production passes
     /// <c>PrebuiltAssemblySeeder.DeclineReason</c> so there is never a second notion of framework
     /// identity.</param>
-    /// <param name="entryDllExists">Whether an entry (e.g. <c>Foo.dll</c>) resolves to an existing
-    /// file — production passes <c>File.Exists(MeshBuilder.ResolveModulePath(entry))</c>.</param>
+    /// <param name="landedModuleDllExists">Whether a persisted module's LANDED entry DLL exists —
+    /// called with the module NAME, and 🚨 it must check <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c>
+    /// SPECIFICALLY (production passes <see cref="LandedModuleDllExists"/>), never
+    /// <c>MeshBuilder.ResolveModulePath</c>: that resolver falls back to the app's base directory,
+    /// so a sidecar entry whose <c>modules/&lt;name&gt;/</c> folder is gone (tampered sidecar,
+    /// deleted folder) would silently BIND a same-named app-closure DLL instead of being skipped.
+    /// A store-installed module never legitimately lives in the app closure — a name collision
+    /// there is exactly what <see cref="ModuleLandingService"/> refuses at landing.</param>
     /// <param name="onSkipped">The loud channel: called once per skipped persisted entry with
     /// (module name, reason).</param>
     public static ImmutableList<string> ComputeEffectiveModuleEntries(
         IReadOnlyList<string>? baselineEntries,
         ModuleActivationList? persisted,
         Func<string?, string?> frameworkGate,
-        Func<string, bool> entryDllExists,
+        Func<string, bool> landedModuleDllExists,
         Action<string, string>? onSkipped = null)
     {
         var effective = ImmutableList.CreateBuilder<string>();
@@ -204,18 +211,38 @@ public static class ModuleActivationBoot
                 continue;
             }
 
-            var entry = module.Name + ".dll";
-            if (!entryDllExists(entry))
+            if (!landedModuleDllExists(module.Name))
             {
                 onSkipped?.Invoke(module.Name,
-                    $"its DLL '{entry}' does not resolve to an existing file (modules/"
-                    + $"{module.Name}/ lost or never landed) — re-install the module");
+                    $"its landed DLL 'modules/{module.Name}/{module.Name}.dll' does not exist "
+                    + "(folder lost or never landed; a same-named app-closure DLL deliberately "
+                    + "does NOT satisfy a store-installed entry) — re-install the module");
                 continue;
             }
 
-            effective.Add(entry);
+            effective.Add(module.Name + ".dll");
         }
 
         return effective.ToImmutable();
     }
+
+    /// <summary>
+    /// The landed entry-DLL path of a store-installed module:
+    /// <c>{baseDirectory}/modules/{name}/{name}.dll</c> — the ONE location the landing service
+    /// writes and the boot union checks.
+    /// </summary>
+    public static string LandedDllPath(string baseDirectory, string moduleName) =>
+        Path.Combine(baseDirectory, "modules", moduleName, moduleName + ".dll");
+
+    /// <summary>
+    /// The PRODUCTION existence check for a persisted (store-installed) entry — the landed DLL at
+    /// <see cref="LandedDllPath"/>, and nothing else. 🚨 Deliberately NOT
+    /// <c>MeshBuilder.ResolveModulePath</c>: that resolver falls back to the app's base directory,
+    /// which is correct for appsettings-baseline entries (both locations are legitimate for them)
+    /// but would let a sidecar entry whose <c>modules/&lt;name&gt;/</c> folder is gone silently
+    /// bind a same-named app-closure DLL instead of being skipped — a store-installed module never
+    /// legitimately lives in the app closure (the landing service refuses that collision).
+    /// </summary>
+    public static bool LandedModuleDllExists(string baseDirectory, string moduleName) =>
+        File.Exists(LandedDllPath(baseDirectory, moduleName));
 }
