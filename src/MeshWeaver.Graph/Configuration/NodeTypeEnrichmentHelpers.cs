@@ -407,7 +407,9 @@ internal static class NodeTypeEnrichmentHelpers
         // The Where below is now strict on those fields, so the slow-path
         // Take(1) keeps waiting until the healed emission arrives.
         var healSub = typeStream
-            .Where(t => t?.Content is NodeTypeDefinition stale
+            // ContentAs, never `is NodeTypeDefinition` — the #1669 blindness on un-materialized
+            // JSON emissions; see ArmStaleAssemblySelfHeal's predicate note.
+            .Where(t => t?.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger) is { } stale
                 && stale.CompilationStatus == CompilationStatus.Ok
                 && (string.IsNullOrEmpty(stale.LatestAssemblyCollection)
                     || string.IsNullOrEmpty(stale.LatestAssemblyPath))
@@ -423,7 +425,7 @@ internal static class NodeTypeEnrichmentHelpers
             .SelectMany(_ => Observable.Using(
                 () => AccessContextScope.AsSystem(enrichAccessService),
                 _2 => typeStream.Update(curr =>
-                    curr.Content is NodeTypeDefinition d
+                    curr.ContentAs<NodeTypeDefinition>(meshHub.JsonSerializerOptions, logger) is { } d
                     && d.CompilationStatus == CompilationStatus.Ok
                     && (string.IsNullOrEmpty(d.LatestAssemblyCollection)
                         || string.IsNullOrEmpty(d.LatestAssemblyPath))
@@ -1579,8 +1581,16 @@ internal static class NodeTypeEnrichmentHelpers
         ILogger? logger,
         IScheduler? scheduler = null,
         string? modulesHash = null)
+        // 🚨 ContentAs, never `is NodeTypeDefinition` (#1669): the type node reaches this stream
+        // in UN-MATERIALIZED JSON shape whenever the publication just crossed a sync stream — the
+        // normal shape for exactly the emission this watcher exists to catch. A CLR type test is
+        // blind there, so the watcher ignored the new build and the instance served its stale
+        // (worst case zero-areas) activation until a manual recycle — the ThinkInStreams/Subscribe
+        // + post-roll Store shape. Same divergence class the settle-gate's own doc comment
+        // convicts; typed content short-circuits in ContentAs, so the materialized path pays
+        // nothing.
         => typeStream
-            .Where(t => t?.Content is NodeTypeDefinition d
+            .Where(t => t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger) is { } d
                 && NodeTypeCompilationHelpers.HasUsableBuild(t, d, modulesHash)
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
                 && !string.Equals(d.LatestAssemblyPath, boundAssemblyPath, StringComparison.Ordinal))
@@ -1592,7 +1602,7 @@ internal static class NodeTypeEnrichmentHelpers
             .Subscribe(
                 t =>
                 {
-                    var published = (t.Content as NodeTypeDefinition)?.LatestAssemblyPath;
+                    var published = t.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger)?.LatestAssemblyPath;
                     logger?.LogInformation(
                         "Stale-assembly self-heal: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — recycling instance '{InstancePath}' so it rebinds",
                         nodeType, published, boundAssemblyPath, instanceHub.Address);
@@ -1634,7 +1644,10 @@ internal static class NodeTypeEnrichmentHelpers
         IScheduler? scheduler = null,
         string? modulesHash = null)
     {
-        var usable = typeStream.Where(t => t?.Content is NodeTypeDefinition d
+        // ContentAs, never `is NodeTypeDefinition` — the #1669 blindness on un-materialized JSON
+        // emissions; see ArmStaleAssemblySelfHeal's predicate note.
+        var usable = typeStream.Where(t =>
+            t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger) is { } d
             && NodeTypeCompilationHelpers.HasUsableBuild(t, d, modulesHash));
 
         // FAST path — the version advanced past the overlay: a genuinely NEW build landed, heal now.
