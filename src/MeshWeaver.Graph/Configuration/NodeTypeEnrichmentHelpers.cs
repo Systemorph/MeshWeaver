@@ -1590,8 +1590,12 @@ internal static class NodeTypeEnrichmentHelpers
         // convicts; typed content short-circuits in ContentAs, so the materialized path pays
         // nothing.
         => typeStream
-            .Where(t => t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger) is { } d
-                && NodeTypeCompilationHelpers.HasUsableBuild(t, d, modulesHash)
+            // Deserialize ONCE per emission — the Subscribe below reuses the recovered definition
+            // (a second ContentAs would also duplicate its degraded-content warning logs).
+            .Select(t => (Node: t,
+                Def: t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger)))
+            .Where(x => x.Def is { } d
+                && NodeTypeCompilationHelpers.HasUsableBuild(x.Node!, d, modulesHash)
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
                 && !string.Equals(d.LatestAssemblyPath, boundAssemblyPath, StringComparison.Ordinal))
             // 🚨 Wait for the type to stop publishing — see AssemblySettleWindow. An install
@@ -1600,9 +1604,9 @@ internal static class NodeTypeEnrichmentHelpers
             .Throttle(AssemblySettleWindow, scheduler ?? Scheduler.Default)
             .Take(1)
             .Subscribe(
-                t =>
+                x =>
                 {
-                    var published = t.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger)?.LatestAssemblyPath;
+                    var published = x.Def?.LatestAssemblyPath;
                     logger?.LogInformation(
                         "Stale-assembly self-heal: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — recycling instance '{InstancePath}' so it rebinds",
                         nodeType, published, boundAssemblyPath, instanceHub.Address);
