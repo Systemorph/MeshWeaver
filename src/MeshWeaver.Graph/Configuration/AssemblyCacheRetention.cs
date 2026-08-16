@@ -237,14 +237,15 @@ public static class AssemblyCacheGenerations
             : null;
     }
 
-    // The two tag shapes the store has ever written (FrameworkVersion[..8], see
+    // The three tag shapes the store has ever written (FrameworkVersion[..8], see
     // FileSystemAssemblyStore.FrameworkTag): 8 hex chars for an MVID identity (local builds, and
-    // every build before #1660 WS3), or 'g' + 7 hex chars for a commit identity (CI builds since
-    // #1660 WS3 — FrameworkVersion is g<sha> there). Anything else stays unattributed and
-    // therefore undeletable.
+    // every build before #1660 WS3), 'g' + 7 hex chars for a commit identity (manifest-less CI
+    // processes since #1660 WS3), or 's' + 7 hex chars for the API-surface identity (hosts that
+    // ship a surface manifest — the portals and the bake host). Anything else stays unattributed
+    // and therefore undeletable.
     private static bool IsGenerationTag(string s) =>
         s.Length == FrameworkTagLength
-        && (IsHex(s) || ((s[0] == 'g' || s[0] == 'G') && IsHex(s[1..])));
+        && (IsHex(s) || ((s[0] is 'g' or 'G' or 's' or 'S') && IsHex(s[1..])));
 
     private static bool IsHex(string s) =>
         s.Length > 0 && s.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');

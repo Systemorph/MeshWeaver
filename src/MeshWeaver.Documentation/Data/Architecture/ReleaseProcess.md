@@ -83,10 +83,13 @@ The `PublicRelease` flag picks the channel (think **CI** vs **CD**):
   `MESHWEAVER_PLATFORM_VERSION` environment variable (image config, not bytes).
 - **`InformationalVersion`** is `$(PlatformVersion)` under `CIRun=true` (the SDK
   appends `+<commit-sha>`); locally it equals `$(Version)`. NodeType ABI identity is
-  `NodeTypeCompilationHelpers.FrameworkVersion`: for CI builds the **stamped commit
-  identity** (`g<sha>`, `AssemblyMetadata("MeshWeaverFrameworkIdentity")`), locally
-  the **`MeshWeaver.Graph` assembly's MVID** (a content hash of the compiled module,
-  stable across rebuilds that don't change Graph's bytes).
+  `NodeTypeCompilationHelpers.FrameworkVersion` (`FrameworkBuildIdentity`): hosts that
+  ship a `meshweaver-surface.manifest` (portals, the CI bake host) resolve the
+  **API-surface hash** (`s<hash>` — stable across internal-only changes, moved by
+  breaking surface changes and by any `MeshWeaver.Graph` change); manifest-less CI
+  processes fall back to the **stamped commit identity** (`g<sha>`,
+  `AssemblyMetadata("MeshWeaverFrameworkIdentity")`, kept as provenance everywhere);
+  local builds fall back to the **Graph MVID**.
 - **`-p:Version=…`** still overrides everything (escape hatch) — and it is what the
   tag-driven release workflows actually pass.
 

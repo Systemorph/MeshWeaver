@@ -993,29 +993,37 @@ internal static class NodeTypeCompilationHelpers
 
     /// <summary>
     /// The live MeshWeaver framework identity a compiled NodeType release is pinned to — see
-    /// <see cref="FrameworkBuildIdentity"/> for the scheme. CI builds resolve the stamped COMMIT
-    /// identity (<c>g&lt;sha&gt;</c> — identical for every CI build of the same commit, which is
-    /// what lets CI-baked assemblies seed at boot, #1660 WS3); local builds resolve the
-    /// <c>MeshWeaver.Graph</c> assembly's MVID (a content hash of the compiled module, exact for
-    /// a dirty working tree). A mismatch against a NodeType's <c>CompiledFrameworkVersion</c>
-    /// means "recompile". Computed once per process.
+    /// <see cref="FrameworkBuildIdentity"/> for the scheme. Hosts that ship a surface manifest
+    /// (the portals, the CI bake host) resolve the API-SURFACE identity (<c>s&lt;hash&gt;</c> —
+    /// stable across internal-only framework changes, so content rebakes ONLY on a breaking
+    /// surface change, #1660 WS3 refinement "rebuild only when we need to"); manifest-less CI
+    /// processes fall back to the stamped COMMIT identity (<c>g&lt;sha&gt;</c>, kept as logged
+    /// provenance everywhere); local builds fall back to the <c>MeshWeaver.Graph</c> assembly's
+    /// MVID (content-exact for a dirty working tree). A mismatch against a NodeType's
+    /// <c>CompiledFrameworkVersion</c> means "recompile". Computed once per process.
     /// </summary>
-    internal static string FrameworkVersion => _frameworkVersion.Value;
+    internal static string FrameworkVersion => _frameworkVersion.Value.Identity;
 
-    // Resolution once per process. The MVID fallback rationale (local builds): the MVID is part
-    // of the compiled module, so it is STABLE whenever the DLL bytes are identical (an
-    // incremental build that skips recompiling Graph, or a deterministic rebuild of unchanged
-    // source) and CHANGES whenever Graph — or any dependency, which forces Graph's recompile —
-    // is rebuilt with different content. Deriving identity from the version STRING (the scheme
-    // before the MVID) forced a fresh stamp into EVERY build and destroyed incremental builds;
-    // appending the DLL's last-write time (the scheme before that) drifted on copies/touches.
-    // The commit identity (CI) supersedes the MVID there because the MVID only covers Graph's
-    // OWN compile inputs, while a NodeType compiles against the WHOLE TPA — a commit covers the
-    // entire tree, so any reference-assembly change still invalidates (see FrameworkBuildIdentity).
-    private static readonly Lazy<string> _frameworkVersion = new(() =>
-        FrameworkBuildIdentity.Resolve(
-            FrameworkBuildIdentity.StampedIdentityOf(typeof(NodeTypeCompilationHelpers).Assembly),
-            typeof(NodeTypeCompilationHelpers).Assembly.ManifestModule.ModuleVersionId.ToString("N")));
+    /// <summary>Degradation warning from the identity resolution (a torn/unusable surface
+    /// manifest fell back to the stamp/MVID layer), or null on the happy path — cached with the
+    /// identity itself so the pre-warmer can log it beside the identity it announces.</summary>
+    internal static string? FrameworkVersionWarning => _frameworkVersion.Value.Warning;
+
+    // Resolution once per process, through the ONE chain (FrameworkBuildIdentity
+    // .ResolveProcessIdentityWithDiagnostics): surface manifest → commit stamp → Graph MVID. The MVID fallback
+    // rationale (local builds): the MVID is part of the compiled module, so it is STABLE whenever
+    // the DLL bytes are identical and CHANGES whenever Graph is rebuilt with different content.
+    // The surface identity supersedes both where a manifest ships because the commit key
+    // OVER-invalidated (every merge — internal-only included — rebaked all content; measured
+    // pending=82 on the ci.3979 roll) while the Graph MVID alone UNDER-invalidates (it only
+    // covers Graph's own compile inputs, not the content-facing surface of the rest of the
+    // framework). The ref-assembly-based surface hash sits exactly between: it moves when — and
+    // only when — the API surface content compiles against changes (plus the Graph-impl
+    // exception for the compile pipeline's own emitters).
+    private static readonly Lazy<(string Identity, string? Warning)> _frameworkVersion = new(() =>
+        FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics(
+            AppContext.BaseDirectory,
+            typeof(NodeTypeCompilationHelpers).Assembly));
 
     /// <summary>
     /// True when a NodeType's persisted compile state is backed by a compiled

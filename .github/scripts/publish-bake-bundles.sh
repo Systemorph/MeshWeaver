@@ -52,6 +52,13 @@ if [ "${#BUNDLES[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# The completeness sentinel (must match ShippedPrebuiltBundles.CompletionSentinelFileName): its
+# PRESENCE means "every bundle of this publication landed", because it is uploaded strictly LAST.
+# Its content lists the bundle set, so the reader can detect a listed-but-missing bundle too.
+SENTINEL="_complete"
+SENTINEL_LOCAL=$(mktemp)
+for zip in "${BUNDLES[@]}"; do basename "$zip"; done | sort > "$SENTINEL_LOCAL"
+
 publish_one_target() { # <account> <share> <dest-dir>
   local account="$1" share="$2" dest="$3" path="" part
   # az storage directory create is not recursive and errors on an existing directory on some CLI
@@ -74,6 +81,12 @@ publish_one_target() { # <account> <share> <dest-dir>
       --auth-mode login --backup-intent --only-show-errors > /dev/null
     echo "published: $account/$share/$dest/$(basename "$zip")"
   done
+  # LAST write — the atomic completeness marker. Anything that dies before this line leaves the
+  # directory sentinel-less: unreadable to portals, re-published wholesale by the next run.
+  az storage file upload --account-name "$account" --share-name "$share" \
+    --path "$dest/$SENTINEL" --source "$SENTINEL_LOCAL" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null
+  echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s))"
 }
 
 for target in $BAKE_PUBLISH_TARGETS; do
@@ -87,6 +100,23 @@ for target in $BAKE_PUBLISH_TARGETS; do
     exit 1
   fi
   DEST="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
+  # "Rebuild only when we need to" applies to the publish too (#1660 WS3): the identity is the
+  # API-surface hash, so an internal-only merge resolves the SAME identity as the previous one —
+  # its bake is byte-for-byte what is already published.
+  #
+  # 🚨 The skip keys on the _complete SENTINEL, never on "any file exists": the sentinel is
+  # written LAST, after every bundle uploaded, so a publish that died mid-way (cancelled run,
+  # network fault) leaves a directory WITHOUT it — and the next publish re-uploads everything
+  # (idempotent overwrites) instead of freezing the identity incomplete forever. The read side
+  # (ShippedPrebuiltBundles.SeedPublishedRoot) honours the same contract: a source directory
+  # without its sentinel is never seeded.
+  complete=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
+    --path "$DEST/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors 2>/dev/null || echo false)
+  if [ "$complete" = "true" ]; then
+    echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication under $DEST ($SENTINEL present) — surface unchanged, bake already published; skipping."
+    continue
+  fi
   echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s))"
   publish_one_target "$ACCOUNT" "$SHARE" "$DEST"
 done
