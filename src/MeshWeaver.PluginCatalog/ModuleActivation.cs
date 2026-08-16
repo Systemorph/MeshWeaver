@@ -38,10 +38,25 @@ public sealed record ModuleActivationEntry
     public string? PackagePath { get; init; }
 
     /// <summary>The framework MVID (MeshWeaver.Graph's ModuleVersionId) the landed assemblies
-    /// were built against, as verified at landing time. Boot SKIPS the entry — loudly, never a
-    /// crash — when this does not match the running framework: after an image roll the landed
-    /// bytes are ABI-stale, and the entry waits for a re-install against the new framework.</summary>
+    /// were built against, as the producer recorded it — DIAGNOSTIC metadata only: it names the
+    /// exact build behind the bytes when something needs debugging, but it is never a gate.
+    /// Modules bind by simple name and their contract is API compatibility, expressed by
+    /// <see cref="MinMeshVersion"/>; the strict MVID gate is bake semantics and belongs to the
+    /// NodeType assembly lane.</summary>
     public string? FrameworkMvid { get; init; }
+
+    /// <summary>The module's declared platform FLOOR (<c>minMeshVersion</c>) as recorded at
+    /// landing. Boot SKIPS the entry — loudly, never a crash — when the running platform no
+    /// longer satisfies it (a rollback below the floor); absent = no constraint. The one gate is
+    /// <see cref="ModulePlatformFloor.DeclineReason(string?)"/>.</summary>
+    public string? MinMeshVersion { get; init; }
+
+    /// <summary>The package version the landed bundle was served at (the module package's released
+    /// SemVer). What the auto-update reconcile compares against the registry's bundle index to
+    /// decide "already landed" without downloading a byte (<see cref="ModuleUpdateDecision"/>).
+    /// Null on an entry written before this field existed — which reads as "unknown", so the next
+    /// reconcile re-lands once and records it.</summary>
+    public string? Version { get; init; }
 
     /// <summary>False = uninstalled (the record is kept for history/idempotence; the folder is
     /// deleted). Takes effect at the next restart, like every activation change.</summary>
@@ -138,7 +153,7 @@ public static class ModuleActivationSidecar
 
 /// <summary>
 /// The boot-time union of #1664 step 9: appsettings baseline ∪ enabled persisted store installs,
-/// deduped by module name, with the two skip rules (missing DLL, framework-MVID mismatch)
+/// deduped by module name, with the two skip rules (missing DLL, unsatisfied platform floor)
 /// applied loudly — extracted PURE so the computation is unit-testable without booting a portal.
 /// </summary>
 public static class ModuleActivationBoot
@@ -155,21 +170,23 @@ public static class ModuleActivationBoot
     ///     entries only).</item>
     ///   <item>Each ENABLED persisted entry appends as <c>&lt;Name&gt;.dll</c> unless: it
     ///     duplicates a baseline (or earlier persisted) module name — dedupe, silent, the module
-    ///     is simply already activated; its recorded <see cref="ModuleActivationEntry.FrameworkMvid"/>
-    ///     is refused by <paramref name="frameworkGate"/> (an image roll changed the framework —
-    ///     SKIPPED with a loud report, the entry stays for the post-roll re-install); or its
-    ///     LANDED DLL is missing per <paramref name="landedModuleDllExists"/> (a lost volume /
-    ///     manual deletion — SKIPPED loudly; a same-named app-closure DLL does not count).
-    ///     A skip is never a crash: the deployment must boot.</item>
+    ///     is simply already activated; its recorded <see cref="ModuleActivationEntry.MinMeshVersion"/>
+    ///     floor is refused by <paramref name="platformGate"/> (the platform rolled BACK below
+    ///     the module's declared requirement — SKIPPED with a loud report, the entry stays for
+    ///     when the platform moves forward again); or its LANDED DLL is missing per
+    ///     <paramref name="landedModuleDllExists"/> (a lost volume / manual deletion — SKIPPED
+    ///     loudly; a same-named app-closure DLL does not count). A skip is never a crash: the
+    ///     deployment must boot. A landed module's MVID is deliberately NOT a skip condition —
+    ///     modules bind by simple name across platform builds; the recorded MVID is diagnostic.</item>
     ///   <item>Disabled entries (uninstalled) contribute nothing and report nothing.</item>
     /// </list>
     /// </summary>
     /// <param name="baselineEntries">The raw <c>Modules:Assemblies</c> values (may be null/empty).</param>
     /// <param name="persisted">The sidecar list (may be null).</param>
-    /// <param name="frameworkGate">Returns WHY a recorded framework identity may not load against
-    /// the running framework, or null when it may — production passes
-    /// <c>PrebuiltAssemblySeeder.DeclineReason</c> so there is never a second notion of framework
-    /// identity.</param>
+    /// <param name="platformGate">Returns WHY a recorded platform FLOOR is not satisfied by the
+    /// running platform, or null when it is (an absent floor is always satisfied) — production
+    /// passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/> so there is never a second
+    /// notion of the module platform requirement.</param>
     /// <param name="landedModuleDllExists">Whether a persisted module's LANDED entry DLL exists —
     /// called with the module NAME, and 🚨 it must check <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c>
     /// SPECIFICALLY (production passes <see cref="LandedModuleDllExists"/>), never
@@ -183,7 +200,7 @@ public static class ModuleActivationBoot
     public static ImmutableList<string> ComputeEffectiveModuleEntries(
         IReadOnlyList<string>? baselineEntries,
         ModuleActivationList? persisted,
-        Func<string?, string?> frameworkGate,
+        Func<string?, string?> platformGate,
         Func<string, bool> landedModuleDllExists,
         Action<string, string>? onSkipped = null)
     {
@@ -205,7 +222,7 @@ public static class ModuleActivationBoot
             if (!seen.Add(module.Name))
                 continue; // already activated (baseline or an earlier entry) — dedupe by name
 
-            if (frameworkGate(module.FrameworkMvid) is { } reason)
+            if (platformGate(module.MinMeshVersion) is { } reason)
             {
                 onSkipped?.Invoke(module.Name, reason);
                 continue;

@@ -33,6 +33,12 @@ module removes its routes wholesale: a 404, not a compiled optional-service 503.
 `MeshWeaver.Social` is the first consumer — its LinkedIn connect/publish/page-sync routes ride
 this hook, with the two OAuth callback routes opting out via `AllowAnonymous` (LinkedIn's
 redirect must not bounce through a login challenge; the CSRF state cookie is the guard).
+`MeshWeaver.Hosting.Grpc` is the second: the whole `meshweaver.v1.Mesh` service maps through the
+hook, `AllowAnonymous` on every route because the transport authenticates each connection itself
+(Bearer API token in gRPC call metadata, or the trusted loopback port). One piece cannot ride the
+hook: the gRPC-web MIDDLEWARE must run between `UseRouting` and the endpoint maps, so the host
+keeps a single compiled `UseMeshWeaverGrpcWebWhenInstalled()` line that self-gates on the module
+being listed — the module listing stays the only switch.
 
 Module DI options bind through the options pipeline —
 `services.AddOptions<T>().BindConfiguration("Section")` — never `services.Configure(section)`:
@@ -68,18 +74,22 @@ folder is deleted, and the change likewise takes effect at restart.
 
 **The skip rules** (persisted entries only — the deployment must always boot):
 
-- **Framework-MVID mismatch** — an image roll changed the running framework since the install, so
-  the landed bytes are ABI-stale. The entry is SKIPPED with a loud log naming both identities and
-  stays in the sidecar, waiting for a re-install against the new framework. The gate is the same
-  pure function every prebuilt lane uses (`PrebuiltAssemblySeeder.DeclineReason`) — there is one
-  notion of framework identity, never two.
+- **Unsatisfied platform floor** — the running platform no longer satisfies the module's declared
+  `minMeshVersion` (a rollback below its requirement). The entry is SKIPPED with a loud log
+  naming both versions and stays in the sidecar, waiting for the platform to move forward again.
+  The gate is `ModulePlatformFloor.DeclineReason` — the ONE notion of the module platform
+  requirement, shared with landing and serving. Deliberately a **semver floor, never MVID
+  equality**: a module is a plain assembly binding by simple name, so a landed module keeps
+  loading across ordinary platform updates; the MVID it was built with is recorded on the entry
+  as diagnostics only (MVID equality is bake semantics and belongs to the NodeType assembly
+  lane).
 - **Missing DLL** — the entry's `modules/<name>/<name>.dll` does not exist (lost volume, manual
   deletion). Skipped loudly; re-install to heal. The check is that path SPECIFICALLY — a
   same-named DLL in the app closure never satisfies a store-installed entry (the
   `ResolveModulePath` base-directory fallback applies to baseline entries only, so a tampered
   sidecar can never silently bind the platform's own binaries).
 
-The landing service itself gates twice more, at placement: the same MVID check (declined bytes
+The landing service itself gates twice more, at placement: the same floor check (declined bytes
 never reach disk), and a refusal of any module whose entry DLL name collides with an app-closure
 assembly — `ResolveModulePath` probes `modules/<name>/` first, so such a module would silently
 shadow the platform's own binary at the next boot.
@@ -108,6 +118,17 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
 =======
 | `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
+<<<<<<< HEAD
+| `MeshWeaver.Hosting.Grpc.dll` | The mesh gRPC transport: `meshweaver.v1.Mesh` + gRPC-web, `py`/`node` foreign participants AND the React GUI's browser data plane | `Grpc` (`TrustedPort`) |
+
+🚨 **`MeshWeaver.Hosting.Grpc` is DEFAULT-ON in every deployment.** Its endpoint is not just the
+foreign-participant (`py/*`, `node/*`) transport — the React GUI connects over the very same
+grpc-web `Connect`+`Deliver` split at the origin root (`clients/portal-next`, `clients/portal`).
+Delist it only in a deployment with NO React GUI and NO foreign participants; anywhere else a
+delist silently breaks the React frontend's live connection. (The former `Features:Grpc` flag is
+gone — the module listing is the switch.)
+=======
+>>>>>>> origin/main
 >>>>>>> origin/main
 
 Boot packs select by OTHER configuration too: `Graph:Storage:Type` `Cosmos`/`Snowflake` requires
@@ -136,6 +157,67 @@ targeting packs, so its folder carries the engine assembly (measured private dep
 none; the engine's package closure still rides the app via other references). Because a flipped
 DLL exists nowhere else, the closure lane also lays it into a plain build's output
 (`bin/…/modules/`), keeping `dotnet run` on a host working without a publish step.
+
+## The bundle lane — modules as Store packages (#1664)
+
+A compiled module reaches a deployment one of two ways: shipped in the image (the baseline above),
+or **installed from the Store as part of an ordinary package**. The second rides the plugin bundle
+transport end to end — there is deliberately no second distribution channel:
+
+1. **Declare** — the package's root `index.json` carries `content.module` naming the module's
+   entry-assembly (`"module": "MeshWeaver.Social"`), plus the platform floor it requires in the
+   `content.minMeshVersion` field authors already write. The listing reads both onto the catalog
+   entry (`PackageManifest.Module` / `.MinMeshVersion`) and the ordinary install-record stamp
+   carries them onto the record. A package with content nodes AND a module is one Store product —
+   card, price, install funnel, pre-install eligibility all unchanged.
+2. **Build** — `MeshWeaver.Plugin.Build`'s `module-pack` mode packs a built module's closure into
+   a bundle recording the `minMeshVersion` floor (`--min-mesh-version`) and, as diagnostics, the
+   MVID of the `MeshWeaver.Graph.dll` in the build output. It is a plain dotnet invocation over
+   an output folder, so ANY node repo's CI can drive it — SocialMedia builds its own module
+   bundle the same way the platform repo does — and because the gate is the floor, ONE bundle
+   serves every compatible platform build: nothing is rebundled per CI build. The closure is an
+   explicit statement (`--with`), never a folder scrape: a publish output contains the whole app
+   closure, and bundling framework assemblies would shadow the platform at the consumer.
+3. **Serve** — the registry portal's `/api/plugins/bundles` serves the module section inside the
+   SAME bundle that carries the package's NodeType assemblies (`meshweaver/modules/` beside
+   `meshweaver/assemblies/`, one manifest naming both). The registry serves a module's bytes from
+   its own `modules/<name>/` tree — the very bytes it loads and runs — and refuses to serve a
+   landing its own boot would skip (uninstalled, or a floor the registry's own platform no longer
+   satisfies). The index stamps each bundle's `module` (and its floor) only when the bytes are
+   actually servable, so a consumer never downloads for a section that will not be there. Same
+   instance-key auth, fail-closed.
+4. **Land** — on install (and on update), a consumer whose package declares a module fetches the
+   bundle, verifies the **platform floor** (`ModulePlatformFloor.DeclineReason` — the one notion
+   of the module platform requirement, checked at the index, at the manifest, and again at
+   placement), and lands it through `ModuleLandingService` into `modules/<name>/` with its
+   activation entry (version + floor recorded; the built-against MVID recorded as diagnostics).
+   Deliberately **not** MVID equality — that is bake semantics, the NodeType lane's gate: a
+   module binds by simple name, so a bundle built against an older platform installs ex post on
+   any deployment satisfying its floor. Restart-as-activation as above: `PendingRestart` is the
+   signal, the next restart loads it.
+
+### Auto-update
+
+Store-installed modules **update themselves by default**. The boot reconcile
+(`RegistryUpdateReconciler`) runs a module pass after the content pass: for every installed
+module-declaring package it consults the registry's bundle index and applies the one pure decision
+(`ModuleUpdateDecision`) — a newer version whose **floor this platform satisfies** lands via
+`ModuleLandingService` and flags `PendingRestart`; the same served version is skipped without a
+download; a bundle whose floor **exceeds** the running platform is skipped silently-with-log (it
+becomes installable once the platform has updated, and the same reconcile lands it then). Nothing
+is ever rolled back unattended — and an ordinary platform update needs no module re-land at all:
+landed modules keep loading across platform builds.
+
+The policy gate is the deployment's **existing update policy — `Admin/UpdatePolicy`**, the same
+single surface that governs the platform image roll; there is no module-specific knob.
+**Continuous — the platform default, and what an absent policy reads as — lands unattended;
+Stable and None decline the UPGRADE** (the catalog's manual Update still works there): a
+deployment that pins its image takes updates deliberately, and its modules do not run ahead of
+that choice. A **first landing** is deliberately policy-exempt: it completes an install the
+operator's own surfaces already sanctioned, and gating it would ship a package whose binary half
+never arrives. The wiring is `IModuleUpdatePolicy` (`MeshWeaver.PluginCatalog`), implemented by
+the memex portals over the policy node; a host that registers no implementation gets the default
+(allowed).
 
 ## Modules and the in-mesh compiler
 

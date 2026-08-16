@@ -527,20 +527,23 @@ public static class MemexConfiguration
             //
             // #1664 step 9 — the effective set is the appsettings baseline ∪ the ENABLED entries
             // of the modules/activation.json sidecar (store-installed modules landed by
-            // ModuleLandingService), deduped by name. Sidecar entries are guarded: a recorded
-            // framework MVID that mismatches the running framework (an image roll happened since
-            // the install) or a missing DLL SKIPS the entry with a loud stderr line — never a
-            // crash, the deployment must boot; the entry stays for the post-roll re-install.
-            // Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship to Loki regardless).
+            // ModuleLandingService), deduped by name. Sidecar entries are guarded: a declared
+            // minMeshVersion FLOOR the running platform no longer satisfies (a rollback below the
+            // module's requirement) or a missing DLL SKIPS the entry with a loud stderr line —
+            // never a crash, the deployment must boot; the entry stays for when the platform
+            // moves forward again. A landed module's built-against MVID is diagnostic only:
+            // modules bind by simple name across platform builds (the strict MVID gate is the
+            // NodeType bake lane's). Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
+            // to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
             var persistedActivation = ModuleActivationSidecar.Read(AppContext.BaseDirectory,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
                 moduleAssemblies,
                 persistedActivation,
-                // The ONE framework-identity gate (PrebuiltAssemblySeeder) — never a second
-                // notion of framework version.
-                PrebuiltAssemblySeeder.DeclineReason,
+                // The ONE module platform gate (ModulePlatformFloor) — never a second notion of
+                // the module platform requirement.
+                ModulePlatformFloor.DeclineReason,
                 // 🚨 modules/<name>/<name>.dll SPECIFICALLY — never ResolveModulePath, whose
                 // BaseDirectory fallback would let a sidecar entry with a lost modules/ folder
                 // silently bind a same-named app-closure DLL instead of being skipped. Baseline
@@ -731,11 +734,16 @@ public static class MemexConfiguration
                 .AddPortalType()
                 .AddAI(serveFromPartition);
 
-            // gRPC mesh transport (foreign participants py/*, node/*, and the React GUI's
-            // browser Connect+Deliver split). Registers the service + declares the
-            // participant address types stream-routed. Symmetric with Features:SignalR.
-            if (features.Grpc)
-                mb = mb.AddGrpcHub();
+            // The gRPC mesh transport is a MODULE (MeshWeaver.Hosting.Grpc.dll under
+            // Modules:Assemblies — GrpcMeshModuleAttribute folds AddGrpcHub over this builder:
+            // the transport services + the py/node stream-routed participant address types; its
+            // GrpcModuleAttribute maps the meshweaver.v1.Mesh endpoint via
+            // MapMeshModuleEndpoints). 🚨 DEFAULT-ON in every deployment: the endpoint is the
+            // React GUI's browser data plane (grpc-web Connect+Deliver at the origin root), not
+            // just the foreign-participant (py/*, node/*) transport — delist only where there is
+            // no React GUI and no foreign participant. The former Features:Grpc flag is gone;
+            // the module listing IS the switch. Only the pipeline-order-bound gRPC-web
+            // middleware stays compiled (UseMeshWeaverGrpcWebWhenInstalled, below).
 
             // Each AI provider self-registers everything (catalog source +
             // IOptions binding + IChatClientFactory) via one builder extension.
@@ -1074,9 +1082,11 @@ public static class MemexConfiguration
 
         // gRPC-web middleware — lets browsers / React Native reach the mesh gRPC service
         // (Connect+Deliver split) without HTTP/2 bidi. Must sit between UseRouting and the
-        // endpoint maps. Inert for non-grpc-web requests.
-        if (features.Grpc)
-            app.UseMeshWeaverGrpcWeb();
+        // endpoint maps — the one gRPC piece that CANNOT ride the module's endpoint hook — so
+        // this compiled line stays and self-gates on the MeshWeaver.Hosting.Grpc module being
+        // listed under Modules:Assemblies (the endpoint itself maps via MapMeshModuleEndpoints).
+        // Inert for non-grpc-web requests.
+        app.UseMeshWeaverGrpcWebWhenInstalled();
         app.UseAuthentication();
         app.UseAuthorization();
         app.UseAntiforgery();
@@ -1116,10 +1126,11 @@ public static class MemexConfiguration
         if (features.SignalR)
             app.MapMeshWeaverSignalRHubs();
 
-        // gRPC mesh endpoint (meshweaver.v1.Mesh/Open, grpc-web enabled) — foreign-language
-        // workers and the React GUI connect here.
-        if (features.Grpc)
-            app.MapMeshWeaverGrpc();
+        // The gRPC mesh endpoint (meshweaver.v1.Mesh, grpc-web enabled — foreign-language
+        // workers AND the React GUI) rides MapMeshModuleEndpoints below: the
+        // MeshWeaver.Hosting.Grpc module's GrpcModuleAttribute maps it, AllowAnonymous by
+        // explicit opt-out (the transport authenticates connections itself — Bearer token in
+        // gRPC metadata / trusted loopback port).
 
         // Map MCP endpoint
         app.MapMeshMcp();

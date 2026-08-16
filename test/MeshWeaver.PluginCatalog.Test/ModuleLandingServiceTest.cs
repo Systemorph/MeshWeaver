@@ -13,10 +13,10 @@ namespace MeshWeaver.PluginCatalog.Test;
 
 /// <summary>
 /// The runtime <c>modules/</c> writer (#1664 Slice A, step 7): a landed module's files + its
-/// activation entry, the MVID gate at placement (the SAME
-/// <see cref="PrebuiltAssemblySeeder.DeclineReason(string?)"/> identity every other prebuilt lane gates
-/// on), the app-closure same-identity refusal, and uninstall (disable + delete,
-/// restart-as-activation).
+/// activation entry, the platform-FLOOR gate at placement (the ONE
+/// <see cref="ModulePlatformFloor"/> notion every module call site shares — the built-against
+/// MVID is recorded as diagnostics, never refused), the app-closure same-identity refusal, and
+/// uninstall (disable + delete, restart-as-activation).
 /// </summary>
 public class ModuleLandingServiceTest : IDisposable
 {
@@ -24,7 +24,8 @@ public class ModuleLandingServiceTest : IDisposable
         Path.Combine(Path.GetTempPath(), "mw-landing-" + Guid.NewGuid().ToString("N"));
 
     /// <summary>The RUNNING framework identity — MeshWeaver.Graph's MVID, exactly what
-    /// <c>NodeTypeCompilationHelpers.FrameworkVersion</c> computes.</summary>
+    /// <c>NodeTypeCompilationHelpers.FrameworkVersion</c> computes. Recorded on landings as
+    /// DIAGNOSTIC metadata.</summary>
     private static string LiveFrameworkMvid =>
         typeof(PrebuiltAssemblySeeder).Assembly.ManifestModule.ModuleVersionId.ToString("N");
 
@@ -46,7 +47,9 @@ public class ModuleLandingServiceTest : IDisposable
                 "Acme.Widgets",
                 [("Acme.Widgets.dll", [1, 2, 3]), ("Acme.Widgets.Support.dll", [4, 5])],
                 LiveFrameworkMvid,
-                packagePath: "Plugins/acme-widgets")
+                packagePath: "Plugins/acme-widgets",
+                version: "1.2.0",
+                minMeshVersion: "0.0.1")
             .FirstAsync().ToTask();
 
         // The files, in the exact layout ResolveModulePath probes.
@@ -65,7 +68,9 @@ public class ModuleLandingServiceTest : IDisposable
         entry.Name.Should().Be("Acme.Widgets");
         entry.Source.Should().Be(ModuleActivationSources.Store);
         entry.PackagePath.Should().Be("Plugins/acme-widgets");
-        entry.FrameworkMvid.Should().Be(LiveFrameworkMvid);
+        entry.FrameworkMvid.Should().Be(LiveFrameworkMvid, "the built-against MVID is recorded as diagnostics");
+        entry.Version.Should().Be("1.2.0");
+        entry.MinMeshVersion.Should().Be("0.0.1", "the floor is what boot and the serve side re-check");
         entry.Enabled.Should().BeTrue();
         list.PendingRestart.Should().BeTrue("landing takes effect only at the next restart");
     }
@@ -86,23 +91,48 @@ public class ModuleLandingServiceTest : IDisposable
     }
 
     [Fact]
-    public async Task LandModule_FrameworkMvidMismatch_Refuses_NamingBothMvids()
+    public async Task LandModule_PlatformBelowDeclaredFloor_Refuses_NamingBothVersions()
     {
         using var service = Service;
-        var foreign = Guid.NewGuid().ToString("N");
 
         var act = () => service
-            .LandModule("Acme.Widgets", [("Acme.Widgets.dll", [1])], foreign)
+            .LandModule("Acme.Widgets", [("Acme.Widgets.dll", [1])],
+                LiveFrameworkMvid, minMeshVersion: "999.0.0")
             .FirstAsync().ToTask();
 
         (await act.Should().ThrowAsync<InvalidOperationException>(
-                "landing ABI-stale bytes would surface only as a TypeLoadException at the next boot"))
-            .Which.Message.Should().Contain(foreign).And.Contain(LiveFrameworkMvid,
-                "the refusal must name BOTH identities so the operator can see which side is stale");
+                "landing bytes whose required API surface does not exist here would surface only "
+                + "as a MissingMethodException at the next boot"))
+            .Which.Message.Should().Contain("999.0.0").And.Contain(
+                // Non-null on any stamped build — ModulePlatformFloorTest pins that.
+                ModulePlatformFloor.RunningVersion!,
+                "the refusal must name BOTH versions so the operator can see which side is behind");
 
         Directory.Exists(Path.Combine(baseDirectory, "modules", "Acme.Widgets"))
             .Should().BeFalse("declined bytes never reach disk");
         ModuleActivationSidecar.Read(baseDirectory).Entries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LandModule_ForeignBuiltAgainstMvid_Lands_TheMvidIsDiagnosticOnly()
+    {
+        // 🚨 The design decision of the module lane: modules bind by SIMPLE NAME and their
+        // contract is API compatibility (the minMeshVersion floor) — a bundle produced by a
+        // different platform build lands fine. MVID equality is bake semantics and stays with the
+        // NodeType assembly lane; gating modules on it would forbid the ex-post Store install
+        // across platform versions the lane exists for.
+        using var service = Service;
+        var foreignBuild = Guid.NewGuid().ToString("N");
+
+        await service.LandModule(
+                "Acme.Widgets", [("Acme.Widgets.dll", [1])], foreignBuild, version: "1.0.0")
+            .FirstAsync().ToTask();
+
+        File.Exists(Path.Combine(baseDirectory, "modules", "Acme.Widgets", "Acme.Widgets.dll"))
+            .Should().BeTrue();
+        ModuleActivationSidecar.Read(baseDirectory).Entries.Should().ContainSingle()
+            .Which.FrameworkMvid.Should().Be(foreignBuild,
+                "the built-against MVID is kept as diagnostics naming the exact producing build");
     }
 
     [Fact]

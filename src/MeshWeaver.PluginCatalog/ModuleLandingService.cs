@@ -1,6 +1,5 @@
 using System.IO;
 using System.Reactive;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 
@@ -9,15 +8,18 @@ namespace MeshWeaver.PluginCatalog;
 /// <summary>
 /// The runtime writer into <c>modules/</c> (#1664 step 7) — the ONE code path that lands a
 /// compiled module's assemblies beside the app at runtime and records its activation, so the next
-/// restart loads it (restart-as-activation, #1664 step 8). This is the seam Slice C's
-/// <c>PackageInstaller</c> binary branch calls after fetching a module bundle; nothing in Slice A
-/// invokes it from the install funnel yet.
+/// restart loads it (restart-as-activation, #1664 step 8). Slice C's install funnel calls it
+/// through <see cref="PluginBundleClient.AdoptModule"/> (bundle-fetch → MVID gate → here), from
+/// the install orchestrator (<c>CatalogLayoutAreas.InstallOrUpdate</c>) and the boot reconcile
+/// (<see cref="RegistryUpdateReconciler"/>).
 ///
-/// <para><b>The MVID gate holds at placement.</b> Landing verifies the caller's declared
-/// framework identity through <see cref="PrebuiltAssemblySeeder.DeclineReason(string?)"/> — the SAME pure
-/// function the prebuilt-assembly seeder and the bundle client gate on, so there is never a
-/// second notion of framework version. A mismatch REFUSES the landing (the observable errors,
-/// naming both MVIDs); declined bytes never reach disk.</para>
+/// <para><b>The platform-floor gate holds at placement.</b> Landing verifies the module's
+/// declared <c>minMeshVersion</c> through <see cref="ModulePlatformFloor.DeclineReason(string?)"/>
+/// — the ONE notion of the module platform gate, shared with the serve and fetch sides. An
+/// unsatisfied floor REFUSES the landing (the observable errors, naming both versions); declined
+/// bytes never reach disk. The framework MVID the bundle was built against is recorded and logged
+/// as DIAGNOSTIC metadata only — modules bind by simple name, and their contract is API
+/// compatibility, not build identity (that strict gate belongs to the NodeType bake lane).</para>
 ///
 /// <para><b>The same-identity trap-door is refused too.</b> <c>MeshBuilder.ResolveModulePath</c>
 /// resolves <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c> BEFORE the app folder, so landing a
@@ -56,8 +58,13 @@ public sealed class ModuleLandingService : IDisposable
         this.baseDirectory = baseDirectory ?? AppContext.BaseDirectory;
     }
 
+    /// <summary>The deployment root the <c>modules/</c> tree lives under — exposed so the serving
+    /// side (<see cref="ModuleBundleSource"/> callers) reads the SAME tree this service writes,
+    /// tests included.</summary>
+    public string BaseDirectory => baseDirectory;
+
     /// <summary>
-    /// Lands a module: verifies the framework MVID, writes the assemblies atomically into
+    /// Lands a module: verifies the declared platform floor, writes the assemblies atomically into
     /// <c>modules/&lt;name&gt;/</c>, and appends/updates the activation entry in the
     /// <c>modules/activation.json</c> sidecar with <c>PendingRestart = true</c>. The module
     /// LOADS on the next restart (restart-as-activation) — nothing is loaded into the running
@@ -70,18 +77,37 @@ public sealed class ModuleLandingService : IDisposable
     /// <param name="assemblies">The module's closure: file name + bytes per assembly. Must
     /// contain the entry <c>&lt;name&gt;.dll</c>.</param>
     /// <param name="frameworkMvid">The framework MVID (MeshWeaver.Graph's ModuleVersionId) the
-    /// assemblies were built against, as recorded by the producer.</param>
+    /// assemblies were built against, as recorded by the producer — DIAGNOSTIC metadata: logged
+    /// and recorded on the activation entry, never a refusal (modules bind by simple name; the
+    /// strict MVID gate belongs to the NodeType bake lane).</param>
     /// <param name="packagePath">The install record's mesh path, when the store lane calls.</param>
+    /// <param name="version">The package version the bundle was served at — recorded on the
+    /// activation entry so the auto-update reconcile can answer "already landed" without a
+    /// download (<see cref="ModuleActivationEntry.Version"/>).</param>
+    /// <param name="minMeshVersion">The module's declared platform FLOOR — the gate: an
+    /// unsatisfied floor (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>) refuses the
+    /// landing. Null = no constraint declared.</param>
     public IObservable<Unit> LandModule(
         string name,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
-        string frameworkMvid,
-        string? packagePath = null)
+        string? frameworkMvid = null,
+        string? packagePath = null,
+        string? version = null,
+        string? minMeshVersion = null)
         => pool.InvokeBlocking(_ =>
         {
-            LandCore(name, assemblies, frameworkMvid, packagePath);
+            LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion);
             return Unit.Default;
         });
+
+    /// <summary>
+    /// Reads the current activation list on this service's IO pool — the runtime counterpart of the
+    /// boot-time <see cref="ModuleActivationSidecar.Read"/>, serialized behind the same cap-1 pool
+    /// as the writes so a read never observes a landing halfway through its read-modify-write.
+    /// </summary>
+    public IObservable<ModuleActivationList> GetActivation()
+        => pool.InvokeBlocking(_ => ModuleActivationSidecar.Read(baseDirectory,
+            msg => logger?.LogError("{Message}", msg)));
 
     /// <summary>
     /// Uninstalls a module landed by <see cref="LandModule"/>: disables its activation entry
@@ -100,8 +126,10 @@ public sealed class ModuleLandingService : IDisposable
     private void LandCore(
         string name,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
-        string frameworkMvid,
-        string? packagePath)
+        string? frameworkMvid,
+        string? packagePath,
+        string? version,
+        string? minMeshVersion)
     {
         ValidateFileName(name, "module name");
         if (assemblies is not { Count: > 0 })
@@ -119,11 +147,14 @@ public sealed class ModuleLandingService : IDisposable
                 $"Module '{name}': the assembly list does not contain its entry '{entryDll}' — "
                 + "such a folder could never load.", nameof(assemblies));
 
-        // 🚨 THE MVID GATE, at placement — the same pure function PrebuiltAssemblySeeder and
-        // PluginBundleClient gate on. Declining is always safe; landing on faith is not: the
-        // ABI mismatch would surface only at the next boot, as a TypeLoadException with nothing
-        // connecting it to the install that caused it.
-        if (PrebuiltAssemblySeeder.DeclineReason(frameworkMvid) is { } reason)
+        // 🚨 THE PLATFORM-FLOOR GATE, at placement — the same pure function the serve and fetch
+        // sides gate on (ModulePlatformFloor), so there is never a second notion of the module
+        // platform requirement. Deliberately NOT MVID equality: modules bind by simple name and
+        // their contract is API compatibility — the strict MVID gate is bake semantics and stays
+        // with the NodeType lane. Declining an unsatisfied floor is always safe; landing on faith
+        // is not: the missing API would surface only at the next boot, as a
+        // MissingMethodException with nothing connecting it to the install that caused it.
+        if (ModulePlatformFloor.DeclineReason(minMeshVersion) is { } reason)
         {
             logger?.LogWarning("Module '{Name}' REFUSED at landing: {Reason}", name, reason);
             throw new InvalidOperationException($"Module '{name}' refused: {reason}");
@@ -172,6 +203,8 @@ public sealed class ModuleLandingService : IDisposable
             Source = ModuleActivationSources.Store,
             PackagePath = packagePath,
             FrameworkMvid = frameworkMvid,
+            Version = version,
+            MinMeshVersion = minMeshVersion,
             Enabled = true,
         };
         ModuleActivationSidecar.Write(baseDirectory, list with
@@ -183,9 +216,11 @@ public sealed class ModuleLandingService : IDisposable
         });
 
         logger?.LogInformation(
-            "Module '{Name}' LANDED into modules/{Name}/ ({Count} assemblies, framework "
-            + "{FrameworkMvid}) — activation recorded, RESTART REQUIRED to load it",
-            name, name, assemblies.Count, frameworkMvid);
+            "Module '{Name}' LANDED into modules/{Name}/ ({Count} assemblies, floor "
+            + "{MinMeshVersion}, platform {Running}; built against framework MVID "
+            + "{FrameworkMvid} — diagnostic) — activation recorded, RESTART REQUIRED to load it",
+            name, name, assemblies.Count, minMeshVersion ?? "(none)",
+            ModulePlatformFloor.RunningVersion ?? "(unknown)", frameworkMvid ?? "(unrecorded)");
     }
 
     private void RemoveCore(string name)

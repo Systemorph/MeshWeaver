@@ -18,6 +18,12 @@ public static class SelfUpdateConfiguration
         builder.AddUpdatePolicyType();
         builder.ConfigureServices(services =>
         {
+            // The module lane's unattended-landing gate (#1664) rides the SAME Admin/UpdatePolicy
+            // node this feature owns — Continuous (default) lands store-installed modules
+            // unattended, Stable/None decline. Registered here, beside the node type, so a host
+            // without self-update simply has no policy provider and the PluginCatalog default
+            // (allowed) applies. Platform-neutral (a storage read), so no browser guard.
+            services.AddSingleton<MeshWeaver.PluginCatalog.IModuleUpdatePolicy, PlatformModuleUpdatePolicy>();
             // Bind from configuration when the caller passes nothing. Without this the defaults were
             // baked into the image: PollInterval sat at 6h with NO way for an environment to change
             // it, and a SelfUpdate__PollInterval in the configmap silently did nothing — the failure

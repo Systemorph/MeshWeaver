@@ -60,7 +60,16 @@ public static class GrpcHostingExtensions
     /// <returns>The same <paramref name="endpoints"/> for chaining.</returns>
     public static IEndpointRouteBuilder MapMeshWeaverGrpc(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGrpcService<MeshGrpcService>().EnableGrpcWeb();
+        // AllowAnonymous is today's semantics made EXPLICIT, not a widening: the transport
+        // authenticates every connection ITSELF — MeshGrpcService validates the Bearer API token
+        // carried in gRPC call metadata (registry.Authenticate), a call on the loopback
+        // GrpcOptions.TrustedPort authenticates by reachability, and a definitively invalid token
+        // still connects as Anonymous whose writes are cleanly RLS-denied. ASP.NET-level
+        // authorization here would break both non-cookie callers (foreign py/node gates present
+        // mw_ API tokens no host auth scheme accepts) and the credential-less trusted-port path.
+        // The explicit opt-out matters because the module lane (GrpcModuleAttribute) maps this
+        // inside MapMeshModuleEndpoints' authenticated-by-default group.
+        endpoints.MapGrpcService<MeshGrpcService>().EnableGrpcWeb().AllowAnonymous();
         return endpoints;
     }
 
@@ -72,6 +81,42 @@ public static class GrpcHostingExtensions
     public static IApplicationBuilder UseMeshWeaverGrpcWeb(this IApplicationBuilder app)
     {
         app.UseGrpcWeb();
+        return app;
+    }
+
+    /// <summary>
+    /// The module-lane form of <see cref="UseMeshWeaverGrpcWeb"/>: applies the gRPC-web middleware
+    /// only when this assembly is INSTALLED as a module (<c>Modules:Assemblies</c> →
+    /// <see cref="InstalledModuleAssembly"/>). Middleware cannot ride
+    /// <c>MeshEndpointProviderAttribute</c> — it must run in the pipeline between
+    /// <c>UseRouting</c> and the endpoint maps — so the host keeps this ONE compiled line and the
+    /// module listing stays the single on/off switch: delist the module and both the routes
+    /// (via <c>MapMeshModuleEndpoints</c>) and this middleware drop out together.
+    /// </summary>
+    /// <param name="app">The application builder.</param>
+    /// <returns>The same <paramref name="app"/> for chaining.</returns>
+    public static IApplicationBuilder UseMeshWeaverGrpcWebWhenInstalled(this IApplicationBuilder app)
+    {
+        // Match by assembly NAME, not instance: the module list resolves through
+        // Assembly.LoadFrom, which normally dedupes onto the compiled reference the host already
+        // loaded (double-ship), but a modules/-folder copy must gate identically.
+        var moduleName = typeof(GrpcHostingExtensions).Assembly.GetName().Name;
+        var installed = app.ApplicationServices.GetServices<InstalledModuleAssembly>()
+            .Any(m => m.Assembly.GetName().Name == moduleName);
+        // LOUD either way: gRPC silently off is indistinguishable from a broken transport —
+        // every "React GUI / py client cannot connect" triage starts by grepping for this line.
+        var logger = app.ApplicationServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+            ?.CreateLogger(typeof(GrpcHostingExtensions).FullName!);
+        if (installed)
+        {
+            if (logger is not null)
+                Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(logger,
+                    "gRPC transport ENABLED: {Module} is installed — gRPC-web middleware active, mesh gRPC endpoints map via the module hook", moduleName);
+            app.UseMeshWeaverGrpcWeb();
+        }
+        else if (logger is not null)
+            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(logger,
+                "gRPC transport OFF: {Module} is NOT in this deployment's module set (Modules:Assemblies) — the React GUI and py/node participants cannot connect. List the DLL to enable.", moduleName);
         return app;
     }
 }
