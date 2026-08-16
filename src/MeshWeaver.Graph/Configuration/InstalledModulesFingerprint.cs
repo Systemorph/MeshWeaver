@@ -10,15 +10,15 @@ namespace MeshWeaver.Graph.Configuration;
 /// set, design #1644). Stamped as <c>NodeTypeDefinition.CompiledModulesHash</c> by every
 /// successful NodeType compile, alongside <c>CompiledFrameworkVersion</c>.
 ///
-/// <para><b>Step-1 scope (deliberate):</b> the hash is RECORDED but does not yet join the
-/// usable-build decision. While modules ride the app image, a module change rebuilds the image,
-/// which changes Graph's MVID, which invalidates every build through the existing framework-match
-/// rule — the modules hash is redundant there. It becomes load-bearing exactly when modules ship
-/// SEPARATELY from the image (the <c>modules/</c> folder + bundle lane, #1644 step 2): then a
-/// module-only update must invalidate baked builds that could reference it, and this recorded
-/// hash is what the usable-build check compares. Definitions stamped before this feature carry
-/// null, which step 2 must treat as MATCH: a null-hash build was compiled when modules were in
-/// the app closure, and the framework rule already governs it.</para>
+/// <para><b>DECISIVE since #1664 Slice A:</b> the hash joins the usable-build decision —
+/// <c>NodeTypeCompilationHelpers.HasUsableBuild</c> (and its rebuild-kickoff twin
+/// <c>HasStaleFrameworkBuild</c>) invalidates a build stamped with a DIFFERENT non-null hash than
+/// the live set, so a module-only update (framework MVID unchanged — the store-install lane,
+/// where modules land in <c>modules/</c> without an image rebuild) forces the rebuild the
+/// framework rule cannot see. Definitions stamped before the feature carry null, which compares
+/// as MATCH: a null-hash build was compiled when modules were in the app closure, and the
+/// framework rule already governs it. Call sites without a mesh in scope pass null and keep the
+/// framework-only behavior.</para>
 ///
 /// <para>Registered as a mesh-scoped singleton (lifetime = the mesh, never static — test meshes
 /// with different module sets must not bleed).</para>

@@ -80,6 +80,10 @@ internal static class NodeTypeCompilationHelpers
         // NodeType whose compile already terminally failed, so a broken type can never drive
         // the recompile storm that saturates this hub's single-threaded action block.
         var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
+        // The live installed-module fingerprint (#1664 step 11) — joins HasUsableBuild /
+        // HasStaleFrameworkBuild below so a module-only update re-drives the compile the same
+        // way a framework redeploy does. Null when the mesh registers no fingerprint (legacy).
+        var modulesHash = ModulesHashOf(hub);
 
         var installSeq = System.Threading.Interlocked.Increment(ref _watcherInstallCount);
         logger?.LogDebug(
@@ -315,7 +319,7 @@ internal static class NodeTypeCompilationHelpers
         var firstBuildKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus is null
-                && !HasUsableBuild(node, def)
+                && !HasUsableBuild(node, def, modulesHash)
                 // Same truly-static exclusion as the watcher above: the
                 // HubConfiguration delegate IS the configuration; nothing to
                 // Roslyn-compile.
@@ -442,7 +446,7 @@ internal static class NodeTypeCompilationHelpers
         var frameworkStaleKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error
-                && HasStaleFrameworkBuild(def)
+                && HasStaleFrameworkBuild(def, modulesHash)
                 && !IsStaticOnlyNodeType(node, def)
                 && parkRegistry?.IsParked(hubPath) != true)
             .Take(1)
@@ -461,11 +465,23 @@ internal static class NodeTypeCompilationHelpers
             //
             // So: mismatch is the CHEAP pre-filter (a pure record read on every emission, unchanged),
             // and the store probe runs at most once per hub lifetime, here, after Take(1).
-            .SelectMany(node => ResolveAssemblyStore(hub)
-                .TryGetAssemblyPath(hubPath, DefinitionOf(hub, node)?.LastCompiledVersion ?? node.Version)
-                .Take(1)
-                .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
-                .Select(path => (Node: node, HasBytes: !string.IsNullOrEmpty(path))))
+            //
+            // 🚨 The probe answers the FRAMEWORK-mismatch case only. The store key carries the
+            // framework tag, not the modules hash — so when the staleness is a MODULES-hash
+            // mismatch on a framework-matching build (#1664 step 11), a bytes-hit for the live
+            // framework IS the very stale build we are trying to replace, and skipping on it
+            // would wedge the type forever. For that case, skip the probe and rebuild.
+            .SelectMany(node =>
+            {
+                var stampedFramework = DefinitionOf(hub, node)?.CompiledFrameworkVersion;
+                if (string.Equals(stampedFramework, FrameworkVersion, StringComparison.Ordinal))
+                    return Observable.Return((Node: node, HasBytes: false));
+                return ResolveAssemblyStore(hub)
+                    .TryGetAssemblyPath(hubPath, DefinitionOf(hub, node)?.LastCompiledVersion ?? node.Version)
+                    .Take(1)
+                    .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
+                    .Select(path => (Node: node, HasBytes: !string.IsNullOrEmpty(path)));
+            })
             .Where(probe =>
             {
                 if (!probe.HasBytes)
@@ -480,11 +496,17 @@ internal static class NodeTypeCompilationHelpers
             .Select(probe => probe.Node)
             .Subscribe(node =>
             {
-                logger?.LogInformation(
-                    "Framework-stale kickoff: NodeType {HubPath} assembly was compiled against framework {Compiled} but the live framework is {Live} — flipping CompilationStatus=Pending to rebuild",
-                    hubPath,
-                    node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.CompiledFrameworkVersion ?? "(null)",
-                    FrameworkVersion);
+                // Name the ACTUAL staleness cause: on a modules-only update the stamped and live
+                // framework are EQUAL, and a framework-shaped message would read as a no-op.
+                var staleDef = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+                if (string.Equals(staleDef?.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal))
+                    logger?.LogInformation(
+                        "Stale-build kickoff: NodeType {HubPath} assembly was compiled under installed-module set {Compiled} but the live set is {Live} (framework unchanged — a module-only update) — flipping CompilationStatus=Pending to rebuild",
+                        hubPath, staleDef?.CompiledModulesHash ?? "(null)", modulesHash);
+                else
+                    logger?.LogInformation(
+                        "Framework-stale kickoff: NodeType {HubPath} assembly was compiled against framework {Compiled} but the live framework is {Live} — flipping CompilationStatus=Pending to rebuild",
+                        hubPath, staleDef?.CompiledFrameworkVersion ?? "(null)", FrameworkVersion);
                 var staleAccess = hub.ServiceProvider.GetService<AccessService>();
                 using var systemScope = staleAccess?.ImpersonateAsSystem();
                 workspace.GetMeshNodeStream().Update(curr =>
@@ -497,7 +519,7 @@ internal static class NodeTypeCompilationHelpers
                         return curr;
                     // Re-check staleness inside the lambda — a genuine rebuild may have refreshed
                     // CompiledFrameworkVersion between the outer Where and this write.
-                    if (!HasStaleFrameworkBuild(def)) return curr;
+                    if (!HasStaleFrameworkBuild(def, modulesHash)) return curr;
                     return curr with
                     {
                         Content = def with { CompilationStatus = CompilationStatus.Pending }
@@ -1026,11 +1048,37 @@ internal static class NodeTypeCompilationHelpers
     /// compile over a blocking store round-trip on every stream emission;
     /// the runtime miss is caught later when activation tries to hydrate the
     /// assembly and the store reports a miss.</para>
+    ///
+    /// <para><b>The modules fingerprint is DECISIVE (#1664 step 11).</b> When the caller passes
+    /// the mesh's live <see cref="InstalledModulesFingerprint.Hash"/> as
+    /// <paramref name="modulesHash"/>, a build stamped with a DIFFERENT non-null
+    /// <see cref="NodeTypeDefinition.CompiledModulesHash"/> is not usable — a module-only update
+    /// (framework MVID unchanged, module MVIDs changed) must invalidate baked builds that could
+    /// reference the replaced module, which the framework rule cannot see once modules ship
+    /// separately from the image. Two deliberate MATCH cases: a <c>null</c> STAMP is grandfathered
+    /// (compiled before modules joined the compile surface — the framework rule alone governs it,
+    /// per the contract on <see cref="NodeTypeDefinition.CompiledModulesHash"/>), and a
+    /// <c>null</c> CALLER (no mesh in scope to resolve the fingerprint from) keeps the legacy
+    /// framework-only behavior. The empty string is NOT null — it is the real stamped hash of a
+    /// zero-module mesh and compares like any other value.</para>
     /// </summary>
-    internal static bool HasUsableBuild(MeshNode node, NodeTypeDefinition def) =>
+    internal static bool HasUsableBuild(MeshNode node, NodeTypeDefinition def, string? modulesHash = null) =>
         !string.IsNullOrEmpty(def.LatestAssemblyCollection)
         && !string.IsNullOrEmpty(def.LatestAssemblyPath)
-        && string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal);
+        && string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal)
+        && (modulesHash is null
+            || def.CompiledModulesHash is null
+            || string.Equals(def.CompiledModulesHash, modulesHash, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The mesh's live installed-module fingerprint, resolved from the hub's service tree
+    /// (<see cref="InstalledModulesFingerprint"/> is a mesh-scoped singleton registered by
+    /// <c>AddGraph</c>), or null when the mesh does not register one — the ONE resolver every
+    /// call site that threads <c>modulesHash</c> into <see cref="HasUsableBuild"/> /
+    /// <see cref="HasStaleFrameworkBuild"/> goes through, so "which hash is live" can never fork.
+    /// </summary>
+    internal static string? ModulesHashOf(IMessageHub hub) =>
+        hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash;
 
     /// <summary>
     /// True when this NodeType has a cached compiled assembly (the durable
@@ -1057,11 +1105,21 @@ internal static class NodeTypeCompilationHelpers
     private static NodeTypeDefinition? DefinitionOf(IMessageHub hub, MeshNode? node) =>
         node?.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
 
-    internal static bool HasStaleFrameworkBuild(NodeTypeDefinition def) =>
+    // The twin of HasUsableBuild's modules-hash join (#1664 step 11): a build whose stamped
+    // CompiledModulesHash differs from the live set is STALE the same way a framework mismatch
+    // is — the bytes exist but may bind a replaced module's old ABI. Without this twin the flip
+    // in HasUsableBuild would WEDGE every such type after a module-only update: HasUsableBuild
+    // says "not usable" so instances fall back to the default config, but nothing would re-drive
+    // the compile (first-build kickoff needs Status=null, recovery needs Compiling). Null stamp /
+    // null caller keep legacy behavior, exactly as in HasUsableBuild.
+    internal static bool HasStaleFrameworkBuild(NodeTypeDefinition def, string? modulesHash = null) =>
         !string.IsNullOrEmpty(def.LatestAssemblyCollection)
         && !string.IsNullOrEmpty(def.LatestAssemblyPath)
         && !string.IsNullOrEmpty(def.CompiledFrameworkVersion)
-        && !string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal);
+        && (!string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal)
+            || (modulesHash is not null
+                && def.CompiledModulesHash is not null
+                && !string.Equals(def.CompiledModulesHash, modulesHash, StringComparison.Ordinal)));
 
     /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
