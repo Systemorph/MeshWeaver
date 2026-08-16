@@ -309,8 +309,10 @@ published — so its framework-stale kickoff started flipping CURRENT NodeType r
 and rebuilding them for a framework nothing serves. The cause was the per-build
 `+build.<UtcNow.Ticks>` stamp `InformationalVersion` then carried under `CIRun`: every
 `dotnet publish` minted a fresh `MeshWeaver.Graph` MVID. #1660 WS3 removed that stamp and made CI
-builds **commit-deterministic** — the framework identity is now the commit (`g<sha>`), identical
-across every CI build of it — so the Build-and-Test run's bake artifact IS adoptable: `main-cd`'s
+builds deterministic — the framework identity is now the **API-surface hash** (`s<hash>`,
+`FrameworkBuildIdentity`; identical across CI builds AND across internal-only merges, moved only
+by breaking surface changes or Graph changes) — so the Build-and-Test run's bake artifact IS
+adoptable, and usually already published: `main-cd`'s
 `publish-bake` job copies it onto the portals' `/data` share
 (`prebuilt-bundles/<identity>/<source>/`), and each booting pod seeds its own identity's bundles
 (`PreWarm__PrebuiltBundleRoot`) before its sweep.

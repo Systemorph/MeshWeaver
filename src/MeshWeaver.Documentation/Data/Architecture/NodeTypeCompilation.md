@@ -369,16 +369,22 @@ only usable while the framework version matches.
 resolved once per process (`FrameworkBuildIdentity`,
 [#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3):
 
-- **CI builds** — the **commit identity** `g<sha>`, stamped into every assembly as
-  `AssemblyMetadata("MeshWeaverFrameworkIdentity")` by `Directory.Build.props`.
-  CI compile inputs are commit-deterministic (no run number or timestamp reaches
-  any compiled attribute), so every CI build of the same commit — the
-  Build-and-Test run that bakes NodeType assemblies and the main-cd run that
-  builds the image — shares one identity; that is what lets the CI bake seed at
-  portal boot instead of recompiling. Any code or package-pin change is a new
-  commit and therefore a new identity — a commit names the whole tree, covering
-  the full TPA reference set a NodeType compiles against, not just Graph's own
-  dependency closure.
+- **Hosts with a surface manifest** (the portals and the CI bake host, which
+  build with `MeshWeaverSurfaceManifest=true`) — the **API-surface identity**
+  `s<hash>`: per compile reference, the SHA-256 of its *reference assembly*
+  (the compiler's own definition of the API surface — byte-stable under
+  body-only and private-member edits, changed by any surface change), hashed
+  over the canonical content-surface set, with `MeshWeaver.Graph` contributing
+  its full implementation MVID because its code shapes the *generated input*
+  of every NodeType compile. "Rebuild only when we need to": an internal-only
+  framework release keeps the identity, so every cached and CI-published build
+  stays valid; a breaking surface change mints a new one, and the CI bake for
+  the new surface seeds at boot instead of recompiling per pod.
+- **Manifest-less CI processes** (test hosts) — the **commit identity** `g<sha>`
+  stamped as `AssemblyMetadata("MeshWeaverFrameworkIdentity")` by
+  `Directory.Build.props` (CI compile inputs are commit-deterministic — no run
+  number or timestamp reaches any compiled attribute). Kept everywhere as
+  logged PROVENANCE.
 - **Local builds** — the `MeshWeaver.Graph` assembly's **MVID** (a content hash
   of the compiled module; no stamp is present). Content-exact for a dirty
   working tree — stable across rebuilds that don't change Graph's bytes,

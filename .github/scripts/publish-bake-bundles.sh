@@ -87,6 +87,17 @@ for target in $BAKE_PUBLISH_TARGETS; do
     exit 1
   fi
   DEST="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
+  # "Rebuild only when we need to" applies to the publish too (#1660 WS3): the identity is the
+  # API-surface hash, so an internal-only merge resolves the SAME identity as the previous one —
+  # its bake is byte-for-byte what is already published. Skip with a notice instead of
+  # re-uploading; a genuinely new surface gets a new identity directory and publishes fully.
+  existing=$(az storage file list --account-name "$ACCOUNT" --share-name "$SHARE" \
+    --path "$DEST" --auth-mode login --backup-intent --query "length([?name!=null])" -o tsv \
+    --only-show-errors 2>/dev/null || echo 0)
+  if [ "${existing:-0}" -gt 0 ]; then
+    echo "::notice::$ACCOUNT/$SHARE already holds $existing file(s) under $DEST — surface unchanged, bake already published; skipping."
+    continue
+  fi
   echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s))"
   publish_one_target "$ACCOUNT" "$SHARE" "$DEST"
 done
