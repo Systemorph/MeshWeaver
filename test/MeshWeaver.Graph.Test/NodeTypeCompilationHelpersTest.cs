@@ -153,4 +153,95 @@ public class NodeTypeCompilationHelpersTest
             .Should().NotBeNullOrWhiteSpace()
             .And.Be(NodeTypeCompilationHelpers.FrameworkVersion);
     }
+
+    // ---- CompiledModulesHash joins the usable-build decision (#1664 Slice A, step 11) ---------
+    //
+    // 🚨 Rule-3-adjacent: the ONLY behavior change these pins license is "a build stamped with a
+    // DIFFERENT non-null modules hash than the live installed set is not usable". Everything else
+    // — null stamps, null callers, the empty-string no-modules hash — keeps the pre-#1664 answer.
+
+    private static NodeTypeDefinition UsableDef(string? compiledModulesHash = null) => new()
+    {
+        CompilationStatus = CompilationStatus.Ok,
+        LatestAssemblyCollection = "nodetype-cache",
+        LatestAssemblyPath = "type/MyType/v1.dll",
+        CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+        CompiledModulesHash = compiledModulesHash,
+    };
+
+    [Fact]
+    public void HasUsableBuild_NullStampedModulesHash_IsGrandfatheredAsMatch()
+    {
+        // The documented contract on NodeTypeDefinition.CompiledModulesHash: a null stamp predates
+        // modules in the compile surface and stays governed by the framework rule alone.
+        var def = UsableDef(compiledModulesHash: null);
+        NodeTypeCompilationHelpers.HasUsableBuild(TypeNode(def), def, modulesHash: "abc123")
+            .Should().BeTrue("a null-stamped build predates the fingerprint feature — the framework rule alone governs it");
+    }
+
+    [Fact]
+    public void HasUsableBuild_EqualModulesHash_IsMatch()
+    {
+        var def = UsableDef(compiledModulesHash: "abc123");
+        NodeTypeCompilationHelpers.HasUsableBuild(TypeNode(def), def, modulesHash: "abc123")
+            .Should().BeTrue("the build was compiled under exactly the live installed-module set");
+    }
+
+    [Fact]
+    public void HasUsableBuild_DifferentModulesHash_Invalidates()
+    {
+        // THE step-11 flip: a module-only update (framework MVID unchanged) must invalidate baked
+        // builds that could reference the replaced module.
+        var def = UsableDef(compiledModulesHash: "abc123");
+        NodeTypeCompilationHelpers.HasUsableBuild(TypeNode(def), def, modulesHash: "def456")
+            .Should().BeFalse("a build stamped with a different non-null modules hash than the live set is not usable");
+    }
+
+    [Fact]
+    public void HasUsableBuild_EmptyStringModulesHash_IsDistinctFromNull()
+    {
+        // "" is the STAMPED hash of a mesh with zero modules (InstalledModulesFingerprint); null is
+        // "stamped before the feature". They must not collapse: a "" stamp against a live module
+        // set is a REAL mismatch, while a "" stamp against a live "" is a real match.
+        var noModulesStamp = UsableDef(compiledModulesHash: "");
+        NodeTypeCompilationHelpers.HasUsableBuild(TypeNode(noModulesStamp), noModulesStamp, modulesHash: "")
+            .Should().BeTrue("compiled with no modules, live set has no modules — match");
+        NodeTypeCompilationHelpers.HasUsableBuild(TypeNode(noModulesStamp), noModulesStamp, modulesHash: "abc123")
+            .Should().BeFalse("compiled with no modules but the live mesh HAS modules — the build could not reference them, but the set changed: rebuild");
+
+        var moduleStamp = UsableDef(compiledModulesHash: "abc123");
+        NodeTypeCompilationHelpers.HasUsableBuild(TypeNode(moduleStamp), moduleStamp, modulesHash: "")
+            .Should().BeFalse("compiled against modules that are no longer installed — rebuild");
+    }
+
+    [Fact]
+    public void HasUsableBuild_NullCaller_KeepsLegacyBehavior()
+    {
+        // A call site without a mesh in scope passes null and keeps the pre-#1664 answer — the
+        // modules check simply does not join.
+        var def = UsableDef(compiledModulesHash: "abc123");
+        NodeTypeCompilationHelpers.HasUsableBuild(TypeNode(def), def)
+            .Should().BeTrue("a null modulesHash caller cannot resolve the live set and must not invalidate on it");
+    }
+
+    [Fact]
+    public void HasStaleFrameworkBuild_ModulesHashMismatch_IsStale_TwinOfHasUsableBuild()
+    {
+        // The twin: HasStaleFrameworkBuild feeds the owner-side proactive rebuild kickoff. If
+        // HasUsableBuild says "not usable" because of the modules hash while this stays false,
+        // NOTHING re-drives the compile (first-build needs Status=null, recovery needs Compiling)
+        // and every instance of the type wedges on the fallback config after a module-only update.
+        var def = UsableDef(compiledModulesHash: "abc123");
+
+        NodeTypeCompilationHelpers.HasStaleFrameworkBuild(def, modulesHash: "def456")
+            .Should().BeTrue("a modules-hash mismatch is the same 'stale stamped build' shape as a framework mismatch");
+        NodeTypeCompilationHelpers.HasStaleFrameworkBuild(def, modulesHash: "abc123")
+            .Should().BeFalse("hash matches — nothing stale");
+        NodeTypeCompilationHelpers.HasStaleFrameworkBuild(def)
+            .Should().BeFalse("null caller keeps legacy behavior");
+
+        var nullStamp = UsableDef(compiledModulesHash: null);
+        NodeTypeCompilationHelpers.HasStaleFrameworkBuild(nullStamp, modulesHash: "def456")
+            .Should().BeFalse("a null stamp is grandfathered as MATCH — it must not trigger rebuild storms on pre-feature definitions");
+    }
 }

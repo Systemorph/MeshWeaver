@@ -49,6 +49,22 @@
     <Content Include="..\..\..\nuget.config" Link="nuget.config" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- CI-baked prebuilt NodeType assemblies (#1660 WS1): when the invoking build passes
+       -p:PrebuiltBakeDir=<dir> (the bake-output directory mw-plugin-test writes over the image's
+       own shipped content), the bundle zips are laid into prebuilt/ beside the app, where
+       ShippedPrebuiltBundles seeds them at boot BEFORE the dynamic-type sweep — pending=0 for
+       shipped content, zero Roslyn on the pod. Inert when the property is unset (the default and
+       every local build): the image simply ships no bundles and boot compiles as today.
+       🚨 The bundles are only adoptable when they were produced by the SAME compilation that
+       produced this publish's MeshWeaver.Graph.dll (the seeder's MVID gate) — bake in the same
+       job, with the same version inputs, or the bundles are dead weight that declines wholesale. -->
+  <ItemGroup Condition="'$(PrebuiltBakeDir)' != '' AND Exists('$(PrebuiltBakeDir)')">
+    <Content Include="$(PrebuiltBakeDir)/**/*.zip"
+             Link="prebuilt/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Aspire.Azure.Npgsql" />
     <PackageReference Include="Aspire.Azure.Storage.Blobs" />

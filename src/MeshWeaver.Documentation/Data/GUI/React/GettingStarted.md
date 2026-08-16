@@ -31,22 +31,22 @@ app.Use((ctx, next) =>
 });
 ```
 
-2. **The gRPC-web transport**, gated by the `Features:Grpc` flag — the browser's data plane. Three calls wire it end to end:
+2. **The gRPC-web transport** — the browser's data plane. It is the `MeshWeaver.Hosting.Grpc`
+**module** (see [Modules](/Doc/Architecture/Modules)): listing the DLL under `Modules:Assemblies`
+wires all three pieces — the mesh half (`GrpcMeshModuleAttribute` folds `AddGrpcHub()`: the gRPC
+service + the `py/*`, `node/*` foreign-participant address types declared stream-routed), the
+endpoint half (`GrpcModuleAttribute` maps `meshweaver.v1.Mesh`, grpc-web enabled, through the
+host's `MapMeshModuleEndpoints()`), and the one compiled platform line the endpoint hook cannot
+carry, the gRPC-web middleware between `UseRouting` and the endpoint maps:
 
 ```csharp
-// Mesh tier (ConfigureMemexMesh): registers the gRPC service + declares the
-// foreign-participant address types (py/*, node/*) stream-routed.
-if (features.Grpc)
-    mb = mb.AddGrpcHub();
-
-// Request pipeline (between UseRouting and the endpoint maps):
-if (features.Grpc)
-    app.UseMeshWeaverGrpcWeb();     // gRPC-web middleware — browsers can't do HTTP/2 bidi
-
-// Endpoints:
-if (features.Grpc)
-    app.MapMeshWeaverGrpc();        // meshweaver.v1.Mesh, grpc-web enabled
+// Request pipeline — self-gates on the module being listed under Modules:Assemblies:
+app.UseMeshWeaverGrpcWebWhenInstalled();   // gRPC-web middleware — browsers can't do HTTP/2 bidi
 ```
+
+🚨 The module is **default-on in every deployment**: the same endpoint serves the React GUI AND
+the foreign-language participants — delisting it silently breaks the React frontend's live
+connection.
 
 `AddGrpcHub` / `UseMeshWeaverGrpcWeb` / `MapMeshWeaverGrpc` live in `src/MeshWeaver.Hosting.Grpc/GrpcHostingExtensions.cs`. `AddGrpcHub` declares the `py/*` and `node/*` address types as **stream-routed** foreign-participant types — so a reply addressed to one routes back down its `Connect` stream instead of being resolved (and dropped) as a mesh-node lookup. The browser connection *defaults* to a random `node/<id>`; the Next.js shell (`clients/portal-next`) overrides it with a **stable per-tab `portal/<id>`** (`portal` is a built-in stream-routed type, the same family Blazor user circuits use) so the server keeps the participant and its sync sub-hubs alive across reloads — see [Live connection & session](/Doc/GUI/React). The wire details are on [Rendering Architecture](../Rendering).
 

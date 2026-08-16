@@ -3,17 +3,17 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.AI;                       // StartThread
-using MeshWeaver.Blazor.Infrastructure;    // PortalApplication
 using MeshWeaver.Graph.Configuration;      // Notification* NodeType segment consts
-using MeshWeaver.Mesh;                      // Notification, MeshNode
+using MeshWeaver.Mesh;                      // Notification, MeshNode, EmailOptions
 using MeshWeaver.Mesh.Security;             // ImpersonateAsSystem
 using MeshWeaver.Mesh.Services;             // IMeshQueryCore, MeshQueryRequest
 using MeshWeaver.Messaging;                 // IMessageHub, AccessService
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
-namespace Memex.Portal.Shared.Notifications;
+namespace MeshWeaver.Notifications.Channels;
 
 /// <summary>
 /// Watches for new in-app <see cref="Notification"/>s and, <b>only for recipients who authored routing
@@ -22,7 +22,8 @@ namespace Memex.Portal.Shared.Notifications;
 /// always-on default; this service never duplicates it — it only escalates per the recipient's
 /// <see cref="NotificationRule"/>s.
 ///
-/// <para>Cost/safety guards: deferred to <c>ApplicationStarted</c> (mesh must be up); only notifications
+/// <para>Cost/safety guards: self-skips unless <c>Email:Enabled</c> (escalation without a sender could
+/// deliver nothing); deferred to <c>ApplicationStarted</c> (mesh must be up); only notifications
 /// created <i>after</i> startup are considered (no back-routing history, no double-route across restart);
 /// each is processed once (instance dedup set); the triage agent is invoked <i>only</i> when the recipient
 /// has at least one rule, so it is free for everyone else; all failures are logged, never fatal.</para>
@@ -32,17 +33,18 @@ namespace Memex.Portal.Shared.Notifications;
 /// relying on this at scale.</para>
 /// </summary>
 public sealed class NotificationTriageService(
-    IServiceProvider rootServices,
+    IMessageHub hub,
     IHostApplicationLifetime lifetime,
+    IOptions<EmailOptions> emailOptions,
     ILogger<NotificationTriageService>? logger = null) : IHostedService, IDisposable
 {
     private const string TriageAgent = "NotificationTriage";
 
     private readonly CompositeDisposable subscriptions = new();
     private readonly ConcurrentDictionary<string, byte> processed = new();   // instance, not static
-    private IServiceScope? scope;
     private DateTimeOffset startedAt;
 
+    /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
         lifetime.ApplicationStarted.Register(Begin);
@@ -53,9 +55,16 @@ public sealed class NotificationTriageService(
     {
         try
         {
+            // Escalation is email-shaped today; without a sender there is nothing to escalate to.
+            // Same gate the compiled-in registration used to apply at registration time — applied
+            // at startup here because the module installs before configuration-dependent choices.
+            if (!emailOptions.Value.Enabled)
+            {
+                logger?.LogDebug("NotificationTriage: Email:Enabled is false — triage not started");
+                return;
+            }
+
             startedAt = DateTimeOffset.UtcNow;
-            scope = rootServices.CreateScope();
-            var hub = scope.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
             var sp = hub.ServiceProvider;
             var query = sp.GetRequiredService<IMeshQueryCore>();
             var access = sp.GetRequiredService<AccessService>();
@@ -144,24 +153,14 @@ public sealed class NotificationTriageService(
         }
     }
 
-    private static Notification? NotificationOf(MeshNode node, JsonSerializerOptions opts) => node.Content switch
-    {
-        Notification x => x,
-        JsonElement je => Safe(je, opts),
-        _ => null
-    };
+    // ContentAs, never a type-pattern on Content: it recovers the degraded-JsonElement and
+    // as-written-DOM shapes a live mesh actually hands out (AGENTS.md → "Never cast an object payload").
+    private static Notification? NotificationOf(MeshNode node, JsonSerializerOptions opts) =>
+        node.ContentAs<Notification>(opts);
 
-    private static Notification? Safe(JsonElement je, JsonSerializerOptions opts)
-    {
-        try { return JsonSerializer.Deserialize<Notification>(je.GetRawText(), opts); }
-        catch { return null; }
-    }
-
+    /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    public void Dispose()
-    {
-        subscriptions.Dispose();
-        scope?.Dispose();
-    }
+    /// <inheritdoc />
+    public void Dispose() => subscriptions.Dispose();
 }

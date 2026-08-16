@@ -36,12 +36,11 @@ public sealed record MemexFeatureOptions
     /// </summary>
     public bool SignalR { get; init; } = true;
 
-    /// <summary>
-    /// gRPC mesh transport (<c>meshweaver.v1.Mesh/Open</c> + gRPC-web) for foreign-language
-    /// participants (Python/Node workers) and the browser React GUI's Connect+Deliver split.
-    /// On by default, symmetric with <see cref="SignalR"/>; close with <c>Features:Grpc=false</c>.
-    /// </summary>
-    public bool Grpc { get; init; } = true;
+    // The gRPC mesh transport (meshweaver.v1.Mesh + gRPC-web — foreign-language participants
+    // AND the React GUI's browser Connect+Deliver split) is a MODULE now: the former
+    // Features:Grpc flag is gone, and listing/delisting MeshWeaver.Hosting.Grpc.dll under
+    // Modules:Assemblies is the switch (GrpcMeshModuleAttribute + GrpcModuleAttribute;
+    // no org deployment ever set the flag). See Doc/Architecture/Modules.
 
     /// <summary>
     /// True when the deployment ships at least one in-process API provider OR one

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Notification delivery channels for MeshWeaver — user-authored NotificationRule/NotificationChannel nodes plus the AI triage watcher that escalates in-app notifications to email/Teams per each recipient's rules. Ships as a module: list the DLL under Modules:Assemblies to activate.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+  </ItemGroup>
+
+</Project>

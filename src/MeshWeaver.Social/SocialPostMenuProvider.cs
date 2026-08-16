@@ -1,13 +1,11 @@
-using System;
 using System.Reactive.Linq;
 using System.Text.Json;
-using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Messaging;
+using Microsoft.Extensions.Options;
 
-namespace Memex.Portal.Shared.Social;
+namespace MeshWeaver.Social;
 
 /// <summary>
 /// Adds LinkedIn publish/engagement actions to the node menu of a <b>social-media Post</b> node
@@ -23,9 +21,17 @@ namespace Memex.Portal.Shared.Social;
 /// "Download past posts") — no hand-rolled HTML, no async hub code. The item self-swaps as the node's
 /// <c>publishedUrn</c> lands because the provider composes the live own-node stream. Both require Update
 /// permission, which the post owner has by definition.
+///
+/// <para>The node-shape predicate ($type/platform/publishedUrn) is beyond the closed
+/// <c>UiContribution</c> vocabulary, so this stays a DI provider — registered by the Social
+/// module's <see cref="SocialExtensions.AddSocial"/> configure path. It emits nothing while
+/// <c>Social:LinkedIn:ClientId</c> is unconfigured, preserving the pre-module behaviour where
+/// the provider was only registered when configured.</para>
 /// </summary>
-public sealed class SocialPostMenuProvider : INodeMenuProvider
+/// <param name="options">LinkedIn app options; an empty ClientId keeps the provider inert.</param>
+public sealed class SocialPostMenuProvider(IOptions<LinkedInOptions> options) : INodeMenuProvider
 {
+    /// <inheritdoc />
     public string Context => "Node";
 
     /// <summary>
@@ -36,6 +42,9 @@ public sealed class SocialPostMenuProvider : INodeMenuProvider
     public IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> GetItems(
         LayoutAreaHost host, RenderingContext ctx)
     {
+        if (string.IsNullOrEmpty(options.Value.ClientId))
+            return Observable.Return<IReadOnlyCollection<NodeMenuItemDefinition>>([]);
+
         var hubPath = host.Hub.Address.ToString();
         return host.Workspace.GetMeshNodeStream()
             .Select(n => (MeshNode?)n)

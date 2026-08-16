@@ -284,7 +284,16 @@ public sealed class DynamicTypePreWarmerHostedService(
         var sweepMemory = MemoryDelta.Start();
 
         logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
+        // Shipped prebuilt bundles seed BEFORE the sweep decides what to build (#1660 WS1): a
+        // NodeType whose CI-baked bytes match this image's framework MVID is stamped + uploaded to
+        // the assembly store here, so the sweep's store probe reports it AlreadyBaked and never
+        // compiles it. Sequenced AFTER the static repo import for the same reason the sweep is —
+        // the nodes the bundles name must exist to be seeded. SeedAll never faults (it degrades to
+        // "compile as today", loudly), so this cannot wedge or redden the warm-up.
+        var prebuiltDirectory = services.GetService<IConfiguration>()
+            ?[ShippedPrebuiltBundles.DirectoryConfigKey];
         _warmSubscription = (importSettled?.Settled ?? Observable.Return(Unit.Default))
+            .SelectMany(_ => ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
             .SelectMany(_ => DynamicTypePreWarmer
                 .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol))
             .Subscribe(

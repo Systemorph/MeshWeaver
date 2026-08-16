@@ -3,6 +3,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.Approvals;
 using MeshWeaver.Data;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph;
@@ -39,6 +40,20 @@ public sealed record GateOptions
 
     /// <summary>Budget for one layout-area render / Tests execution.</summary>
     public TimeSpan RenderTimeout { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// When set, the gate PERSISTS what it compiled: one prebuilt-assembly bundle per package
+    /// (every NodeType that reached <see cref="CompilationStatus.Ok"/>) is written into this
+    /// directory, keyed to the run's framework MVID — the artifact half of issue #1660 WS1 (the
+    /// gate's compile stops being verdict-only). Null (the default) keeps the gate verdict-only.
+    /// </summary>
+    public string? BakeOutputDirectory { get; init; }
+
+    /// <summary>
+    /// The commit the gated content was synced from, recorded in each bundle's manifest for
+    /// provenance. Null falls back to the repo snapshot's own commit sha.
+    /// </summary>
+    public string? SourceSha { get; init; }
 }
 
 /// <summary>
@@ -73,7 +88,13 @@ public static class PluginGateRunner
                 .Get("plugin-test:files");
             return LocalNodeRepo.Load(options.RepoRoot, pool)
                 .SelectMany(snapshot => LocalNodeRepo.DiscoverPackages(snapshot)
-                    .SelectMany(packages => RunPackages(harness, options, snapshot, packages)))
+                    .SelectMany(packages => RunPackages(harness, options, snapshot, packages)
+                        // The bake artifact rides the compile the gate just performed (#1660 WS1):
+                        // persisting is part of the run, INSIDE the outer Catch, so a bake fault is
+                        // a FatalError and the run exits RED — an artifact stage must never fail
+                        // into a green gate.
+                        .SelectMany(report => BakeOutput.Persist(
+                            harness.Mesh, options, snapshot, packages, report))))
                 .Catch((Exception ex) => Observable.Return(
                     new GateReport([]) { FatalError = $"{ex.GetType().Name}: {ex.Message}" }))
                 .Finally(harness.Dispose);
@@ -443,6 +464,11 @@ public static class PluginGateRunner
                 .AddRowLevelSecurity()
                 .AddGraph()
                 .AddSpaceType()
+                // The Approval node type rides the MeshWeaver.Approvals module (every portal
+                // lists it under Modules:Assemblies) — content trees ship Approval satellites
+                // (samples FutuRe …/_Approval/a1); without this those installs are refused
+                // "NodeType 'Approval' is not registered" by CreateNode's type-existence check.
+                .AddApprovals()
                 // The AI node types (Agent / Skill / Model / …) — plugin packages ship Agent
                 // and Skill nodes (LinkedIn, Feedback, ExplainerVideo), and a portal always
                 // registers these; without them those installs are refused "not registered".

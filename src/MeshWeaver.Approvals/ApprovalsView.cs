@@ -1,6 +1,6 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data;
-using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
@@ -10,12 +10,14 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Graph;
+namespace MeshWeaver.Approvals;
 
 /// <summary>
 /// Views used by ApprovalExtensions:
 /// - RequestApproval: Form to request approval on the current node.
 /// - InlineApprovals: Inline section showing existing approvals for the node.
+/// Registered on every per-node hub by the Approvals module; delisting the module removes them
+/// mesh-wide while approval data stays platform-level.
 /// </summary>
 public static class ApprovalsView
 {
@@ -44,34 +46,35 @@ public static class ApprovalsView
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
-        container = container.WithView(Controls.Html("<h2 style=\"margin: 0 0 16px 0;\">Request Approval</h2>"));
+        container = container.WithView(Controls.H2(host.Localize("menu.requestApproval"))
+            .WithStyle("margin: 0 0 16px 0;"));
 
         var form = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
 
         // Approver input
-        form = form.WithView(Controls.Html("<label style=\"font-weight: 600;\">Approver (User ID)</label>"));
+        form = form.WithView(FieldLabel(host.Localize("approval.approverLabel")));
         form = form.WithView(new MarkdownEditorControl()
             .WithDocumentId($"{nodePath}_approver")
             .WithHeight("40px")
-            .WithPlaceholder("Enter user ObjectId...") with
+            .WithPlaceholder(host.Localize("approval.approverPlaceholder")) with
         {
             Value = new JsonPointerReference("approver"),
             DataContext = LayoutAreaReference.GetDataPointer(formDataId)
         });
 
         // Purpose input
-        form = form.WithView(Controls.Html("<label style=\"font-weight: 600;\">Purpose</label>"));
+        form = form.WithView(FieldLabel(host.Localize("approval.purpose")));
         form = form.WithView(new MarkdownEditorControl()
             .WithDocumentId($"{nodePath}_purpose")
             .WithHeight("60px")
-            .WithPlaceholder("Why is this approval needed?") with
+            .WithPlaceholder(host.Localize("approval.purposePlaceholder")) with
         {
             Value = new JsonPointerReference("purpose"),
             DataContext = LayoutAreaReference.GetDataPointer(formDataId)
         });
 
         // Due date input
-        form = form.WithView(Controls.Html("<label style=\"font-weight: 600;\">Due Date (optional, YYYY-MM-DD)</label>"));
+        form = form.WithView(FieldLabel(host.Localize("approval.dueDateLabel")));
         form = form.WithView(new MarkdownEditorControl()
             .WithDocumentId($"{nodePath}_dueDate")
             .WithHeight("40px")
@@ -110,6 +113,9 @@ public static class ApprovalsView
 
         return container;
     }
+
+    private static UiControl FieldLabel(string text)
+        => Controls.Body(text).WithStyle("font-weight: 600;");
 
     private static void SubmitApprovalRequest(LayoutAreaHost host, string nodePath, string currentUser, string formDataId)
     {
@@ -210,10 +216,13 @@ public static class ApprovalsView
             })
             .Subscribe(list =>
             {
+                // ContentAs, never a type-pattern cast: a degraded JsonElement payload (untyped
+                // $type on a mirror hub) still converts instead of silently dropping the approval.
                 var controls = list
-                    .Where(n => n.Content is Approval)
-                    .OrderByDescending(n => n.ContentAs<Approval>(host.Hub.JsonSerializerOptions)!.CreatedAt)
-                    .Select(n => Controls.LayoutArea(n.Path, ApprovalLayoutAreas.ThumbnailArea))
+                    .Select(n => (Node: n, Approval: n.ContentAs<Approval>(host.Hub.JsonSerializerOptions)))
+                    .Where(x => x.Approval is not null)
+                    .OrderByDescending(x => x.Approval!.CreatedAt)
+                    .Select(x => Controls.LayoutArea(x.Node.Path, ApprovalLayoutAreas.ThumbnailArea))
                     .ToArray();
                 host.UpdateData(approvalsDataId, controls);
             });
@@ -226,7 +235,8 @@ public static class ApprovalsView
 
                 var section = Controls.Stack.WithWidth("100%")
                     .WithStyle("margin-top: 32px; border-top: 1px solid var(--neutral-stroke-rest); padding-top: 16px;");
-                section = section.WithView(Controls.Html("<h3 style=\"margin: 0 0 12px 0;\">Approvals</h3>"));
+                section = section.WithView(Controls.H3(host.Localize("approval.sectionTitle"))
+                    .WithStyle("margin: 0 0 12px 0;"));
 
                 foreach (var ctrl in approvalControls)
                     section = section.WithView(ctrl);

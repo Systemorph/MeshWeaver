@@ -29,6 +29,7 @@ using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.PostgreSql;
@@ -144,9 +145,9 @@ public static class MemexConfiguration
             // permission). EaGraphAuth drives the consent/token flow; the plugin uses the per-user token.
             services.AddHttpClient<Authentication.IEaGraphAuth, Authentication.EaGraphAuth>();
             services.AddSingleton<MeshWeaver.AI.Plugins.IAgentPlugin, ExecutiveAssistantPlugin>();
-            // Notification triage runner — escalates in-app notifications to email/Teams per each
-            // recipient's NotificationRules, via the cheap triage agent (only fires for users with rules).
-            services.AddHostedService<Memex.Portal.Shared.Notifications.NotificationTriageService>();
+            // The notification triage runner (escalates in-app notifications to email/Teams per each
+            // recipient's NotificationRules) rides the MeshWeaver.Notifications.Channels module
+            // (Modules:Assemblies); its hosted service self-skips unless Email:Enabled.
         }
         else
             services.AddSingleton<IEmailSender, NoOpEmailSender>();
@@ -318,41 +319,13 @@ public static class MemexConfiguration
         }
         // CopilotConnectStrategy registers from the Copilot pack (Modules:Assemblies).
 
-        // Social publishing — the LinkedIn connect + pull endpoints. (The never-wired
-        // hosted-service pipeline around AddSocialPublishing was deleted as unreachable;
-        // if scheduling/ingest ever returns it will be built node-native in the
-        // SocialMedia repo, not compiled here.)
-        var linkedInClientId = builder.Configuration["Social:LinkedIn:ClientId"];
-        if (!string.IsNullOrEmpty(linkedInClientId))
-        {
-            services.AddHttpClient<MeshWeaver.Social.LinkedInPublisher>();
-            services.AddSingleton(new MeshWeaver.Social.LinkedInOptions
-            {
-                ClientId = linkedInClientId!,
-                ClientSecret = builder.Configuration["Social:LinkedIn:ClientSecret"] ?? ""
-            });
-
-            // Add the menu provider so "Connect LinkedIn" + "Pull LinkedIn posts"
-            // appear on the viewer's own user page.
-            services.TryAddEnumerable(
-                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
-                    MeshWeaver.Mesh.INodeMenuProvider,
-                    Memex.Portal.Shared.Social.LinkedInCredentialMenuProvider>());
-
-            // Add the Publish/Refresh-engagement actions to a social-media Post node's menu.
-            services.TryAddEnumerable(
-                Microsoft.Extensions.DependencyInjection.ServiceDescriptor.Scoped<
-                    MeshWeaver.Mesh.INodeMenuProvider,
-                    Memex.Portal.Shared.Social.SocialPostMenuProvider>());
-
-            // (Removed: SocialMediaUserMenuProvider — hardcoded a NodeType
-            // ("Systemorph/SocialMediaHub") that isn't registered anywhere in
-            // the codebase. NodeTypes belong in the database (NodeTypeDefinition
-            // MeshNodes), not as DLL-side string constants. The SocialMedia
-            // hub feature should be added back when its NodeType is defined
-            // through the regular mesh node creation flow rather than wired
-            // through a DLL-time CreateNode that fails on the receiver.)
-        }
+        // Social publishing (LinkedIn connect/publish/page-sync + node-menu providers) rides the
+        // MeshWeaver.Social MODULE (Modules:Assemblies): SocialMeshModuleAttribute registers the
+        // DI services + menu providers, SocialModuleAttribute contributes the endpoints via
+        // app.MapMeshModuleEndpoints() below. Only the ApiCredential NodeType registration
+        // (AddApiCredentialType) and the LinkedIn SIGN-IN scheme (AddLinkedInAuthentication)
+        // stay compiled here — existing credential nodes must deserialize and auth schemes
+        // configure before the host builds, module or no module.
 
         // Configure authentication
         var authSection = builder.Configuration.GetSection(PortalAuthOptions.SectionName);
@@ -551,13 +524,54 @@ public static class MemexConfiguration
             // per-deployment "which packs does this instance run" knob (Doc/Architecture/
             // UiExtensibility). Empty/absent = no-op; a listed path that fails to load should
             // fail loudly at startup, never silently run without the pack.
+            //
+            // #1664 step 9 — the effective set is the appsettings baseline ∪ the ENABLED entries
+            // of the modules/activation.json sidecar (store-installed modules landed by
+            // ModuleLandingService), deduped by name. Sidecar entries are guarded: a declared
+            // minMeshVersion FLOOR the running platform no longer satisfies (a rollback below the
+            // module's requirement) or a missing DLL SKIPS the entry with a loud stderr line —
+            // never a crash, the deployment must boot; the entry stays for when the platform
+            // moves forward again. A landed module's built-against MVID is diagnostic only:
+            // modules bind by simple name across platform builds (the strict MVID gate is the
+            // NodeType bake lane's). Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
+            // to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
-            if (moduleAssemblies is { Length: > 0 })
+            var persistedActivation = ModuleActivationSidecar.Read(AppContext.BaseDirectory,
+                msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
+            var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+                moduleAssemblies,
+                persistedActivation,
+                // The ONE module platform gate (ModulePlatformFloor) — never a second notion of
+                // the module platform requirement.
+                ModulePlatformFloor.DeclineReason,
+                // 🚨 modules/<name>/<name>.dll SPECIFICALLY — never ResolveModulePath, whose
+                // BaseDirectory fallback would let a sidecar entry with a lost modules/ folder
+                // silently bind a same-named app-closure DLL instead of being skipped. Baseline
+                // entries below keep ResolveModulePath (both locations are legitimate for them).
+                name => ModuleActivationBoot.LandedModuleDllExists(AppContext.BaseDirectory, name),
+                (module, reason) => Console.Error.WriteLine(
+                    $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"));
+            if (effectiveModules.Count > 0)
                 // ResolveModulePath probes the modules/<name>/ publish layout first (#1644),
                 // then falls back to the classic BaseDirectory-relative location.
-                builder.InstallAssemblies(moduleAssemblies
+                builder.InstallAssemblies(effectiveModules
                     .Select(MeshBuilder.ResolveModulePath)
                     .ToArray());
+            // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
+            // consume the pending flag so the step-10 signal reads current. Best-effort: on a
+            // read-only app filesystem the flag simply stays set (cosmetic), and boot proceeds.
+            if (persistedActivation.PendingRestart)
+                try
+                {
+                    ModuleActivationSidecar.Write(AppContext.BaseDirectory,
+                        persistedActivation with { PendingRestart = false });
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine(
+                        $"[ModuleActivation] could not reset PendingRestart ({ex.GetType().Name}: "
+                        + $"{ex.Message}) — the flag stays set; activation itself is unaffected.");
+                }
 
             // Read graph storage config
             var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();
@@ -720,11 +734,16 @@ public static class MemexConfiguration
                 .AddPortalType()
                 .AddAI(serveFromPartition);
 
-            // gRPC mesh transport (foreign participants py/*, node/*, and the React GUI's
-            // browser Connect+Deliver split). Registers the service + declares the
-            // participant address types stream-routed. Symmetric with Features:SignalR.
-            if (features.Grpc)
-                mb = mb.AddGrpcHub();
+            // The gRPC mesh transport is a MODULE (MeshWeaver.Hosting.Grpc.dll under
+            // Modules:Assemblies — GrpcMeshModuleAttribute folds AddGrpcHub over this builder:
+            // the transport services + the py/node stream-routed participant address types; its
+            // GrpcModuleAttribute maps the meshweaver.v1.Mesh endpoint via
+            // MapMeshModuleEndpoints). 🚨 DEFAULT-ON in every deployment: the endpoint is the
+            // React GUI's browser data plane (grpc-web Connect+Deliver at the origin root), not
+            // just the foreign-participant (py/*, node/*) transport — delist only where there is
+            // no React GUI and no foreign participant. The former Features:Grpc flag is gone;
+            // the module listing IS the switch. Only the pipeline-order-bound gRPC-web
+            // middleware stays compiled (UseMeshWeaverGrpcWebWhenInstalled, below).
 
             // Each AI provider self-registers everything (catalog source +
             // IOptions binding + IChatClientFactory) via one builder extension.
@@ -1063,16 +1082,18 @@ public static class MemexConfiguration
 
         // gRPC-web middleware — lets browsers / React Native reach the mesh gRPC service
         // (Connect+Deliver split) without HTTP/2 bidi. Must sit between UseRouting and the
-        // endpoint maps. Inert for non-grpc-web requests.
-        if (features.Grpc)
-            app.UseMeshWeaverGrpcWeb();
+        // endpoint maps — the one gRPC piece that CANNOT ride the module's endpoint hook — so
+        // this compiled line stays and self-gates on the MeshWeaver.Hosting.Grpc module being
+        // listed under Modules:Assemblies (the endpoint itself maps via MapMeshModuleEndpoints).
+        // Inert for non-grpc-web requests.
+        app.UseMeshWeaverGrpcWebWhenInstalled();
         app.UseAuthentication();
         app.UseAuthorization();
         app.UseAntiforgery();
         app.UseCookiePolicy();
 
         // User-context middleware MUST run BEFORE the terminal endpoint maps
-        // (MapMeshMcp / MapMeshWeaver / MapLinkedInConnect). Once a request
+        // (MapMeshMcp / MapMeshWeaver / MapGitHubConnect). Once a request
         // matches a terminal endpoint, no further `app.UseMiddleware<…>()`
         // registered AFTER the Map* call ever sees it. With UserContextMiddleware
         // after MapMeshMcp, MCP-Bearer requests skipped it entirely →
@@ -1105,10 +1126,11 @@ public static class MemexConfiguration
         if (features.SignalR)
             app.MapMeshWeaverSignalRHubs();
 
-        // gRPC mesh endpoint (meshweaver.v1.Mesh/Open, grpc-web enabled) — foreign-language
-        // workers and the React GUI connect here.
-        if (features.Grpc)
-            app.MapMeshWeaverGrpc();
+        // The gRPC mesh endpoint (meshweaver.v1.Mesh, grpc-web enabled — foreign-language
+        // workers AND the React GUI) rides MapMeshModuleEndpoints below: the
+        // MeshWeaver.Hosting.Grpc module's GrpcModuleAttribute maps it, AllowAnonymous by
+        // explicit opt-out (the transport authenticates connections itself — Bearer token in
+        // gRPC metadata / trusted loopback port).
 
         // Map MCP endpoint
         app.MapMeshMcp();
@@ -1126,6 +1148,11 @@ public static class MemexConfiguration
         // gate as the registry above (Bearer or Basic, since a NuGet client cannot send Bearer),
         // but with NO anonymous mode: it hands out compiled assemblies for paid modules.
         app.MapPluginBundles();
+
+        // Module endpoint contributions (design #1655): every Modules:Assemblies DLL carrying a
+        // MeshEndpointProviderAttribute maps its routes here — authenticated by default, loud
+        // startup failure on route collisions. Delisting a module removes its routes wholesale.
+        app.MapMeshModuleEndpoints();
 
         // First-startup auto-registration — POST /api/instances/register. A new deployment presents
         // an admin-minted bootstrap key (mwr_) and receives its own instance key (mwi_) once;
@@ -1157,19 +1184,8 @@ public static class MemexConfiguration
         // override cookie and redirects — the reversible switch both shells link to.
         app.MapFrontendSelection();
 
-
-        // Social publishing — LinkedIn connect/pull endpoints. Must be AFTER
-        // UseAuthentication so HttpContext.User is populated.
-        app.MapLinkedInConnect();
-
-        // LinkedIn company-Page sync (Community Management API) — org-scope OAuth +
-        // posts/statistics pull. Same ordering requirement (needs HttpContext.User).
-        app.MapLinkedInPageSync();
-
-        // LinkedIn member publishing + engagement — POST /linkedin/publish (JSON API) plus
-        // GET /linkedin/publish and GET /linkedin/engagement triggers surfaced from the Post
-        // node menu (w_member_social scope). Same ordering requirement (needs HttpContext.User).
-        app.MapLinkedInPublish();
+        // (LinkedIn connect/publish/page-sync endpoints ride the MeshWeaver.Social module —
+        // contributed through app.MapMeshModuleEndpoints() above via SocialModuleAttribute.)
 
         // GitHub Sync — OAuth authorization-code connect endpoints (same ordering
         // requirement: needs HttpContext.User). Stores the per-user token at

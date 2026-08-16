@@ -80,7 +80,16 @@ public sealed class PluginBundleClient
     public sealed record BundleIndex(string? FrameworkMvid, IReadOnlyList<BundleRef> Bundles);
 
     /// <summary>One servable bundle.</summary>
-    public sealed record BundleRef(string Plugin, string Version, string Url);
+    /// <param name="Plugin">The plugin/package id.</param>
+    /// <param name="Version">The served version.</param>
+    /// <param name="Url">Absolute download URL.</param>
+    /// <param name="Module">The compiled module the bundle carries (its entry-assembly name), or
+    /// null for a NodeType-only bundle (#1664). Additive: an older registry simply omits it.</param>
+    /// <param name="MinMeshVersion">The module's declared platform FLOOR — surfaced on the index
+    /// so a consumer can skip an uninstallable bundle without downloading it. Null = none.</param>
+    public sealed record BundleRef(
+        string Plugin, string Version, string Url, string? Module = null,
+        string? MinMeshVersion = null);
 
     /// <summary>
     /// Reads the registry's bundle index. Emits an empty index rather than throwing when the
@@ -142,6 +151,151 @@ public sealed class PluginBundleClient
                         .SelectMany(bytes => bytes is null
                             ? Observable.Return(0)
                             : SeedAll(pluginId, bytes));
+            });
+
+    /// <summary>
+    /// Fetches <paramref name="pluginId"/>'s bundle and LANDS the compiled module it carries into
+    /// this deployment's <c>modules/</c> tree (#1664 Slice C) — the module counterpart of
+    /// <see cref="Adopt"/>, riding the same index, the same download route and the same MVID gate.
+    ///
+    /// <para>The whole decision is <see cref="ModuleUpdateDecision.Decide"/>, taken BEFORE any
+    /// download: an up-to-date module, a bundle whose platform floor this deployment does not
+    /// satisfy, an uninstalled module and a policy-declined unattended run each cost zero bytes.
+    /// The gate is the <c>minMeshVersion</c> FLOOR (<see cref="ModulePlatformFloor"/>), never MVID
+    /// equality — that strict gate is the NodeType lane's (<see cref="Adopt"/>); a module built
+    /// against a different platform build lands fine as long as its floor is satisfied. Landing
+    /// goes through <see cref="ModuleLandingService"/> (restart-as-activation — the sidecar's
+    /// <c>PendingRestart</c> is the step-10 signal); the module LOADS at the next restart.</para>
+    ///
+    /// <para>Emits how many module files were landed — zero is a normal, non-error outcome (nothing
+    /// to land, or the bundle is for a framework this deployment does not run yet). Like
+    /// <see cref="Adopt"/>, nothing here may fail an install: every refusal is logged and absorbed.
+    /// Cold: nothing is fetched until Subscribe.</para>
+    /// </summary>
+    /// <param name="pluginId">The package id whose bundle carries the module.</param>
+    /// <param name="moduleName">The module's entry-assembly name (the package manifest's
+    /// <see cref="PackageManifest.Module"/> declaration).</param>
+    /// <param name="packagePath">The install record's mesh path, recorded on the activation entry.</param>
+    /// <param name="unattended">True on the reconciler's background lane — gates the landing on
+    /// <see cref="IModuleUpdatePolicy"/> (the deployment's existing update-policy surface; absent =
+    /// allowed, the platform default). An explicit install passes false: the operator asked.</param>
+    public IObservable<int> AdoptModule(
+        string pluginId, string moduleName, string? packagePath = null, bool unattended = false)
+    {
+        var landing = _hub.ServiceProvider.GetService<ModuleLandingService>();
+        if (landing is null)
+        {
+            _logger?.LogWarning(
+                "Module bundle for {Plugin}: no ModuleLandingService on this host — nothing landed",
+                pluginId);
+            return Observable.Return(0);
+        }
+
+        var policy = unattended ? _hub.ServiceProvider.GetService<IModuleUpdatePolicy>() : null;
+        var policyDecline = policy?.DeclineUnattendedLanding().Take(1)
+                            ?? Observable.Return<string?>(null);
+
+        return _index.GetOrCreate(FetchIndex)
+            .Take(1)
+            .SelectMany(index => landing.GetActivation().Take(1)
+                .SelectMany(activation => policyDecline
+                    .SelectMany(declined =>
+                    {
+                        var bundle = index.Bundles?.FirstOrDefault(b =>
+                            string.Equals(b.Plugin, pluginId, StringComparison.OrdinalIgnoreCase)
+                            && !string.IsNullOrWhiteSpace(b.Module));
+                        var entry = activation.Entries.FirstOrDefault(e =>
+                            string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
+
+                        var verdict = ModuleUpdateDecision.Decide(
+                            bundle?.Version, bundle?.MinMeshVersion,
+                            ModulePlatformFloor.DeclineReason, entry, declined);
+
+                        if (verdict.Action != ModuleUpdateAction.Land)
+                        {
+                            _logger?.LogInformation(
+                                "Module '{Module}' of {Plugin}: {Action} — {Reason}",
+                                moduleName, pluginId, verdict.Action, verdict.Reason);
+                            return Observable.Return(0);
+                        }
+
+                        _logger?.LogInformation(
+                            "Module '{Module}' of {Plugin}: {Reason}",
+                            moduleName, pluginId, verdict.Reason);
+                        return Download(pluginId, bundle!.Version)
+                            .SelectMany(bytes => bytes is null
+                                ? Observable.Return(0)
+                                : LandFromBundle(pluginId, moduleName, packagePath, bundle.Version, bytes));
+                    })))
+            .Catch((Exception ex) =>
+            {
+                // A distribution hiccup must not fail the install/reconcile that asked — the module
+                // simply stays as it is until the next boot or a manual re-install.
+                _logger?.LogWarning(ex,
+                    "Module '{Module}' of {Plugin}: landing failed — the module is unchanged",
+                    moduleName, pluginId);
+                return Observable.Return(0);
+            });
+    }
+
+    /// <summary>
+    /// Reads the downloaded bundle's module section and lands it. The platform FLOOR is verified
+    /// AGAIN here, against the manifest inside the archive — the index said what the registry
+    /// advertises, the manifest says what these bytes require, and only the second is the gate
+    /// that holds (<see cref="ModuleLandingService"/> re-checks it a third time at placement;
+    /// declining twice is cheaper than debugging a MissingMethodException once). The MVID the
+    /// bundle records is logged as DIAGNOSTIC metadata, never refused.
+    /// </summary>
+    // Internal for the ModuleFunnelTest pin (InternalsVisibleTo): the land half without HTTP.
+    internal IObservable<int> LandFromBundle(
+        string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes) =>
+        _httpPool.InvokeBlocking(_ => BundleReader.ReadModule(bundleBytes))
+            .SelectMany(payload =>
+            {
+                var (manifest, files) = payload;
+
+                if (ModulePlatformFloor.DeclineReason(manifest?.Module?.MinMeshVersion) is { } reason)
+                {
+                    _logger?.LogInformation(
+                        "Module bundle for {Plugin} DECLINED: {Reason} — nothing landed",
+                        pluginId, reason);
+                    return Observable.Return(0);
+                }
+
+                if (files.Count == 0)
+                {
+                    _logger?.LogInformation(
+                        "Module bundle for {Plugin} carries no (complete) module payload — nothing landed",
+                        pluginId);
+                    return Observable.Return(0);
+                }
+
+                // The bundle must be the module the PACKAGE declared — a producer/catalog drift
+                // here would land bytes under an identity the boot union never asks for.
+                if (manifest?.Module?.AssemblyName is { Length: > 0 } declared
+                    && !string.Equals(declared, moduleName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger?.LogWarning(
+                        "Module bundle for {Plugin} declares module '{Declared}' but the package "
+                        + "declares '{Expected}' — nothing landed", pluginId, declared, moduleName);
+                    return Observable.Return(0);
+                }
+
+                var landing = _hub.ServiceProvider.GetRequiredService<ModuleLandingService>();
+                return landing
+                    .LandModule(
+                        moduleName,
+                        files.Select(f => (f.FileName, f.Bytes)).ToArray(),
+                        // Diagnostic metadata (which exact platform build produced these bytes),
+                        // recorded on the activation entry and logged at landing — never a gate.
+                        manifest!.FrameworkMvid,
+                        packagePath,
+                        version,
+                        manifest.Module?.MinMeshVersion)
+                    .Select(_ => files.Count)
+                    .Do(count => _logger?.LogInformation(
+                        "Module '{Module}' of {Plugin} landed ({Count} file(s), version {Version}) "
+                        + "— RESTART REQUIRED to load it", moduleName, pluginId, count, version));
             });
 
     /// <summary>
