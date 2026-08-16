@@ -23,11 +23,12 @@ public class ModuleLandingServiceTest : IDisposable
     private readonly string baseDirectory =
         Path.Combine(Path.GetTempPath(), "mw-landing-" + Guid.NewGuid().ToString("N"));
 
-    /// <summary>The RUNNING framework identity — MeshWeaver.Graph's MVID, exactly what
-    /// <c>NodeTypeCompilationHelpers.FrameworkVersion</c> computes. Recorded on landings as
+    /// <summary>The RUNNING framework identity — exactly what
+    /// <c>NodeTypeCompilationHelpers.FrameworkVersion</c> resolves (the stamped commit identity
+    /// on a CI-built Graph, the MVID locally — #1660 WS3), read through the ONE public reading so
+    /// this test can never diverge from what the gate compares. Recorded on landings as
     /// DIAGNOSTIC metadata.</summary>
-    private static string LiveFrameworkMvid =>
-        typeof(PrebuiltAssemblySeeder).Assembly.ManifestModule.ModuleVersionId.ToString("N");
+    private static string LiveFrameworkMvid => PrebuiltAssemblySeeder.LiveFrameworkMvid;
 
     private ModuleLandingService Service => new(baseDirectory: baseDirectory);
 

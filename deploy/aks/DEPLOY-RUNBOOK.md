@@ -301,21 +301,25 @@ the outage happens anyway.
 Both are rendered correctly by the chart — a `helm upgrade` restores them. A per-env `portal-patch.json`
 or a hand `kubectl patch` can still override them, which is how the drift happened.
 
-🪦 **There is no pre-run bake Job any more, and there never can be one (#1347).** The separate
-`memex-bake` image was removed after two weeks of running in zero namespaces. On its only AKS run
-(memex-cloud, 2026-07-30) `memex-bake:3.0.0-ci.1565` computed a **different framework fingerprint**
-than the running `portal-ai:3.0.0-ci.1565` — same version, same commit, separately published — so
-its framework-stale kickoff started flipping CURRENT NodeType records to `Pending` and rebuilding
-them for a framework nothing serves. That was not a bug to tune: `InformationalVersion` carries
-`+build.<UtcNow.Ticks>` under `CIRun` (`Directory.Build.props`, and the stamp is load-bearing ABI
-safety), so **every** `dotnet publish` mints a fresh `MeshWeaver.Graph` MVID and no second image can
-ever agree with the portal's framework identity.
+🪦 **There is no pre-run bake Job any more (#1347) — the CI bake replaced it (#1660 WS3).** The
+separate `memex-bake` image was removed after two weeks of running in zero namespaces. On its only
+AKS run (memex-cloud, 2026-07-30) `memex-bake:3.0.0-ci.1565` computed a **different framework
+fingerprint** than the running `portal-ai:3.0.0-ci.1565` — same version, same commit, separately
+published — so its framework-stale kickoff started flipping CURRENT NodeType records to `Pending`
+and rebuilding them for a framework nothing serves. The cause was the per-build
+`+build.<UtcNow.Ticks>` stamp `InformationalVersion` then carried under `CIRun`: every
+`dotnet publish` minted a fresh `MeshWeaver.Graph` MVID. #1660 WS3 removed that stamp and made CI
+builds **commit-deterministic** — the framework identity is now the commit (`g<sha>`), identical
+across every CI build of it — so the Build-and-Test run's bake artifact IS adoptable: `main-cd`'s
+`publish-bake` job copies it onto the portals' `/data` share
+(`prebuilt-bundles/<identity>/<source>/`), and each booting pod seeds its own identity's bundles
+(`PreWarm__PrebuiltBundleRoot`) before its sweep.
 
-**The pod-side sweep is the bake.** It runs in the serving process, so its fingerprint is right by
-construction, and it is fast — 76 s for 280 types (memex-cloud, batch direct-compile). The "fail
-before prod" contract the Job was meant to give is given, and given better, by
-`PreWarm__GateReadiness` + `maxSurge:1` / `maxUnavailable:0`: the new pod refuses readiness until
-its OWN bake is green while the old image keeps serving.
+**The pod-side sweep remains the enforcement.** It runs in the serving process, adopts whatever CI
+published, and compiles the remainder — 76 s for 280 types cold (memex-cloud, batch
+direct-compile), seconds when the CI bake covered the shipped content. The "fail before prod"
+contract is given by `PreWarm__GateReadiness` + `maxSurge:1` / `maxUnavailable:0`: the new pod
+refuses readiness until its OWN bake is green while the old image keeps serving.
 
 **Verify after every roll** — the bake completing is the deploy signal, not HTTP 200:
 

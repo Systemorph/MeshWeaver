@@ -32,9 +32,11 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     private readonly string landingRoot =
         Path.Combine(Path.GetTempPath(), "mw-funnel-" + Guid.NewGuid().ToString("N"));
 
-    /// <summary>The RUNNING framework identity — what the bundle must carry to be landable.</summary>
-    private static string LiveFrameworkMvid =>
-        typeof(PrebuiltAssemblySeeder).Assembly.ManifestModule.ModuleVersionId.ToString("N");
+    /// <summary>The RUNNING framework identity — what the bundle must carry to be landable.
+    /// Resolved through the ONE public reading (never a locally-computed MVID: a CI-built Graph
+    /// resolves its stamped commit identity, #1660 WS3, and a hand-computed MVID would diverge
+    /// from what the gate actually compares on CI).</summary>
+    private static string LiveFrameworkMvid => PrebuiltAssemblySeeder.LiveFrameworkMvid;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
