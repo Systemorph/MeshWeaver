@@ -38,7 +38,9 @@
 
   <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
     <PropertyGroup>
-      <_AppPublishDir>$([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))</_AppPublishDir>
+      <!-- EnsureTrailingSlash: GetFullPath does not guarantee one, and every use below
+           concatenates directly (`$(_AppPublishDir)modules/…`). -->
+      <_AppPublishDir>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))))</_AppPublishDir>
     </PropertyGroup>
 
     <!-- Build each module (already built as part of the host's graph in the double-ship state —
