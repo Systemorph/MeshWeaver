@@ -7,6 +7,10 @@ using System.Text.Json;
 [assembly: InternalsVisibleTo("MeshWeaver.Graph")]
 [assembly: InternalsVisibleTo("MeshWeaver.AI")]
 [assembly: InternalsVisibleTo("Memex.Portal.Shared")]
+// The notification triage watcher observes ALL users' Notification nodes and their rules — a
+// system-level watch with no ambient user context, so it needs the unfiltered core (the same
+// reason it had this grant while it lived in Memex.Portal.Shared).
+[assembly: InternalsVisibleTo("MeshWeaver.Notifications.Channels")]
 // SyncedQueryInitialGateTest decorates the REAL IMeshQueryCore with a
 // subscription-delaying wrapper to pin the pre-Initial emission gate.
 [assembly: InternalsVisibleTo("MeshWeaver.Query.Test")]
