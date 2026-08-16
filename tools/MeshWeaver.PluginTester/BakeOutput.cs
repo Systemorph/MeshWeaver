@@ -142,15 +142,20 @@ public static class BakeOutput
                                 $"bake: '{typePath}' claims a usable build at v{version} but the "
                                 + "run's assembly store has NO bytes for it — refusing to write a "
                                 + "bundle that ships less than the gate verdict claims");
+                        // STREAMED, never buffered: the entry carries open-stream FACTORIES, so the
+                        // bytes flow disk → zip inside BundleWriter (which opens and disposes each
+                        // stream per entry) instead of the whole bake's DLL set sitting in byte[]s
+                        // at once — that is the entire point of AssemblyEntry's factory shape.
+                        // The factories run inside the zip-writing InvokeBlocking, on the same
+                        // files pool as this existence probe.
                         return pool.InvokeBlocking(_ =>
                         {
-                            var dll = File.ReadAllBytes(dllPath);
                             var pdbPath = Path.ChangeExtension(dllPath, ".pdb");
-                            var pdb = File.Exists(pdbPath) ? File.ReadAllBytes(pdbPath) : null;
+                            var hasPdb = File.Exists(pdbPath);
                             return new BundleWriter.AssemblyEntry(
                                 typePath,
-                                () => new MemoryStream(dll, writable: false),
-                                pdb is null ? null : () => new MemoryStream(pdb, writable: false),
+                                () => File.OpenRead(dllPath),
+                                hasPdb ? () => File.OpenRead(pdbPath) : null,
                                 def.CompiledSources);
                         });
                     });
