@@ -74,6 +74,18 @@ public class ModuleUpdateDecisionTest
     }
 
     [Fact]
+    public void VersionEqualityIsSemVer_TwoPartAndThreePartFormsAreTheSameVersion()
+    {
+        // Manifests legitimately carry two-part versions ("1.2"; NuGet widens to "1.2.0"), so
+        // equality must go through the SAME comparer as the downgrade check — string equality
+        // would read this as an update and re-land the module on every reconcile, forever.
+        Assert.Equal(ModuleUpdateAction.SkipUpToDate,
+            ModuleUpdateDecision.Decide("1.2", "3.0.0", Gate, Landed("1.2.0"), null).Action);
+        Assert.Equal(ModuleUpdateAction.SkipUpToDate,
+            ModuleUpdateDecision.Decide("1.2.0", "3.0.0", Gate, Landed("1.2"), null).Action);
+    }
+
+    [Fact]
     public void ABundleWhoseFloorExceedsTheRunningPlatform_IsSkipped_ItBecomesInstallableAfterTheUpdate()
     {
         // The reconcile runs on every boot; a module that already requires a newer platform must

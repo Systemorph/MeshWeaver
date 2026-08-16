@@ -46,6 +46,29 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 services.AddSingleton(new ModuleLandingService(baseDirectory: landingRoot)));
     }
 
+    /// <summary>
+    /// Teardown cleanup of the per-test landing tree — here, in the lifecycle hook, so it runs on
+    /// ASSERTION FAILURE too (inline deletes at the end of a test body are skipped the moment an
+    /// assert throws, leaking a temp dir per red run). The base implements
+    /// <see cref="IAsyncLifetime"/>, and xUnit v3 calls <c>DisposeAsync</c> in preference to
+    /// <c>IDisposable.Dispose</c> — so this override, not an added <c>Dispose()</c>, is the hook
+    /// that actually runs.
+    /// </summary>
+    public override async ValueTask DisposeAsync()
+    {
+        await base.DisposeAsync();
+        try
+        {
+            if (Directory.Exists(landingRoot))
+                Directory.Delete(landingRoot, recursive: true);
+        }
+        catch
+        {
+            // Best-effort: a cleanup hiccup (a straggling handle on a just-written DLL) must
+            // never turn a green test red — leaked temp dirs are the OS's to reap.
+        }
+    }
+
     private static byte[] ModuleBundle(string frameworkMvid, string? minMeshVersion = null)
     {
         var manifestJson = JsonSerializer.Serialize(new
@@ -109,8 +132,6 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         entry.FrameworkMvid.Should().Be(foreignBuild,
             "the built-against MVID rides along as diagnostics, never as a gate");
         list.PendingRestart.Should().BeTrue("restart-as-activation — nothing loads into the running process");
-
-        Directory.Delete(landingRoot, recursive: true);
     }
 
     /// <summary>
@@ -133,8 +154,6 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         Directory.Exists(Path.Combine(landingRoot, "modules", "MeshWeaver.Social"))
             .Should().BeFalse("declined bytes never reach disk");
         ModuleActivationSidecar.Read(landingRoot).Entries.Should().BeEmpty();
-
-        Directory.Delete(landingRoot, recursive: true);
     }
 
     /// <summary>
@@ -174,8 +193,6 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             "the record is what the registry's bundle index serves modules from");
         content.MinMeshVersion.Should().Be("3.0.0",
             "the floor rides the record so the index can surface it without re-reading the repo");
-
-        Directory.Delete(landingRoot, recursive: true);
     }
 
     /// <summary>
@@ -203,7 +220,5 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         social.MinMeshVersion.Should().Be("3.0.0", "the floor is the module lane's landing gate");
         packages.Single(p => p.Id == "Plain").Module.Should().BeNull(
             "a package that declares no module must never enter the module funnel");
-
-        Directory.Delete(landingRoot, recursive: true);
     }
 }

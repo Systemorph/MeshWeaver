@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.Plugin.Build;
@@ -36,6 +37,29 @@ public static class ModulePackCommand
 {
     /// <summary>The CLI verb.</summary>
     public const string Verb = "module-pack";
+
+    // 🚨 These values flow into FILE PATHS (the entry-DLL probe, the closure entries, the output
+    // bundle name) and into the bundle manifest, so they are validated to a safe shape before any
+    // path is composed — "../evil" as a module name must be a clear exit-2, never a probe outside
+    // the module folder or a bundle written somewhere surprising.
+
+    /// <summary>Assembly-/package-id shape: dot-separated segments of letters, digits, '_' and
+    /// '-'. No path separators, no empty segments, so no "." / ".." / traversal by construction.</summary>
+    private static readonly Regex IdentifierShape =
+        new(@"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$", RegexOptions.Compiled);
+
+    /// <summary>SemVer-ish shape: numeric core (2–4 parts, matching what manifests carry) with
+    /// optional pre-release / build-metadata tail. Path separators are impossible here.</summary>
+    private static readonly Regex VersionShape =
+        new(@"^\d+(\.\d+){1,3}(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$", RegexOptions.Compiled);
+
+    private static bool Invalid(string what, string? value, Regex shape, string constraint)
+    {
+        if (value is not null && shape.IsMatch(value))
+            return false;
+        Console.Error.WriteLine($"error: {what} '{value}' is invalid — {constraint}");
+        return true;
+    }
 
     /// <summary>Runs the command; returns the process exit code.</summary>
     public static int Run(string[] args)
@@ -130,6 +154,19 @@ public static class ModulePackCommand
                 + "its manifest.lock `version`)");
             return 2;
         }
+
+        // Validate BEFORE composing a single path from these values (see the shapes above).
+        const string identifierConstraint =
+            "dot-separated segments of letters, digits, '_' and '-' (e.g. MeshWeaver.Social); "
+            + "no path separators";
+        const string versionConstraint =
+            "a SemVer-shaped version (e.g. 1.2.0 or 1.2.0-rc1)";
+        if (Invalid("--module-name", moduleName, IdentifierShape, identifierConstraint)
+            || Invalid("--plugin", plugin, IdentifierShape, identifierConstraint)
+            || Invalid("--package-version", packageVersion, VersionShape, versionConstraint)
+            || (minMeshVersion is not null
+                && Invalid("--min-mesh-version", minMeshVersion, VersionShape, versionConstraint)))
+            return 2;
 
         var entryDll = Path.Combine(moduleDirectory, moduleName + ".dll");
         if (!File.Exists(entryDll))

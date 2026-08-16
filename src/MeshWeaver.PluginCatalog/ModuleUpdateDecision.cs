@@ -114,21 +114,27 @@ public static class ModuleUpdateDecision
                 "the module was uninstalled on this deployment; an unattended update must not "
                 + "re-install it");
 
+        // Both version checks go through the ONE comparer, so "equal" and "older" cannot disagree
+        // about what a version string means: manifests legitimately carry two-part versions, and
+        // string equality would read a landed "1.2.0" against a served "1.2" as an update — a
+        // re-land on every reconcile, forever (Copilot catch on the ordinal-equality draft).
+        var landedComparison = landed is { Version.Length: > 0 }
+            ? NuGetVersionComparer.Instance.Compare(bundleVersion, landed.Version)
+            : (int?)null;
+
         // Already landed at the served version: nothing travels. The version alone keys this —
         // landed bytes stay loadable across platform builds (simple-name binding), so there is no
         // "re-land the same version for a new build" case.
-        if (landed is { } current
-            && string.Equals(current.Version, bundleVersion, StringComparison.OrdinalIgnoreCase))
+        if (landedComparison == 0)
             return new(ModuleUpdateAction.SkipUpToDate,
                 $"version {bundleVersion} is already landed");
 
         // Never roll BACK unattended: a registry serving an older version than what is landed is a
         // deliberate operator situation (a pinned rollback, a lagging registry), and silently
         // downgrading a running deployment is not this lane's call.
-        if (landed is { Version.Length: > 0 } newer
-            && NuGetVersionComparer.Instance.Compare(bundleVersion, newer.Version) < 0)
+        if (landedComparison < 0)
             return new(ModuleUpdateAction.SkipOlder,
-                $"the registry serves {bundleVersion} but {newer.Version} is landed — never "
+                $"the registry serves {bundleVersion} but {landed!.Version} is landed — never "
                 + "rolled back unattended");
 
         // 🚨 The policy gates UPGRADES ONLY — an existing landing moving to a different version.
