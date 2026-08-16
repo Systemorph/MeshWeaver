@@ -47,7 +47,6 @@
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Notifications.Channels/MeshWeaver.Notifications.Channels.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
@@ -55,6 +54,7 @@
     <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2). -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />
   </ItemGroup>
 
   <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
