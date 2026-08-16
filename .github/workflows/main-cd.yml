@@ -929,8 +929,10 @@ jobs:
   # ────────────────── PUBLISH THE CI NODETYPE BAKE TO PORTAL STORAGE ──────────────────
   # #1660 WS3 — "bake on CI": the Build-and-Test run of this same commit already compiled every
   # shipped NodeType (its doc-gate runs mw-plugin-test with --bake-output and uploads the result
-  # as `baked-assemblies-<framework-identity>`). CI builds are commit-deterministic, so that
-  # artifact's framework identity EQUALS the identity of the images promote just armed — this job
+  # as `baked-assemblies-<framework-identity>`). The framework identity is the API-SURFACE hash
+  # (FrameworkBuildIdentity — deterministic per source+references, stable across internal-only
+  # merges), so that artifact's identity EQUALS the identity of the images promote just armed —
+  # and usually equals the PREVIOUS release's too, in which case the publish below skips — this job
   # copies the bundles into the storage the portals mount, laid out
   # `prebuilt-bundles/<identity>/<source>/`, and each booting pod seeds its own identity's
   # directory (ShippedPrebuiltBundles.SeedPublishedRoot) before its NodeType sweep: pending drops
@@ -1055,7 +1057,7 @@ jobs:
             curl -sS -o /tmp/resp -w '%{http_code}\n' -X POST \
               -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/$repo/dispatches" \
-              -d "{\"event_type\":\"meshweaver-framework-released\",\"client_payload\":{\"sha\":\"$SHA\",\"identity\":\"g$SHA\",\"version\":\"$VERSION\"}}" \
+              -d "{\"event_type\":\"meshweaver-framework-released\",\"client_payload\":{\"sha\":\"$SHA\",\"version\":\"$VERSION\"}}" \
               | grep -q '^2' \
               || echo "::warning::dispatch to $repo failed ($(cat /tmp/resp)) — its next own push (or the next release) re-bakes it."
           done

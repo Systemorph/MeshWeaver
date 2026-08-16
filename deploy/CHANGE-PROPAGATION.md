@@ -61,27 +61,31 @@ older code would mint a higher `-ci.<n>` and roll installs backwards.
 > `publish-bake` job copies to the portals' storage; the pod-side sweep then adopts it at boot
 > (`ShippedPrebuiltBundles.SeedPublishedRoot`) and compiles only what CI did not bake.
 
-### Every core release still invalidates the compile cache — but CI pre-pays the bake
+### A core release invalidates the compile cache only when the API SURFACE changed
 
-The compile cache keys on the **framework identity** (`NodeTypeCompilationHelpers.FrameworkVersion`).
-Since #1660 WS3 that identity is **the commit** for CI builds (`g<sha>`, stamped as
-`AssemblyMetadata("MeshWeaverFrameworkIdentity")` by `Directory.Build.props`; local builds keep
-Graph's MVID). Two consequences, replacing the per-build-ticks scheme this section used to
-describe:
+The compile cache keys on the **framework identity** (`NodeTypeCompilationHelpers.FrameworkVersion`
+/ `FrameworkBuildIdentity`). Since #1660 WS3's refinement that identity is the **API-surface hash**
+(`s<hash>`) for every host that ships a `meshweaver-surface.manifest` — the portals and the CI
+bake host: per compile reference, the SHA-256 of its *reference assembly* (byte-stable under
+body-only and private-member edits; changed by any public/protected — and, for IVT'd assemblies,
+internal — surface change), hashed over the canonical content-surface set, with `MeshWeaver.Graph`
+contributing its full implementation MVID (its code shapes the *generated input* of every NodeType
+compile). Three consequences:
 
-1. **Every core release is still a full invalidation** — a release is a new commit, so the
-   identity changes even when the release touches only, say, `MeshWeaver.Blazor.Portal`. That
-   breadth is deliberate: a NodeType compiles against
-   `AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")` — **every assembly in the image**, not just
-   Graph's dependency closure (`MeshNodeCompilationService.GetDefaultReferences`) — and a commit
-   names the entire tree, so any reference-assembly change flips the identity. (Graph's bare MVID
-   would not: it only covers Graph's own compile inputs.)
-2. **The invalidation no longer implies pod-side Roslyn.** CI compile inputs are
-   commit-deterministic (no run number or timestamp reaches any compiled attribute), so the
-   Build-and-Test bake, the CD-built images, and the booting pods all agree on the identity for a
-   given commit — the pods adopt the CI-baked assemblies instead of recompiling. The bake tax
-   below is still the truth for anything CI did not bake (user-partition NodeTypes, a reuse-green
-   run that skipped the bake job, a deployment without `PreWarm__PrebuiltBundleRoot`).
+1. **An internal-only core release invalidates NOTHING.** Same surfaces ⇒ same identity ⇒ every
+   cached and CI-published build stays valid — pods boot with `pending≈0` and the publish step
+   skips ("rebuild only when we need to"). The commit identity this replaced re-baked the world on
+   every merge (measured: `pending=82` on a routine roll).
+2. **A breaking surface change — or any Graph change — is a full invalidation**, pre-paid by CI:
+   the Build-and-Test bake, the CD-built images, and the booting pods agree on the new identity
+   (reference-assembly bytes are deterministic per source+references), so pods adopt the fresh CI
+   bake instead of recompiling.
+3. **The staleness scope is the CONTENT-facing surface**, not the whole image: the canonical set
+   is the bake gate's own framework closure — content referencing anything outside it cannot pass
+   the gate, so portal-only assemblies (Blazor, Orleans, hosting) are deliberately outside the
+   key. The bake tax below is still the truth for anything CI did not bake (user-partition
+   NodeTypes, a reuse-green run that skipped the bake job, a deployment without
+   `PreWarm__PrebuiltBundleRoot`).
 
 ---
 

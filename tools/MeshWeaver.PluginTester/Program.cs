@@ -63,10 +63,25 @@ for (var i = 0; i < args.Length; i++)
             or "--bake-output" or "--source-sha":
             Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
             return 2;
+        // Diagnostic: print the framework build identity this process resolves — the exact value
+        // the bake keys bundles to and the seeder gates on (#1660 WS3). One line, `identity=<id>
+        // provenance=<g<sha> | (unstamped)>`, then exit 0. Lets CI steps and operators verify
+        // "would this build's bake be adoptable by that image?" without standing up a mesh, and
+        // is what the surface-identity proof script drives.
+        case "--print-framework-identity":
+        {
+            var provenance = MeshWeaver.Graph.Configuration.FrameworkBuildIdentity
+                .StampedIdentityOf(typeof(MeshWeaver.Graph.Configuration.FrameworkBuildIdentity).Assembly);
+            Console.WriteLine(
+                $"identity={MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid} "
+                + $"provenance={provenance ?? "(unstamped)"}");
+            return 0;
+        }
         case "--help" or "-h":
             Console.WriteLine(
                 "usage: mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
-                + "[--allow <file>] [--report <file>] [--bake-output <dir>] [--source-sha <sha>]");
+                + "[--allow <file>] [--report <file>] [--bake-output <dir>] [--source-sha <sha>] "
+                + "[--print-framework-identity]");
             return 0;
         default:
             if (args[i].StartsWith('-') || root is not null)

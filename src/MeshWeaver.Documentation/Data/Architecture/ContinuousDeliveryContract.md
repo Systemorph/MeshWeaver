@@ -186,9 +186,12 @@ Two post-promote legs ride every armed release (#1660 WS3):
 `baked-assemblies-<framework-identity>` artifact its doc-gate produced with
 `mw-plugin-test --bake-output`) onto the portals' shared storage, laid out
 `prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip`
-(`.github/scripts/publish-bake-bundles.sh`). CI builds are **commit-deterministic**, so the
-identity the bake was keyed under equals the identity of the images promote just armed — each
-booting pod seeds its own identity's bundles (`PreWarm:PrebuiltBundleRoot` →
+(`.github/scripts/publish-bake-bundles.sh`). The framework identity is the **API-surface hash**
+(`FrameworkBuildIdentity` — reference-assembly hashes, deterministic per source+references), so
+the identity the bake was keyed under equals the identity of the images promote just armed — and
+stays equal across internal-only merges: when the identity's directory already holds the bundles,
+the script **skips with a notice** instead of re-uploading ("rebuild only when we need to").
+Each booting pod seeds its own identity's bundles (`PreWarm:PrebuiltBundleRoot` →
 `ShippedPrebuiltBundles.SeedPublishedRoot`) before its NodeType sweep, and compiles only what CI
 did not bake. Its configuration is **preflighted red, never skipped**: repo variable
 `BAKE_PUBLISH_TARGETS` names the Azure Files targets (`<account>/<share>[/<base-path>]`,
@@ -198,7 +201,8 @@ would silently restore the every-pod-rebakes-everything regression (#1347). A mi
 nothing to publish.
 
 **`notify-dependents`** sends one `repository_dispatch` (`meshweaver-framework-released`, payload:
-commit, identity, version) to each repo in `BAKE_SUBSCRIBER_REPOS`, using
+commit, version — receivers resolve the framework identity themselves from the new image) to each
+repo in `BAKE_SUBSCRIBER_REPOS`, using
 `DEPENDENT_DISPATCH_TOKEN`. A node repo subscribes with
 
 ```yaml

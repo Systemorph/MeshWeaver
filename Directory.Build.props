@@ -102,13 +102,16 @@
          assembly attributes. Keep them excluded explicitly (also covers obj/container/, nested). -->
     <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
   </PropertyGroup>
-  <!-- Ref assemblies stay OFF for the whole multi-arch publish (PR #552): with per-leg isolation they
-       no longer collide, but a from-clean CI container publish gains nothing from producing them
-       (they only skip downstream recompiles on INCREMENTAL rebuilds), so this is pure saved work.
-       Empty in normal dev / Build-and-Test CI — ref assemblies and incremental builds unaffected there. -->
-  <PropertyGroup Condition="'$(ContainerRuntimeIdentifiers)' != ''">
-    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
-  </PropertyGroup>
+  <!-- 🚨 Ref assemblies stay ON in the multi-arch container publish — they are LOAD-BEARING now.
+       This block used to set ProduceReferenceAssembly=false for '$(ContainerRuntimeIdentifiers)'
+       != '' ("pure saved work" once the per-leg bin/obj isolation above killed the PR #552
+       CopyRefAssembly collisions). Since #1660 WS3's surface identity, the framework build
+       identity hashes each compile reference's REFERENCE-ASSEMBLY content (the
+       _MeshWeaverWriteSurfaceManifest target below reads @(ReferencePathWithRefAssemblies)) — so
+       a publish without ref assemblies would fall back to hashing implementation assemblies,
+       fork the image's identity away from the Build-and-Test bake's, and silently decline every
+       CI-baked NodeType bundle at boot. Do not re-add the disable. The per-leg isolation above
+       still prevents the collisions; the only cost of keeping them on is the ref-asm emit time. -->
   <!-- 🚨 A container leg that pushed NOTHING must fail HERE, not two tasks later as "invalid metadata".
        The SDK's CreateNewImage task is written to swallow cancellation:
 
@@ -284,15 +287,14 @@
        and the About page falls back to the version string.
 
        🚨 Under CIRun the SAME resolved SHA is ALSO stamped as
-       AssemblyMetadata("MeshWeaverFrameworkIdentity", "g<sha>") — THE framework build identity
-       (issue #1660 WS3). NodeTypeCompilationHelpers.FrameworkVersion reads this attribute off
-       MeshWeaver.Graph and uses it VERBATIM as the ABI-staleness key for every dynamic NodeType
-       (assembly-store filename tag, CompiledFrameworkVersion stamps, the CI bake artifact key,
-       PrebuiltAssemblySeeder's adoption gate). Two CI builds of the same commit therefore share
-       one identity — which is what lets the CI-baked NodeType assemblies seed at portal boot —
-       while ANY code or package-pin change mints a new one (a commit names the entire tree, a
-       strict superset of the old per-build-ticks guarantee's scope; see the InformationalVersion
-       note above). Stamped ONLY for CIRun builds ON GitHub Actions (GITHUB_ACTIONS=true), ON
+       AssemblyMetadata("MeshWeaverFrameworkIdentity", "g<sha>") — the COMMIT identity
+       (issue #1660 WS3). Since the API-surface identity (the _MeshWeaverWriteSurfaceManifest
+       target above; `s<hash>`) this stamp is the FALLBACK staleness key for CI processes without
+       a surface manifest (test hosts) and the DIAGNOSTIC PROVENANCE everywhere — logged beside
+       the surface identity so "which commit built this" is always answerable. Two CI builds of
+       the same commit share it; ANY code or package-pin change mints a new one (a commit names
+       the entire tree; see the InformationalVersion note above). Stamped ONLY for CIRun builds
+       ON GitHub Actions (GITHUB_ACTIONS=true), ON
        PURPOSE: a CI checkout is always CLEAN at the named commit, while a local working tree can
        be DIRTY at it — and AGENTS.md has developers reproduce CI locally with -p:CIRun=true, so
        a CIRun-alone condition would give two different local builds (same commit, different
@@ -301,6 +303,49 @@
        SourceRevisionId is preferred over GITHUB_SHA because it names the CHECKED-OUT commit; on
        a workflow_run-triggered CD job GITHUB_SHA can be the branch tip rather than the commit
        being built, which would fork the identity. -->
+  <!-- 🚨 The API-SURFACE manifest (issue #1660 WS3, "rebuild only when we need to"): entry apps
+       that opt in with <MeshWeaverSurfaceManifest>true</MeshWeaverSurfaceManifest> (the portals,
+       mw-plugin-test — the processes that compile or bake dynamic NodeTypes) get a
+       meshweaver-surface.manifest beside their binaries: one `<AssemblyName>=<SHA-256>` line per
+       MeshWeaver.* COMPILE REFERENCE, hashed over the assembly the COMPILER actually saw —
+       @(ReferencePathWithRefAssemblies) substitutes each project reference's REFERENCE ASSEMBLY,
+       which is byte-stable under body-only / private-member edits and changes on any surface
+       change (the compiler's own definition of "the API surface"; for IVT'd assemblies the
+       internal surface counts too, which is correct conservatism). The runtime
+       (FrameworkBuildIdentity.ResolveProcessIdentity) hashes the manifest's canonical subset into
+       the framework build identity `s<hash>` — so a NodeType bake stays valid across
+       internal-only framework merges and is invalidated exactly by breaking changes.
+       Deterministic by construction: ref-assembly bytes are deterministic per source+references
+       (proven: byte-identical across independent from-clean, non-incremental rebuilds), so the
+       Build-and-Test bake host and the main-cd image compute the SAME identity for the same
+       surfaces — which is what lets the CI bake seed at boot without rebaking per commit. -->
+  <Target Name="_MeshWeaverWriteSurfaceManifest"
+          AfterTargets="Build"
+          Condition="'$(MeshWeaverSurfaceManifest)' == 'true'">
+    <ItemGroup>
+      <_MeshWeaverSurfaceRef Include="@(ReferencePathWithRefAssemblies)"
+                             Condition="$([System.String]::new('%(Filename)').StartsWith('MeshWeaver.'))" />
+    </ItemGroup>
+    <GetFileHash Files="@(_MeshWeaverSurfaceRef)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_MeshWeaverSurfaceRefHashed" />
+    </GetFileHash>
+    <WriteLinesToFile File="$(TargetDir)meshweaver-surface.manifest"
+                      Lines="@(_MeshWeaverSurfaceRefHashed->'%(Filename)=%(FileHash)')"
+                      Overwrite="true"
+                      WriteOnlyWhenDifferent="true" />
+  </Target>
+  <Target Name="_MeshWeaverAddSurfaceManifestToPublish"
+          BeforeTargets="CopyFilesToPublishDirectory"
+          DependsOnTargets="_MeshWeaverWriteSurfaceManifest"
+          Condition="'$(MeshWeaverSurfaceManifest)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(TargetDir)meshweaver-surface.manifest"
+                             Condition="Exists('$(TargetDir)meshweaver-surface.manifest')">
+        <RelativePath>meshweaver-surface.manifest</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
   <Target Name="AddCommitHashMetadata"
           BeforeTargets="CoreGenerateAssemblyInfo"
           DependsOnTargets="InitializeSourceControlInformation"
