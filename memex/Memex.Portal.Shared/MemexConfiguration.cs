@@ -524,13 +524,51 @@ public static class MemexConfiguration
             // per-deployment "which packs does this instance run" knob (Doc/Architecture/
             // UiExtensibility). Empty/absent = no-op; a listed path that fails to load should
             // fail loudly at startup, never silently run without the pack.
+            //
+            // #1664 step 9 — the effective set is the appsettings baseline ∪ the ENABLED entries
+            // of the modules/activation.json sidecar (store-installed modules landed by
+            // ModuleLandingService), deduped by name. Sidecar entries are guarded: a recorded
+            // framework MVID that mismatches the running framework (an image roll happened since
+            // the install) or a missing DLL SKIPS the entry with a loud stderr line — never a
+            // crash, the deployment must boot; the entry stays for the post-roll re-install.
+            // Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
-            if (moduleAssemblies is { Length: > 0 })
+            var persistedActivation = ModuleActivationSidecar.Read(AppContext.BaseDirectory,
+                msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
+            var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+                moduleAssemblies,
+                persistedActivation,
+                // The ONE framework-identity gate (PrebuiltAssemblySeeder) — never a second
+                // notion of framework version.
+                PrebuiltAssemblySeeder.DeclineReason,
+                // 🚨 modules/<name>/<name>.dll SPECIFICALLY — never ResolveModulePath, whose
+                // BaseDirectory fallback would let a sidecar entry with a lost modules/ folder
+                // silently bind a same-named app-closure DLL instead of being skipped. Baseline
+                // entries below keep ResolveModulePath (both locations are legitimate for them).
+                name => ModuleActivationBoot.LandedModuleDllExists(AppContext.BaseDirectory, name),
+                (module, reason) => Console.Error.WriteLine(
+                    $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"));
+            if (effectiveModules.Count > 0)
                 // ResolveModulePath probes the modules/<name>/ publish layout first (#1644),
                 // then falls back to the classic BaseDirectory-relative location.
-                builder.InstallAssemblies(moduleAssemblies
+                builder.InstallAssemblies(effectiveModules
                     .Select(MeshBuilder.ResolveModulePath)
                     .ToArray());
+            // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
+            // consume the pending flag so the step-10 signal reads current. Best-effort: on a
+            // read-only app filesystem the flag simply stays set (cosmetic), and boot proceeds.
+            if (persistedActivation.PendingRestart)
+                try
+                {
+                    ModuleActivationSidecar.Write(AppContext.BaseDirectory,
+                        persistedActivation with { PendingRestart = false });
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine(
+                        $"[ModuleActivation] could not reset PendingRestart ({ex.GetType().Name}: "
+                        + $"{ex.Message}) — the flag stays set; activation itself is unaffected.");
+                }
 
             // Read graph storage config
             var graphStorageConfig = configuration.GetSection("Graph:Storage").Get<GraphStorageConfig>();

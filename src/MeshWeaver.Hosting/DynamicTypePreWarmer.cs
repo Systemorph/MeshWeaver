@@ -1032,7 +1032,8 @@ public static class DynamicTypePreWarmer
                         .SelectMany(baseline => stream
                             .Where(n => n?.Content is NodeTypeDefinition d
                                 && d.CompilationStatus == CompilationStatus.Ok
-                                && NodeTypeCompilationHelpers.HasUsableBuild(n, d)
+                                && NodeTypeCompilationHelpers.HasUsableBuild(
+                                    n, d, NodeTypeCompilationHelpers.ModulesHashOf(mesh))
                                 && IsFreshSuccess(d.LastCompileSucceededAt, baseline))
                             .Take(1));
                 })
@@ -1109,7 +1110,8 @@ public static class DynamicTypePreWarmer
                     // the state, so waiting out the rest of the budget for a write that
                     // is not coming only slows the sweep down.
                     .Where(n => n?.Content is NodeTypeDefinition d
-                        && (NodeTypeCompilationHelpers.HasUsableBuild(n, d)
+                        && (NodeTypeCompilationHelpers.HasUsableBuild(
+                                n, d, NodeTypeCompilationHelpers.ModulesHashOf(workspace.Hub))
                             || d.CompilationStatus is CompilationStatus.Error
                                                    or CompilationStatus.Unavailable))
                     .Take(1)
