@@ -9,10 +9,17 @@ using MeshWeaver.Plugin.Build;
 // (unless --no-build) builds them. Exit code 0 only when EVERY unit built: a partial plugin is
 // worse than an unbuilt one, because a consumer resolving a mixed set gets a silent ABI mismatch.
 
+// The module-pack verb (#1664): packs a built MODULE's closure into a bundle keyed to the
+// framework MVID it was compiled against — invocable from any node repo's CI. Everything below
+// this dispatch is the classic per-NodeType plugin build.
+if (args.Length > 0 && args[0] == ModulePackCommand.Verb)
+    return ModulePackCommand.Run(args.Skip(1).ToArray());
+
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
     Console.WriteLine("""
         usage: meshweaver-plugin-build <pluginDirectory> [options]
+               meshweaver-plugin-build module-pack <moduleOutputDir> [options]   (see module-pack --help)
 
           --out <dir>                 where to write generated projects (default: ./obj/plugin-build)
           --framework-version <v>     MeshWeaver package version to compile against, or `latest`
