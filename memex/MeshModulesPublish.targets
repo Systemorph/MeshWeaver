@@ -1,25 +1,41 @@
 <Project>
   <!--
-    The modules/ publish layout — design #1644, step 1 (ADDITIVE).
+    The modules/ publish layout — design #1644.
 
     Publishing a host lays every mesh MODULE out under modules/<Name>/ beside the app. Which
     modules EXIST is this list (a publish/composition decision); which ACTIVATE stays the
     deployment's Modules:Assemblies configuration, whose loader probes modules/<name>/<name>.dll
     first and falls back to the app folder (MeshBuilder.ResolveModulePath).
 
-    Step-1 scope, deliberately THIN: each module contributes its OWN build outputs (dll/pdb/xml),
-    not its transitive closure. A full `Publish` per module was measured to drag ~1400
-    framework-package assemblies the app resolves from the SHARED FRAMEWORK (a class library's
-    standalone publish rolls Microsoft.Extensions.* in; the app does not carry them), and a
-    filename prune against the app folder cannot see shared-framework provision — the same-identity
-    trap-door class in its publish-time form. Closure layout is therefore per-module STEP-2 work:
-    when a module's ProjectReference flips off, its entry here upgrades to a closure publish with a
-    prune that is correct FOR THAT MODULE (most have no private deps beyond the app's closure;
-    Speech's native runtime is the known exception).
+    TWO lanes, one per migration state (#1644 step 2 flips modules from the first to the second,
+    one at a time):
 
-    While a module ALSO rides a ProjectReference from Memex.Portal.Shared (the step-1 double-ship),
-    even its own DLL is pruned as a same-identity duplicate of the app copy — the folder stays
-    empty for it and the loader falls back to the app folder: byte-for-byte today's behaviour.
+    1. THIN lane (@(MeshModule)) — modules still double-shipped via a ships-the-bits
+       ProjectReference from Memex.Portal.Shared. Each contributes its OWN build outputs
+       (dll/pdb/xml), all pruned as same-identity duplicates of the app copies, so the folder
+       stays empty for it and the loader falls back to the app folder: byte-for-byte today's
+       behaviour. A full `Publish` per module was measured to drag ~1400 framework-package
+       assemblies here (a class library's standalone publish rolls Microsoft.Extensions.* in),
+       which is why the closure lane exists only for modules whose reference has flipped OFF.
+
+    2. CLOSURE lane (@(MeshModuleClosure)) — modules whose ProjectReference is GONE: the folder
+       is the ONLY way their bits ship. Each gets a full `Publish` into modules/<Name>/ (culture
+       satellites suppressed at the source via SatelliteResourceLanguages), then a prune that is
+       the inverse of the thin lane's problem:
+         0. drop runtimes/<rid>/ trees (Assembly.LoadFrom never consults the module's deps.json,
+            so a RID tree under a module folder is unreachable by construction);
+         a. drop files the app publish already carries at the same RELATIVE path (same-identity
+            duplicates — the documented trap-door class);
+         b. drop assemblies the SHARED FRAMEWORK provides (globbed from the machine's
+            Microsoft.AspNetCore.App.Ref / Microsoft.NETCore.App.Ref targeting packs — the
+            app resolves these from the shared framework, so a prune against the app output
+            alone cannot see them; measured at 18 leftovers for Markdown.Export).
+       What survives is the module's own assembly + its TRUE private deps. First flipped module:
+       MeshWeaver.Markdown.Export (measured private deps: none — its whole package closure,
+       Markdig/OpenXml/HtmlAgilityPack/PdfPig, still rides the app via other references; if one
+       of those references ever leaves, the closure publish+prune keeps the dep automatically).
+       The closure lane ALSO runs after plain Build of a host (into $(OutDir)modules/), because a
+       dev `dotnet run` has no publish step and the flipped DLL exists nowhere else.
   -->
   <ItemGroup>
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.OpenAI/MeshWeaver.AI.OpenAI.csproj" />
@@ -31,9 +47,11 @@
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
+
+    <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2, flip #1). -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
   </ItemGroup>
 
   <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
@@ -73,10 +91,137 @@
     </ItemGroup>
     <Delete Files="@(_ModuleDuplicate)" />
 
+    <!-- Closure lane. Self-invoked on THIS file so the identical worker serves the Build hook
+         below — a target runs at most once per project instance, and `dotnet publish` runs Build
+         AND Publish in one instance, so a shared in-instance worker would fire for only one of
+         the two directories. MeshModulesGuardAppRoot: only the publish lane hard-fails on the
+         module's own dll in the app root (in a dev bin/ that is routinely a STALE file from the
+         pre-flip era, not a re-added reference). -->
+    <MSBuild Projects="$(MSBuildThisFileFullPath)"
+             Targets="LayoutMeshModuleClosures"
+             BuildInParallel="false"
+             Properties="MeshModulesAppDir=$(_AppPublishDir);Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=true" />
+
     <ItemGroup>
       <_ModuleFileKept Include="$(_AppPublishDir)modules/**/*.*" />
     </ItemGroup>
     <Message Importance="high"
-             Text="PublishMeshModules: @(MeshModule->Count()) module(s) laid out; pruned @(_ModuleDuplicate->Count()) app-closure duplicate(s); modules/ keeps @(_ModuleFileKept->Count()) file(s)." />
+             Text="PublishMeshModules: @(MeshModule->Count()) thin + @(MeshModuleClosure->Count()) closure module(s) laid out; pruned @(_ModuleDuplicate->Count()) app-closure duplicate(s) from the thin lane; modules/ keeps @(_ModuleFileKept->Count()) file(s)." />
+  </Target>
+
+  <!-- Dev-run lane: a flipped module's DLL exists NOWHERE in a plain build's output (no
+       ProjectReference ships it, and Build has no publish step), so `dotnet run` on a host would
+       fail Assembly.LoadFrom at startup. Lay the closure modules into $(OutDir)modules/ — the
+       same folder ResolveModulePath probes first. Thin-lane modules deliberately stay out: their
+       DLLs already ride the app output via the ProjectReference. -->
+  <Target Name="LayoutMeshModuleClosuresAfterBuild" AfterTargets="Build" Condition="'$(PublishMeshModules)' != 'false'">
+    <MSBuild Projects="$(MSBuildThisFileFullPath)"
+             Targets="LayoutMeshModuleClosures"
+             BuildInParallel="false"
+             Properties="MeshModulesAppDir=$([System.IO.Path]::GetFullPath('$(OutDir)', '$(MSBuildProjectDirectory)'));Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=false" />
+  </Target>
+
+  <!-- The closure-lane worker. Runs against THIS file as its own project (see the callers for
+       why), parameterized by MeshModulesAppDir — so it must receive Configuration,
+       MeshModulesTargetFramework and NetCoreTargetingPackRoot from the caller: evaluated
+       standalone there is no SDK import to define them. -->
+  <Target Name="LayoutMeshModuleClosures">
+    <PropertyGroup>
+      <_AppDir>$([MSBuild]::EnsureTrailingSlash('$(MeshModulesAppDir)'))</_AppDir>
+    </PropertyGroup>
+
+    <!-- The module's own dll in the APP root means a ships-the-bits ProjectReference came back
+         (the same-identity double-load trap — #1644's fail-if-referenced guard) or the publish
+         dir is stale from before the flip. Either way the layout would be a lie: fail. -->
+    <Error Condition="'$(MeshModulesGuardAppRoot)' == 'true' And Exists('$(_AppDir)%(MeshModuleClosure.Filename).dll')"
+           Text="LayoutMeshModuleClosures: %(MeshModuleClosure.Filename).dll is in the app publish root, but that module ships via modules/ only (#1644 step 2). Remove the re-added ProjectReference, or clean a stale publish directory." />
+
+    <!-- Restore explicitly: post-flip the module is OUTSIDE the host's project graph, so the
+         host's implicit restore never touches it and a clean machine has no assets file. A
+         separate invocation (different global properties than the build below) also sidesteps
+         MSBuild's evaluation reuse between a Restore and the build that needs its outputs. -->
+    <MSBuild Projects="@(MeshModuleClosure)"
+             Targets="Restore"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration)"
+             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules" />
+
+    <!-- Build, then Publish with NoBuild — deliberately TWO invocations, and the Build one runs
+         with the module's ordinary global properties (RemoveProperties strips everything this
+         lane added, including an outer `-o`'s PublishDir). That makes it the SAME scheduled
+         instance as a solution-level build of the module (which is no longer ordered against the
+         host — nothing else serialises the two), so MSBuild merges the requests instead of
+         racing two builds over one obj/ — the documented CopyRefAssembly corruption class.
+         Folding Build into the Publish call would run it inside the PublishDir-divergent
+         instance and reopen exactly that race. -->
+    <MSBuild Projects="@(MeshModuleClosure)"
+             Targets="Build"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration)"
+             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules" />
+    <!-- SatelliteResourceLanguages=en: without it the closure publish lays out a culture folder
+         per Roslyn localization (cs/de/es/… via Kernel.Hub), every one a same-identity duplicate
+         of the app's own satellite folders. Suppressing them at the SOURCE beats deleting them
+         afterwards (no empty-directory litter). Caveat, documented for the wave that flips a
+         module with genuinely-private localized deps: such a module would need its cultures
+         listed here. -->
+    <MSBuild Projects="@(MeshModuleClosure)"
+             Targets="Publish"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration);NoBuild=true;SatelliteResourceLanguages=en;PublishDir=$(_AppDir)modules/%(Filename)/"
+             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;NetCoreTargetingPackRoot;PublishMeshModules" />
+
+    <!-- Prune (0): RID trees. A module loads via Assembly.LoadFrom, which never consults the
+         module's deps.json — the fallback probe is the module's FLAT folder only — so a
+         runtimes/<rid>/ tree under a module folder is unreachable dead weight by construction
+         (today: a net8.0-flavoured Pkcs copy and the Windows EventLog message table). A module
+         that truly needs native/RID assets (Speech is the known exception, per the #1644 design)
+         needs explicit flat placement or NativeLibrary resolution in ITS flip, not a RID tree. -->
+    <RemoveDir Directories="$(_AppDir)modules/%(MeshModuleClosure.Filename)/runtimes"
+               Condition="Exists('$(_AppDir)modules/%(MeshModuleClosure.Filename)/runtimes')" />
+
+    <!-- Prune (a): same-identity files the app publish already carries, compared by RELATIVE
+         path (%(RecursiveDir)) so a nested duplicate matches the app's nested copy, not just
+         root-level names. The batched glob and the duplicate selection live in SEPARATE
+         ItemGroups: mixing a %(MeshModuleClosure.Filename) batch with a plain @(_ClosureFile)
+         transform in one element would re-consume the accumulated files once per batch
+         iteration when a second module joins this lane. -->
+    <ItemGroup>
+      <_ClosureFile Include="$(_AppDir)modules/%(MeshModuleClosure.Filename)/**/*.*" />
+    </ItemGroup>
+    <ItemGroup>
+      <_ClosureAppDuplicate Include="@(_ClosureFile)" Condition="Exists('$(_AppDir)%(RecursiveDir)%(Filename)%(Extension)')" />
+    </ItemGroup>
+    <Delete Files="@(_ClosureAppDuplicate)" />
+
+    <!-- Prune (b): shared-framework-provided assemblies. A standalone class-library publish
+         rolls Microsoft.Extensions.* in as ordinary package deps, but the APP resolves those
+         from the Microsoft.AspNetCore.App shared framework — so they are absent from the app
+         root and prune (a) cannot see them (the same-identity trap-door in publish-time form).
+         The targeting packs ARE the definition of what the shared framework provides; glob them
+         rather than hand-maintaining a name list that drifts with every framework bump. -->
+    <ItemGroup>
+      <_FrameworkRefAssembly Include="$(NetCoreTargetingPackRoot)/Microsoft.AspNetCore.App.Ref/*/ref/$(MeshModulesTargetFramework)/*.dll" />
+      <_FrameworkRefAssembly Include="$(NetCoreTargetingPackRoot)/Microsoft.NETCore.App.Ref/*/ref/$(MeshModulesTargetFramework)/*.dll" />
+    </ItemGroup>
+    <Error Condition="'@(_FrameworkRefAssembly->Count())' == '0'"
+           Text="LayoutMeshModuleClosures: no targeting packs found under '$(NetCoreTargetingPackRoot)' for $(MeshModulesTargetFramework) — cannot prune shared-framework assemblies from the module folders. (Any machine that builds the host has these packs; an empty glob means the path plumbing broke, and skipping the prune would silently ship framework duplicates.)" />
+    <PropertyGroup>
+      <_FrameworkNames>;@(_FrameworkRefAssembly->'%(Filename)%(Extension)');</_FrameworkNames>
+    </PropertyGroup>
+    <ItemGroup>
+      <_ClosureFileLeft Include="$(_AppDir)modules/%(MeshModuleClosure.Filename)/**/*.dll" />
+    </ItemGroup>
+    <ItemGroup>
+      <_ClosureFrameworkDuplicate Include="@(_ClosureFileLeft)"
+                                  Condition="$(_FrameworkNames.Contains(';%(Filename)%(Extension);'))" />
+    </ItemGroup>
+    <Delete Files="@(_ClosureFrameworkDuplicate)" />
+
+    <ItemGroup>
+      <_ClosureKept Include="$(_AppDir)modules/%(MeshModuleClosure.Filename)/**/*.*" />
+    </ItemGroup>
+    <Message Importance="high"
+             Text="LayoutMeshModuleClosures: @(MeshModuleClosure->Count()) closure module(s) → $(_AppDir)modules/; pruned @(_ClosureAppDuplicate->Count()) app-closure + @(_ClosureFrameworkDuplicate->Count()) shared-framework duplicate(s); kept: @(_ClosureKept->'%(Filename)%(Extension)')" />
   </Target>
 </Project>
