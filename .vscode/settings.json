@@ -8,19 +8,26 @@
 
   // Keep the file tree free of build output: with 159 projects the bin/obj noise buries the source,
   // and stale folders left behind by deleted projects read as if those projects still existed.
+  //
+  // 🚨 `bin/Debug` and `bin/Release`, never a bare `**/bin`: `deploy/homebrew/bin` holds the
+  // memex-local CLI SOURCE (deliberately un-ignored in .gitignore), and a blanket bin exclude hides
+  // real, tracked scripts from the explorer, from search, and from the file watcher.
   "files.exclude": {
-    "**/bin": true,
+    "**/bin/Debug": true,
+    "**/bin/Release": true,
     "**/obj": true
   },
   "search.exclude": {
-    "**/bin": true,
+    "**/bin/Debug": true,
+    "**/bin/Release": true,
     "**/obj": true,
     "**/TestResults": true,
     "**/node_modules": true
   },
-  // Watching bin/obj across 159 projects is what pins a core at 100% after a build.
+  // Watching build output across 159 projects is what pins a core at 100% after a build.
   "files.watcherExclude": {
-    "**/bin/**": true,
+    "**/bin/Debug/**": true,
+    "**/bin/Release/**": true,
     "**/obj/**": true,
     "**/TestResults/**": true,
     "**/node_modules/**": true

@@ -12,13 +12,16 @@
       "problemMatcher": "$msCompile"
     },
     {
-      // 🚨 CI's exact flags. A plain Debug build passes while CI fails, because warnings are
-      // promoted to errors there (the classic miss is CS9107). Run this before pushing — see
-      // AGENTS.md, "make CI green LOCALLY first".
+      // 🚨 CI's flags. A plain Debug build passes while CI fails, because warnings are promoted to
+      // errors there (the classic miss is CS9107). `-p:CIRun=true` matters beyond versioning: it
+      // adds the CIRun DefineConstants, so `#if CIRun` code compiles only with it set. CI also
+      // restores in a separate step and then builds `--no-restore`; that is omitted here on purpose,
+      // since a local `--no-restore` against an unrestored tree fails for reasons CI never sees.
+      // Run this before pushing — AGENTS.md, "make CI green LOCALLY first".
       "label": "build (CI flags: Release + warnaserror)",
       "type": "process",
       "command": "dotnet",
-      "args": ["build", "MeshWeaver.slnx", "-c", "Release", "-warnaserror"],
+      "args": ["build", "MeshWeaver.slnx", "-c", "Release", "-p:CIRun=true", "-warnaserror"],
       "options": { "cwd": "${workspaceFolder}" },
       "group": "build",
       "problemMatcher": "$msCompile"
@@ -29,7 +32,7 @@
       "label": "build project",
       "type": "process",
       "command": "dotnet",
-      "args": ["build", "${input:project}", "-c", "Release", "-warnaserror"],
+      "args": ["build", "${input:project}", "-c", "Release", "-p:CIRun=true", "-warnaserror"],
       "options": { "cwd": "${workspaceFolder}" },
       "group": "build",
       "problemMatcher": "$msCompile"
