@@ -689,7 +689,8 @@ internal static class NodeTypeBatchBake
                         // IAssemblyStore upload used (it uploaded the node it was handed), so
                         // LastCompiledVersion always names a store key that has bytes.
                         ? NodeTypeCompilationHelpers.ApplyCompileSuccess(
-                            def, result!, typeNode.Version, activityPath: null, releasePath)
+                            def, result!, typeNode.Version, activityPath: null, releasePath,
+                            mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
                         : NodeTypeCompilationHelpers.ApplyCompileFailure(
                             def, result, error, activityPath: null))
                     // The batch driver has no Pending→Compiling flip to stamp this at, and the

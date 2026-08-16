@@ -1,0 +1,82 @@
+<Project>
+  <!--
+    The modules/ publish layout — design #1644, step 1 (ADDITIVE).
+
+    Publishing a host lays every mesh MODULE out under modules/<Name>/ beside the app. Which
+    modules EXIST is this list (a publish/composition decision); which ACTIVATE stays the
+    deployment's Modules:Assemblies configuration, whose loader probes modules/<name>/<name>.dll
+    first and falls back to the app folder (MeshBuilder.ResolveModulePath).
+
+    Step-1 scope, deliberately THIN: each module contributes its OWN build outputs (dll/pdb/xml),
+    not its transitive closure. A full `Publish` per module was measured to drag ~1400
+    framework-package assemblies the app resolves from the SHARED FRAMEWORK (a class library's
+    standalone publish rolls Microsoft.Extensions.* in; the app does not carry them), and a
+    filename prune against the app folder cannot see shared-framework provision — the same-identity
+    trap-door class in its publish-time form. Closure layout is therefore per-module STEP-2 work:
+    when a module's ProjectReference flips off, its entry here upgrades to a closure publish with a
+    prune that is correct FOR THAT MODULE (most have no private deps beyond the app's closure;
+    Speech's native runtime is the known exception).
+
+    While a module ALSO rides a ProjectReference from Memex.Portal.Shared (the step-1 double-ship),
+    even its own DLL is pruned as a same-identity duplicate of the app copy — the folder stays
+    empty for it and the loader falls back to the app folder: byte-for-byte today's behaviour.
+  -->
+  <ItemGroup>
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.OpenAI/MeshWeaver.AI.OpenAI.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />
+    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
+  </ItemGroup>
+
+  <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
+    <PropertyGroup>
+      <!-- EnsureTrailingSlash: GetFullPath does not guarantee one, and every use below
+           concatenates directly (`$(_AppPublishDir)modules/…`). -->
+      <_AppPublishDir>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath('$(PublishDir)', '$(MSBuildProjectDirectory)'))))</_AppPublishDir>
+    </PropertyGroup>
+
+    <!-- Build each module (already built as part of the host's graph in the double-ship state —
+         this is an incremental no-op then) and collect its primary output. Serial on purpose:
+         parallel builds have wedged the shared compiler on this repo's build hosts. -->
+    <MSBuild Projects="@(MeshModule)"
+             Targets="Build"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_ModuleAssemblyBuilt" />
+    </MSBuild>
+
+    <ItemGroup>
+      <_ModuleOwnFile Include="@(_ModuleAssemblyBuilt)" ModuleName="%(Filename)" />
+      <_ModuleOwnFile Include="@(_ModuleAssemblyBuilt->'%(RootDir)%(Directory)%(Filename).pdb')"
+                      ModuleName="%(Filename)"
+                      Condition="Exists('%(RootDir)%(Directory)%(Filename).pdb')" />
+      <_ModuleOwnFile Include="@(_ModuleAssemblyBuilt->'%(RootDir)%(Directory)%(Filename).xml')"
+                      ModuleName="%(Filename)"
+                      Condition="Exists('%(RootDir)%(Directory)%(Filename).xml')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_ModuleOwnFile)"
+          DestinationFiles="@(_ModuleOwnFile->'$(_AppPublishDir)modules/%(ModuleName)/%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+
+    <!-- Prune same-identity files the app output already carries (the double-ship state). -->
+    <ItemGroup>
+      <_ModuleFolderFile Include="$(_AppPublishDir)modules/**/*.*" />
+      <_ModuleDuplicate Include="@(_ModuleFolderFile)" Condition="Exists('$(_AppPublishDir)%(Filename)%(Extension)')" />
+    </ItemGroup>
+    <Delete Files="@(_ModuleDuplicate)" />
+
+    <ItemGroup>
+      <_ModuleFileKept Include="$(_AppPublishDir)modules/**/*.*" />
+    </ItemGroup>
+    <Message Importance="high"
+             Text="PublishMeshModules: @(MeshModule->Count()) module(s) laid out; pruned @(_ModuleDuplicate->Count()) app-closure duplicate(s); modules/ keeps @(_ModuleFileKept->Count()) file(s)." />
+  </Target>
+</Project>

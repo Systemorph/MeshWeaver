@@ -31,14 +31,48 @@ public record MeshBuilder
     private List<MeshNode> MeshNodes { get; } = new();
 
     /// <summary>
+    /// Resolves one <c>Modules:Assemblies</c> entry to an assembly path. Rooted paths pass
+    /// through; relative entries probe the <c>modules/&lt;name&gt;/&lt;entry&gt;</c> publish
+    /// layout FIRST (the modules-folder lane, #1644 — a module published beside the app wins so
+    /// flipping its ProjectReference off changes nothing for the deployment), then fall back to
+    /// the classic BaseDirectory-relative location (the double-shipped transition state, and
+    /// every module that still rides the app closure).
+    /// </summary>
+    public static string ResolveModulePath(string entry)
+    {
+        if (Path.IsPathRooted(entry))
+            return entry;
+        var baseDirectory = AppContext.BaseDirectory;
+        var moduleFolderPath = Path.Combine(
+            baseDirectory, "modules", Path.GetFileNameWithoutExtension(entry), entry);
+        return File.Exists(moduleFolderPath)
+            ? moduleFolderPath
+            : Path.Combine(baseDirectory, entry);
+    }
+
+    /// <summary>
     /// Installs mesh nodes from the specified assembly locations.
     /// </summary>
     /// <param name="assemblyLocations">Paths to assemblies containing MeshNodeProviderAttribute definitions.</param>
     /// <returns>The builder for method chaining.</returns>
     public MeshBuilder InstallAssemblies(params string[] assemblyLocations)
     {
-        var attributes = assemblyLocations
+        var assemblies = assemblyLocations
             .Select(Assembly.LoadFrom)
+            .ToArray();
+        // Record every installed module for the runtime surfaces that must SEE modules the way
+        // they see the platform: the in-mesh compile reference set (a module leaving the publish
+        // closure leaves TRUSTED_PLATFORM_ASSEMBLIES, so compilation composes TPA + these) and
+        // the bake fingerprint (a module upgrade invalidates baked builds that could reference
+        // it). Registered even while a module still ALSO rides the app closure — the surfaces
+        // dedupe by identity.
+        ConfigureServices(services =>
+        {
+            foreach (var assembly in assemblies)
+                services.AddSingleton(new InstalledModuleAssembly(assembly));
+            return services;
+        });
+        var attributes = assemblies
             .SelectMany(a => a.GetCustomAttributes<MeshNodeProviderAttribute>())
             .ToArray();
         MeshNodes.AddRange(attributes.SelectMany(a => InstallServices(a.Nodes)));
