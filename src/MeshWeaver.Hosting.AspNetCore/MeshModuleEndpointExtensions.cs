@@ -21,9 +21,11 @@ public static class MeshModuleEndpointExtensions
     ///
     /// <para>Each module's routes map inside a group defaulting to
     /// <c>RequireAuthorization()</c>; a route is anonymous only where the module explicitly opts
-    /// out. On <c>ApplicationStarted</c> the whole endpoint table is checked for duplicate
-    /// (verb, pattern) registrations — a collision throws and takes the app down, because a
-    /// silently shadowed route is indistinguishable from a passing one (the #683 class).</para>
+    /// out. On <c>ApplicationStarted</c> the endpoint table is checked for duplicate
+    /// (verb, pattern) registrations involving a module-contributed endpoint — a collision throws
+    /// and takes the app down, because a silently shadowed route is indistinguishable from a
+    /// passing one (the #683 class). Platform-only duplicates are exempt: published static assets
+    /// legitimately register one endpoint per precompressed variant on the same route.</para>
     /// </summary>
     public static WebApplication MapMeshModuleEndpoints(this WebApplication app)
     {
@@ -36,8 +38,11 @@ public static class MeshModuleEndpointExtensions
         {
             // Authenticated-by-default: the group policy applies to every route the module maps
             // unless the route itself declares AllowAnonymous — a module cannot accidentally
-            // publish an open route.
-            var group = app.MapGroup(string.Empty).RequireAuthorization();
+            // publish an open route. The marker metadata scopes the collision refusal to groups
+            // involving a module-contributed endpoint (see MeshModuleEndpointMetadata).
+            var group = app.MapGroup(string.Empty).RequireAuthorization()
+                .WithMetadata(new MeshModuleEndpointMetadata(
+                    module.Assembly.GetName().Name ?? module.Assembly.FullName ?? "unknown"));
             foreach (var configure in attribute.EndpointConfigurations)
             {
                 configure(group);
@@ -82,8 +87,13 @@ public static class MeshModuleEndpointExtensions
     }
 
     /// <summary>
-    /// The pure collision predicate: duplicate (verb, pattern) pairs across the endpoint table,
-    /// or null when clean. Extracted so the refusal logic is unit-testable without a running host.
+    /// The pure collision predicate: duplicate (verb, pattern) pairs that involve at least one
+    /// module-contributed endpoint (<see cref="MeshModuleEndpointMetadata"/>), or null when clean.
+    /// Platform-only duplicates are NOT collisions: a published app's static-asset table
+    /// legitimately holds one endpoint per precompressed variant (identity/gzip/brotli) on the
+    /// same (verb, pattern), resolved by content negotiation — an unscoped assertion refuses
+    /// every published deployment while passing every dev run, which is how ci.3958 crash-looped
+    /// in prod. Extracted so the refusal logic is unit-testable without a running host.
     /// </summary>
     internal static string? FindRouteCollisions(IEnumerable<Endpoint> endpoints)
     {
@@ -95,11 +105,21 @@ public static class MeshModuleEndpointExtensions
                 .Select(verb => (Verb: verb, Pattern: endpoint.RoutePattern.RawText ?? "", Endpoint: endpoint)))
             .Where(e => e.Pattern.Length > 0)
             .GroupBy(e => (e.Verb, e.Pattern))
-            .Where(g => g.Count() > 1)
+            .Where(g => g.Count() > 1
+                        && g.Any(e => e.Endpoint.Metadata.GetMetadata<MeshModuleEndpointMetadata>() is not null))
             .ToList();
         return duplicates.Count == 0
             ? null
             : string.Join("; ", duplicates.Select(g =>
-                $"{g.Key.Verb} {g.Key.Pattern} ← [{string.Join(" | ", g.Select(e => e.Endpoint.DisplayName))}]"));
+                $"{g.Key.Verb} {g.Key.Pattern} ← [{string.Join(" | ", g.Select(Describe))}]"));
+    }
+
+    private static string Describe((string Verb, string Pattern, RouteEndpoint Endpoint) entry)
+    {
+        var display = string.IsNullOrWhiteSpace(entry.Endpoint.DisplayName)
+            ? entry.Endpoint.RoutePattern.RawText ?? "?"
+            : entry.Endpoint.DisplayName;
+        var module = entry.Endpoint.Metadata.GetMetadata<MeshModuleEndpointMetadata>();
+        return module is null ? display : $"{display} (module {module.ModuleName})";
     }
 }
