@@ -38,7 +38,6 @@
        dev `dotnet run` has no publish step and the flipped DLL exists nowhere else.
   -->
   <ItemGroup>
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
@@ -55,6 +54,7 @@
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.OpenAI/MeshWeaver.AI.OpenAI.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
   </ItemGroup>
 
   <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
