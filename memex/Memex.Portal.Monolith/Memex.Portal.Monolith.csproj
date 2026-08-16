@@ -17,4 +17,6 @@
     <ProjectReference Include="..\..\samples\Northwind\MeshWeaver.Northwind.Application\MeshWeaver.Northwind.Application.csproj" />
   </ItemGroup>
 
+  <Import Project="..\MeshModulesPublish.targets" />
+
 </Project>

@@ -179,6 +179,35 @@ internal class MeshNodeCompilationService(
     private static readonly IReadOnlyList<MetadataReference> _references = GetDefaultReferences();
 
     /// <summary>
+    /// The compile reference set: the process-wide TPA baseline (<see cref="_references"/>) plus
+    /// THIS mesh's installed module assemblies (<c>Modules:Assemblies</c> →
+    /// <see cref="InstalledModuleAssembly"/>, design #1644). A module published into
+    /// <c>modules/&lt;name&gt;/</c> is not in <c>TRUSTED_PLATFORM_ASSEMBLIES</c>, so in-mesh
+    /// consumers (e.g. a scope class using a map control) would silently lose it without this.
+    /// Deduped by path — a module still riding the app closure appears in both sets. Lazy per
+    /// service instance: modules install at boot, before any compile runs.
+    /// </summary>
+    private IReadOnlyList<MetadataReference> References => meshReferences.Value;
+
+    private readonly Lazy<IReadOnlyList<MetadataReference>> meshReferences = new(() =>
+    {
+        var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>().ToArray();
+        if (modules.Length == 0)
+            return _references;
+        var seen = new HashSet<string>(
+            _references.Select(r => r.Display ?? string.Empty),
+            StringComparer.OrdinalIgnoreCase);
+        var composed = new List<MetadataReference>(_references);
+        foreach (var module in modules)
+        {
+            var location = module.Assembly.Location;
+            if (!string.IsNullOrEmpty(location) && File.Exists(location) && seen.Add(location))
+                composed.Add(MetadataReference.CreateFromFile(location));
+        }
+        return composed;
+    });
+
+    /// <summary>
     /// Builds the process-wide MetadataReference list — TPA assemblies plus a few
     /// well-known additions. Uses <see cref="MetadataReference.CreateFromFile(string, MetadataReferenceProperties, DocumentationProvider)"/>
     /// (mmap, lazy read) — Roslyn typically reads only a small fraction of each
@@ -1682,10 +1711,10 @@ internal class MeshNodeCompilationService(
         IObservable<ImmutableArray<MetadataReference>> referencesObs =
             allNugetRefs.Count > 0
                 ? _ioPool.Run(ct => nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct))
-                    .Select(resolved => _references
+                    .Select(resolved => References
                         .Concat(resolved.AssemblyPaths.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)))
                         .ToImmutableArray())
-                : Observable.Return(_references.ToImmutableArray());
+                : Observable.Return(References.ToImmutableArray());
 
         return referencesObs.Select(references =>
         {
@@ -1901,12 +1930,12 @@ internal class MeshNodeCompilationService(
         var nugetRefList = extractedRefs.ToList();
         StripBuiltInScopeGeneratorRef(nugetRefList, builtInPresent: BuiltInGeneratorPaths.Count > 0);
         var nugetRefs = nugetRefList.ToArray();
-        IEnumerable<MetadataReference> references = _references;
+        IEnumerable<MetadataReference> references = References;
         IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
         {
             var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
-            references = _references.Concat(
+            references = References.Concat(
                 resolved.AssemblyPaths.Select(p => MetadataReference.CreateFromFile(p)));
             nugetAssemblyPaths = resolved.AssemblyPaths;
             cacheService.RegisterProbingDirectories(nodeName, resolved.ProbingDirectories);
