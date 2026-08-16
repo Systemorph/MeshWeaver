@@ -59,7 +59,10 @@
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <!-- Service modules NOT flippable for compile-time coupling (reasons: PR #1681) — Speech
          (ISpeechTranscriber lives in the module; no contract split), Social (ApiCredentialNodeType
-         compiles against PlatformCredential; registration deliberately host-side), Hosting.Grpc
+         compiles against PlatformCredential; registration deliberately host-side; RELOCATING to
+         MeshWeaver.SocialMedia per the modularization program's task 63 (a program-plan task, not
+         a GitHub issue) — double-ship, this copy is the master until the flip:
+         see src/MeshWeaver.Social/README.md), Hosting.Grpc
          (UseMeshWeaverGrpcWebWhenInstalled is middleware-order-coupled, cannot ride the endpoint hook). -->
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
