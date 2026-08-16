@@ -7,6 +7,7 @@ using MeshWeaver.PluginTester;
 
 // mw-plugin-test <repo-root> [--compile-timeout <seconds>] [--render-timeout <seconds>]
 //                            [--allow <file>] [--report <file>]
+//                            [--bake-output <dir>] [--source-sha <sha>]
 //
 // The MeshWeaver.Plugins PR gate: imports each node-repo package of the checkout into a fresh
 // in-process mesh, waits for every NodeType to compile (Roslyn diagnostics on error), renders
@@ -15,6 +16,10 @@ using MeshWeaver.PluginTester;
 // tolerated, new failures fail, and an entry whose check now passes is stale and fails.
 // --report writes the structured GateRunReport JSON (the combo verifier's wire contract) —
 // written for every completed run, red or green, BEFORE the allowlist verdict is applied.
+// --bake-output persists the run's compiled assemblies as prebuilt-assembly bundles (one
+// <package>.zip per package + framework-mvid.txt) into <dir> — the artifact half of #1660 WS1:
+// the same compile that proves the content produces the bytes a consumer loads instead of
+// re-compiling. --source-sha records the synced commit in each bundle manifest.
 //
 // The one Task bridge lives HERE, at the console boundary — everything below Run() is reactive.
 
@@ -24,6 +29,8 @@ var renderTimeout = TimeSpan.FromMinutes(2);
 var allowlist = GateAllowlist.Empty;
 var allowApplied = false;
 string? reportPath = null;
+string? bakeOutput = null;
+string? sourceSha = null;
 
 for (var i = 0; i < args.Length; i++)
 {
@@ -44,15 +51,22 @@ for (var i = 0; i < args.Length; i++)
         case "--report" when i + 1 < args.Length:
             reportPath = args[++i];
             break;
+        case "--bake-output" when i + 1 < args.Length:
+            bakeOutput = args[++i];
+            break;
+        case "--source-sha" when i + 1 < args.Length:
+            sourceSha = args[++i];
+            break;
         // A value-taking option as the LAST argument would otherwise fall through to the default
         // case as "Unknown argument" — a misleading message for a missing value.
-        case "--compile-timeout" or "--render-timeout" or "--allow" or "--report":
+        case "--compile-timeout" or "--render-timeout" or "--allow" or "--report"
+            or "--bake-output" or "--source-sha":
             Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
             return 2;
         case "--help" or "-h":
             Console.WriteLine(
                 "usage: mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
-                + "[--allow <file>] [--report <file>]");
+                + "[--allow <file>] [--report <file>] [--bake-output <dir>] [--source-sha <sha>]");
             return 0;
         default:
             if (args[i].StartsWith('-') || root is not null)
@@ -70,6 +84,8 @@ var options = new GateOptions
     RepoRoot = root ?? ".",
     CompileTimeout = compileTimeout,
     RenderTimeout = renderTimeout,
+    BakeOutputDirectory = bakeOutput,
+    SourceSha = sourceSha,
 };
 
 Console.WriteLine($"mw-plugin-test: gating node repos under '{Path.GetFullPath(options.RepoRoot)}'");

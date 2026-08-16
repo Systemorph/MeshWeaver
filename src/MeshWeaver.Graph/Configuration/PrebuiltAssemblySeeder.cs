@@ -37,13 +37,29 @@ public static class PrebuiltAssemblySeeder
     /// gate below is still the one that holds, but re-seeding a whole bundle only to decline every
     /// assembly individually wastes the download and buries the one reason in N identical lines.</para>
     public static string? DeclineReason(string? frameworkMvid) =>
+        DeclineReason(frameworkMvid, NodeTypeCompilationHelpers.FrameworkVersion);
+
+    /// <summary>
+    /// <see cref="DeclineReason(string?)"/> against an EXPLICIT live identity — the pure core, so a
+    /// test can stage a framework roll without rebuilding the framework (the same seam
+    /// <c>NodeTypeBakeStatus.Classify</c> exposes for the same reason).
+    /// </summary>
+    public static string? DeclineReason(string? frameworkMvid, string liveFrameworkMvid) =>
         string.IsNullOrEmpty(frameworkMvid)
             ? $"the producer recorded no framework identity, so it cannot be shown ABI-compatible "
-              + $"with the live framework {NodeTypeCompilationHelpers.FrameworkVersion}"
-            : !string.Equals(frameworkMvid, NodeTypeCompilationHelpers.FrameworkVersion, StringComparison.Ordinal)
+              + $"with the live framework {liveFrameworkMvid}"
+            : !string.Equals(frameworkMvid, liveFrameworkMvid, StringComparison.Ordinal)
                 ? $"built against framework {frameworkMvid}, live framework is "
-                  + $"{NodeTypeCompilationHelpers.FrameworkVersion}"
+                  + $"{liveFrameworkMvid}"
                 : null;
+
+    /// <summary>
+    /// The LIVE framework identity a producer must record beside its bytes — MeshWeaver.Graph's
+    /// MVID, exactly as <see cref="DeclineReason(string?)"/> compares it. The one public reading of
+    /// this identity, so a producer (the CI bake, the registry bundle lane) and the consuming gate
+    /// can never disagree about what "the framework identity" is.
+    /// </summary>
+    public static string LiveFrameworkMvid => NodeTypeCompilationHelpers.FrameworkVersion;
 
     /// <summary>
     /// Seeds <paramref name="assemblyBytes"/> as the build for <paramref name="nodeTypePath"/>.
