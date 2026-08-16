@@ -218,23 +218,54 @@ public static class FrameworkBuildIdentity
     /// <summary>
     /// The full resolution the process identity uses, in order: surface manifest beside the app
     /// (<c>s&lt;hash&gt;</c>) → stamped commit identity (<c>g&lt;sha&gt;</c>) → Graph MVID.
-    /// Wrapped here (not in the Lazy at the call site) so the whole chain is one testable seam.
+    /// See <see cref="ResolveProcessIdentityWithDiagnostics"/> — this is its identity-only
+    /// convenience reading.
     /// </summary>
     /// <param name="baseDirectory">Where to look for <see cref="SurfaceManifestFileName"/> —
     /// the app base directory in production.</param>
     /// <param name="graphAssembly">The MeshWeaver.Graph assembly (identity anchor).</param>
     public static string ResolveProcessIdentity(string baseDirectory, Assembly graphAssembly)
+        => ResolveProcessIdentityWithDiagnostics(baseDirectory, graphAssembly).Identity;
+
+    /// <summary>
+    /// The full resolution chain as one PURE, testable seam, returning the identity plus the
+    /// degradation warning when the surface-manifest layer could not be used (unreadable/torn
+    /// manifest, no usable pairs) — 🚨 never a throw: this runs on the boot path (the process
+    /// identity Lazy), and a torn file must cost a conservative fallback identity, never the
+    /// process. The caller that caches the identity for the process lifetime caches the warning
+    /// with it (see <c>NodeTypeCompilationHelpers</c>); the pre-warmer logs it beside the
+    /// identity it announces.
+    /// </summary>
+    /// <param name="baseDirectory">Where to look for <see cref="SurfaceManifestFileName"/> —
+    /// the app base directory in production.</param>
+    /// <param name="graphAssembly">The MeshWeaver.Graph assembly (identity anchor).</param>
+    public static (string Identity, string? Warning) ResolveProcessIdentityWithDiagnostics(
+        string baseDirectory, Assembly graphAssembly)
     {
         var manifestPath = Path.Combine(baseDirectory, SurfaceManifestFileName);
-        if (File.Exists(manifestPath))
+        string? warning = null;
+        try
         {
-            var pairs = ParseSurfaceManifest(File.ReadAllText(manifestPath));
-            if (pairs.Count > 0)
-                return ComputeSurfaceIdentity(pairs, name => ImplMvidOf(name, graphAssembly));
+            if (File.Exists(manifestPath))
+            {
+                var pairs = ParseSurfaceManifest(File.ReadAllText(manifestPath));
+                if (pairs.Count > 0)
+                    return (ComputeSurfaceIdentity(pairs, name => ImplMvidOf(name, graphAssembly)), null);
+                warning =
+                    $"surface manifest at {manifestPath} held no usable pairs — "
+                    + "resolved the stamp/MVID fallback identity instead";
+            }
         }
-        return Resolve(
+        catch (Exception ex)
+        {
+            warning =
+                $"surface manifest at {manifestPath} could not be read "
+                + $"({ex.GetType().Name}: {ex.Message}) — resolved the stamp/MVID fallback "
+                + "identity instead";
+        }
+        return (Resolve(
             StampedIdentityOf(graphAssembly),
-            graphAssembly.ManifestModule.ModuleVersionId.ToString("N"));
+            graphAssembly.ManifestModule.ModuleVersionId.ToString("N")), warning);
     }
 
     /// <summary>

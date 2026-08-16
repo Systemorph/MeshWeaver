@@ -55,6 +55,17 @@ public static class ShippedPrebuiltBundles
     /// </summary>
     public const string PublishedRootConfigKey = "PreWarm:PrebuiltBundleRoot";
 
+    /// <summary>
+    /// 🚨 The completeness sentinel of a published source directory (must match the
+    /// <c>SENTINEL</c> in <c>.github/scripts/publish-bake-bundles.sh</c>): the publisher writes it
+    /// strictly LAST, after every bundle uploaded, so its presence is the atomic "this publication
+    /// is whole" fact. The reader honours the same contract — a source directory without it (a
+    /// publish that died mid-way) is never seeded: adopting a PARTIAL bake would stamp types as
+    /// built from a set that is missing members, and the pre-warmer would trust it. Its content
+    /// lists the bundle file names, so a listed-but-missing bundle also reads as torn.
+    /// </summary>
+    public const string CompletionSentinelFileName = "_complete";
+
     /// <summary>The conventional location — <c>prebuilt/</c> beside the app binaries, which is
     /// where the publish lays <c>$(PrebuiltBakeDir)</c> bundles into the image.</summary>
     public static string DefaultDirectory => Path.Combine(AppContext.BaseDirectory, "prebuilt");
@@ -81,17 +92,25 @@ public static class ShippedPrebuiltBundles
         => Observable.Defer(() =>
         {
             var dir = string.IsNullOrWhiteSpace(directory) ? DefaultDirectory : directory;
-            return SeedDirectory(mesh, dir, SearchOption.TopDirectoryOnly, logger);
+            return SeedBundles(mesh, dir,
+                () => Directory
+                    .EnumerateFiles(dir, "*.zip", SearchOption.TopDirectoryOnly)
+                    .OrderBy(f => f, StringComparer.Ordinal)
+                    .ToList(),
+                logger);
         });
 
     /// <summary>
     /// Seeds the CI-published bundles for THIS process's framework identity from the configured
     /// published root (<see cref="PublishedRootConfigKey"/>): the pod resolves its own
-    /// <c>FrameworkVersion</c> and seeds <c>&lt;root&gt;/&lt;identity&gt;/**/*.zip</c> — the
-    /// layout CI's publish step writes, one <c>&lt;source&gt;</c> subdirectory per producing repo.
-    /// Emits the number of assemblies adopted; inert (0, debug-logged) when the root is not
-    /// configured, and loud-but-degrading like <see cref="SeedAll"/> everywhere else — a missing
-    /// or partial publication only ever costs what today costs, a compile.
+    /// <c>FrameworkVersion</c> and seeds
+    /// <c>&lt;root&gt;/&lt;identity&gt;/&lt;source&gt;/*.zip</c> — the layout CI's publish step
+    /// writes, one <c>&lt;source&gt;</c> subdirectory per producing repo — honouring the
+    /// completeness contract: only source directories sealed by
+    /// <see cref="CompletionSentinelFileName"/> are read, and only the bundles the sentinel
+    /// LISTS. Emits the number of assemblies adopted; inert (0, debug-logged) when the root is
+    /// not configured, and loud-but-degrading like <see cref="SeedAll"/> everywhere else — a
+    /// missing, torn, or partial publication only ever costs what today costs, a compile.
     /// </summary>
     /// <param name="mesh">The mesh hub (supplies the workspace, the I/O pool and the services).</param>
     /// <param name="publishedRoot">The published bundle root, or null/blank when the deployment
@@ -116,13 +135,58 @@ public static class ShippedPrebuiltBundles
                     "ShippedPrebuiltBundles: no CI-published bundles for framework identity "
                     + "{Identity} under {Root} — the sweep compiles instead",
                     identity, publishedRoot);
-            return SeedDirectory(mesh, dir, SearchOption.AllDirectories, logger);
+            return SeedBundles(mesh, dir, () => CompletePublishedBundlesOf(dir, logger), logger);
         });
 
-    /// <summary>The shared seeding core: every <c>*.zip</c> under <paramref name="dir"/>
-    /// (recursively for the published-root lane), through the one bundle pipeline.</summary>
-    private static IObservable<int> SeedDirectory(
-        IMessageHub mesh, string dir, SearchOption searchOption, ILogger? logger)
+    /// <summary>
+    /// The sentinel-gated bundle set of a published identity directory: for each
+    /// <c>&lt;source&gt;</c> subdirectory, exactly the bundles its
+    /// <see cref="CompletionSentinelFileName"/> lists — an unsealed directory (publish died
+    /// before the sentinel) or a listed-but-missing bundle (torn beyond the seal) skips that
+    /// WHOLE source, loudly, and the sweep compiles instead. Runs inside the seeding pool's
+    /// blocking leg.
+    /// </summary>
+    private static List<string> CompletePublishedBundlesOf(string identityDirectory, ILogger? logger)
+    {
+        var bundles = new List<string>();
+        foreach (var sourceDir in Directory
+                     .EnumerateDirectories(identityDirectory)
+                     .OrderBy(d => d, StringComparer.Ordinal))
+        {
+            var sentinel = Path.Combine(sourceDir, CompletionSentinelFileName);
+            if (!File.Exists(sentinel))
+            {
+                logger?.LogWarning(
+                    "ShippedPrebuiltBundles: {SourceDirectory} carries no {Sentinel} — the "
+                    + "publication is incomplete (it died before the seal); NOT seeding it, the "
+                    + "sweep compiles instead and the next CI publish re-publishes the source",
+                    sourceDir, CompletionSentinelFileName);
+                continue;
+            }
+            var listed = File.ReadAllLines(sentinel)
+                .Select(l => l.Trim())
+                .Where(l => l.Length > 0)
+                .OrderBy(l => l, StringComparer.Ordinal)
+                .Select(name => Path.Combine(sourceDir, name))
+                .ToList();
+            var missing = listed.Where(p => !File.Exists(p)).ToList();
+            if (missing.Count > 0)
+            {
+                logger?.LogWarning(
+                    "ShippedPrebuiltBundles: {SourceDirectory} is sealed but {Missing} listed "
+                    + "bundle(s) are absent (torn publication) — NOT seeding it, the sweep "
+                    + "compiles instead", sourceDir, missing.Count);
+                continue;
+            }
+            bundles.AddRange(listed);
+        }
+        return bundles;
+    }
+
+    /// <summary>The shared seeding core: the bundle files <paramref name="enumerateBundles"/>
+    /// resolves (on the pool's blocking leg), through the one bundle pipeline.</summary>
+    private static IObservable<int> SeedBundles(
+        IMessageHub mesh, string dir, Func<List<string>> enumerateBundles, ILogger? logger)
         => Observable.Defer(() =>
         {
             if (!Directory.Exists(dir))
@@ -148,10 +212,7 @@ public static class ShippedPrebuiltBundles
             return Observable.Using(
                     () => AccessContextScope.AsSystem(accessService),
                     _ => pool
-                        .InvokeBlocking(_ => Directory
-                            .EnumerateFiles(dir, "*.zip", searchOption)
-                            .OrderBy(f => f, StringComparer.Ordinal)
-                            .ToList())
+                        .InvokeBlocking(_ => enumerateBundles())
                         .SelectMany(bundles =>
                         {
                             if (bundles.Count == 0)

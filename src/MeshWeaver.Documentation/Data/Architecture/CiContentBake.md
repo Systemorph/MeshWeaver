@@ -105,12 +105,14 @@ adopted.
 Since #1660 WS3, `main-cd`'s **`publish-bake`** job downloads the Build-and-Test run's
 `baked-assemblies-*` artifact for the promoted commit and copies the bundles to the portals'
 shared storage (`.github/scripts/publish-bake-bundles.sh`), laid out
-`prebuilt-bundles/<identity>/<source>/<bundle>.zip`. Each booting pod seeds ONLY its own
-identity's directory (`ShippedPrebuiltBundles.SeedPublishedRoot`, config
-`PreWarm:PrebuiltBundleRoot`) before its sweep. "Rebuild only when we need to" applies to the
-publish too: when the identity's directory already holds the bundles — an internal-only merge
-resolves the same surface identity as its predecessor — the script skips with a notice instead of
-re-uploading. See [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)
+`prebuilt-bundles/<identity>/<source>/<bundle>.zip`, sealed by a `_complete` sentinel written
+strictly LAST. Each booting pod seeds ONLY its own identity's SEALED source directories
+(`ShippedPrebuiltBundles.SeedPublishedRoot`, config `PreWarm:PrebuiltBundleRoot`) before its
+sweep — an unsealed or torn publication (a publish that died mid-way) is refused loudly and the
+sweep compiles instead. "Rebuild only when we need to" applies to the publish too: when the
+identity's directory is already sealed — an internal-only merge resolves the same surface
+identity as its predecessor — the script skips with a notice instead of re-uploading. See
+[The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)
 for the job's preflight discipline and the dependent-repo dispatch.
 
 ## What this step does not do yet
