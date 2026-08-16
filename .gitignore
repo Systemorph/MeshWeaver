@@ -47,7 +47,13 @@ bld/
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/
-.vscode
+# .vscode stays ignored EXCEPT the three shared files below. Note the `/*`: a negation cannot
+# re-include anything under a directory that is itself excluded, so plain `.vscode` would make the
+# `!` lines below dead.
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
 # Uncomment if you have tasks that create the project's static files in wwwroot
 #wwwroot/
 
