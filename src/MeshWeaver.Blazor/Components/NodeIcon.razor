@@ -18,11 +18,11 @@
 
 @if (Resolved.Kind == IconRenderKind.InlineSvg)
 {
-    <span class="@Class" style="@SvgBoxStyle">@((MarkupString)MeshNodeImageHelper.SizeInlineSvg(Resolved.Value, Size))</span>
+    <span class="@Class" style="@SvgBoxStyle" role="@SpanRole" aria-label="@SpanLabel" aria-hidden="@SpanHidden">@((MarkupString)MeshNodeImageHelper.SizeInlineSvg(Resolved.Value, Size))</span>
 }
 else if (Resolved.Kind == IconRenderKind.Glyph)
 {
-    <span class="@Class" style="@GlyphStyle">@Resolved.Value</span>
+    <span class="@Class" style="@GlyphStyle" role="@SpanRole" aria-label="@SpanLabel" aria-hidden="@SpanHidden">@Resolved.Value</span>
 }
 else
 {
@@ -58,6 +58,18 @@ else
     public string Alt { get; set; } = "";
 
     private RenderableIcon Resolved => MeshNodeImageHelper.ResolveRenderable(Icon, Fallback);
+
+    // The <img> branch gets its semantics from alt="" (decorative) / alt="…" for free; the two <span>
+    // branches carry NO implicit role, so an emoji or an inline <svg> would otherwise be announced as
+    // stray content. Decorative (the default, Alt empty) → aria-hidden; named → role="img" + label.
+    // Blazor drops an attribute whose value is null, so each branch emits exactly one of the two.
+    private bool Decorative => string.IsNullOrEmpty(Alt);
+
+    private string? SpanRole => Decorative ? null : "img";
+
+    private string? SpanLabel => Decorative ? null : Alt;
+
+    private string? SpanHidden => Decorative ? "true" : null;
 
     private string ImageStyle => $"width: {Size}px; height: {Size}px; flex: 0 0 auto; object-fit: contain;{Style}";
 
