@@ -126,6 +126,28 @@ public record PackageManifest
     public ImmutableList<string> Requires { get; init; } = [];
 
     /// <summary>
+    /// The compiled MODULE this package delivers (#1664): the module's entry-assembly name WITHOUT
+    /// extension (e.g. <c>MeshWeaver.Social</c>) — the same identity <c>Modules:Assemblies</c>
+    /// entries and <c>modules/&lt;name&gt;/</c> folders use. Null (the default) = a pure content /
+    /// code package, which is every package before this field existed.
+    ///
+    /// <para>Non-null routes the package through the module funnel ON TOP of its normal content
+    /// install: after the content lands, the consumer fetches the package's bundle from the
+    /// registry's <c>/api/plugins/bundles</c>, verifies the framework MVID
+    /// (<c>PrebuiltAssemblySeeder.DeclineReason</c> — the ONE identity), and lands the module via
+    /// <c>ModuleLandingService</c> (restart-as-activation). The registry side serves the module's
+    /// bytes for any installed record carrying this field. A MIXED package — content nodes plus a
+    /// compiled module in one Store product (the MeshWeaver.SocialMedia shape) — is exactly this
+    /// field on an ordinary node-repo package.</para>
+    ///
+    /// <para>Authored on the plugin root's <c>content.module</c> (node-repo format) or a
+    /// <c>package.json</c>; read while listing (<see cref="NodeRepoPackageSource"/>) and carried
+    /// onto the install record by the ordinary record stamp, so the registry's bundle index can
+    /// offer the module without re-reading the repo.</para>
+    /// </summary>
+    public string? Module { get; init; }
+
+    /// <summary>
     /// The package is part of the platform's DEFAULT INSTALL: every instance that can see it in a
     /// catalog installs it automatically at startup (<see cref="InstanceAutoRegistrationService"/>),
     /// with public read established by the installer

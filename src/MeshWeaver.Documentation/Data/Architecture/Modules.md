@@ -133,6 +133,60 @@ none; the engine's package closure still rides the app via other references). Be
 DLL exists nowhere else, the closure lane also lays it into a plain build's output
 (`bin/…/modules/`), keeping `dotnet run` on a host working without a publish step.
 
+## The bundle lane — modules as Store packages (#1664)
+
+A compiled module reaches a deployment one of two ways: shipped in the image (the baseline above),
+or **installed from the Store as part of an ordinary package**. The second rides the plugin bundle
+transport end to end — there is deliberately no second distribution channel:
+
+1. **Declare** — the package's root `index.json` carries `content.module` naming the module's
+   entry-assembly (`"module": "MeshWeaver.Social"`). The listing reads it onto the catalog entry
+   (`PackageManifest.Module`) and the ordinary install-record stamp carries it onto the record. A
+   package with content nodes AND a module is one Store product — card, price, install funnel,
+   pre-install eligibility all unchanged.
+2. **Build** — `MeshWeaver.Plugin.Build`'s `module-pack` mode packs a built module's closure into
+   a bundle keyed to the framework MVID it was compiled against (read from the
+   `MeshWeaver.Graph.dll` in the build output — never guessed). It is a plain dotnet invocation
+   over an output folder, so ANY node repo's CI can drive it — SocialMedia builds its own module
+   bundle the same way the platform repo does. The closure is an explicit statement (`--with`),
+   never a folder scrape: a publish output contains the whole app closure, and bundling framework
+   assemblies would shadow the platform at the consumer.
+3. **Serve** — the registry portal's `/api/plugins/bundles` serves the module section inside the
+   SAME bundle that carries the package's NodeType assemblies (`meshweaver/modules/` beside
+   `meshweaver/assemblies/`, one manifest naming both). The registry serves a module's bytes from
+   its own `modules/<name>/` tree — the very bytes it loads and runs — and refuses to serve a
+   landing its own boot would skip (uninstalled, or framework-stale after its image roll). The
+   index stamps each bundle's `module` only when the bytes are actually servable, so a consumer
+   never downloads for a section that will not be there. Same instance-key auth, fail-closed.
+4. **Land** — on install (and on update), a consumer whose package declares a module fetches the
+   bundle, verifies the framework MVID (`PrebuiltAssemblySeeder.DeclineReason` — the one identity,
+   checked at the index, at the manifest, and again at placement), and lands it through
+   `ModuleLandingService` into `modules/<name>/` with its activation entry (version recorded).
+   Restart-as-activation as above: `PendingRestart` is the signal, the next restart loads it.
+
+### Auto-update
+
+Store-installed modules **update themselves by default**. The boot reconcile
+(`RegistryUpdateReconciler`) runs a module pass after the content pass: for every installed
+module-declaring package it consults the registry's bundle index and applies the one pure decision
+(`ModuleUpdateDecision`) — a newer version **for the running framework MVID** lands via
+`ModuleLandingService` and flags `PendingRestart`; the same served version is skipped without a
+download; a bundle for a **different** framework MVID is skipped silently-with-log (it becomes
+relevant after the next image roll, when the same reconcile re-lands current bytes — that re-land
+is also how a landing orphaned by an image roll heals). Nothing is ever rolled back unattended.
+
+The policy gate is the deployment's **existing update policy — `Admin/UpdatePolicy`**, the same
+single surface that governs the platform image roll; there is no module-specific knob.
+**Continuous — the platform default, and what an absent policy reads as — lands unattended;
+Stable and None decline the UPGRADE** (the catalog's manual Update still works there): a
+deployment that pins its image takes updates deliberately, and its modules do not run ahead of
+that choice. Two landings are deliberately policy-exempt, because gating them turns "no unattended
+updates" into "the module breaks": a **first landing** completes an install the operator's own
+surfaces already sanctioned, and the **image-roll heal** (re-landing the same version for the new
+framework MVID) keeps what was installed working after a roll the operator chose. The wiring is
+`IModuleUpdatePolicy` (`MeshWeaver.PluginCatalog`), implemented by the memex portals over the
+policy node; a host that registers no implementation gets the default (allowed).
+
 ## Modules and the in-mesh compiler
 
 In-mesh source compiles against the platform's `TRUSTED_PLATFORM_ASSEMBLIES` **plus this mesh's

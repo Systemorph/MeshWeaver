@@ -43,6 +43,13 @@ public sealed record ModuleActivationEntry
     /// bytes are ABI-stale, and the entry waits for a re-install against the new framework.</summary>
     public string? FrameworkMvid { get; init; }
 
+    /// <summary>The package version the landed bundle was served at (the module package's released
+    /// SemVer). What the auto-update reconcile compares against the registry's bundle index to
+    /// decide "already landed" without downloading a byte (<see cref="ModuleUpdateDecision"/>).
+    /// Null on an entry written before this field existed — which reads as "unknown", so the next
+    /// reconcile re-lands once and records it.</summary>
+    public string? Version { get; init; }
+
     /// <summary>False = uninstalled (the record is kept for history/idempotence; the folder is
     /// deleted). Takes effect at the next restart, like every activation change.</summary>
     public bool Enabled { get; init; } = true;
