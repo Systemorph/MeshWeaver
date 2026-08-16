@@ -309,10 +309,18 @@ jobs:
           newest=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
             --orderby time_desc --detail --top 20 \
             --query "[?contains(name, 'ci.')] | [0].lastUpdateTime" -o tsv 2>/dev/null || true)
+          # Fail-open must survive EVERY failure shape, including a timestamp `date -d` cannot
+          # parse: an error inside arithmetic expansion is fatal to the shell, which would fail
+          # this step — and the gate job with it — CLOSED. So the epoch parse is guarded on its
+          # own line and age_min only computed from a verified number (Copilot review, #1691).
+          age_min=999999
           if [ -n "$newest" ]; then
-            age_min=$(( ( $(date -u +%s) - $(date -u -d "$newest" +%s) ) / 60 ))
+            epoch=$(date -u -d "$newest" +%s 2>/dev/null || true)
+            case "$epoch" in
+              ''|*[!0-9]*) echo "::warning::Batching probe could not parse '$newest' — failing OPEN (this merge publishes)." ;;
+              *) age_min=$(( ( $(date -u +%s) - epoch ) / 60 )) ;;
+            esac
           else
-            age_min=999999
             echo "::warning::Batching probe could not read the registry — failing OPEN (this merge publishes)."
           fi
           echo "Newest published ci tag: ${newest:-<none>} (${age_min} min ago)"
