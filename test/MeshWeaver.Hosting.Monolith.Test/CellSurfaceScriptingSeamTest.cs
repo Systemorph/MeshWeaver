@@ -222,4 +222,40 @@ public class CellSurfaceScriptingSeamTest(ITestOutputHelper output) : MonolithMe
             "the failure must NAME the cell-surface owner");
         consumer.CompilationError.Should().Contain("single-home");
     }
+
+    [Fact(Timeout = 120_000)]
+    public async Task UnreadableOwner_DegradesLoudly_AndTheCompileProceeds()
+    {
+        // The gate's fail-open direction, pinned: the consumer's source set reaches into
+        // `type/GhostOwner/Source`, but NO NodeType node exists at `type/GhostOwner` — the
+        // bounded owner read emits null (absent and stalled are deliberately the same null).
+        // That must SKIP that owner's validation with a Warning, never fault the compile:
+        // a transient read blip may not park an innocent consumer.
+        await MeshService.CreateNode(new MeshNode("ghost", "type/GhostOwner/Source")
+        {
+            NodeType = "Code",
+            Name = "ghost",
+            Content = new CodeConfiguration
+            {
+                Code = """public static class GhostSharedApi { public static int Zero() => 0; }""",
+                Language = "csharp"
+            },
+            State = MeshNodeState.Active
+        }).Should().Within(30.Seconds()).Emit();
+
+        var consumer = await CreateAndCompile(
+            "type/GhostConsumer",
+            new NodeTypeDefinition
+            {
+                Configuration = "config => config.WithContentType<GhostConsumerContent>()",
+                Sources = ["namespace:Source scope:subtree", "shared=@type/GhostOwner/Source"]
+            },
+            ("own", """
+                public record GhostConsumerContent { public string Title { get; init; } = ""; }
+                """));
+
+        consumer.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            "an unreadable owner skips ITS single-home validation (logged loud) — it must never "
+            + $"turn into a compile failure; error: {consumer.CompilationError}");
+    }
 }

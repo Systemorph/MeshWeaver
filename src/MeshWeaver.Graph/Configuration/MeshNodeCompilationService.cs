@@ -1285,8 +1285,27 @@ internal class MeshNodeCompilationService(
         return owners
             .Select(owner => ReadCompileSourceNode(owner, ReadTimeoutBehavior.EmitNull)
                 .Take(1)
-                .Select(ownerNode => (Owner: owner,
-                    IsCellSurface: ownerNode.ContentAs<NodeTypeDefinition>(JsonOptions)?.CellSurface == true)))
+                .Select(ownerNode =>
+                {
+                    // EmitNull collapses "absent" and "stalled" into one null — deliberately, so
+                    // a transient mesh blip can never turn into a hard compile failure here (the
+                    // gate's fail-open direction, documented above). But the degradation must be
+                    // LOUD: a null owner read skips exactly this owner's single-home validation,
+                    // and if that owner really is cell-surface the CS0433 this gate exists to
+                    // prevent surfaces later in cells — this line is what ties that back here.
+                    if (ownerNode is null)
+                    {
+                        logger.LogWarning(
+                            "Cell-surface single-home gate for '{SelfPath}': the owning NodeType "
+                            + "'{Owner}' could not be read (absent or stalled) — skipping ITS "
+                            + "single-home validation for this compile; if '{Owner}' declares "
+                            + "cellSurface, re-compile once it is reachable",
+                            selfPath, owner, owner);
+                        return (Owner: owner, IsCellSurface: false);
+                    }
+                    return (Owner: owner,
+                        IsCellSurface: ownerNode.ContentAs<NodeTypeDefinition>(JsonOptions)?.CellSurface == true);
+                }))
             .Merge()
             .Where(t => t.IsCellSurface)
             .ToList()
