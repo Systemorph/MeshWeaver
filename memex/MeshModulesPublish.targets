@@ -70,7 +70,8 @@
     <MSBuild Projects="@(MeshModule)"
              Targets="Build"
              BuildInParallel="false"
-             Properties="Configuration=$(Configuration)">
+             Properties="Configuration=$(Configuration)"
+             RemoveProperties="RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed;PublishDir;PublishMeshModules;PrebuiltBakeDir">
       <Output TaskParameter="TargetOutputs" ItemName="_ModuleAssemblyBuilt" />
     </MSBuild>
 
@@ -139,7 +140,7 @@
     <Error Condition="'$(MeshModulesGuardAppRoot)' == 'true' And Exists('$(_AppDir)%(MeshModuleClosure.Filename).dll')"
            Text="LayoutMeshModuleClosures: %(MeshModuleClosure.Filename).dll is in the app publish root, but that module ships via modules/ only (#1644 step 2). Remove the re-added ProjectReference, or clean a stale publish directory." />
 
-    <!-- 🚨 RID-agnostic by design: every invocation below strips the outer publish's
+    <!-- 🚨 RID-agnostic by design: every module invocation in BOTH lanes (thin Build here included) strips the outer publish's
          RuntimeIdentifier(s), SelfContained, ContainerRuntimeIdentifier(s) and publish-mode globals (the exact RemoveProperties list below). Modules are portable IL —
          the app's shared framework provides the runtime, Assembly.LoadFrom never consults RID
          trees (the prune below deletes them), and a flipped module is OUTSIDE the host's restore
