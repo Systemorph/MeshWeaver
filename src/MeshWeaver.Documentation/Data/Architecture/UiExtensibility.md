@@ -146,12 +146,61 @@ in its `TypeRegistry` or it degrades to an untyped `JsonElement` and the area re
 | A named area on a node type | `LayoutDefinition.WithView(name, generator)` | the NodeType's configuration — in-mesh or compiled |
 | Default areas on every node | `AddDefaultLayoutAreas()` composition | core only — extending it puts your area on *every node in the mesh*; prefer a NodeType-scoped area |
 | A left-rail navigation for a node family | `INodeNavigationProvider` | DI singleton (pack) — claimed by node shape at render time |
-| A settings tab | `AddGlobalSettingsMenuItems(new GlobalSettingsMenuItemProvider(...))` | hub configuration (pack or plugin hub config) |
-| Node-menu entries / presentation | `AddNodeMenuItems(...)`; menu presentation is editable data (`MenuPresentationOverlay`) | hub configuration / mesh data |
+| A settings tab | a `UiContribution` node (`Context: Settings`) pointing at a layout area — or compiled `AddGlobalSettingsMenuItems(...)` for content that needs code | mesh data / hub configuration |
+| Node-menu entries / presentation | a `UiContribution` node (`Context: Node`/`Mesh`/`AI`/`SidePanel`/…) — or compiled `AddNodeMenuItems(...)`; presentation stays editable data (`MenuPresentationOverlay`) | mesh data / hub configuration |
+| A whole NEW top-bar menu | a `UiContribution` node (`Context: TopBar`) declaring the dropdown; entries target its key | mesh data — no code at all |
 | A home-screen tab | a `HomeTab` node | mesh data — no code at all |
 | Hub behaviour for a node type | `MeshNode.HubConfiguration` | works from in-mesh plugins at runtime |
 | Root services, nodes, hub + per-node-hub configuration, or a whole builder extension from a DLL | `MeshNodeProviderAttribute` (`Nodes` / `HubConfigurations` / `DefaultNodeHubConfigurations` / `BuilderConfigurations`) + `MeshBuilder.InstallAssemblies` | boot time only (`Modules:Assemblies`) |
 | Portal-hub config from a plugin (incl. views) | `WithPortalConfiguration(portal => …)` | the plugin's own hub configuration — at runtime |
+
+## Menus and settings tabs as data — `UiContribution` nodes
+
+The composition-first lane: a **menu entry, settings tab, or whole top-bar menu is a mesh node**
+(`nodeType: UiContribution`), so a plugin ships it as pack content and an admin edits it live —
+no build, no image, no rollout. One live query per silo (the `UiContributionCatalog`) feeds every
+per-node hub's menu aggregation; installing or updating a contribution changes every open menu
+reactively.
+
+**The security boundary.** Visibility is enforced by COMPILED code against a CLOSED vocabulary —
+a contribution can only ever NARROW its own visibility, never widen anything, and it never
+introduces a render surface: it points at a layout AREA that renders through the ordinary layout
+pipeline and its own access gates. Anything beyond the vocabulary stays in code.
+
+The full field surface:
+
+| Field | Meaning |
+|---|---|
+| `Context` | Which menu: `Node` (default), `Mesh`, `Settings`, `AI`, `SidePanel`, `GitHub`, any registered context — or `TopBar` (below) |
+| `Area` | The layout area the entry opens (settings: embedded into the pane; menus: the link target) |
+| `Href` | Optional explicit URL overriding the derived area link — catalog-style entries (`/search?…`, type-root pages) |
+| `Label` / `LabelKey` | Display text; the key resolves against the shared localization catalog |
+| `Icon` | String icon — settings tabs parse it via `Icon.Parse` (Fluent name/SVG/URL/emoji); menus render emoji or image URLs |
+| `Tooltip` / `TooltipKey` | Hover text (menus and top-bar buttons) |
+| `Order` | Sort position (default 100 — after the built-ins) |
+| `Group` / `GroupKey` / `GroupIcon` | Settings-tab grouping (entries sharing a group nest under its header) |
+| `RequiredPermission` | Checked against the viewer's LIVE effective permission on the anchoring node, floored at `Read`; anonymous sees nothing |
+| `Gates.NodeTypes` | Suffix-aware node-type filter (`"Slide"` matches `Publish/Slide`) |
+| `Gates.ExcludePartitionRoot` | Never on a protected partition root — the built-in suppression's own predicate |
+| `Gates.AdminOnly` | Platform admins only (`hub.IsGlobalAdmin()`, reactive) |
+
+**Settings tabs** (`Context: Settings`): the contributed area is embedded into the pane's styled
+stack; the tab id is the NODE id, so `/GlobalSettings/{id}` deep links stay stable when a compiled
+tab migrates to a same-named seed. The platform's own What's New / About / Privacy tabs ship this
+way (`Admin/UiContribution/*` seeds) — the reference implementation.
+
+**Whole top-bar menus** (`Context: TopBar`): the contribution declares a NEW dropdown — its `Area`
+names the menu's own context key, `Label`/`Icon`/`Order`/`Tooltip` style the button, and its
+entries are ordinary contributions targeting that key. The gates apply to the declaration itself
+(an `AdminOnly` menu disappears wholesale), and a menu with no visible entries renders nothing.
+The AI menu's catalog entries (Threads / Models / Tiers / Providers / Agents / Skills) are seeded
+contributions in the `AI` context; only imperative click-action entries (New thread, the side
+panel's new-chat/history/fullscreen) stay compiled — behavior, which the closed vocabulary
+deliberately cannot express.
+
+**Seeding**: platform-static seeds ride `MeshBuilder.AddMeshNodes(...)`
+(`AddPlatformSettingsTabContributions`, `AddAiMenuContributions`); a plugin just ships
+`UiContribution` nodes as pack content under its own namespace.
 
 ## What cannot be extended today
 
