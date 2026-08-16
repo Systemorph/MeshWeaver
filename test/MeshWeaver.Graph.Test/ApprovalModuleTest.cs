@@ -54,7 +54,10 @@ public class ApprovalModuleTest
         // The markdown overview embeds its Approvals section only when HasApprovals() is true —
         // the marker stays in Graph, the module sets it. One drifting apart of the two would
         // silently blank the section, so pin the pair here.
-        var configuration = ApprovalExtensions.ConfigureHub(
+        // Fully qualified: the legacy MeshWeaver.Graph.ApprovalExtensions (the restored in-mesh
+        // surface) shadows the module class from this namespace, and only the module class has
+        // the internal ConfigureHub.
+        var configuration = Approvals.ApprovalExtensions.ConfigureHub(
             new MessageHubConfiguration(null, new Address("test", "approvals")));
         configuration.HasApprovals().Should().BeTrue();
     }
