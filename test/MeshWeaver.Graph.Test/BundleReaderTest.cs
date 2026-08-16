@@ -176,12 +176,20 @@ public class BundleReaderTest
     public void AModuleBundleRoundTrips()
     {
         var bundle = WriteModuleBundle(
-            new { assemblyName = "MeshWeaver.Social", assemblies = new[] { "MeshWeaver.Social.dll" } },
+            new
+            {
+                assemblyName = "MeshWeaver.Social",
+                assemblies = new[] { "MeshWeaver.Social.dll" },
+                minMeshVersion = "3.0.0",
+            },
             ("MeshWeaver.Social.dll", "SOCIAL"u8.ToArray()));
 
         var (manifest, files) = BundleReader.ReadModule(bundle);
 
         Assert.Equal("MeshWeaver.Social", manifest!.Module!.AssemblyName);
+        // The consumer's landing gate — a platform FLOOR, not the manifest-level frameworkMvid
+        // (which stays the NodeType lane's strict gate and, for the module, diagnostics).
+        Assert.Equal("3.0.0", manifest.Module.MinMeshVersion);
         var only = Assert.Single(files);
         Assert.Equal("MeshWeaver.Social.dll", only.FileName);
         Assert.Equal("SOCIAL", Encoding.UTF8.GetString(only.Bytes));

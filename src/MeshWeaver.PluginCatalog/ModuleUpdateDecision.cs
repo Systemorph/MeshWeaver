@@ -33,9 +33,9 @@ public enum ModuleUpdateAction
     /// <summary>The landed module already matches the registry's bundle — nothing travels.</summary>
     SkipUpToDate,
 
-    /// <summary>The registry serves bundles for a DIFFERENT framework MVID — skipped
-    /// silently-with-log; the bundle becomes relevant after the next image roll.</summary>
-    SkipForeignFramework,
+    /// <summary>The bundle's declared <c>minMeshVersion</c> FLOOR exceeds the running platform —
+    /// skipped silently-with-log; the bundle becomes installable after the platform updates.</summary>
+    SkipPlatformBelowFloor,
 
     /// <summary>The deployment's update policy declines unattended landing (Stable/None).</summary>
     SkipPolicy,
@@ -61,26 +61,34 @@ public sealed record ModuleUpdateVerdict(ModuleUpdateAction Action, string? Reas
 /// THE decision "does this installed module package's bundle land, and why not otherwise" — pure,
 /// so the reconciler's behaviour is pinnable without a registry, a filesystem, or a mesh
 /// (#1664 Slice C). Every input is a fact the caller already holds; nothing here fetches.
+///
+/// <para><b>The platform gate is a semver FLOOR, never MVID equality.</b> Modules are ordinary
+/// .NET assemblies binding by simple name — their contract is API compatibility, which
+/// <c>minMeshVersion</c> expresses. A bundle built against an OLDER platform whose floor this
+/// deployment satisfies LANDS (the ex-post Store install across platform versions the lane exists
+/// for); MVID equality is bake semantics and stays with the NodeType assembly lane.</para>
 /// </summary>
 public static class ModuleUpdateDecision
 {
     /// <summary>
     /// Decides for one module-declaring installed package.
     ///
-    /// <para>Order matters and is deliberate: no-bundle before the framework gate (a registry that
-    /// serves nothing for this package says nothing about frameworks), the framework gate before
-    /// everything stateful (a foreign-MVID index makes every other question moot — and the skip is
-    /// silent-with-log, becoming relevant only after the next image roll), the uninstalled check
-    /// before up-to-date (a disabled entry may still carry the served version, and "up to date"
-    /// would misname the operator's choice), and the policy LAST — so a policy skip is only ever
-    /// reported when an update genuinely would have landed.</para>
+    /// <para>Order matters and is deliberate: no-bundle before the floor gate (a registry that
+    /// serves nothing for this package declares no floor to check), the floor gate before
+    /// everything stateful (an uninstallable bundle makes every other question moot — and the
+    /// skip is silent-with-log, becoming relevant when the platform updates), the uninstalled
+    /// check before up-to-date (a disabled entry may still carry the served version, and "up to
+    /// date" would misname the operator's choice), and the policy LAST — so a policy skip is only
+    /// ever reported when an update genuinely would have landed.</para>
     /// </summary>
     /// <param name="bundleVersion">The version the registry's bundle index serves for this package,
     /// or null when it lists no bundle.</param>
-    /// <param name="registryFrameworkMvid">The framework MVID the registry's index advertises.</param>
-    /// <param name="frameworkGate">Returns WHY a framework identity may not load here, or null when
-    /// it may — production passes <c>PrebuiltAssemblySeeder.DeclineReason</c> so there is never a
-    /// second notion of framework identity.</param>
+    /// <param name="bundleMinMeshVersion">The bundle's declared platform floor, as the index
+    /// surfaces it. Null = no constraint.</param>
+    /// <param name="platformGate">Returns WHY a declared floor is not satisfied by the running
+    /// platform, or null when it is — production passes
+    /// <see cref="ModulePlatformFloor.DeclineReason(string?)"/> so there is never a second notion
+    /// of the module platform requirement.</param>
     /// <param name="landed">This deployment's activation entry for the module, or null when it was
     /// never landed (which includes "installed before the module lane existed" — those heal by
     /// landing).</param>
@@ -89,8 +97,8 @@ public static class ModuleUpdateDecision
     /// registered — the platform default is auto-update).</param>
     public static ModuleUpdateVerdict Decide(
         string? bundleVersion,
-        string? registryFrameworkMvid,
-        Func<string?, string?> frameworkGate,
+        string? bundleMinMeshVersion,
+        Func<string?, string?> platformGate,
         ModuleActivationEntry? landed,
         string? policyDecline)
     {
@@ -98,53 +106,41 @@ public static class ModuleUpdateDecision
             return new(ModuleUpdateAction.SkipNoBundle,
                 "the registry lists no bundle for this package");
 
-        if (frameworkGate(registryFrameworkMvid) is { } foreign)
-            return new(ModuleUpdateAction.SkipForeignFramework, foreign);
+        if (platformGate(bundleMinMeshVersion) is { } belowFloor)
+            return new(ModuleUpdateAction.SkipPlatformBelowFloor, belowFloor);
 
         if (landed is { Enabled: false })
             return new(ModuleUpdateAction.SkipUninstalled,
                 "the module was uninstalled on this deployment; an unattended update must not "
                 + "re-install it");
 
-        // Already landed, still loadable against the RUNNING framework, and at the served version:
-        // nothing travels. A landed entry whose recorded MVID the gate refuses is NOT up to date —
-        // its bytes stopped loading at the last image roll, and re-landing current ones is exactly
-        // the heal this lane exists for.
+        // Already landed at the served version: nothing travels. The version alone keys this —
+        // landed bytes stay loadable across platform builds (simple-name binding), so there is no
+        // "re-land the same version for a new build" case.
         if (landed is { } current
-            && frameworkGate(current.FrameworkMvid) is null
             && string.Equals(current.Version, bundleVersion, StringComparison.OrdinalIgnoreCase))
             return new(ModuleUpdateAction.SkipUpToDate,
-                $"version {bundleVersion} is already landed for the running framework");
+                $"version {bundleVersion} is already landed");
 
         // Never roll BACK unattended: a registry serving an older version than what is landed is a
         // deliberate operator situation (a pinned rollback, a lagging registry), and silently
-        // downgrading a running deployment is not this lane's call. Only comparable when the landed
-        // bytes still load here — stale-MVID bytes are dead weight whatever their version says.
+        // downgrading a running deployment is not this lane's call.
         if (landed is { Version.Length: > 0 } newer
-            && frameworkGate(newer.FrameworkMvid) is null
             && NuGetVersionComparer.Instance.Compare(bundleVersion, newer.Version) < 0)
             return new(ModuleUpdateAction.SkipOlder,
                 $"the registry serves {bundleVersion} but {newer.Version} is landed — never "
                 + "rolled back unattended");
 
-        // 🚨 The policy gates UPGRADES ONLY — a loadable landing moving to a different version.
-        // Two landings are deliberately EXEMPT, because gating them turns "no unattended updates"
-        // into "the module breaks":
-        //   • a FIRST landing (landed == null) COMPLETES an install the operator's own surfaces
-        //     already sanctioned (a Provision click, the default-install config) — withholding it
-        //     ships a package whose binary half never arrives;
-        //   • a stale-MVID RE-LAND heals an image roll the operator chose: the old bytes stopped
-        //     loading with that roll, and refusing the heal leaves the module dead until someone
-        //     notices. Keeping what was installed WORKING is not an update.
-        if (policyDecline is not null
-            && landed is { } upgraded
-            && frameworkGate(upgraded.FrameworkMvid) is null)
+        // 🚨 The policy gates UPGRADES ONLY — an existing landing moving to a different version.
+        // A FIRST landing (landed == null) is deliberately EXEMPT: it COMPLETES an install the
+        // operator's own surfaces already sanctioned (a Provision click, the default-install
+        // config), and gating it would ship a package whose binary half never arrives.
+        if (policyDecline is not null && landed is not null)
             return new(ModuleUpdateAction.SkipPolicy, policyDecline);
 
         return new(ModuleUpdateAction.Land,
             landed is null
                 ? $"never landed here — landing {bundleVersion}"
-                : $"landing {bundleVersion} (current: {landed.Version ?? "unknown"}"
-                  + (frameworkGate(landed.FrameworkMvid) is null ? ")" : ", framework-stale)"));
+                : $"landing {bundleVersion} (current: {landed.Version ?? "unknown"})");
     }
 }

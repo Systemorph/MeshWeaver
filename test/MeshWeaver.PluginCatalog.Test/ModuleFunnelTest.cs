@@ -46,7 +46,7 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 services.AddSingleton(new ModuleLandingService(baseDirectory: landingRoot)));
     }
 
-    private static byte[] ModuleBundle(string frameworkMvid)
+    private static byte[] ModuleBundle(string frameworkMvid, string? minMeshVersion = null)
     {
         var manifestJson = JsonSerializer.Serialize(new
         {
@@ -57,6 +57,7 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             {
                 assemblyName = "MeshWeaver.Social",
                 assemblies = new[] { "MeshWeaver.Social.dll" },
+                minMeshVersion,
             },
         });
 
@@ -75,18 +76,22 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
     /// <summary>
-    /// The consumer's land half, without HTTP: a bundle carrying the RUNNING framework's MVID lands
-    /// into <c>modules/&lt;name&gt;/</c> with its activation entry — version recorded, restart
-    /// flagged — which is exactly what boot's activation union then loads.
+    /// The consumer's land half, without HTTP — and the design decision of the lane in one pin: a
+    /// bundle built against a DIFFERENT platform build (a deliberately foreign MVID), whose
+    /// declared <c>minMeshVersion</c> floor this deployment satisfies, LANDS into
+    /// <c>modules/&lt;name&gt;/</c> with its activation entry — version + floor recorded, MVID
+    /// kept as diagnostics, restart flagged. That is the ex-post Store install across platform
+    /// versions that MVID equality (bake semantics, the NodeType lane's gate) would forbid.
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task ABundleForTheRunningFramework_LandsIntoTheModulesTree()
+    public async Task ABundleFromAnotherPlatformBuild_WithItsFloorSatisfied_Lands()
     {
         var client = new PluginBundleClient(Mesh, "http://registry.invalid");
+        var foreignBuild = Guid.NewGuid().ToString("N");
 
         var landed = await client
             .LandFromBundle("SocialMedia", "MeshWeaver.Social", "Plugins/SocialMedia", "1.2.0",
-                ModuleBundle(LiveFrameworkMvid))
+                ModuleBundle(foreignBuild, minMeshVersion: "0.0.1"))
             .FirstAsync().ToTask();
 
         landed.Should().Be(1);
@@ -99,26 +104,29 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         entry.Name.Should().Be("MeshWeaver.Social");
         entry.Version.Should().Be("1.2.0",
             "the recorded version is what lets the reconcile answer 'already landed' without a download");
+        entry.MinMeshVersion.Should().Be("0.0.1", "boot and the serve side re-check the floor");
         entry.PackagePath.Should().Be("Plugins/SocialMedia");
-        entry.FrameworkMvid.Should().Be(LiveFrameworkMvid);
+        entry.FrameworkMvid.Should().Be(foreignBuild,
+            "the built-against MVID rides along as diagnostics, never as a gate");
         list.PendingRestart.Should().BeTrue("restart-as-activation — nothing loads into the running process");
 
         Directory.Delete(landingRoot, recursive: true);
     }
 
     /// <summary>
-    /// 🚨 The MVID gate at the client: a bundle built against a DIFFERENT framework is refused
-    /// before a byte reaches disk — the refusal is a logged zero, never a failed install, because
-    /// the bundle becomes relevant after the next image roll and nothing is wrong today.
+    /// 🚨 The floor gate at the client: a bundle whose declared platform requirement exceeds this
+    /// deployment is refused before a byte reaches disk — the refusal is a logged zero, never a
+    /// failed install, because the bundle becomes installable after the platform updates and
+    /// nothing is wrong today.
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task ABundleForAForeignFramework_IsRefused_NothingReachesDisk()
+    public async Task ABundleWhoseFloorExceedsThisPlatform_IsRefused_NothingReachesDisk()
     {
         var client = new PluginBundleClient(Mesh, "http://registry.invalid");
 
         var landed = await client
             .LandFromBundle("SocialMedia", "MeshWeaver.Social", "Plugins/SocialMedia", "1.2.0",
-                ModuleBundle(Guid.NewGuid().ToString("N")))
+                ModuleBundle(LiveFrameworkMvid, minMeshVersion: "999.0.0"))
             .FirstAsync().ToTask();
 
         landed.Should().Be(0);
@@ -145,6 +153,7 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             SourceFolder = "SocialMedia",
             Version = "c1",
             Module = "MeshWeaver.Social",
+            MinMeshVersion = "3.0.0",
         };
         IReadOnlyList<PackageFile> files =
         [
@@ -160,9 +169,11 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             .Take(1).ToTask();
 
         record.Should().NotBeNull();
-        record!.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)!.Module
-            .Should().Be("MeshWeaver.Social",
-                "the record is what the registry's bundle index serves modules from");
+        var content = record!.ContentAs<PackageManifest>(Mesh.JsonSerializerOptions)!;
+        content.Module.Should().Be("MeshWeaver.Social",
+            "the record is what the registry's bundle index serves modules from");
+        content.MinMeshVersion.Should().Be("3.0.0",
+            "the floor rides the record so the index can surface it without re-reading the repo");
 
         Directory.Delete(landingRoot, recursive: true);
     }
@@ -179,7 +190,7 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             (_, _, _, _) => Observable.Return(new RepoSnapshot("c1",
             [
                 new RepoFile("SocialMedia/index.json",
-                    """{"nodeType":"Space","name":"Social Media","content":{"module":"MeshWeaver.Social"}}"""),
+                    """{"nodeType":"Space","name":"Social Media","content":{"module":"MeshWeaver.Social","minMeshVersion":"3.0.0"}}"""),
                 new RepoFile("Plain/index.json",
                     """{"nodeType":"Space","name":"Plain","content":{}}"""),
             ])),
@@ -187,7 +198,9 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         var packages = await source.ListPackages("HEAD").FirstAsync().ToTask();
 
-        packages.Single(p => p.Id == "SocialMedia").Module.Should().Be("MeshWeaver.Social");
+        var social = packages.Single(p => p.Id == "SocialMedia");
+        social.Module.Should().Be("MeshWeaver.Social");
+        social.MinMeshVersion.Should().Be("3.0.0", "the floor is the module lane's landing gate");
         packages.Single(p => p.Id == "Plain").Module.Should().BeNull(
             "a package that declares no module must never enter the module funnel");
 

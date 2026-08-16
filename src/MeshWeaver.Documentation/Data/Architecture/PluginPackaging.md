@@ -161,7 +161,7 @@ A package that delivers a **compiled module** (its root's `content.module` names
 assembly) carries the module's closure in the SAME bundle, under its own folder:
 
 ```
-├── meshweaver/manifest.json          … + module: { assemblyName, assemblies[] }
+├── meshweaver/manifest.json          … + module: { assemblyName, assemblies[], minMeshVersion }
 ├── meshweaver/assemblies/<Unit>.dll  NodeType lane (assembly store, per-node ALC)
 └── meshweaver/modules/<File>.dll     module lane (modules/<name>/ beside the app, default ALC)
 ```
@@ -173,14 +173,23 @@ both manifest-driven, and the module side is **all-or-nothing** (a NodeType with
 simply compiles; a module missing part of its closure loads and then faults at first use, so an
 incomplete closure yields no files at all).
 
-Producing a module bundle in CI — from any node repo, keyed to the framework MVID the module was
-actually compiled against (read from the `MeshWeaver.Graph.dll` in the build output; there is no
-default and no version-string fallback):
+**The module gate is a `minMeshVersion` FLOOR, not the MVID.** The MVID-equality rule above is
+*bake* semantics: a NodeType assembly is compiled in-process against exact framework references,
+so only the identical build is known-good. A module is an ordinary assembly binding by **simple
+name**; its contract is API compatibility, which the semver floor expresses. So the consumer lands
+any bundle whose floor its platform satisfies — one bundle serves every compatible platform build
+(nothing is rebundled per CI build), and a module can be installed **ex post** onto a platform
+newer than the one it was built with. The bundle still records its built-against `frameworkMvid`
+as **diagnostic metadata** — logged at landing, surfaced in the index — never a refusal. The one
+gate is `ModulePlatformFloor.DeclineReason`, applied at the index, at the manifest, at placement,
+and again at boot.
+
+Producing a module bundle in CI — from any node repo:
 
 ```
 dotnet run --project src/MeshWeaver.Plugin.Build -- module-pack ./bin/Release/net10.0 \
     --module-name MeshWeaver.Social --plugin SocialMedia --package-version 1.2.0 \
-    --out ./artifacts/bundles
+    --min-mesh-version 3.0.0 --out ./artifacts/bundles
 ```
 
 The closure is an explicit statement: `<name>.dll` (+ `.pdb`), plus only the files named with

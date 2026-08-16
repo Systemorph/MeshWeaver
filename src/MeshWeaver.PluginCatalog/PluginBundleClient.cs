@@ -85,7 +85,11 @@ public sealed class PluginBundleClient
     /// <param name="Url">Absolute download URL.</param>
     /// <param name="Module">The compiled module the bundle carries (its entry-assembly name), or
     /// null for a NodeType-only bundle (#1664). Additive: an older registry simply omits it.</param>
-    public sealed record BundleRef(string Plugin, string Version, string Url, string? Module = null);
+    /// <param name="MinMeshVersion">The module's declared platform FLOOR — surfaced on the index
+    /// so a consumer can skip an uninstallable bundle without downloading it. Null = none.</param>
+    public sealed record BundleRef(
+        string Plugin, string Version, string Url, string? Module = null,
+        string? MinMeshVersion = null);
 
     /// <summary>
     /// Reads the registry's bundle index. Emits an empty index rather than throwing when the
@@ -155,9 +159,12 @@ public sealed class PluginBundleClient
     /// <see cref="Adopt"/>, riding the same index, the same download route and the same MVID gate.
     ///
     /// <para>The whole decision is <see cref="ModuleUpdateDecision.Decide"/>, taken BEFORE any
-    /// download: an up-to-date module, a foreign-framework registry, an uninstalled module and a
-    /// policy-declined unattended run each cost zero bytes. Landing goes through
-    /// <see cref="ModuleLandingService"/> (restart-as-activation — the sidecar's
+    /// download: an up-to-date module, a bundle whose platform floor this deployment does not
+    /// satisfy, an uninstalled module and a policy-declined unattended run each cost zero bytes.
+    /// The gate is the <c>minMeshVersion</c> FLOOR (<see cref="ModulePlatformFloor"/>), never MVID
+    /// equality — that strict gate is the NodeType lane's (<see cref="Adopt"/>); a module built
+    /// against a different platform build lands fine as long as its floor is satisfied. Landing
+    /// goes through <see cref="ModuleLandingService"/> (restart-as-activation — the sidecar's
     /// <c>PendingRestart</c> is the step-10 signal); the module LOADS at the next restart.</para>
     ///
     /// <para>Emits how many module files were landed — zero is a normal, non-error outcome (nothing
@@ -201,8 +208,8 @@ public sealed class PluginBundleClient
                             string.Equals(e.Name, moduleName, StringComparison.OrdinalIgnoreCase));
 
                         var verdict = ModuleUpdateDecision.Decide(
-                            bundle?.Version, index.FrameworkMvid,
-                            PrebuiltAssemblySeeder.DeclineReason, entry, declined);
+                            bundle?.Version, bundle?.MinMeshVersion,
+                            ModulePlatformFloor.DeclineReason, entry, declined);
 
                         if (verdict.Action != ModuleUpdateAction.Land)
                         {
@@ -232,11 +239,12 @@ public sealed class PluginBundleClient
     }
 
     /// <summary>
-    /// Reads the downloaded bundle's module section and lands it. The MVID is verified AGAIN here,
-    /// against the manifest inside the archive — the index said what the registry runs, the
-    /// manifest says what these bytes were built with, and only the second is the gate that holds
-    /// (<see cref="ModuleLandingService"/> re-checks it a third time at placement; declining twice
-    /// is cheaper than debugging a TypeLoadException once).
+    /// Reads the downloaded bundle's module section and lands it. The platform FLOOR is verified
+    /// AGAIN here, against the manifest inside the archive — the index said what the registry
+    /// advertises, the manifest says what these bytes require, and only the second is the gate
+    /// that holds (<see cref="ModuleLandingService"/> re-checks it a third time at placement;
+    /// declining twice is cheaper than debugging a MissingMethodException once). The MVID the
+    /// bundle records is logged as DIAGNOSTIC metadata, never refused.
     /// </summary>
     // Internal for the ModuleFunnelTest pin (InternalsVisibleTo): the land half without HTTP.
     internal IObservable<int> LandFromBundle(
@@ -246,7 +254,7 @@ public sealed class PluginBundleClient
             {
                 var (manifest, files) = payload;
 
-                if (PrebuiltAssemblySeeder.DeclineReason(manifest?.FrameworkMvid) is { } reason)
+                if (ModulePlatformFloor.DeclineReason(manifest?.Module?.MinMeshVersion) is { } reason)
                 {
                     _logger?.LogInformation(
                         "Module bundle for {Plugin} DECLINED: {Reason} — nothing landed",
@@ -278,9 +286,12 @@ public sealed class PluginBundleClient
                     .LandModule(
                         moduleName,
                         files.Select(f => (f.FileName, f.Bytes)).ToArray(),
-                        manifest!.FrameworkMvid!,
+                        // Diagnostic metadata (which exact platform build produced these bytes),
+                        // recorded on the activation entry and logged at landing — never a gate.
+                        manifest!.FrameworkMvid,
                         packagePath,
-                        version)
+                        version,
+                        manifest.Module?.MinMeshVersion)
                     .Select(_ => files.Count)
                     .Do(count => _logger?.LogInformation(
                         "Module '{Module}' of {Plugin} landed ({Count} file(s), version {Version}) "

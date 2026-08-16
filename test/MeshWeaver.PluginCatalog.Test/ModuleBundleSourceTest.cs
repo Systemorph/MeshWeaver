@@ -11,17 +11,17 @@ namespace MeshWeaver.PluginCatalog.Test;
 /// <summary>
 /// The registry's serve rules for module bundles (#1664 Slice C, the serving half): a registry may
 /// only fan out module bytes it could load itself — its own <c>modules/&lt;name&gt;/</c> tree,
-/// gated on the activation sidecar exactly as boot is.
+/// gated on the activation sidecar exactly as boot is (the platform FLOOR; the recorded MVID is
+/// diagnostic and never withholds a serve).
 /// </summary>
 public class ModuleBundleSourceTest : IDisposable
 {
     private readonly string baseDirectory =
         Path.Combine(Path.GetTempPath(), "mw-bundle-src-" + Guid.NewGuid().ToString("N"));
 
-    private const string LiveMvid = "aaaa0000aaaa0000aaaa0000aaaa0000";
-
-    private static string? Gate(string? mvid) =>
-        string.Equals(mvid, LiveMvid, StringComparison.Ordinal) ? null : $"stale ({mvid})";
+    /// <summary>The production gate bound to a fixed running platform version.</summary>
+    private static string? Gate(string? floor) =>
+        ModulePlatformFloor.DeclineReason(floor, "3.2.0");
 
     public ModuleBundleSourceTest() => Directory.CreateDirectory(baseDirectory);
 
@@ -62,13 +62,16 @@ public class ModuleBundleSourceTest : IDisposable
     }
 
     [Fact]
-    public void AStoreLandedModuleWithTheRunningFramework_IsServed()
+    public void AStoreLandedModuleWhoseFloorIsSatisfied_IsServed()
     {
         LayOut("MeshWeaver.Social");
 
         var (files, decline) = ModuleBundleSource.Collect(
             baseDirectory, "MeshWeaver.Social",
-            Activation(new ModuleActivationEntry { Name = "MeshWeaver.Social", FrameworkMvid = LiveMvid }),
+            Activation(new ModuleActivationEntry
+            {
+                Name = "MeshWeaver.Social", MinMeshVersion = "3.0.0",
+            }),
             Gate);
 
         Assert.Null(decline);
@@ -76,20 +79,46 @@ public class ModuleBundleSourceTest : IDisposable
     }
 
     [Fact]
-    public void AFrameworkStaleLanding_IsRefused()
+    public void ALandingBuiltByAnotherPlatformBuild_IsStillServed_TheMvidIsDiagnostic()
     {
-        // The registry itself rolled its image since it landed this module: the folder holds bytes
-        // the registry's OWN boot skips, and serving them would hand a consumer assemblies stamped
-        // with a framework neither side runs.
+        // The landing records which exact build produced the bytes — but modules bind by simple
+        // name, so those bytes load (and therefore serve) on every platform satisfying their
+        // floor. Under the old MVID-equality rule this landing went dark on the registry's first
+        // image roll, which is precisely the bake semantics the module lane rejects.
         LayOut("MeshWeaver.Social");
 
         var (files, decline) = ModuleBundleSource.Collect(
             baseDirectory, "MeshWeaver.Social",
-            Activation(new ModuleActivationEntry { Name = "MeshWeaver.Social", FrameworkMvid = "ffff" }),
+            Activation(new ModuleActivationEntry
+            {
+                Name = "MeshWeaver.Social",
+                FrameworkMvid = "ffff9999ffff9999ffff9999ffff9999",
+                MinMeshVersion = "3.0.0",
+            }),
+            Gate);
+
+        Assert.Null(decline);
+        Assert.Single(files);
+    }
+
+    [Fact]
+    public void ALandingWhoseFloorExceedsTheRunningPlatform_IsRefused()
+    {
+        // The platform rolled BACK below the module's declared requirement: these are exactly the
+        // bytes this instance's own boot union skips, and a registry must never fan out a module
+        // it could not load itself.
+        LayOut("MeshWeaver.Social");
+
+        var (files, decline) = ModuleBundleSource.Collect(
+            baseDirectory, "MeshWeaver.Social",
+            Activation(new ModuleActivationEntry
+            {
+                Name = "MeshWeaver.Social", MinMeshVersion = "9.0.0",
+            }),
             Gate);
 
         Assert.Empty(files);
-        Assert.Contains("stale", decline);
+        Assert.Contains("9.0.0", decline);
     }
 
     [Fact]
@@ -101,7 +130,7 @@ public class ModuleBundleSourceTest : IDisposable
             baseDirectory, "MeshWeaver.Social",
             Activation(new ModuleActivationEntry
             {
-                Name = "MeshWeaver.Social", FrameworkMvid = LiveMvid, Enabled = false,
+                Name = "MeshWeaver.Social", Enabled = false,
             }),
             Gate);
 

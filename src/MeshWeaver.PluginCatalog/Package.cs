@@ -148,6 +148,18 @@ public record PackageManifest
     public string? Module { get; init; }
 
     /// <summary>
+    /// The package's declared platform FLOOR (<c>content.minMeshVersion</c> — the field plugin
+    /// authors already write): the minimum MeshWeaver version its compiled module requires. For a
+    /// module-declaring package this is THE landing gate
+    /// (<see cref="ModulePlatformFloor.DeclineReason(string?)"/>) — deliberately a semver floor,
+    /// never MVID equality, because a module is a plain assembly binding by simple name whose
+    /// contract is API compatibility. Null = no constraint (most modules need none). Carried onto
+    /// the install record and surfaced on the registry's bundle index so a consumer skips an
+    /// uninstallable bundle without downloading it.
+    /// </summary>
+    public string? MinMeshVersion { get; init; }
+
+    /// <summary>
     /// The package is part of the platform's DEFAULT INSTALL: every instance that can see it in a
     /// catalog installs it automatically at startup (<see cref="InstanceAutoRegistrationService"/>),
     /// with public read established by the installer
