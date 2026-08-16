@@ -165,4 +165,77 @@ public class MeshNodeImageHelperTest
             .Should().Contain(resource,
                 "a skill already points at /static/NodeTypeIcons/{0}.svg — without the asset it is a broken image", name);
     }
+
+    // ── ResolveRenderable: every icon form gets the element it needs, never a broken <img> ────
+
+    /// <summary>The standard glyph a thread surface passes as the fallback.</summary>
+    private const string ThreadIcon = "/static/NodeTypeIcons/chat.svg";
+
+    /// <summary>
+    /// 🚨 THE BUG THIS FIXES. Every thread node carries a <c>ThreadIconGenerator</c> identicon —
+    /// raw inline <c>&lt;svg&gt;</c>, not a URL — and the delegated-sub-thread chip put it straight
+    /// into <c>&lt;img src="…"&gt;</c>, so the browser drew its broken-image glyph. Inline SVG must
+    /// classify as markup, and the value must survive verbatim.
+    /// </summary>
+    [Fact]
+    public void AnInlineSvgIcon_RendersAsMarkup_NeverAsAnImageSource()
+    {
+        const string identicon =
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 80 80\"><rect width=\"80\" height=\"80\" rx=\"16\" fill=\"#eae5f5\"/></svg>";
+
+        var resolved = MeshNodeImageHelper.ResolveRenderable(identicon, ThreadIcon);
+
+        resolved.Kind.Should().Be(IconRenderKind.InlineSvg);
+        resolved.Value.Should().Be(identicon);
+    }
+
+    [Theory]
+    [InlineData("/static/NodeTypeIcons/bot.svg")]
+    [InlineData("https://example.com/avatar.png")]
+    [InlineData("data:image/png;base64,abc")]
+    public void AUrlIcon_RendersAsAnImage(string icon)
+        => MeshNodeImageHelper.ResolveRenderable(icon, ThreadIcon)
+            .Should().Be(new RenderableIcon(IconRenderKind.Image, icon));
+
+    [Theory]
+    [InlineData("🎯")]
+    [InlineData("➕")]
+    public void AnEmojiIcon_RendersAsText(string icon)
+        => MeshNodeImageHelper.ResolveRenderable(icon, ThreadIcon)
+            .Should().Be(new RenderableIcon(IconRenderKind.Glyph, icon));
+
+    /// <summary>A legacy Fluent NAME is renderable only where a glyph of that name is shipped.</summary>
+    [Fact]
+    public void AFluentName_RendersAsItsShippedGlyph()
+        => MeshNodeImageHelper.ResolveRenderable("Sparkle", ThreadIcon)
+            .Should().Be(new RenderableIcon(IconRenderKind.Image, "/static/NodeTypeIcons/sparkle.svg"));
+
+    /// <summary>
+    /// The other half of the bug: a Fluent name with no shipped glyph used to become
+    /// <c>&lt;img src="DocumentPdf"&gt;</c>. It has to yield the caller's standard icon instead.
+    /// </summary>
+    [Fact]
+    public void AFluentName_WithNoShippedGlyph_FallsBackToTheStandardIcon()
+        => MeshNodeImageHelper.ResolveRenderable("NoSuchIconNameAtAll", ThreadIcon)
+            .Should().Be(new RenderableIcon(IconRenderKind.Image, ThreadIcon));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void NoIcon_FallsBackToTheStandardIcon(string? icon)
+        => MeshNodeImageHelper.ResolveRenderable(icon, ThreadIcon)
+            .Should().Be(new RenderableIcon(IconRenderKind.Image, ThreadIcon));
+
+    /// <summary>
+    /// Total, so no caller can produce a broken icon: with neither a usable icon NOR a usable
+    /// fallback, the neutral box glyph still comes out.
+    /// </summary>
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", "")]
+    [InlineData("NoSuchIconNameAtAll", "AlsoNotAnIcon")]
+    public void NeitherIconNorFallback_StillYieldsTheNeutralGlyph(string? icon, string? fallback)
+        => MeshNodeImageHelper.ResolveRenderable(icon, fallback)
+            .Should().Be(new RenderableIcon(IconRenderKind.Image, "/static/NodeTypeIcons/box.svg"));
 }

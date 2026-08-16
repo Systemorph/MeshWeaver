@@ -703,21 +703,11 @@ button.thread-chat-status-item {
     transition: background 80ms ease, border-color 80ms ease;
 }
 
-.thread-chat-widget-item-icon {
-    flex: 0 0 auto;
-    width: 18px;
-    height: 18px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+/* The icon is rendered by <NodeIcon>, which sizes itself inline and lives in its OWN CSS-isolation
+   scope — so every rule that styles it has to be anchored on an element of THIS component and reach
+   through with ::deep. Only the decoration lives here; width/height come from NodeIcon's Size. */
+.thread-chat-widget-item ::deep .thread-chat-widget-item-icon {
     color: var(--neutral-foreground-hint);
-}
-
-.thread-chat-widget-item-icon :deep(svg),
-.thread-chat-widget-item-icon img,
-.thread-chat-widget-item-icon svg {
-    width: 18px;
-    height: 18px;
 }
 
 .thread-chat-widget-item-text {
@@ -803,10 +793,7 @@ button.thread-chat-status-item {
     border-top: 1px solid var(--neutral-stroke-divider-rest);
 }
 
-.thread-chat-widget-group-icon {
-    width: 14px;
-    height: 14px;
-    flex: 0 0 auto;
+.thread-chat-widget-group ::deep .thread-chat-widget-group-icon {
     opacity: 0.8;
 }
 
@@ -1395,10 +1382,7 @@ button.thread-chat-status-item {
     color: var(--error-foreground-rest, #d93636);
 }
 
-.thread-msg-tool-delegation-icon {
-    width: 14px;
-    height: 14px;
-    flex: 0 0 auto;
+.thread-msg-tool-delegation ::deep .thread-msg-tool-delegation-icon {
     opacity: 0.85;
 }
 
@@ -1501,12 +1485,10 @@ button.thread-chat-status-item {
     background: color-mix(in srgb, var(--accent-fill-rest) 8%, var(--neutral-layer-3));
 }
 
-.thread-runtime-subthread-icon {
-    width: 24px;
-    height: 24px;
+.thread-runtime-subthread-card ::deep .thread-runtime-subthread-icon {
     border-radius: 6px;
-    flex: 0 0 auto;
     opacity: 0.9;
+    overflow: hidden;
 }
 
 .thread-runtime-subthread-body {
