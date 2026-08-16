@@ -1085,7 +1085,8 @@ internal static class NodeTypeCompilationHelpers
         NodeCompilationResult result,
         long currentNodeVersion,
         string? activityPath,
-        string? releasePath)
+        string? releasePath,
+        string? modulesHash = null)
         => def with
         {
             CompilationStatus = CompilationStatus.Ok,
@@ -1111,6 +1112,10 @@ internal static class NodeTypeCompilationHelpers
             // live FrameworkVersion so a MeshWeaver redeploy forces a recompile instead of
             // loading an ABI-stale DLL.
             CompiledFrameworkVersion = FrameworkVersion,
+            // The installed-module fingerprint (#1644 step 1 — recorded, not yet decisive; the
+            // property doc on NodeTypeDefinition carries the full story). Preserved when the
+            // caller cannot resolve a fingerprint, so a stamped hash is never erased.
+            CompiledModulesHash = modulesHash ?? def.CompiledModulesHash,
             // Clear the consumed release-requester so a later System-only recompile doesn't
             // mis-attribute its release to a stale prior user.
             RequestedReleaseBy = null
@@ -1608,7 +1613,8 @@ internal static class NodeTypeCompilationHelpers
                             return curr with
                             {
                                 Content = ApplyCompileSuccess(
-                                    def, outcome.Result, curr.Version, resolvedActivityPath, newReleasePath)
+                                    def, outcome.Result, curr.Version, resolvedActivityPath, newReleasePath,
+                                    hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
                             };
                         }
 

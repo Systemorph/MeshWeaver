@@ -518,6 +518,18 @@ public record NodeTypeDefinition
     public string? CompiledFrameworkVersion { get; init; }
 
     /// <summary>
+    /// The deployment's installed-MODULE fingerprint the assembly was compiled under —
+    /// <see cref="InstalledModulesFingerprint.Hash"/> (sorted module MVIDs; empty string = no
+    /// modules; null = stamped before the feature, or by a mesh without the fingerprint
+    /// registered). Recorded by every successful compile (#1644 step 1); it joins the
+    /// usable-build decision when modules ship separately from the image (step 2) — a
+    /// module-only update must invalidate baked builds that could reference it, which the
+    /// framework-MVID rule cannot see. Null compares as MATCH there: a null-hash build predates
+    /// modules in the compile surface and is governed by the framework rule alone.
+    /// </summary>
+    public string? CompiledModulesHash { get; init; }
+
+    /// <summary>
     /// 🚨 Round-trip buffer for content members this compiled shape does not declare —
     /// schema evolution: a property written by a NEWER build, or one removed since the
     /// JSON was persisted. Without this, System.Text.Json silently DROPS such members on
