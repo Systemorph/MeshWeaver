@@ -1093,7 +1093,7 @@ jobs:
         log="${RUNNER_TEMP:-/tmp}/plugin-gate.log"
         status=0
         if ! time dotnet "$TESTER" "$STAGE" --allow "$STAGE/plugin-gate.allow" \
-            --bake-output "$RUNNER_TEMP/bake-plugins" --source-sha "$PLUGINS_SHA" 2>&1 | tee "$log"; then
+            --bake-output "${RUNNER_TEMP:-/tmp}/bake-plugins" --source-sha "$PLUGINS_SHA" 2>&1 | tee "$log"; then
           status="${PIPESTATUS[0]}"
           # tee always exits 0, so a non-zero pipeline with a zero head means tee itself failed.
           if [ "$status" = "0" ]; then status=1; fi
@@ -1127,7 +1127,7 @@ jobs:
       id: bake
       run: |
         set -euo pipefail
-        mvid_file="$RUNNER_TEMP/bake-plugins/framework-mvid.txt"
+        mvid_file="${RUNNER_TEMP:-/tmp}/bake-plugins/framework-mvid.txt"
         if [ ! -s "$mvid_file" ]; then
           echo "::error::the plugins gate ran green but wrote no bake identity ($mvid_file) — the bake stage regressed."
           exit 1
@@ -1382,7 +1382,7 @@ jobs:
       id: bake
       run: |
         set -euo pipefail
-        mvid_file="$RUNNER_TEMP/bake/framework-mvid.txt"
+        mvid_file="${RUNNER_TEMP:-/tmp}/bake/framework-mvid.txt"
         if [ ! -s "$mvid_file" ]; then
           echo "::error::the content gate ran green but wrote no bake identity ($mvid_file) — the bake stage regressed."
           exit 1
@@ -1392,7 +1392,7 @@ jobs:
           echo "### 📦 Baked shipped-content assemblies (framework $(cat "$mvid_file"))"
           echo
           echo '```'
-          grep -h '^bake: ' "$RUNNER_TEMP/doc-gate.log" "$RUNNER_TEMP/samples-gate.log" || true
+          grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/doc-gate.log" "${RUNNER_TEMP:-/tmp}/samples-gate.log" || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     # The MVID-keyed artifact every lane of THIS run can adopt (same solution build ⇒ same
