@@ -64,6 +64,16 @@ public record UiContribution
     public const string SettingsContext = "Settings";
 
     /// <summary>
+    /// The top-bar MENU-DECLARATION context: a contribution here declares a whole NEW top-bar
+    /// dropdown. <see cref="Area"/> names the new menu's context KEY — entries target that key as
+    /// their own <see cref="Context"/> — and Label/LabelKey, Icon, Order and Tooltip style the
+    /// menu button. The closed gate vocabulary applies to the declaration like any entry (an
+    /// <c>AdminOnly</c> menu disappears wholesale for non-admins), and a menu with no visible
+    /// entries renders nothing.
+    /// </summary>
+    public const string TopBarContext = "TopBar";
+
+    /// <summary>
     /// Which menu the entry contributes to: <c>Node</c>, <c>Mesh</c>, <c>Settings</c>,
     /// <c>AiMenu</c> or <c>SidePanel</c>. Unset ⇒ <c>Node</c>.
     /// </summary>
@@ -87,6 +97,20 @@ public record UiContribution
     /// area-not-found placeholder renders if it is missing, exactly like any dangling area link.
     /// </summary>
     public string? Area { get; init; }
+
+    /// <summary>
+    /// Optional explicit navigation URL, overriding the URL derived from <see cref="Area"/> on the
+    /// anchoring node — the shape catalog-style entries use (absolute portal paths, search URLs).
+    /// Purely navigational: what the URL opens still renders through the ordinary layout pipeline
+    /// and its own access gates; the closed gate vocabulary here only NARROWS who sees the link.
+    /// </summary>
+    public string? Href { get; init; }
+
+    /// <summary>Optional hover tooltip. Prefer <see cref="TooltipKey"/> for translated text.</summary>
+    public string? Tooltip { get; init; }
+
+    /// <summary>Localization key for <see cref="Tooltip"/>.</summary>
+    public string? TooltipKey { get; init; }
 
     /// <summary>Sort order within the menu (lower = earlier). Default 100 — after the built-ins.</summary>
     public int Order { get; init; } = 100;

@@ -58,8 +58,17 @@ internal static class UiContributionProjection
                 contribution.Icon,
                 required,
                 contribution.Order,
-                Href: MeshNodeLayoutAreas.BuildUrl(menuPath, area))
-                { LabelKey = contribution.LabelKey });
+                // A declared Href wins (catalog-style links) — but ONLY a portal-internal one:
+                // Href is mesh DATA reaching NavigationManager, so schemes (javascript:, https:)
+                // and protocol-relative hosts are an XSS/phishing surface the closed vocabulary
+                // must not open. Anything non-internal falls back to the derived area URL —
+                // narrowing, never widening (#1645). Otherwise the entry opens its area on the
+                // anchoring node, like every built-in node-menu item.
+                Href: contribution.Href is { Length: > 0 } href && IsPortalInternalHref(href)
+                    ? href
+                    : MeshNodeLayoutAreas.BuildUrl(menuPath, area),
+                Tooltip: contribution.Tooltip)
+                { LabelKey = contribution.LabelKey, TooltipKey = contribution.TooltipKey });
         }
         return items ?? (IReadOnlyCollection<NodeMenuItemDefinition>)[];
     }
@@ -102,6 +111,16 @@ internal static class UiContributionProjection
         }
         return items;
     }
+
+    /// <summary>
+    /// The Href gate: a contributed link must be PORTAL-INTERNAL — a single-slash-rooted path
+    /// (<c>/search?…</c>, <c>/Agent/AiAgents</c>). A leading scheme (<c>javascript:</c>,
+    /// <c>https:</c>) or a protocol-relative <c>//host</c> cannot pass, because a rooted path can
+    /// contain neither. External links stay a COMPILED concern until an explicit allowlist
+    /// vocabulary exists.
+    /// </summary>
+    internal static bool IsPortalInternalHref(string href) =>
+        href.Length > 1 && href[0] == '/' && href[1] != '/';
 
     /// <summary>Suffix-aware node-type gate — the platform's <c>Matches</c> semantics.</summary>
     internal static bool NodeTypeGateMatches(string? nodeType, string gate) =>

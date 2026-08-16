@@ -499,10 +499,12 @@ public static class MemexConfiguration
     }
 
     /// <summary>
-    /// The AI (✨) menu seed. In render order (by <c>Order</c>): the imperative "New thread" entry, then
-    /// Threads / Models / Providers / Agents / Skills, each opening mesh search grouped by namespace.
-    /// This is the SINGLE SOURCE OF TRUTH, shared by the hub registration below and the unit tests, so a
-    /// regression can't quietly drop an entry (there was no coverage at all pinning "New thread" here).
+    /// The AI (✨) menu's COMPILED remainder: exactly the imperative "New thread" entry. The
+    /// navigation entries (Threads / Models / Tiers / Providers / Agents / Skills) migrated to
+    /// seeded <c>UiContribution</c> nodes (<see cref="AiMenuContributions"/>, WS7 slice 3) — they
+    /// are pure links, so they ride the same lane a plugin's AI-menu entry arrives through.
+    /// This list stays the SINGLE SOURCE OF TRUTH for the imperative entry, shared by the hub
+    /// registration below and the unit tests, so a regression can't quietly drop it.
     /// <para>
     /// 🚨 "New thread" carries NO <c>Href</c> because it CANNOT: the composer lives at
     /// <c>/User/{me}/Chat</c>, and the signed-in user is not known here — this seed is static and
@@ -525,34 +527,6 @@ public static class MemexConfiguration
             Icon: "➕", Order: 0,
             Tooltip: "Start a new conversation")
             { LabelKey = "menu.newThread", TooltipKey = "menu.newThreadTooltip" },
-        new NodeMenuItemDefinition("Threads", "AiThreads", Icon: "/static/NodeTypeIcons/chat.svg", Order: 10,
-            Href: "/search?q=nodeType%3AThread&groupBy=Namespace",
-            Tooltip: "Conversation threads across every namespace")
-            { LabelKey = "menu.threads", TooltipKey = "menu.threadsTooltip" },
-        // Scope-tabbed catalogs (This space · User · Global) with per-tab "+" create,
-        // anchored on the type roots so the catalog area resolves (AddAiCatalogLayoutAreas).
-        new NodeMenuItemDefinition("Models", "AiModels", Icon: "/static/NodeTypeIcons/sparkle.svg", Order: 20,
-            Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ModelsArea}",
-            Tooltip: "Language models — global, space, and user")
-            { LabelKey = "menu.models", TooltipKey = "menu.modelsTooltip" },
-        // Tiers sit between Models and Providers on purpose: it is the third thing you configure when
-        // you set a deployment up — which models exist, what each one is FOR, and whose key pays.
-        new NodeMenuItemDefinition("Tiers", "AiModelTiers", Icon: "/static/NodeTypeIcons/task-list.svg", Order: 22,
-            Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.TiersArea}",
-            Tooltip: "Model tiers — what each model is used for")
-            { LabelKey = "menu.modelTiers", TooltipKey = "menu.modelTiersTooltip" },
-        new NodeMenuItemDefinition("Providers", "AiProviders", Icon: "/static/NodeTypeIcons/key.svg", Order: 25,
-            Href: $"/{ModelProviderNodeType.RootNamespace}/{AiCatalogLayoutAreas.ProvidersArea}",
-            Tooltip: "AI providers — endpoints + keys")
-            { LabelKey = "menu.providers", TooltipKey = "menu.providersTooltip" },
-        new NodeMenuItemDefinition("Agents", "AiAgents", Icon: "/static/NodeTypeIcons/bot.svg", Order: 30,
-            Href: $"/Agent/{AiCatalogLayoutAreas.AgentsArea}",
-            Tooltip: "AI agents — global, space, and user")
-            { LabelKey = "menu.agents", TooltipKey = "menu.agentsTooltip" },
-        new NodeMenuItemDefinition("Skills", "AiSkills", Icon: "/static/NodeTypeIcons/rocket.svg", Order: 40,
-            Href: $"/{SkillNodeType.RootNamespace}/{AiCatalogLayoutAreas.SkillsArea}",
-            Tooltip: "Reusable skills — global, space, and user")
-            { LabelKey = "menu.skills", TooltipKey = "menu.skillsTooltip" },
     ];
 
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder
@@ -728,6 +702,11 @@ public static class MemexConfiguration
                 // What's New / About / Privacy settings-tab entries as seeded UiContribution
                 // nodes — the WS7 lane a plugin's own settings tab arrives through.
                 .AddPlatformSettingsTabContributions()
+                // The AI menu's navigation entries (Threads/Models/Tiers/Providers/Agents/Skills)
+                // as seeded UiContribution nodes — same lane a plugin's AI-menu entry (or a whole
+                // TopBar-declared menu) arrives through. Only the imperative "New thread" stays
+                // compiled (AiMenuItems).
+                .AddAiMenuContributions()
                 .AddSpaceType()
                 // Generic webhook inbox: the WebhookEvent node type behind
                 // POST /api/hooks/{target} (allowlisted via WebhookInbox:Targets).
