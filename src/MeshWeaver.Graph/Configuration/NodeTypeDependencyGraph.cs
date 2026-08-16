@@ -289,6 +289,45 @@ public static class NodeTypeDependencyGraph
                   .FirstOrDefault()
             : null;
 
+    /// <summary>
+    /// The FOREIGN NodeType paths whose <c>Source/</c> or <c>Test/</c> subtree a resolved source
+    /// set reaches into — the pure half of the cell-surface single-home rule (issue #1649). A
+    /// source node's owner is derived from its path shape: everything before the first
+    /// <c>/Source/</c> or <c>/Test/</c> segment (the convention every source query resolves
+    /// against — <c>{nodeTypePath}/Source/…</c>), which is exact where
+    /// <see cref="OwningType"/>-style longest-prefix matching would need the full type catalog.
+    /// A path without such a segment names no owner and is skipped; owners equal to
+    /// <paramref name="selfPath"/> are the type's own sources, not a foreign reach.
+    /// </summary>
+    /// <param name="selfPath">The NodeType being compiled.</param>
+    /// <param name="sourceNodePaths">The resolved source/test Code node paths of one compile.</param>
+    public static ImmutableHashSet<string> ForeignSourceOwners(
+        string selfPath, IEnumerable<string> sourceNodePaths)
+    {
+        var owners = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in sourceNodePaths)
+        {
+            if (string.IsNullOrEmpty(path)) continue;
+            var owner = OwnerBySourceSegment(path);
+            if (owner is not null && !owner.Equals(selfPath, StringComparison.OrdinalIgnoreCase))
+                owners.Add(owner);
+        }
+        return owners.ToImmutable();
+    }
+
+    /// <summary>Everything before the first <c>/Source/</c> or <c>/Test/</c> segment, or null.</summary>
+    private static string? OwnerBySourceSegment(string path)
+    {
+        var best = -1;
+        foreach (var segment in new[] { "/Source/", "/Test/" })
+        {
+            var index = path.IndexOf(segment, StringComparison.OrdinalIgnoreCase);
+            if (index > 0 && (best < 0 || index < best))
+                best = index;
+        }
+        return best > 0 ? path[..best] : null;
+    }
+
     /// <summary><c>path</c> is <paramref name="root"/> itself or lives under it.</summary>
     private static bool IsSelfOrUnder(string path, string root) =>
         path.Equals(root, StringComparison.OrdinalIgnoreCase)

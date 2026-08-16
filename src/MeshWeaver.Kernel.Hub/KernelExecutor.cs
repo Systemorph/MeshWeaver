@@ -45,6 +45,17 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     private ScriptLogger? scriptLogger;
     private bool initialized;
 
+    // The cell-surface pack bind (issue #1649): name → Assembly for exactly the DynamicNode_*
+    // assemblies THIS session's reference set declared (see EnsureCellSurfaceReferences). The
+    // session's load context resolves these names here instead of falling through to the
+    // Default ALC, which cannot see collectible node contexts. Null until the first successful
+    // resolution — a failed resolution is NOT latched, so the next submission re-attempts.
+    // 🚨 These strong references + the leases below deliberately PIN the referenced collectible
+    // generation until this executor (== the kernel session) dies; a NodeType recompile
+    // mid-session keeps this session on the old generation, new sessions bind the new one.
+    private ImmutableDictionary<string, Assembly>? cellSurfaceBindings;
+    private readonly System.Reactive.Disposables.CompositeDisposable cellSurfaceLeases = new();
+
     // REPL submissions run STRICTLY in arrival order on a 100%-reactive serial queue:
     // Concat subscribes the next submission only AFTER the previous Execute completes
     // (i.e. after scriptState is assigned), so block #2 always sees block #1's variables.
@@ -56,14 +67,22 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     private IDisposable? submissionPump;
 
     /// <summary>One queued REPL submission + the sink that carries its outcome back to the
-    /// posting handler (so the serial Concat pump stays decoupled from request/response).</summary>
+    /// posting handler (so the serial Concat pump stays decoupled from request/response).
+    /// <see cref="AccessContext"/> is the DELIVERY's identity, captured at the handler — the
+    /// script is explicitly re-stamped with it before it runs (see <see cref="RunOnePass"/>),
+    /// so its effective identity never depends on whatever AsyncLocal happens to ride the
+    /// reactive chain to the compile pool (a System-scoped resolution step upstream — e.g. the
+    /// cell-surface provider's discovery query, whose response emission the framework
+    /// deliberately re-stamps with the OBSERVING caller's context — would otherwise leak
+    /// System into the script and render content the submitting user may not read).</summary>
     private sealed record Submission(
         string Code,
         string ViewId,
         IReadOnlyDictionary<string, JsonElement> Inputs,
         ILogger ScriptOutputLogger,
         CancellationToken Ct,
-        AsyncSubject<object?> Result);
+        AsyncSubject<object?> Result,
+        AccessContext? AccessContext);
 
     // 🚦 Roslyn script compile+execute is a CPU/blocking leaf (the compile prologue +
     // RuntimeMetadataReferenceResolver.ResolveMissingAssembly file I/O run synchronously).
@@ -117,6 +136,9 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     submissionPump?.Dispose();
                     session?.Dispose();
                     session = null;
+                    // Release the cell-surface generation pins with the session — after this,
+                    // a superseded NodeType generation this session was bound to can unload.
+                    cellSurfaceLeases.Dispose();
                 })))
             .WithHandler<SubmitCodeRequest>(HandleSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(HandleCancelRequest);
@@ -158,10 +180,25 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // success, OnError on failure/cancel). Wire the request/response off it, then push
         // the submission onto the serial pump — it executes once all earlier submissions
         // have completed, guaranteeing block #2 sees block #1's ScriptState.
+        //
+        // The settle path (activity terminal write + response post) is re-stamped with the
+        // DELIVERY's identity: it runs on whatever thread the pipeline terminated on, whose
+        // ambient AsyncLocal reflects the pipeline's history, not this submission's caller.
+        // Hub-shaped principals are excluded exactly as MessageHub's own handler stamping
+        // excludes them — a hub-stamped post must not become the script's principal.
+        var submissionContext =
+            request.AccessContext is { } deliveryContext
+            && !AccessService.LooksLikeHubPrincipal(deliveryContext.ObjectId)
+                ? deliveryContext
+                : null;
+        var accessService = publicHub.ServiceProvider.GetService<AccessService>();
+        IDisposable? RestoreSubmissionContext() =>
+            submissionContext is null ? null : accessService?.SwitchAccessContext(submissionContext);
         var result = new AsyncSubject<object?>();
         result.Subscribe(
             returnValue =>
             {
+                using var _ = RestoreSubmissionContext();
                 ClearCancellationIf(cts);
                 try
                 {
@@ -194,6 +231,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             },
             ex =>
             {
+                using var _ = RestoreSubmissionContext();
                 ClearCancellationIf(cts);
                 var canceled = ex is OperationCanceledException;
                 if (canceled)
@@ -214,7 +252,8 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     o => o.ResponseFor(request));
             });
 
-        submissions.OnNext(new Submission(msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token, result));
+        submissions.OnNext(new Submission(
+            msg.Code, msg.Id, msg.Inputs, activityLogger, cts.Token, result, submissionContext));
         return request.Processed();
     }
 
@@ -232,7 +271,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// </summary>
     private IObservable<Unit> RunSubmission(Submission s) =>
         Observable.Create<Unit>(downstream =>
-            Execute(s.Code, s.ViewId, s.Inputs, s.ScriptOutputLogger, s.Ct)
+            Execute(s.Code, s.ViewId, s.Inputs, s.ScriptOutputLogger, s.AccessContext, s.Ct)
                 .Subscribe(
                     value => s.Result.OnNext(value),
                     ex =>
@@ -300,6 +339,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         string viewId,
         IReadOnlyDictionary<string, JsonElement> inputs,
         ILogger scriptOutputLogger,
+        AccessContext? accessContext,
         CancellationToken ct)
     {
         // No lock and no gate here: REPL ordering across submissions is owned by the serial
@@ -312,8 +352,9 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         return Observable.Defer(() =>
             {
                 EnsureInitialized();
-                return nugetPool.Invoke(t => ResolveNuGetReferencesAsync(code, t))
-                    .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, ct));
+                return EnsureCellSurfaceReferences()
+                    .SelectMany(_ => nugetPool.Invoke(t => ResolveNuGetReferencesAsync(code, t)))
+                    .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, accessContext, ct));
             })
             .Catch<object?, Exception>(ex =>
             {
@@ -343,6 +384,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         string viewId,
         ILogger scriptOutputLogger,
         IReadOnlyDictionary<string, JsonElement> inputs,
+        AccessContext? accessContext,
         CancellationToken ct)
     {
         scriptLogger!.Set(scriptOutputLogger);
@@ -367,9 +409,30 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             // so REPL state + CancelScriptRequest semantics are preserved. The session owns
             // chain advancement (only on success — a throwing submission's variables are
             // discarded, the historical ScriptState behavior).
-            scope => compilePool.Invoke(t =>
-                    (session ??= new ScriptSession(scriptGlobals!))
-                        .RunAsync(cleaned, scriptOptions, typeof(MeshScriptGlobals), t))
+            // The external resolver reads the CURRENT bindings field (not a snapshot), so a
+            // cell-surface set resolved after a transient first-submission failure still binds
+            // for later submissions of the same session.
+            //
+            // 🚨 The script runs EXPLICITLY under its submission's identity, never under the
+            // AsyncLocal the reactive chain happens to carry onto the pool. Upstream resolution
+            // steps run System-scoped (the cell-surface provider's discovery query — whose
+            // response emission the framework re-stamps with the OBSERVING caller's context by
+            // design), and an inherited System identity here made a `--render` export resolve
+            // embedded areas the submitting user may NOT read (DocumentExportAreaAccessTest).
+            // A null delivery context leaves the ambient untouched — background flows that
+            // impersonate explicitly keep their identity; nothing is invented.
+            scope => compilePool.Invoke(async t =>
+                {
+                    using (accessContext is null
+                               ? null
+                               : publicHub.ServiceProvider.GetService<AccessService>()
+                                   ?.SwitchAccessContext(accessContext))
+                        return await (session ??= new ScriptSession(
+                                scriptGlobals!,
+                                name => cellSurfaceBindings?.GetValueOrDefault(name)))
+                            .RunAsync(cleaned, scriptOptions, typeof(MeshScriptGlobals), t)
+                            .ConfigureAwait(false);
+                })
                 .Select(returnValue =>
                 {
                     scope.Flush();
@@ -440,6 +503,76 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             .WithMetadataResolver(MeshScriptEnvironment.MetadataResolver)
             .WithImports(MeshScriptEnvironment.Imports)
             .WithEmitDebugInformation(true);
+    }
+
+    /// <summary>
+    /// The pack-scripting seam, session side (issue #1649 part 2): resolves the CURRENT baked
+    /// assembly of every <c>cellSurface: true</c> NodeType through
+    /// <see cref="ICellSurfaceAssemblyProvider"/> (implemented over the compilation cache in
+    /// MeshWeaver.Graph), adds each PE as a metadata reference to this session's
+    /// <see cref="scriptOptions"/> (compile-time visibility), and records name → Assembly in
+    /// <see cref="cellSurfaceBindings"/> for the session load context's runtime bind — scoped to
+    /// exactly the set declared here, never a blanket Default-ALC hook. Runs once per kernel
+    /// session (the executor), on the serial Concat pump, so the plain field check is race-free;
+    /// resolving per session rather than per process is what makes the surface immune to the
+    /// frozen snapshot and to NodeType recompiles (old sessions keep their generation via the
+    /// leases; new sessions bind the current one).
+    ///
+    /// <para>Degrades OPEN, loudly: when the provider is absent (no Graph module) the surface is
+    /// simply the platform baseline; when resolution FAULTS, the failure is logged at Warning and
+    /// this submission runs without pack references — but the failure is not latched, so the next
+    /// submission re-attempts instead of replaying one transient fault for the session's life.</para>
+    /// </summary>
+    private IObservable<Unit> EnsureCellSurfaceReferences()
+    {
+        if (cellSurfaceBindings is not null)
+            return Observable.Return(Unit.Default);
+
+        var provider = publicHub.ServiceProvider.GetService<ICellSurfaceAssemblyProvider>();
+        if (provider is null)
+        {
+            cellSurfaceBindings = ImmutableDictionary<string, Assembly>.Empty;
+            return Observable.Return(Unit.Default);
+        }
+
+        return provider.ResolveCellSurfaceAssemblies()
+            .Take(1)
+            .Select(resolved =>
+            {
+                var bindings = ImmutableDictionary.CreateBuilder<string, Assembly>(StringComparer.Ordinal);
+                var references = new List<MetadataReference>();
+                foreach (var entry in resolved)
+                {
+                    var reference = KernelScriptReferences.GetOrCreateFromFile(entry.AssemblyPath);
+                    if (reference is null)
+                    {
+                        // Unreadable PE (deleted mid-resolve) — drop the whole entry: a runtime
+                        // bind without the metadata reference could never be requested anyway.
+                        entry.Lease.Dispose();
+                        Logger.LogWarning(
+                            "Cell-surface assembly for {NodeTypePath} at {AssemblyPath} could not be materialized as a metadata reference — skipped",
+                            entry.NodeTypePath, entry.AssemblyPath);
+                        continue;
+                    }
+                    references.Add(reference);
+                    if (entry.Assembly.GetName().Name is { Length: > 0 } name)
+                        bindings[name] = entry.Assembly;
+                    cellSurfaceLeases.Add(entry.Lease);
+                }
+                scriptOptions = scriptOptions.AddReferences(references);
+                cellSurfaceBindings = bindings.ToImmutable();
+                if (!cellSurfaceBindings.IsEmpty)
+                    Logger.LogDebug(
+                        "Kernel session joined {Count} cell-surface pack assembly(ies): {Names}",
+                        cellSurfaceBindings.Count, string.Join(", ", cellSurfaceBindings.Keys));
+                return Unit.Default;
+            })
+            .Catch<Unit, Exception>(ex =>
+            {
+                Logger.LogWarning(ex,
+                    "Cell-surface assembly resolution failed — this submission runs without pack references; the next submission re-attempts");
+                return Observable.Return(Unit.Default);
+            });
     }
 
     /// <summary>

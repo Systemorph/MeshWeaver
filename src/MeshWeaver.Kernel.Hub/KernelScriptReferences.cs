@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reflection;
+using System.Runtime.Loader;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.CodeAnalysis.Scripting.Hosting;
@@ -59,6 +60,18 @@ internal static class KernelScriptReferences
     private static ImmutableArray<PortableExecutableReference> CreateSharedSnapshot()
         => AppDomain.CurrentDomain.GetAssemblies()
             .Where(IsProductionReferenceable)
+            // 🚨 Collectible-ALC assemblies (DynamicNode_* NodeType builds, other kernel
+            // sessions) NEVER enter the frozen snapshot. They are per-GENERATION: every
+            // recompile mints a fresh collectible context, so a snapshot entry is stale the
+            // moment its type recompiles — and once the cell-surface seam (#1649) adds the
+            // CURRENT generation per session, a frozen older generation of the SAME assembly
+            // name would make every bare-name call ambiguous (CS0433 between two generations).
+            // Excluding them also kills the load-order lottery the issue documents: a pack
+            // assembly was cell-visible only if it happened to load before the process's first
+            // kernel session. Pack types join the surface exactly one way now — the explicit
+            // per-session `cellSurface: true` opt-in; modules join per-session via
+            // MeshScriptEnvironment.SessionAssemblies (Default ALC, so unaffected here).
+            .Where(asm => AssemblyLoadContext.GetLoadContext(asm)?.IsCollectible != true)
             .Select(TryGetOrCreate)
             .Where(r => r is not null)
             .Select(r => r!)

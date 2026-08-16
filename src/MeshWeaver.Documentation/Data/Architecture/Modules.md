@@ -114,11 +114,8 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.Markdown.Export.dll` | Document export (PDF/DOCX/HTML/email) | — |
 | `MeshWeaver.Observability.dll` | Red-log ticketing / log watch | `LogWatch` |
 | `MeshWeaver.OgCard.dll` | Link-preview (og-card) layout area | — |
-<<<<<<< HEAD
 | `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
-=======
 | `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
-<<<<<<< HEAD
 | `MeshWeaver.Hosting.Grpc.dll` | The mesh gRPC transport: `meshweaver.v1.Mesh` + gRPC-web, `py`/`node` foreign participants AND the React GUI's browser data plane | `Grpc` (`TrustedPort`) |
 
 🚨 **`MeshWeaver.Hosting.Grpc` is DEFAULT-ON in every deployment.** Its endpoint is not just the
@@ -127,9 +124,6 @@ grpc-web `Connect`+`Deliver` split at the origin root (`clients/portal-next`, `c
 Delist it only in a deployment with NO React GUI and NO foreign participants; anywhere else a
 delist silently breaks the React frontend's live connection. (The former `Features:Grpc` flag is
 gone — the module listing is the switch.)
-=======
->>>>>>> origin/main
->>>>>>> origin/main
 
 Boot packs select by OTHER configuration too: `Graph:Storage:Type` `Cosmos`/`Snowflake` requires
 the matching `MeshWeaver.Hosting.Cosmos`/`.Snowflake` DLL in this list — installation runs before
@@ -227,9 +221,21 @@ installed modules**: `InstallAssemblies` records every loaded module as an
 set from both — so a module published outside the app closure stays visible to scope classes and
 NodeType source that reference it (e.g. a map control). Two boundaries stand:
 
-- **Kernel cells are different.** Executable `--render` cells resolve against a process-wide
-  snapshot, and pack/NodeType assemblies are not reliably cell-callable — cell-callable API stays
-  in compiled, startup-loaded assemblies until the pack-scripting seam lands.
+- **Kernel cells — the pack-scripting seam (#1649).** Executable `--render` cells compose their
+  reference set per SESSION, not from the frozen process snapshot alone: every installed module
+  joins automatically (`MeshScriptEnvironment.SessionAssemblies` enumerates the
+  `InstalledModuleAssembly` registrations — modules are Default-ALC file-backed, so the runtime
+  bind is free), and a dynamic NodeType joins by DECLARING it — `cellSurface: true` in its
+  definition (the pack's `index.json`). At session init the kernel resolves each cell-surface
+  type's CURRENT baked assembly through the assembly store + compilation cache, references its
+  PE, and binds its collectible load context by name — scoped to the session's declared set,
+  never a blanket hook. Assemblies in collectible load contexts never enter the frozen snapshot,
+  so the cell surface is a declaration, not a load-order lottery. Two rules follow:
+  a `cellSurface` NodeType's `Source/` is **single-home** — any other NodeType that
+  `shared=`-consumes it fails its compile with a message naming the owner (the CS0433
+  duplicate-type class, prevented by construction); and a live session **pins** the generation it
+  bound — sessions are short-lived, and a recompile mid-session keeps old sessions on the old
+  generation while new sessions bind the new one (the same semantics live layout areas have).
 - **The bake fingerprint is DECISIVE.** Every successful NodeType compile stamps
   `CompiledModulesHash` — a hash of the sorted installed-module MVIDs
   (`InstalledModulesFingerprint`) — beside `CompiledFrameworkVersion`, and the usable-build check
