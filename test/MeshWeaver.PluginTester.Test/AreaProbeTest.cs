@@ -31,6 +31,13 @@ public class AreaProbeTest
     private static readonly JsonElement RedTable = Frame(
         """{"areas":{"Tests":"✅ First_Passes\n❌ Second_Fails: expected 42\n1/2 passed"}}""");
 
+    // A frame carrying ONLY chrome: the node menu the global renderer writes into every area
+    // subscription, with the Approvals entry's ✅ emoji icon. Chrome must never classify — the
+    // PR #1654 shard-4 red was exactly this frame arriving before the Tests markdown and being
+    // latched as "all rendered cases green".
+    private static readonly JsonElement MenuChromeOnly = Frame(
+        """{"areas":{"$Menu:Node":{"items":[{"label":"Request Approval","icon":"✅"},{"label":"Delete","icon":"🗑️"}]}}}""");
+
     /// <summary>
     /// The regression pin: a not-found frame followed by the real table must be GREEN. Before the
     /// fix, Take(1) latched the not-found frame and the run failed without the tests ever running.
@@ -63,6 +70,24 @@ public class AreaProbeTest
         Assert.Equal(CheckOutcome.Failed, verdict.Outcome);
         Assert.Contains("never became available", verdict.Detail);
         Assert.Contains("Area not found", verdict.Detail);
+    }
+
+    /// <summary>
+    /// Chrome never classifies: a frame carrying only the node menu (whose Approvals entry's
+    /// icon IS the ✅ emoji) must be treated as transient, and the verdict must come from the
+    /// Tests CONTENT frame that follows — with the real "N/M passed" detail, not the premature
+    /// "all rendered cases green".
+    /// </summary>
+    [Fact]
+    public async Task MenuChromeFrame_ThenGreenTable_ReportsThePassSummary()
+    {
+        var frames = new[] { MenuChromeOnly, GreenTable }.ToObservable();
+
+        var verdict = await AreaProbe.ClassifyTestsFrames(frames, TimeSpan.FromSeconds(5))
+            .FirstAsync().ToTask();
+
+        Assert.Equal(CheckOutcome.Passed, verdict.Outcome);
+        Assert.Equal("2/2 passed", verdict.Detail);
     }
 
     /// <summary>A red row still fails immediately — transience applies to not-found only.</summary>
