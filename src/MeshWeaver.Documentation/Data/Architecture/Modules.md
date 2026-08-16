@@ -86,6 +86,13 @@ correct for that module) is what makes the folder carry real content; which modu
 becomes a publish decision while which ACTIVATE stays `Modules:Assemblies`. Skip the whole
 target with `-p:PublishMeshModules=false`.
 
+The first flipped module is `MeshWeaver.Markdown.Export`: no host references it any more — its
+targets entry runs a full closure publish pruned against the app root AND the shared-framework
+targeting packs, so its folder carries the engine assembly (measured private deps beyond it:
+none; the engine's package closure still rides the app via other references). Because a flipped
+DLL exists nowhere else, the closure lane also lays it into a plain build's output
+(`bin/…/modules/`), keeping `dotnet run` on a host working without a publish step.
+
 ## Modules and the in-mesh compiler
 
 In-mesh source compiles against the platform's `TRUSTED_PLATFORM_ASSEMBLIES` **plus this mesh's

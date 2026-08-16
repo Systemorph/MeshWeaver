@@ -70,7 +70,9 @@ public static class MeshModuleEndpointExtensions
                 return;
             logger.LogCritical(
                 "Endpoint route collision(s) after module contributions — refusing to serve: {Detail}", detail);
-            // Terminate the host loudly — a lifetime-callback throw alone would vanish.
+            // Belt and braces: StopApplication() guarantees shutdown even where the runtime
+            // swallows a lifetime-callback exception; the throw makes the refusal visible in
+            // crash telemetry where it does propagate. Together: logged, stopped, loud.
             app.Lifetime.StopApplication();
             throw new InvalidOperationException(
                 $"Endpoint route collision(s) after module endpoint contributions: {detail}. "
