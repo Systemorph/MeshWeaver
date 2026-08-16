@@ -283,7 +283,24 @@ public sealed class DynamicTypePreWarmerHostedService(
         // that from a container gauge. See MemoryDelta.
         var sweepMemory = MemoryDelta.Start();
 
-        logger.LogInformation("DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs");
+        // Name the identity the whole sweep keys on, WITH its commit provenance (#1660 WS3): the
+        // staleness key is the API-surface hash (stable across internal-only merges), so "which
+        // commit built this process" is no longer derivable from the key — the g<sha> stamp is,
+        // and this is the one line that ties the two together for an operator reading a roll.
+        logger.LogInformation(
+            "DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs "
+            + "(framework identity {FrameworkIdentity}, build {Provenance})",
+            Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid,
+            Graph.Configuration.FrameworkBuildIdentity.StampedIdentityOf(
+                typeof(Graph.Configuration.FrameworkBuildIdentity).Assembly) ?? "(unstamped)");
+        // A degraded identity resolution (torn/unusable surface manifest → stamp/MVID fallback)
+        // is safe — conservative key, everything rebakes under it — but it silently costs the
+        // whole CI-bake benefit, so it must be SAID where the identity is announced.
+        if (Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkIdentityWarning is { } identityWarning)
+            logger.LogWarning(
+                "DynamicTypePreWarmer: framework identity resolution DEGRADED: {Warning} — "
+                + "CI-published bakes will decline against the fallback identity and this pod "
+                + "compiles its content itself", identityWarning);
         // Shipped prebuilt bundles seed BEFORE the sweep decides what to build (#1660 WS1): a
         // NodeType whose CI-baked bytes match this image's framework identity is stamped +
         // uploaded to the assembly store here, so the sweep's store probe reports it AlreadyBaked

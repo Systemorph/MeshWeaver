@@ -7,6 +7,9 @@
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
     <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
     <UserSecretsId>ca47ca53-2eec-4f25-9c24-1f03b5523cc9</UserSecretsId>
+    <!-- The API-surface manifest (#1660 WS3): the framework build identity resolves from it, so
+         local NodeType caches survive internal-only framework rebuilds (see Directory.Build.props). -->
+    <MeshWeaverSurfaceManifest>true</MeshWeaverSurfaceManifest>
   </PropertyGroup>
 
   <ItemGroup>

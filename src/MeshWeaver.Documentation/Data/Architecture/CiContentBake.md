@@ -43,25 +43,31 @@ The workflow uploads the directories as **`baked-assemblies-<mvid>`** (Doc + sam
 **`baked-plugins-<mvid>`** (vital plugin modules), and fails RED when a green gate produced no bake
 identity.
 
-## The identity rule: one compile, one MVID
+## The identity rule: adoptable when the SURFACE is unchanged
 
-Adoption is gated by `PrebuiltAssemblySeeder.DeclineReason` on the **MeshWeaver.Graph MVID** — a
-content identity of the compiled framework, not a version string. A bundle is adoptable only by a
-process whose Graph.dll came from the *same compilation* that produced the bundle.
+Adoption is gated by `PrebuiltAssemblySeeder.DeclineReason` on the **framework build identity**
+(`NodeTypeCompilationHelpers.FrameworkVersion` / `FrameworkBuildIdentity` — #1660 WS3). For the
+hosts that matter here — the bake host and the portals, which both ship a
+`meshweaver-surface.manifest` — that identity is the **API-surface hash** `s<hash>`: per compile
+reference, the SHA-256 of its *reference assembly* (the compiler's own definition of the API
+surface — byte-stable under body-only and private-member edits, changed by any surface change),
+hashed over the canonical content-surface set, with the generator-bearing exception
+(`MeshWeaver.Graph`, whose code shapes the *generated input* of every NodeType compile)
+contributing its full implementation MVID.
 
-Within one Build-and-Test run that holds everywhere by construction: the solution builds **once**,
-and every lane — test shards, doc-gate, plugin-gate — reuses that build's binaries. So the artifacts
-are immediately consumable by the run's own lanes.
+Three consequences:
 
-Across builds it does *not* hold today: the CI run number is a compile input
-(`Version` → assembly attributes), so `main-cd`'s image legs — which re-publish from source under
-their own run number — mint a *different* Graph MVID than the test workflow's artifact, and the
-seeder correctly declines the whole set. That is deliberate ABI safety, not a defect; two things
-follow from it:
+- **a bundle is adoptable across CI runs, images, and internal-only merges** — the bake for
+  commit X seeds at boot on the image of commit Y whenever nothing in the content-facing surface
+  changed between them ("rebuild only when we need to");
+- **a breaking surface change (or any Graph change) mints a new identity** — every cached and
+  published build for the old surface is stale, and the next Build-and-Test run bakes fresh;
+- **a declined bundle costs exactly what today costs — a compile.** Shipping bundles is strictly
+  safe; declines are logged with both identities.
 
-- until framework-identity determinism lands (#1660 workstream 3), an image can only ship bundles
-  **baked in its own publish job**, with the same version inputs;
-- a declined bundle costs exactly what today costs — a compile. Shipping bundles is strictly safe.
+Manifest-less CI processes (test hosts) fall back to the commit identity `g<sha>` stamped by
+`Directory.Build.props`; local builds fall back to the Graph MVID. The commit stamp doubles as
+provenance everywhere.
 
 ## The image: `prebuilt/` beside the app
 
@@ -94,15 +100,25 @@ logged and skipped, and the sweep compiles that type as it always has. Nothing c
 from this path — the bake gate keeps probing the store, which only ever holds what was actually
 adopted.
 
+## The delivery: main-cd publishes, boot seeds
+
+Since #1660 WS3, `main-cd`'s **`publish-bake`** job downloads the Build-and-Test run's
+`baked-assemblies-*` artifact for the promoted commit and copies the bundles to the portals'
+shared storage (`.github/scripts/publish-bake-bundles.sh`), laid out
+`prebuilt-bundles/<identity>/<source>/<bundle>.zip`, sealed by a `_complete` sentinel written
+strictly LAST. Each booting pod seeds ONLY its own identity's SEALED source directories
+(`ShippedPrebuiltBundles.SeedPublishedRoot`, config `PreWarm:PrebuiltBundleRoot`) before its
+sweep — an unsealed or torn publication (a publish that died mid-way) is refused loudly and the
+sweep compiles instead. "Rebuild only when we need to" applies to the publish too: when the
+identity's directory is already sealed — an internal-only merge resolves the same surface
+identity as its predecessor — the script skips with a notice instead of re-uploading. See
+[The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)
+for the job's preflight discipline and the dependent-repo dispatch.
+
 ## What this step does not do yet
 
-- **`main-cd` does not consume or produce bundles yet.** The image legs recompile from source, so
-  the test workflow's artifact is not adoptable there (identity rule above). The next increment is
-  either baking inside the portal-image leg (same job, same MVID) or — after workstream 3 — the
-  thin containerize step that consumes the compile stage's publish + bake artifacts directly.
-- **DB-resident types** (user/partition content CI cannot see) stay on the runtime bake; that is
-  workstream 2's pre-roll bake Job.
-- Test lanes do not consume the artifact yet — it is named stably (`baked-assemblies-<mvid>`)
+- **DB-resident types** (user/partition content CI cannot see) stay on the runtime bake.
+- Test lanes do not consume the artifact yet — it is named stably (`baked-assemblies-<identity>`)
   precisely so they can start.
 
 See also: [Plugin Packaging](/Doc/Architecture/PluginPackaging) (the compilation-unit rules and the

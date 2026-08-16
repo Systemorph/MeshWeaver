@@ -94,19 +94,21 @@ environment, is narrower, and reintroduces the `CS0616` above.
 
 `HasUsableBuild` skips a compile only when `CompiledFrameworkVersion` equals the live
 `NodeTypeCompilationHelpers.FrameworkVersion` — never a semver. Since
-[#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3 that value has two shapes, one
-resolution (`FrameworkBuildIdentity`): for a **CI-built framework** it is the **commit identity**
-`g<sha>` (stamped as `AssemblyMetadata("MeshWeaverFrameworkIdentity")`; CI builds are
-commit-deterministic, so every CI build of a commit shares it — including the separate workflow
-runs that bake content and build the image); for a **local build** it is the **Module Version Id
-of the MeshWeaver.Graph assembly** — a content identity.
+[#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3 that value has three shapes, one
+resolution (`FrameworkBuildIdentity`): hosts shipping a `meshweaver-surface.manifest` — the
+portals and the CI bake host — resolve the **API-surface identity** `s<hash>` (reference-assembly
+hashes over the canonical content-surface set, full impl MVID for the generator-bearing
+`MeshWeaver.Graph`; stable across internal-only merges, moved by breaking changes); manifest-less
+CI processes resolve the **commit identity** `g<sha>` (stamped as
+`AssemblyMetadata("MeshWeaverFrameworkIdentity")`, also everyone's logged provenance); a **local
+build** resolves the **Module Version Id of the MeshWeaver.Graph assembly** — a content identity.
 
-Neither is derived from `AssemblyInformationalVersion`, on purpose. Deriving identity from the
+None is derived from `AssemblyInformationalVersion`, on purpose. Deriving identity from the
 version string once forced `Directory.Build.props` to stamp a fresh version into every build,
 which regenerated `AssemblyInfo` every time and destroyed incremental compilation. The identity
 decouples the two: the version string serves packages and image tags while ABI invalidation stays
-correct — and a commit-scoped CI identity recompiles *less* than the per-build scheme did (two
-builds of one commit now agree), never more.
+correct — and the surface identity recompiles strictly *less* than every scheme before it (only
+breaking changes move it), never more than is safe.
 
 Three things follow.
 

@@ -187,7 +187,8 @@ config:
     # this portal's /data share as prebuilt-bundles/<framework-identity>/<source>/*.zip; the pod
     # seeds its OWN identity's directory before the sweep (ShippedPrebuiltBundles.
     # SeedPublishedRoot), so shipped content boots with zero Roslyn. CI builds are
-    # commit-deterministic, so the identity CI baked under equals this image's. Inert while CI
+    # deterministic (API-surface identity), so the identity CI baked under equals this image's —
+    # and survives internal-only merges, so most rolls find the bundles already there. Inert while CI
     # has published nothing (the directory is simply absent and the sweep compiles as before).
     # Producer side: repo variable BAKE_PUBLISH_TARGETS must name this share
     # (.github/scripts/publish-bake-bundles.sh).

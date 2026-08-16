@@ -6,6 +6,10 @@
     <PublishProfile>DefaultContainer</PublishProfile>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
     <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
+    <!-- The API-surface manifest (#1660 WS3): the portal's framework build identity resolves
+         from it — equal to the CI bake host's for unchanged surfaces, which is what lets the
+         published bake seed at boot across internal-only merges (see Directory.Build.props). -->
+    <MeshWeaverSurfaceManifest>true</MeshWeaverSurfaceManifest>
     <!-- Multi-arch container publish: declare the RID set HERE (project-local), NOT as a global
          `-p:RuntimeIdentifiers=` on the CLI. The container publish (`-t:PublishContainer
          -p:ContainerRuntimeIdentifiers=linux-x64;linux-arm64`) requires RuntimeIdentifiers to be

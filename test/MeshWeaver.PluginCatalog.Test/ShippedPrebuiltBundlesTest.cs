@@ -146,6 +146,7 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                 Path.Combine(mine, "shipped.zip"),
                 PrebuiltAssemblySeeder.LiveFrameworkMvid,
                 new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream(new byte[] { 9, 9, 9 })));
+            Seal(mine, "shipped.zip");
 
             // Another commit's publication beside it — same node path, must be invisible.
             var other = Path.Combine(root, "gdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "meshweaver-content");
@@ -154,12 +155,13 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
                 Path.Combine(other, "shipped.zip"),
                 "gdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
                 new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream(new byte[] { 1 })));
+            Seal(other, "shipped.zip");
 
             var adopted = await ShippedPrebuiltBundles.SeedPublishedRoot(Mesh, root, null)
                 .FirstAsync()
                 .ToTask(TestContext.Current.CancellationToken);
             adopted.Should().Be(1,
-                "the pod seeds its own identity's directory (recursively, one source subdir), "
+                "the pod seeds its own identity's directory (sealed source subdirs only), "
                 + "and never another identity's");
 
             var node = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
@@ -193,6 +195,56 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             .ToTask(TestContext.Current.CancellationToken);
         adopted.Should().Be(0, "a deployment that does not consume CI bakes seeds nothing");
     }
+
+    [Fact(Timeout = 120_000)]
+    public async Task PublishedRoot_RefusesUnsealedAndTornPublications()
+    {
+        // The completeness contract (Copilot finding, PR #1696): the publisher writes the
+        // _complete sentinel strictly LAST, so a source directory without it is a publish that
+        // died mid-way — seeding it would adopt a PARTIAL bake the pre-warmer then trusts. A
+        // sealed directory whose sentinel lists a bundle that is ABSENT is torn beyond the seal
+        // and equally refused. Both cost exactly what today costs — a compile.
+        var typePath = $"{TestPartition}/TornThing";
+        await CreateNodeType("TornThing");
+
+        var root = CreateBundleDirectory();
+        try
+        {
+            // Unsealed: bundle present, no sentinel.
+            var unsealed = Path.Combine(root, PrebuiltAssemblySeeder.LiveFrameworkMvid, "unsealed-source");
+            Directory.CreateDirectory(unsealed);
+            WriteBundle(
+                Path.Combine(unsealed, "shipped.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream(new byte[] { 7 })));
+
+            // Torn: sealed, but the sentinel names a bundle that does not exist.
+            var torn = Path.Combine(root, PrebuiltAssemblySeeder.LiveFrameworkMvid, "torn-source");
+            Directory.CreateDirectory(torn);
+            WriteBundle(
+                Path.Combine(torn, "present.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream(new byte[] { 8 })));
+            Seal(torn, "present.zip", "vanished.zip");
+
+            var adopted = await ShippedPrebuiltBundles.SeedPublishedRoot(Mesh, root, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            adopted.Should().Be(0,
+                "neither an unsealed nor a torn publication may seed anything");
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    /// <summary>Writes the completeness sentinel exactly as the publish script does — bundle
+    /// file names, one per line, written after the bundles.</summary>
+    private static void Seal(string sourceDirectory, params string[] bundleNames) =>
+        File.WriteAllLines(
+            Path.Combine(sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName),
+            bundleNames.OrderBy(n => n, StringComparer.Ordinal));
 
     /// <summary>A durable NodeType node nested under the base's test partition — the shape the
     /// static repo import produces for shipped content, created under the platform identity.</summary>

@@ -6,8 +6,13 @@
     <RootNamespace>MeshWeaver.PluginTester</RootNamespace>
     <IsPackable>false</IsPackable>
     <!-- Multi-arch container publish (same pair as memex-portal-ai / memex-migration);
-         Directory.Build.props' ProduceReferenceAssembly gate handles the RID-leg race. -->
+         Directory.Build.props' per-leg bin/obj isolation handles the RID-leg race (ref
+         assemblies stay ON — the surface manifest below is hashed from them). -->
     <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+    <!-- The API-surface manifest (#1660 WS3): this is the CI bake host, so its framework build
+         identity MUST resolve the same s<hash> the portals resolve — the manifest beside the
+         binaries is what makes that possible (see Directory.Build.props). -->
+    <MeshWeaverSurfaceManifest>true</MeshWeaverSurfaceManifest>
   </PropertyGroup>
 
   <!-- 🚨 NO ContainerEnvironmentVariable PATH override. The one that used to sit here (added for
