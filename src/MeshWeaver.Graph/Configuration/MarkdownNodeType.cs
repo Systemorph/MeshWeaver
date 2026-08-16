@@ -51,6 +51,7 @@ public static class MarkdownNodeType
             .AddMeshDataSource(s => s.WithContentType<MarkdownContent>())
             .AddContentCollections()
             .AddComments()
-            .AddApprovals()
+            // Approvals ride the MeshWeaver.Approvals module, which registers on EVERY per-node
+            // hub (not just Markdown) — see ApprovalsModuleAttribute.
     };
 }
