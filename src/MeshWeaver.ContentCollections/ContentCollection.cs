@@ -307,7 +307,9 @@ public class ContentCollection : IDisposable
     /// and reports whether this ingest may proceed. <c>false</c> means a LATER-triggered read of
     /// the same file already landed, so this (older) snapshot must be dropped rather than
     /// overwrite it — the article-level twin of <c>MonotonicWriteGuardStorageAdapter</c>'s
-    /// high-water mark for mesh nodes.
+    /// high-water mark for mesh nodes. 🚨 Only ever evaluated INSIDE the stream's update
+    /// transform (<see cref="MergeIngestedArticle"/>), where the sync hub serializes it — see
+    /// the atomicity note there (#1692).
     /// </summary>
     private bool ClaimIngest(string key, long sequence)
     {
@@ -386,7 +388,9 @@ public class ContentCollection : IDisposable
         // empty PrerenderedHtml forever, which is the CollectionNamedArea flake's exact
         // signature (MarkdownControl { Markdown = , Html = } as the last emission). Ordering by
         // trigger is the correct rule because every read observes the file at-or-after its own
-        // trigger: a LATER trigger can therefore never carry OLDER content.
+        // trigger: a LATER trigger can therefore never carry OLDER content. The claim is taken
+        // HERE (trigger time) but EVALUATED inside the stream's serialized update transform —
+        // see MergeIngestedArticle for why checking it any earlier reopens the hole (#1692).
         var sequence = Interlocked.Increment(ref ingestSequence);
 
         // The file read + parse is the IO leaf — pooled OFF the hub; only the parsed
@@ -404,24 +408,49 @@ public class ContentCollection : IDisposable
                 {
                     if (article is null)
                         return;
-                    var key = ArticleKey(article.Path);
-                    if (!ClaimIngest(key, sequence))
-                        return;   // a later-triggered read of this file already landed — drop this one
-                    using var _ = caller is null ? null : AccessService?.SwitchAccessContext(caller);
-                    markdownStream.Update(
-                        x => new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version),
-                        ex =>
-                        {
-                            // The stream errors incoming pushes once it (or its hub) is disposing — typically a
-                            // FileSystemWatcher event racing collection teardown. Close the incoming stream at the
-                            // source so no further events flow into a disposed hub. See Doc/Architecture/HubDisposalModel.
-                            if (ex is ObjectDisposedException)
-                                monitorDisposable?.Dispose();
-                        });
+                    MergeIngestedArticle(article, ArticleKey(article.Path), sequence, caller);
                 },
                 ex => Hub.ServiceProvider.GetService<ILoggerFactory>()
                     ?.CreateLogger(typeof(ContentCollection))
                     .LogWarning(ex, "IngestContentFile failed reading {Path} in collection {Collection}", path, Collection));
+    }
+
+    /// <summary>
+    /// Merges a completed ingest read into the synchronization stream. 🚨 The trigger-order claim
+    /// (<see cref="ClaimIngest"/>) is evaluated INSIDE the update transform, which the stream's
+    /// sync hub invokes strictly serially (one <c>UpdateStreamRequest</c> at a time) — so claim
+    /// and apply are ATOMIC and apply order can never invert claim order. Checking the claim on
+    /// the (pool) read-completion thread and posting the update afterwards — what #978
+    /// shipped — left a check-then-act window: an EARLIER-triggered ingest (the watcher's Created
+    /// event, whose share-tolerant read legally observes the just-created file at 0 bytes) could
+    /// pass its claim, then be overtaken before its post enqueued by the LATER-triggered
+    /// read-your-writes ingest claiming and posting the complete article. The hub then applied
+    /// complete-then-torn, the empty article stuck, and — Linux inotify dropping events for files
+    /// written into a just-created subdirectory — no repair event ever came: the #1692 recurrence
+    /// of the exact #978 signature. A superseded ingest's transform returns <c>null</c>, which the
+    /// stream skips as a no-op. Virtual so the deterministic pin
+    /// (<c>ContentCollectionClaimApplyRaceTest</c>) can hold one ingest at this exact boundary
+    /// (post-parse, pre-post) and prove the inversion is harmless.
+    /// </summary>
+    /// <param name="article">The parsed article from the completed read.</param>
+    /// <param name="key">The article's <see cref="InstanceCollection"/> key (<see cref="ArticleKey"/>).</param>
+    /// <param name="sequence">The trigger-order sequence claimed when this ingest was triggered.</param>
+    /// <param name="caller">The originating user's context snapshot, or <c>null</c> for watcher-driven changes.</param>
+    protected virtual void MergeIngestedArticle(MarkdownElement article, string key, long sequence, AccessContext? caller)
+    {
+        using var _ = caller is null ? null : AccessService?.SwitchAccessContext(caller);
+        markdownStream.Update(
+            x => ClaimIngest(key, sequence)
+                ? new ChangeItem<InstanceCollection>(x!.SetItem(key, article), markdownStream.StreamId, Hub.Version)
+                : null,   // a later-triggered read of this file already applied — drop this one
+            ex =>
+            {
+                // The stream errors incoming pushes once it (or its hub) is disposing — typically a
+                // FileSystemWatcher event racing collection teardown. Close the incoming stream at the
+                // source so no further events flow into a disposed hub. See Doc/Architecture/HubDisposalModel.
+                if (ex is ObjectDisposedException)
+                    monitorDisposable?.Dispose();
+            });
     }
 
     private async Task<MarkdownElement?> ParseContentAsync(Stream? stream, string path, DateTime lastModified, CancellationToken ct)
