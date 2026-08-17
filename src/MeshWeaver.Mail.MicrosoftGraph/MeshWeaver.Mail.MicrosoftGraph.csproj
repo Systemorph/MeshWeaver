@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Microsoft Graph mail for MeshWeaver: system email (IEmailSender over /sendMail), inbound mail intake with its change-notification webhook, and the Executive Assistant's mailbox tools. Ships as a module — list the DLL under Modules:Assemblies to activate.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 🚨 The reason this module exists. Microsoft.Graph + Kiota is 43 MB across nine assemblies,
+         and Microsoft.Graph.dll alone materializes a 41 MiB NATIVE metadata block in every Roslyn
+         script reference set (KernelScriptReferences names it as a direct cause of the CI
+         memory-pressure flakes). Carried here, a deployment that sends no mail pays neither.
+         Azure.Identity supplies the managed-identity / client-secret credential the sender uses. -->
+    <PackageReference Include="Microsoft.Graph" />
+    <PackageReference Include="Azure.Identity" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- AI: IAgentPlugin, for the Executive Assistant's tools (resolved by NAME out of DI, so the
+         AI assembly never references this one). Blazor: PortalApplication, whose hub the inbound
+         intake must run on. Hosting.AspNetCore: the endpoint-contribution hook for the webhook. -->
+    <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
+  </ItemGroup>
+</Project>

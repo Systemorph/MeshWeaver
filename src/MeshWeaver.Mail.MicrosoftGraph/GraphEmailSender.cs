@@ -2,7 +2,6 @@ using System.Linq;
 using System.Reactive.Linq;
 using Azure.Core;
 using Azure.Identity;
-using Memex.Portal.Shared.Authentication;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Mesh;
@@ -14,7 +13,7 @@ using Microsoft.Kiota.Abstractions;
 using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.Kiota.Http.HttpClientLibrary;
 
-namespace Memex.Portal.Shared.Email;
+namespace MeshWeaver.Mail.MicrosoftGraph;
 
 /// <summary>
 /// Sends email via Microsoft Graph <c>/users/{noReply}/sendMail</c> using the <c>Mail.Send</c>
@@ -80,7 +79,7 @@ public sealed class GraphEmailSender : IEmailSender, IDisposable
 
     /// <summary>
     /// True when the user has connected their mailbox. The stored credential is minted with
-    /// <see cref="EaGraphAuth.Scopes"/>, which already includes delegated <c>Mail.Send</c> — so
+    /// the EA's delegated scope set (<c>EaGraphAuth.Scopes</c>, host-side), which already includes delegated <c>Mail.Send</c> — so
     /// "connected" and "can send as themselves" are the same condition, with no extra consent step.
     /// </summary>
     /// <summary>
@@ -89,8 +88,8 @@ public sealed class GraphEmailSender : IEmailSender, IDisposable
     /// what keeps the UI from offering a button that would answer "not configured".
     /// </summary>
     public string? ConnectAsUserHref =>
-        _services.GetService<IEaGraphAuth>() is { IsConfigured: true }
-            ? EaConsentController.ConnectPath
+        _services.GetService<IEaGraphAuth>() is { IsConfigured: true } auth
+            ? auth.ConnectPath
             : null;
 
     public IObservable<bool> CanSendAsUser(string userObjectId) =>
@@ -208,7 +207,7 @@ public sealed class GraphEmailSender : IEmailSender, IDisposable
 
 /// <summary>
 /// Presents an already-minted delegated access token to Graph. The token is obtained and rotated by
-/// <see cref="EaGraphAuth"/> (which holds the encrypted refresh token); this only carries it onto
+/// <c>EaGraphAuth</c> (host-side) (which holds the encrypted refresh token); this only carries it onto
 /// the request.
 /// </summary>
 internal sealed class StaticTokenAuthenticationProvider(string accessToken) : IAuthenticationProvider

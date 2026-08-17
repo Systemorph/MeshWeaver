@@ -4,14 +4,13 @@ using Azure.Core;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
-using Memex.Portal.Shared.Authentication;
 using Microsoft.Extensions.AI;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Me.SendMail;
 using Microsoft.Graph.Me.Messages.Item.Reply;
 
-namespace Memex.Portal.Shared.Email;
+namespace MeshWeaver.Mail.MicrosoftGraph;
 
 /// <summary>
 /// <b>Executive Assistant</b> agent tool: read/write the <i>signed-in user's own</i> mailbox and calendar
@@ -32,9 +31,11 @@ public sealed class ExecutiveAssistantPlugin(
                           ?? access.CircuitContext?.ObjectId ?? access.CircuitContext?.Name;
 
     // Absolute (agent-facing): a link pasted into chat must be clickable out of context. The PATH
-    // comes from the controller that registers it, so the route has exactly one definition.
+    // comes off the IEaGraphAuth seam, whose host implementation surfaces the constant from the
+    // controller that registers the route — so the route still has exactly one definition, and
+    // this module needs no reference to a host controller.
     private string ConsentLink =>
-        $"{(options.WebhookBaseUrl ?? "").TrimEnd('/')}{EaConsentController.ConnectPath}";
+        $"{(options.WebhookBaseUrl ?? "").TrimEnd('/')}{ea.ConnectPath}";
 
     /// <summary>Builds a Graph client bound to the acting user's delegated token, or a "please connect" message.</summary>
     private async Task<(GraphServiceClient? graph, string? notConnected)> ClientAsync()

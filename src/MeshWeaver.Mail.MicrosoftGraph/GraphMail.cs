@@ -7,7 +7,7 @@ using MeshWeaver.Mesh.Threading;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 
-namespace Memex.Portal.Shared.Email;
+namespace MeshWeaver.Mail.MicrosoftGraph;
 
 /// <summary>
 /// Reactive wrapper over a Microsoft Graph client scoped to the portal mailbox, for the inbound side

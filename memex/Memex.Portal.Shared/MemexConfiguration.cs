@@ -139,29 +139,32 @@ public static class MemexConfiguration
         services.AddSingleton(emailOptions);
         if (emailOptions.Enabled)
         {
-            services.AddSingleton<IEmailSender, GraphEmailSender>();
             // Executive Assistant: per-user JUST-IN-TIME delegated Graph access (the user consents to the
-            // EA touching THEIR OWN mailbox/calendar only when they first use the tool — no standing app
-            // permission). EaGraphAuth drives the consent/token flow; the plugin uses the per-user token.
-            services.AddHttpClient<Authentication.IEaGraphAuth, Authentication.EaGraphAuth>();
-            services.AddSingleton<MeshWeaver.AI.Plugins.IAgentPlugin, ExecutiveAssistantPlugin>();
+            // EA touching THEIR OWN mailbox only when they first use the tool — no standing app
+            // permission). EaGraphAuth drives the consent/token flow; it is raw OAuth over HTTP, so it
+            // stays HERE with its consent controller — the EA's mailbox TOOLS (which do use the Graph
+            // SDK) ride the MeshWeaver.Mail.MicrosoftGraph module and depend only on this seam.
+            services.AddHttpClient<IEaGraphAuth, Authentication.EaGraphAuth>();
             // The notification triage runner (escalates in-app notifications to email/Teams per each
             // recipient's NotificationRules) rides the MeshWeaver.Notifications.Channels module
             // (Modules:Assemblies); its hosted service self-skips unless Email:Enabled.
         }
-        else
-            services.AddSingleton<IEmailSender, NoOpEmailSender>();
+
+        // 🚨 TryAdd, deliberately. The Graph sender lives in the MeshWeaver.Mail.MicrosoftGraph
+        // module, which registers it with a plain AddSingleton. The pairing is ORDER-INDEPENDENT:
+        // whichever runs first, the LAST registration of a service type is what GetRequiredService
+        // returns and TryAdd declines when any registration already exists. Module listed ⇒ the
+        // Graph sender wins; module absent ⇒ this no-op keeps OutboundEmailSender and
+        // InvitationEmailSender — both of which GetRequiredService<IEmailSender> — resolvable
+        // instead of throwing at startup.
+        services.TryAddSingleton<IEmailSender, NoOpEmailSender>();
 
         // Inbound email→agent channel (intake). Mail is treated as a chat device: each inbound email
         // finds-or-creates a conversation thread and appends its latest message (referencing the email
         // by path). The Graph subscription self-skips unless Email:Enabled && Email:InboundEnabled.
-        services.AddSingleton<GraphMail>(sp => new GraphMail(
-            sp.GetRequiredService<EmailOptions>()));
-        services.AddSingleton<EmailInboundProcessor>(sp => new EmailInboundProcessor(
-            sp.GetRequiredService<PortalApplication>().Hub,
-            sp.GetRequiredService<GraphMail>(),
-            sp.GetService<Microsoft.Extensions.Logging.ILogger<EmailInboundProcessor>>()));
-        services.AddHostedService<GraphSubscriptionService>();
+        // (GraphMail, EmailInboundProcessor and the Graph subscription watcher ride the
+        // MeshWeaver.Mail.MicrosoftGraph module, together with POST /api/email — the change
+        // notification webhook — which it contributes through MapMeshModuleEndpoints.)
         // Mesh-driven reply sender: drains agent-emitted Outbound Email nodes (Status=New) via Graph.
         services.AddHostedService<OutboundEmailSender>();
         // Mesh-driven invitation emailer: emails any Pending Invitation node not yet emailed
