@@ -148,9 +148,18 @@ jobs:
           VALUES="$ENV_DIR/values.${{ matrix.env.release }}.public.yaml"
           if [ ! -f "$VALUES" ]; then
             echo "::error::$VALUES is missing. Commit the SECRET-FREE half of this environment's"
-            echo "  helm overlay there (config/persistence/keda/probes/ingress — nothing under"
-            echo "  secrets:). Rendering with chart defaults instead would compare the cluster"
-            echo "  against a chart nobody deployed, so this is a failure, not a fallback."
+            echo "  helm overlay there, captured with:"
+            echo "      helm get values ${{ matrix.env.release }} -n ${{ matrix.env.ns }} -o yaml"
+            echo "  🚨 Copy it as an ALLOW-LIST — ONLY these top-level sections:"
+            echo "      config, ingress, persistence, image, replicas, resources"
+            echo "  Do NOT use the deny-list 'everything except secrets:'. pgbackrest.azure.accountKey"
+            echo "  is a live Azure storage account key and it sits OUTSIDE the secrets: block, so a"
+            echo "  deny-list commits a working credential to git permanently. Drop parameters: and"
+            echo "  pgbackrest: wholesale — neither feeds the ConfigMap or Deployment compared here."
+            echo "  Scan for secret-shaped AND high-entropy values before committing; the only"
+            echo "  legitimate 'secret'-ish match is ingress.secretName, a Kubernetes object name."
+            echo "  Rendering with chart defaults instead would compare the cluster against a chart"
+            echo "  nobody deployed, so this is a failure, not a fallback."
             exit 1
           fi
           PATCH_ARG=""
