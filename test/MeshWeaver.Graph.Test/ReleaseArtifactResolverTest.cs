@@ -178,12 +178,34 @@ public class ReleaseArtifactResolverTest
             IdentityA, "linux-x64");
 
         Assert.Contains("no release records an artifact link", unlinked.DeclineReason);
-        Assert.DoesNotContain("offers", unlinked.DeclineReason);
+        Assert.DoesNotContain("offer", unlinked.DeclineReason);
 
         Assert.Contains(IdentityA, wrongLane.DeclineReason);
         Assert.Contains("linux-x64", wrongLane.DeclineReason);
         // …and it names what WAS on offer, so the reader can see it is a lane problem, not an outage.
         Assert.Contains($"{IdentityB}/linux-arm64", wrongLane.DeclineReason);
+    }
+
+    [Fact]
+    public void TheOfferedSetIsDescribedAsAggregate_NotAsOneRelease()
+    {
+        // The offered lanes are collected across EVERY candidate release, so a reason phrased as
+        // "this release offers …" would point the reader at a single node that may hold only part of
+        // the set — and this sentence is the whole diagnostic a bundle miss and both ends' logs
+        // carry. It has to describe exactly what was looked at.
+        var reason = ReleaseArtifactResolver.Resolve(
+            [
+                Release(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+                    new ReleaseArtifact(IdentityB, "linux-arm64")),
+                Release(new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero),
+                    new ReleaseArtifact(IdentityB, "win-x64")),
+            ],
+            IdentityA, "linux-x64").DeclineReason;
+
+        Assert.Contains("2 release(s) examined", reason);
+        Assert.Contains($"{IdentityB}/linux-arm64", reason);
+        Assert.Contains($"{IdentityB}/win-x64", reason);
+        Assert.DoesNotContain("this release offers", reason);
     }
 
     [Fact]
