@@ -1,1 +1,18 @@
-{"$type":"MeshNode","id":"Currency","namespace":"PensionFund","path":"PensionFund/Currency","mainNode":"PensionFund/Currency","name":"Currency","description":"Currency dimension (ISO 4217); the fund reports in CHF.","nodeType":"NodeType","category":"Types","icon":"\u003Csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003E\u003Ccircle cx=\u002712\u0027 cy=\u002712\u0027 r=\u00279\u0027/\u003E\u003Cpath d=\u0027M9 9h4a2 2 0 1 1 0 4H9m0-7v10\u0027/\u003E\u003C/svg\u003E","lastModified":"2026-08-17T11:58:26.2424424+00:00","version":5,"state":"Active","content":{"$type":"NodeTypeDefinition","configuration":"config =\u003E config.WithContentType\u003CCurrency\u003E().AddDefaultLayoutAreas()","includeGlobalTypes":true,"compilationStatus":"Ok","lastCompileStartedAt":"2026-08-17T12:16:20.759158\u002B00:00","lastCompileSucceededAt":"2026-08-17T12:16:20.771476\u002B00:00","lastCompiledVersion":3,"lastCompilationActivityPath":"PensionFund/Currency/_Activity/compile-20260817121620754e0de630335744dd8aea2ea49ff394e74","latestReleasePath":"PensionFund/Currency/Release/20260817121620-e0gUXODG","latestAssemblyCollection":"local","latestAssemblyPath":"PensionFund_Currency/v3-s6408a66-26246218a01a.dll","compiledSources":{"PensionFund/Currency/Source/Currency":639225647062426329},"currentSourceVersions":{"PensionFund/Currency/Source/Currency":639225647062426329},"compiledFrameworkVersion":"s6408a662fcf9398bcff8cac5d0f4bdce","compiledModulesHash":"f59558c7c4a388b3866ccbb91a2bed15aeb7df94378b7fde8c342cef097f1f1a","compiledDependencies":{"!toolchain":"mvid:d0997007a10f7c2887d58f3035b950be","MeshWeaver.Graph":"ref:E0E5AE960D476AACAB88F7C0DB7C09E077649B15C9B78A78BFF1FEDB8FD77F4B","MeshWeaver.Mesh.Contract":"ref:B4C3890EB54E343C679F5023F92848057D1D482253535EAE6CDCB305C40AEF49","MeshWeaver.Messaging.Hub":"ref:0D1443C361C1A052BE3473C5BBD829165F53598D8C088742E2B35C29500BCF61"},"id":"Currency","namespace":"PensionFund","displayName":"Currency","iconName":"Money"}}
+﻿{
+    "id":  "Currency",
+    "namespace":  "PensionFund",
+    "name":  "Currency",
+    "nodeType":  "NodeType",
+    "category":  "Types",
+    "description":  "Currency dimension (ISO 4217); the fund reports in CHF.",
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003ccircle cx=\u002712\u0027 cy=\u002712\u0027 r=\u00279\u0027/\u003e\u003cpath d=\u0027M9 9h4a2 2 0 1 1 0 4H9m0-7v10\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "NodeTypeDefinition",
+                    "id":  "Currency",
+                    "namespace":  "PensionFund",
+                    "displayName":  "Currency",
+                    "iconName":  "Money",
+                    "configuration":  "config =\u003e config.WithContentType\u003cCurrency\u003e().AddDefaultLayoutAreas()"
+                }
+}

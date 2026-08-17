@@ -1,1 +1,18 @@
-{"$type":"MeshNode","id":"Position","namespace":"PensionFund","path":"PensionFund/Position","mainNode":"PensionFund/Position","name":"Balance Sheet Position","description":"Balance-sheet position dimension: atomic positions take values from entries; computed positions (Total Assets, Balance Sheet Sum, Funding Ratio) define formulas over other positions.","nodeType":"NodeType","category":"Types","icon":"\u003Csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003E\u003Crect x=\u00273\u0027 y=\u00273\u0027 width=\u002718\u0027 height=\u002718\u0027 rx=\u00273\u0027/\u003E\u003Cpath d=\u0027M12 3v18M3 9h18\u0027/\u003E\u003C/svg\u003E","lastModified":"2026-08-17T11:58:26.2427291+00:00","version":5,"state":"Active","content":{"$type":"NodeTypeDefinition","configuration":"config =\u003E config.WithContentType\u003CPosition\u003E().AddDefaultLayoutAreas()","includeGlobalTypes":true,"compilationStatus":"Ok","lastCompileStartedAt":"2026-08-17T12:16:22.790841\u002B00:00","lastCompileSucceededAt":"2026-08-17T12:16:22.804832\u002B00:00","lastCompiledVersion":3,"lastCompilationActivityPath":"PensionFund/Position/_Activity/compile-2026081712162278613879dfbad774bb7a63c629e3a74ab82","latestReleasePath":"PensionFund/Position/Release/20260817121622-5GTGnDMg","latestAssemblyCollection":"local","latestAssemblyPath":"PensionFund_Position/v3-s6408a66-d270f29c63f0.dll","compiledSources":{"PensionFund/Position/Source/Position":639225647062435773},"currentSourceVersions":{"PensionFund/Position/Source/Position":639225647062435773},"compiledFrameworkVersion":"s6408a662fcf9398bcff8cac5d0f4bdce","compiledModulesHash":"f59558c7c4a388b3866ccbb91a2bed15aeb7df94378b7fde8c342cef097f1f1a","compiledDependencies":{"!toolchain":"mvid:d0997007a10f7c2887d58f3035b950be","MeshWeaver.Domain":"ref:C101255960AF195B85C552C9BFE40EBC74B6BC58C2515C77C5C6418EEDA1DD7B","MeshWeaver.Graph":"ref:E0E5AE960D476AACAB88F7C0DB7C09E077649B15C9B78A78BFF1FEDB8FD77F4B","MeshWeaver.Mesh.Contract":"ref:B4C3890EB54E343C679F5023F92848057D1D482253535EAE6CDCB305C40AEF49","MeshWeaver.Messaging.Hub":"ref:0D1443C361C1A052BE3473C5BBD829165F53598D8C088742E2B35C29500BCF61"},"id":"Position","namespace":"PensionFund","displayName":"Balance Sheet Position","iconName":"Table"}}
+﻿{
+    "id":  "Position",
+    "namespace":  "PensionFund",
+    "name":  "Balance Sheet Position",
+    "nodeType":  "NodeType",
+    "category":  "Types",
+    "description":  "Balance-sheet position dimension: atomic positions take values from entries; computed positions (Total Assets, Balance Sheet Sum, Funding Ratio) define formulas over other positions.",
+    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003crect x=\u00273\u0027 y=\u00273\u0027 width=\u002718\u0027 height=\u002718\u0027 rx=\u00273\u0027/\u003e\u003cpath d=\u0027M12 3v18M3 9h18\u0027/\u003e\u003c/svg\u003e",
+    "isPersistent":  true,
+    "content":  {
+                    "$type":  "NodeTypeDefinition",
+                    "id":  "Position",
+                    "namespace":  "PensionFund",
+                    "displayName":  "Balance Sheet Position",
+                    "iconName":  "Table",
+                    "configuration":  "config =\u003e config.WithContentType\u003cPosition\u003e().AddDefaultLayoutAreas()"
+                }
+}
