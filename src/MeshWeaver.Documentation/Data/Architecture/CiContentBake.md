@@ -113,12 +113,38 @@ fixture that exercises the default `Source/`+`Test/` subtree queries including a
 cross-package `shared=@…` query, an `@@` include of a node no query matches, an executable code cell
 that must be excluded, and a `// NodeType: Scope` source the `nodeType:Code` filter must exclude.
 
-**Bytes are deliberately not compared.** The mesh folds its source set through an
-`ImmutableDictionary` and emits `dict.Values` — hash-bucket order over per-process-randomised string
-hashes — and the sources are then concatenated in that order, so the mesh-driven bake is not
-byte-reproducible even against itself (the generated skeleton also stamps `// Generated at:
-{UtcNow}`). The compiler-driven bake sorts, which is strictly better; the surface comparison is what
-proves the concatenation order of independent top-level declarations does not matter.
+**Bytes are deliberately not compared** — for a reason that is a property of the platform, not of
+this test. See the next section.
+
+## 🚨 A stated property: the mesh-driven bake is NOT byte-reproducible, even against itself
+
+This is not a quirk of the comparison above; it is true of **every bake this platform has ever
+produced**, and anyone reasoning about bake artifacts needs it up front.
+
+A NodeType's compile input is the concatenation of its source Code nodes. The mesh discovers them by
+folding each query's results into an `ImmutableDictionary<string, MeshNode>` and emitting
+`dict.Values` — which is **hash-bucket order over string hashes that .NET randomises per process**.
+`NodeCompileShaping.CombineSources` then joins the files in exactly that order. So two runs of the
+same mesh-driven bake, over the same commit, on the same machine, concatenate the same sources in
+**different orders** and emit **different bytes**. (The generated skeleton independently stamps
+`// Generated at: {UtcNow}`, and the emit embeds a temp `pdbFilePath`, so even a fixed order would
+not give byte equality.)
+
+Three consequences worth carrying:
+
+- **This is why the framework identity is SURFACE-based, not byte-based.** Hashing emitted bytes
+  could never have worked as an identity: it would change on every run without anything changing.
+  `FrameworkBuildIdentity` hashes *reference assemblies* — the compiler's own definition of an API
+  surface — precisely because that is stable where bytes are not.
+- **Any "did these two bakes produce the same thing?" check must compare SURFACE, never hashes.**
+  Comparing digests of bake outputs will report differences that do not exist, on every run.
+  `BakeEquivalenceTest` compares node paths, resolved source sets, dependency records and the
+  emitted assemblies' type-and-member surface; that is the shape such a check has to take.
+- **The compiler-driven bake is deterministic** (query order, then ordinal by path). That is strictly
+  better and costs nothing, but it does not make the two producers byte-equal — the old lane is the
+  non-deterministic one. What the surface comparison proves is that the concatenation order of
+  independent top-level declarations does not affect what is emitted, which is why the old lane's
+  non-determinism was survivable.
 
 ## The identity rule: adoptable when the SURFACE is unchanged
 
