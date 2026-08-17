@@ -1799,6 +1799,13 @@ public class MeshOperations
     /// document through Patch (token cost + truncation corruption on long files).
     /// Same read-your-writes semantics as Patch. Every failure mode returns a descriptive
     /// error telling the agent how to recover.
+    /// <para>🚨 ATOMIC (#1716): the anchor check-and-replace runs INSIDE
+    /// <c>GetMeshNodeStream(path).Update(...)</c> against the LIVE node — not against a
+    /// pre-read snapshot. A content-only edit ships as a base-fingerprinted splice the
+    /// owner applies only when its live text provably matches the base; a Conflict NACK
+    /// re-enqueues the lambda, which re-verifies the anchor against fresh state. The
+    /// success string is additionally gated on the edit provably landing in the live
+    /// mirror, so an exhausted late-NACK retry surfaces as an error, never "Edited:".</para>
     /// </summary>
     public IObservable<string> EditContent(string path, string oldText, string newText, bool replaceAll = false)
     {
@@ -1828,60 +1835,68 @@ public class MeshOperations
                         $"Error: node not found at {resolvedPath}. The path must be the node's exact 'path' property — " +
                         "locate it with Search and retry with the 'path' value from the match.");
 
-                var text = existing.Content switch
-                {
-                    MarkdownContent md => md.Content,
-                    CodeConfiguration code => code.Code,
-                    string s => s,
-                    _ => null
-                };
-
-                if (text == null)
+                // Pre-flight ONLY (#1716): this snapshot supplies the friendly not-text error
+                // and the pre-write version for the read-your-writes barrier. The authoritative
+                // anchor check runs inside the write lambda below — a snapshot-verified anchor
+                // can be gone by the time the write applies.
+                if (ExtractEditableText(existing) is null)
                     return Observable.Return(
                         $"Error: cannot edit {resolvedPath}: its content is " +
                         $"{existing.Content?.GetType().Name ?? "empty"}, not editable text. EditContent works on " +
                         "Markdown and Code nodes; for structured content use Patch with the full 'content' object.");
 
-                var count = CountOccurrences(text, oldText);
-                if (count == 0)
-                    return Observable.Return(
-                        $"Error: the text to replace was not found in {resolvedPath}. Get the node and copy the " +
-                        "exact text — including whitespace and line breaks — then retry. " +
-                        $"(Current content is {text.Length} chars.)");
-                if (count > 1 && !replaceAll)
-                    return Observable.Return(
-                        $"Error: the text to replace occurs {count} times in {resolvedPath}. Include more " +
-                        "surrounding context to make the match unique, or set replaceAll=true to change every occurrence.");
-
-                var newFull = text.Replace(oldText, newText, StringComparison.Ordinal);
-                var merged = existing.Content switch
-                {
-                    MarkdownContent md => WithRerenderedMarkdown(existing, md, newFull),
-                    CodeConfiguration code => existing with { Content = code with { Code = newFull } },
-                    _ => existing with { Content = newFull },
-                };
-
                 var versionBefore = existing.Version;
-                return mesh.UpdateNode(merged)
+                var appliedCount = 0;
+                string? expectedText = null;
+                return hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
+                    // The anchored check-and-replace runs against the LIVE node the framework
+                    // hands the lambda (the CollaborationPlugin.SuggestEdit shape). On a
+                    // Conflict NACK the re-enqueued lambda re-counts against fresh state, so
+                    // the uniqueness check and the replacement always see the same text the
+                    // write applies to. The lambda records the EXACT post-edit text it
+                    // produced (a re-run overwrites it) — the landed-write gate below compares
+                    // against that, never against bare newText presence: newText can occur
+                    // elsewhere in the document BEFORE the edit, which would satisfy a
+                    // presence check even for a write that never applied.
+                    .Update(live =>
+                    {
+                        var updated = ApplyAnchoredEdit(live, oldText, newText, replaceAll, out var count);
+                        appliedCount = count;
+                        expectedText = ExtractEditableText(updated);
+                        return updated;
+                    })
+                    .Take(1)
+                    .DefaultIfEmpty()
                     // Same read-your-writes barrier as Patch — see comment there.
-                    .SelectMany(updated => WaitForReadYourWrites(resolvedPath, versionBefore)
-                        .Select(confirmed =>
+                    .SelectMany(_ => WaitForReadYourWrites(resolvedPath, versionBefore))
+                    // 🚨 Gate the success string on the edit provably landing (#1716):
+                    // UpdateRemote emits OPTIMISTICALLY after its short owner-response bound,
+                    // and an exhausted late-NACK retry only logs LATE_NACK_TERMINAL. Wait
+                    // (bounded) until the live mirror provably reflects OUR edit; name the
+                    // conflict when it never does, instead of lying "Edited:". The expected
+                    // text is read per emission (Func) so a Conflict re-enqueue's re-run —
+                    // which rewrites expectedText — is picked up by the live predicate.
+                    .SelectMany(_ => WaitForEditApplied(resolvedPath, oldText, newText, () => expectedText))
+                    .Select(after =>
+                    {
+                        if (after is null)
+                            return $"Error: the edit did not land on {resolvedPath} — a concurrent " +
+                                   "change conflicted with it. Get the node to see its current " +
+                                   "content and retry with a fresh oldText.";
+                        OnNodeChange?.Invoke(new NodeChangeEntry
                         {
-                            var after = confirmed ?? updated;
-                            OnNodeChange?.Invoke(new NodeChangeEntry
-                            {
-                                Path = after.Path,
-                                Operation = "Updated",
-                                VersionBefore = versionBefore,
-                                VersionAfter = after.Version,
-                                NodeType = after.NodeType,
-                                NodeName = after.Name
-                            });
-                            var plural = count == 1 ? "" : "s";
-                            return $"Edited: {after.Path} ({count} replacement{plural})";
-                        }))
+                            Path = after.Path,
+                            Operation = "Updated",
+                            VersionBefore = versionBefore,
+                            VersionAfter = after.Version,
+                            NodeType = after.NodeType,
+                            NodeName = after.Name
+                        });
+                        var plural = appliedCount == 1 ? "" : "s";
+                        return $"Edited: {after.Path} ({appliedCount} replacement{plural})";
+                    })
                     .Catch((Exception ex) =>
-                        Observable.Return($"Error editing {resolvedPath}: {ex.Message}"));
+                        Observable.Return(TranslateAnchoredEditError(ex, resolvedPath)));
             })
             .Catch((Exception ex) =>
             {
@@ -1889,6 +1904,68 @@ public class MeshOperations
                 return Observable.Return($"Error: {ex.Message}");
             });
         });
+    }
+
+    /// <summary>
+    /// Maps the anchored-edit exception types thrown inside the write lambda back to the
+    /// tool's contract error strings — byte-identical to the messages the pre-#1716
+    /// snapshot check produced, so agents see an unchanged contract.
+    /// </summary>
+    private static string TranslateAnchoredEditError(Exception ex, string resolvedPath) => ex switch
+    {
+        AnchorNotFoundException notFound =>
+            $"Error: the text to replace was not found in {resolvedPath}. Get the node and copy the " +
+            "exact text — including whitespace and line breaks — then retry. " +
+            $"(Current content is {notFound.ContentLength} chars.)",
+        AmbiguousAnchorException ambiguous =>
+            $"Error: the text to replace occurs {ambiguous.OccurrenceCount} times in {resolvedPath}. Include more " +
+            "surrounding context to make the match unique, or set replaceAll=true to change every occurrence.",
+        _ => $"Error editing {resolvedPath}: {ex.Message}"
+    };
+
+    /// <summary>
+    /// Bounded wait for the anchored edit to be OBSERVABLE in the live mirror: emits the
+    /// first node state that provably reflects the edit (see <see cref="IsEditApplied"/>),
+    /// or <c>null</c> when it never appears within the budget (the write was NACKed away
+    /// or lost). <paramref name="expectedText"/> is a live read of the post-edit text the
+    /// update lambda produced — a Func, not a snapshot, because a Conflict re-enqueue
+    /// re-runs the lambda and rewrites the expectation. Subscribes the cache mirror's
+    /// READ stream — same non-deadlocking shape as <see cref="WaitForReadYourWrites"/>.
+    /// </summary>
+    private IObservable<MeshNode?> WaitForEditApplied(
+        string path, string oldText, string newText, Func<string?> expectedText) =>
+        hub.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null
+                && expectedText() is { } expected
+                && IsEditApplied(n, oldText, newText, expected))
+            .Take(1)
+            .Select(n => (MeshNode?)n)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
+
+    /// <summary>
+    /// Whether <paramref name="node"/>'s text provably reflects the applied edit, given
+    /// <paramref name="expectedText"/> — the EXACT post-edit text the update lambda produced.
+    /// 🚨 STRUCTURAL, never a bare "contains newText" probe: <paramref name="newText"/> can
+    /// occur elsewhere in the document BEFORE the edit, so presence alone would report a lost
+    /// write as landed. Exact equality with the expectation is the primary check; the fallback
+    /// tolerates a concurrent writer landing AFTER our edit (so the mirror never shows exactly
+    /// our expected text) by requiring the occurrence structure the edit produced: at least the
+    /// expectation's count of <paramref name="newText"/>, and no more than the expectation's
+    /// count of <paramref name="oldText"/> (0 unless <paramref name="newText"/> re-contains it).
+    /// For a deletion (empty <paramref name="newText"/>) only the anchor-count bound applies.
+    /// </summary>
+    internal static bool IsEditApplied(MeshNode node, string oldText, string newText, string expectedText)
+    {
+        var text = ExtractEditableText(node);
+        if (text is null)
+            return false;
+        if (string.Equals(text, expectedText, StringComparison.Ordinal))
+            return true;
+        var anchorGone = CountOccurrences(text, oldText) <= CountOccurrences(expectedText, oldText);
+        return newText.Length > 0
+            ? anchorGone && CountOccurrences(text, newText) >= CountOccurrences(expectedText, newText)
+            : anchorGone;
     }
 
     /// <summary>
@@ -1921,6 +1998,69 @@ public class MeshOperations
             i += needle.Length;
         }
         return count;
+    }
+
+    /// <summary>
+    /// Extracts the node's primary editable text — the Markdown body, the Code source, or a raw
+    /// string — or <c>null</c> when the content is not editable text (structured content, a
+    /// degraded <c>JsonElement</c>, empty).
+    /// </summary>
+    internal static string? ExtractEditableText(MeshNode node) => node.Content switch
+    {
+        MarkdownContent md => md.Content,
+        CodeConfiguration code => code.Code,
+        string s => s,
+        _ => null
+    };
+
+    /// <summary>
+    /// The pure anchored-edit transition (#1716): extracts the text from the LIVE node, verifies
+    /// the anchor there (0 matches ⇒ <see cref="AnchorNotFoundException"/>; several without
+    /// <paramref name="replaceAll"/> ⇒ <see cref="AmbiguousAnchorException"/>), replaces
+    /// (ordinal), and rebuilds the node — re-rendering the derived markdown artefacts exactly as
+    /// before. Designed to run INSIDE <c>GetMeshNodeStream(path).Update(...)</c> so the check and
+    /// the replacement see the same state the write applies to; a Conflict re-enqueue re-runs it
+    /// against fresh state.
+    /// </summary>
+    internal static MeshNode ApplyAnchoredEdit(MeshNode live, string oldText, string newText, bool replaceAll)
+        => ApplyAnchoredEdit(live, oldText, newText, replaceAll, out _);
+
+    /// <summary>
+    /// <see cref="ApplyAnchoredEdit(MeshNode, string, string, bool)"/> with the number of
+    /// replacements made, for the caller's success message.
+    /// </summary>
+    internal static MeshNode ApplyAnchoredEdit(
+        MeshNode live, string oldText, string newText, bool replaceAll, out int replacements)
+    {
+        var text = ExtractEditableText(live)
+            ?? throw new InvalidOperationException(
+                $"content is {live.Content?.GetType().Name ?? "empty"}, not editable text");
+        var newFull = AnchoredReplace(text, oldText, newText, replaceAll, out replacements);
+        return live.Content switch
+        {
+            MarkdownContent md => WithRerenderedMarkdown(live, md, newFull),
+            CodeConfiguration code => live with { Content = code with { Code = newFull } },
+            _ => live with { Content = newFull },
+        };
+    }
+
+    /// <summary>
+    /// The ONE anchored text replace (#1716) — shared by <see cref="ApplyAnchoredEdit(MeshNode,
+    /// string, string, bool)"/> and <c>CollaborationPlugin.Splice</c> so the uniqueness contract
+    /// cannot drift between the two edit surfaces. Throws <see cref="AnchorNotFoundException"/>
+    /// on 0 matches and <see cref="AmbiguousAnchorException"/> on an ambiguous match without
+    /// <paramref name="replaceAll"/>.
+    /// </summary>
+    internal static string AnchoredReplace(
+        string text, string oldText, string newText, bool replaceAll, out int replacements)
+    {
+        var count = CountOccurrences(text, oldText);
+        if (count == 0)
+            throw new AnchorNotFoundException(text.Length);
+        if (count > 1 && !replaceAll)
+            throw new AmbiguousAnchorException(count);
+        replacements = count;
+        return text.Replace(oldText, newText, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -4145,4 +4285,37 @@ public class MeshOperations
                 });
         });
     }
+}
+
+/// <summary>
+/// Thrown by the anchored-edit primitive (<see cref="MeshOperations.AnchoredReplace"/>) when the
+/// text to replace has 0 occurrences in the LIVE content — the anchor was edited away between the
+/// caller's read and the write turn (or never existed). Carries the live content's length so the
+/// tool error can tell the agent what it was checked against.
+/// </summary>
+internal sealed class AnchorNotFoundException : InvalidOperationException
+{
+    /// <summary>Creates the exception, recording the live content's length.</summary>
+    public AnchorNotFoundException(int contentLength)
+        : base("the text to replace was not found — it may have been edited since you read it")
+        => ContentLength = contentLength;
+
+    /// <summary>Length (chars) of the live content the anchor was checked against.</summary>
+    public int ContentLength { get; }
+}
+
+/// <summary>
+/// Thrown by the anchored-edit primitive (<see cref="MeshOperations.AnchoredReplace"/>) when the
+/// text to replace occurs more than once in the LIVE content and <c>replaceAll</c> was not set —
+/// replacing an arbitrary occurrence would corrupt the document.
+/// </summary>
+internal sealed class AmbiguousAnchorException : InvalidOperationException
+{
+    /// <summary>Creates the exception, recording how many occurrences were found.</summary>
+    public AmbiguousAnchorException(int occurrenceCount)
+        : base($"the text to replace occurs {occurrenceCount} times — include more surrounding context to make the match unique")
+        => OccurrenceCount = occurrenceCount;
+
+    /// <summary>Number of occurrences found in the live content.</summary>
+    public int OccurrenceCount { get; }
 }
