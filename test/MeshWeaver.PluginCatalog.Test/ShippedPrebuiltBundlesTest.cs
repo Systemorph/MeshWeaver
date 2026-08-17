@@ -90,6 +90,111 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
         }
     }
 
+    /// <summary>
+    /// 🚨 THE STEADY-STATE BOOT: a bundle whose types are already adopted must cost NOTHING —
+    /// no assembly read, no store upload, no node write, and above all no per-NodeType hub
+    /// activation — while still reporting the same COVERAGE.
+    ///
+    /// <para>Measured on memex-cloud 2026-08-17 (pod <c>…-dbpx6</c>, 19:22:51→19:23:05): 43
+    /// assemblies re-adopted from 18 bundles, <b>13.5 s of a 101 s boot</b>, at ~300 ms per entry
+    /// — one per-node hub activation + one store upload + one node write each — establishing that
+    /// nothing had changed since the previous pod did exactly the same thing. The framework
+    /// identity is an API-surface hash and is deliberately stable across internal-only merges, so
+    /// this is the COMMON roll, not an edge case.</para>
+    ///
+    /// <para>The three steps are one story on purpose, and step 3 is what makes step 2 an honest
+    /// assertion rather than a race: a skip is the absence of a write, so it can only be proven
+    /// against a stream that demonstrably WOULD have shown one. Clearing the store and watching
+    /// the very next seed re-adopt supplies exactly that positive control — and pins the
+    /// level-triggered property at the same time (a cleared / remounted / stale-restored assembly
+    /// volume must re-seed, never be skipped on the record's word alone; that is the
+    /// <see cref="BakeState.BytesMissing"/> trap).</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task UnchangedBundle_SkipsWithoutRewriting_AndReSeedsWhenTheStoreLosesItsBytes()
+    {
+        var typePath = $"{TestPartition}/SteadyStateThing";
+        await CreateNodeType("SteadyStateThing");
+
+        var dir = CreateBundleDirectory();
+        try
+        {
+            WriteBundle(
+                Path.Combine(dir, "steady.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream([0xAB, 0xCD, 0xEF])));
+
+            // ── 1. First boot: the bundle is adopted, exactly as before. ──────────────────────
+            var first = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            first.Should().Be(1, "a type with no build yet must be adopted");
+
+            var afterFirst = await AdoptedNode(typePath);
+            var adoptedVersion = afterFirst.Version;
+            var adoptedAt = afterFirst
+                .ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.LastCompileSucceededAt;
+
+            // ── 2. Second boot, nothing changed: SKIPPED — but still COVERED. ─────────────────
+            var second = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            second.Should().Be(1,
+                "coverage is unchanged by the skip — deploy/aks/values.aks.yaml makes this count "
+                + "the signal that the CI bake lane works, so it must NOT collapse to 0 on a "
+                + "healthy steady-state boot");
+
+            var afterSecond = await CurrentNode(typePath);
+            afterSecond.Version.Should().Be(adoptedVersion,
+                "an already-adopted entry must not be re-stamped — the write is what activates "
+                + "the NodeType's per-node hub, and that activation is the whole cost being removed");
+            afterSecond.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!
+                .LastCompileSucceededAt.Should().Be(adoptedAt,
+                    "a re-adoption would restamp this timestamp; an unchanged one proves Seed "
+                    + "never ran");
+
+            // ── 3. The positive control: the store loses its bytes ⇒ the next seed re-adopts. ──
+            Directory.Delete(AssemblyStoreRoot, recursive: true);
+
+            var third = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            third.Should().Be(1, "the entry is covered again — this time by actually re-adopting it");
+
+            var afterThird = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+                .Where(n => n is not null && n.Version > adoptedVersion)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+            afterThird!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!
+                .LastCompileSucceededAt.Should().NotBe(adoptedAt,
+                    "the record may never be trusted over the store: a cleared assembly volume "
+                    + "leaves every record pristine over bytes that are gone, and a skip decided "
+                    + "on the record alone would leave the type permanently unbuilt");
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    /// <summary>The node once its adoption has landed.</summary>
+    private Task<MeshNode> AdoptedNode(string typePath) =>
+        Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
+                ?.CompilationStatus == CompilationStatus.Ok)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(TestContext.Current.CancellationToken)!;
+
+    /// <summary>The node as it stands right now.</summary>
+    private Task<MeshNode> CurrentNode(string typePath) =>
+        Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n is not null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(TestContext.Current.CancellationToken)!;
+
     /// <summary>#1707 slice 3: install/push-time consumption is scoped to the CALLER's types —
     /// the mesh-wide enumeration is the boot path's business only.</summary>
     [Fact(Timeout = 120_000)]
