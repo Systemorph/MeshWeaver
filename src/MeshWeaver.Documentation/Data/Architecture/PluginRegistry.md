@@ -93,6 +93,11 @@ and they are independent:
   `Source/Package` patterns, through the same path the Install button uses. Our deployments set
   `["Plugins/*"]`, so a new portal comes up with the platform plugins — the Store included — already
   present and (per `AutoUpdateByDefault`) tracking their repo.
+- **`Features:Flags:{name}:Packages`** *asserts* a per-environment policy, reconciled on **every**
+  boot: what THIS deployment always has, with a declared-but-disabled flag EXCLUDING what it names.
+  🚨 Use this, not `InstallByDefault`, whenever the portal already has install records — the seed is
+  ledger-gated and can say nothing about an already-populated installation, which is every live
+  portal. Full treatment: [Environment Composition](/Doc/Architecture/EnvironmentComposition).
 
 > 🚨 The selection is **source-scoped, and that is a security property, not a convenience**. An
 > instance is routinely granted the platform repo *and* paid course content; "install everything I'm

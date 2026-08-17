@@ -335,6 +335,31 @@ data:
   {{- range $i, $p := .Values.pluginCatalog.installByDefault }}
   PluginCatalog__InstallByDefault__{{ $i }}: "{{ $p }}"
   {{- end }}
+  {{- /* The platform's own baseline (packages whose manifest declares preInstalled), reconciled on
+         every boot. Defaults to true in code; templated HERE because it was one of the keys this
+         configmap did not list, i.e. an env overlay that set it was SILENTLY DROPPED and the
+         documented opt-out could not be exercised per environment at all. */}}
+  {{- if kindIs "bool" .Values.pluginCatalog.installPreInstalledPackages }}
+  PluginCatalog__InstallPreInstalledPackages: "{{ .Values.pluginCatalog.installPreInstalledPackages }}"
+  {{- end }}
+  # ---- Per-environment composition: FEATURE FLAGS ---------------------------
+  # An enabled flag INSTALLS the packages it names (reconciled on every boot — unlike
+  # installByDefault above, which seeds once and can therefore say nothing about an
+  # already-populated portal); a declared-but-DISABLED flag EXCLUDES them, and the exclusion wins
+  # over every other selection signal. That is what makes "all of Plugins, without the games" one
+  # line in an environment's values file on top of a shared declaration. A flag with no packages is
+  # a plain named boolean. See Doc/Architecture/EnvironmentComposition.
+  {{- range $name, $flag := .Values.features }}
+  {{- if hasKey $flag "enabled" }}
+  Features__Flags__{{ $name }}__Enabled: "{{ $flag.enabled }}"
+  {{- end }}
+  {{- if $flag.description }}
+  Features__Flags__{{ $name }}__Description: "{{ $flag.description }}"
+  {{- end }}
+  {{- range $i, $p := $flag.packages }}
+  Features__Flags__{{ $name }}__Packages__{{ $i }}: "{{ $p }}"
+  {{- end }}
+  {{- end }}
   {{- if .Values.pluginCatalog.instanceId }}
   # First-startup auto-registration identity (pairs with the PluginCatalog__BootstrapKey secret).
   PluginCatalog__InstanceId: "{{ .Values.pluginCatalog.instanceId }}"
