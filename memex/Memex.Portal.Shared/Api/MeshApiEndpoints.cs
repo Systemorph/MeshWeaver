@@ -3,7 +3,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.Blazor.Infrastructure; // PortalApplication
-using MeshWeaver.Mcp;
+using MeshWeaver.Hosting.AspNetCore;    // SessionHubResolver, McpConfiguration
 using MeshWeaver.Mesh.Security;         // WellKnownUsers
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;             // AccessService
@@ -309,8 +309,10 @@ public static class MeshApiEndpoints
             o.MultipartHeadersLengthLimit = int.MaxValue;
         });
 
-        // McpConfiguration is already bound by AddMeshMcp(); BindConfiguration is
-        // idempotent so a second call is harmless if the MCP wiring is absent.
+        // 🚨 This binding is the REST surface's OWN — it must not depend on the MCP module being
+        // listed. AddMeshMcp() binds the same options when MeshWeaver.Mcp IS installed;
+        // BindConfiguration is idempotent, so both lanes coexist and /api/mesh/base-url keeps
+        // answering when MCP is delisted.
         services.AddOptions<McpConfiguration>().BindConfiguration("Mcp");
 
         return services;
