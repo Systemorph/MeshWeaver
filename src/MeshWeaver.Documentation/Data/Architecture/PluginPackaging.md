@@ -249,6 +249,29 @@ Both are gated by the **instance key** (`mwi_`, as `Bearer` or `Basic`) resolvin
 are recorded against. They **fail closed**: no anonymous escape hatch, unlike the registry's dev-mode
 one. These are compiled assemblies for paid modules.
 
+**That is TWO decisions, and for a long time only the first one ran (#1772).** The key
+*authenticates* — a valid `mwi_` or 401 — and the grant *authorizes*, per package. Until #1772 the
+authenticated caller was stashed on the request and never read back, so any registered instance could
+download every installed package's bundle, paid courses included, while this very paragraph said
+otherwise. An instance key is issued to every registered installation: it is identity, never
+entitlement.
+
+The authorization is `PluginGrantEntry` matched against the **install record's `Source`** — the
+registry source the package was installed from — exactly as `/api/plugins` scopes its listing and
+`InstallByDefault` scopes its selection. Consequences worth knowing:
+
+- **The index is scoped too.** An ungranted package is not listed, so a caller cannot learn it is
+  installed here. That is what makes the download refusal non-informative.
+- **A refusal is byte-identical to "no such bundle"** — same status, same empty body, same headers.
+  Bundle URLs are fully predictable, so a distinguishable refusal is an inventory oracle over the
+  whole catalogue; `/api/content` closed the same hole in #587. WHICH of the three it was (unknown
+  package, unknown version, ungranted) goes to the **log**, never the response.
+- **An unstamped `Source` is servable to nobody.** It matches no grant entry, and "cannot determine"
+  is a refusal. `PluginBundleClient` reads the resulting 404 as "no prebuilt bundle — will compile",
+  so the cost is a compile, never a failed install. The stamp is carried forward across re-installs
+  (`PackageInstaller.SeedSource`): an update rebuilt from a source-less catalog entry must not erase
+  the field the check reads, or the lane goes dark silently.
+
 **The portal serves the bytes rather than handing out storage access.** `BlobAssemblyStore` is
 already the durable transport — one blob per `(nodeTypePath, version)`, hydrated into a process-local
 cache on demand — so reading through `IAssemblyStore` means the bundle is assembled from the very
