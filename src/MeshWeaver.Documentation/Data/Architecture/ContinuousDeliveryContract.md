@@ -182,9 +182,11 @@ produces it rather than silently "fixed". This is also why `check-image-set.sh` 
 
 Two post-promote legs ride every armed release (#1660 WS3):
 
-**`publish-bake`** runs the platform's own shipped content (the `Doc` tree and the
-`samples/Graph/Data` trees) through `mw-plugin-test --bake-output` **inside the `mw-plugin-test`
-image this run just built and promoted**, then copies the bundles onto the portals' shared storage,
+**`publish-bake`** runs the content the image itself embeds (the `Doc` tree — and **only** that:
+node-repo content, Store packages and the samples trees arrive already compiled or are gate-only,
+see [CI Content Bake](/Doc/Architecture/CiContentBake)) through `mw-plugin-test --bake-output`
+**inside the `mw-plugin-test` image this run just built and promoted**, then copies the bundles onto
+the portals' shared storage,
 laid out `prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip`
 (`.github/scripts/publish-bake-bundles.sh`). Baking in the image is not an implementation detail —
 it is the whole correctness argument. The framework identity is derived from the **binaries a host
