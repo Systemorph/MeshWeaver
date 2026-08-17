@@ -1,4 +1,4 @@
-using Memex.Portal.Shared.Email;
+using MeshWeaver.Mail.MicrosoftGraph;
 using Xunit;
 
 namespace MeshWeaver.Auth.Test;
