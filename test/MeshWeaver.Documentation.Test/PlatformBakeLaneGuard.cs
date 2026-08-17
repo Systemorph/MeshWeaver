@@ -95,6 +95,42 @@ public class PlatformBakeLaneGuard
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 CD bakes ONLY the content the image itself embeds. Everything a deployment receives
+    /// already built — node-repo content (Plugins, Education, Reinsurance, SocialMedia), Store
+    /// packages, and the samples trees — is ADOPTED from a bundle its own lane published under the
+    /// same framework identity. Re-compiling it here would redo that work, burn CD wall-clock, and
+    /// re-derive assemblies that were meant to be authoritative.
+    /// </summary>
+    [Fact]
+    public void PlatformBake_CompilesOnlyWhatTheImageEmbeds()
+    {
+        var job = ExecutableLinesOf(ReadJobBlock());
+
+        Assert.True(job.Contains("stage-doc-gate.sh", StringComparison.Ordinal),
+            $"'{JobName}' must bake the Doc tree — it is the content every portal embeds "
+            + "(Memex.Portal.Shared references MeshWeaver.Documentation), so it is the one tree "
+            + "no other lane can publish.");
+
+        Assert.False(job.Contains("stage-samples-gate.sh", StringComparison.Ordinal),
+            $"'{JobName}' must NOT bake samples/Graph/Data. No deployment embeds those trees, and "
+            + "memex receives them over the GitHub link into the `MeshWeaver` partition — where the "
+            + "node paths read `MeshWeaver/samples/Graph/Data/ACME/…` while the bundles are keyed "
+            + "`ACME/…`, so the seeder (which matches by node PATH) can never adopt them. Measured: "
+            + "7 packages / 24 assemblies compiled per CD run for bundles nothing can use. They "
+            + "still compile-GATE on every PR in dotnet-test.yml's doc-gate — that proves the "
+            + "content, which is the part worth paying for.");
+
+        // The strongest form of "CD cannot compile someone else's module": it never checks out
+        // someone else's repository. One `repository:` input would make it possible.
+        var text = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
+        Assert.False(text.Contains("repository:", StringComparison.Ordinal),
+            $"{Workflow} must check out no repository but this one. Node-repo and Store content "
+            + "arrives already compiled and is adopted; a checkout of another repo here would let "
+            + "CD re-derive assemblies whose authoritative build belongs to that repo's own "
+            + "publish-bake lane.");
+    }
+
     /// <summary>The block's lines that can actually DO something: YAML and shell comment lines
     /// (first non-blank character <c>#</c>) dropped, everything else kept verbatim.</summary>
     private static string ExecutableLinesOf(string block) =>
@@ -182,38 +218,64 @@ public class PlatformBakeLaneGuard
     }
 
     /// <summary>
-    /// 🚨 <c>PreWarm__AdoptOnly</c> only does anything while <c>PreWarm__DynamicTypes</c> is
-    /// <c>true</c> — and the "obvious simplification" of the local values (set
-    /// <c>PreWarm__DynamicTypes: "false"</c>, since we are not pre-baking any more) would silently
-    /// undo the whole point.
+    /// 🚨 <b>An armed readiness gate with no sweep behind it is a SILENT LIE.</b>
     ///
-    /// <para>The bundle SEEDING and the compiling sweep live on the same hosted service. Disabling
-    /// the service disables adoption with it, so the instance would adopt nothing AND still compile
-    /// every type — just lazily, one hub activation at a time, and with no boot report saying so.
-    /// The local default therefore has to keep the service ON and select adopt-only, which reads
-    /// like a contradiction to anyone who has not traced the boot path. This asserts the pairing so
-    /// it survives the next person who tidies the file.</para>
+    /// <para>The bake gate reads state that only the compiling sweep writes, and the health check
+    /// deliberately reports Healthy while the bake is <c>NotStarted</c> so a configuration mistake
+    /// can never black-hole a pod. The consequence is that <c>GateReadiness=true</c> with
+    /// <c>DynamicTypes=false</c> yields a gate that is registered, permanently green, and protects
+    /// NOTHING — which is precisely the failure the gate exists to prevent.</para>
+    ///
+    /// <para>The portal shouts that combination at Critical on startup, but a log line is a
+    /// runtime discovery; this is the compile-time one. It matters most right now, because the
+    /// fleet has just switched the sweep OFF: the next person who re-arms a gate "for safety"
+    /// without also restoring the sweep gets false confidence, not safety.</para>
     /// </summary>
     [Fact]
-    public void LocalDefaults_AdoptRatherThanPreBake_AndKeepTheSeedingOn()
+    public void NoValuesFileArmsTheBakeGateWithoutTheSweepBehindIt()
+    {
+        var root = FindRepoRoot();
+        var offenders = new[]
+            {
+                Path.Combine(root, "deploy", "helm", "values.yaml"),
+                Path.Combine(root, "deploy", "aks", "values.aks.yaml"),
+                Path.Combine(root, "deploy", "homebrew", "share", "values.local.defaults.yaml"),
+            }
+            .Where(File.Exists)
+            .Select(f => (file: Path.GetFileName(f), lines: File.ReadAllLines(f)
+                .Select(l => l.Trim())
+                .Where(l => !l.StartsWith('#'))
+                .ToList()))
+            .Where(x => Setting(x.lines, "PreWarm__GateReadiness") == "true"
+                        && Setting(x.lines, "PreWarm__DynamicTypes") != "true")
+            .Select(x => x.file)
+            .ToList();
+
+        Assert.True(offenders.Count == 0,
+            "These values files arm PreWarm__GateReadiness while PreWarm__DynamicTypes is not "
+            + "true. The gate can only reach a verdict from the compiling sweep, so with the sweep "
+            + "off it reports healthy on every rollout and protects nothing — worse than no gate, "
+            + "because the deployment believes it is protected. Either restore the sweep or turn "
+            + "the gate off. Offending file(s): " + string.Join(", ", offenders));
+    }
+
+    /// <summary>The value of a <c>KEY: "value"</c> line, unquoted, or null when unset.</summary>
+    private static string? Setting(IEnumerable<string> lines, string key) =>
+        lines.FirstOrDefault(l => l.StartsWith(key + ":", StringComparison.Ordinal))
+            ?.Split(':', 2)[1].Trim().Trim('"');
+
+    /// <summary>
+    /// The local instance must name a bundle root — adopt-only with nothing to adopt from reports
+    /// every dynamic type as uncovered forever, which is honest but useless.
+    /// </summary>
+    [Fact]
+    public void LocalDefaults_NameABundleRootToAdoptFrom()
     {
         var values = File.ReadAllLines(Path.Combine(
                 FindRepoRoot(), "deploy", "homebrew", "share", "values.local.defaults.yaml"))
             .Select(l => l.Trim())
             .Where(l => !l.StartsWith('#'))
             .ToList();
-
-        Assert.Contains(values, l => l.StartsWith("PreWarm__AdoptOnly:", StringComparison.Ordinal)
-                                     && l.Contains("true", StringComparison.Ordinal));
-
-        Assert.True(
-            values.Any(l => l.StartsWith("PreWarm__DynamicTypes:", StringComparison.Ordinal)
-                            && l.Contains("true", StringComparison.Ordinal)),
-            "The local instance selects adopt-only, which requires PreWarm__DynamicTypes to stay "
-            + "\"true\": the prebuilt-bundle seeding runs on the same hosted service as the sweep, "
-            + "so turning the service off would adopt NOTHING and compile everything lazily "
-            + "instead — the opposite of the intent, and silent. Adopt-only is the key that "
-            + "removes the compiling; DynamicTypes is the key that keeps the adoption.");
 
         Assert.True(
             values.Any(l => l.StartsWith("PreWarm__PrebuiltBundleRoot:", StringComparison.Ordinal)

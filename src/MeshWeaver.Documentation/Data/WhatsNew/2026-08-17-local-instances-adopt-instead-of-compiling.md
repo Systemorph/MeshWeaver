@@ -26,7 +26,7 @@ never will, and "build your own" remains the right answer for it. What the new d
 the *silent* version — a gap you would otherwise discover when a page renders empty.
 
 If you are authoring NodeTypes locally and want the old behaviour back, set
-`PreWarm__AdoptOnly: "false"` in your values overlay; the startup bake returns unchanged.
+`PreWarm__DynamicTypes: "true"` in your values overlay; the startup bake returns unchanged.
 
 Two related fixes ship with it. `PreWarm__PrebuiltBundleRoot` had been set in the AKS values since
 the CI-bake lane shipped, but the chart's configmap never rendered the key — so every
