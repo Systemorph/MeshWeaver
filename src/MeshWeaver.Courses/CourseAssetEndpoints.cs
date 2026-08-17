@@ -12,7 +12,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Courses;
+namespace MeshWeaver.Courses;
 
 /// <summary>
 /// <c>GET /assets/{Space}/{path…}</c> — the entitlement-gated course-asset endpoint.
@@ -28,7 +28,7 @@ namespace Memex.Portal.Shared.Courses;
 /// Space) always pass. 404 when the Space has no GitSync config or the file is not in the repo;
 /// 401 (anonymous) / 403 (authenticated) when the gate denies.</para>
 ///
-/// <para><b>Shape</b>: mirrors <see cref="MeshWeaver.Hosting.Blazor">the /static endpoint</see> —
+/// <para><b>Shape</b>: mirrors the <c>/static</c> endpoint in <c>MeshWeaver.Hosting.Blazor</c> —
 /// the whole resolution is one <see cref="IObservable{T}"/> chain, bridged to
 /// <c>Task&lt;IResult&gt;</c> exactly once at the HTTP boundary with
 /// <c>FirstAsync().ToTask(RequestAborted)</c>. The viewer identity comes from the
@@ -89,7 +89,15 @@ public static class CourseAssetEndpoints
                 })
                 .FirstAsync()
                 .ToTask(http.RequestAborted);
-        });
+        })
+        // 🚨 EXPLICITLY anonymous, and it must stay that way. The route was implicitly anonymous
+        // while it lived in the host; contributed through the module endpoint hook it maps inside
+        // a group that defaults to RequireAuthorization(), which would challenge an anonymous
+        // viewer BEFORE CourseAssetGate ever runs — turning a public course's assets into a login
+        // redirect. The gate IS the guard here: it distinguishes anonymous-but-allowed (public
+        // course) from NotAuthenticated (401) and Forbidden (403) itself, exactly as the LinkedIn
+        // OAuth callbacks rely on their CSRF state cookie rather than the group policy.
+        .AllowAnonymous();
         return endpoints;
     }
 

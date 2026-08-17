@@ -1,6 +1,6 @@
 using MeshWeaver.Mesh.Security;
 
-namespace Memex.Portal.Shared.Courses;
+namespace MeshWeaver.Courses;
 
 /// <summary>
 /// Pure decision logic for the course-asset endpoint (<c>GET /assets/{Space}/{path…}</c>):
