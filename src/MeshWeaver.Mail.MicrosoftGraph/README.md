@@ -18,8 +18,9 @@ invitation and outbound-drain services keep resolving, and `POST /api/email` is 
 
 ## Why it is a module
 
-The Microsoft Graph SDK was the heaviest dependency in the portal image — **43 MB across nine
-assemblies** — for four files of code. It also costs at runtime: `KernelScriptReferences`
+The Microsoft Graph SDK was the heaviest dependency in the portal image — **43 MB across ten
+assemblies** (nine `Microsoft.Graph*`/`Microsoft.Kiota*` plus `Microsoft.IO.RecyclableMemoryStream`) —
+for four files of code. It also costs at runtime: `KernelScriptReferences`
 documents `Microsoft.Graph.dll` as a **41 MiB native metadata block** in the Roslyn script
 reference set, named there as a direct cause of CI memory-pressure flakes. A deployment that sends
 no mail should carry neither.

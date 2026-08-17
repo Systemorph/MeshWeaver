@@ -16,7 +16,8 @@ namespace MeshWeaver.Mail.MicrosoftGraph;
 /// Graph <c>/sendMail</c>), inbound mail intake, and the Executive Assistant's mailbox tools.
 ///
 /// <para><b>Why this is a module.</b> The Microsoft Graph SDK is the single heaviest dependency
-/// the portal carried — 43 MB across nine assemblies — for four files of code, and
+/// the portal carried — 43 MB across ten assemblies (nine <c>Microsoft.Graph*</c>/
+/// <c>Microsoft.Kiota*</c> plus <c>Microsoft.IO.RecyclableMemoryStream</c>) — for four files of code, and
 /// <c>Microsoft.Graph.dll</c> alone materializes a <b>41 MiB native metadata block</b> in every
 /// Roslyn script reference set (see <c>KernelScriptReferences</c>, where it is named as a direct
 /// cause of CI memory-pressure flakes). A deployment that sends no mail should carry none of it.</para>
