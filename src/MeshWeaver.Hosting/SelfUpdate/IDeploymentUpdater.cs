@@ -19,6 +19,21 @@ public interface IDeploymentUpdater
     /// rolling update. Patching the migration alongside the portal is how the database schema /
     /// <c>db_version</c> stays in step — the meaningful, safe "auto-update Postgres".</summary>
     Task PatchToVersionAsync(string versionTag, CancellationToken ct);
+
+    /// <summary>
+    /// When self-update last rolled THIS install, or null when it never has (or cannot tell).
+    ///
+    /// <para>🚨 This must be state that SURVIVES A RESTART, because a successful roll restarts the
+    /// process: an in-memory "last rolled at" is always empty exactly when it is needed, so a floor
+    /// built on it would never hold. The Kubernetes implementation stamps an annotation on the
+    /// Deployment it patches and reads that back.</para>
+    ///
+    /// <para>🚨 And it must NOT be process uptime, which is the tempting third option and is wrong
+    /// for crash recovery: a pod that comes back on an OLD image has a young process but an old
+    /// deployment, and uptime would make it wait out a floor it has long since satisfied. The
+    /// annotation gives the right answer there — old stamp, floor elapsed, roll immediately.</para>
+    /// </summary>
+    Task<DateTimeOffset?> LastRolledAtAsync(CancellationToken ct);
 }
 
 /// <summary>Probes the deployment target so the k8s-patch path only arms where it can actually
