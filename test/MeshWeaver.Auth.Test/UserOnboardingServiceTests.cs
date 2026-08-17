@@ -149,6 +149,79 @@ public class UserOnboardingServiceTests(ITestOutputHelper output) : MonolithMesh
     }
 
     /// <summary>
+    /// The language picked on the onboarding form is persisted to <see cref="User.Locale"/> at user
+    /// creation.
+    ///
+    /// <para>This is the whole point of asking during onboarding rather than leaving it to
+    /// <c>BrowserPreferenceDetector</c>: the detector lives in the authenticated portal shell, so it
+    /// does not run until AFTER onboarding — a German-speaking user therefore filled in the form,
+    /// and read the first screens, in English. The form defaults the picker from the visitor's own
+    /// computer language (<c>Accept-Language</c> → <c>AccessContext.Locale</c>), so this write is
+    /// what makes "take the computer language, put it on the user" actually true from the first
+    /// screen.</para>
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateUser_PersistsTheChosenLocale()
+    {
+        var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+
+        var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        using (accessService.ImpersonateAsSystem())
+        {
+            await service.CreateUser(new UserOnboardingRequest(
+                    Username: username,
+                    Email: $"{username}@example.com",
+                    FullName: "Sprachtest",
+                    Locale: "de"))
+                .Should().Emit();
+        }
+
+        var root = await ReadNode(username).Should().Emit();
+        root.Should().NotBeNull();
+        // ContentAs, never `as User` — the node stream alternates typed↔JsonElement frames.
+        root.ContentAs<User>(Mesh.JsonSerializerOptions)!.Locale.Should().Be("de",
+            "the language chosen on the onboarding form must reach User.Locale, which is what "
+            + "AccessContext.Locale — and therefore every localized render — resolves from");
+    }
+
+    /// <summary>
+    /// A region variant folds onto the shipped primary subtag, and a language this deployment does
+    /// NOT ship stores NOTHING rather than pinning the profile.
+    ///
+    /// <para>The null case matters: leaving <see cref="User.Locale"/> empty is what lets a
+    /// translation shipped later apply to that user automatically. Storing the raw unshipped tag
+    /// would render English anyway AND permanently suppress that upgrade — so "unsupported" has to
+    /// stay distinguishable from "chose English" (<see cref="Locales.TryMatch"/> vs
+    /// <see cref="Locales.Resolve"/>).</para>
+    /// </summary>
+    [Theory(Timeout = 30000)]
+    [InlineData("de-CH", "de")]
+    [InlineData("en-GB", "en")]
+    [InlineData("fr-FR", null)]
+    [InlineData("", null)]
+    public async Task CreateUser_ResolvesLocaleAndDropsUnshippedLanguages(string requested, string? expected)
+    {
+        var username = $"obtest-{Guid.NewGuid():N}".ToLowerInvariant()[..16];
+
+        var service = Mesh.ServiceProvider.GetRequiredService<UserOnboardingService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        using (accessService.ImpersonateAsSystem())
+        {
+            await service.CreateUser(new UserOnboardingRequest(
+                    Username: username,
+                    Email: $"{username}@example.com",
+                    Locale: requested))
+                .Should().Emit();
+        }
+
+        var root = await ReadNode(username).Should().Emit();
+        root.ContentAs<User>(Mesh.JsonSerializerOptions)!.Locale.Should().Be(expected);
+    }
+
+    /// <summary>
     /// Login query (the actual one used by <c>OnboardingMiddleware.FindUserByEmail</c>)
     /// must find the just-created user by email. With the User-catalog mirror write removed,
     /// this is now served by the partition-root User node directly (the query is

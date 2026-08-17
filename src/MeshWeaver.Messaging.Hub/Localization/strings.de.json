@@ -347,6 +347,7 @@
   "auth.username": "Benutzername",
   "auth.usernamePlaceholder": "Benutzernamen wählen",
   "auth.email": "E-Mail",
+  "auth.language": "Sprache",
   "auth.bio": "Kurzbiografie",
   "auth.bioPlaceholder": "Eine kurze Beschreibung zur Person (optional)",
   "auth.role": "Rolle",
