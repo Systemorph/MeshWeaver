@@ -223,16 +223,36 @@ behaves exactly as today.
 pipeline, **after** the static repo import settles (the nodes a bundle names must exist) and
 **before** [the sweep](/Doc/Architecture/NodeTypeCompilation) probes the assembly store:
 
-1. every `*.zip` under `prebuilt/` (override: `PreWarm:PrebuiltDirectory`) is read with
-   `BundleReader` — the one codec shared with the registry bundle client;
+1. every `*.zip` under `prebuilt/` (override: `PreWarm:PrebuiltDirectory`) has its **manifest** read
+   with `BundleReader.ReadManifest` — a few KB at a known entry, **no assembly decompressed**;
 2. the bundle's framework MVID is checked **once** against the running process; a mismatch declines
    the whole bundle, loudly;
 3. one enumeration of the mesh's NodeType nodes filters the entries down to types this deployment
    actually holds (an image ships one content set; a mesh serves a subset) — no per-missing-path
-   waits;
-4. each remaining entry is adopted through `PrebuiltAssemblySeeder.Seed`: the bytes land in the
-   assembly store under the node's **current** version, and the record is stamped exactly as a
-   successful compile stamps it.
+   waits. The enumerated **nodes** are kept, not just their paths: they carry the record that
+   answers step 4;
+4. each remaining entry is asked whether adopting it would change anything —
+   `PrebuiltAssemblySeeder.IsAlreadyAdopted`, which defers to the same `NodeTypeBakeStatus.Classify`
+   the sweep's probe uses, plus one store probe at the record's `LastCompiledVersion`. An entry the
+   store already backs is **skipped entirely**;
+5. only the **deviating** entries are extracted (`BundleReader.Read(stream, nodePaths)`) and adopted
+   through `PrebuiltAssemblySeeder.Seed`: the bytes land in the assembly store under the node's
+   version and the record is stamped exactly as a successful compile stamps it.
+
+> 🚨 **Step 4 is not an optimisation detail — adoption is expensive.** `Seed` opens the type's own
+> mesh-node stream, which **activates its per-node hub**, then re-uploads the bytes and writes the
+> node. Before the skip, memex-cloud re-adopted all 43 of its assemblies on every boot — 43
+> activations, 43 uploads, 43 writes, **13.5 s of a 101 s warm-up** — to establish that nothing had
+> changed since the previous pod did the same. The framework identity is an API-surface hash and is
+> stable across internal-only merges, so that is the *common* roll. It also grew the assembly cache
+> by a whole generation per boot: `Seed` stamps the version it read *before* its own write, so each
+> re-adoption uploaded the same bytes under a new key that nothing ever read.
+
+The skip stays **level-triggered on the store**: the record's claim is believed only when a probe
+confirms the bytes are still at that key, so a cleared, remounted or stale-restored assembly volume
+re-seeds exactly as before (`BakeState.BytesMissing`). The reported count is `adopted +
+already-current`, so the coverage signal below does not collapse to zero on a healthy steady-state
+boot.
 
 The sweep's store probe (`NodeTypeBakeStatus`) then classifies each adopted type `Baked` — for fully
 covered shipped content the boot log reads `pending=0` and no Roslyn runs. Everything here is
