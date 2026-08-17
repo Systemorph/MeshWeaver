@@ -1674,10 +1674,7 @@ public static class PackageInstaller
             .Where(f => ModuleManifest.IsManifestPath(f.RelativePath))
             .Select(f => ModuleManifest.TryParse(f.Content, logger))
             .FirstOrDefault(m => m is not null);
-        var nodes = files
-            .Select(f => ParseCanonical(parsers, f, logger))
-            .Where(n => n is not null).Select(n => n!)
-            .ToArray();
+        var nodes = ParseAll(parsers, files, manifest.Id, logger);
 
         if (nodes.Length == 0)
             return Observable.Throw<InstallResult>(new InvalidOperationException(
@@ -2187,10 +2184,7 @@ public static class PackageInstaller
     {
 
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
-        var nodes = changedFiles
-            .Select(f => ParseCanonical(parsers, f, logger))
-            .Where(n => n is not null).Select(n => n!)
-            .ToArray();
+        var nodes = ParseAll(parsers, changedFiles, manifest.Id, logger);
 
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
             return shadowed;
@@ -2338,7 +2332,42 @@ public static class PackageInstaller
     // Parses a node-per-file file into a MeshNode at its CANONICAL path (no partition rebase) — the
     // file's repo-relative path IS the node's path. The export's top-level README.md is a GitHub
     // display file, never a node (mirrors GitHubSyncService.ParseFile, minus the space rebase).
-    private static MeshNode? ParseCanonical(FileFormatParserRegistry parsers, PackageFile file, ILogger? logger)
+    /// <summary>
+    /// Parses every file of an install and reports the UNPARSEABLE ones as ONE aggregate line.
+    ///
+    /// <para>🚨 #1767: a per-file "skipped" warning is not a signal. `PensionFund` shipped 72
+    /// BOM'd files, 62 of them were skipped, the package gated ZERO NodeTypes — and the install
+    /// reported success for years, because the only evidence was 62 lines in a log nobody reads.
+    /// "I installed nothing" and "I installed everything" must never look alike at the level where
+    /// the verdict is read.</para>
+    ///
+    /// <para>Loud and counted, NOT fatal: the runtime itself skips unmaterialisable files and
+    /// installs the rest, so refusing here would resolve a SMALLER tree than the mesh does — the
+    /// equivalence break #1763 exists to prevent, in the opposite direction. Files that are not
+    /// nodes by design (README, manifest, `content/**` assets) are not skips and are not counted.
+    /// </para>
+    /// </summary>
+    private static MeshNode[] ParseAll(
+        FileFormatParserRegistry parsers, IReadOnlyList<PackageFile> files, string packageId, ILogger? logger)
+    {
+        var unparsed = new List<string>();
+        var nodes = files
+            .Select(f => ParseCanonical(parsers, f, logger, unparsed))
+            .Where(n => n is not null).Select(n => n!)
+            .ToArray();
+
+        if (unparsed.Count > 0)
+            logger?.LogWarning(
+                "Package '{Package}': {Skipped} of {Total} files had no parser and were skipped; "
+                + "{Installed} nodes installed. First skipped: {Sample}.",
+                packageId, unparsed.Count, files.Count, nodes.Length,
+                string.Join(", ", unparsed.Take(5)));
+
+        return nodes;
+    }
+
+    private static MeshNode? ParseCanonical(
+        FileFormatParserRegistry parsers, PackageFile file, ILogger? logger, List<string>? unparsed = null)
     {
         if (string.Equals(file.RelativePath, "README.md", StringComparison.OrdinalIgnoreCase)
             || ModuleManifest.IsManifestPath(file.RelativePath)
@@ -2357,6 +2386,7 @@ public static class PackageInstaller
         if (parsed is null)
         {
             logger?.LogWarning("No parser for node-repo file {Path}; skipped.", file.RelativePath);
+            unparsed?.Add(file.RelativePath);
             return null;
         }
         var (id, ns) = NodeFileMapper.FromRelativePath(file.RelativePath);

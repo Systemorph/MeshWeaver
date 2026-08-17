@@ -39,7 +39,11 @@ public partial class CSharpFileParser : IFileFormatParser
     /// <returns>A <c>CodeConfiguration</c> with the cleaned code, or null if it cannot be parsed.</returns>
     public CodeConfiguration? ParseCodeConfiguration(string filePath, string content)
     {
-        var codeWithoutMetadata = RemoveMetadataBlock(content);
+        // Second entry point into C# node text, reached from the storage adapters rather than
+        // through FileFormatParserRegistry.TryParse — so it needs the same BOM handling (#1767).
+        // A BOM here does not throw; RemoveMetadataBlock simply stops matching the leading
+        // `// <meshweaver>` line, and the heading survives as dead code at the top of Code.
+        var codeWithoutMetadata = RemoveMetadataBlock(FileFormatParserRegistry.WithoutBom(content));
 
         return new CodeConfiguration
         {
