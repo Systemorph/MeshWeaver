@@ -169,7 +169,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         var activityPath = !string.IsNullOrEmpty(msg.ActivityLogPath)
             ? msg.ActivityLogPath!
             : publicHub.Address.ToString();
-        var activityLogger = new ActivityLogLogger(hub, activityPath);
+        // 🚨 publicHub, NOT this executor hub. The executor is a lightweight kernel sub-hub with
+        // no mesh data source, so it has no workspace to write the activity node through; the
+        // public (Activity) hub OWNS that node, which makes the logger's writes plain own-node
+        // writes — minted version, serialised by the owner's action block, no mirror (#1784).
+        var activityLogger = new ActivityLogLogger(publicHub, activityPath);
 
         // Pair each submission with its own CancellationTokenSource. The handler
         // for CancelScriptRequest cancels whatever's currently active.
