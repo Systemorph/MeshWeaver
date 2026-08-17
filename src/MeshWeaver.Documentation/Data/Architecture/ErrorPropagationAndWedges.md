@@ -78,6 +78,22 @@ services' `NotFound`, on a hot path) marks the delivery answered so the sender n
 
 An import / compile / mirror runs as an activity. A fault must not strand the activity "Running" forever — it writes `Status = Error` with the message onto the activity node, which the activity log and any progress reader render. Persistence at the bottom of the stack never re-gates and never fail-closes a write that was already approved; it forwards. See [Activity Control Plane](/Doc/Architecture/ActivityControlPlane) and [Activity Operations](/Doc/Architecture/ActivityOperations).
 
+### The one leg that cannot forward yet (Orleans streams)
+
+Every rule above assumes a transport that can *tell you* it failed. One cannot: delivery to a
+**pod-process hub** — `mesh`, `portal`, `client`, `cache`, `import` — is an Orleans stream publish,
+and **a publish to a stream with no live subscriber succeeds**. Nothing faults, the continuation
+never sees `IsFaulted`, and the message is gone; the requester then waits out its full 60 s budget
+for an answer the router believes it sent. Because a reply is just a delivery addressed back at the
+requester, this is the failure mode of every cross-silo reply to those hubs.
+
+Two things have been done about it and one has not. `RoutingGrain.PostFailure` now answers a
+**co-hosted** sender over the local route instead of the stream (#1486), and the pub-sub subscription
+registry is **durable** so the registry no longer evaporates on every deploy (#1729) — but neither
+makes an undeliverable reply *report*. Closing that gap means taking replies off streams entirely;
+see [Orleans Stream Pub-Sub Durability](/Doc/Architecture/OrleansStreamPubSubDurability) for the
+mechanism, what durability does and does not buy, and the shape of the remaining fix.
+
 ## Where this sits
 
 This is the *what must always happen* — errors reach a sink. The *why a single thread saturates* is [Action-Block Wedge Prevention](/Doc/Architecture/ActionBlockWedgePrevention) (amplification on the single-threaded action block). The *how to trace a live hang* is [Debugging Message Flow](/Doc/Architecture/DebuggingMessageFlow). The reactive rules that keep forwarding intact across hops are [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) and [AccessContext Propagation](/Doc/Architecture/AccessContextPropagation).
