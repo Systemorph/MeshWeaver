@@ -18,6 +18,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
@@ -111,7 +112,7 @@ public class BatchBakeSourceDiscoveryScaleTests(PostgreSqlFixture fixture, ITest
 
     /// <summary>
     /// The same pure fold the compiler's own probe applies
-    /// (<c>MeshNodeCompilationService.ApplyQueryChange</c>, internal to MeshWeaver.Graph so it is
+    /// (<c>NodeCompileShaping.ApplyQueryChange</c>, internal to MeshWeaver.Compiler so it is
     /// restated rather than referenced): every change ACCUMULATES, and only a <c>Removed</c> takes
     /// anything out.
     ///

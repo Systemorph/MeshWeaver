@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// Shared query-expansion helpers used by both the compiler (to find which Code
@@ -11,7 +11,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// user sees in the UI is guaranteed to match the files the runtime actually
 /// pulls into the NodeType's assembly.
 /// <para>
-/// Rules (mirrored from <see cref="NodeTypeDefinition.Sources"/>):
+/// Rules (mirrored from <c>NodeTypeDefinition.Sources</c>):
 /// </para>
 /// <list type="bullet">
 ///   <item>An optional <c>name=</c> prefix (e.g. <c>"shared=@Lib/Common"</c>)
@@ -34,19 +34,19 @@ namespace MeshWeaver.Graph.Configuration;
 public static class CodeQueryResolver
 {
     /// <summary>
-    /// Default Source query when a NodeType doesn't declare <see cref="NodeTypeDefinition.Sources"/>.
+    /// Default Source query when a NodeType doesn't declare <c>NodeTypeDefinition.Sources</c>.
     /// Resolves to <c>{NodeTypePath}/Source</c> subtree.
     /// </summary>
     public static readonly IReadOnlyList<string> DefaultSources =
-        [$"namespace:{CodeNodeType.SourceSubNamespace} scope:subtree"];
+        [$"namespace:{CodeConventions.SourceSubNamespace} scope:subtree"];
 
     /// <summary>
-    /// Default Test query when a NodeType doesn't declare <see cref="NodeTypeDefinition.Tests"/>.
+    /// Default Test query when a NodeType doesn't declare <c>NodeTypeDefinition.Tests</c>.
     /// Resolves to <c>{NodeTypePath}/Test</c> subtree. Mirrors <see cref="DefaultSources"/>
     /// so the side-menu Sources/Tests split matches the convention.
     /// </summary>
     public static readonly IReadOnlyList<string> DefaultTests =
-        [$"namespace:{CodeNodeType.TestSubNamespace} scope:subtree"];
+        [$"namespace:{CodeConventions.TestSubNamespace} scope:subtree"];
 
     /// <summary>Group name for unnamed Source query entries.</summary>
     public const string DefaultSourceGroupName = "src";
@@ -81,8 +81,8 @@ public static class CodeQueryResolver
     }
 
     /// <summary>
-    /// Expands one raw query entry from <see cref="NodeTypeDefinition.Sources"/> or
-    /// <see cref="NodeTypeDefinition.Tests"/> into one-or-more concrete mesh query
+    /// Expands one raw query entry from <c>NodeTypeDefinition.Sources</c> or
+    /// <c>NodeTypeDefinition.Tests</c> into one-or-more concrete mesh query
     /// strings ready for <c>IMeshService.Query&lt;MeshNode&gt;</c>. An optional
     /// <c>name=</c> prefix is stripped first — the compiler ignores grouping.
     /// </summary>
@@ -146,7 +146,7 @@ public static class CodeQueryResolver
     private static string WithCodeTypeFilter(string query) =>
         query.Contains("nodeType:", System.StringComparison.OrdinalIgnoreCase)
             ? query
-            : $"{query} nodeType:{CodeNodeType.NodeType}";
+            : $"{query} nodeType:{CodeConventions.CodeNodeType}";
 
     /// <summary>
     /// Groups the raw Sources/Tests entries by their <c>name=</c> prefix (falling back

@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
@@ -349,10 +350,10 @@ public static class PersistenceExtensions
     private static void RegisterDefaultAssemblyStore(IServiceCollection services)
     {
         services.TryAddSingleton<IAssemblyStore>(sp =>
-            new MeshWeaver.Graph.Configuration.FileSystemAssemblyStore(
+            new MeshWeaver.Compiler.FileSystemAssemblyStore(
                 System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                     $"MeshWeaver-AssemblyStore-pid{System.Environment.ProcessId}"),
-                sp.GetRequiredService<ILogger<MeshWeaver.Graph.Configuration.FileSystemAssemblyStore>>()));
+                sp.GetRequiredService<ILogger<MeshWeaver.Compiler.FileSystemAssemblyStore>>()));
     }
 
     /// <summary>

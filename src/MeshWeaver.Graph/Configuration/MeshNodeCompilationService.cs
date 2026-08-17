@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using MeshWeaver.Compiler;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
@@ -169,213 +170,29 @@ internal class MeshNodeCompilationService(
     private readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inflightCompiles =
         new(StringComparer.Ordinal);
 
-    // Query expansion lives in CodeQueryResolver now so the NodeType Configuration
-    // side menu can evaluate the *same* queries the compiler uses — the Sources /
+    // Query expansion lives in CodeQueryResolver (MeshWeaver.Compiler) so the NodeType
+    // Configuration side menu can evaluate the *same* queries the compiler uses — the Sources /
     // Tests lists displayed in the UI are guaranteed to match the files compiled.
     //
-    // Default Roslyn references are process-wide: TPA list + a few well-known
-    // additions never change at runtime. Eager static-field init runs once at
-    // type load and the result is then a plain field read on every compile —
-    // no Lazy property dispatch, no synchronization, zero per-compile cost.
-    private static readonly IReadOnlyList<MetadataReference> _references = GetDefaultReferences();
-
-    /// <summary>
-    /// The compile reference set: the process-wide TPA baseline (<see cref="_references"/>) plus
-    /// THIS mesh's installed module assemblies (<c>Modules:Assemblies</c> →
-    /// <see cref="InstalledModuleAssembly"/>, design #1644). A module published into
-    /// <c>modules/&lt;name&gt;/</c> is not in <c>TRUSTED_PLATFORM_ASSEMBLIES</c>, so in-mesh
-    /// consumers (e.g. a scope class using a map control) would silently lose it without this.
-    /// Deduped by path — a module still riding the app closure appears in both sets. Lazy per
-    /// service instance: modules install at boot, before any compile runs.
-    /// </summary>
+    // The reference-set construction lives in CompileReferences (MeshWeaver.Compiler, #1707) —
+    // which assemblies Roslyn can see is part of the compile input. This service only resolves
+    // THIS mesh's installed-module composition from its service tree and threads it in. Lazy per
+    // service instance: modules install at boot, before any compile runs.
     private IReadOnlyList<MetadataReference> References => meshReferences.Value;
 
     private readonly Lazy<IReadOnlyList<MetadataReference>> meshReferences = new(() =>
-    {
-        var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>().ToArray();
-        if (modules.Length == 0)
-            return _references;
-        var seen = new HashSet<string>(
-            _references.Select(r => r.Display ?? string.Empty),
-            StringComparer.OrdinalIgnoreCase);
-        var composed = new List<MetadataReference>(_references);
-        foreach (var module in modules)
-        {
-            var location = module.Assembly.Location;
-            if (!string.IsNullOrEmpty(location) && File.Exists(location) && seen.Add(location))
-                composed.Add(MetadataReference.CreateFromFile(location));
-        }
-        return composed;
-    });
+        CompileReferences.ComposeWithModules(
+            hub.ServiceProvider.GetServices<InstalledModuleAssembly>().ToArray()));
 
     /// <summary>
-    /// Builds the process-wide MetadataReference list — TPA assemblies plus a few
-    /// well-known additions. Uses <see cref="MetadataReference.CreateFromFile(string, MetadataReferenceProperties, DocumentationProvider)"/>
-    /// (mmap, lazy read) — Roslyn typically reads only a small fraction of each
-    /// assembly's metadata, so the upfront cost is tiny. An earlier attempt at
-    /// <see cref="MetadataReference.CreateFromStream(Stream, MetadataReferenceProperties, DocumentationProvider, string?)"/>
-    /// to avoid finalizer pressure ended up reading the whole DLL into managed
-    /// memory eagerly — net 10%+ slower in the autocomplete-test CPU profile,
-    /// since most of those bytes were never touched. The file-handle finalizer
-    /// pressure those references add is also tiny in practice (the static field
-    /// holds them for the process lifetime; finalizers only run at shutdown).
+    /// Resolves every <c>@@</c> include via the toolchain's shaping
+    /// (<see cref="NodeCompileShaping.ResolveCodeIncludes"/>), supplying the mesh-actor half:
+    /// the System-impersonated, bounded include read (<see cref="ReadIncludeNode"/>).
     /// </summary>
-    private static List<MetadataReference> GetDefaultReferences()
-    {
-        var references = new List<MetadataReference>();
-
-        var trustedAssemblies = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
-        if (trustedAssemblies != null)
-        {
-            foreach (var path in trustedAssemblies.Split(Path.PathSeparator))
-            {
-                if (string.IsNullOrEmpty(path) || !File.Exists(path))
-                    continue;
-                try
-                {
-                    references.Add(MetadataReference.CreateFromFile(path));
-                }
-                catch
-                {
-                    // Skip assemblies that can't be loaded
-                }
-            }
-        }
-
-        // Three well-known additions in case TPA didn't include them. Dedup
-        // against TPA-derived set by Display path so we don't double-load.
-        var seen = new HashSet<string>(
-            references.Select(r => r.Display ?? string.Empty),
-            StringComparer.OrdinalIgnoreCase);
-        foreach (var assembly in new[]
-        {
-            typeof(object).Assembly,                                           // System.Runtime
-            typeof(System.ComponentModel.DataAnnotations.KeyAttribute).Assembly, // DataAnnotations
-            typeof(System.Text.Json.Serialization.JsonPropertyNameAttribute).Assembly, // System.Text.Json
-        })
-        {
-            if (!string.IsNullOrEmpty(assembly.Location)
-                && File.Exists(assembly.Location)
-                && seen.Add(assembly.Location))
-            {
-                try
-                {
-                    references.Add(MetadataReference.CreateFromFile(assembly.Location));
-                }
-                catch
-                {
-                    // Skip if it can't be loaded
-                }
-            }
-        }
-
-        return references;
-    }
-
-    /// <summary>
-    /// Regex matching @@path references in code files. The capture must LOOK LIKE A NODE PATH —
-    /// it starts with a word character and continues with path characters only — because this
-    /// pattern runs over RAW C# SOURCE, where <c>@@</c> also appears in prose: XML doc comments
-    /// citing the markdown embed idiom (<c>@@("area/Search")</c>) and string literals in tests
-    /// asserting exactly that idiom.
-    ///
-    /// <para>🚨 The permissive predecessor (<c>@@([^\s#\]]+)</c>, shared with the AI
-    /// InlineReferenceResolver, which reads PROSE where that is correct) scraped those fragments
-    /// as include paths — <c>("area/CoverCta")&lt;/c&gt;</c>, <c>("Install/area/CoverCta")"),</c> —
-    /// and each garbage match cost a SERIAL 15s GetMeshNode timeout on the resolving hub. On memex
-    /// 2026-07-29 that stall starved the Store root's activation reads (its subtree holds ~44 Code
-    /// nodes): SubscribeRequest hit its 60s ceiling and the page died with "activation faulted".
-    /// A scanner over source code must reject anything a node path cannot begin with — quotes,
-    /// parentheses, XML markup.</para>
-    /// </summary>
-    internal static readonly Regex CodeIncludePattern = new(@"@@([\w][\w\-./]*)", RegexOptions.Compiled);
-
-    /// <summary>
-    /// Rebases a mount-relative <c>@@</c> include path onto the prefix the INCLUDING node lives
-    /// under, so the same content resolves from whichever mount point it is served.
-    ///
-    /// <para>🚨 Why this exists: include paths are authored mount-relative. A sample tree that sits
-    /// at the mesh root in the Monolith (<c>FutuRe/GroupAnalysis/Source/…</c>, which is what
-    /// <c>FutuReAnalysisTest</c> exercises) is served from a PREFIX in a statically-imported
-    /// partition (<c>MeshWeaver/samples/Graph/Data/FutuRe/…</c>). Resolving the authored path
-    /// verbatim there finds nothing, and an unresolved include is left VERBATIM in the source —
-    /// so Roslyn parses the <c>@@</c> line itself and reports CS9008 / CS8803 / CS0103 on symbol
-    /// names that are really path segments. On memex-cloud 2026-08-12 that parked 15 NodeTypes
-    /// (FutuRe, Cession, SocialMedia, Northwind/AnalyticsCatalog) and cost a serial
-    /// 15s read per unresolved include on the ACTIVATION path — the "waiting for code" stall.</para>
-    ///
-    /// <para>The anchor is the DEEPEST occurrence of the include's first segment in the including
-    /// node's path — the most local reading. An already-absolute include anchors at index 0 and is
-    /// returned unchanged, so a root mount keeps behaving exactly as before.</para>
-    /// </summary>
-    internal static string AnchorIncludePath(string includePath, string? anchorPath)
-    {
-        if (string.IsNullOrEmpty(anchorPath) || string.IsNullOrEmpty(includePath))
-            return includePath;
-
-        var slash = includePath.IndexOf('/');
-        var first = slash < 0 ? includePath : includePath[..slash];
-        var segments = anchorPath.Split('/');
-        for (var i = segments.Length - 1; i > 0; i--)
-        {
-            if (string.Equals(segments[i], first, StringComparison.Ordinal))
-                return string.Join('/', segments, 0, i) + '/' + includePath;
-        }
-        return includePath;
-    }
-
     private IObservable<string> ResolveCodeIncludes(
         string code, HashSet<string> resolved, string? anchorPath)
-    {
-        if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
-            return Observable.Return(code);
-
-        var matches = CodeIncludePattern.Matches(code);
-        if (matches.Count == 0)
-            return Observable.Return(code);
-
-        // For each @@ match, fetch the referenced node via composed hub.GetMeshNode
-        // (NEVER await — that's a 100% deadlock). Each result feeds the recursive
-        // resolution; the final substituted string is built up in left-to-right order
-        // by serially aggregating the per-match observables.
-        IObservable<string> chain = Observable.Return(code);
-        foreach (Match match in matches)
-        {
-            var authored = match.Groups[1].Value;
-            var anchored = AnchorIncludePath(authored, anchorPath);
-            var matchValue = match.Value;
-            chain = chain.SelectMany(current =>
-            {
-                if (!resolved.Add(anchored))
-                    return Observable.Return(current.Replace(matchValue, string.Empty));
-
-                // The anchored candidate is tried FIRST and the authored path only as a fallback:
-                // on a root mount the two are identical (one read, unchanged behaviour), and the
-                // second read is reached only where today's single read already failed.
-                return ReadIncludeNode(anchored, anchored == authored ? null : authored)
-                    .SelectMany(hit =>
-                    {
-                        if (hit.Node?.Content is CodeConfiguration cf
-                            && !string.IsNullOrWhiteSpace(cf.Code))
-                        {
-                            logger.LogDebug("Resolved code include @@{Path}", hit.Path);
-                            // Nested includes anchor from where THIS one was found, so a chain of
-                            // mount-relative includes stays inside the same mount.
-                            return ResolveCodeIncludes(cf.Code, resolved, hit.Path)
-                                .Select(resolvedInner => current.Replace(matchValue, resolvedInner));
-                        }
-                        logger.LogWarning(
-                            "Could not resolve code include @@{Path} referenced from {Anchor} "
-                            + "— it stays VERBATIM in the source, so the compiler will report "
-                            + "errors on the @@ line itself",
-                            authored, anchorPath ?? "(no anchor)");
-                        return Observable.Return(current);
-                    });
-            });
-        }
-
-        return chain;
-    }
+        => NodeCompileShaping.ResolveCodeIncludes(
+            code, resolved, anchorPath, ReadIncludeNode, logger);
 
     /// <summary>
     /// 🚨 EVERY compile-path node read runs under the well-known System identity — the same rule
@@ -794,7 +611,7 @@ internal class MeshNodeCompilationService(
         // nothing stays SILENT and completes, so it can never beat the cached query with an empty
         // set (compiling against no sources is worse than the stall this exists to dodge). That
         // filter is also the likeliest reason #682's probe "never fired" — not the delay alone.
-        return RaceSourceSnapshot(
+        return NodeCompileShaping.RaceSourceSnapshot(
                 DirectSourceProbe(ntDef, selfPath, TimeSpan.Zero),
                 // 🚨 The cached leg's FAULT is unestablishment, not emptiness. A synced query
                 // that errors used to propagate straight out of the snapshot as a raw exception
@@ -819,56 +636,6 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
-    /// The snapshot race between the authoritative direct mesh read (<paramref name="directProbe"/> —
-    /// emits at most one NON-EMPTY source set, stays silent and completes when it finds nothing) and
-    /// the cached synced query's first emission (<paramref name="cachedFirst"/>). Extracted as a pure
-    /// combinator so the race's correctness semantics are deterministically unit-testable
-    /// (CodeEditRecompileTest.SourceSnapshot_*).
-    ///
-    /// <para>🚨 An EMPTY cached answer must never WIN the race (issue #612, CI run 30004790036
-    /// "sub-case b"). The cached synced query replays its latest set SYNCHRONOUSLY on subscribe,
-    /// while the probe cannot answer before its chunk quiet window — so under the old
-    /// <c>Merge(...).FirstAsync()</c> shape a cached query that had latched EMPTY (a missed
-    /// source-create update under load — the stale-synced-query class) ALWAYS beat the probe, the
-    /// compile consumed ZERO sources, the configuration lambda's CS0103 parked the type, and every
-    /// retry — including the explicit un-parking RequestedReleaseAt re-trigger — re-failed
-    /// identically: a permanent wedge at Status=Error with no release. The probe leg already
-    /// refuses to emit empty for exactly this reason ("compiling the type against NOTHING [is]
-    /// strictly worse than the stall"); this applies the same rule to the cached leg.</para>
-    ///
-    /// <para>Semantics: the first ESTABLISHED NON-EMPTY answer from either side wins immediately (a
-    /// healthy cached query still settles the snapshot with zero probe latency — the #690 regression
-    /// guard). EMPTY settles only by CONSENSUS: both legs completed without producing a source —
-    /// then a source-less, configuration-only NodeType still compiles. A cached leg that never
-    /// emits at all leaves the race to the probe / the caller's outer <c>Timeout</c>, unchanged.</para>
-    ///
-    /// <para>🚨 An UNESTABLISHED report (a leg whose queries errored — issue #1218) never WINS the
-    /// race, and never loses it silently either. It is held back until the merged stream completes,
-    /// so a probe with one dead query cannot veto a perfectly healthy cached answer; but if no leg
-    /// ever produces a real source set, the unestablished report is what settles the race — and the
-    /// caller then refuses to compile rather than handing Roslyn a set it knows to be short. The
-    /// old shape simply dropped the failed leg's contribution (<c>.Catch(_ =&gt; empty)</c>) and let
-    /// the PARTIAL remainder win, which is precisely how a starved cross-silo read became a
-    /// phantom <c>CS0246</c> on 14 of 56 types during a memex-cloud rollout.</para>
-    /// </summary>
-    internal static IObservable<SourceSnapshot> RaceSourceSnapshot(
-        IObservable<SourceSnapshot> directProbe,
-        IObservable<SourceSnapshot> cachedFirst)
-        => directProbe
-            .Merge(cachedFirst)
-            .Publish(shared => Observable.Merge(
-                // A real set — wins the instant it arrives, from either leg.
-                shared.Where(static s => s.IsEstablished && s.Sources.Count > 0),
-                // "I could not read the sources" — consulted only once BOTH legs have had
-                // their say (TakeLast emits on completion), so it can never pre-empt a
-                // healthy answer that is merely slower.
-                shared.Where(static s => !s.IsEstablished).TakeLast(1)))
-            .Take(1)
-            // Both legs completed, neither found anything, neither reported a failure: the
-            // sources genuinely do not exist. That is a CONTENT fact and the compile proceeds.
-            .DefaultIfEmpty(SourceSnapshot.Empty);
-
-    /// <summary>
     /// How long the cached synced source query gets before the uncached probe is even subscribed.
     /// Comfortably past a warm cache hit or one cold storage read, so the probe stays dormant in
     /// every healthy compile and only wakes for a genuinely stalled subscription.
@@ -878,27 +645,6 @@ internal class MeshNodeCompilationService(
     /// <summary>How long the uncached probe waits for its chunked Initial to go quiet before
     /// treating the accumulated set as complete.</summary>
     private static readonly TimeSpan SourceProbeQuietWindow = TimeSpan.FromSeconds(1);
-
-    /// <summary>
-    /// Fold one <see cref="QueryResultChange{T}"/> into the accumulating path→node map — pure, so
-    /// the chunk-accumulation contract is unit-testable. Initial/Reset/Added/Updated set; Removed
-    /// deletes. Keyed by path, so a re-delivered chunk is idempotent rather than a duplicate.
-    /// </summary>
-    internal static ImmutableDictionary<string, MeshNode> ApplyQueryChange(
-        ImmutableDictionary<string, MeshNode> acc, QueryResultChange<MeshNode> change)
-    {
-        if (change?.Items is not { Count: > 0 } items)
-            return acc;
-        foreach (var node in items)
-        {
-            if (string.IsNullOrEmpty(node?.Path))
-                continue;
-            acc = change.ChangeType == QueryChangeType.Removed
-                ? acc.Remove(node.Path)
-                : acc.SetItem(node.Path, node);
-        }
-        return acc;
-    }
 
     /// <summary>One expanded source query's result — the nodes it matched, or the reason it did
     /// not answer. A failed leg is no longer interchangeable with an empty one (issue #1218).</summary>
@@ -982,7 +728,7 @@ internal class MeshNodeCompilationService(
                     // about two comments up, and how a starved read surfaced as a completely
                     // genuine-looking CS0246 (#1218). See Doc/Architecture/QueryIdentity.
                     Observable.Defer(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(q).AsSystem()))
-                        .Scan(ImmutableDictionary<string, MeshNode>.Empty, ApplyQueryChange)
+                        .Scan(ImmutableDictionary<string, MeshNode>.Empty, NodeCompileShaping.ApplyQueryChange)
                         .Throttle(SourceProbeQuietWindow)
                         .Take(1)
                         .Select(map => new SourceProbeLeg(
@@ -1082,33 +828,11 @@ internal class MeshNodeCompilationService(
         var discoverCodeFiles = SnapshotSources(ntDef, selfPath, sourcesOverride)
             .Select(matches =>
             {
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var acc = new List<CodeConfiguration>();
-                foreach (var n in matches)
-                {
-                    if (string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path))
-                        continue;
-                    if (n.Content is CodeConfiguration cf
-                        && !string.IsNullOrWhiteSpace(cf.Code))
-                    {
-                        // Skip executable scripts — they run via the kernel
-                        // (ExecuteScriptRequest), not folded into the parent
-                        // NodeType's Roslyn unit. Top-level statements would
-                        // collide with class declarations from Source/ siblings
-                        // ("Top-level statements must precede namespace and
-                        // type declarations"). Test/ commonly mixes both
-                        // shapes; this filter lets both coexist.
-                        if (cf.IsExecutable)
-                        {
-                            logger.LogDebug(
-                                "Source discovery for {NodePath}: skipping executable Code {CodePath} — runs via kernel only",
-                                node.Path, n.Path);
-                            continue;
-                        }
-                        acc.Add(cf);
-                        matchedCodePaths.Add(n.Path);
-                    }
-                }
+                // The dedup + executable filter + join order live in the toolchain
+                // (NodeCompileShaping, #1707) — they shape the compile input.
+                var (acc, matched) = NodeCompileShaping.CollectCompileSources(
+                    matches, node.Path, logger);
+                matchedCodePaths.AddRange(matched);
                 logger.LogDebug(
                     "Source discovery for {NodePath}: matched {Count} Code nodes from {QueryCount} queries",
                     node.Path, matchedCodePaths.Count, executedQueries.Count);
@@ -1150,13 +874,9 @@ internal class MeshNodeCompilationService(
             .SelectMany(codeFiles =>
             {
                 // Final stage: combine + compile. The Roslyn `Compile` call itself is
-                // the only Task→Observable bridge in this whole method.
-                CodeConfiguration? codeFile = codeFiles.Count switch
-                {
-                    0 => null,
-                    1 => codeFiles[0],
-                    _ => new CodeConfiguration { Code = string.Join("\n\n", codeFiles.Select(cf => cf.Code)) }
-                };
+                // the only Task→Observable bridge in this whole method. The join order
+                // lives in the toolchain (it shapes the emitted bytes).
+                var codeFile = NodeCompileShaping.CombineSources(codeFiles);
                 var configuration = ntDef?.Configuration;
                 var contentCollections = ntDef?.ContentCollections;
 
@@ -1248,7 +968,7 @@ internal class MeshNodeCompilationService(
                     // CompilationException`.
                     .Catch<(string?, ActivityLog), CompilationException>(ex =>
                     {
-                        var diag = BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
+                        var diag = CompileDiagnostics.BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
                         logger.LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}",
                             node.Path, diag);
                         var failedLog = AppendError(discoveryLog,
@@ -1326,38 +1046,6 @@ internal class MeshNodeCompilationService(
     }
 
     /// <summary>
-    /// Formats a failed Roslyn <c>Emit</c>'s diagnostics into a complete, never-empty error
-    /// message — each line carries the diagnostic <c>CS####</c> id, severity, source line and
-    /// message. Falls back to Warning-severity diagnostics when there are no Errors, and to an
-    /// explanatory sentence when Emit failed with NO diagnostics at all (typically a missing
-    /// source file or a configuration lambda referencing a type that was never compiled). The
-    /// previous <c>Where(Severity == Error).Select(GetMessage)</c> produced a bare
-    /// "Compilation failed for 'X':" whenever the failure carried no Error-severity diagnostic.
-    /// </summary>
-    private static string FormatCompileFailure(string nodePath, IEnumerable<Diagnostic> diagnostics)
-    {
-        var joined = string.Join('\n', diagnostics
-            .Where(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
-            .OrderByDescending(d => d.Severity)
-            .Select(d =>
-            {
-                var loc = d.Location.IsInSource
-                    ? $" (line {d.Location.GetLineSpan().StartLinePosition.Line + 1})"
-                    : "";
-                return $"{d.Id} {d.Severity}{loc}: {d.GetMessage()}";
-            }));
-        return !string.IsNullOrEmpty(joined)
-            ? $"Compilation failed for '{nodePath}':\n{joined}"
-            : $"Compilation failed for '{nodePath}': Roslyn emit failed but produced no error/warning "
-              + "diagnostics — this usually means a source file was not found, or the configuration "
-              + "lambda references a type that was never compiled (see the source-discovery report below).";
-    }
-
-    // Sentinel FilePath for the generated skeleton tree — must match the one the LSP uses
-    // so skeleton-internal diagnostics (framework noise the user can't act on) are filtered out.
-    private const string SkeletonDiagnosticsPath = "__skeleton__.cs";
-
-    /// <summary>
     /// On a FAILED compile, re-derive the diagnostics in their structured, per-source-file
     /// form by assembling ONE LSP-style compilation (skeleton tree + one tree per src/test
     /// Code node, each carrying the MeshNode path as its <c>FilePath</c>) — exactly the model
@@ -1374,7 +1062,7 @@ internal class MeshNodeCompilationService(
             .Take(1)
             .SelectMany(inputs => inputs is null
                 ? Observable.Return<IReadOnlyList<Lsp.DiagnosticInfo>>(Array.Empty<Lsp.DiagnosticInfo>())
-                : OnThreadPool(() => DiagnoseInputs(inputs)))
+                : OnThreadPool(() => CompileDiagnostics.DiagnoseInputs(inputs)))
             // 🚨 BOUNDED with the same clock as the emit leg — this runs on the FAILURE path,
             // where a hang is worst: the compile has already failed and this is what stands
             // between that failure and its terminal Error write. Unbounded, a stalled
@@ -1389,83 +1077,6 @@ internal class MeshNodeCompilationService(
                 logger.LogDebug(ex, "Structured failure-diagnostics capture failed for {NodePath} (best-effort)", node.Path);
                 return Observable.Return<IReadOnlyList<Lsp.DiagnosticInfo>>(Array.Empty<Lsp.DiagnosticInfo>());
             });
-
-    private static IReadOnlyList<Lsp.DiagnosticInfo> DiagnoseInputs(CompilationInputs inputs)
-    {
-        var trees = new List<SyntaxTree>(inputs.Sources.Length + 1)
-        {
-            CSharpSyntaxTree.ParseText(
-                Microsoft.CodeAnalysis.Text.SourceText.From(inputs.SkeletonSource),
-                inputs.ParseOptions, path: SkeletonDiagnosticsPath),
-        };
-        foreach (var (path, code) in inputs.Sources)
-            trees.Add(CSharpSyntaxTree.ParseText(
-                Microsoft.CodeAnalysis.Text.SourceText.From(code), inputs.ParseOptions, path: path));
-
-        // Structured failure diagnostics are best-effort: pass no generator candidates so
-        // RunSourceGenerators is a no-op here (the authoritative flat summary from the production
-        // compile already reflects generation). Avoids loading any generator on every failed compile.
-        var compilation = RunSourceGenerators(
-            CSharpCompilation.Create(inputs.AssemblyName, trees, inputs.References, inputs.CompilationOptions),
-            Array.Empty<string>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, CancellationToken.None);
-
-        var diags = compilation.GetDiagnostics();
-        if (diags.IsDefaultOrEmpty) return Array.Empty<Lsp.DiagnosticInfo>();
-
-        var result = new List<Lsp.DiagnosticInfo>(diags.Length);
-        foreach (var d in diags)
-        {
-            if (d.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)) continue;
-            // Skeleton-internal diagnostics are framework noise the user can't act on.
-            if (d.Location.SourceTree?.FilePath == SkeletonDiagnosticsPath) continue;
-            result.Add(ToDiagnosticInfo(d));
-        }
-        // Errors first, then by file then position — stable order for the GUI.
-        return result
-            .OrderByDescending(d => d.Severity)
-            .ThenBy(d => d.Location?.SourcePath, StringComparer.Ordinal)
-            .ThenBy(d => d.Location?.Range.Start.Line ?? 0)
-            .ToList();
-    }
-
-    private static Lsp.DiagnosticInfo ToDiagnosticInfo(Diagnostic d)
-    {
-        Lsp.SourceLocation? location = null;
-        if (d.Location.IsInSource && d.Location.SourceTree?.FilePath is { Length: > 0 } path)
-        {
-            var span = d.Location.GetLineSpan();
-            location = new Lsp.SourceLocation(
-                path,
-                new Lsp.SourceRange(
-                    new Lsp.SourcePosition(span.StartLinePosition.Line, span.StartLinePosition.Character),
-                    new Lsp.SourcePosition(span.EndLinePosition.Line, span.EndLinePosition.Character)));
-        }
-        return new Lsp.DiagnosticInfo(d.Id, MapDiagnosticSeverity(d.Severity), d.GetMessage(), location);
-    }
-
-    private static Lsp.DiagnosticSeverity MapDiagnosticSeverity(DiagnosticSeverity s) => s switch
-    {
-        DiagnosticSeverity.Hidden => Lsp.DiagnosticSeverity.Hidden,
-        DiagnosticSeverity.Info => Lsp.DiagnosticSeverity.Info,
-        DiagnosticSeverity.Warning => Lsp.DiagnosticSeverity.Warning,
-        DiagnosticSeverity.Error => Lsp.DiagnosticSeverity.Error,
-        _ => Lsp.DiagnosticSeverity.Info,
-    };
-
-    private static string BuildSourceDiscoveryReport(IReadOnlyList<string> executedQueries, IReadOnlyList<string> matchedCodePaths)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"Executed source queries ({executedQueries.Count}):");
-        foreach (var q in executedQueries)
-            sb.AppendLine($"  - {q}");
-        sb.AppendLine($"Matched Code nodes ({matchedCodePaths.Count}):");
-        if (matchedCodePaths.Count == 0)
-            sb.AppendLine("  (none) — the configuration lambda cannot reference types because no source files were included. Check that your Source Code nodes exist and that the NodeType's `sources` list points at them.");
-        else
-            foreach (var p in matchedCodePaths)
-                sb.AppendLine($"  - {p}");
-        return sb.ToString();
-    }
 
     /// <inheritdoc />
     public IObservable<NodeCompilationResult?> CompileAndGetConfigurations(
@@ -1690,7 +1301,7 @@ internal class MeshNodeCompilationService(
             SnapshotSources(ntDef, selfPath, sourcesOverride)
                 .SelectMany(matches =>
                 {
-                    var pairs = CollectSourcePairs(matches);
+                    var pairs = NodeCompileShaping.CollectSourcePairs(matches);
                     return ResolveIncludesForPairs(pairs)
                         .SelectMany(resolvedPairs =>
                             // Reactive input assembly — NOT in the pool (see
@@ -1698,29 +1309,6 @@ internal class MeshNodeCompilationService(
                             // touches the pool.
                             AssembleCompilationInputs(node, ntDef, resolvedPairs));
                 }));
-    }
-
-    /// <summary>
-    /// Discovers source <c>(Path, CodeConfiguration, LastModifiedTicks)</c> triples — mirrors
-    /// the dedup + IsExecutable filter from <see cref="CompileCore"/>'s discovery step but
-    /// retains paths alongside configurations so language services can address each file.
-    /// </summary>
-    private static List<(string Path, CodeConfiguration Config, long LastModifiedTicks)>
-        CollectSourcePairs(IEnumerable<MeshNode> matches)
-    {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var pairs = new List<(string, CodeConfiguration, long)>();
-        foreach (var n in matches)
-        {
-            if (string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path)) continue;
-            if (n.Content is CodeConfiguration cf
-                && !string.IsNullOrWhiteSpace(cf.Code)
-                && !cf.IsExecutable)
-            {
-                pairs.Add((n.Path, cf, n.LastModified.UtcTicks));
-            }
-        }
-        return pairs;
     }
 
     /// <summary>Resolves @@ includes for each source independently, preserving paths. Sequential aggregation matches <see cref="CompileCore"/>.</summary>
@@ -1775,8 +1363,9 @@ internal class MeshNodeCompilationService(
         }
 
         // A legacy `#r "nuget:MeshWeaver.BusinessRules.Generator"` must NOT reach the NuGet resolver
-        // (the generator ships built-in now) — see StripBuiltInScopeGeneratorRef.
-        StripBuiltInScopeGeneratorRef(allNugetRefs, builtInPresent: BuiltInGeneratorPaths.Count > 0);
+        // (the generator ships built-in now) — see GeneratorPipeline.StripBuiltInScopeGeneratorRef.
+        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
+            allNugetRefs, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
 
         // 🚨 100% reactive — NO await, and the input assembly is NOT wrapped in
         // _ioPool.Run. The only async leaf is NuGet restore (network IO), and it runs
@@ -1794,10 +1383,8 @@ internal class MeshNodeCompilationService(
 
         return referencesObs.Select(references =>
         {
-            var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
-            var compilationOptions = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-                .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu);
+            var parseOptions = EmitPipeline.CreateParseOptions();
+            var compilationOptions = EmitPipeline.CreateCompilationOptions();
 
             var sourcesArray = strippedSources
                 .Select(s => (s.Path, s.Code))
@@ -2004,7 +1591,8 @@ internal class MeshNodeCompilationService(
         // (see the release-folder compile below for the full story: resolving the legacy
         // generator #r hard-fails now that the mesh-local feed is gone).
         var nugetRefList = extractedRefs.ToList();
-        StripBuiltInScopeGeneratorRef(nugetRefList, builtInPresent: BuiltInGeneratorPaths.Count > 0);
+        GeneratorPipeline.StripBuiltInScopeGeneratorRef(
+            nugetRefList, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
         var nugetRefs = nugetRefList.ToArray();
         IEnumerable<MetadataReference> references = References;
         IReadOnlyList<string> nugetAssemblyPaths = [];
@@ -2028,556 +1616,33 @@ internal class MeshNodeCompilationService(
         logger.LogInformation("Compiling assembly for {NodeName} ({Mode}, {NuGetRefs} NuGet refs)",
             nodeName, cacheService.IsDiskCacheEnabled ? "disk" : "in-memory", nugetRefs.Length);
 
-        // Parse with source path and encoding embedded (critical for PDB source linking)
-        var sourceText = Microsoft.CodeAnalysis.Text.SourceText.From(source, System.Text.Encoding.UTF8);
-        var parseOptions = new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose);
-        var syntaxTree = CSharpSyntaxTree.ParseText(
-            sourceText,
-            parseOptions,
-            path: cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging ? sourcePath : "",
-            cancellationToken: ct);
-
+        // Parse + compile via the toolchain (EmitPipeline, #1707) — source path and encoding
+        // embedded (critical for PDB source linking); canonical options; generators applied.
         var assemblyName = $"DynamicNode_{nodeName}";
-
-        var compilation = RunSourceGenerators(CSharpCompilation.Create(
-            assemblyName,
-            syntaxTrees: [syntaxTree],
-            references: references,
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-                .WithOptimizationLevel(OptimizationLevel.Debug)
-                .WithPlatform(Platform.AnyCpu)), nugetAssemblyPaths, logger, ct);
+        var compilation = GeneratorPipeline.RunSourceGenerators(
+            EmitPipeline.CreateEmitCompilation(
+                source,
+                assemblyName,
+                references,
+                parsePath: cacheService.IsDiskCacheEnabled && _cacheOptions.EnableSourceDebugging ? sourcePath : "",
+                ct),
+            nugetAssemblyPaths, logger, ct);
 
         string? actualPath;
         if (cacheService.IsDiskCacheEnabled)
         {
-            actualPath = await CompileToDiskAsync(compilation, nodeName, node.Path, ct);
+            actualPath = EmitPipeline.EmitToDiskWithRetry(
+                cacheService.CacheDirectory, nodeName, EmitPipeline.DiskEmitAttempts, logger,
+                releaseDir => EmitPipeline.EmitCompilationToDirectory(compilation, nodeName, node.Path, releaseDir, ct));
         }
         else
         {
-            CompileToMemory(compilation, nodeName, node.Path, ct);
+            var (assemblyBytes, pdbBytes) = EmitPipeline.EmitToMemory(compilation, node.Path, ct);
+            cacheService.LoadAssemblyFromBytes(nodeName, assemblyBytes, pdbBytes);
             actualPath = $"memory://{nodeName}";
         }
 
         logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
         return actualPath;
-    }
-
-    /// <summary>
-    /// Paths of source-generator assemblies fed to EVERY dynamic-node compilation, resolved once
-    /// per process. 🚨 The platform does NOT ship any — business rules / scopes moved OUT of the
-    /// platform (see the comment blocks in <c>MeshWeaver.Graph.csproj</c> and
-    /// <c>Memex.Portal.Distributed.csproj</c>): the scope runtime is a shared-source library node
-    /// in the <c>MeshWeaver.Plugins/BusinessRules</c> plugin, pulled into a consumer's compilation
-    /// via <c>shared=@BusinessRules/Scope/Source</c>, and the plugin carries the
-    /// <c>ScopeCodeGenerator</c> SOURCE for the generator-injection seam. So on a deployed image
-    /// this list is EMPTY. It only fills when a <c>MeshWeaver.BusinessRules.Generator.dll</c> is
-    /// physically present next to the app (a dev/self-host tree that placed one there) — kept as
-    /// graceful degradation for such trees, and because the legacy-<c>#r</c> strip below keys off it.
-    /// </summary>
-    private static readonly IReadOnlyList<string> BuiltInGeneratorPaths = ResolveBuiltInGenerators();
-
-    /// <summary>
-    /// NuGet package id (and, with <c>.dll</c>, assembly file name) of the BusinessRules scope
-    /// source generator. When a copy is present in the app base (<see cref="BuiltInGeneratorPaths"/>
-    /// non-empty), a legacy <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> is redundant and is
-    /// filtered out of BOTH the generator list (avoid a double-run → CS0101, see
-    /// <see cref="RunSourceGenerators"/>) and the NuGet resolve set (avoid a dead round-trip, see
-    /// <see cref="AssembleCompilationInputs"/>).
-    /// </summary>
-    private const string BuiltInScopeGeneratorId = "MeshWeaver.BusinessRules.Generator";
-
-    private static IReadOnlyList<string> ResolveBuiltInGenerators()
-    {
-        var path = Path.Combine(AppContext.BaseDirectory, BuiltInScopeGeneratorId + ".dll");
-        return File.Exists(path) ? [path] : [];
-    }
-
-    /// <summary>
-    /// Removes a legacy <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> from the NuGet resolve
-    /// set when the generator ships built-in (<paramref name="builtInPresent"/>). The generator is
-    /// now part of the platform, so that <c>#r</c> is redundant — and RESOLVING it hard-fails on a
-    /// deployed image: after <c>BakeMeshLocalFeed</c> was removed (#395) the mesh-local feed
-    /// (<c>dist/packages</c>) is gone, so NuGet throws
-    /// <c>"The local source '/app/dist/packages' doesn't exist"</c> and breaks every deployed scope
-    /// node still carrying the legacy <c>#r</c> (the prod BalanceSheet failure). Behaviour is
-    /// unchanged: the built-in generator still emits the <c>IScope&lt;,&gt;</c> implementations, and
-    /// <see cref="RunSourceGenerators"/> already de-dups the generator itself (CS0101). When the
-    /// built-in is somehow absent the <c>#r</c> is kept so the generator can still resolve via NuGet.
-    /// Other package references are never touched.
-    /// </summary>
-    internal static void StripBuiltInScopeGeneratorRef(List<NuGetPackageReference> refs, bool builtInPresent)
-    {
-        if (builtInPresent)
-            refs.RemoveAll(r => string.Equals(
-                r.Id, BuiltInScopeGeneratorId, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static CSharpCompilation RunSourceGenerators(
-        CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger, CancellationToken ct)
-    {
-        // Always include the built-in scope generator, plus any OTHER generator a node #r'd. Filter a
-        // node's own `#r "nuget:MeshWeaver.BusinessRules.Generator"` OUT — otherwise the same generator
-        // loads from two paths (built-in + baked) and runs twice → duplicate IScope<,> implementations
-        // → CS0101. Legacy nodes that still carry that #r keep compiling (built-in supersedes it, and
-        // AssembleCompilationInputs strips the #r from the NuGet resolve set so it never round-trips).
-        IReadOnlyList<string> allPaths = BuiltInGeneratorPaths.Count == 0
-            ? generatorAssemblyPaths
-            : [.. BuiltInGeneratorPaths,
-               .. generatorAssemblyPaths.Where(p => !string.Equals(
-                   Path.GetFileName(p), BuiltInScopeGeneratorId + ".dll", StringComparison.OrdinalIgnoreCase))];
-        if (allPaths.Count == 0)
-            return compilation;
-        var generators = SourceGeneratorLoader.Discover(allPaths, logger);
-        if (generators.IsDefaultOrEmpty)
-            return compilation;
-        var driver = CSharpGeneratorDriver.Create(generators);
-        driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out _, ct);
-        return (CSharpCompilation)updated;
-    }
-
-    /// <summary>
-    /// Compiles and emits assembly to a unique per-compile subdirectory, then VERIFIES the
-    /// assembly actually landed on disk and re-emits when it did not. Each compile writes to
-    /// {cacheDir}/{nodeName}_{ticks_hex}/ so V1 and V2 DLLs coexist on disk without overwriting.
-    ///
-    /// <para>🩹 Self-heal: on container deployments the cache directory is an ephemeral
-    /// <c>/tmp/...</c>; a "successful" Roslyn emit can leave NO file on disk when the just-written
-    /// assembly is evicted before the next read. That used to poison the NodeType permanently with
-    /// a sticky "Compilation succeeded but DLL not found" error (prod AgenticPension/Datenpunkt,
-    /// 2026-06-22) — the grain never recompiled. We now re-emit the lost artifact (a genuine compile
-    /// error is NOT retried) and, if it still cannot be persisted, surface a clear, loud failure
-    /// instead of a silent poison. See <see cref="EmitToDiskWithRetry"/>.</para>
-    ///
-    /// <para>⚠️ The self-heal above is about a LOST WRITE, not about a failing emit. A Roslyn
-    /// emit that reports errors is a normal, deterministic outcome (the node's C# does not
-    /// compile) and travels out of here as a <see cref="CompilationException"/> — which is why
-    /// <see cref="EmitToDiskWithRetry"/> shows up on the stack of every compile failure without
-    /// having failed at anything. Do not read that frame as an IO fault.</para>
-    /// </summary>
-    private Task<string> CompileToDiskAsync(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
-        => Task.FromResult(EmitToDiskWithRetry(
-            cacheService.CacheDirectory, nodeName, DiskEmitAttempts, logger,
-            releaseDir => EmitCompilationToDirectory(compilation, nodeName, nodePath, releaseDir, ct)));
-
-    /// <summary>
-    /// Runs the real Roslyn emit for <paramref name="nodeName"/> into <paramref name="releaseDir"/>
-    /// (dll + pdb + XML doc) and returns the DLL path it wrote TOGETHER WITH the digest of the image
-    /// it produced. A failed emit throws a <see cref="CompilationException"/> carrying the formatted
-    /// diagnostics.
-    ///
-    /// <para>🚨 It emits into memory and writes the bytes out, rather than streaming Roslyn straight
-    /// at the file, for one reason: the publisher has to be able to prove the file on disk IS the
-    /// image that was emitted. Streaming leaves nothing to compare against, which is how the old
-    /// <c>Length &gt; 0</c> gate came to publish an artifact whose metadata had an unwritten region
-    /// in it and PARK the NodeType for good (#1412). Peak memory is unchanged in practice — Roslyn
-    /// already serialises the whole PE into an in-memory <c>BlobBuilder</c> before it writes a single
-    /// byte. See <see cref="EmittedArtifact"/>.</para>
-    ///
-    /// <para>🚨 It does NOT log. A compile failure is reported EXACTLY ONCE, by the compile
-    /// pipeline's single <c>.Catch&lt;…, CompilationException&gt;</c> funnel in
-    /// <c>CompileAsyncCore</c> — the only place that also has the exception, its stack and the
-    /// source-discovery report (which queries ran, which Code nodes matched). Logging the same
-    /// diagnostics here as well double-counted EVERY compile failure in production: the ~150
-    /// ERROR lines/24h across the memex/memex-cloud/atioz portals were ~72 real failures logged
-    /// twice, and the duplicate came FIRST — context-free and exception-free, so red-log
-    /// fingerprinting (which keys on category+eventId+exception+frame) filed it as a second,
-    /// distinct fault whose only visible frame was the emit path. That is what made a plain
-    /// "your C# does not compile" read like an emit/IO defect. Extracted and <c>internal</c> so
-    /// the log-once contract is unit-testable against a real broken compilation.</para>
-    /// </summary>
-    internal static EmittedArtifact EmitCompilationToDirectory(
-        CSharpCompilation compilation, string nodeName, string nodePath, string releaseDir, CancellationToken ct)
-    {
-        var dllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
-        var pdbPath = Path.Combine(releaseDir, $"{nodeName}.pdb");
-        var xmlDocPath = Path.Combine(releaseDir, $"DynamicNode_{nodeName}.xml");
-
-        using var dllImage = new MemoryStream();
-        using var pdbImage = new MemoryStream();
-        using var xmlDoc = new MemoryStream();
-
-        var emitOptions = new EmitOptions(
-            debugInformationFormat: DebugInformationFormat.PortablePdb,
-            pdbFilePath: pdbPath);
-
-        EmitResult emitResult;
-        try
-        {
-            emitResult = compilation.Emit(
-                dllImage, pdbImage, xmlDocumentationStream: xmlDoc,
-                options: emitOptions, cancellationToken: ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // Roslyn THREW instead of returning diagnostics — an emit-phase fault, not a
-            // compile error. Stamp the canary verdict on the exception and rethrow the
-            // ORIGINAL untouched: the type name is what CI triage keys on, so this must
-            // never become a wrapper. The verdict travels to the pipeline's single
-            // reporting funnel via SummarizeCompileError — no second log from here, the
-            // log-once contract above still holds.
-            ex.Data[EmitCanaryDataKey] = ProbeSharedEmitState(compilation);
-            throw;
-        }
-
-        if (!emitResult.Success)
-            // Deterministic compile error — propagates straight out of the retry loop,
-            // unlogged, to the pipeline's single reporting funnel.
-            throw new CompilationException(nodePath, FormatCompileFailure(nodePath, emitResult.Diagnostics));
-
-        // The DLL last: it is the discovery key of the release directory, so a reader that ever sees
-        // the staging dir mid-write still finds the symbols and docs already beside it. (Publication
-        // itself is the atomic Directory.Move in EmitToDiskWithRetry; this is belt and braces.)
-        File.WriteAllBytes(pdbPath, Bytes(pdbImage));
-        File.WriteAllBytes(xmlDocPath, Bytes(xmlDoc));
-        var image = Bytes(dllImage);
-        File.WriteAllBytes(dllPath, image);
-
-        return EmittedArtifact.For(dllPath, image);
-
-        // Expandable MemoryStreams created with the parameterless ctor expose their buffer, so the
-        // common path hands out a span over it instead of copying a multi-megabyte image.
-        static ReadOnlySpan<byte> Bytes(MemoryStream s)
-            => s.TryGetBuffer(out var seg) ? seg.AsSpan() : s.ToArray();
-    }
-
-    /// <summary>
-    /// Key under which <see cref="EmitCompilationToDirectory"/> stamps the canary verdict on a
-    /// thrown-from-Emit exception, and under which
-    /// <c>NodeTypeCompilationHelpers.SummarizeCompileError</c> reads it back.
-    /// </summary>
-    internal const string EmitCanaryDataKey = "MeshWeaver.EmitCanary";
-
-    /// <summary>
-    /// A minimal, self-contained compilation used ONLY by <see cref="ProbeSharedEmitState"/>.
-    /// Three levels of nested generics on purpose: that is what makes Roslyn's metadata writer
-    /// walk a type's containing chain (<c>GetConsolidatedTypeParameters</c> recursing through
-    /// <c>ContainingTypeDefinition</c>) — the exact path issue #890's NRE dies on. A flat class
-    /// would emit fine even on a poisoned writer and the canary would answer "healthy" wrongly.
-    /// </summary>
-    private const string EmitCanarySource =
-        "public class MwEmitCanary<T> { public class Inner<U> { public class Leaf<V> "
-        + "{ public T A; public U B; public V C; } } }";
-
-    /// <summary>
-    /// Answers, at the moment a Roslyn <c>Emit</c> throws, which state is actually broken — in
-    /// TWO legs, because the first leg alone cannot tell "the shared reference set is poisoned"
-    /// from "the process is broken below Roslyn".
-    ///
-    /// <para><b>Leg 1 — same references.</b> Re-emit a trivial nested-generic compilation built
-    /// against <b>the same <see cref="MetadataReference"/> instances</b> as the compilation that
-    /// just failed. Succeeds ⇒ shared state is healthy and the fault is a property of this node's
-    /// own compilation inputs (dump its generated source). This is the leg #1378 shipped, and on
-    /// 2026-08-13 it returned THREW — closing the "generated source" half of the search
-    /// space.</para>
-    ///
-    /// <para><b>Leg 2 — pristine references.</b> Run only when leg 1 fails: the SAME source
-    /// against a freshly created, minimal reference set that has never been handed to Roslyn
-    /// before and is shared with nothing. This is the discriminator, and it exists because
-    /// Roslyn's own source settles who can supply the null. The NRE's guard
-    /// (<c>NamedTypeSymbolAdapter.AsNestedTypeDefinitionImpl</c>) admits a type only when
-    /// <c>ContainingModule == moduleBeingBuilt.SourceModule</c> — so the symbol whose
-    /// <c>ContainingType</c> reads null is a <b>source</b> symbol of the compilation being
-    /// emitted, never a PE symbol arriving from a reference. Leg 1 therefore proves the fault is
-    /// process-wide without proving the reference set carries it.
-    /// <list type="bullet">
-    ///   <item><c>canary=REFERENCES</c> — pristine emits, shared does not: the poison travels
-    ///     with the reference instances (or the symbols Roslyn caches on their
-    ///     <c>AssemblyMetadata</c>), and scoping the set per-mesh is on the right axis.</item>
-    ///   <item><c>canary=BELOW-ROSLYN</c> — neither emits: brand-new references and freshly
-    ///     parsed source still cannot emit, so nothing about the reference set explains it. The
-    ///     broken state is under Roslyn (CLR heap / JIT / GC) and no reference-set change can fix
-    ///     it. Roslyn keeps no cross-emit state — the metadata writer's indices are per-emit, its
-    ///     object pools hold only scratch buffers, and <c>AssemblyMetadata.CachedSymbols</c> is a
-    ///     weak list of assembly symbols — so there is no Roslyn cache left to blame.</item>
-    ///   <item><c>canary=INCONCLUSIVE</c> — the pristine control could not be BUILT (no on-disk
-    ///     CoreLib to reference), so leg 2 never ran. Reported as its own verdict rather than
-    ///     folded into BELOW-ROSLYN: a probe that answers its scariest branch on its own
-    ///     inability would send triage after a CLR heap bug nothing observed.</item>
-    /// </list></para>
-    ///
-    /// <para>🚨 It cannot fail into the fault path it is diagnosing: every outcome — including
-    /// the canary throwing — returns a STRING. A diagnostic that throws while diagnosing would
-    /// replace the original exception and destroy the evidence it exists to preserve. It is also
-    /// bounded: one tiny in-memory emit, only ever on an already-failing path, never on the
-    /// success path or on a normal compile error.</para>
-    /// </summary>
-    /// <param name="faulted">The compilation whose <c>Emit</c> threw; only its references are used.</param>
-    /// <returns>A one-line verdict, safe to append to a log message.</returns>
-    internal static string ProbeSharedEmitState(CSharpCompilation faulted)
-    {
-        var shared = EmitCanary(() => faulted.References);
-        if (shared.StartsWith("OK", StringComparison.Ordinal))
-            return "canary=OK (a trivial nested-generic emit against the SAME reference set "
-                + "still succeeds ⇒ shared Roslyn/reference state is healthy; the fault is "
-                + "specific to THIS compilation's inputs — dump its generated source)";
-
-        // The shared-reference canary failed. Re-run the SAME source against a reference set that
-        // shares NOTHING with this process's other compilations — freshly created, minimal
-        // (System.Private.CoreLib is all the canary source needs), and never handed to Roslyn
-        // before.
-        //
-        // 🚨 BUILDING the pristine reference is a SEPARATE step from emitting against it, and its
-        // failure is a SEPARATE verdict. If CreateFromFile cannot produce it (an empty
-        // Assembly.Location on a single-file host, a missing file), the discriminator was never
-        // run — and folding that into BELOW-ROSLYN would make the probe answer its scariest
-        // branch on its own inability, sending triage after a CLR heap bug that nothing observed.
-        // A diagnostic that cannot report "I could not run" is the same defect as a gate that
-        // passes when its input is missing.
-        string? pristineUnavailable = null;
-        IReadOnlyList<MetadataReference> pristineRefs = [];
-        try
-        {
-            var coreLib = typeof(object).Assembly.Location;
-            if (string.IsNullOrEmpty(coreLib) || !File.Exists(coreLib))
-                pristineUnavailable = "no on-disk System.Private.CoreLib to reference";
-            else
-                pristineRefs = [MetadataReference.CreateFromFile(coreLib)];
-        }
-        catch (Exception buildError)
-        {
-            pristineUnavailable = $"{buildError.GetType().Name}: {buildError.Message}";
-        }
-
-        if (pristineUnavailable is not null)
-            return $"canary=INCONCLUSIVE shared:{shared} pristine:UNAVAILABLE({pristineUnavailable}) "
-                + "— the shared reference set cannot emit, but the pristine control could not be "
-                + "BUILT, so this says nothing about whether the reference set is the cause";
-
-        var pristine = EmitCanary(() => pristineRefs);
-
-        return pristine.StartsWith("OK", StringComparison.Ordinal)
-            ? $"canary=REFERENCES shared:{shared} pristine:{pristine} — the same source emits fine "
-                + "against BRAND-NEW references but fails against the shared set ⇒ the poison "
-                + "travels with the MetadataReference instances / the Roslyn symbols cached on "
-                + "them (reference-set scoping is the right axis)"
-            : $"canary=BELOW-ROSLYN shared:{shared} pristine:{pristine} — a trivial compilation "
-                + "with BRAND-NEW references and freshly parsed source cannot emit either ⇒ "
-                + "nothing about the reference set explains this; the broken state is below "
-                + "Roslyn (CLR heap / JIT / GC), so no reference-set change can fix it — "
-                + "capture a core dump and re-run with tiering disabled";
-    }
-
-    /// <summary>
-    /// One canary leg: emit <see cref="EmitCanarySource"/> against the references
-    /// <paramref name="references"/> produces, into memory, and reduce the outcome to a short
-    /// token. Never throws — see the "cannot fail into the fault path it is diagnosing" note on
-    /// <see cref="ProbeSharedEmitState"/>. The references arrive as a FACTORY so that building
-    /// them is inside this method's try as well: on a poisoned process even
-    /// <c>MetadataReference.CreateFromFile</c> is a candidate to fail.
-    /// </summary>
-    private static string EmitCanary(Func<IEnumerable<MetadataReference>> references)
-    {
-        try
-        {
-            var canary = CSharpCompilation.Create(
-                "MeshWeaverEmitCanary",
-                syntaxTrees: [CSharpSyntaxTree.ParseText(EmitCanarySource)],
-                references: references(),
-                options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-            using var canaryStream = new MemoryStream();
-            var result = canary.Emit(canaryStream);
-            if (result.Success)
-                return "OK";
-
-            var ids = result.Diagnostics
-                .Where(d => d.Severity == DiagnosticSeverity.Error)
-                .Select(d => d.Id).Distinct().Take(5);
-            return $"DIAGNOSTICS({string.Join(",", ids)})";
-        }
-        catch (Exception probeError)
-        {
-            return $"THREW {probeError.GetType().Name}: {probeError.Message}";
-        }
-    }
-
-    /// <summary>
-    /// Number of times <see cref="EmitToDiskWithRetry"/> re-emits when a "successful" Roslyn
-    /// emit leaves no assembly on disk (ephemeral-cache eviction). Three attempts recover a
-    /// transient lost write while still failing fast on a genuinely unwritable cache directory.
-    ///
-    /// <para>Why a retry is legitimate here (and is NOT covering for a defect of ours): the
-    /// condition is genuinely EXTERNAL and transient — a container runtime reclaiming an
-    /// ephemeral <c>/tmp</c> under memory pressure between our write and our read. Nothing in
-    /// this process can prevent it, there is no lock/slot/budget being leaked, and the retry is
-    /// bounded, stateless and timer-free: three synchronous attempts, then a loud terminal
-    /// failure. A deterministic compile error is explicitly NOT retried. Its counterfactual is a
-    /// permanently poisoned NodeType (prod AgenticPension/Datenpunkt, 2026-06-22), not a slower
-    /// recovery. Evidence that it is not masking anything: across memex + memex-cloud + atioz it
-    /// has fired ZERO times in 7 days (31M log lines) — every ERROR the compile service emits in
-    /// production is a genuine Roslyn diagnostic, never a lost write.</para>
-    /// </summary>
-    internal const int DiskEmitAttempts = 3;
-
-    /// <summary>
-    /// Emits to a fresh per-attempt subdirectory under <paramref name="cacheDirectory"/> and
-    /// confirms the assembly on disk IS the image that was emitted, re-emitting up to
-    /// <paramref name="maxAttempts"/> times when it is not. <paramref name="emitToReleaseDir"/> runs
-    /// the real Roslyn emit into the supplied directory and returns the DLL path together with the
-    /// digest of the image it produced (<see cref="EmittedArtifact"/>); it may throw
-    /// <see cref="CompilationException"/> for a genuine compile error, which propagates immediately
-    /// (NEVER retried — only a lost or mismatched artifact triggers a re-emit). Extracted and
-    /// <c>internal</c> so the publication contract is unit-testable without a real flaky filesystem.
-    /// </summary>
-    internal static string EmitToDiskWithRetry(
-        string cacheDirectory,
-        string nodeName,
-        int maxAttempts,
-        ILogger logger,
-        Func<string, EmittedArtifact> emitToReleaseDir)
-    {
-        string? lastDllPath = null;
-        // Why the LAST attempt failed to publish, carried into the terminal exception: "could not
-        // be persisted" alone sent operators looking for a read-only cache directory when the real
-        // answer was an artifact that is present and unreadable.
-        var lastReason = "the artifact never appeared";
-
-        static void TryDeleteDir(string dir)
-        {
-            try { Directory.Delete(dir, recursive: true); }
-            catch { /* best-effort cleanup */ }
-        }
-
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            var timestamp = DateTimeOffset.UtcNow.Ticks.ToString("x");
-            // Unique published name. Discovery orders by the dir's LastWriteTime, NOT by parsing the
-            // ticks out of the name (see TryGetLatestCachedDllPath), so a GUID suffix guarantees the
-            // atomic Directory.Move below never collides — on a coarse clock or two rapid compiles —
-            // while still matching the `{nodeName}_*` glob.
-            var releaseDir = Path.Combine(cacheDirectory, $"{nodeName}_{timestamp}_{Guid.NewGuid():N}");
-            lastDllPath = Path.Combine(releaseDir, $"{nodeName}.dll");
-
-            // 🚨 Emit into a STAGING dir whose name does NOT match the `{nodeName}_*` discovery glob
-            // (TryGetLatestCachedDllPath), then atomically publish it by renaming to the discoverable
-            // name only AFTER the DLL is fully written + verified. The DLL file exists at 0 bytes and
-            // grows during compilation.Emit (File.Create + Emit is NOT atomic); without staging, a
-            // concurrent reader can discover the half-written DLL and LoadFromAssemblyPath a truncated
-            // image → a native crash (SIGSEGV) or a BadImageFormat that deletes the artifact and churns
-            // the compile. A directory rename on the same filesystem is atomic, so a reader sees either
-            // nothing or the COMPLETE artifact.
-            var stagingDir = Path.Combine(cacheDirectory, $".staging-{nodeName}-{timestamp}-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(stagingDir);
-
-            // The real emit (a genuine compile error throws straight through — never retried). Discard
-            // the half-written staging dir first so a failed emit leaves no partial artifact behind (the
-            // old code leaked a glob-discoverable `{nodeName}_{ticks}` dir here — the same hazard).
-            EmittedArtifact staged;
-            try
-            {
-                staged = emitToReleaseDir(stagingDir);
-            }
-            catch
-            {
-                TryDeleteDir(stagingDir);
-                throw;
-            }
-
-            // Confirm the staged file IS the image the emit produced, then atomically publish. EVERY
-            // fault here is a RETRYABLE publish failure — an ephemeral-cache eviction racing the
-            // read, a lost or partial write, or a transient rename IO error — so discard staging and
-            // re-emit rather than aborting the compile.
-            //
-            // 🚨 The predicate is "these are the bytes we emitted", NOT "this file is non-empty".
-            // `Length > 0` accepts a 1-byte file, a truncated PE, and — the case that survived
-            // #1387 — a full-length image with an unwritten region inside its metadata. None of
-            // those is rejected by the loader in any way the pipeline survives: the first two make
-            // LoadNodeAssembly return null, the third loads fine and throws
-            // ReflectionTypeLoadException "…because the format is invalid" on the first GetTypes().
-            // CompileResultFromAssembly records either as CompilationStatus.Error, and the
-            // first-build kickoff is gated on Status == null, so it NEVER retries — the bytes may
-            // heal, the verdict does not, and the NodeType is parked for good (#1412). Proving the
-            // artifact before it enters the discovery namespace is the publication contract, the
-            // same one AtomicFileWrite gives the assembly store; it is emphatically NOT a retry
-            // around a load. See EmittedArtifact for why a digest and not a metadata walk.
-            try
-            {
-                if (staged.MatchesFileOnDisk(out lastReason))
-                {
-                    Directory.Move(stagingDir, releaseDir);
-                    return lastDllPath;
-                }
-
-                logger.LogWarning(
-                    "Emit for {NodeName} reported success but the staged assembly at {DllPath} is " +
-                    "not the image that was emitted — {Reason} (attempt {Attempt}/{Max}); re-emitting.",
-                    nodeName, staged.DllPath, lastReason, attempt, maxAttempts);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                lastReason = $"publishing failed — {ex.GetType().Name}: {ex.Message}";
-                logger.LogWarning(ex,
-                    "Publishing the emitted assembly for {NodeName} failed (attempt {Attempt}/{Max}); re-emitting.",
-                    nodeName, attempt, maxAttempts);
-            }
-
-            // Drop the staging directory so the retry starts clean.
-            TryDeleteDir(stagingDir);
-        }
-
-        throw new CompilationException(nodeName,
-            $"Compilation succeeded but the emitted assembly for '{nodeName}' could not be published to " +
-            $"'{cacheDirectory}' after {maxAttempts} attempts (last target '{lastDllPath}'; last failure: " +
-            $"{lastReason}). The compilation host's cache directory may be read-only, evicting files, or " +
-            "losing writes.");
-    }
-
-    /// <summary>
-    /// Compiles and loads assembly directly to memory (no disk I/O).
-    ///
-    /// <para>🚨 Like <see cref="EmitCompilationToDirectory"/>, a failed emit throws UNLOGGED —
-    /// the pipeline's single <c>.Catch&lt;…, CompilationException&gt;</c> funnel is the one
-    /// reporter of a compile failure.</para>
-    /// </summary>
-    private void CompileToMemory(CSharpCompilation compilation, string nodeName, string nodePath, CancellationToken ct)
-    {
-        using var dllStream = new MemoryStream();
-        using var pdbStream = new MemoryStream();
-
-        var emitOptions = new EmitOptions(
-            debugInformationFormat: DebugInformationFormat.PortablePdb);
-
-        var emitResult = compilation.Emit(dllStream, pdbStream, options: emitOptions, cancellationToken: ct);
-
-        if (!emitResult.Success)
-            throw new CompilationException(nodePath, FormatCompileFailure(nodePath, emitResult.Diagnostics));
-
-        // Load assembly from bytes immediately
-        var assemblyBytes = dllStream.ToArray();
-        var pdbBytes = pdbStream.ToArray();
-        cacheService.LoadAssemblyFromBytes(nodeName, assemblyBytes, pdbBytes);
-    }
-}
-
-/// <summary>
-/// Exception thrown when compilation fails.
-/// </summary>
-public class CompilationException : Exception
-{
-    /// <summary>The mesh path of the node whose compilation failed.</summary>
-    public string NodePath { get; }
-
-    /// <summary>
-    /// Initializes a new instance of the exception for a failed compilation.
-    /// </summary>
-    /// <param name="nodePath">The mesh path of the node whose compilation failed.</param>
-    /// <param name="message">The error message describing the failure.</param>
-    public CompilationException(string nodePath, string message)
-        : base(message)
-    {
-        NodePath = nodePath;
-    }
-
-    /// <summary>
-    /// Initializes a new instance of the exception for a failed compilation, wrapping an
-    /// underlying cause.
-    /// </summary>
-    /// <param name="nodePath">The mesh path of the node whose compilation failed.</param>
-    /// <param name="message">The error message describing the failure.</param>
-    /// <param name="innerException">The underlying exception that caused the failure.</param>
-    public CompilationException(string nodePath, string message, Exception innerException)
-        : base(message, innerException)
-    {
-        NodePath = nodePath;
     }
 }

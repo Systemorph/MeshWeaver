@@ -25,6 +25,7 @@ using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>

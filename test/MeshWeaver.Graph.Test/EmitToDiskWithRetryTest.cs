@@ -11,10 +11,11 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The publication contract of <see cref="MeshNodeCompilationService.EmitToDiskWithRetry"/>:
+/// The publication contract of <see cref="EmitPipeline.EmitToDiskWithRetry"/>:
 /// <b>an artifact becomes discoverable only when the file on disk IS the image the emit produced</b>,
 /// and a lost write is re-emitted rather than poisoning the NodeType.
 ///
@@ -108,7 +109,7 @@ public class EmitToDiskWithRetryTest : IDisposable
         const string nodeName = "Demo_Happy";
         var attempts = 0;
 
-        var result = MeshNodeCompilationService.EmitToDiskWithRetry(
+        var result = EmitPipeline.EmitToDiskWithRetry(
             _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
             releaseDir => { attempts++; return Stage(releaseDir, nodeName, RealAssemblyBytes()); });
 
@@ -125,7 +126,7 @@ public class EmitToDiskWithRetryTest : IDisposable
         const string nodeName = "Demo_Datenpunkt";
         var attempts = 0;
 
-        var result = MeshNodeCompilationService.EmitToDiskWithRetry(
+        var result = EmitPipeline.EmitToDiskWithRetry(
             _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
             releaseDir =>
             {
@@ -149,7 +150,7 @@ public class EmitToDiskWithRetryTest : IDisposable
         var attempts = 0;
         var whole = RealAssemblyBytes();
 
-        var result = MeshNodeCompilationService.EmitToDiskWithRetry(
+        var result = EmitPipeline.EmitToDiskWithRetry(
             _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
             releaseDir =>
             {
@@ -176,7 +177,7 @@ public class EmitToDiskWithRetryTest : IDisposable
         var attempts = 0;
         var whole = RealAssemblyBytes();
 
-        var result = MeshNodeCompilationService.EmitToDiskWithRetry(
+        var result = EmitPipeline.EmitToDiskWithRetry(
             _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
             releaseDir =>
             {
@@ -209,7 +210,7 @@ public class EmitToDiskWithRetryTest : IDisposable
         LoaderVerdict(WriteTemp(holed)).Should().NotBeNull(
             "the fixture must be damage the real loader actually refuses");
 
-        var result = MeshNodeCompilationService.EmitToDiskWithRetry(
+        var result = EmitPipeline.EmitToDiskWithRetry(
             _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
             releaseDir =>
             {
@@ -231,7 +232,7 @@ public class EmitToDiskWithRetryTest : IDisposable
 
         var ex = Assert.Throws<CompilationException>(() =>
         {
-            MeshNodeCompilationService.EmitToDiskWithRetry(
+            EmitPipeline.EmitToDiskWithRetry(
                 _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
                 releaseDir =>
                 {
@@ -262,7 +263,7 @@ public class EmitToDiskWithRetryTest : IDisposable
         var holed = WithMetadataHole(whole);
 
         var ex = Assert.Throws<CompilationException>(() =>
-            MeshNodeCompilationService.EmitToDiskWithRetry(
+            EmitPipeline.EmitToDiskWithRetry(
                 _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
                 releaseDir =>
                 {
@@ -288,7 +289,7 @@ public class EmitToDiskWithRetryTest : IDisposable
 
         var ex = Assert.Throws<CompilationException>(() =>
         {
-            MeshNodeCompilationService.EmitToDiskWithRetry(
+            EmitPipeline.EmitToDiskWithRetry(
                 _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
                 releaseDir =>
                 {
@@ -311,7 +312,7 @@ public class EmitToDiskWithRetryTest : IDisposable
         // and no `.staging-*` dir is left behind.
         const string nodeName = "Demo_AtomicPublish";
 
-        var result = MeshNodeCompilationService.EmitToDiskWithRetry(
+        var result = EmitPipeline.EmitToDiskWithRetry(
             _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
             releaseDir => Stage(releaseDir, nodeName, RealAssemblyBytes()));
 
@@ -332,7 +333,7 @@ public class EmitToDiskWithRetryTest : IDisposable
         const string nodeName = "Demo_ErrorNoPartial";
 
         Assert.Throws<CompilationException>(() =>
-            MeshNodeCompilationService.EmitToDiskWithRetry(
+            EmitPipeline.EmitToDiskWithRetry(
                 _cacheDir, nodeName, maxAttempts: 3, NullLogger.Instance,
                 releaseDir =>
                 {

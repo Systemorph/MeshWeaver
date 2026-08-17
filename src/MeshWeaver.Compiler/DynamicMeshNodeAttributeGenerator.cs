@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// Generates C# source code for dynamic MeshNodeProviderAttribute classes.

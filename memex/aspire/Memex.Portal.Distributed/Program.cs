@@ -17,6 +17,7 @@ using Npgsql;
 using Orleans.Configuration;
 using Orleans.Hosting;
 
+using MeshWeaver.Compiler;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.Services.AddServerSideBlazor().AddCircuitOptions(o => o.DetailedErrors = true);

@@ -61,6 +61,7 @@
     <Project Path="src/MeshWeaver.Blazor.Portal/MeshWeaver.Blazor.Portal.csproj" />
     <Project Path="src/MeshWeaver.Blazor/MeshWeaver.Blazor.csproj" />
     <Project Path="src/MeshWeaver.Cli/MeshWeaver.Cli.csproj" />
+    <Project Path="src/MeshWeaver.Compiler/MeshWeaver.Compiler.csproj" />
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections.Indexing/MeshWeaver.ContentCollections.Indexing.csproj" />

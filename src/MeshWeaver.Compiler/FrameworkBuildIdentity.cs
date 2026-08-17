@@ -4,15 +4,15 @@ using System.Reflection.Metadata;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// THE framework build identity every compiled NodeType release is pinned to (issue #1660 WS3) —
-/// the value <see cref="NodeTypeCompilationHelpers.FrameworkVersion"/> resolves and every other
-/// reading (the assembly-store filename tag, <c>CompiledFrameworkVersion</c> stamps, the CI bake
-/// artifact key, <c>PrebuiltAssemblySeeder</c>'s adoption gate, the build-protocol fingerprint)
-/// flows from. One identity, one resolution — a producer and a consumer can never disagree about
-/// what "the framework" is.
+/// the value <see cref="FrameworkVersion"/> resolves and every other reading (the assembly-store
+/// filename tag, <c>CompiledFrameworkVersion</c> stamps, the CI bake artifact key,
+/// <c>PrebuiltAssemblySeeder</c>'s adoption gate, the build-protocol fingerprint) flows from. One
+/// identity, one resolution — a producer and a consumer can never disagree about what "the
+/// framework" is.
 ///
 /// <para><b>Three schemes, in resolution order:</b></para>
 /// <list type="number">
@@ -36,8 +36,14 @@ namespace MeshWeaver.Graph.Configuration;
 /// (clean checkout at a named commit). The fallback for CI-built processes WITHOUT a surface
 /// manifest (test hosts on CI), and retained everywhere as DIAGNOSTIC PROVENANCE — logged beside
 /// the surface identity so an operator can always answer "which commit built this".</description></item>
-/// <item><description><b>The Graph MVID</b> — local builds with neither: a content identity,
-/// exact for a dirty working tree.</description></item>
+/// <item><description><b>The anchor MVID</b> — local builds with neither: the
+/// <c>MeshWeaver.Compiler</c> assembly's MVID, a content identity of the toolchain, exact for a
+/// dirty working tree. Deliberately a SINGLE file's identity so a producer can attribute it
+/// without loading anything (<c>MeshWeaver.Plugin.Build.FrameworkIdentity.ReadIdentity</c>).
+/// The fallback governs only manifest-less processes — test hosts and ad-hoc tools; every host
+/// that compiles against a PERSISTENT assembly store (the portals, the CI bake host,
+/// mw-plugin-test) ships a surface manifest and resolves the surface identity, locally
+/// included.</description></item>
 /// </list>
 ///
 /// <para><b>Why a canonical LIST and not the ambient TPA:</b> the bake host (mw-plugin-test) and
@@ -83,6 +89,7 @@ public static class FrameworkBuildIdentity
         "MeshWeaver.AI",
         "MeshWeaver.Application.Styles",
         "MeshWeaver.Approvals",
+        "MeshWeaver.Compiler",
         "MeshWeaver.ContentCollections",
         "MeshWeaver.ContentCollections.Indexing",
         "MeshWeaver.ContentCollections.Indexing.Graph",
@@ -124,17 +131,100 @@ public static class FrameworkBuildIdentity
     /// NodeType compile — a body-only change there alters what Roslyn is fed without any API
     /// change, so the surface hash alone would under-invalidate. Each entry names why:
     /// <list type="bullet">
-    /// <item><description><c>MeshWeaver.Graph</c> — carries the NodeType compile pipeline's
-    /// emitters and source shaping: <c>DynamicMeshNodeAttributeGenerator</c> (the generated
-    /// attribute/skeleton source injected into every dynamic NodeType compilation),
-    /// <c>MeshNodeCompilationService</c> (source aggregation, <c>@@</c> include resolution and
-    /// rebasing, <c>#r</c>/NuGet directive handling), and <c>CodeQueryResolver</c> (which source
-    /// files a compile consumes). Swept 2026-08-16: the other generator in the repo
-    /// (<c>SkeletonGenerator</c> in MeshWeaver.Plugin.Build) is plugin BUILD tooling — not loaded
-    /// by the portal's compile path and not in the canonical set.</description></item>
+    /// <item><description><c>MeshWeaver.Compiler</c> — THE compile toolchain (#1707): the
+    /// skeleton generator (<c>DynamicMeshNodeAttributeGenerator</c> — the generated
+    /// attribute/provider source injected into every dynamic NodeType compilation), source-query
+    /// resolution (<c>CodeQueryResolver</c> — which source files a compile consumes), the
+    /// <c>@@</c>-include resolution and rebasing, source aggregation/filtering/join order,
+    /// parse/compilation options, generator execution, and the emit itself. Before #1707 this
+    /// code lived in <c>MeshWeaver.Graph</c> and pinned ALL of Graph — the highest-churn assembly
+    /// in the repo — so nearly every merge rebaked the world; the extraction is what makes
+    /// "rebuild only when we need to" hold in practice. Swept 2026-08-16: the other generator in
+    /// the repo (<c>SkeletonGenerator</c> in MeshWeaver.Plugin.Build) is plugin BUILD tooling —
+    /// not loaded by the portal's compile path and not in the canonical set.</description></item>
+    /// <item><description><c>MeshWeaver.NuGet</c> — <c>NuGetDirectiveParser</c> shapes what
+    /// Roslyn is fed (which <c>#r "nuget:"</c> lines are stripped and what they resolve to), and
+    /// the resolver decides which assemblies a directive adds to the reference set. A body-only
+    /// change to either alters compile inputs with no API change — before #1707 this was a HOLE:
+    /// the assembly was surface-hashed only.</description></item>
+    /// <item><description><b>…and each root's MeshWeaver DEPENDENCY CLOSURE</b> (maintainer,
+    /// 2026-08-17: "must track dependencies of compiler itself — if any have changed, need to
+    /// recompile"): the toolchain CALLS into what it links (Mesh.Contract's data types,
+    /// ContentCollections' config shapes, the NuGet resolver), so a body-only change in a closure
+    /// member can change what the toolchain emits without any API change. The set is COMPUTED
+    /// from the roots' AssemblyRef metadata — fixed bytes of the shipped assemblies, so every
+    /// host derives the identical set — rather than hand-listed, so a new toolchain dependency
+    /// can never be silently outside the identity. Under deterministic builds this still keeps
+    /// "rebuild only when we need to": a platform update that provably touches none of the
+    /// closure members' bytes moves nothing.</description></item>
     /// </list>
     /// </summary>
-    public static readonly ImmutableArray<string> FullMvidAssemblies = ["MeshWeaver.Graph"];
+    public static ImmutableArray<string> FullMvidAssemblies => _fullMvidAssemblies.Value;
+
+    /// <summary>The toolchain roots the full-MVID closure is computed from.</summary>
+    internal static readonly ImmutableArray<string> ToolchainRoots =
+        ["MeshWeaver.Compiler", "MeshWeaver.NuGet"];
+
+    private static readonly Lazy<ImmutableArray<string>> _fullMvidAssemblies = new(() =>
+        ComputeToolchainClosure(ToolchainRoots, ReferencedMeshWeaverAssembliesOf));
+
+    /// <summary>
+    /// The MeshWeaver-only transitive closure of <paramref name="roots"/> over
+    /// <paramref name="referencedOf"/> — pure and injectable so the closure rule is unit-testable
+    /// against a staged reference graph. Sorted ordinal; roots always included.
+    /// </summary>
+    internal static ImmutableArray<string> ComputeToolchainClosure(
+        IEnumerable<string> roots,
+        Func<string, IEnumerable<string>> referencedOf)
+    {
+        var seen = new SortedSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<string>(roots);
+        while (stack.Count > 0)
+        {
+            var name = stack.Pop();
+            if (!seen.Add(name))
+                continue;
+            foreach (var reference in referencedOf(name))
+                if (reference.StartsWith("MeshWeaver.", StringComparison.Ordinal))
+                    stack.Push(reference);
+        }
+        return [.. seen];
+    }
+
+    /// <summary>
+    /// An assembly's MeshWeaver.* AssemblyRef simple names: from the loaded assembly when
+    /// present, else a metadata-only read of the DLL beside the entry assembly, else empty
+    /// (the name still joins the closure via its root/parent; its MVID then resolves
+    /// <see cref="AbsentMarker"/>, which is itself identity-relevant).
+    /// </summary>
+    private static IEnumerable<string> ReferencedMeshWeaverAssembliesOf(string simpleName)
+    {
+        var loaded = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => !a.IsDynamic
+                && string.Equals(a.GetName().Name, simpleName, StringComparison.Ordinal));
+        if (loaded is not null)
+            return loaded.GetReferencedAssemblies()
+                .Select(n => n.Name)
+                .Where(n => !string.IsNullOrEmpty(n))!;
+
+        var candidate = Path.Combine(AppContext.BaseDirectory, simpleName + ".dll");
+        if (!File.Exists(candidate))
+            return [];
+        try
+        {
+            using var stream = File.OpenRead(candidate);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            var md = pe.GetMetadataReader();
+            return md.AssemblyReferences
+                .Select(h => md.GetString(md.GetAssemblyReference(h).Name))
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
 
     /// <summary>Marker recorded for a canonical assembly absent from the manifest/process — the
     /// absence itself is part of the identity (two hosts with different presence sets must never
@@ -192,13 +282,36 @@ public static class FrameworkBuildIdentity
 
     /// <summary>
     /// The pure resolution rule for the FALLBACK layer (no surface manifest): a non-blank stamped
-    /// commit identity wins; otherwise the caller's content identity (the Graph MVID) applies.
+    /// commit identity wins; otherwise the caller's content identity (the anchor assembly's MVID)
+    /// applies.
     /// </summary>
     /// <param name="stamped">The <see cref="MetadataKey"/> attribute value, or null when the
     /// assembly carries none (every local build).</param>
-    /// <param name="contentIdentity">The fallback content identity (Graph's MVID, "N" format).</param>
+    /// <param name="contentIdentity">The fallback content identity (the anchor's MVID, "N"
+    /// format).</param>
     public static string Resolve(string? stamped, string contentIdentity) =>
         string.IsNullOrWhiteSpace(stamped) ? contentIdentity : stamped;
+
+    /// <summary>
+    /// The live MeshWeaver framework identity a compiled NodeType release is pinned to — THE one
+    /// process-lifetime resolution, anchored on this (the MeshWeaver.Compiler) assembly. Every
+    /// consumer — the assembly-store filename tag, <c>CompiledFrameworkVersion</c> stamps, the CI
+    /// bake artifact key, the seeder's adoption gate, the build-protocol fingerprint — reads it
+    /// from here (directly or through the delegating shims in <c>MeshWeaver.Graph</c>), so a
+    /// producer and a consumer can never disagree about what "the framework" is. A mismatch
+    /// against a NodeType's <c>CompiledFrameworkVersion</c> means "recompile".
+    /// </summary>
+    public static string FrameworkVersion => Resolved.Value.Identity;
+
+    /// <summary>Degradation warning from the identity resolution (a torn/unusable surface
+    /// manifest fell back to the stamp/MVID layer), or null on the happy path — cached with the
+    /// identity itself so the pre-warmer can log it beside the identity it announces.</summary>
+    public static string? FrameworkVersionWarning => Resolved.Value.Warning;
+
+    private static readonly Lazy<(string Identity, string? Warning)> Resolved = new(() =>
+        ResolveProcessIdentityWithDiagnostics(
+            AppContext.BaseDirectory,
+            typeof(FrameworkBuildIdentity).Assembly));
 
     /// <summary>
     /// Reads the stamped <see cref="MetadataKey"/> value off a LOADED assembly, or null when the
@@ -217,15 +330,16 @@ public static class FrameworkBuildIdentity
 
     /// <summary>
     /// The full resolution the process identity uses, in order: surface manifest beside the app
-    /// (<c>s&lt;hash&gt;</c>) → stamped commit identity (<c>g&lt;sha&gt;</c>) → Graph MVID.
+    /// (<c>s&lt;hash&gt;</c>) → stamped commit identity (<c>g&lt;sha&gt;</c>) → MVID-set identity.
     /// See <see cref="ResolveProcessIdentityWithDiagnostics"/> — this is its identity-only
     /// convenience reading.
     /// </summary>
     /// <param name="baseDirectory">Where to look for <see cref="SurfaceManifestFileName"/> —
     /// the app base directory in production.</param>
-    /// <param name="graphAssembly">The MeshWeaver.Graph assembly (identity anchor).</param>
-    public static string ResolveProcessIdentity(string baseDirectory, Assembly graphAssembly)
-        => ResolveProcessIdentityWithDiagnostics(baseDirectory, graphAssembly).Identity;
+    /// <param name="anchorAssembly">The MeshWeaver.Compiler assembly (identity anchor — carries
+    /// the commit stamp and roots the by-simple-name MVID resolution).</param>
+    public static string ResolveProcessIdentity(string baseDirectory, Assembly anchorAssembly)
+        => ResolveProcessIdentityWithDiagnostics(baseDirectory, anchorAssembly).Identity;
 
     /// <summary>
     /// The full resolution chain as one PURE, testable seam, returning the identity plus the
@@ -238,9 +352,10 @@ public static class FrameworkBuildIdentity
     /// </summary>
     /// <param name="baseDirectory">Where to look for <see cref="SurfaceManifestFileName"/> —
     /// the app base directory in production.</param>
-    /// <param name="graphAssembly">The MeshWeaver.Graph assembly (identity anchor).</param>
+    /// <param name="anchorAssembly">The MeshWeaver.Compiler assembly (identity anchor — carries
+    /// the commit stamp and roots the by-simple-name MVID resolution).</param>
     public static (string Identity, string? Warning) ResolveProcessIdentityWithDiagnostics(
-        string baseDirectory, Assembly graphAssembly)
+        string baseDirectory, Assembly anchorAssembly)
     {
         var manifestPath = Path.Combine(baseDirectory, SurfaceManifestFileName);
         string? warning = null;
@@ -250,7 +365,7 @@ public static class FrameworkBuildIdentity
             {
                 var pairs = ParseSurfaceManifest(File.ReadAllText(manifestPath));
                 if (pairs.Count > 0)
-                    return (ComputeSurfaceIdentity(pairs, name => ImplMvidOf(name, graphAssembly)), null);
+                    return (ComputeSurfaceIdentity(pairs, name => ImplMvidOf(name, anchorAssembly)), null);
                 warning =
                     $"surface manifest at {manifestPath} held no usable pairs — "
                     + "resolved the stamp/MVID fallback identity instead";
@@ -264,19 +379,19 @@ public static class FrameworkBuildIdentity
                 + "identity instead";
         }
         return (Resolve(
-            StampedIdentityOf(graphAssembly),
-            graphAssembly.ManifestModule.ModuleVersionId.ToString("N")), warning);
+            StampedIdentityOf(anchorAssembly),
+            anchorAssembly.ManifestModule.ModuleVersionId.ToString("N")), warning);
     }
 
     /// <summary>
-    /// An assembly's implementation MVID by simple name: the loaded assembly when present (Graph —
-    /// the only current <see cref="FullMvidAssemblies"/> member — is always loaded, since this
-    /// code IS Graph), else a metadata-only read of the DLL beside the entry assembly, else null.
+    /// An assembly's implementation MVID by simple name: the anchor itself, else the loaded
+    /// assembly when present, else a metadata-only read of the DLL beside the entry assembly,
+    /// else null.
     /// </summary>
-    private static string? ImplMvidOf(string simpleName, Assembly graphAssembly)
+    private static string? ImplMvidOf(string simpleName, Assembly anchorAssembly)
     {
-        if (string.Equals(graphAssembly.GetName().Name, simpleName, StringComparison.Ordinal))
-            return graphAssembly.ManifestModule.ModuleVersionId.ToString("N");
+        if (string.Equals(anchorAssembly.GetName().Name, simpleName, StringComparison.Ordinal))
+            return anchorAssembly.ManifestModule.ModuleVersionId.ToString("N");
         var loaded = AppDomain.CurrentDomain.GetAssemblies()
             .FirstOrDefault(a => string.Equals(a.GetName().Name, simpleName, StringComparison.Ordinal)
                                  && !a.IsDynamic);

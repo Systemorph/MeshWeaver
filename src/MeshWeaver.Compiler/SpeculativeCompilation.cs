@@ -7,7 +7,7 @@ using Microsoft.CodeAnalysis.Text;
 using RoslynDiagnosticSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
 using LspDiagnosticSeverity = MeshWeaver.Mesh.Services.LanguageServer.DiagnosticSeverity;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// Builds a <see cref="CSharpCompilation"/> from a NodeType's <see cref="CompilationInputs"/>
@@ -28,7 +28,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolver)
 {
-    private const string SkeletonDocumentPath = "__skeleton__.cs";
+    private const string SkeletonDocumentPath = Compiler.CompileDiagnostics.SkeletonDiagnosticsPath;
 
     public async Task<IReadOnlyList<DiagnosticInfo>> GetDiagnosticsAsync(
         CompilationInputs inputs,

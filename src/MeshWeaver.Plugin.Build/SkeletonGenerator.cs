@@ -3,6 +3,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Plugin.Build;
 
 /// <summary>

@@ -18,6 +18,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -751,7 +752,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var probe = Observable.Timer(TimeSpan.FromMilliseconds(200))
             .Select(_ => SourceSnapshot.Established(new[] { source }));
 
-        var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
+        var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
         snapshot.IsEstablished.Should().BeTrue();
@@ -776,7 +777,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
             .SelectMany(_ => Observable.Empty<SourceSnapshot>());
         var cachedFirst = Observable.Return(SourceSnapshot.Established(Array.Empty<MeshNode>()));
 
-        var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
+        var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
         snapshot.IsEstablished.Should().BeTrue(
@@ -803,7 +804,7 @@ public class CodeEditRecompileTest(ITestOutputHelper output) : MonolithMeshTestB
         var probe = Observable.Never<SourceSnapshot>();
         var cachedFirst = Observable.Return(SourceSnapshot.Established(new[] { source }));
 
-        var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
+        var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(5)).ToTask(ct);
 
         snapshot.Sources.Should().ContainSingle(

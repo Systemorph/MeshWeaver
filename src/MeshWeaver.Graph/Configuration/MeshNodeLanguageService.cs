@@ -19,6 +19,7 @@ using Microsoft.Extensions.Logging;
 using RoslynDiagnosticSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
 using LspDiagnosticSeverity = MeshWeaver.Mesh.Services.LanguageServer.DiagnosticSeverity;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
@@ -39,7 +40,8 @@ internal sealed class MeshNodeLanguageService(
 {
     // Path used as the SyntaxTree.FilePath for the generated skeleton tree.
     // Distinct from any user MeshNode path so callers can never address it accidentally.
-    private const string SkeletonDocumentPath = "__skeleton__.cs";
+    // Aliases the toolchain's sentinel — the failure-diagnostics filter keys on the SAME value.
+    private const string SkeletonDocumentPath = MeshWeaver.Compiler.CompileDiagnostics.SkeletonDiagnosticsPath;
 
     // Per-NodeType cached workspace, invalidated when source versions change.
     // Concurrent because hub-message handlers may invoke language-service queries

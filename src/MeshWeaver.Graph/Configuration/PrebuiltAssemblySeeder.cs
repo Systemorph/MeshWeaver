@@ -7,6 +7,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
@@ -22,12 +23,14 @@ public static class PrebuiltAssemblySeeder
     /// Why a prebuilt assembly may NOT be adopted, or null when it may.
     ///
     /// <para>🚨 This is the whole safety argument, kept as one pure function so it can be tested
-    /// without standing up a mesh. <c>FrameworkVersion</c> is MeshWeaver.Graph's MVID — a CONTENT
-    /// identity — and the assembly-store key carries its first eight characters. Seeding bytes built
-    /// against different framework content therefore writes them under the LIVE framework's tag,
-    /// where the store reports them as a usable build: the rebuild that was needed is suppressed,
-    /// and the ABI mismatch surfaces as a <c>TypeLoadException</c> inside a collectible ALC at
-    /// activation — no overlay, no compile error, nothing to grep.</para>
+    /// without standing up a mesh. <c>FrameworkVersion</c> is the resolved framework build
+    /// identity (<see cref="FrameworkBuildIdentity.FrameworkVersion"/> — surface hash / commit
+    /// stamp / toolchain-anchor MVID) — and the assembly-store key carries its first eight
+    /// characters. Seeding bytes built against a different framework therefore writes them under
+    /// the LIVE framework's tag, where the store reports them as a usable build: the rebuild that
+    /// was needed is suppressed, and the ABI mismatch surfaces as a <c>TypeLoadException</c>
+    /// inside a collectible ALC at activation — no overlay, no compile error, nothing to
+    /// grep.</para>
     ///
     /// <para>Declining is always safe (the caller compiles, as it does today). Adopting on faith is
     /// not. So anything short of an exact match declines — including an absent identity, which is
@@ -54,10 +57,11 @@ public static class PrebuiltAssemblySeeder
                 : null;
 
     /// <summary>
-    /// The LIVE framework identity a producer must record beside its bytes — MeshWeaver.Graph's
-    /// MVID, exactly as <see cref="DeclineReason(string?)"/> compares it. The one public reading of
-    /// this identity, so a producer (the CI bake, the registry bundle lane) and the consuming gate
-    /// can never disagree about what "the framework identity" is.
+    /// The LIVE framework identity a producer must record beside its bytes — the resolved
+    /// framework build identity (<see cref="FrameworkBuildIdentity.FrameworkVersion"/>), exactly
+    /// as <see cref="DeclineReason(string?)"/> compares it. The one public reading of this
+    /// identity, so a producer (the CI bake, the registry bundle lane) and the consuming gate can
+    /// never disagree about what "the framework identity" is.
     /// </summary>
     public static string LiveFrameworkMvid => NodeTypeCompilationHelpers.FrameworkVersion;
 
@@ -93,12 +97,13 @@ public static class PrebuiltAssemblySeeder
         string? frameworkMvid,
         ILogger? logger = null)
     {
-        // 🚨 THE GATE. FrameworkVersion is MeshWeaver.Graph's MVID — a CONTENT identity, not a
-        // version string — and the assembly-store key carries the first eight characters of it. So
-        // seeding bytes built against different framework content writes them under the LIVE
-        // framework's tag, where the store reports them as a usable build: the rebuild that was
-        // needed is suppressed, and the ABI mismatch surfaces as a TypeLoadException inside a
-        // collectible ALC at activation — no overlay, no compile error, nothing to grep.
+        // 🚨 THE GATE. FrameworkVersion is the resolved framework build identity — a content/
+        // surface identity, not a version string — and the assembly-store key carries the first
+        // eight characters of it. So seeding bytes built against a different framework writes
+        // them under the LIVE framework's tag, where the store reports them as a usable build:
+        // the rebuild that was needed is suppressed, and the ABI mismatch surfaces as a
+        // TypeLoadException inside a collectible ALC at activation — no overlay, no compile
+        // error, nothing to grep.
         //
         // Declining is always safe; adopting on faith is not. So an identity that is absent or
         // different declines, and the caller compiles.

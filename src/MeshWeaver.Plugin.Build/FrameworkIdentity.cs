@@ -2,6 +2,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using MeshWeaver.Graph.Configuration;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Plugin.Build;
 
 /// <summary>
@@ -9,12 +10,12 @@ namespace MeshWeaver.Plugin.Build;
 ///
 /// <para>🚨 <b>The identity is <see cref="FrameworkBuildIdentity"/>, not the package version.</b>
 /// The runtime compares <c>NodeTypeDefinition.CompiledFrameworkVersion</c> against
-/// <c>NodeTypeCompilationHelpers.FrameworkVersion</c>: for a CI-built framework that is the stamped
-/// COMMIT identity (<c>AssemblyMetadata("MeshWeaverFrameworkIdentity", "g&lt;sha&gt;")</c> on
-/// MeshWeaver.Graph — identical for every CI build of the same commit, #1660 WS3); for a local
-/// build it is Graph's <b>MVID</b> — a content identity, chosen over
-/// <c>AssemblyInformationalVersion</c> because deriving it from the version string forced a fresh
-/// stamp into every build and destroyed incremental compilation.</para>
+/// <see cref="FrameworkBuildIdentity.FrameworkVersion"/>: for a CI-built framework that is the
+/// stamped COMMIT identity (<c>AssemblyMetadata("MeshWeaverFrameworkIdentity", "g&lt;sha&gt;")</c>
+/// on <see cref="IdentityAssembly"/> — identical for every CI build of the same commit, #1660
+/// WS3); for a manifest-less local build it is the toolchain assembly's <b>MVID</b> — a content
+/// identity, chosen over <c>AssemblyInformationalVersion</c> because deriving it from the version
+/// string forced a fresh stamp into every build and destroyed incremental compilation.</para>
 ///
 /// <para>So a package recording only <c>3.0.0-rc2</c> records something the runtime never looks at:
 /// two builds can share a version string and differ in content, and the identity is what says
@@ -27,8 +28,9 @@ namespace MeshWeaver.Plugin.Build;
 /// </summary>
 public static class FrameworkIdentity
 {
-    /// <summary>The assembly whose stamp/MVID IS the framework identity.</summary>
-    public const string IdentityAssembly = "MeshWeaver.Graph";
+    /// <summary>The assembly whose stamp/MVID IS the framework identity — the compile toolchain
+    /// assembly the identity is anchored on (moved from MeshWeaver.Graph in #1707).</summary>
+    public const string IdentityAssembly = "MeshWeaver.Compiler";
 
     /// <summary>
     /// Reads an assembly's framework identity without loading it — metadata only, so it cannot

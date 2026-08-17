@@ -173,7 +173,7 @@ public class TestTraceLogFaultTest
     public void ALongFault_KeepsBothTheThrowSiteAndOurOwnFramesAtTheEnd()
     {
         const string throwSite = "   at Microsoft.CodeAnalysis.CSharp.Symbols.NamedTypeSymbol.get_ContainingTypeDefinition()";
-        const string ourFrame = "   at MeshWeaver.Graph.Configuration.MeshNodeCompilationService.EmitCompilationToDirectory(...)";
+        const string ourFrame = "   at MeshWeaver.Compiler.EmitPipeline.EmitCompilationToDirectory(...)";
         var libraryNoise = string.Join(
             Environment.NewLine,
             Enumerable.Range(0, 400).Select(i => $"   at Microsoft.Cci.MetadataWriter.Frame{i}()"));

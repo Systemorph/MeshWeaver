@@ -5,6 +5,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>

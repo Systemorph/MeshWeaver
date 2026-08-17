@@ -8,6 +8,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
@@ -992,38 +993,18 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
-    /// The live MeshWeaver framework identity a compiled NodeType release is pinned to — see
-    /// <see cref="FrameworkBuildIdentity"/> for the scheme. Hosts that ship a surface manifest
-    /// (the portals, the CI bake host) resolve the API-SURFACE identity (<c>s&lt;hash&gt;</c> —
-    /// stable across internal-only framework changes, so content rebakes ONLY on a breaking
-    /// surface change, #1660 WS3 refinement "rebuild only when we need to"); manifest-less CI
-    /// processes fall back to the stamped COMMIT identity (<c>g&lt;sha&gt;</c>, kept as logged
-    /// provenance everywhere); local builds fall back to the <c>MeshWeaver.Graph</c> assembly's
-    /// MVID (content-exact for a dirty working tree). A mismatch against a NodeType's
-    /// <c>CompiledFrameworkVersion</c> means "recompile". Computed once per process.
+    /// The live MeshWeaver framework identity a compiled NodeType release is pinned to —
+    /// delegates to <see cref="FrameworkBuildIdentity.FrameworkVersion"/> (MeshWeaver.Compiler,
+    /// the toolchain assembly the identity is anchored on since #1707). A mismatch against a
+    /// NodeType's <c>CompiledFrameworkVersion</c> means "recompile". Kept as a delegating shim so
+    /// the many Graph-internal consumers (and the IVT'd bake pipeline) need no re-pointing.
     /// </summary>
-    internal static string FrameworkVersion => _frameworkVersion.Value.Identity;
+    internal static string FrameworkVersion => FrameworkBuildIdentity.FrameworkVersion;
 
     /// <summary>Degradation warning from the identity resolution (a torn/unusable surface
-    /// manifest fell back to the stamp/MVID layer), or null on the happy path — cached with the
-    /// identity itself so the pre-warmer can log it beside the identity it announces.</summary>
-    internal static string? FrameworkVersionWarning => _frameworkVersion.Value.Warning;
-
-    // Resolution once per process, through the ONE chain (FrameworkBuildIdentity
-    // .ResolveProcessIdentityWithDiagnostics): surface manifest → commit stamp → Graph MVID. The MVID fallback
-    // rationale (local builds): the MVID is part of the compiled module, so it is STABLE whenever
-    // the DLL bytes are identical and CHANGES whenever Graph is rebuilt with different content.
-    // The surface identity supersedes both where a manifest ships because the commit key
-    // OVER-invalidated (every merge — internal-only included — rebaked all content; measured
-    // pending=82 on the ci.3979 roll) while the Graph MVID alone UNDER-invalidates (it only
-    // covers Graph's own compile inputs, not the content-facing surface of the rest of the
-    // framework). The ref-assembly-based surface hash sits exactly between: it moves when — and
-    // only when — the API surface content compiles against changes (plus the Graph-impl
-    // exception for the compile pipeline's own emitters).
-    private static readonly Lazy<(string Identity, string? Warning)> _frameworkVersion = new(() =>
-        FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics(
-            AppContext.BaseDirectory,
-            typeof(NodeTypeCompilationHelpers).Assembly));
+    /// manifest fell back to the stamp/MVID layer), or null on the happy path — see
+    /// <see cref="FrameworkBuildIdentity.FrameworkVersionWarning"/>.</summary>
+    internal static string? FrameworkVersionWarning => FrameworkBuildIdentity.FrameworkVersionWarning;
 
     /// <summary>
     /// True when a NodeType's persisted compile state is backed by a compiled
@@ -1198,11 +1179,11 @@ internal static class NodeTypeCompilationHelpers
                 : "Compilation produced no assembly",
             CompilationException ce => ce.Message,
             // A non-Roslyn abort out of Emit carries the canary verdict
-            // (MeshNodeCompilationService.ProbeSharedEmitState) — appended HERE, in the one
+            // (EmitPipeline.ProbeSharedEmitState) — appended HERE, in the one
             // funnel, so the answer to "is this compilation's inputs or the whole process?"
             // rides the record triage already reads, without a second log line.
             { } other => $"{other.GetType().Name}: {other.Message}"
-                + (other.Data[MeshNodeCompilationService.EmitCanaryDataKey] is string canary
+                + (other.Data[EmitPipeline.EmitCanaryDataKey] is string canary
                     ? $" [{canary}]"
                     : string.Empty),
         };

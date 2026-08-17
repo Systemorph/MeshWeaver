@@ -6,6 +6,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
@@ -155,7 +156,7 @@ public class RecursiveCompilationTest
         params QueryResultChange<MeshNode>[] changes) =>
         changes.Aggregate(
             ImmutableDictionary<string, MeshNode>.Empty,
-            MeshNodeCompilationService.ApplyQueryChange);
+            NodeCompileShaping.ApplyQueryChange);
 
     /// <summary>
     /// 🚨 A query's Initial arrives in CHUNKS. Taking the first emission yields a partial source
@@ -231,11 +232,11 @@ public class RecursiveCompilationTest
     {
         var seeded = Fold(Change(QueryChangeType.Initial, "Store/Plugin/Source/Localizer"));
 
-        MeshNodeCompilationService.ApplyQueryChange(
+        NodeCompileShaping.ApplyQueryChange(
                 seeded, new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial })
             .Should().BeSameAs(seeded, "an empty chunk changes nothing");
 
-        MeshNodeCompilationService.ApplyQueryChange(seeded, null!)
+        NodeCompileShaping.ApplyQueryChange(seeded, null!)
             .Should().BeSameAs(seeded, "a null change must not throw mid-discovery");
     }
 }

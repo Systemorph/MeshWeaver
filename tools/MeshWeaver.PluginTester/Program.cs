@@ -5,6 +5,7 @@ using System.Text.Json;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.PluginTester;
 
+using MeshWeaver.Compiler;
 // mw-plugin-test <repo-root> [--compile-timeout <seconds>] [--render-timeout <seconds>]
 //                            [--allow <file>] [--report <file>]
 //                            [--bake-output <dir>] [--source-sha <sha>]
@@ -70,8 +71,8 @@ for (var i = 0; i < args.Length; i++)
         // is what the surface-identity proof script drives.
         case "--print-framework-identity":
         {
-            var provenance = MeshWeaver.Graph.Configuration.FrameworkBuildIdentity
-                .StampedIdentityOf(typeof(MeshWeaver.Graph.Configuration.FrameworkBuildIdentity).Assembly);
+            var provenance = MeshWeaver.Compiler.FrameworkBuildIdentity
+                .StampedIdentityOf(typeof(MeshWeaver.Compiler.FrameworkBuildIdentity).Assembly);
             Console.WriteLine(
                 $"identity={MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid} "
                 + $"provenance={provenance ?? "(unstamped)"}");
