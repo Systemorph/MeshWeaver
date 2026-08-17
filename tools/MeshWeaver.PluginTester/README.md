@@ -8,9 +8,9 @@ portals adopt instead of recompiling.
 
 Distributed two ways, same binary:
 
-- **dotnet tool** — `dotnet tool install MeshWeaver.Compiler.Cli` (command: `mw-compiler`), for
-  satellite content repos' CI lanes: install the version matching your platform, run the bake, no
-  platform-repo artifact download.
+- **dotnet tool** — `dotnet tool install -g MeshWeaver.Compiler.Cli` (command: `mw-compiler`; use
+  `--tool-path`/`--local` for CI-scoped installs), for satellite content repos' CI lanes: install
+  the version matching your platform, run the bake, no platform-repo artifact download.
 - **container image** — the `mw-plugin-test` image the plugin gates run.
 
 Useful entry points:

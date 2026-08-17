@@ -16,8 +16,8 @@
   </PropertyGroup>
 
   <!-- The dotnet-tool distribution of the compiler (#1707 S1b): the SAME binary CI's bake/gate
-       runs, installable via `dotnet tool install MeshWeaver.Compiler.Cli` so satellite repos need
-       no platform-repo artifact download. OPT-IN via -p:PackCompilerTool=true (the
+       runs, installable via `dotnet tool install -g MeshWeaver.Compiler.Cli` so satellite repos
+       need no platform-repo artifact download. OPT-IN via -p:PackCompilerTool=true (the
        publish-compiler-tool workflow) — IsPackable stays false for the platform release pack, so
        `dotnet pack` over the solution never ships this exe as an ordinary library package. The
        docker distribution of the same binary is the existing mw-plugin-test container image. -->
