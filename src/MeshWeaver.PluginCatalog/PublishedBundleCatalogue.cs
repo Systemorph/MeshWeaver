@@ -145,39 +145,64 @@ public static class PublishedBundleCatalogue
     private static IEnumerable<string> SealedBundleNames(string identityDirectory, ILogger? logger)
     {
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory))
-        {
-            var sentinel = Path.Combine(
-                sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
-            if (!File.Exists(sentinel))
-            {
-                logger?.LogInformation(
-                    "ReleaseAvailability: {SourceDirectory} carries no {Sentinel} — the publication "
-                    + "is torn, so its bundles do not count as available",
-                    sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
-                continue;
-            }
-
-            var listed = File.ReadAllLines(sentinel)
-                .Select(line => line.Trim())
-                .Where(line => line.Length > 0)
-                .ToList();
-            if (listed.Any(name => !File.Exists(Path.Combine(sourceDirectory, name))))
-            {
-                logger?.LogInformation(
-                    "ReleaseAvailability: {SourceDirectory} is sealed but a listed bundle is "
-                    + "absent — the publication is torn, so its bundles do not count as available",
-                    sourceDirectory);
-                continue;
-            }
-
-            foreach (var name in listed)
+            foreach (var name in CompleteBundlesOf(sourceDirectory, logger) ?? [])
                 yield return name;
-        }
     }
 
-    /// <summary>Which sources are sealed under one identity — the BUILD gate's question (#1755),
-    /// asked per producing repo rather than per package.</summary>
-    public static IReadOnlySet<string> SealedSources(string? publishedRoot, string? identity)
+    /// <summary>
+    /// 🚨 THE completeness rule, in ONE place: the bundle names a source directory lists in its
+    /// sentinel when — and only when — the sentinel is present AND every bundle it lists is on
+    /// disk. <c>null</c> means the publication is torn and the source counts for nothing.
+    ///
+    /// <para>Both readings go through here on purpose. A per-source answer that keyed on the
+    /// sentinel alone (and a per-bundle answer that did not) would disagree about the same
+    /// directory, and the one that said "ready" would be the optimistic one — which is precisely
+    /// the direction a gate must never be wrong in.</para>
+    /// </summary>
+    private static IReadOnlyList<string>? CompleteBundlesOf(string sourceDirectory, ILogger? logger)
+    {
+        var sentinel = Path.Combine(
+            sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+        if (!File.Exists(sentinel))
+        {
+            logger?.LogInformation(
+                "ReleaseAvailability: {SourceDirectory} carries no {Sentinel} — the publication "
+                + "is torn, so its bundles do not count as available",
+                sourceDirectory, ShippedPrebuiltBundles.CompletionSentinelFileName);
+            return null;
+        }
+
+        var listed = File.ReadAllLines(sentinel)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+        if (listed.Any(name => !File.Exists(Path.Combine(sourceDirectory, name))))
+        {
+            logger?.LogInformation(
+                "ReleaseAvailability: {SourceDirectory} is sealed but a listed bundle is "
+                + "absent — the publication is torn, so its bundles do not count as available",
+                sourceDirectory);
+            return null;
+        }
+
+        return listed;
+    }
+
+    private static bool IsComplete(string sourceDirectory, ILogger? logger) =>
+        CompleteBundlesOf(sourceDirectory, logger) is not null;
+
+    /// <summary>
+    /// Which sources are COMPLETE under one identity — the BUILD gate's question (#1755), asked per
+    /// producing repo rather than per package.
+    ///
+    /// <para>🚨 "Sealed" is the sentinel AND every bundle it lists, exactly as
+    /// <see cref="SealedBundlesForIdentity"/> and the boot seeder judge it. Keying on the sentinel
+    /// alone would call a torn-beyond-the-seal publication ready and let a downstream repo build
+    /// against an upstream whose bytes are not all there — while the portal that later reads the
+    /// same directory would skip it whole. The two readings must never disagree.</para>
+    /// </summary>
+    public static IReadOnlySet<string> SealedSources(
+        string? publishedRoot, string? identity, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(identity))
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -185,8 +210,7 @@ public static class PublishedBundleCatalogue
         if (!Directory.Exists(identityDirectory))
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         return Directory.EnumerateDirectories(identityDirectory)
-            .Where(d => File.Exists(
-                Path.Combine(d, ShippedPrebuiltBundles.CompletionSentinelFileName)))
+            .Where(d => IsComplete(d, logger))
             .Select(d => Path.GetFileName(d)!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
