@@ -6,6 +6,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- ConfigurationFeatureFlags reads the deployment's Features:Flags section (abstractions only —
+         the providers come from the host). -->
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Contract\MeshWeaver.Messaging.Contract.csproj" />

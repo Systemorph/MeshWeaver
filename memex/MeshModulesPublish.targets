@@ -78,6 +78,7 @@
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Teams/MeshWeaver.Teams.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.SelfUpdate.Aks/MeshWeaver.SelfUpdate.Aks.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.WebSearch/MeshWeaver.AI.WebSearch.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Courses/MeshWeaver.Courses.csproj" />

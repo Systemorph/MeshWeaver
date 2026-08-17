@@ -24,6 +24,78 @@ using MeshWeaver.Compiler;
 //
 // The one Task bridge lives HERE, at the console boundary — everything below Run() is reactive.
 
+// 🚨 THE `compile` VERB — the compiler-driven bake (#1763). It resolves NodeType sources straight
+// from the git tree, compiles them with MeshWeaver.Compiler and emits DLL + PDB into the existing
+// bundle format. There is NO MeshBuilder, NO AddGraph(), NO content import and NO hub anywhere in
+// its path: producing an assembly is a build step, and the mesh's job is to CONSUME a bake.
+//
+//     mw-compiler compile <checkout-root> --output <dir> [--source-sha <sha>]
+//
+// Everything BELOW this block is the GATE (`mw-plugin-test <root>`), which legitimately stands up a
+// mesh because rendering a layout area and executing a `Tests` area are runtime behaviours. The two
+// used to be one code path wearing two names, which is how the mesh-driven bake stayed invisible.
+if (args.Length > 0 && args[0] == "compile")
+    return RunCompile(args[1..]);
+
+static int RunCompile(string[] args)
+{
+    string? compileRoot = null;
+    string? outputDirectory = null;
+    string? compileSourceSha = null;
+    for (var i = 0; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--output" when i + 1 < args.Length:
+                outputDirectory = args[++i];
+                break;
+            case "--source-sha" when i + 1 < args.Length:
+                compileSourceSha = args[++i];
+                break;
+            case "--output" or "--source-sha":
+                Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
+                return 2;
+            case "--help" or "-h":
+                Console.WriteLine(
+                    "usage: mw-compiler compile <checkout-root> --output <dir> [--source-sha <sha>]");
+                return 0;
+            default:
+                if (args[i].StartsWith('-') || compileRoot is not null)
+                {
+                    Console.Error.WriteLine($"Unknown argument '{args[i]}'. Try --help.");
+                    return 2;
+                }
+                compileRoot = args[i];
+                break;
+        }
+    }
+    if (outputDirectory is null)
+    {
+        Console.Error.WriteLine(
+            "compile: --output <dir> is required (the directory the bundles are written into).");
+        return 2;
+    }
+
+    compileRoot ??= ".";
+    Console.WriteLine(
+        $"mw-compiler compile: baking node repos under '{Path.GetFullPath(compileRoot)}' "
+        + $"→ '{Path.GetFullPath(outputDirectory)}' (no mesh)");
+    var bake = TreeBake.Run(new TreeBake.Options
+    {
+        RepoRoot = compileRoot,
+        OutputDirectory = outputDirectory,
+        SourceSha = compileSourceSha,
+    });
+    if (bake.FatalError is not null)
+        Console.Error.WriteLine($"compile: FATAL — {bake.FatalError}");
+    foreach (var failed in bake.Types.Where(t => !t.Success))
+        Console.Error.WriteLine($"compile: RED {failed.NodePath} — {failed.Error}");
+    Console.WriteLine(
+        $"compile: {bake.Types.Count(t => t.Success)}/{bake.Types.Length} NodeType(s) compiled, "
+        + $"{bake.Bundles.Length} bundle(s), framework={bake.FrameworkIdentity}");
+    return bake.ExitCode;
+}
+
 string? root = null;
 var compileTimeout = TimeSpan.FromMinutes(5);
 var renderTimeout = TimeSpan.FromMinutes(2);

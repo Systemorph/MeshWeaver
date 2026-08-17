@@ -495,6 +495,13 @@ public static class CatalogLayoutAreas
         // asked for. The installer carries the same gate — that one is the enforcement (no caller
         // can bypass it), this one is where the refusal is cheapest.
         return PackageEntitlement.Authorize(hub, pkg, authorizingUserId, logger)
+            // …then the PARAMETER gate, on the same funnel and for the same reason. A package that
+            // declares a required connection string / endpoint the environment does not supply is
+            // refused here, naming the exact env var to provision — never installed half-configured
+            // and never silently skipped. Every lane goes through this method (boot default install,
+            // the Store's Provision click, the auto-update reconciler), so this is the ONE place it
+            // needs to sit.
+            .SelectMany(_ => PackageParameters.Require(hub, pkg, logger))
             .SelectMany(_ => InstallOrUpdateCore(hub, source, sourceRef, pkg, logger, authorizingUserId));
     }
 

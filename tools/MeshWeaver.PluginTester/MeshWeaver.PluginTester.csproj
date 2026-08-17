@@ -47,6 +47,24 @@
        base image's environment untouched also restores the default ENTRYPOINT for anyone
        running the image directly. -->
 
+  <!-- 🚨 THIS PROJECT'S REFERENCE CLOSURE IS THE FRAMEWORK IDENTITY. DO NOT "TIDY UP" THE LAYOUT.
+       FrameworkBuildIdentity.ContentSurfaceAssemblies is defined as the transitive MeshWeaver.*
+       closure of THIS csproj (minus MeshWeaver.PluginTester + MeshWeaver.Hosting.Monolith), and the
+       identity is the hash over those assemblies' surface-manifest pairs — one this process does not
+       reference contributes no pair and hashes as "absent".
+
+       Two consequences, both SILENT if you get them wrong:
+         • REMOVING a ProjectReference here (or adding one) changes the identity for every bake host.
+           FrameworkBuildIdentityTest.CanonicalList_MatchesTheTesterClosure catches the drift, which
+           is why that test exists — do not "fix" it by editing the canonical list to match.
+         • MOVING the `compile` verb (#1763) into a separate MeshWeaver.Compiler.Cli project with a
+           leaner reference list resolves a DIFFERENT identity, so every bundle it bakes is declined
+           by every portal (PrebuiltAssemblySeeder.DeclineReason working exactly as designed) and the
+           pods just compile everything as if no bake existed. Nothing reports a defect. The split is
+           fine — it must keep this closure intact and extend that test to assert BOTH closures.
+
+       The BAKE (`compile`) and the GATE (`mw-plugin-test`) therefore share one project on purpose:
+       that is what makes the compiler-driven bake's identity provably equal to the gate's. -->
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
