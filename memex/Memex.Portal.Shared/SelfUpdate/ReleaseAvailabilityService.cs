@@ -85,10 +85,27 @@ public class ReleaseAvailabilityService(
                     .Select(observation => ReleaseAvailability.IsUpdatable(
                         observation.Target, required, observation.Artifacts)));
         })
+        // 🚨 The gate must ANSWER, always. Its two inputs can each stall indefinitely — a mesh
+        // query that never emits its initial snapshot, an I/O pool slot that never frees — and a
+        // gate that hangs is strictly worse than one that refuses: the poller's tick never
+        // completes, so the update neither applies NOR records a hold, and the environment freezes
+        // with nothing anywhere saying why. The timeout converts a stall into the honest answer
+        // (Indeterminate ⇒ HOLD, named), which the very next tick re-evaluates from scratch.
+        .Timeout(AnswerBudget)
         .Catch((Exception ex) => Observable.Return(ReleaseAvailability.IsUpdatable(
             new ReleaseTarget(targetVersion, null),
             [],
-            ReleaseArtifacts.Unreadable(ex.Message))));
+            ReleaseArtifacts.Unreadable(ex is TimeoutException
+                ? $"the availability check did not answer within {AnswerBudget.TotalSeconds:0}s"
+                : ex.Message))));
+
+    /// <summary>
+    /// How long the whole verdict may take. Generous — it bounds a stall, it is not a performance
+    /// budget: the reads behind it are a mesh query and a handful of directory stats, so anything
+    /// approaching this is wedged rather than slow. Deliberately shorter than the poll interval, so
+    /// a stalled tick can never overlap the next one.
+    /// </summary>
+    private static readonly TimeSpan AnswerBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// What this environment deploys, as the gate's inputs.
