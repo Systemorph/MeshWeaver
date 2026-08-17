@@ -83,6 +83,20 @@ public static class FrameworkBuildIdentity
     /// surface. <c>FrameworkBuildIdentityTest.CanonicalList_MatchesTheTesterClosure</c> recomputes
     /// the closure from the csproj graph and fails naming the drift when the tester's references
     /// change without this list following.
+    ///
+    /// <para>🚨 <b>MOVING THE BAKE/GATE CLI INTO A NEW PROJECT SILENTLY CHANGES THE FRAMEWORK
+    /// IDENTITY.</b> This list is anchored to <c>tools/MeshWeaver.PluginTester</c>'s reference
+    /// closure, and the identity is the hash over these assemblies' surface-manifest pairs — an
+    /// assembly the PRODUCING process does not reference contributes no pair and hashes as
+    /// <see cref="AbsentMarker"/>. So a tidy-up that splits <c>mw-compiler</c> (the <c>compile</c>
+    /// verb, #1763) out of the tester into its own csproj with a leaner reference list resolves a
+    /// DIFFERENT identity, and every bundle it bakes is then declined by every portal:
+    /// <c>PrebuiltAssemblySeeder.DeclineReason</c> is doing its job, the pods simply compile
+    /// everything as though no bake existed, and nothing anywhere reports a defect. The split is
+    /// perfectly doable — it just has to keep this closure intact and extend
+    /// <c>CanonicalList_MatchesTheTesterClosure</c> to assert BOTH projects' closures, so the
+    /// equality is CHECKED rather than assumed. Keeping the verb inside the tester project is what
+    /// makes the identity provably unchanged today.</para>
     /// </summary>
     public static readonly ImmutableArray<string> ContentSurfaceAssemblies =
     [

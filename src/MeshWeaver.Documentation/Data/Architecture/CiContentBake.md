@@ -50,6 +50,102 @@ shipped image ever contains those (see "The identity rule" below), so `doc-gate`
 `plugin-gate` still uploads `baked-plugins-<mvid>` for in-run diagnosis. What the portals adopt is
 baked **inside the shipped image** — see "The delivery" below.
 
+## BAKE is a build step; GATE is a mesh run that CONSUMES one
+
+The section above describes how the bake worked until issue #1763: `mw-plugin-test` stood up an
+in-process mesh (`new MeshBuilder(...).AddGraph()`), imported the repo's content, let the **mesh**
+compile every NodeType, and `--bake-output` collected what the mesh had produced. That is
+"compile through mesh nodes" — the thing #1707 forbids — and it is where the minutes went: mesh
+startup, the hub scheduler, and one per-type activation for every type in the tree.
+
+The two concerns are now split, and they are different kinds of thing:
+
+| | what it is | how it runs |
+|---|---|---|
+| **BAKE** — produce assemblies | a **build step** | `mw-compiler compile <root> --output <dir>`: resolve NodeType sources from the git tree, compile with `MeshWeaver.Compiler`, emit **DLL + PDB**, write the bundle. No `MeshBuilder`, no `AddGraph()`, no import, no hub. |
+| **GATE** — prove it works | a **runtime** check | `mw-plugin-test <root>`: stand up a mesh, render each type's default area, execute its `Tests` area. Rendering and running tests are genuine runtime behaviours; producing an assembly is not. |
+
+**The emergency path is untouched.** A live instance with no usable artifact still compiles its own
+— #1707 requires it, because there will always be code that never went through CI. That is
+*recovery*, not a build lane.
+
+### Source resolution without a mesh
+
+At runtime the mesh performs source discovery: `NodeSources.GetSources` expands the NodeType's
+`Sources`/`Tests` queries and asks `workspace.GetQuery`, which reaches the storage adapters. A build
+step has none of that, so `MeshWeaver.Compiler` gained a second implementation — `NodeSet` /
+`NodeSetQuery` / `NodeSetCompiler` — that answers the same queries against an in-memory node set the
+caller assembled from the tree.
+
+That code lives **inside the toolchain assembly on purpose**: which Code nodes a compile consumes is
+part of the *generated input* of that compile, exactly like the skeleton generator and the join
+order, so it has to sit inside the full-MVID identity boundary. A resolver outside it could change
+what a bake consumes without moving the framework identity, and every portal would adopt the changed
+bytes as if nothing had happened.
+
+Two rules keep the second implementation honest:
+
+- **Query EXPANSION is not re-implemented.** `CodeQueryResolver.ExpandAll` is the same call the
+  runtime makes, so `$self`, the `name=` prefix, the `@`/`@@` shorthand, the bare-namespace rebase
+  and the implicit `nodeType:Code` filter cannot fork. The same is true of the `@@`-include walk,
+  the dedup/executable filter, the join order, the skeleton and the emit — the tree baker is an
+  *orchestrator* of the runtime's own shaping, not a parallel copy of it.
+- **Query EVALUATION refuses what it does not understand.** Only `path:`, `namespace:`, `scope:` and
+  `nodeType:` are supported — everything `CodeQueryResolver` can emit. Free text (which routes to
+  vector search on a real mesh), wildcards, alternations and any other selector make the resolution
+  **unestablished**, and the bake then refuses to compile rather than matching less. This is the same
+  fail-loud direction `SourceSnapshot` takes at runtime and for the same reason: a source set that is
+  short compiles into completely genuine-looking `CS0246`/`CS0103` diagnostics about code that is
+  fine.
+
+### The equivalence pin
+
+🚨 **Getting this wrong is silent.** A baker that resolves sources even slightly differently emits
+assemblies that are subtly not what the mesh would have built. The bundle is well-formed, the
+framework identity matches, every consumer adopts it, and the defect first appears as a page
+rendering empty in production — no exception, no log line.
+
+So the equivalence is a **test**, not an argument. `BakeEquivalenceTest`
+(`test/MeshWeaver.PluginTester.Test`) bakes one content set BOTH ways and asserts the producers
+agree on: the framework identity, the bundle and node-path sets, the resolved source set per type,
+the per-type dependency records, and the emitted assemblies' type-and-member surface — over a
+fixture that exercises the default `Source/`+`Test/` subtree queries including a nested folder, a
+cross-package `shared=@…` query, an `@@` include of a node no query matches, an executable code cell
+that must be excluded, and a `// NodeType: Scope` source the `nodeType:Code` filter must exclude.
+
+**Bytes are deliberately not compared** — for a reason that is a property of the platform, not of
+this test. See the next section.
+
+## 🚨 A stated property: the mesh-driven bake is NOT byte-reproducible, even against itself
+
+This is not a quirk of the comparison above; it is true of **every bake this platform has ever
+produced**, and anyone reasoning about bake artifacts needs it up front.
+
+A NodeType's compile input is the concatenation of its source Code nodes. The mesh discovers them by
+folding each query's results into an `ImmutableDictionary<string, MeshNode>` and emitting
+`dict.Values` — which is **hash-bucket order over string hashes that .NET randomises per process**.
+`NodeCompileShaping.CombineSources` then joins the files in exactly that order. So two runs of the
+same mesh-driven bake, over the same commit, on the same machine, concatenate the same sources in
+**different orders** and emit **different bytes**. (The generated skeleton independently stamps
+`// Generated at: {UtcNow}`, and the emit embeds a temp `pdbFilePath`, so even a fixed order would
+not give byte equality.)
+
+Three consequences worth carrying:
+
+- **This is why the framework identity is SURFACE-based, not byte-based.** Hashing emitted bytes
+  could never have worked as an identity: it would change on every run without anything changing.
+  `FrameworkBuildIdentity` hashes *reference assemblies* — the compiler's own definition of an API
+  surface — precisely because that is stable where bytes are not.
+- **Any "did these two bakes produce the same thing?" check must compare SURFACE, never hashes.**
+  Comparing digests of bake outputs will report differences that do not exist, on every run.
+  `BakeEquivalenceTest` compares node paths, resolved source sets, dependency records and the
+  emitted assemblies' type-and-member surface; that is the shape such a check has to take.
+- **The compiler-driven bake is deterministic** (query order, then ordinal by path). That is strictly
+  better and costs nothing, but it does not make the two producers byte-equal — the old lane is the
+  non-deterministic one. What the surface comparison proves is that the concatenation order of
+  independent top-level declarations does not affect what is emitted, which is why the old lane's
+  non-determinism was survivable.
+
 ## The identity rule: adoptable when the SURFACE is unchanged
 
 Adoption is gated by `PrebuiltAssemblySeeder.DeclineReason` on the **framework build identity**
