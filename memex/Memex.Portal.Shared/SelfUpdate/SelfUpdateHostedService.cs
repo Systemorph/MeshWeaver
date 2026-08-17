@@ -1,3 +1,5 @@
+using System.Reactive.Disposables;
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
@@ -11,6 +13,7 @@ using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Hosting.SelfUpdate;
 
 namespace Memex.Portal.Shared.SelfUpdate;
 
@@ -61,31 +64,72 @@ public class SelfUpdateHostedService : IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _logger?.LogInformation(
-            "[SelfUpdate] starting; version={Version}, registry={Registry}/{Repo}, canPatch={CanPatch}, interval={Interval}.",
+            "[SelfUpdate] starting (event-driven; one startup pass, then a check per build-completion event); version={Version}, registry={Registry}/{Repo}, canPatch={CanPatch}, retryInterval={Interval}.",
             ShippedReleaseSeed.InstalledPlatformVersion, _options.Registry, _options.PortalRepository,
-            _updater.CanPatch, _options.PollInterval);
+            _updater.CanPatch, _options.RetryInterval);
 
-        _subscription = CreatePolicySource()
-            // The policy re-drives the poller via Switch. With DistinctUntilChanged the timer is only
-            // re-subscribed when the admin ACTUALLY changes the policy (human-rare) — not a storm.
-            .Select(content => content.Policy == UpdatePolicyKind.None
-                ? Observable.Empty<Unit>()                            // None => never poll
-                : Observable.Merge(
-                        Observable.Interval(_options.PollInterval).StartWith(-1L),
-                        BuildCompletionTicks())
-                    .SelectMany(_ => RunOnce(content)
-                        .Catch((Exception ex) =>
-                        {
-                            // wedges-to-zero: a tick error (ACR outage, k8s 403) logs and the poller
-                            // keeps ticking. No outer .Retry (that would be a resubscribe storm).
-                            _logger?.LogWarning(ex, "[SelfUpdate] check failed (policy={Policy}).", content.Policy);
-                            return Observable.Empty<Unit>();
-                        })))
-            .Switch()
+        // 🚨 EVENT-DRIVEN, and the event source is deliberately OUTSIDE the policy stream.
+        //
+        // Exactly ONE pass at startup — to catch publications missed while this install was down —
+        // and after that a check per build completion, of the platform OR of any module the
+        // environment deploys. There is no recurring interval: a timer that re-asks a question
+        // nothing has answered is the shape this codebase treats as a band-aid, and the
+        // availability gate already defers a roll whose artifacts are not ready. What makes
+        // deferral safe without a timer is that the NEXT publication is itself an event, so a
+        // deferred roll is re-decided the moment its missing artifact appears.
+        //
+        // 🚨 The policy is STATE, not a driver — WithLatestFrom, never Switch. Under Switch every
+        // policy emission re-subscribed the watch, which RE-BASELINED it: a publication landing in
+        // that window was read as "current state" rather than as a new build and silently swallowed.
+        // The recurring interval used to cover that; with the interval gone it would be a lost
+        // update with nothing to recover it. One long-lived watch, the latest policy read at
+        // decision time, is what closes it. (CreatePolicySource emits the default exactly once
+        // before the first live read, so the startup pass always has a policy to run under.)
+        // The policy is shared STATE with a replayed latest value, connected for the lifetime of the
+        // service. Replay(1)+Connect rather than RefCount: a RefCount would drop to zero between the
+        // Take(1) below and the WithLatestFrom re-subscribe, re-running the seed and re-baselining
+        // everything downstream — the very class of bug this restructure exists to remove.
+        var policy = CreatePolicySource().Replay(1);
+
+        // 🚨 The first check waits for a policy to exist. CreatePolicySource emits the default only
+        // AFTER its async seed, so a startup pass composed with WithLatestFrom alone fires before
+        // any policy is available and is silently dropped — no first check at all. Take(1) gates the
+        // trigger stream on that first emission; every LATER policy change is picked up by
+        // WithLatestFrom without re-subscribing the watch.
+        // Three trigger sources, no timer among them:
+        //   • the one startup pass,
+        //   • a build completion from the platform or ANY module the environment deploys,
+        //   • an admin CHANGING the policy — enabling updates must not wait for the next
+        //     publication, which could be weeks away. DistinctUntilChanged so a re-emission of the
+        //     same policy is not a trigger, and Skip(1) so the replayed CURRENT policy is not one
+        //     either (the startup pass already covers it).
+        var checks = policy
+            .Take(1)
+            .SelectMany(_ => Observable.Merge(
+                Observable.Return(-1L),
+                BuildCompletionTicks(),
+                policy.DistinctUntilChanged(content => content.Policy).Skip(1).Select(_ => -3L)))
+            // 🚨 Read the CURRENT policy at decision time — never WithLatestFrom. That operator only
+            // pairs once its secondary has produced, and the startup trigger fires synchronously on
+            // subscribe, so whether the first check survives came down to Rx's internal subscribe
+            // ordering: it silently dropped the startup pass. policy is Replay(1), so Take(1) yields
+            // the latest value immediately and deterministically.
+            .SelectMany(_ => policy.Take(1))
+            .Where(content => content.Policy != UpdatePolicyKind.None)   // None => never update
+            .SelectMany(content => RunOnce(content)
+                .Catch((Exception ex) =>
+                {
+                    // wedges-to-zero: a check error (ACR outage, k8s 403) logs and the watch stays
+                    // live. No outer .Retry — that would be a resubscribe storm.
+                    _logger?.LogWarning(ex, "[SelfUpdate] check failed (policy={Policy}).", content.Policy);
+                    return Observable.Empty<Unit>();
+                }))
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 _ => { },
-                ex => _logger?.LogError(ex, "[SelfUpdate] poller terminated unexpectedly."));
+                ex => _logger?.LogError(ex, "[SelfUpdate] update watch terminated unexpectedly."));
+
+        _subscription = new CompositeDisposable(checks, policy.Connect());
         return Task.CompletedTask;
     }
 
@@ -119,11 +163,11 @@ public class SelfUpdateHostedService : IHostedService
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         return Observable
             .Defer(() => UpdatePolicyNodeType.EnsureExists(_hub, accessService, _options.DefaultPolicy, _logger))
-            .RetryWhen(ResubscribeAfterPollInterval("policy-node seeding"))
+            .RetryWhen(ResubscribeAfterRetryInterval("policy-node seeding"))
             .Take(1)
             .SelectMany(_ => Observable
                 .Defer(ReadPolicyStream)
-                .RetryWhen(ResubscribeAfterPollInterval("policy stream"))
+                .RetryWhen(ResubscribeAfterRetryInterval("policy stream"))
                 .StartWith(new UpdatePolicyContent { Policy = _options.DefaultPolicy }))
             .DistinctUntilChanged(c => (c.Policy, c.RequireCiGreen)); // <-- re-switch only on a REAL policy change
     }
@@ -142,7 +186,8 @@ public class SelfUpdateHostedService : IHostedService
     }
 
     /// <summary>
-    /// Ticks once per NEW green build of <see cref="SelfUpdateOptions.BuildTriggerRepository"/> —
+    /// Ticks once per NEW green build of ANY repository that publishes — the platform and every
+    /// satellite alike —
     /// the event-driven complement to the interval. The <c>BuildCompletion</c> node is a FACT the
     /// GitHub webhook writes; on an install without the webhook the query never yields and the
     /// interval still drives everything. Throttled so a burst of workflow completions coalesces
@@ -151,22 +196,14 @@ public class SelfUpdateHostedService : IHostedService
     /// and <see cref="RunOnce"/> still lists ACR itself, so a spurious tick costs one cheap tag
     /// list and can never cause a wrong roll.
     /// </summary>
-    protected virtual IObservable<long> BuildCompletionTicks()
-    {
-        var parts = (_options.BuildTriggerRepository ?? "")
-            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length != 2)
-            return Observable.Empty<long>();
-
-        var path = BuildCompletion.PathFor(parts[0], parts[1]);
-        return Observable
-            .Defer(() => NewBuildEvents(_hub
-                .GetQuery($"SelfUpdate.BuildTrigger:{_hub.Address}", $"path:{path}")
-                .Select(nodes => nodes?.FirstOrDefault())))
-            .Throttle(TimeSpan.FromMinutes(1))
+    protected virtual IObservable<long> BuildCompletionTicks() =>
+        Observable
+            .Defer(() => NewBuildEventsAcross(_hub
+                .GetQuery($"SelfUpdate.BuildTrigger:{_hub.Address}",
+                    $"nodeType:{BuildCompletion.NodeType}")))
+            .Throttle(_options.EventCoalesceWindow)
             .Select(_ => -2L)
-            .RetryWhen(ResubscribeAfterPollInterval("build-completion watch"));
-    }
+            .RetryWhen(ResubscribeAfterRetryInterval("build-completion watch"));
 
     /// <summary>
     /// Turns a live read of one node into "a NEW write happened while we were watching": the
@@ -187,14 +224,48 @@ public class SelfUpdateHostedService : IHostedService
             .Where(s => s.IsEvent)
             .Select(_ => Unit.Default);
 
-    /// <summary>Retry signal for <c>RetryWhen</c>: log the fault and resubscribe after one poll
+    /// <summary>
+    /// The collection-wide form: "a NEW build completed for ANY repository we care about".
+    ///
+    /// <para>Every repository that publishes writes its own <c>BuildCompletion</c> record under
+    /// <c>Admin/_Build</c> — the platform and every satellite alike — so watching the whole
+    /// collection is what makes "listen for updates of any module or platform" one subscription
+    /// rather than a per-repo fan-out that would have to be rebuilt whenever the installed set
+    /// changes.</para>
+    ///
+    /// <para>Same baseline rule as the single-node form and for the same reason: the replayed
+    /// current state is baseline, never an event, so a pod start cannot look like a fresh build.
+    /// After that, a record whose version moved OR a record that appeared is one event. A record
+    /// that DISAPPEARS is deliberately not an event — there is nothing to update toward.</para>
+    ///
+    /// <para>Pure and static, so the distinction is pinned by unit tests instead of re-derived
+    /// from Rx operator lore.</para>
+    /// </summary>
+    public static IObservable<Unit> NewBuildEventsAcross(IObservable<IEnumerable<MeshNode>?> nodes) =>
+        nodes.Scan(
+                (Baselined: false, Versions: ImmutableDictionary<string, long>.Empty, IsEvent: false),
+                (state, current) =>
+                {
+                    var snapshot = (current ?? [])
+                        .GroupBy(n => n.Path)
+                        .ToImmutableDictionary(g => g.Key, g => g.Max(n => n.Version));
+                    if (!state.Baselined)
+                        return (true, snapshot, false);
+                    var advanced = snapshot.Any(kv =>
+                        !state.Versions.TryGetValue(kv.Key, out var seen) || kv.Value != seen);
+                    return (true, snapshot, advanced);
+                })
+            .Where(s => s.IsEvent)
+            .Select(_ => Unit.Default);
+
+    /// <summary>Retry signal for <c>RetryWhen</c>: log the fault and resubscribe after the retry
     /// interval (delayed, Rx-composed — no hot loop).</summary>
-    private Func<IObservable<Exception>, IObservable<long>> ResubscribeAfterPollInterval(string stage) =>
+    private Func<IObservable<Exception>, IObservable<long>> ResubscribeAfterRetryInterval(string stage) =>
         faults => faults.SelectMany(ex =>
         {
             _logger?.LogWarning(ex,
-                "[SelfUpdate] {Stage} faulted; re-establishing in {Interval}.", stage, _options.PollInterval);
-            return Observable.Timer(_options.PollInterval);
+                "[SelfUpdate] {Stage} faulted; re-establishing in {Interval}.", stage, _options.RetryInterval);
+            return Observable.Timer(_options.RetryInterval);
         });
 
     /// <summary>One evaluation: list tags → pick target per policy → gate target &gt; current →

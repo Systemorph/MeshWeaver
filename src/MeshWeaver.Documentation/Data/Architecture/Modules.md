@@ -148,8 +148,11 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
 | `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
 | `MeshWeaver.Teams.dll` | Microsoft Teams bot channel: messaging endpoint, inbound routing into threads, proactive replies | `Teams` (inert until bot credentials set) |
+| `MeshWeaver.SelfUpdate.Aks.dll` | AKS/ACR mechanics: ACR tag reads, Kubernetes deployment patching, cluster instance provisioning (the self-update POLLER stays in the platform) | `SelfUpdate`, `Instances` |
 | `MeshWeaver.Courses.dll` | Course delivery: the entitlement-gated `/assets/{Space}/…` route over a Space's synced repo | `GitHub:App:*` (shared with GitSync) |
 | `MeshWeaver.Mail.MicrosoftGraph.dll` | Mail over Microsoft Graph: system email, inbound intake + its webhook, the Executive Assistant's mailbox tools | `Email` (`Enabled`, `InboundEnabled`) |
+| `MeshWeaver.Import.dll` | Tabular import: Excel/CSV readers (its private `MeshWeaver.DataSetReader.*` closure), mapping configuration, the `ImportRequest` handler | — (🚨 list it FIRST — see below) |
+| `MeshWeaver.Mcp.dll` | The Model Context Protocol server: the mesh tool surface + the `/mcp` HTTP transport | `Mcp` (`BaseUrl`; the `McpAuth` policy stays platform-side) |
 | `MeshWeaver.Hosting.Grpc.dll` | The mesh gRPC transport: `meshweaver.v1.Mesh` + gRPC-web, `py`/`node` foreign participants AND the React GUI's browser data plane | `Grpc` (`TrustedPort`) |
 | `MeshWeaver.Hosting.Cosmos.dll` | Cosmos DB storage backend (keyed adapter factory + native query) | selected by `Graph:Storage:Type` = `Cosmos` |
 | `MeshWeaver.Hosting.Snowflake.dll` | Snowflake storage backend (persistence, change feed, cross-schema query, access projection) | selected by `Graph:Storage:Type` = `Snowflake` |
@@ -160,6 +163,23 @@ grpc-web `Connect`+`Deliver` split at the origin root (`clients/portal-next`, `c
 Delist it only in a deployment with NO React GUI and NO foreign participants; anywhere else a
 delist silently breaks the React frontend's live connection. (The former `Features:Grpc` flag is
 gone — the module listing is the switch.)
+
+🚨 **`MeshWeaver.Import` is listed FIRST, and a module that registers nothing is still doing work.**
+No host ever called `AddImport()` — `AddImport(...)` is an application-level call a data source
+makes for itself, and the portals referenced the assembly for exactly one reason: so that **in-mesh
+source could `using MeshWeaver.Import`**. NodeType sources compile against
+`TRUSTED_PLATFORM_ASSEMBLIES` **composed with the deployment's installed modules**
+(`CompileReferences.ComposeWithModules`), and `MeshBuilder.InstallAssemblies` records an
+`InstalledModuleAssembly` for **every** listed DLL — attribute or not — so listing it is what keeps
+that compile surface. Because the reference set is composed in list order, a module whose own
+content compiles against `MeshWeaver.Import` must be listed **after** it.
+
+Note what a module contributes to that surface: **its entry assembly, not its private closure.** A
+module's own dependencies (here the six `MeshWeaver.DataSetReader.*` assemblies, plus
+`MeshWeaver.DataStructures` and `CsvHelper`) resolve at
+RUNTIME from the module folder, but they are not metadata references — so in-mesh code may use the
+module's public types freely, and would need the platform to carry any *other* assembly whose types
+appear in those signatures. Keep a module's in-mesh-facing surface self-contained.
 
 Boot packs select by OTHER configuration too: `Graph:Storage:Type` `Cosmos`/`Snowflake` requires
 the matching `MeshWeaver.Hosting.Cosmos`/`.Snowflake` DLL in this list — installation runs before

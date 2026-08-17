@@ -1,16 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- ═════════ The storage-backend contract gate (#1752) ═════════
-       StorageModuleLayoutTest loads the Cosmos/Snowflake backends the way a PORTAL does — off
-       disk, from modules/<Name>/, with NO compiled reference — so the layout has to exist in THIS
-       project's own bin. Reuse the real lane (MeshModulesClosureSubset narrows it to these two)
-       rather than hand-copying a publish+prune here: a copy would be a second detector, free to
-       agree with itself while the shipped layout is broken.
+  <!-- ═════════ The module-layout contract gate (#1752) ═════════
+       StorageModuleLayoutTest and ImportModuleLayoutTest load their modules the way a PORTAL does —
+       off disk, from modules/<Name>/, with NO compiled reference — so the layout has to exist in
+       THIS project's own bin. Reuse the real lane (MeshModulesClosureSubset narrows it to the
+       modules named below) rather than hand-copying a publish+prune here: a copy would be a second
+       detector, free to agree with itself while the shipped layout is broken.
 
-       🚨 Deliberately NO ProjectReference to either backend. One would put the module's own DLL in
+       🚨 Deliberately NO ProjectReference to any of them. One would put the module's own DLL in
        this bin's root, where prune (a) deletes it from modules/ as a same-identity duplicate — the
-       gate would then load the app-root copy and assert nothing about the shipped layout. -->
+       gate would then load the app-root copy and assert nothing about the shipped layout. That is
+       exactly why MeshWeaver.Import is gated HERE and not in Memex.Portal.Monolith's own tests: the
+       dev portal still carries Import in its app closure through the Northwind sample, so it is a
+       false green for the module-only path every other deployment runs. -->
   <PropertyGroup>
-    <MeshModulesClosureSubset>MeshWeaver.Hosting.Cosmos;MeshWeaver.Hosting.Snowflake</MeshModulesClosureSubset>
+    <MeshModulesClosureSubset>MeshWeaver.Hosting.Cosmos;MeshWeaver.Hosting.Snowflake;MeshWeaver.Import</MeshModulesClosureSubset>
   </PropertyGroup>
   <Import Project="..\..\memex\MeshModulesPublish.targets" />
 
@@ -35,6 +38,7 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Export\MeshWeaver.Markdown.Export.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.OgCard\MeshWeaver.OgCard.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Courses\MeshWeaver.Courses.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.SelfUpdate.Aks\MeshWeaver.SelfUpdate.Aks.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Observability\MeshWeaver.Observability.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Notifications.Channels\MeshWeaver.Notifications.Channels.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.OpenAI\MeshWeaver.AI.OpenAI.csproj" />

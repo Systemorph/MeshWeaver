@@ -13,23 +13,9 @@ using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Hosting.SelfUpdate;   // UpdatePolicyKind — the policy value
 
 namespace Memex.Portal.Shared.SelfUpdate;
-
-/// <summary>The platform auto-update strategy — the single value on <c>Admin/UpdatePolicy</c>.</summary>
-public enum UpdatePolicyKind
-{
-    /// <summary>Always roll to the newest image on ACR, INCLUDING build-numbered continuous builds
-    /// (e.g. <c>3.0.0-ci.51</c>). This is the platform default.</summary>
-    Continuous,
-
-    /// <summary>Roll only to the newest CLEAN release (no build number, e.g. <c>3.0.0</c>); ignore
-    /// continuous build-numbered images.</summary>
-    Stable,
-
-    /// <summary>Never auto-update. Updates are applied manually (operator / admin action).</summary>
-    None,
-}
 
 /// <summary>
 /// Content of the <c>Admin/UpdatePolicy</c> node: the admin-editable update <see cref="Policy"/>

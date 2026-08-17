@@ -3,6 +3,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Mcp;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;

@@ -12,6 +12,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Memex.Portal.Shared.SelfUpdate;
 using Microsoft.Extensions.DependencyInjection;
+using MeshWeaver.Hosting.SelfUpdate;
 
 namespace Memex.Portal.Shared.Settings;
 
