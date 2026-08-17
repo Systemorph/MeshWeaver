@@ -207,6 +207,7 @@ public static class PluginBundleEndpoints
         var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}";
 
         return InstalledPackages(rootHub, ct)
+            .Do(packages => WarnAboutUnstampedRecords(rootHub, packages))
             .Select(packages => (IReadOnlyList<BundleEntry>)packages
                 .Where(p => IsGranted(caller, p)).ToArray())
             .SelectMany(packages => ServableModules(rootHub, packages)
@@ -238,6 +239,35 @@ public static class PluginBundleEndpoints
                 })))
             .FirstAsync()
             .ToTask(ct);
+    }
+
+    /// <summary>
+    /// 🚨 Names, on the index request, every install record with NO <see cref="BundleEntry.Source"/>
+    /// — the records <see cref="IsGranted"/> can never match, and which are therefore servable to
+    /// nobody.
+    ///
+    /// <para>It belongs HERE rather than only on the download path, because the filtered index means
+    /// that path is never reached for such a record: a consumer polls the index, does not see the
+    /// package, and never asks for it. Without this line the whole distribution lane could go dark
+    /// with nothing in the log at all — every consumer just quietly compiling, which looks exactly
+    /// like a healthy day. Normally this logs nothing, since a record installed through any registry
+    /// lane carries its source.</para>
+    /// </summary>
+    private static void WarnAboutUnstampedRecords(
+        IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
+    {
+        var unstamped = packages.Where(p => string.IsNullOrWhiteSpace(p.Source)).ToArray();
+        if (unstamped.Length == 0)
+            return;
+
+        rootHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(PluginBundleEndpoints))
+            .LogWarning(
+                "Plugin bundles: {Count} install record(s) carry no registry source, so no "
+                + "PluginGrant can match them and their bundles are servable to NO instance: "
+                + "{Packages}. Re-install them through the registry to stamp the source (#1772).",
+                unstamped.Length,
+                string.Join(", ", unstamped.Select(p => p.PluginId).Take(MissesReported)));
     }
 
     /// <summary>
