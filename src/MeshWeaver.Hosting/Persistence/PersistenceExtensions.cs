@@ -28,6 +28,29 @@ public static class PersistenceExtensions
     /// </summary>
     private const string InnerStorageAdapterKey = "inner";
 
+    /// <summary>
+    /// Resolves the RAW, un-decorated storage adapter as <typeparamref name="T"/>.
+    ///
+    /// <para>🚨 Backends that register a native <c>IMeshQueryProvider</c> over their own adapter
+    /// MUST use this, never <c>sp.GetRequiredService&lt;IStorageAdapter&gt;() as TAdapter</c>. The
+    /// default <see cref="IStorageAdapter"/> registration is a THREE-deep decorator chain
+    /// (<c>SubtreeDeletionGuard</c> → <c>MonotonicWriteGuard</c> → <c>VersionWriting</c>, all
+    /// <c>internal sealed</c>), so that cast is guaranteed to yield <c>null</c> once
+    /// <see cref="DecorateStorageAdapterWithVersionWriting"/> has run — which
+    /// <see cref="AddCoreAndWrapperServices"/> always does. Cosmos hit exactly this: its
+    /// keyed-factory lane threw "the selected storage adapter is not Cosmos" at every startup,
+    /// even with <c>Graph:Storage:Type = Cosmos</c> correctly set.</para>
+    ///
+    /// <para>Falls back to the undecorated registration for hosts that never ran the decorator,
+    /// so this is safe to call from any registration lane.</para>
+    /// </summary>
+    /// <typeparam name="T">The concrete adapter type the caller needs.</typeparam>
+    /// <returns>The raw adapter, or <c>null</c> when the selected backend is a different one.</returns>
+    public static T? GetRawStorageAdapter<T>(this IServiceProvider serviceProvider)
+        where T : class, IStorageAdapter
+        => serviceProvider.GetKeyedService<IStorageAdapter>(InnerStorageAdapterKey) as T
+           ?? serviceProvider.GetRequiredService<IStorageAdapter>() as T;
+
     /// <summary>Marker singleton: present once <see cref="DecorateStorageAdapterWithVersionWriting"/> ran.</summary>
     private sealed class VersionWritingDecoratedMarker { }
 

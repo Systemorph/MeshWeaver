@@ -90,7 +90,11 @@ public static class SnowflakeExtensions
 
         services.AddSingleton<SnowflakeMeshQuery>(sp =>
         {
-            var adapter = sp.GetRequiredService<IStorageAdapter>() as SnowflakeStorageAdapter
+            // GetRawStorageAdapter, never `GetRequiredService<IStorageAdapter>() as …` — the
+            // default registration is a three-deep decorator chain, so the plain cast is always
+            // null once AddCoreAndWrapperServices has run. Same defect that made the Cosmos
+            // lane unbootable; Snowflake's is reachable the moment a deployment selects it.
+            var adapter = sp.GetRawStorageAdapter<SnowflakeStorageAdapter>()
                 ?? throw new InvalidOperationException(
                     "The Snowflake storage module is registered but the selected storage adapter " +
                     "is not Snowflake. Either set Graph:Storage:Type to 'Snowflake' or remove " +

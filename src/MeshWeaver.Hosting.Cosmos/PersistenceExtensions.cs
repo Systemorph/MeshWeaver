@@ -87,7 +87,11 @@ public static class PersistenceExtensions
         // Register CosmosMeshQuery so it takes priority over StorageAdapterMeshQueryProvider (via TryAddSingleton)
         services.AddSingleton<IMeshQueryProvider>(sp =>
         {
-            var adapter = sp.GetRequiredService<IStorageAdapter>() as CosmosStorageAdapter
+            // 🚨 GetRawStorageAdapter, never `GetRequiredService<IStorageAdapter>() as …`: the
+            // default registration is a three-deep decorator chain, so the plain cast always
+            // yielded null and this threw at EVERY startup — even with Graph:Storage:Type=Cosmos
+            // correctly set, which is what the message told the operator to go check.
+            var adapter = sp.GetRawStorageAdapter<CosmosStorageAdapter>()
                 ?? throw new InvalidOperationException(
                     "The Cosmos storage module is registered but the selected storage adapter is " +
                     "not Cosmos. Either set Graph:Storage:Type to 'Cosmos' or remove " +
