@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>

@@ -21,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Monolith.TestBase;
 
 /// <summary>

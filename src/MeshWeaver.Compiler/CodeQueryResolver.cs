@@ -1,9 +1,8 @@
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
-using MeshWeaver.Compiler;
 using MeshWeaver.Mesh;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// Shared query-expansion helpers used by both the compiler (to find which Code

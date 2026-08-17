@@ -1,7 +1,7 @@
 // Moved verbatim from MeshNodeCompilationService.cs in MeshWeaver.Graph (#1707). The namespace
 // stays MeshWeaver.Graph.Configuration and MeshWeaver.Graph type-forwards it, so modules compiled
 // against earlier releases keep binding.
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// Exception thrown when compilation fails.

@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting;
 
 /// <summary>
@@ -291,8 +292,8 @@ public sealed class DynamicTypePreWarmerHostedService(
             "DynamicTypePreWarmer: starting background warm-up of dynamic NodeType hubs "
             + "(framework identity {FrameworkIdentity}, build {Provenance})",
             Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid,
-            Graph.Configuration.FrameworkBuildIdentity.StampedIdentityOf(
-                typeof(Graph.Configuration.FrameworkBuildIdentity).Assembly) ?? "(unstamped)");
+            MeshWeaver.Compiler.FrameworkBuildIdentity.StampedIdentityOf(
+                typeof(MeshWeaver.Compiler.FrameworkBuildIdentity).Assembly) ?? "(unstamped)");
         // A degraded identity resolution (torn/unusable surface manifest → stamp/MVID fallback)
         // is safe — conservative key, everything rebakes under it — but it silently costs the
         // whole CI-bake benefit, so it must be SAID where the identity is announced.

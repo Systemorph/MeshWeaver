@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using MeshWeaver.Mesh;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// A compile's point-in-time source set TOGETHER WITH whether that set was actually

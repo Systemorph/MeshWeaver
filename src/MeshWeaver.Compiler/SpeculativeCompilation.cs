@@ -7,7 +7,7 @@ using Microsoft.CodeAnalysis.Text;
 using RoslynDiagnosticSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
 using LspDiagnosticSeverity = MeshWeaver.Mesh.Services.LanguageServer.DiagnosticSeverity;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// Builds a <see cref="CSharpCompilation"/> from a NodeType's <see cref="CompilationInputs"/>

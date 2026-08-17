@@ -2,7 +2,7 @@ namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// The Code-node naming conventions the compile toolchain keys on. Defined here — below the
-/// graph — because <see cref="MeshWeaver.Graph.Configuration.CodeQueryResolver"/>'s default
+/// graph — because <see cref="CodeQueryResolver"/>'s default
 /// queries and path matching are part of the compile toolchain's identity boundary;
 /// <c>MeshWeaver.Graph</c>'s <c>CodeNodeType</c> aliases these same constants for the mesh-side
 /// registration, so the two can never drift.

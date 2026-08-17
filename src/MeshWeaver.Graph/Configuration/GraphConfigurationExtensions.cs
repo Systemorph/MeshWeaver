@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>

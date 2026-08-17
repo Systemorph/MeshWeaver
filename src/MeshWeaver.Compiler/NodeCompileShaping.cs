@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.RegularExpressions;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;

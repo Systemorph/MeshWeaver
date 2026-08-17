@@ -3,12 +3,12 @@ using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// Discovers Roslyn <c>[Generator]</c> source generators from the assemblies a node pulls in via
 /// <c>#r "nuget:..."</c>, so generators are modular and travel with the node Source instead of being
-/// baked into the low-level <see cref="MeshWeaver.Graph"/> project. A generator referenced from Graph
+/// baked into the low-level <c>MeshWeaver.Graph</c> project. A generator referenced from Graph
 /// is a Roslyn analyzer that propagates to every downstream project and bloats every build
 /// (project_graph_generator_build_bloat); instead the compile pipeline injects
 /// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> for nodes that declare an <c>IScope&lt;,&gt;</c>,

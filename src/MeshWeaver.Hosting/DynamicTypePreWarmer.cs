@@ -9,6 +9,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting;
 
 /// <summary>Terminal outcome of pre-warming one dynamic NodeType's hub.</summary>
@@ -870,7 +871,7 @@ public static class DynamicTypePreWarmer
     /// that removal is the fix for issue #1391. An empty <see cref="NodeTypeDefinition.Sources"/>
     /// does not mean "configuration-only" — it means <b>"uses the DEFAULT queries"</b>
     /// (<c>namespace:{path}/Source scope:subtree</c>, see
-    /// <see cref="Graph.Configuration.CodeQueryResolver.DefaultSources"/>), which is how very
+    /// <see cref="MeshWeaver.Compiler.CodeQueryResolver.DefaultSources"/>), which is how very
     /// nearly every NodeType in a real mesh is authored. Requiring declared queries therefore made
     /// <see cref="PreWarmStatus.NoSources"/> unreachable for almost the entire population: a type
     /// whose <c>Source/</c> subtree had been DELETED was compiled against nothing, its
@@ -878,7 +879,7 @@ public static class DynamicTypePreWarmer
     /// verdict, and a node that no longer exists held portal readiness hostage on every pod boot.
     /// That is exactly what <c>Edu/Course</c> was doing to <c>memex</c>.</para>
     ///
-    /// <para>This restores the three-outcome contract <see cref="Graph.Configuration.SourceSnapshot"/>
+    /// <para>This restores the three-outcome contract <see cref="MeshWeaver.Compiler.SourceSnapshot"/>
     /// already documents — an established-but-EMPTY snapshot is a content fact "(the sources were
     /// deleted, or the type is configuration-only)" and classifies as <c>NoSources</c> — from which
     /// the extra conjunct had silently drifted. A genuinely configuration-only type is folded in on

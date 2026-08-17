@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Xunit;
 using Lsp = MeshWeaver.Mesh.Services.LanguageServer;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>

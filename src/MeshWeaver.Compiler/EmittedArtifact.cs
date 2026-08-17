@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// What an emit produced, and the fingerprint that lets the publisher prove the file on disk still
