@@ -249,9 +249,11 @@ public static partial class LogLineParser
         {
             foreach (var segment in match.Value.Split('/', '\\'))
             {
-                // Placeholder names are excluded or a segment called "path" would rewrite the
-                // `{path}` this very method is about to produce.
-                if (segment.Length < 2 || !char.IsLetter(segment[0]) || segment.Contains('{')
+                // Word tokens only (letter-initial, all word characters) — that is what MaskSubjects
+                // can compare against, and it is the shape a bare subject actually takes (`Chess`,
+                // `Claims`, `Northwind`). Placeholder names are excluded or a segment called "path"
+                // would rewrite the `{path}` this very method is about to produce.
+                if (segment.Length < 2 || !char.IsLetter(segment[0]) || !IsWordToken(segment)
                     || PlaceholderNames.Contains(segment))
                     continue;
                 segments.Add(segment);
@@ -275,25 +277,61 @@ public static partial class LogLineParser
     /// <c>Chess</c> is a path segment, therefore <c>Chess</c> anywhere in that message is an
     /// identifier, whatever position it occupies.</para>
     ///
-    /// <para>Word-boundary and case-sensitive, so <c>Cession</c> does not swallow
-    /// <c>CessionData</c>, and bounded at <see cref="MaxSubjects"/> tokens. The failure direction is
-    /// over-collapsing (a prose word that happens to be a path segment), which costs one ticket a
-    /// human can split rather than fifty nobody reads.</para>
+    /// <para>Whole-token and case-sensitive, so <c>Cession</c> does not swallow <c>CessionData</c>,
+    /// and bounded at <see cref="MaxSubjects"/> tokens. The failure direction is over-collapsing (a
+    /// prose word that happens to be a path segment), which costs one ticket a human can split
+    /// rather than fifty nobody reads.</para>
+    ///
+    /// <para>🚨 Deliberately a linear scan over word tokens rather than a constructed
+    /// <c>\b(?:a|b|c)\b</c> regex. <see cref="Normalize"/> is on the ingest hot path, and a regex
+    /// built per message would be re-parsed on every call (the pattern cache is keyed by pattern
+    /// text) and would need a match timeout — whose expiry would throw straight through the
+    /// aggregator and wedge the poll, since a failed pass leaves the cursor put and the next tick
+    /// re-reads the very same window. A scan cannot time out, so there is nothing to catch.</para>
     /// </summary>
     private static string MaskSubjects(string message, ImmutableHashSet<string> subjects)
     {
         if (subjects.IsEmpty)
             return message;
 
-        // Longest first, so a subject that is a prefix of another cannot shadow it.
-        var pattern = @"\b(?:"
-                      + string.Join('|', subjects.OrderByDescending(s => s.Length).Select(Regex.Escape))
-                      + @")\b";
-        return Regex.Replace(message, pattern, "{id}",
-            RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        // A length window over the subjects, so the overwhelming majority of prose tokens are
+        // rejected without allocating the string the hash-set lookup would need.
+        var shortest = subjects.Min(s => s.Length);
+        var longest = subjects.Max(s => s.Length);
+
+        var result = new StringBuilder(message.Length);
+        var i = 0;
+        while (i < message.Length)
+        {
+            if (!IsWordChar(message[i]))
+            {
+                result.Append(message[i++]);
+                continue;
+            }
+
+            var start = i;
+            while (i < message.Length && IsWordChar(message[i]))
+                i++;
+
+            var token = message.AsSpan(start, i - start);
+            var isSubject = token.Length >= shortest && token.Length <= longest
+                            && subjects.Contains(token.ToString());
+            result.Append(isSubject ? "{id}" : token);
+        }
+        return result.ToString();
     }
 
-    /// <summary>How many path segments may become subjects. Bounds the constructed regex.</summary>
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    private static bool IsWordToken(string value)
+    {
+        foreach (var c in value)
+            if (!IsWordChar(c))
+                return false;
+        return true;
+    }
+
+    /// <summary>How many path segments may become subjects. Bounds the lookup set.</summary>
     private const int MaxSubjects = 32;
 
     /// <summary>The masks <see cref="Normalize"/> itself emits — never re-masked.</summary>
