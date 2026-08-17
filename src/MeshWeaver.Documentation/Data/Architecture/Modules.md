@@ -106,6 +106,7 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.AI.AzureFoundry.dll` | Azure Foundry + Anthropic-on-Azure providers | `AzureFoundry`, `Anthropic` |
 | `MeshWeaver.AI.ClaudeCode.dll` | Claude Code harness | `ClaudeCode` |
 | `MeshWeaver.AI.Copilot.dll` | Copilot harness | `Copilot` |
+| `MeshWeaver.AI.WebSearch.dll` | Agent web-search tools (`SearchWeb`, `FetchWebPage`, feed readers) | `WebSearch` (self-gates on credentials) |
 | `MeshWeaver.Blazor.Radzen.dll` | Radzen view pack (charts etc.) | — |
 | `MeshWeaver.Blazor.Analysis.dll` | Analysis view pack | — |
 | `MeshWeaver.Blazor.GoogleMaps.dll` | Google Maps map provider | `GoogleMaps` |
