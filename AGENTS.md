@@ -328,6 +328,17 @@ summarize step is the real gate; a GitHub-API 429 must not fail the run) and the
 push/prune (losing a marker costs a redundant run, never correctness). The test is *what does a
 failure here hide?* — nothing, for a reporter; everything, for a gate.
 
+### Satellite CI = thin callers of THIS repo's reusable workflows
+
+**Never hand-roll (or copy-paste) a node repo's CI.** The shared jobs live here as `workflow_call`
+workflows — `.github/workflows/node-repo-{validate,compile-check,gate,tag-modules,publish-bake}.yml`
+— and MeshWeaver.Plugins / .Education / .Reinsurance / .SocialMedia call them, keeping only
+repo-specific policy (digest pin, gating, `repository_dispatch` receiver, their own `scripts/`).
+Adopting one renames that repo's required-status-check contexts to `<caller job> / <name>` — do it
+in the same change. Full contract: [CiContentBake.md](src/MeshWeaver.Documentation/Data/Architecture/CiContentBake.md)
+and [ContinuousDeliveryContract.md](src/MeshWeaver.Documentation/Data/Architecture/ContinuousDeliveryContract.md)
+(which also carries the GitHub OIDC subject-format rule: register BOTH subject formats per repo).
+
 ## 🚨 Postgres: One Schema Per Partition
 
 **`public.mesh_nodes` is empty by design.** Data lives in per-partition schemas (`acme.mesh_nodes`, `rbuergi.mesh_nodes`, etc.).
