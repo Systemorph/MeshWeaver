@@ -31,18 +31,27 @@ public static class LocalNodeRepo
     /// classification GitSync's GitHub fetch applies.
     /// </summary>
     public static IObservable<RepoSnapshot> Load(string repoRoot, IIoPool pool) =>
-        pool.InvokeBlocking(_ =>
-        {
-            var root = Path.GetFullPath(repoRoot);
-            if (!Directory.Exists(root))
-                throw new DirectoryNotFoundException($"Repo root '{root}' does not exist.");
+        pool.InvokeBlocking(_ => LoadSync(repoRoot));
 
-            var files = new List<RepoFile>();
-            Sweep(root, root, files);
-            return new RepoSnapshot("local", files
-                .OrderBy(f => f.Path, StringComparer.Ordinal)
-                .ToImmutableList());
-        });
+    /// <summary>
+    /// The sweep itself. Public and synchronous so the compiler-driven bake (#1763), which runs in
+    /// a build process with no mesh and therefore no <see cref="IIoPool"/>, reads the SAME file set
+    /// with the SAME exclusions and the SAME UTF-8 classification the mesh-driven gate reads —
+    /// "which files are content" must not fork between the two bake paths.
+    /// </summary>
+    /// <param name="repoRoot">The checkout root to sweep.</param>
+    public static RepoSnapshot LoadSync(string repoRoot)
+    {
+        var root = Path.GetFullPath(repoRoot);
+        if (!Directory.Exists(root))
+            throw new DirectoryNotFoundException($"Repo root '{root}' does not exist.");
+
+        var files = new List<RepoFile>();
+        Sweep(root, root, files);
+        return new RepoSnapshot("local", files
+            .OrderBy(f => f.Path, StringComparer.Ordinal)
+            .ToImmutableList());
+    }
 
     private static void Sweep(string root, string directory, List<RepoFile> files)
     {
