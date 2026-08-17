@@ -107,6 +107,56 @@ jobs:
           fi
           echo "All external inputs are present."
 
+      # 🚨 PRESENT is not VALID, and this gate learned that the hard way (2026-08-17): the
+      # secret above was provisioned, the check on this page went GREEN — and all three drift
+      # jobs then died at `actions/checkout` with "Bad credentials". A non-empty string passed
+      # an emptiness test while being worthless, so the job reported "all external inputs are
+      # present" having proven nothing about the only input that had just changed. That is
+      # precisely the "a gate NEVER tests its own inputs" failure this workflow's header warns
+      # about, one level in: we checked that a value EXISTS instead of that it WORKS.
+      #
+      # So assert the capability the drift job actually needs — reading $DEPLOY_REPO — against
+      # the real API, and name what each rejection means, because the three causes are
+      # indistinguishable from the checkout error and take very different fixes. Read-only, one
+      # request, no `if:`, no continue-on-error: it fails RED like everything else here.
+      - name: The token can actually READ the deploy repo
+        env:
+          MEMEX_DEPLOY_REPO_TOKEN: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $MEMEX_DEPLOY_REPO_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$DEPLOY_REPO")
+          case "$code" in
+            200)
+              echo "secrets.MEMEX_DEPLOY_REPO_TOKEN reads $DEPLOY_REPO (HTTP 200)." ;;
+            401)
+              echo "::error::secrets.MEMEX_DEPLOY_REPO_TOKEN is set but GitHub rejects it (HTTP 401, Bad credentials)."
+              echo "  The stored value is not a usable token. Most often it is not the token at all —"
+              echo "  a clipboard-piped 'gh secret set' stores whatever was on the clipboard — or the"
+              echo "  token was revoked, expired, or truncated on copy. Re-mint at"
+              echo "  https://github.com/settings/personal-access-tokens and store it again."
+              exit 1 ;;
+            403)
+              echo "::error::secrets.MEMEX_DEPLOY_REPO_TOKEN is refused (HTTP 403)."
+              echo "  The token exists but is not authorised for $DEPLOY_REPO's organisation. A"
+              echo "  fine-grained PAT whose resource owner is an org stays inert until an org owner"
+              echo "  APPROVES it — check https://github.com/settings/personal-access-tokens for a"
+              echo "  'Pending owner approval' badge, and the org's pending-requests page to grant it."
+              exit 1 ;;
+            404)
+              echo "::error::secrets.MEMEX_DEPLOY_REPO_TOKEN authenticates but cannot see $DEPLOY_REPO (HTTP 404)."
+              echo "  GitHub returns 404 rather than 403 for a repository a token may not read, so this"
+              echo "  is a SCOPE problem: the PAT's repository access does not include $DEPLOY_REPO, or"
+              echo "  it lacks 'Contents: Read-only'. Re-scope it — no other permission is needed."
+              exit 1 ;;
+            *)
+              echo "::error::Unexpected HTTP $code probing $DEPLOY_REPO with secrets.MEMEX_DEPLOY_REPO_TOKEN."
+              echo "  Treating as FAILURE: an indeterminate answer must never read as a working token."
+              exit 1 ;;
+          esac
+
   drift:
     name: ${{ matrix.env.ns }}
     needs: [preflight]
