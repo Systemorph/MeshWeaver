@@ -22,7 +22,5 @@ Recycle is now a confirmation. The page explains what will happen and offers **R
 the teardown second, so nothing has to survive the shutdown and the page always comes back. The
 next visit re-activates the hub against the latest compiled build.
 
-German users had a second, worse problem: the menu entry read *"In den Papierkorb"* — "move to the
-recycle bin" — which describes deleting the node, the opposite of what the action does. It now reads
-*"Hub neu starten"*, and the confirmation says in both languages that nothing is deleted and no
-content changes.
+The confirmation also states plainly that nothing is deleted and no content changes — recycling
+restarts the node's hub, it does not touch the node.
