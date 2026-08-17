@@ -334,8 +334,19 @@
                       Overwrite="true"
                       WriteOnlyWhenDifferent="true" />
   </Target>
+  <!-- 🚨 AfterTargets="ComputeFilesToPublish" — NOT BeforeTargets="CopyFilesToPublishDirectory".
+       The copy is performed by CopyFilesToPublishDirectory's DEPENDENCIES
+       (_ComputeResolvedFilesToPublishTypes splits @(ResolvedFileToPublish) into the
+       Always/PreserveNewest copy lists, then _CopyResolvedFilesToPublish* copy them), and a
+       BeforeTargets hook on the orchestrator runs AFTER its dependencies — so the previous shape
+       added the item once every copy had already happened. The result (#1699): every published
+       output — plain publish AND -t:PublishContainer, i.e. EVERY SHIPPED IMAGE — silently lacked
+       the manifest, portals fell back to the commit identity g<sha>, and the s<hash>-keyed CI
+       bake publication was never adopted: pods recompiled all shipped content at boot. This hook
+       point (the documented publish extension point) runs after the list is computed and before
+       it is split, and PublishContainer consumes the same list. -->
   <Target Name="_MeshWeaverAddSurfaceManifestToPublish"
-          BeforeTargets="CopyFilesToPublishDirectory"
+          AfterTargets="ComputeFilesToPublish"
           DependsOnTargets="_MeshWeaverWriteSurfaceManifest"
           Condition="'$(MeshWeaverSurfaceManifest)' == 'true'">
     <ItemGroup>
