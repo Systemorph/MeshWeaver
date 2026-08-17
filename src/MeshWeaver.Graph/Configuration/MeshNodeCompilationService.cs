@@ -1398,6 +1398,13 @@ internal class MeshNodeCompilationService(
                 AssemblyName: $"DynamicNode_{nodeName}",
                 Sources: sourcesArray,
                 SkeletonSource: skeleton,
+                // The skeleton above is generated with codeFile:null, so its `using`s are
+                // file-scoped to a tree that holds no user code. Under the per-file trees the
+                // language service needs for Monaco positions that leaves every source without the
+                // framework imports the emit path gives it by concatenation — the #1802 false FAIL.
+                // Render the same scope as `global using` so both paths agree.
+                GlobalUsingsSource: _attributeGenerator.GenerateGlobalUsingsSource(
+                    strippedSources.Select(s => (string?)s.Code)),
                 References: references,
                 ParseOptions: parseOptions,
                 CompilationOptions: compilationOptions,
