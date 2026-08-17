@@ -299,9 +299,11 @@ whole stack, because of what it *rules out*:
 A zero MT inside the swept range means the sweep walked memory the GC believed held an object but that
 is in fact zeroed. ⚠️ **2026-08-17: the two guesses that used to follow here — "a gap that was never
 filled with a free object, or a walk that ran past the true allocated end" — are both now measured
-FALSE.** The block *was* filled with a free object, correctly sized and correctly linked into the free
-list; only its header word was lost. See the 2026-08-17 section. That is runtime-internal bookkeeping
-either way, so treat it as a **CoreCLR GC issue** and report it upstream with this dump rather than
+FALSE, for this dump and for the 2026-08-17 one.** Here the zeroed block is a well-formed 32-byte
+object whose neighbours walk cleanly onto it and whose successor's header sits exactly 32 bytes
+later — so the walk is neither desynchronised nor past the allocated end; only the header word is
+gone. See the 2026-08-17 section for the second shape. That is runtime-internal bookkeeping either
+way, so treat it as a **CoreCLR GC issue** and report it upstream with this dump rather than
 "fixing" it here. What
 MeshWeaver contributes is the *workload* that provokes it: per-`[Fact]` mesh build + teardown with
 collectible NodeType assemblies loading and unloading, and 48 gen2 GCs in 75 s.
@@ -470,7 +472,7 @@ curl -sf -r "$START-$END" -o "part-$i" "$URL"
   assembled an 8 MB "208 MB" file that way. Verify every chunk's exact byte length before
   concatenating.
 
-### 2026-08-17: the zeroed block is a **GC free-list item** — read it as a free object FIRST
+### 2026-08-17: this sighting's zeroed block is a **GC free-list item** — and the shape is not constant
 
 `dotnet-4418.dmp` (run `32033793544`, commit `8f163c43a`, shard 2, runtime `10.0.11`) faults at a
 **third** RVA — `0x5d5ab2` = `WKS::gc_heap::find_first_object+0x132` — with the same
@@ -498,7 +500,25 @@ header word was zero.** So:
 > only the GC writes — and the next heap walk to reach it faulted reading `MT->m_dwFlags` at 0.
 
 **On the next dump, do this before anything else**: read the cursor as a free object. If length +
-links are consistent, it is this defect and the discovering frame does not matter.
+links are consistent you have the free-list shape and the discovering frame does not matter.
+
+🚨 **But the shape is NOT the same in every sighting — do not generalise this one.** Re-running the
+same test against `dotnet-2969.dmp` (2026-08-06, `10.0.10`, `background_sweep`) **falsifies** the
+free-list reading there: its zeroed block is a **32-byte, live-shaped object** — `+0x08` holds a
+genuine heap reference (implausible as a free-object length), its neighbours walk cleanly onto it,
+and the next valid header sits exactly 32 bytes later. `dotnet-3433` (2026-08-12) has the same
+live-shaped payload. So there are **two shapes** on record:
+
+| shape | seen in | the zeroed word is |
+|---|---|---|
+| **live-shaped object**, ~32 B, one ref + scalar fields | 2026-08-06, 2026-08-12 | that object's **type slot** |
+| **free-list item**, 304 B, length + both links intact | 2026-08-17 | `g_pFreeObjectMethodTable` — GC bookkeeping |
+
+What survives across both — and is the honest invariant to hand upstream — is narrower than either:
+**a single 8-byte header word reads as exactly zero while the rest of its block stays coherent, and
+the next GC heap walk to reach it faults reading `MT->m_dwFlags` at address 0.** Whether the block
+was a live object or free space is not constant, so an upstream report must not be written around
+the free-list detail alone.
 
 Three further things that recurrence established:
 
@@ -512,11 +532,14 @@ Three further things that recurrence established:
   in the signal `ucontext`. **No managed object points at free space** — which is what closes the
   "could our code have written it" question, without relying on the weaker "no native code in the
   process" claim corrected above.
-- **The collectible-ALC hypothesis is dead a third time, and this ground is the general one.** A
-  free-list item belongs to no assembly: it has no MethodTable to dangle, no ALC, no
-  `LoaderAllocator`, and the word that broke is in the **GC heap**, not a loader heap. (11
-  collectible NodeType ALCs were live at the fault and the block's stale contents are their dead
-  objects — that is the *workload* that grows gen2 free lists, not the cause.)
+- **The collectible-ALC hypothesis is dead a third time.** For *this* sighting on the general
+  ground: a free-list item belongs to no assembly, so it has no MethodTable to dangle, no ALC, no
+  `LoaderAllocator`, and the word that broke is in the **GC heap**, not a loader heap. For the
+  live-shaped sightings the earlier grounds still carry it — `RIP` inside file-backed `libcoreclr`,
+  and `si_addr` exactly `0x0` where a freed `LoaderAllocator` yields a **non-null unmapped**
+  pointer. (11 collectible NodeType ALCs were live at the 2026-08-17 fault and the block's stale
+  contents are their dead objects — that is the *workload* that grows gen2 free lists, not the
+  cause.)
 
 ## Reading the result honestly
 
