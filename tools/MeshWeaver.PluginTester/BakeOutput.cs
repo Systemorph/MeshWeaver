@@ -156,7 +156,8 @@ public static class BakeOutput
                                 typePath,
                                 () => File.OpenRead(dllPath),
                                 hasPdb ? () => File.OpenRead(pdbPath) : null,
-                                def.CompiledSources);
+                                def.CompiledSources,
+                                def.CompiledDependencies);
                         });
                     });
             });

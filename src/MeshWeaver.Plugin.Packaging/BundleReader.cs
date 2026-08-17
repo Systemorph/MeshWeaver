@@ -31,7 +31,10 @@ public static class BundleReader
     /// <summary>One assembly and the NodeType it implements.</summary>
     /// <param name="NodePath">Mesh path of the NodeType — the key a consumer re-seeds under.</param>
     /// <param name="Assembly">File name inside <see cref="NuGetPackageWriter.AssemblyFolder"/>.</param>
-    public sealed record AssemblyRef(string NodePath, string Assembly);
+    /// <param name="Dependencies">The producer's per-type dependency record (#1707 slice 2), or
+    /// null for a legacy bundle.</param>
+    public sealed record AssemblyRef(
+        string NodePath, string Assembly, IReadOnlyDictionary<string, string>? Dependencies = null);
 
     /// <summary>The bundle's compiled-module declaration.</summary>
     /// <param name="AssemblyName">The module's entry-assembly name WITHOUT extension
@@ -55,7 +58,11 @@ public static class BundleReader
     /// <param name="NodePath">Mesh path of the NodeType these bytes implement.</param>
     /// <param name="Assembly">The compiled assembly.</param>
     /// <param name="Pdb">Symbols, when the bundle carried them.</param>
-    public sealed record Payload(string NodePath, byte[] Assembly, byte[]? Pdb);
+    /// <param name="Dependencies">The producer's per-type dependency record for these bytes
+    /// (#1707 slice 2), joined from the manifest, or null for a legacy bundle.</param>
+    public sealed record Payload(
+        string NodePath, byte[] Assembly, byte[]? Pdb,
+        IReadOnlyDictionary<string, string>? Dependencies = null);
 
     /// <summary>
     /// Extracts the manifest and every assembly it names.
@@ -103,7 +110,8 @@ public static class BundleReader
                 + Path.ChangeExtension(reference.Assembly, ".pdb"));
 
             payloads.Add(new Payload(
-                reference.NodePath, ReadAll(dll), pdb is null ? null : ReadAll(pdb)));
+                reference.NodePath, ReadAll(dll), pdb is null ? null : ReadAll(pdb),
+                reference.Dependencies));
         }
 
         return (manifest, payloads);

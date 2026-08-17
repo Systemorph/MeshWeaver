@@ -552,6 +552,24 @@ public record NodeTypeDefinition
     public string? CompiledModulesHash { get; init; }
 
     /// <summary>
+    /// The per-type DEPENDENCY RECORD the assembly was compiled with (#1707 slice 2): sorted
+    /// <c>(referenced assembly name → surface-id)</c> pairs read from the EMITTED assembly's
+    /// AssemblyRef table — the pruned, true set of what these bytes actually bind — plus the
+    /// reserved <c>!toolchain</c> entry (see <c>MeshWeaver.Compiler.CompiledDependencies</c>).
+    /// Platform entries carry the reference-assembly hash (<c>ref:</c> — moves only on a breaking
+    /// surface change); module entries carry the exact build MVID (<c>mvid:</c>).
+    ///
+    /// <para>DECISIVE when present: <c>HasUsableBuild</c> / <c>HasStaleFrameworkBuild</c>, the
+    /// bake probe's <c>Classify</c>, and the prebuilt seeder validate every entry against the
+    /// live environment — so a module update invalidates ONLY its dependents, and a type that
+    /// references no module is valid on ANY deployment regardless of composition (the
+    /// instance-wide <see cref="CompiledModulesHash"/> stops keying record-stamped builds and
+    /// remains only as the legacy rule for null-record stamps). Null = stamped before this
+    /// feature; the legacy modules-hash rule governs.</para>
+    /// </summary>
+    public System.Collections.Immutable.ImmutableSortedDictionary<string, string>? CompiledDependencies { get; init; }
+
+    /// <summary>
     /// 🚨 Round-trip buffer for content members this compiled shape does not declare —
     /// schema evolution: a property written by a NEWER build, or one removed since the
     /// JSON was persisted. Without this, System.Text.Json silently DROPS such members on

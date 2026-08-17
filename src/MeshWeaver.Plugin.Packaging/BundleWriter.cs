@@ -38,11 +38,16 @@ public static class BundleWriter
     /// (<c>NodeTypeDefinition.CompiledSources</c>: Code-node path → version ticks) — provenance for
     /// auditing which bytes were built from which sources. Ignored by <see cref="BundleReader"/>
     /// (unknown JSON properties are skipped), so carrying it costs consumers nothing.</param>
+    /// <param name="Dependencies">The per-type DEPENDENCY RECORD the compile stamped
+    /// (<c>NodeTypeDefinition.CompiledDependencies</c>, #1707 slice 2): referenced assembly name →
+    /// surface-id. The consumer validates it against ITS environment before adopting and stamps it
+    /// on adopt. Null for a legacy producer.</param>
     public sealed record AssemblyEntry(
         string NodePath,
         Func<Stream> OpenAssembly,
         Func<Stream>? OpenPdb = null,
-        IReadOnlyDictionary<string, long>? SourceVersions = null);
+        IReadOnlyDictionary<string, long>? SourceVersions = null,
+        IReadOnlyDictionary<string, string>? Dependencies = null);
 
     /// <summary>
     /// Writes the bundle into <paramref name="destination"/> (left open, mirroring
@@ -87,6 +92,7 @@ public static class BundleWriter
                     nodePath = a.NodePath,
                     assembly = $"{a.NodePath}.dll",
                     sourceVersions = a.SourceVersions,
+                    dependencies = a.Dependencies,
                 })
                 .ToList(),
         };

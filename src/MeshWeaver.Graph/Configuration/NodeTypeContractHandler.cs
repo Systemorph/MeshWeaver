@@ -419,7 +419,7 @@ internal static class NodeTypeContractHandler
                     if (def.CompilationStatus is not null and not CompilationStatus.Unavailable)
                         return curr;
                     if (NodeTypeCompilationHelpers.HasUsableBuild(
-                            curr, def, NodeTypeCompilationHelpers.ModulesHashOf(hub))) return curr;
+                            curr, def, NodeTypeCompilationHelpers.GuardsOf(hub))) return curr;
                     if (NodeTypeCompilationHelpers.IsStaticOnlyNodeType(curr, def)) return curr;
                     return curr with
                     {

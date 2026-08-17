@@ -368,7 +368,9 @@ public static class DynamicTypePreWarmer
                     // pod inherits the first pod's work instead of repeating it.
                     var store = ResolveAssemblyStore(mesh);
                     return NodeTypeBakeStatus
-                        .Probe(definitions, store, logger: logger)
+                        .Probe(definitions, store, logger: logger,
+                            liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+                            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)
                         .SelectMany(report => BakeOrFollow(
                             mesh, workspace, accessService, definitions, nodes, store, report,
                             budget, pacing, batchBake, buildProtocol, logger));
@@ -998,7 +1000,7 @@ public static class DynamicTypePreWarmer
     /// <para>🚨 <b>The recovery must be a compile that is demonstrably FRESH</b> — a settled
     /// <see cref="CompilationStatus.Ok"/> whose
     /// <see cref="NodeTypeDefinition.LastCompileSucceededAt"/> is strictly newer than the one this
-    /// watch observed when it started. <see cref="NodeTypeCompilationHelpers.HasUsableBuild"/>
+    /// watch observed when it started. <c>NodeTypeCompilationHelpers.HasUsableBuild</c>
     /// alone is NOT sufficient and matching on it would silently disable the whole gate: a failed
     /// compile keeps the PREVIOUS build's assembly coordinates and framework stamp
     /// (<c>ApplyCompileFailure</c> clears only the status, the error and
@@ -1034,7 +1036,7 @@ public static class DynamicTypePreWarmer
                             .Where(n => n?.Content is NodeTypeDefinition d
                                 && d.CompilationStatus == CompilationStatus.Ok
                                 && NodeTypeCompilationHelpers.HasUsableBuild(
-                                    n, d, NodeTypeCompilationHelpers.ModulesHashOf(mesh))
+                                    n, d, NodeTypeCompilationHelpers.GuardsOf(mesh))
                                 && IsFreshSuccess(d.LastCompileSucceededAt, baseline))
                             .Take(1));
                 })
@@ -1112,7 +1114,7 @@ public static class DynamicTypePreWarmer
                     // is not coming only slows the sweep down.
                     .Where(n => n?.Content is NodeTypeDefinition d
                         && (NodeTypeCompilationHelpers.HasUsableBuild(
-                                n, d, NodeTypeCompilationHelpers.ModulesHashOf(workspace.Hub))
+                                n, d, NodeTypeCompilationHelpers.GuardsOf(workspace.Hub))
                             || d.CompilationStatus is CompilationStatus.Error
                                                    or CompilationStatus.Unavailable))
                     .Take(1)
