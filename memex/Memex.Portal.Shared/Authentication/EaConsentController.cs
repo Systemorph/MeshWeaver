@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh;        // IEaGraphAuth — the SDK-free seam, now in the mesh contract
 using MeshWeaver.Messaging;   // AccessService
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;

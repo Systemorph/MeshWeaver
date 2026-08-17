@@ -104,6 +104,7 @@
     <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />
     <Project Path="src/MeshWeaver.Kernel/MeshWeaver.Kernel.csproj" />
     <Project Path="src/MeshWeaver.Layout/MeshWeaver.Layout.csproj" />
+    <Project Path="src/MeshWeaver.Mail.MicrosoftGraph/MeshWeaver.Mail.MicrosoftGraph.csproj" />
     <Project Path="src/MeshWeaver.Markdown/MeshWeaver.Markdown.csproj" />
     <Project Path="src/MeshWeaver.Markdown.Collaboration/MeshWeaver.Markdown.Collaboration.csproj" />
     <Project Path="src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
