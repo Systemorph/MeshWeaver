@@ -15,9 +15,17 @@ public static class CompileReferences
     /// <summary>
     /// The process-wide default reference list — TPA assemblies plus a few well-known additions,
     /// built once at type load (eager static init: a plain field read on every compile, no Lazy
-    /// dispatch, no synchronization; an immutable constant lookup in the NoStaticState.md sense).
+    /// dispatch, no synchronization). 🚨 NOT a constant lookup, whatever the collection type says:
+    /// a <c>PortableExecutableReference</c> owns lazily mmap'd IDisposable metadata and Roslyn
+    /// caches symbol tables against the instance — this is the process-wide CACHE tracked by #890,
+    /// allowlisted by name in <c>NoStaticCollectionsTest.AllowedRoslynReferenceHolders</c>
+    /// (migration held in #1438 pending the emit canary's verdict). An explicit field, not an
+    /// auto-property, so the allowlist names <c>_default</c> rather than a compiler-generated
+    /// backing field.
     /// </summary>
-    public static IReadOnlyList<MetadataReference> Default { get; } = GetDefaultReferences();
+    public static IReadOnlyList<MetadataReference> Default => _default;
+
+    private static readonly IReadOnlyList<MetadataReference> _default = GetDefaultReferences();
 
     /// <summary>
     /// Builds the process-wide MetadataReference list — TPA assemblies plus a few

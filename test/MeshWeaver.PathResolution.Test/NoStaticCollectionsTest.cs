@@ -185,7 +185,9 @@ public class NoStaticCollectionsTest
             // The entry stays until the canary reads canary=REFERENCES; #1438 removes both the
             // field and this line. Listing it is the point: an allowlist entry is a visible debt,
             // which is precisely what the field lacked when two reviews called it a constant.
-            ["MeshWeaver.Graph.Configuration.MeshNodeCompilationService._references"] =
+            // (Home moved in #1707: MeshNodeCompilationService._references → the toolchain's
+            // CompileReferences._default — same field, same debt, same issue numbers.)
+            ["MeshWeaver.Compiler.CompileReferences._default"] =
                 "CACHE: process-wide Roslyn reference set — tracked by #890, migration held in #1438 pending the canary verdict",
         };
 
