@@ -1137,6 +1137,21 @@ jobs:
             echo "- source: \`meshweaver-content\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
             echo "- release marker: \`_releases/${RELEASE_VERSION}\` — environments may now be rolled to it"
           } >> "$GITHUB_STEP_SUMMARY"
+      # 🚨 CD's own consumption of the release gate (#1754). The three paths that roll a version
+      # must read ONE verdict, and this is CD's: assert — against the artifact store, through the
+      # same script the build gate uses — that the release just armed resolves an identity and
+      # carries a sealed platform content bake. Without it, an environment rolled to this release
+      # Roslyn-compiles its whole content set at boot.
+      #
+      # It runs UNCONDITIONALLY and fails RED, never `if:`-guarded and never continue-on-error: a
+      # grey skip renders identically to a pass, and a release-availability check that cannot fail
+      # is not a check. Placed AFTER the publish it verifies, so it judges the state that shipped
+      # rather than the state that was intended.
+      - name: "Assert the armed release is one an environment can be rolled to"
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
+        run: .github/scripts/check-release-availability.sh "$RELEASE_VERSION" meshweaver-content
 
   # ────────────────── NOTIFY DEPENDENT REPOS (repository_dispatch) ──────────────────
   # "Subscribe to new releases of any dependency and rebuild": dependency bumps INSIDE a repo are

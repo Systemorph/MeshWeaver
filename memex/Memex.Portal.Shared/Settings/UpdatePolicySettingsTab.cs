@@ -88,9 +88,29 @@ public static class UpdatePolicySettingsTab
                         h.UpdateData(ResultId, "No newer version has been detected yet.");
                         return;
                     }
-                    pool.Invoke(ct => updater.PatchToVersionAsync(tag, ct)).Subscribe(
-                        _ => h.UpdateData(ResultId, $"Rolling the platform to {tag}…"),
-                        ex => h.UpdateData(ResultId, $"Update failed: {ex.Message}"));
+                    // 🚨 The manual roll honours the SAME release-availability gate as the poller
+                    // (#1754). A gate only the unattended path respects is not a gate — and this
+                    // button is exactly the moment an operator, seeing an update that never
+                    // applied, would force the roll the poller refused for good reason. Absent the
+                    // service the button behaves as before (nothing to check against), which is
+                    // said out loud rather than read as a pass.
+                    var gate = h.Hub.ServiceProvider.GetService<ReleaseAvailabilityService>();
+                    var decision = gate is null
+                        ? Observable.Return(UpdatabilityVerdict.NotEnforced(
+                            "no release-availability gate is registered on this install"))
+                        : gate.IsUpdatable(tag);
+                    decision.Subscribe(verdict =>
+                    {
+                        if (!verdict.IsUpdatable)
+                        {
+                            h.UpdateData(ResultId,
+                                h.Localize("ui.updateHeldManual", tag) + "\n\n> " + verdict.HoldReason);
+                            return;
+                        }
+                        pool.Invoke(ct => updater.PatchToVersionAsync(tag, ct)).Subscribe(
+                            _ => h.UpdateData(ResultId, $"Rolling the platform to {tag}…"),
+                            ex => h.UpdateData(ResultId, $"Update failed: {ex.Message}"));
+                    });
                 });
                 return Task.CompletedTask;
             }));
@@ -128,6 +148,21 @@ public static class UpdatePolicySettingsTab
             + (content.CheckedAt is { } at
                 ? " " + localize("ui.updateCheckedAt", [at.ToString("yyyy-MM-dd HH:mm")])
                 : "");
+
+        // 🚨 The availability hold (#1754) is reported BEFORE the combo verdict, because it is the
+        // reason this install is not moving RIGHT NOW. A hold that only showed up in the logs would
+        // leave an operator reading "update available" for weeks with nothing explaining why the
+        // version never changes — the silent freeze this gate must never become.
+        if (content.IsHeld(tag))
+            available += "\n\n"
+                + localize(
+                    content.HeldIndeterminate ? "ui.updateHeldUnknown" : "ui.updateHeld", [tag])
+                + (string.IsNullOrEmpty(content.HeldReason)
+                    ? ""
+                    : "\n\n> " + Sanitize(content.HeldReason!))
+                + (content.HeldAt is { } heldAt
+                    ? "\n\n" + localize("ui.updateHeldAt", [heldAt.ToString("yyyy-MM-dd HH:mm")])
+                    : "");
 
         var verdict = content.VerificationFor(tag);
         if (verdict is null)

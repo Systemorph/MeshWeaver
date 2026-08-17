@@ -205,6 +205,23 @@ absent means no condition under which it may decline to run.
 
 Operational facts about the in-pod updater (learned the hard way — each cost a debugging session):
 
+- 🚨 **Check availability BEFORE a manual roll.** `kubectl set image` bypasses the poller, and with it
+  the [release availability gate](/Doc/Architecture/ReleaseGates) — so it can put an environment on a
+  release whose content bake has not been published, and every pod then Roslyn-compiles the whole
+  content set at boot (a type that fails to compile parks its hub for the full activation budget).
+  Ask the target portal first:
+
+  ```bash
+  curl -s -H "Authorization: Bearer $MWI_KEY" \
+    "https://<portal>/api/plugins/is-updatable?version=<tag>" | jq
+  ```
+
+  `isUpdatable: false` names the blocking packages in `holdReason`. `indeterminate: true` means the
+  check itself could not run — an availability problem to fix, never a release to re-bake, and never
+  clearance to proceed. If the portal is unreachable, `.github/scripts/check-release-availability.sh
+  <tag>` asks the artifact store the same question directly (needs the storage role).
+  **A held update needs no manual roll anyway**: publish the missing bake and the poller applies it
+  on its next tick.
 - **Tags must be dotted SemVer** (`3.0.0` / `3.0.0-ci.749`). `VersionSelect.PickTarget` keeps only tags
   matching `^\d+\.\d+\.\d+([-+].*)?$` (and drops per-RID suffixes like `-linux-arm64`), then picks the
   highest. It never inspects the tag you deployed — it compares its pick against the **running build's
