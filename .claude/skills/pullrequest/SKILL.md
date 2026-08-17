@@ -126,10 +126,19 @@ gh pr create --base main --head "$(git branch --show-current)" --title "…" --b
 #    suite finishes only when every shard job does, so there's no late-shard race — then read its
 #    conclusion. Merge ONLY on SUCCESS.
 #
-#    🔔 RUN THIS BLOCK IN THE BACKGROUND (harness: run_in_background: true) so you get ONE completion
-#    NOTIFICATION and keep working meanwhile — the background task IS your "CI finished" event. The
-#    loop exits 0 iff green, so the notification's exit code tells you whether to merge. (This is the
-#    push-style event a local session can have; GitHub can't webhook a CLI directly — see below.)
+#    🔔 PREFERRED SHAPE: a PERSISTENT harness `Monitor` armed at PR-open, subscribed to EVERY
+#    transition you'd act on — suite COMPLETED/SUCCESS, suite COMPLETED/<anything else> (red /
+#    cancelled / timed-out), a NEW unresolved review thread (the automatic Copilot review gates the
+#    merge and lands minutes after open), mergeStateStatus=DIRTY (a dirty PR runs ZERO CI), and
+#    MERGED/CLOSED (the monitor's exit). 🚨 Never a success-only watch: silence looks identical to
+#    "still running" while the thing you needed to react to already happened — and one-shot
+#    background loops die at their timeout cap and leave dead air until someone re-arms them
+#    (maintainer, 2026-08-17). See AGENTS.md → "SUBSCRIBE to a PR". One monitor can cover several
+#    open PRs and re-armed pushes (it keys on the LATEST commit each poll).
+#
+#    The single-shot fallback below (harness Bash, run_in_background: true) is acceptable when no
+#    Monitor is available: it exits 0 iff green, so the notification's exit code is the merge
+#    signal — but it fires ONCE, covers no review threads, and dies at the bash timeout cap.
 PR=<PR>
 Q='query($o:String!,$r:String!,$p:Int!){repository(owner:$o,name:$r){pullRequest(number:$p){commits(last:1){nodes{commit{checkSuites(first:20){nodes{status conclusion workflowRun{workflow{name}}}}}}}}}}'
 suite(){ gh api graphql -f query="$Q" -f o=Systemorph -f r=MeshWeaver -F p=$PR \
