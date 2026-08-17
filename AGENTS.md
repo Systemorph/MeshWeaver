@@ -328,6 +328,17 @@ summarize step is the real gate; a GitHub-API 429 must not fail the run) and the
 push/prune (losing a marker costs a redundant run, never correctness). The test is *what does a
 failure here hide?* — nothing, for a reporter; everything, for a gate.
 
+### Satellite CI = thin callers of THIS repo's reusable workflows
+
+**Never hand-roll (or copy-paste) a node repo's CI.** The shared jobs live here as `workflow_call`
+workflows — `.github/workflows/node-repo-{validate,compile-check,gate,tag-modules,publish-bake}.yml`
+— and MeshWeaver.Plugins / .Education / .Reinsurance / .SocialMedia call them, keeping only
+repo-specific policy (digest pin, gating, `repository_dispatch` receiver, their own `scripts/`).
+Adopting one renames that repo's required-status-check contexts to `<caller job> / <name>` — do it
+in the same change. Full contract: [CiContentBake.md](src/MeshWeaver.Documentation/Data/Architecture/CiContentBake.md)
+and [ContinuousDeliveryContract.md](src/MeshWeaver.Documentation/Data/Architecture/ContinuousDeliveryContract.md)
+(which also carries the GitHub OIDC subject-format rule: register BOTH subject formats per repo).
+
 ## 🚨 Postgres: One Schema Per Partition
 
 **`public.mesh_nodes` is empty by design.** Data lives in per-partition schemas (`acme.mesh_nodes`, `rbuergi.mesh_nodes`, etc.).
@@ -405,7 +416,9 @@ This bit two separate PRs on 2026-08-12 because nothing said it: `LocalizationTe
 
 `LocalizationTest` fails if a language is missing any English key, so a half-translated string cannot merge.
 
-🚨 **Never resolve from `CultureInfo.CurrentUICulture`** — a layout-area render hops the hub scheduler and an ambient AsyncLocal culture does not survive it, so one user's UI would pick up another user's language. Resolution is always explicit off `AccessContext.Locale`.
+🚨 **Never resolve from `CultureInfo.CurrentUICulture` or `CurrentCulture`** — and this covers *formatting* (dates, numbers, calendars), not just translated strings. Two independent reasons: (1) a layout-area render hops the hub scheduler and an ambient AsyncLocal culture does not survive it, so one user's UI would pick up another user's language; (2) on Blazor Server the ambient culture is the **server process's**, i.e. the container the portal runs in — identical for every simultaneous viewer and unrelated to any of them. `DateTimeView` defaulted its calendar culture that way until 2026-08-17 and rendered English month names for German users regardless of their choice. Resolution is always explicit off `AccessContext.Locale` (`AccessService.ViewerLocale()` / `host.ViewerLocale()`); derive a `CultureInfo` from that when you need one.
+
+**The language policy: take the language of the USER's computer, and put it on the user.** The onboarding form's first field is a language picker pre-selected from the visitor's own `Accept-Language`; it writes `User.Locale` at user creation. It is then editable in two places sharing ONE control (`MeshNodeContentEditorControl` over `User.Locale`): the profile editor and User → Settings → *Preferences*. A **silent** auto-detect of an unshipped language stores nothing (so a later translation applies automatically); an **explicit** pick is always honoured — `Locales.TryMatch` vs `Locales.Resolve` is that distinction in code.
 
 🚨 **Do NOT translate**: LLM tool-parameter `[Description]`s (model-facing — translating degrades tool-calling), wire identifiers (`nodeType:Thread` in help text, `RequestAction("New")`, Fluent icon names), or the glossary terms kept English on purpose (Thread, Mesh, Node, Agent, Skill, Harness, Provider, Namespace, Partition, Store).
 

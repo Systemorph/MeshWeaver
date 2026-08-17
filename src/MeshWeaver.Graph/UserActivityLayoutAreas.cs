@@ -15,6 +15,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -839,6 +840,30 @@ public static class UserActivityLayoutAreas
             MaxHeight = "none",
             Placeholder = "One link per line, e.g. [GitHub](https://github.com/you)"
         }));
+
+        // Language — the UI language, editable HERE on the profile and not only buried in
+        // Settings → Preferences, which is where a user actually looks for "my language".
+        // Node-bound like every other field on this page: MeshNodeContentEditorControl reads and
+        // writes User.Locale straight on the node stream (IMeshNodeStreamCache), so there is ONE
+        // source of truth and no /data replica + save-subscription. The same control and the same
+        // field back the Preferences tab, so the two can never drift apart.
+        container = container.WithView(BuildProfileSection(
+            LocalizationCatalog.Get("settings.language", locale),
+            new MeshNodeContentEditorControl(userPath)
+            {
+                CanEdit = true,
+                Fields = ImmutableList.Create(
+                    new MeshNodeEditorField(
+                        nameof(User.Locale).ToCamelCase()!,
+                        LocalizationCatalog.Get("settings.language", locale),
+                        MeshNodeEditorFieldKind.Enum)
+                    {
+                        // Stores the BCP-47 tag ("de") but shows the endonym ("Deutsch") — a German
+                        // speaker looks for "Deutsch", not "German" or a raw tag.
+                        Options = Locales.Supported,
+                        OptionLabels = Locales.DisplayNames
+                    })
+            }));
 
         // Showcase — pinned cards with the inline unpin overlay; a note on how to add more.
         container = container.WithView(BuildProfileSection("Showcase",

@@ -239,20 +239,9 @@ public static class AIExtensions
             return services.AddAgentChatServices();
         }
 
-        /// <summary>
-        /// Registers the WebSearch plugin, making SearchWeb and FetchWebPage tools
-        /// available to agents that declare "WebSearch" in their plugins frontmatter.
-        /// </summary>
-        public IServiceCollection AddWebSearchPlugin(Action<WebSearchConfiguration>? configure = null)
-        {
-            if (configure != null)
-                services.Configure(configure);
-            else
-                services.AddOptions<WebSearchConfiguration>();
-
-            services.AddHttpClient<WebSearchPlugin>();
-            services.AddSingleton<IAgentPlugin, WebSearchPlugin>();
-            return services;
-        }
+        // The WebSearch tools moved to the MeshWeaver.AI.WebSearch MODULE
+        // (WebSearchExtensions.AddWebSearch, activated by listing the DLL under
+        // Modules:Assemblies). Nothing here registers them: an agent plugin is resolved by NAME
+        // out of DI, so the tool family needs no seam in this assembly.
     }
 }

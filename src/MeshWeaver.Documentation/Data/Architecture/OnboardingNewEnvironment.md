@@ -120,6 +120,16 @@ environment, in this order:
    `Admin/UpdatePolicy` node. Recommended: **Continuous for dev/test** (always rolls to the newest
    build-numbered image), **Stable for prod** (rolls only to the newest clean release). See
    [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy).
+5. **Add the env's Azure Files share to the CI bake targets** — otherwise no published bundle ever
+   reaches the new portal and its pods Roslyn-compile every shipped NodeType at boot. Append its
+   `<account>/<share>[/<base-path>]` (the account/share behind the namespace's `memex-data` PVC) to
+   the `BAKE_PUBLISH_TARGETS` repo variable on the platform repo and on each satellite content
+   repo, and make sure the `github-actions-bake` identity holds *Storage File Data Privileged
+   Contributor* on that storage account. The publishing jobs preflight this **red, never skipped**
+   — see [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract), which
+   also carries the GitHub OIDC subject-format rule (register BOTH the classic and the immutable
+   subject per repo). Note that identity's federated subjects come from GitHub's issuer and are
+   unrelated to the cluster-issuer `system:serviceaccount:` subjects in steps 1–3.
 
 ## Plugins — wire the environment to a registry
 
