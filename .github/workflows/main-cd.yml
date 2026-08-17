@@ -313,9 +313,11 @@ jobs:
       # 🚨 So the WINDOW controls coalescing, and the RECONCILE CADENCE controls the tail — they
       # are not the same knob, and raising the window does not delay a merge by the window. Both
       # were 3 h until 2026-08-17, which is why a merge could sit unpublished that long; the
-      # maintainer rejected that ("3 hour window is not acceptable"). Window now 30 min (repo var),
-      # ticks every 30 min: a lone fix more than 30 min after the last publish ships at once, and
-      # a batched one waits at most one tick.
+      # maintainer rejected that ("3 hour window is not acceptable"). Now: window **60 min** (the
+      # repo var `CD_BATCH_WINDOW_MINUTES` — this comment does not set it, so treat the variable as
+      # the authority and this line as its intent), ticks **hourly** (`23 * * * *`). A lone fix
+      # landing more than an hour after the last publish ships at once; a batched one waits at
+      # most one tick.
       # `workflow_dispatch` bypasses the window by construction (it enters via the reconcile
       # branch), so an urgent fix ships immediately with one manual run.
       # 🚨 FAILS OPEN: if the registry cannot be read, the age reports 999999 and the merge
