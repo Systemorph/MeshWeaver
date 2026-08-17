@@ -43,8 +43,8 @@
     "react-dom": "^19.2.8"
   },
   "dependencies": {
-    "@fluentui/react-components": "^9.54.0",
-    "@fluentui/react-icons": "^2.0.260",
+    "@fluentui/react-components": "^9.74.6",
+    "@fluentui/react-icons": "^2.0.337",
     "@monaco-editor/react": "^4.7.0",
     "chart.js": "^4.4.1",
     "react-markdown": "^10.1.0",
