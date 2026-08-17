@@ -1014,7 +1014,13 @@ jobs:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
         run: |
           set -euo pipefail
-          .github/scripts/publish-bake-bundles.sh "${{ steps.dl.outputs.bake_dir }}" meshweaver-content
+          # The third argument is the CONTENT identity (the commit this bake was taken from).
+          # Under the API-surface framework identity an internal-only merge resolves the SAME
+          # directory — without the content key the first seal would freeze that directory for
+          # the whole surface generation, and pods would keep declining its stale per-type source
+          # SHAs and recompiling. With it, a content change under an unchanged surface republishes
+          # (cheap uploads), and a truly unchanged bake still skips.
+          .github/scripts/publish-bake-bundles.sh "${{ steps.dl.outputs.bake_dir }}" meshweaver-content "${{ needs.gate.outputs.sha }}"
           {
             echo "### 📦 CI bake published"
             echo "- identity: \`$(cat "${{ steps.dl.outputs.bake_dir }}/framework-mvid.txt")\`"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# publish-bake-bundles.sh <bake-dir> <source-name>
+# publish-bake-bundles.sh <bake-dir> <source-name> [<source-sha>]
 #
 # Publishes a CI NodeType bake (the directory mw-plugin-test's --bake-output wrote: one
 # <package>.zip per package + framework-mvid.txt) to the shared storage the portals read at boot
@@ -13,6 +13,14 @@
 # makes this publication findable by the images built from the same commit). <source-name> is the
 # producing repo's segment (e.g. meshweaver-content, plugins, education) so multiple independent
 # producers publish without clobbering; the bundle manifests inside carry the exact source SHA.
+#
+# <source-sha> is the CONTENT identity — the producing repo's commit the bake was taken from
+# (what the caller passed to mw-plugin-test --source-sha). The publication key is content ×
+# framework: a sealed directory is skipped only when BOTH match (see the sealed-skip below).
+# Omitting it degrades the skip to framework-identity-only — correct for a producer whose content
+# lives in the framework repo itself, but a NODE repo must pass it: its content changes while the
+# framework identity stays put, and a framework-only skip would freeze its first publication for
+# the whole framework release.
 #
 # ENVIRONMENT
 #   BAKE_PUBLISH_TARGETS   whitespace-separated targets, each  <storage-account>/<file-share>
@@ -30,11 +38,15 @@
 # step that silently ships nothing is exactly the regression (#1347 → #1660) this lane fixes.
 set -euo pipefail
 
-BAKE_DIR="${1:?usage: publish-bake-bundles.sh <bake-dir> <source-name>}"
-SOURCE="${2:?usage: publish-bake-bundles.sh <bake-dir> <source-name>}"
+BAKE_DIR="${1:?usage: publish-bake-bundles.sh <bake-dir> <source-name> [<source-sha>]}"
+SOURCE="${2:?usage: publish-bake-bundles.sh <bake-dir> <source-name> [<source-sha>]}"
+SOURCE_SHA="${3:-}"
 
-if [ -z "${BAKE_PUBLISH_TARGETS:-}" ]; then
-  echo "::error::BAKE_PUBLISH_TARGETS is not set — provision the repo variable with the portals' storage targets (<account>/<share>[/<base-path>], whitespace-separated). The CI bake cannot reach any portal without it."
+# Whitespace-only counts as unset: `for target in $BAKE_PUBLISH_TARGETS` would iterate zero
+# times and the script would report success having published nowhere — the silent-nothing
+# outcome this script exists to make impossible.
+if [ -z "${BAKE_PUBLISH_TARGETS:-}" ] || ! grep -q '[^[:space:]]' <<<"${BAKE_PUBLISH_TARGETS:-}"; then
+  echo "::error::BAKE_PUBLISH_TARGETS is not set (or holds no targets) — provision the repo variable with the portals' storage targets (<account>/<share>[/<base-path>], whitespace-separated). The CI bake cannot reach any portal without it."
   exit 1
 fi
 
@@ -44,6 +56,12 @@ if [ ! -s "$IDENTITY_FILE" ]; then
   exit 1
 fi
 IDENTITY="$(tr -d '[:space:]' < "$IDENTITY_FILE")"
+# -s passes a whitespace-only file; an empty identity would silently publish under
+# 'prebuilt-bundles//<source>' — a directory no pod's identity ever resolves to.
+if [ -z "$IDENTITY" ]; then
+  echo "::error::$IDENTITY_FILE holds only whitespace — the bake carries no framework identity, so nothing can adopt it."
+  exit 1
+fi
 
 shopt -s nullglob
 BUNDLES=("$BAKE_DIR"/*.zip)
@@ -55,12 +73,31 @@ fi
 # The completeness sentinel (must match ShippedPrebuiltBundles.CompletionSentinelFileName): its
 # PRESENCE means "every bundle of this publication landed", because it is uploaded strictly LAST.
 # Its content lists the bundle set, so the reader can detect a listed-but-missing bundle too.
+#
+# 🚨 The local copy lives in a temp DIRECTORY under its REAL name, and the upload below targets
+# the destination DIRECTORY (not "$dest/$SENTINEL"): `az storage file upload` silently treats an
+# EXTENSIONLESS --path as a directory and appends the source basename — so uploading a mktemp
+# file to "$dest/_complete" actually attempts "$dest/_complete/tmp.XXXX" and fails
+# `ParentNotFound` every time, while every ".zip" beside it lands fine. Verified live against the
+# portals' Azure Files share 2026-08-17; with the naive shape the seal step can never succeed and
+# every publication stays torn (unreadable to portals) forever.
 SENTINEL="_complete"
-SENTINEL_LOCAL=$(mktemp)
+SENTINEL_LOCAL_DIR=$(mktemp -d)
+trap 'rm -rf "$SENTINEL_LOCAL_DIR"' EXIT
+SENTINEL_LOCAL="$SENTINEL_LOCAL_DIR/$SENTINEL"
 for zip in "${BUNDLES[@]}"; do basename "$zip"; done | sort > "$SENTINEL_LOCAL"
 
-publish_one_target() { # <account> <share> <dest-dir>
-  local account="$1" share="$2" dest="$3" path="" part
+# The CONTENT identity marker: which source commit this publication was baked from. It is NOT
+# part of the reader's contract (SeedPublishedRoot seeds only what the sentinel lists; extra
+# files are ignored) — it exists solely so the sealed-skip below can compare content, not just
+# framework identity. Written BEFORE the sentinel, so a sealed directory always carries a
+# consistent marker.
+SOURCE_MARKER="source-commit.txt"
+SOURCE_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$SOURCE_MARKER"
+printf '%s\n' "${SOURCE_SHA:-unknown}" > "$SOURCE_MARKER_LOCAL"
+
+publish_one_target() { # <account> <share> <dest-dir> <resealing>
+  local account="$1" share="$2" dest="$3" resealing="$4" path="" part
   # az storage directory create is not recursive and errors on an existing directory on some CLI
   # versions — create each level only when absent.
   local IFS='/'
@@ -74,6 +111,14 @@ publish_one_target() { # <account> <share> <dest-dir>
         --name "$path" --auth-mode login --backup-intent --only-show-errors > /dev/null
     fi
   done
+  # Republishing OVER a sealed directory: UNSEAL first. Readers must never seed a mid-replace
+  # mix of old and new bundles under a stale sentinel — deleting the sentinel returns the
+  # directory to the not-yet-complete state readers skip, and the re-seal below closes it again.
+  if [ "$resealing" = "true" ]; then
+    az storage file delete --account-name "$account" --share-name "$share" \
+      --path "$dest/$SENTINEL" --auth-mode login --backup-intent --only-show-errors > /dev/null
+    echo "unsealed: $account/$share/$dest ($SENTINEL removed — content changed, republishing)"
+  fi
   local zip
   for zip in "${BUNDLES[@]}"; do
     az storage file upload --account-name "$account" --share-name "$share" \
@@ -81,14 +126,21 @@ publish_one_target() { # <account> <share> <dest-dir>
       --auth-mode login --backup-intent --only-show-errors > /dev/null
     echo "published: $account/$share/$dest/$(basename "$zip")"
   done
+  # 🚨 Both marker uploads pass the DIRECTORY as --path on purpose — the CLI appends the source
+  # basename. An extensionless "$dest/$SENTINEL" --path would be silently re-interpreted as a
+  # DIRECTORY and fail ParentNotFound (see the SENTINEL_LOCAL comment above).
+  az storage file upload --account-name "$account" --share-name "$share" \
+    --path "$dest" --source "$SOURCE_MARKER_LOCAL" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null
   # LAST write — the atomic completeness marker. Anything that dies before this line leaves the
   # directory sentinel-less: unreadable to portals, re-published wholesale by the next run.
   az storage file upload --account-name "$account" --share-name "$share" \
-    --path "$dest/$SENTINEL" --source "$SENTINEL_LOCAL" \
+    --path "$dest" --source "$SENTINEL_LOCAL" \
     --auth-mode login --backup-intent --only-show-errors > /dev/null
-  echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s))"
+  echo "sealed: $account/$share/$dest/$SENTINEL (${#BUNDLES[@]} bundle(s), source ${SOURCE_SHA:-unknown})"
 }
 
+PUBLISHED=0
 for target in $BAKE_PUBLISH_TARGETS; do
   ACCOUNT="${target%%/*}"
   REST="${target#*/}"
@@ -100,9 +152,11 @@ for target in $BAKE_PUBLISH_TARGETS; do
     exit 1
   fi
   DEST="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
-  # "Rebuild only when we need to" applies to the publish too (#1660 WS3): the identity is the
-  # API-surface hash, so an internal-only merge resolves the SAME identity as the previous one —
-  # its bake is byte-for-byte what is already published.
+  # "Rebuild only when we need to" applies to the publish too (#1660 WS3), but the key is
+  # CONTENT × FRAMEWORK: a sealed directory is already-published only when the framework
+  # identity (the directory) AND the source commit (the marker) both match. A framework-only
+  # skip would freeze a node repo's FIRST publication for the whole framework release — every
+  # later content merge resolves the same framework identity, finds the seal, and ships nothing.
   #
   # 🚨 The skip keys on the _complete SENTINEL, never on "any file exists": the sentinel is
   # written LAST, after every bundle uploaded, so a publish that died mid-way (cancelled run,
@@ -113,12 +167,28 @@ for target in $BAKE_PUBLISH_TARGETS; do
   complete=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
     --path "$DEST/$SENTINEL" --auth-mode login --backup-intent --query exists -o tsv \
     --only-show-errors 2>/dev/null || echo false)
+  resealing=false
   if [ "$complete" = "true" ]; then
-    echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication under $DEST ($SENTINEL present) — surface unchanged, bake already published; skipping."
-    continue
+    published_sha=$(az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
+      --path "$DEST/$SOURCE_MARKER" --dest "$SENTINEL_LOCAL_DIR/remote-$SOURCE_MARKER" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1 \
+      && tr -d '[:space:]' < "$SENTINEL_LOCAL_DIR/remote-$SOURCE_MARKER" || echo "")
+    if [ -n "${SOURCE_SHA:-}" ] && [ "$published_sha" = "$SOURCE_SHA" ]; then
+      echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication of THIS content under $DEST (sentinel present, source $published_sha) — already published; skipping."
+      continue
+    fi
+    if [ -z "${SOURCE_SHA:-}" ]; then
+      # No content identity given (framework-repo producer): the framework identity IS the
+      # content key, so a sealed directory is already this publication.
+      echo "::notice::$ACCOUNT/$SHARE holds a COMPLETE publication under $DEST ($SENTINEL present) — surface unchanged, bake already published; skipping."
+      continue
+    fi
+    resealing=true
+    echo "sealed publication under $DEST is from source '${published_sha:-<unrecorded>}' but this bake is from '$SOURCE_SHA' — republishing."
   fi
   echo "→ $ACCOUNT/$SHARE: $DEST (${#BUNDLES[@]} bundle(s))"
-  publish_one_target "$ACCOUNT" "$SHARE" "$DEST"
+  publish_one_target "$ACCOUNT" "$SHARE" "$DEST" "$resealing"
+  PUBLISHED=$((PUBLISHED + 1))
 done
 
-echo "bake published: identity=$IDENTITY source=$SOURCE bundles=${#BUNDLES[@]}"
+echo "bake published: identity=$IDENTITY source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} targets-published=$PUBLISHED"
