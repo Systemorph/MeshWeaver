@@ -597,6 +597,7 @@
   "ui.mdNodeToUpdateMissing": "**Error:** Could not find MeshNode to update.",
   "ui.mdRecyclingHub": "**Recycling hub…** redirecting in a moment.",
   "ui.mdStaleBuildAvailable": "**A newer build of this type is available.** This page is still running the previously compiled one.",
+  "ui.mdRecycleConfirm": "**Recycle this hub?** The node's hub is torn down and rebuilt on the next visit, picking up the latest compiled build. Nothing is deleted and no content changes.",
   "ui.mdFillFieldsGeneratePlan": "*Fill in the fields and click **Generate plan**.*",
   "ui.accessDeniedPlain": "Access denied.",
   "ui.accessDeniedAdminsOnly": "Access denied — platform admins only.",

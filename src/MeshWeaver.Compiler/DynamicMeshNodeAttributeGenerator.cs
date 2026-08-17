@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Collections.Immutable;
+using System.Text;
 using System.Text.RegularExpressions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
@@ -11,6 +12,96 @@ namespace MeshWeaver.Compiler;
 /// </summary>
 internal class DynamicMeshNodeAttributeGenerator
 {
+    /// <summary>
+    /// The namespaces the generated skeleton puts in scope for user code. Immutable, written once,
+    /// never mutated at runtime — a constant lookup, not a cache.
+    ///
+    /// <para>🚨 This list is the ONE declaration of "what a NodeType source can assume is imported",
+    /// and BOTH compile paths must read it from here. The emit path gets it by concatenating user
+    /// code INTO the skeleton file (<c>GenerateAttributeSource</c>, so these are ordinary
+    /// file-scoped usings that cover the concatenated whole); the language-service path keeps one
+    /// syntax tree PER source file for Monaco positions, so it gets it from
+    /// <see cref="GenerateGlobalUsingsSource"/> instead. Two renderings of one list — never two
+    /// lists (Systemorph/MeshWeaver#1802).</para>
+    /// </summary>
+    internal static readonly ImmutableArray<string> StandardUsings =
+    [
+        "System",
+        "System.Collections.Generic",
+        "System.ComponentModel",
+        "System.ComponentModel.DataAnnotations",
+        "System.Linq",
+        "System.Reactive.Linq",
+        "System.Text.Json.Serialization",
+        "MeshWeaver.Mesh",
+        "MeshWeaver.Messaging",
+        "MeshWeaver.Data",
+        "MeshWeaver.Domain",
+        "MeshWeaver.Graph",
+        "MeshWeaver.Graph.Configuration",
+        "MeshWeaver.Layout",
+        "MeshWeaver.Layout.Composition",
+        "MeshWeaver.Layout.Domain",
+        "MeshWeaver.Layout.Views",
+        "MeshWeaver.Application.Styles",
+        "MeshWeaver.ContentCollections",
+        "MeshWeaver.Mesh.Services",
+        "Microsoft.Extensions.DependencyInjection",
+        "Microsoft.Extensions.Configuration",
+    ];
+
+    /// <summary>
+    /// Renders the compile's import scope as <c>global using</c> directives, for the
+    /// language-service path — which keeps ONE SYNTAX TREE PER SOURCE FILE so a diagnostic, hover
+    /// or completion carries the MeshNode path the user is actually editing.
+    ///
+    /// <para><b>Why this exists (#1802).</b> The emit path concatenates every source into the
+    /// skeleton file, so <see cref="StandardUsings"/> and every file's own <c>using</c>s cover the
+    /// whole compilation. A C# <c>using</c> is <b>file-scoped</b>, so under per-file trees the
+    /// skeleton's imports reach NOTHING — and the language service reported phantom CS0246/CS0308
+    /// on source that compiles and ships. <c>global using</c> is the language feature for exactly
+    /// this: declared in one tree, in scope for the whole compilation. That restores emit's scope
+    /// WITHOUT collapsing the per-file trees the language service exists to provide.</para>
+    ///
+    /// <para>The union of the authored <c>using</c>s is included for the same reason: concatenation
+    /// hoists them to the top of the single emitted file, so under emit every file already sees
+    /// every other file's imports. Reproducing that here uses the SAME
+    /// <see cref="ExtractUsingStatements"/> the emit path hoists with, so the two cannot drift.</para>
+    /// </summary>
+    /// <param name="userSources">The effective source bodies of the compilation — for a speculative
+    /// check, with the proposed body already substituted, so a <c>using</c> the user just typed
+    /// counts.</param>
+    public string GenerateGlobalUsingsSource(IEnumerable<string?> userSources)
+    {
+        // Ordinal set: `using` directives are case-sensitive, and a stable order keeps the
+        // generated document byte-identical across calls (it is a cache key upstream).
+        var namespaces = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var ns in StandardUsings)
+            namespaces.Add(ns);
+
+        foreach (var code in userSources)
+        {
+            var (usings, _) = ExtractUsingStatements(code);
+            foreach (var directive in usings)
+            {
+                // ExtractUsingStatements returns whole lines ("using X;", possibly indented, and
+                // possibly `using static X;` or an alias). Only a plain namespace import can be
+                // promoted to `global using` verbatim; an alias/static form is emitted as-is with
+                // the global modifier, which C# also accepts.
+                var trimmed = directive.Trim();
+                if (trimmed.StartsWith("using ", StringComparison.Ordinal))
+                    namespaces.Add(trimmed["using ".Length..].TrimEnd(';', ' '));
+            }
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("// Auto-generated import scope for language services — do not edit.");
+        sb.AppendLine("// Mirrors the emit path's concatenated-file scope; see #1802.");
+        foreach (var ns in namespaces)
+            sb.AppendLine($"global using {ns};");
+        return sb.ToString();
+    }
+
     /// <summary>
     /// Generates the complete C# source code for a dynamic node assembly.
     /// </summary>
@@ -40,29 +131,10 @@ internal class DynamicMeshNodeAttributeGenerator
         sb.AppendLine("// Source file for debugging support - do not edit manually");
         sb.AppendLine();
 
-        // Using statements (standard ones)
-        sb.AppendLine("using System;");
-        sb.AppendLine("using System.Collections.Generic;");
-        sb.AppendLine("using System.ComponentModel;");
-        sb.AppendLine("using System.ComponentModel.DataAnnotations;");
-        sb.AppendLine("using System.Linq;");
-        sb.AppendLine("using System.Reactive.Linq;");
-        sb.AppendLine("using System.Text.Json.Serialization;");
-        sb.AppendLine("using MeshWeaver.Mesh;");
-        sb.AppendLine("using MeshWeaver.Messaging;");
-        sb.AppendLine("using MeshWeaver.Data;");
-        sb.AppendLine("using MeshWeaver.Domain;");
-        sb.AppendLine("using MeshWeaver.Graph;");
-        sb.AppendLine("using MeshWeaver.Graph.Configuration;");
-        sb.AppendLine("using MeshWeaver.Layout;");
-        sb.AppendLine("using MeshWeaver.Layout.Composition;");
-        sb.AppendLine("using MeshWeaver.Layout.Domain;");
-        sb.AppendLine("using MeshWeaver.Layout.Views;");
-        sb.AppendLine("using MeshWeaver.Application.Styles;");
-        sb.AppendLine("using MeshWeaver.ContentCollections;");
-        sb.AppendLine("using MeshWeaver.Mesh.Services;");
-        sb.AppendLine("using Microsoft.Extensions.DependencyInjection;");
-        sb.AppendLine("using Microsoft.Extensions.Configuration;");
+        // Using statements (standard ones) — read from the single declaration so the emit path and
+        // the language service's `global using` rendering cannot drift apart (#1802).
+        foreach (var ns in StandardUsings)
+            sb.AppendLine($"using {ns};");
 
         // User-defined using statements (extracted from code files)
         foreach (var userUsing in userUsings)
