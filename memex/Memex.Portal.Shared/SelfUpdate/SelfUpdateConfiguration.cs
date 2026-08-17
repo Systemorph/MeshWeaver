@@ -24,6 +24,12 @@ public static class SelfUpdateConfiguration
             // without self-update simply has no policy provider and the PluginCatalog default
             // (allowed) applies. Platform-neutral (a storage read), so no browser guard.
             services.AddSingleton<MeshWeaver.PluginCatalog.IModuleUpdatePolicy, PlatformModuleUpdatePolicy>();
+            // The deployment gate (#1754): "may this environment be rolled to that release?".
+            // Registered unconditionally — the SAME verdict has to be readable by all three paths
+            // that roll a version (the poller below, CD's post-promote assertion and a manual
+            // kubectl set image via /api/plugins/is-updatable), and a gate wired for only one of
+            // them is not a gate. Platform-neutral (a query plus file-system reads).
+            services.AddSingleton<ReleaseAvailabilityService>();
             // Bind from configuration when the caller passes nothing. Without this the defaults were
             // baked into the image: PollInterval sat at 6h with NO way for an environment to change
             // it, and a SelfUpdate__PollInterval in the configmap silently did nothing — the failure
