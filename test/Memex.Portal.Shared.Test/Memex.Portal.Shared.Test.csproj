@@ -19,6 +19,7 @@
          (they ship via modules/), so the module-fold tests anchor the real DLLs themselves. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Markdown.Export\MeshWeaver.Markdown.Export.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.OgCard\MeshWeaver.OgCard.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Courses\MeshWeaver.Courses.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Observability\MeshWeaver.Observability.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Notifications.Channels\MeshWeaver.Notifications.Channels.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.AI.OpenAI\MeshWeaver.AI.OpenAI.csproj" />

@@ -64,6 +64,7 @@
     <Project Path="src/MeshWeaver.Compiler/MeshWeaver.Compiler.csproj" />
     <Project Path="src/MeshWeaver.Connection.Orleans/MeshWeaver.Connection.Orleans.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections/MeshWeaver.ContentCollections.csproj" />
+    <Project Path="src/MeshWeaver.Courses/MeshWeaver.Courses.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections.Indexing/MeshWeaver.ContentCollections.Indexing.csproj" />
     <Project Path="src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
     <Project Path="src/MeshWeaver.Connection.SignalR/MeshWeaver.Connection.SignalR.csproj" />
