@@ -4,7 +4,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Mcp;
+namespace MeshWeaver.Hosting.AspNetCore;
 
 /// <summary>
 /// Resolves a per-caller hosted hub at <c>portal/{prefix}-{sessionId}</c> for
@@ -16,6 +16,13 @@ namespace MeshWeaver.Mcp;
 /// it derives the session id from the request and hands off to
 /// <see cref="SessionHubFactory"/>, which owns the hub materialisation and is
 /// shared with the headless surfaces that have no <see cref="HttpContext"/>.
+/// </para>
+///
+/// <para>
+/// 🚨 It lives PLATFORM-side rather than in <c>MeshWeaver.Mcp</c> because MCP is a
+/// module now (<c>Modules:Assemblies</c>) while the REST mirror <c>/api/mesh/*</c> is
+/// not: a delisted MCP module must not take the REST surface's hub routing with it, and
+/// a second copy is exactly the drift this helper exists to prevent.
 /// </para>
 ///
 /// <para>

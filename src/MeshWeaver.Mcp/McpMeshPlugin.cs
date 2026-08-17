@@ -7,6 +7,7 @@ using MeshWeaver.AI;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.GitSync;
+using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.InstanceSync;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -1164,15 +1165,4 @@ Examples:
             </html>
             """;
     }
-}
-
-/// <summary>
-/// Configuration options for MCP integration.
-/// </summary>
-public class McpConfiguration
-{
-    /// <summary>
-    /// Base URL for the MeshWeaver UI. Used for generating NavigateTo URLs.
-    /// </summary>
-    public string BaseUrl { get; set; } = string.Empty;
 }
