@@ -612,10 +612,12 @@ jobs:
     # it gives the unbounded operation INSIDE it a bound, so a stall is reported as the infra
     # failure it is instead of consuming the whole job silently.
     #
-    # Worst case, counting EVERY term: 3 attempts × (240 s timeout + up to 30 s `--kill-after`
-    # grace, if the process ignores SIGTERM) + 10 s + 20 s backoff ≈ 14 min — inside the shard's
-    # 20-minute `timeout-minutes`, with ~6 min of headroom for the rest of the job. A healthy
-    # install takes well under a minute. 🚨 Keep this arithmetic honest if you change either bound:
+    # Worst case, counting EVERY term: 3 attempts × (60 s apt-lock wait + 180 s timeout + up to
+    # 30 s `--kill-after` grace, if the process ignores SIGTERM) + 10 s + 20 s backoff ≈ 14 min —
+    # inside the shard's 20-minute `timeout-minutes`, with ~6 min of headroom for the rest of the
+    # job. A healthy install takes well under a minute. 🚨 Keep this arithmetic honest if you
+    # change ANY of the three bounds — adding the apt wait is exactly why the install timeout came
+    # down from 240 s, so that the sum did not creep up on the job cap:
     # it is the reason the step cannot itself become the thing that exhausts the job, which is the
     # exact failure being fixed. (`timeout` exists on the Linux runners; the AGENTS.md warning
     # about it is specific to the macOS dev host.)
@@ -625,13 +627,27 @@ jobs:
       env:
         PLAYWRIGHT_VERSION: 1.62.1
         PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
-        BROWSER_INSTALL_TIMEOUT: 240
+        BROWSER_INSTALL_TIMEOUT: 180
+        APT_LOCK_WAIT: 60
       run: |
         set -euo pipefail
         sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
         sudo chown "$(id -u):$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
         ok=0
         for attempt in 1 2 3; do
+          # 🚨 WAIT FOR APT BEFORE EACH ATTEMPT. `--with-deps` shells out to apt-get, and the
+          # runner image runs its own background apt (unattended-upgrades / the daily timer). When
+          # that holds the lock, playwright exits 100 with
+          #   E: Could not get lock /var/lib/apt/lists/lock. It is held by process N (apt-get)
+          # which is CONTENTION, not a broken download — so retrying immediately just re-races the
+          # same holder. Observed on this very PR (run 32077919296, shard 1): all three attempts
+          # failed that way inside 30 s, because the backoff was shorter than the other apt run.
+          # `flock -w N … true` waits for the holder to finish and releases at once, so playwright
+          # takes the lock itself rather than us holding it across its whole run (which would
+          # deadlock). Bounded, like everything else here: it can wait, it cannot hang. `|| true`
+          # because a timed-out wait is not a reason to skip the attempt — apt may well be free by
+          # the time npx reaches it, and the attempt itself is bounded anyway.
+          sudo flock -w "$APT_LOCK_WAIT" /var/lib/apt/lists/lock true 2>/dev/null || true
           rc=0
           timeout --signal=TERM --kill-after=30 "$BROWSER_INSTALL_TIMEOUT" \
             npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium || rc=$?
