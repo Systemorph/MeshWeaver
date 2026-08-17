@@ -1832,8 +1832,9 @@ public static class MeshNodeStreamExtensions
     ///     <see cref="ReadTimeoutBehavior.EmitNull"/>.</item>
     /// </list>
     /// Errors that <see cref="GetMeshNode"/> already surfaces still surface here as
-    /// <c>OnError</c>: <see cref="ErrorType.Unauthorized"/>, a second consecutive
-    /// <see cref="ErrorType.ShuttingDown"/>, and a timeout under
+    /// <c>OnError</c>: <see cref="ErrorType.Unauthorized"/>, an
+    /// <see cref="ErrorType.ShuttingDown"/> that persists past the whole budget (the paced
+    /// re-probe loop exhausted — <see cref="AddressRecyclingException"/>), and a timeout under
     /// <see cref="ReadTimeoutBehavior.Throw"/>.</para>
     /// </summary>
     /// <param name="hub">The hub the caller holds (see <see cref="GetMeshNode"/>).</param>
@@ -1866,8 +1867,25 @@ public static class MeshNodeStreamExtensions
             // path emits null and the outer observer disposes, but the inner
             // Subscribe keeps the hub-level callback registered, surfacing as
             // a "pending callback at dispose" Quiescing-watchdog failure.
-            // One re-probe only: a ShuttingDown answered twice is surfaced, never collapsed to null.
-            var reProbed = 0;
+            // ♻️ Recycling (ShuttingDown) is re-probed WITHIN the caller's budget, not a fixed
+            // number of times. ErrorType.ShuttingDown's own contract (Events.cs) is "retry-worthy,
+            // never terminal … the sender must read this as 'ask again', not 'gone'" — and the
+            // previous one-immediate-re-probe cap violated it under any recycle longer than a few
+            // milliseconds: a package-root hub whose dispose wedges for the 8s force-teardown
+            // watchdog window (MeshWeaver#1701) NACKed BOTH probes within ~1s, and a 15s-budget
+            // compile-path read settled terminally failed with 14s of its budget unused — every
+            // NodeType compile reading the root in that window went CompilationStatus=Error and
+            // the satellite gate reported phantom, module-varying "compile failures". The first
+            // NACK still earns an IMMEDIATE re-probe (a normal recycle completes in well under a
+            // second, so the healthy path stays zero-latency); every further NACK re-probes on the
+            // pacing timer until the budget CTS fires. Termination is unchanged — the budget is
+            // the caller's own, never raised here — and a recycler that outlasts it surfaces the
+            // typed AddressRecyclingException (never null for Throw callers; Unavailable — the
+            // timeout-shaped indeterminate — for EmitNull callers, whose documented contract is
+            // "indeterminate ⇒ treat as absent").
+            var shuttingDownNacks = 0;
+            Exception? lastRecyclingNack = null;
+            var reProbePacing = new SerialDisposable();
             // SerialDisposable, not a bare IDisposable: the ShuttingDown re-probe below REPLACES this
             // subscription, and assigning into a SerialDisposable that has already been disposed
             // disposes the newcomer immediately — so a teardown racing the re-probe cannot leak the
@@ -1891,6 +1909,38 @@ public static class MeshNodeStreamExtensions
                 observer.OnError(error);
             }
 
+            // ♻️ The recycler outlasted the caller's whole budget. Truthful and typed — the
+            // caller learns the address was RECYCLING (never "not found", never a bare stall)
+            // and can classify it as an availability fact (ApplyCompileFailure stamps
+            // CompilationStatus.Unavailable on it, exactly like SourceDiscoveryUnavailable).
+            // Routed by onTimeout the same way the plain timeout is: EmitNull callers opted
+            // into "indeterminate ⇒ absent" and get the Unavailable outcome (null via
+            // GetMeshNode); Throw callers get the error surfaced.
+            void EmitRecyclingExhausted()
+            {
+                var error = new AddressRecyclingException(
+                    $"GetMeshNode('{path}'): the owning hub was still recycling (ShuttingDown) after "
+                    + $"{Volatile.Read(ref shuttingDownNacks)} probe(s) over {started.Elapsed.TotalSeconds:F1}s "
+                    + $"(budget {budget.TotalSeconds:F0}s) — the address is recycling, NOT absent. "
+                    + "Surfacing rather than returning null, which the caller cannot tell apart from "
+                    + "'node not found'. Retry the read once the address has reactivated.",
+                    lastRecyclingNack);
+                try
+                {
+                    hub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.Mesh.GetMeshNode")
+                        ?.LogWarning("{Message}", error.Message);
+                }
+                catch
+                {
+                    // Logging must never mask the verdict it is reporting.
+                }
+                if (onTimeout == ReadTimeoutBehavior.EmitNull)
+                    EmitOnce(NodeReadOutcome.Unavailable(error));
+                else
+                    EmitError(error);
+            }
+
             // ⏱️ TIMEOUT IS NOT "NOT FOUND". A read that gave up knows nothing about the node;
             // collapsing that into the same `null` the not-found path emits made every caller
             // silently substitute "missing" for "the mesh stalled" — and made the stall itself
@@ -1904,6 +1954,14 @@ public static class MeshNodeStreamExtensions
             cts.Token.Register(() =>
             {
                 if (Volatile.Read(ref emitted) != 0) return;
+                // ♻️ The budget elapsed while the address was recycling: the paced re-probe loop
+                // above never got a real answer. Say THAT — "the owning per-node hub never
+                // answered" is the wrong diagnosis when it answered ShuttingDown on every probe.
+                if (Volatile.Read(ref shuttingDownNacks) > 0)
+                {
+                    EmitRecyclingExhausted();
+                    return;
+                }
                 var elapsed = started.Elapsed;
                 string diagnostics;
                 // The pending-request snapshot must come from the ISSUING hub — that is where our
@@ -2079,30 +2137,52 @@ public static class MeshNodeStreamExtensions
                                 // NACK existed the same race HUNG for 60s; the symptom migrated from a stall
                                 // to a confident wrong answer.
                                 //
-                                // Re-issue ONCE inside the caller's remaining budget. This is not a
-                                // retry-to-paper-over: the re-probe lands on a FRESH activation (a
+                                // Re-issue inside the caller's remaining budget. This is not a
+                                // retry-to-paper-over: each re-probe lands on a FRESH activation attempt (a
                                 // SubscribeRequest/GetDataRequest creates one on arrival) and terminates
                                 // authoritatively — if the node is genuinely gone, routing answers NotFound and
-                                // we emit null; if it is still shutting down, we surface the error rather than
-                                // lie. Exactly the reasoning MeshNodeStreamCache.IsTransientOwnerFailure already
-                                // applies on the live-stream path, where "is shutting down" is classified
-                                // transient for this same reason.
+                                // we emit null; if it recycles for the ENTIRE budget, we surface the typed
+                                // recycling verdict rather than lie. Exactly the reasoning
+                                // MeshNodeStreamCache.IsTransientOwnerFailure already applies on the
+                                // live-stream path, where "is shutting down" is classified transient for this
+                                // same reason. The first NACK re-probes immediately (zero latency for the
+                                // sub-second recycle); later NACKs ride the pacing timer so a wedged dispose
+                                // (the 8s force-teardown window, MeshWeaver#1701) is polled, not hammered.
                                 if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
                                 {
-                                    if (Interlocked.Exchange(ref reProbed, 1) == 0
-                                        && !cts.IsCancellationRequested)
+                                    lastRecyclingNack = ex;
+                                    var probes = Interlocked.Increment(ref shuttingDownNacks);
+                                    if (!cts.IsCancellationRequested && Volatile.Read(ref emitted) == 0)
                                     {
-                                        logger?.LogDebug(
-                                            "GetMeshNode: {Path} NACKed ShuttingDown — the address is recycling, "
-                                            + "not absent. Re-probing once within the remaining budget.", path);
-                                        Issue();
+                                        if (probes == 1)
+                                        {
+                                            logger?.LogDebug(
+                                                "GetMeshNode: {Path} NACKed ShuttingDown — the address is recycling, "
+                                                + "not absent. Re-probing immediately within the remaining budget.",
+                                                path);
+                                            Issue();
+                                        }
+                                        else
+                                        {
+                                            logger?.LogDebug(
+                                                "GetMeshNode: {Path} is still recycling after {Probes} probe(s) — "
+                                                + "re-probing on the pacing timer within the remaining budget.",
+                                                path, probes);
+                                            // Observable.Timer runs on the DefaultScheduler — OFF any hub action
+                                            // block. SerialDisposable: teardown (or a superseding NACK) disposes
+                                            // the pending tick, so no timer outlives the read.
+                                            reProbePacing.Disposable = Observable
+                                                .Timer(RecyclingReProbePace)
+                                                .Subscribe(_ =>
+                                                {
+                                                    if (!cts.IsCancellationRequested
+                                                        && Volatile.Read(ref emitted) == 0)
+                                                        Issue();
+                                                });
+                                        }
                                         return;
                                     }
-                                    EmitError(new InvalidOperationException(
-                                        $"GetMeshNode('{path}'): the owning hub answered ShuttingDown twice — "
-                                        + "the address is recycling, NOT absent. Surfacing rather than "
-                                        + "returning null, which the caller cannot tell apart from "
-                                        + "'node not found'. Retry the read.", ex));
+                                    EmitRecyclingExhausted();
                                     return;
                                 }
 
@@ -2131,8 +2211,31 @@ public static class MeshNodeStreamExtensions
 
             return Disposable.Create(() =>
             {
+                reProbePacing.Dispose();
                 innerSubscription.Dispose();
                 cts.Dispose();
             });
         });
+
+    /// <summary>
+    /// How long a recycling (ShuttingDown-NACKing) address rests between re-probes after the
+    /// first immediate one. Short enough that a read resumes well within a normal read budget
+    /// once the address reactivates; long enough that a wedged dispose (the 8s force-teardown
+    /// watchdog window) is polled a handful of times, not hammered. The caller's own budget —
+    /// never this constant — bounds the loop.
+    /// </summary>
+    private static readonly TimeSpan RecyclingReProbePace = TimeSpan.FromMilliseconds(500);
 }
+
+/// <summary>
+/// The owning hub of a read address answered <see cref="ErrorType.ShuttingDown"/> on every probe
+/// for the reader's ENTIRE budget — the address is RECYCLING, not absent (routing mints
+/// ShuttingDown deliberately instead of NotFound for a live-but-recycling address). An
+/// availability fact, never a verdict about the node or about code that reads it: compile
+/// pipelines classify it like <c>SourceDiscoveryUnavailableException</c>
+/// (<c>CompilationStatus.Unavailable</c>), and callers retry once the address has reactivated.
+/// Minted only by <see cref="MeshNodeStreamExtensions.GetMeshNodeOutcome"/> after its
+/// budget-bounded, paced re-probe loop (MeshWeaver#1701) is exhausted.
+/// </summary>
+public sealed class AddressRecyclingException(string message, Exception? inner)
+    : InvalidOperationException(message, inner);
