@@ -40,6 +40,21 @@ namespace Memex.Portal.Shared.Api;
 /// <see cref="PluginGrant"/> that says which packages that install may read. Same gate as
 /// <c>/api/plugins</c>, deliberately: a second entitlement path is a second thing to get wrong, and
 /// this one is already what purchases are recorded against.</para>
+///
+/// <para>🚨 <b>The key is TWO decisions, and for a long time only the first one ran (#1772).</b> The
+/// filter below authenticates — a valid <c>mwi_</c> key or 401 — and <see cref="IsGranted"/>
+/// authorizes, per package, on <b>both</b> routes. Until #1772 the authenticated caller was written
+/// into <see cref="HttpContext.Items"/> and never read back, so any registered instance could
+/// download every installed package's bundle, paid courses included, while this very paragraph said
+/// otherwise. An instance key is provisioned to every registered installation; it is identity, never
+/// entitlement. The grant model is <see cref="PluginGrantEntry"/> matched against the install
+/// record's <see cref="PackageManifest.Source"/> — the same match <c>InstallByDefault</c> and
+/// <c>/api/plugins</c> make, so there is exactly one thing to keep honest.</para>
+///
+/// <para>🚨 <b>A refusal is byte-identical to "no such bundle"</b> (<see cref="NoSuchBundle"/>), and
+/// an ungranted package is absent from the index. The URL scheme is fully predictable, so a
+/// distinguishable refusal would be an inventory oracle over the whole catalogue — the same reasoning
+/// that made <c>/api/content</c>'s refusal identical to its not-found (#587).</para>
 /// </summary>
 public static class PluginBundleEndpoints
 {
@@ -90,7 +105,7 @@ public static class PluginBundleEndpoints
         // throws (500) instead of the 401 the filter would have returned. The rejection path must
         // not need anything but the header.
         group.MapGet("/index.json", (HttpContext http, CancellationToken ct) =>
-            Index(http, RootHub(http), ct));
+            Index(http, RootHub(http), Caller(http), ct));
 
         // 🚨 `identity`/`arch` are the CONSUMER's lane (#1751), not a filter the caller invents: they
         // say which framework build identity and which architecture the caller can actually run, and
@@ -103,10 +118,58 @@ public static class PluginBundleEndpoints
                     RootHub(http), plugin, version,
                     Requested(http, "identity", FrameworkMvid),
                     Requested(http, "arch", ReleaseArchitecture.Live),
+                    Caller(http),
                     ct));
 
         return endpoints;
     }
+
+    /// <summary>
+    /// The authenticated caller the filter stamped, or <c>null</c>.
+    ///
+    /// <para>🚨 Null can only mean the filter did not run — it has no anonymous branch, unlike
+    /// <c>/api/plugins</c>. It is therefore treated as "granted nothing" rather than "unscoped", so a
+    /// route accidentally mapped outside the group serves an empty index and a 404, never the whole
+    /// catalogue. The absence of an answer is never a yes (#1772).</para>
+    /// </summary>
+    private static AuthenticatedInstance? Caller(HttpContext http) =>
+        http.Items.TryGetValue(CallerItemKey, out var value) ? value as AuthenticatedInstance : null;
+
+    /// <summary>
+    /// 🚨 <b>THE PER-PACKAGE AUTHORIZATION</b> (#1772) — whether <paramref name="caller"/> may pull
+    /// <paramref name="package"/>, decided by the admin-owned <see cref="PluginGrant"/> its key
+    /// resolved to.
+    ///
+    /// <para>The grant is a set of <c>(source, package)</c> pairs, so the install record's
+    /// <see cref="PackageManifest.Source"/> — the registry source it was installed FROM — is what the
+    /// entry is matched against. Exactly the reading <c>PluginRegistryEndpoints</c> applies to its
+    /// listing and <c>InstanceAutoRegistrationService</c> applies to <c>InstallByDefault</c>; a
+    /// second, bundle-specific notion of entitlement would be a second thing to keep in step with
+    /// what purchases are recorded against.</para>
+    ///
+    /// <para>🚨 <b>An unstamped source fails CLOSED.</b> A record whose <c>Source</c> is null (one
+    /// written before the field existed, or installed from something that is not a configured
+    /// registry source) matches no entry at all — <see cref="PluginGrantEntry.Matches"/> compares the
+    /// source name, and <c>""</c> equals none of them. "Cannot determine" is a refusal, never a pass.
+    /// The consumer's own <c>PluginBundleClient</c> reads the resulting 404 as "no prebuilt bundle —
+    /// will compile", so the cost of that refusal is a compile, never a failed install.</para>
+    /// </summary>
+    private static bool IsGranted(AuthenticatedInstance? caller, BundleEntry package) =>
+        caller is not null && caller.Allows(package.Source ?? "", package.PluginId);
+
+    /// <summary>
+    /// 🚨 The ONE answer for a bundle this caller cannot have — used for "no such package", "no such
+    /// version" and "not granted to you" alike, so the three are byte-identical: same status, same
+    /// (empty) body, same headers.
+    ///
+    /// <para>The URL is <c>/{plugin}/{version}</c> and every plugin id in the catalogue is public
+    /// knowledge, so a distinguishable refusal (403, or a 404 with a different body) would let any
+    /// registered instance enumerate what this registry carries and at which versions — the exact
+    /// existence oracle <c>/api/content</c> closed in #587 by making its refusal identical to its
+    /// not-found. WHICH of the three it was is written to the LOG, where the caller cannot read
+    /// it.</para>
+    /// </summary>
+    private static IResult NoSuchBundle() => Results.NotFound();
 
     /// <summary>One query-string value, or the serving instance's own value when the caller did not
     /// state one. Blank is treated as absent — an empty <c>?identity=</c> is a client bug, and
@@ -130,12 +193,23 @@ public static class PluginBundleEndpoints
     /// <para>Absolute URLs are built from the REQUEST rather than configuration: an instance reached
     /// through an ingress, a port-forward or a custom domain must advertise the host the caller
     /// actually used, or every follow-up request goes somewhere it cannot reach.</para>
+    ///
+    /// <para>🚨 <b>Scoped to what the caller was GRANTED</b> (#1772, <see cref="IsGranted"/>) — an
+    /// ungranted package is simply not listed, so a caller cannot even learn it is installed here.
+    /// That is what makes the download route's refusal non-informative: with the index filtered, "not
+    /// in your index" and "404 on fetch" agree, and neither confirms existence. A caller granted
+    /// nothing gets an empty <c>bundles</c> array, indistinguishable from a registry with nothing
+    /// installed.</para>
     /// </summary>
-    private static Task<IResult> Index(HttpContext http, IMessageHub rootHub, CancellationToken ct)
+    private static Task<IResult> Index(
+        HttpContext http, IMessageHub rootHub, AuthenticatedInstance? caller, CancellationToken ct)
     {
         var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}";
 
         return InstalledPackages(rootHub, ct)
+            .Do(packages => WarnAboutUnstampedRecords(rootHub, packages))
+            .Select(packages => (IReadOnlyList<BundleEntry>)packages
+                .Where(p => IsGranted(caller, p)).ToArray())
             .SelectMany(packages => ServableModules(rootHub, packages)
                 .Select(modules => Results.Json(new
                 {
@@ -165,6 +239,35 @@ public static class PluginBundleEndpoints
                 })))
             .FirstAsync()
             .ToTask(ct);
+    }
+
+    /// <summary>
+    /// 🚨 Names, on the index request, every install record with NO <see cref="BundleEntry.Source"/>
+    /// — the records <see cref="IsGranted"/> can never match, and which are therefore servable to
+    /// nobody.
+    ///
+    /// <para>It belongs HERE rather than only on the download path, because the filtered index means
+    /// that path is never reached for such a record: a consumer polls the index, does not see the
+    /// package, and never asks for it. Without this line the whole distribution lane could go dark
+    /// with nothing in the log at all — every consumer just quietly compiling, which looks exactly
+    /// like a healthy day. Normally this logs nothing, since a record installed through any registry
+    /// lane carries its source.</para>
+    /// </summary>
+    private static void WarnAboutUnstampedRecords(
+        IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
+    {
+        var unstamped = packages.Where(p => string.IsNullOrWhiteSpace(p.Source)).ToArray();
+        if (unstamped.Length == 0)
+            return;
+
+        rootHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(PluginBundleEndpoints))
+            .LogWarning(
+                "Plugin bundles: {Count} install record(s) carry no registry source, so no "
+                + "PluginGrant can match them and their bundles are servable to NO instance: "
+                + "{Packages}. Re-install them through the registry to stamp the source (#1772).",
+                unstamped.Length,
+                string.Join(", ", unstamped.Select(p => p.PluginId).Take(MissesReported)));
     }
 
     /// <summary>
@@ -205,20 +308,45 @@ public static class PluginBundleEndpoints
     /// <para>Assembled on request rather than stored, because the inputs ARE the storage — this
     /// portal has the bake's assemblies, and a second copy kept "for distribution" is a copy that
     /// can disagree with what the portal runs.</para>
+    ///
+    /// <para>🚨 <b>The caller's grant is part of the RESOLUTION, not a check bolted on after it</b>
+    /// (#1772) — an ungranted package does not match, so there is no branch in which bytes are
+    /// assembled first and refused later, and nothing downstream has to remember to ask. Every miss
+    /// answers <see cref="NoSuchBundle"/>; which of the three it was goes to the log only.</para>
     /// </summary>
     private static Task<IResult> Bundle(
         IMessageHub rootHub, string plugin, string version, string identity, string architecture,
-        CancellationToken ct) =>
+        AuthenticatedInstance? caller, CancellationToken ct) =>
         InstalledPackages(rootHub, ct)
             .SelectMany(packages =>
             {
-                var match = packages.FirstOrDefault(p =>
+                // Named apart from the query-string reader Requested(HttpContext, …) above — one
+                // shadowing the other reads as a call to the wrong thing.
+                bool IsAsked(BundleEntry p) =>
                     string.Equals(p.PluginId, plugin, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(p.Version, version, StringComparison.OrdinalIgnoreCase));
+                    && string.Equals(p.Version, version, StringComparison.OrdinalIgnoreCase);
 
-                return match is null
-                    ? Observable.Return(Results.NotFound())
-                    : Assemble(rootHub, match, identity, architecture);
+                var match = packages.FirstOrDefault(p => IsAsked(p) && IsGranted(caller, p));
+                if (match is not null)
+                    return Assemble(rootHub, match, identity, architecture);
+
+                // The refusal is uniform on the wire; the LOG is where it is diagnosable, naming
+                // which instance asked and whether the record exists at all — including the
+                // fail-closed case an operator would otherwise chase for hours: an install record
+                // with no Source stamped can be granted by nobody (see IsGranted).
+                var installed = packages.FirstOrDefault(IsAsked);
+                rootHub.ServiceProvider.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(PluginBundleEndpoints))
+                    .LogWarning(
+                        "Plugin bundles: {Plugin}@{Version} refused for instance {Instance} — {Reason}",
+                        plugin, version, caller?.Instance.InstanceId ?? "(none)",
+                        installed is null
+                            ? "no such install record on this instance"
+                            : installed.Source is { Length: > 0 } source
+                                ? $"installed from source '{source}', which this instance's grant does not cover"
+                                : "the install record carries NO source, so no grant entry can match it "
+                                  + "(re-install it through the registry to stamp one)");
+                return Observable.Return(NoSuchBundle());
             })
             .FirstAsync()
             .ToTask(ct);
@@ -517,6 +645,12 @@ public static class PluginBundleEndpoints
     /// neighbour substitutes: <c>Version</c> is the whole-repo commit sha and <c>ModuleVersion</c>
     /// is a content hash, which is exact but unordered — it cannot answer "which is newer", the one
     /// question a distribution index is asked.</para>
+    ///
+    /// <para>🚨 <b>Unscoped by design — every caller of this method must apply
+    /// <see cref="IsGranted"/>.</b> It is the full inventory, which is precisely what no caller may
+    /// see; the grant filter lives at the two route handlers because the download route also needs
+    /// the unfiltered list to write a diagnosable log line. The <see cref="BundleEntry.Source"/> each
+    /// entry carries is the only input that decision needs.</para>
     /// </summary>
     private static IObservable<IReadOnlyList<BundleEntry>> InstalledPackages(
         IMessageHub rootHub, CancellationToken ct) =>
@@ -531,14 +665,24 @@ public static class PluginBundleEndpoints
                 .Where(m => m is not null && !string.IsNullOrWhiteSpace(m.ReleasedVersion))
                 .Select(m => new BundleEntry(
                     PackagingManifest.IdPrefix + m!.Id, m.ReleasedVersion!, m.Id, m.Module,
-                    m.MinMeshVersion))
+                    m.MinMeshVersion, m.Source))
                 .OrderBy(e => e.PluginId, StringComparer.OrdinalIgnoreCase)
                 .ToArray());
 
     /// <summary>One servable bundle: its package id, its released version, the plugin it is, the
-    /// compiled module the plugin's install record declares (null for content-only plugins), and
-    /// that module's declared platform floor.</summary>
+    /// compiled module the plugin's install record declares (null for content-only plugins), that
+    /// module's declared platform floor, and the registry SOURCE the record was installed from.</summary>
+    /// <param name="PackageId">The NuGet-shaped package id the archive is named after.</param>
+    /// <param name="Version">The released SemVer this bundle is served at.</param>
+    /// <param name="PluginId">The plugin's catalog id — also the id a grant entry names.</param>
+    /// <param name="Module">The compiled module the install record declares, or null.</param>
+    /// <param name="MinMeshVersion">The module's declared platform floor, or null.</param>
+    /// <param name="Source">🚨 The registry source name the package was installed from
+    /// (<see cref="PackageManifest.Source"/>) — the half of the grant pair that is NOT the package
+    /// id, and therefore the input to <see cref="IsGranted"/>. Null on a record written before the
+    /// field existed or installed from something that is not a configured source: it then matches no
+    /// grant entry, which is the fail-closed answer (#1772).</param>
     private sealed record BundleEntry(
         string PackageId, string Version, string PluginId, string? Module = null,
-        string? MinMeshVersion = null);
+        string? MinMeshVersion = null, string? Source = null);
 }
