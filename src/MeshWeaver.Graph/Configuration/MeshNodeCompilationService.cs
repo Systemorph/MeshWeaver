@@ -1500,7 +1500,19 @@ internal class MeshNodeCompilationService(
                 logger.LogDebug("Extracted {Count} NodeTypeConfigurations from {AssemblyLocation}",
                     configurations.Count, assemblyLocation);
 
-                return new NodeCompilationResult(assemblyLocation, configurations, log, compiledSources);
+                // The per-type DEPENDENCY RECORD (#1707 slice 2), read off the EMITTED assembly's
+                // AssemblyRef table — Roslyn emits a ref only for assemblies the produced code
+                // actually uses, so this is the pruned, true dependency set, computed here where
+                // the assembly is already loaded for the attribute scan (both disk and memory
+                // modes, and the hydration shortcut, funnel through this method).
+                var dependencies = Compiler.CompiledDependencies.Compute(
+                    assembly.GetReferencedAssemblies().Select(n => n.Name),
+                    NodeTypeCompilationHelpers.DependencyIdResolverOf(hub),
+                    NodeTypeCompilationHelpers.ProcessToolchainId);
+
+                return new NodeCompilationResult(
+                    assemblyLocation, configurations, log, compiledSources,
+                    CompiledDependencies: dependencies);
             }
             catch (Exception ex)
             {

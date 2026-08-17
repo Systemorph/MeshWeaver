@@ -227,11 +227,13 @@ public static class PluginBundleEndpoints
                         .TryGetAssemblyPath(x.Node.Path, x.Definition!.LastCompiledVersion!.Value)
                         .Take(1)
                         .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
-                        .Select(path => (x.Node.Path, Path: path)))
+                        .Select(path => (x.Node.Path, Path: path,
+                            Dependencies: (IReadOnlyDictionary<string, string>?)x.Definition!.CompiledDependencies)))
                     .ToArray();
 
                 var assemblies = lookups.Length == 0
-                    ? Observable.Return(Array.Empty<(string NodePath, string? Path)>())
+                    ? Observable.Return(
+                        Array.Empty<(string NodePath, string? Path, IReadOnlyDictionary<string, string>? Dependencies)>())
                     : lookups.CombineLatest().Select(x => x.ToArray());
 
                 return assemblies.SelectMany(found => ModuleFiles(rootHub, package)
@@ -271,18 +273,18 @@ public static class PluginBundleEndpoints
     }
 
     /// <summary>
-    /// The framework identity these assemblies are bound to: the MVID of the MeshWeaver.Graph
-    /// assembly THIS PROCESS loaded, which is what compiled them.
+    /// The framework identity these assemblies are bound to — the RESOLVED framework build
+    /// identity of this process (<see cref="PrebuiltAssemblySeeder.LiveFrameworkMvid"/>: surface
+    /// hash on manifest-bearing portals, not a raw assembly MVID).
     ///
-    /// <para>🚨 Must stay the value <c>NodeTypeCompilationHelpers.FrameworkVersion</c> computes — a
-    /// consumer compares them to decide whether it may adopt these bytes instead of recompiling, and
-    /// a mismatch there is not a wrong answer but a silent one (<c>TypeLoadException</c> inside a
-    /// collectible ALC, no overlay, nothing to grep). Derived from the same assembly rather than
-    /// hard-coded so it cannot drift; it is internal there, which is why it is derived rather than
-    /// referenced.</para>
+    /// <para>🚨 This used to derive MeshWeaver.Graph's raw MVID "because FrameworkVersion is
+    /// internal" — correct while the identity WAS that MVID, silently broken by #1696: portals
+    /// resolve the s&lt;hash&gt; surface identity, so every registry-served bundle recorded a
+    /// mismatched identity and the consumer's gate DECLINED it (adoption quietly regressed to
+    /// compile-everything). LiveFrameworkMvid is the public reading of the one resolution —
+    /// producer and gate can no longer disagree.</para>
     /// </summary>
-    private static string FrameworkMvid { get; } =
-        typeof(NodeTypeDefinition).Assembly.ManifestModule.ModuleVersionId.ToString("N");
+    private static string FrameworkMvid => PrebuiltAssemblySeeder.LiveFrameworkMvid;
 
     /// <summary>
     /// 🚨 Buffered, not streamed straight to the response: <see cref="NuGetPackageWriter"/> writes a
@@ -292,13 +294,13 @@ public static class PluginBundleEndpoints
     /// </summary>
     private static IResult BuildResult(
         BundleEntry package,
-        IReadOnlyList<(string NodePath, string? Path)> assemblies,
+        IReadOnlyList<(string NodePath, string? Path, IReadOnlyDictionary<string, string>? Dependencies)> assemblies,
         IReadOnlyList<string> moduleFiles)
     {
         var entries = new List<NuGetPackageWriter.Entry>();
         var assemblyRecords = new List<object>();
 
-        foreach (var (nodePath, path) in assemblies.Where(a => a.Path is not null))
+        foreach (var (nodePath, path, dependencies) in assemblies.Where(a => a.Path is not null))
         {
             // EntryPathFor states the naming rule (and why it is not slash-replaced) once, shared
             // with the reader. The manifest still carries the mapping — the consumer must read the
@@ -306,7 +308,9 @@ public static class PluginBundleEndpoints
             var local = path!;
             entries.Add(new NuGetPackageWriter.Entry(
                 NuGetPackageWriter.EntryPathFor(nodePath), () => File.OpenRead(local)));
-            assemblyRecords.Add(new { nodePath, assembly = $"{nodePath}.dll" });
+            // The per-type dependency record (#1707 slice 2) rides the manifest so the consumer
+            // validates module/toolchain bindings before adopting and stamps them on adopt.
+            assemblyRecords.Add(new { nodePath, assembly = $"{nodePath}.dll", dependencies });
         }
 
         // The module closure, under its own folder (#1664): these bytes land beside the consumer's

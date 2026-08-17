@@ -361,10 +361,15 @@ only when all of these hold** —
 2. `LatestAssemblyPath` is populated
 3. `CompiledFrameworkVersion` equals the **current** framework identity
    (`FrameworkBuildIdentity.FrameworkVersion` in `MeshWeaver.Compiler`)
-4. `CompiledModulesHash`, when both it and the mesh's live
-   `InstalledModulesFingerprint` are non-null, matches (a module-only update must
-   invalidate builds that could bind the replaced module; null stamp or null
-   caller keep the framework-only behavior)
+4. the dependency clause holds — **record-first** (#1707 slice 2): when the
+   definition carries a per-type `CompiledDependencies` record (referenced
+   assembly name → surface-id, read off the EMITTED assembly's AssemblyRef
+   table + the reserved `!toolchain` entry), every stamped pair must still
+   resolve identically in this environment — so a module update invalidates
+   only its dependents, and a type that binds no module is valid on any
+   deployment regardless of composition. A null record falls back to the
+   legacy whole-set `CompiledModulesHash` vs `InstalledModulesFingerprint`
+   comparison (null stamp or null caller keep the framework-only behavior)
 
 `CompilationStatus` is deliberately **not** a condition — the assembly fields
 self-heal across a stray `Status=Error`. The check is also **metadata-only**: no
@@ -373,6 +378,16 @@ blocking store round-trip, and a store that has lost the bytes is caught at
 activation (`TryGetAssemblyPath` misses → `TriggerRecompileAndRetry`); the bake
 probe's `NodeTypeBakeStatus.Classify` has the `BytesMissing` state for exactly
 that gap.
+
+**Adopt-before-compile (#1707 slice 3).** "If a pre-built lib exists, take it; only if not,
+generate" holds at every entry point, not just at boot: a package INSTALL and a git-sync PUSH
+first run their affected types through the deployment's bundle sources
+(`IPrebuiltAssemblyConsumer.SeedForTypes` — the image's `prebuilt/` plus the CI-published
+identity root, each assembly validated by the framework-identity and dependency-record gates),
+and the **release-request watcher satisfies** a request that arrives while the node already holds
+a valid build of the current sources — the trigger is consumed without dispatching Roslyn.
+`RequestNodeTypeRelease(force: true)` remains the documented escape hatch and always compiles.
+Anything not adopted compiles exactly as before — the "generate" branch is untouched.
 
 Anything else triggers a recompile. This makes a cold hub start **self-healing**:
 

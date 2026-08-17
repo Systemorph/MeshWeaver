@@ -905,7 +905,7 @@ internal static class NodeTypeEnrichmentHelpers
         }
 
         if (NodeTypeCompilationHelpers.HasUsableBuild(
-                typeNode, def, NodeTypeCompilationHelpers.ModulesHashOf(meshHub)))
+                typeNode, def, NodeTypeCompilationHelpers.GuardsOf(meshHub)))
         {
             // Hot path for activating per-instance hubs: the NodeType has a
             // usable compile (LatestAssembly{Collection,Path} populated AND
@@ -1208,7 +1208,7 @@ internal static class NodeTypeEnrichmentHelpers
                 return WaitForCompileSettled(typeStream, typeStream
                 .Where(typeNode => IsRecompileSettled(
                     typeNode, gate, requireUsableBuild, meshHub.JsonSerializerOptions,
-                    NodeTypeCompilationHelpers.ModulesHashOf(meshHub)))
+                    NodeTypeCompilationHelpers.GuardsOf(meshHub)))
                 .Take(1),
                 SlowPathTimeout,
                 () => new TimeoutException(
@@ -1270,7 +1270,7 @@ internal static class NodeTypeEnrichmentHelpers
     internal static bool IsRecompileSettled(
         MeshNode typeNode, long? staleVersion, bool requireUsableBuild,
         System.Text.Json.JsonSerializerOptions? options = null,
-        string? modulesHash = null)
+        NodeTypeCompilationHelpers.BuildGuards? guards = null)
     {
         // Read the definition through ContentAs — the same accessor ApplyStreamResult uses on
         // whatever this admits. A CLR type test is blind to an un-materialized (JsonElement /
@@ -1304,7 +1304,7 @@ internal static class NodeTypeEnrichmentHelpers
         // hash this predicate would settle in ~0 ms on the very state the heal rejected — the
         // exact burn-the-retry hazard the remarks above describe, in modules-stale clothing.
         if (requireUsableBuild)
-            return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d, modulesHash);
+            return NodeTypeCompilationHelpers.HasUsableBuild(typeNode, d, guards);
 
         // The stale pre-flip re-snap (see the remarks above): not news, keep waiting.
         if (staleVersion is { } stale && typeNode.Version <= stale)
@@ -1416,7 +1416,7 @@ internal static class NodeTypeEnrichmentHelpers
     /// it observes the NodeType's MeshNode stream — the SAME
     /// <c>meshHub.GetWorkspace().GetMeshNodeStream(nodeType)</c> source the
     /// slow path reads — and on the first GENUINELY USABLE state
-    /// (<see cref="NodeTypeCompilationHelpers.HasUsableBuild"/>) past
+    /// (<c>NodeTypeCompilationHelpers.HasUsableBuild</c>) past
     /// <paramref name="typeVersionAtOverlay"/> posts a <see cref="DisposeRequest"/>
     /// to the instance's OWN address — the exact recycle idiom of
     /// <see cref="RecycleLayoutArea"/>. The hub tears down, the grain
@@ -1463,7 +1463,7 @@ internal static class NodeTypeEnrichmentHelpers
                         instanceHub.RegisterForDisposal(ArmOverlaySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub, nodeType, typeVersionAtOverlay, logger,
-                            modulesHash: NodeTypeCompilationHelpers.ModulesHashOf(meshHub)));
+                            guards: NodeTypeCompilationHelpers.GuardsOf(meshHub)));
                     }
                     catch (Exception ex)
                     {
@@ -1549,7 +1549,7 @@ internal static class NodeTypeEnrichmentHelpers
                         instanceHub.RegisterForDisposal(ArmStaleAssemblySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub, nodeType, boundAssemblyPath, logger,
-                            modulesHash: NodeTypeCompilationHelpers.ModulesHashOf(meshHub)));
+                            guards: NodeTypeCompilationHelpers.GuardsOf(meshHub)));
                     }
                     catch (Exception ex)
                     {
@@ -1580,7 +1580,7 @@ internal static class NodeTypeEnrichmentHelpers
         string boundAssemblyPath,
         ILogger? logger,
         IScheduler? scheduler = null,
-        string? modulesHash = null)
+        NodeTypeCompilationHelpers.BuildGuards? guards = null)
         // 🚨 ContentAs, never `is NodeTypeDefinition` (#1669): the type node reaches this stream
         // in UN-MATERIALIZED JSON shape whenever the publication just crossed a sync stream — the
         // normal shape for exactly the emission this watcher exists to catch. A CLR type test is
@@ -1595,7 +1595,7 @@ internal static class NodeTypeEnrichmentHelpers
             .Select(t => (Node: t,
                 Def: t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger)))
             .Where(x => x.Def is { } d
-                && NodeTypeCompilationHelpers.HasUsableBuild(x.Node!, d, modulesHash)
+                && NodeTypeCompilationHelpers.HasUsableBuild(x.Node!, d, guards)
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
                 && !string.Equals(d.LatestAssemblyPath, boundAssemblyPath, StringComparison.Ordinal))
             // 🚨 Wait for the type to stop publishing — see AssemblySettleWindow. An install
@@ -1623,7 +1623,7 @@ internal static class NodeTypeEnrichmentHelpers
     /// firing contract is unit-testable without building a hub
     /// (<c>OverlaySelfHealWatcherTest</c>). It posts exactly ONE self-
     /// <see cref="DisposeRequest"/> (Take(1)) when the NodeType reaches a
-    /// genuinely usable build (<see cref="NodeTypeCompilationHelpers.HasUsableBuild"/>),
+    /// genuinely usable build (<c>NodeTypeCompilationHelpers.HasUsableBuild</c>),
     /// by EITHER route:
     /// <list type="bullet">
     ///   <item><b>Version advance</b> — a new build landed past
@@ -1646,13 +1646,13 @@ internal static class NodeTypeEnrichmentHelpers
         long? typeVersionAtOverlay,
         ILogger? logger,
         IScheduler? scheduler = null,
-        string? modulesHash = null)
+        NodeTypeCompilationHelpers.BuildGuards? guards = null)
     {
         // ContentAs, never `is NodeTypeDefinition` — the #1669 blindness on un-materialized JSON
         // emissions; see ArmStaleAssemblySelfHeal's predicate note.
         var usable = typeStream.Where(t =>
             t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger) is { } d
-            && NodeTypeCompilationHelpers.HasUsableBuild(t, d, modulesHash));
+            && NodeTypeCompilationHelpers.HasUsableBuild(t, d, guards));
 
         // FAST path — the version advanced past the overlay: a genuinely NEW build landed, heal now.
         var advanced = usable.Where(t =>

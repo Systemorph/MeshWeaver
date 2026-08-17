@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh.Diagnostics;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -520,7 +521,23 @@ public static class PreWarmServiceCollectionExtensions
         // because its absence is itself the signal: a host without the pre-warm has no bake to
         // wait for, and consumers proceed immediately.
         services.TryAddSingleton<PreWarmCompletion>();
+        // Install/push-time bundle consumption (#1707 slice 3) — same reasoning: a host without
+        // the pre-warm has no bundle sources to consume from, and callers resolving the consumer
+        // optionally fall straight through to compiling.
+        services.TryAddSingleton<IPrebuiltAssemblyConsumer, PrebuiltAssemblyConsumer>();
         services.AddHostedService<DynamicTypePreWarmerHostedService>();
         return services;
     }
+}
+
+/// <summary>
+/// The hosting-layer <see cref="IPrebuiltAssemblyConsumer"/>: adoption for a specific type set
+/// over the deployment's bundle sources — see <see cref="ShippedPrebuiltBundles.SeedForTypes"/>.
+/// </summary>
+internal sealed class PrebuiltAssemblyConsumer(
+    IMessageHub mesh,
+    ILogger<PrebuiltAssemblyConsumer> logger) : IPrebuiltAssemblyConsumer
+{
+    public IObservable<int> SeedForTypes(IReadOnlyCollection<string> typePaths)
+        => ShippedPrebuiltBundles.SeedForTypes(mesh, typePaths, logger);
 }

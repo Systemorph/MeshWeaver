@@ -36,7 +36,12 @@ public record NodeCompilationResult(
     // their native form (id, severity, message, per-file SourceLocation) so the GUI can
     // mark each error at its exact position in a Monaco editor and link to the Code node.
     // Null/empty on success. Produced from the same per-file-tree (LSP) compilation model.
-    IReadOnlyList<DiagnosticInfo>? Diagnostics = null);
+    IReadOnlyList<DiagnosticInfo>? Diagnostics = null,
+    // The per-type DEPENDENCY RECORD (#1707 slice 2): sorted (referenced assembly name →
+    // surface-id) pairs read from the EMITTED assembly's AssemblyRef table, plus the reserved
+    // toolchain entry. Stamped onto NodeTypeDefinition.CompiledDependencies by the compile
+    // watcher; validated at adopt time by HasUsableBuild / the bake probe / the prebuilt seeder.
+    ImmutableSortedDictionary<string, string>? CompiledDependencies = null);
 
 /// <summary>
 /// Service for on-demand compilation of dynamic MeshNode assemblies.

@@ -31,7 +31,9 @@ With `--bake-output <dir>`, the same run also persists what it compiled:
 
 - one **prebuilt-assembly bundle** per package — `<package>.zip`, written by `BundleWriter`
   (`MeshWeaver.Plugin.Packaging`): the `meshweaver/manifest.json` manifest (node path → assembly,
-  framework MVID, source-version provenance) plus each compiled assembly and its symbols;
+  framework identity, source-version provenance, and — #1707 slice 2 — each assembly's per-type
+  **dependency record**, which the consumer validates against ITS environment before adopting and
+  stamps on adopt) plus each compiled assembly and its symbols;
 - `framework-mvid.txt` — the framework identity every bundle in the directory is keyed to.
 
 Only types that reached `CompilationStatus.Ok` contribute. A type the gate's known-debt allowlist
