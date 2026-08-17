@@ -132,6 +132,7 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.AI.AzureFoundry.dll` | Azure Foundry + Anthropic-on-Azure providers | `AzureFoundry`, `Anthropic` |
 | `MeshWeaver.AI.ClaudeCode.dll` | Claude Code harness | `ClaudeCode` |
 | `MeshWeaver.AI.Copilot.dll` | Copilot harness | `Copilot` |
+| `MeshWeaver.AI.WebSearch.dll` | Agent web-search tools (`SearchWeb`, `FetchWebPage`, feed readers) | `WebSearch` (self-gates on credentials) |
 | `MeshWeaver.Blazor.Radzen.dll` | Radzen view pack (charts etc.) | — |
 | `MeshWeaver.Blazor.Analysis.dll` | Analysis view pack | — |
 | `MeshWeaver.Blazor.GoogleMaps.dll` | Google Maps map provider | `GoogleMaps` |
@@ -143,6 +144,8 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
 | `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
 | `MeshWeaver.Hosting.Grpc.dll` | The mesh gRPC transport: `meshweaver.v1.Mesh` + gRPC-web, `py`/`node` foreign participants AND the React GUI's browser data plane | `Grpc` (`TrustedPort`) |
+| `MeshWeaver.Hosting.Cosmos.dll` | Cosmos DB storage backend (keyed adapter factory + native query) | selected by `Graph:Storage:Type` = `Cosmos` |
+| `MeshWeaver.Hosting.Snowflake.dll` | Snowflake storage backend (persistence, change feed, cross-schema query, access projection) | selected by `Graph:Storage:Type` = `Snowflake` |
 
 🚨 **`MeshWeaver.Hosting.Grpc` is DEFAULT-ON in every deployment.** Its endpoint is not just the
 foreign-participant (`py/*`, `node/*`) transport — the React GUI connects over the very same
@@ -155,6 +158,15 @@ Boot packs select by OTHER configuration too: `Graph:Storage:Type` `Cosmos`/`Sno
 the matching `MeshWeaver.Hosting.Cosmos`/`.Snowflake` DLL in this list — installation runs before
 storage selection, so ordering is safe. Delisting a UI module removes its areas mesh-wide;
 embeds of a removed area render the standard area-not-found placeholder (documented per module).
+
+Both storage backends **ship in the image but are listed by nobody** — every memex portal runs
+PostgreSQL — so selecting one is purely an appsettings edit in the deployment that wants it.
+They ride the closure lane rather than the Store bundle lane on purpose: persistence selection
+reads `Graph:Storage` during boot, so a storage backend cannot be something the mesh installs
+for itself once it is already running. The bits cost ~25 MB of publish output (Cosmos ~15 MB with
+the Direct/ServiceInterop client, Snowflake ~10 MB — its driver carries Arrow plus the AWS and
+GCS SDKs for stage transfer); `-p:PublishMeshModules=false` skips the whole layout for a host
+that wants none of it.
 
 Entries resolve through `MeshBuilder.ResolveModulePath`: a rooted path passes through; a bare
 DLL name probes **`modules/<name>/<name>.dll`** beside the app first (the publish layout below),

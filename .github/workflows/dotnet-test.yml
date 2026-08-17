@@ -1305,15 +1305,20 @@ jobs:
         set -euo pipefail
         tar -I 'zstd --long=27' -xf build-output-0.tar.zst
         rm -f build-output-0.tar.zst
-    # 🚨 Since #1660 WS1 this job is not verdict-only: the SAME tester run that proves the content
-    # compiles also PERSISTS the compiled assemblies (--bake-output) as identity-keyed prebuilt
-    # bundles, uploaded below as `baked-assemblies-<identity>`. Since #1660 WS3 the framework
-    # identity is COMMIT-DETERMINISTIC (for CI builds: g<sha>, stamped by Directory.Build.props —
-    # no run number or ticks reach any compiled attribute), so consumers are no longer limited to
-    # this run: main-cd's publish-bake job copies these bundles to the portals' shared storage,
-    # where every pod built from the SAME COMMIT seeds them at boot
-    # (ShippedPrebuiltBundles.SeedPublishedRoot) instead of recompiling. The seeder's identity
-    # gate still declines anything from another commit — that is the ABI gate, not a bug.
+    # 🚨 `--bake-output` here is a SMOKE TEST of the bake stage, NOT a delivery lane (#1725).
+    # It costs almost nothing — the tester has already compiled everything, this only persists it —
+    # and it makes a bake-stage regression fail on the PR that causes it rather than in CD.
+    #
+    # What it deliberately no longer does is FEED the portals. Until #1725 this job's bundles were
+    # uploaded as `baked-assemblies-<identity>` and published to portal storage by main-cd. That can
+    # never work: the framework identity is derived from the exact binaries a host ships, and this
+    # job's binaries are a DIFFERENT compilation from the ones in the shipped image. Measured on
+    # commit babb3bc, same source, same runner path: every implementation assembly's MVID differs
+    # between the two (Data/Layout/AI/Utils included), and 4 of the 37 canonical REFERENCE
+    # assemblies differ too (Graph, Hosting, Kernel, Markdown.Collaboration) — so the two hosts
+    # resolved `sd0d0daa…` and `s377941f…` for one commit, and no pod could ever adopt what this run
+    # baked. The platform's own bake now runs INSIDE the shipped image (main-cd's `publish-bake`),
+    # exactly as every satellite repo's does. See Doc/Architecture/CiContentBake.
     - name: "Compile + run the Doc content against this PR"
       id: gate
       run: |
@@ -1324,18 +1329,12 @@ jobs:
           exit 1
         fi
         BAKE="${RUNNER_TEMP:-/tmp}/bake"
-        # Stage src/MeshWeaver.Documentation/Data as a package root named Doc/. The tree has no
-        # index.json of its own (index.md is the partition's root PAGE, and committing a JSON
-        # root would ship a duplicate root node in the embedded partition), so the root is
-        # synthesized here and index.md is dropped from the STAGE only — shipped content is
-        # untouched. NodeFileMapper then maps Doc/DataMesh/SocialMedia/Post.json et al. to the
-        # exact namespaces the files themselves declare, so the gate compiles the tree under
-        # its canonical paths.
+        # Stage src/MeshWeaver.Documentation/Data as a package root named Doc/. The staging lives
+        # in a script because main-cd's publish-bake stages the SAME tree for the in-image bake —
+        # the bake must publish exactly what this gate judged, so the two cannot have separate
+        # copies of the staging rules.
         STAGE="${RUNNER_TEMP:-/tmp}/doc"
-        mkdir -p "$STAGE/Doc"
-        cp -R src/MeshWeaver.Documentation/Data/. "$STAGE/Doc/"
-        rm -f "$STAGE/Doc/index.md"
-        printf '%s' '{"$type":"MeshNode","id":"Doc","path":"Doc","mainNode":"Doc","name":"MeshWeaver Documentation","nodeType":"Space","state":"Active"}' > "$STAGE/Doc/index.json"
+        bash .github/scripts/stage-doc-gate.sh src/MeshWeaver.Documentation/Data "$STAGE"
         # .github/doc-gate.allow is THIS repo's known-debt ratchet for doc content: listed
         # failures are tolerated, NEW failures fail the PR, and a listed check that starts
         # passing fails the PR until its line is removed — the list can only shrink.
@@ -1376,11 +1375,12 @@ jobs:
           fi
           exit 1
         fi
-    # A green gate that produced no bake identity is a bake-stage REGRESSION — fail RED, never
-    # upload a partial or unnamed artifact (no continue-on-error, no "is the file there?" skip:
-    # the gate above already proved the tester ran green, so the identity file is a POSTcondition).
+    # A green gate that produced no bake identity is a bake-stage REGRESSION — fail RED (no
+    # continue-on-error, no "is the file there?" skip: the gate above already proved the tester ran
+    # green, so the identity file is a POSTcondition). This is the whole point of keeping
+    # --bake-output on the PR lane: the bake stage breaks HERE, on the PR that breaks it, instead of
+    # in CD after the merge.
     - name: "Bake summary + identity"
-      id: bake
       run: |
         set -euo pipefail
         mvid_file="${RUNNER_TEMP:-/tmp}/bake/framework-mvid.txt"
@@ -1388,22 +1388,23 @@ jobs:
           echo "::error::the content gate ran green but wrote no bake identity ($mvid_file) — the bake stage regressed."
           exit 1
         fi
-        echo "mvid=$(cat "$mvid_file")" >> "$GITHUB_OUTPUT"
         {
-          echo "### 📦 Baked shipped-content assemblies (framework $(cat "$mvid_file"))"
+          echo "### 🧪 Bake stage exercised (framework $(cat "$mvid_file")) — NOT published"
+          echo
+          echo "This identity is this job's own build; the portals adopt the bake main-cd takes"
+          echo "inside the shipped image. See Doc/Architecture/CiContentBake."
           echo
           echo '```'
           grep -h '^bake: ' "${RUNNER_TEMP:-/tmp}/doc-gate.log" "${RUNNER_TEMP:-/tmp}/samples-gate.log" || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
-    # The MVID-keyed artifact every lane of THIS run can adopt (same solution build ⇒ same
-    # Graph.dll ⇒ the seeder's gate accepts it). Stable name shape: baked-assemblies-<mvid>.
-    - name: "Upload artifact: baked shipped-content assemblies"
-      uses: actions/upload-artifact@v7
-      with:
-        name: baked-assemblies-${{ steps.bake.outputs.mvid }}
-        path: ${{ runner.temp }}/bake
-        retention-days: 7
+    # 🚨 NO artifact upload — deliberately, since #1725. These bundles are keyed to THIS job's
+    # binaries, which no shipped image ever contains, so an uploaded `baked-assemblies-<identity>`
+    # was adoptable by nothing: main-cd published it under an identity no pod resolves and every
+    # pod kept Roslyn-compiling ~80 platform types at boot (64.8 s warm-up, compiled=80
+    # alreadyBaked=4). An artifact that looks like delivery and delivers nothing is worse than no
+    # artifact — it is what made that regression invisible for a whole release train. The bundles
+    # pods actually adopt are baked by main-cd INSIDE the shipped image.
 
   licence-gate:
     name: "Dependency licences"

@@ -78,6 +78,29 @@
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.WebSearch/MeshWeaver.AI.WebSearch.csproj" />
+
+    <!-- Alternative storage backends. These were BORN flipped: no host has ever referenced them
+         (only their own test projects do), and both attributes state the intent verbatim —
+         "everything a deployment needs for Graph:Storage:Type = Cosmos to resolve, with no
+         compiled reference from the portal". What was missing is this lane, so the DLLs reached
+         no image and the documented `Graph:Storage:Type` Cosmos/Snowflake selection could not be
+         turned on in a shipped deployment at all.
+
+         🚨 CLOSURE, never thin. The thin lane copies a module's OWN dll/pdb/xml and relies on the
+         app closure carrying its dependencies — true only while a ships-the-bits ProjectReference
+         stands. These two have none, so their private package closures (Microsoft.Azure.Cosmos,
+         Snowflake.Data) exist nowhere in the app output; a thin-lane row would land an assembly
+         that fails to load its own driver at first use. The closure publish brings the driver and
+         prunes what the app and the shared framework already provide.
+
+         Storage providers ship in the IMAGE rather than as Store bundles on purpose: a module
+         installed from the Store needs storage to already work, and persistence selection reads
+         Graph:Storage during boot. Shipping the bits costs image size in every deployment;
+         ACTIVATION stays the deployment's Modules:Assemblies choice, and no memex portal lists
+         them (they all run PostgreSQL). -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Snowflake/MeshWeaver.Hosting.Snowflake.csproj" />
   </ItemGroup>
 
   <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
