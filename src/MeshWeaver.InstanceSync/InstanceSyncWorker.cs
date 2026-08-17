@@ -330,10 +330,11 @@ public sealed class InstanceSyncWorker : IDisposable
 
         // Push the node's CURRENT content; a node deleted since the change was observed
         // degrades to a delete.
-        return hub.GetMeshNodeOutcome(change.Path, TimeSpan.FromSeconds(15), ReadTimeoutBehavior.EmitNull)
+        return hub.GetMeshNodeOutcome(change.Path, LocalReadTimeout, ReadTimeoutBehavior.EmitNull)
             .SelectMany(outcome => outcome.Status switch
             {
-                NodeReadStatus.Present => PushNode(remote, cfg, outcome.Node!).Select(_ => true),
+                NodeReadStatus.Present => PushNode(remote, cfg, outcome.Node!)
+                    .SelectMany(_ => ConfirmNotDeletedDuringPush(remote, change.Path, remotePath)),
                 NodeReadStatus.Absent => DeleteRemote(remote, remotePath),
                 // The local delete is in flight; the authoritative next state is "gone", and the
                 // manifest holds a Deleted entry for it too. Pushing the delete now is idempotent.
@@ -347,6 +348,50 @@ public sealed class InstanceSyncWorker : IDisposable
                     $"Cannot push {change.Path}: unhandled read outcome '{outcome.Status}'.")),
             });
     }
+
+    /// <summary>How long a LOCAL node read may take before the drain gives up on it.</summary>
+    private static readonly TimeSpan LocalReadTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// 🚨 Re-resolves the local node AFTER a successful push, and converts the push into a delete
+    /// when the node went away while it was in flight (#1616).
+    ///
+    /// <para><b>The defect this closes.</b> <see cref="DrainOne"/> reads local state and then pushes,
+    /// and those two are separated by a full remote round trip. A local delete landing inside that
+    /// window used to be invisible: the push reported success on content that was already stale,
+    /// <see cref="DrainPending"/> removed the entry as drained, and the remote kept a node that had
+    /// been deleted here — with nothing left in the manifest to correct it. The window is widest
+    /// exactly where the test pins it: while the remote is unreachable, attempts retry every
+    /// 100–400 ms, so an attempt that read the node just before the delete can complete its push
+    /// just after the remote comes back.</para>
+    ///
+    /// <para>The tombstone that makes this detectable is written SYNCHRONOUSLY by the delete handler
+    /// (<c>RecentlyDeletedRegistry.MarkDeleted</c>) and emits no change event, which is why nothing
+    /// re-enters the manifest to catch it and why the read below — the same one
+    /// <see cref="DrainOne"/> already trusts — is the authority.</para>
+    ///
+    /// <para>Only <see cref="NodeReadStatus.Absent"/> / <see cref="NodeReadStatus.DeleteInProgress"/>
+    /// change the outcome. A still-present node, an unreadable one, or a status this predates all
+    /// report the push as drained exactly as before: the push DID succeed, and any later delete
+    /// raises its own change event and its own manifest entry. Never destroy the remote copy on
+    /// evidence we could not gather — the same rule <see cref="DrainOne"/> states for its first read.</para>
+    /// </summary>
+    private IObservable<bool> ConfirmNotDeletedDuringPush(
+        IRemoteMeshClient remote, string localPath, string remotePath) =>
+        hub.GetMeshNodeOutcome(localPath, LocalReadTimeout, ReadTimeoutBehavior.EmitNull)
+            .Select(after => after.Status is NodeReadStatus.Absent or NodeReadStatus.DeleteInProgress)
+            // 🚨 The catch is scoped to the RE-READ, never to the corrective delete below. An
+            // unreadable local node must not fail an entry whose push already succeeded (that would
+            // re-push identical content on every pass), so it reports drained — but a FAILING
+            // DeleteRemote must propagate: swallowing it would mark the entry drained while the
+            // remote still holds the locally-deleted node, which is precisely the defect this
+            // method exists to close. Propagating leaves the entry pending, and DrainPending
+            // classifies it: a connectivity fault aborts the pass for the retry probe, anything
+            // else surfaces on the config as LastError. Either way the next pass tries again.
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .SelectMany(mustDelete => mustDelete
+                ? DeleteRemote(remote, remotePath)
+                : Observable.Return(true));
 
     private static IObservable<bool> DeleteRemote(IRemoteMeshClient remote, string remotePath) =>
         remote.Get(remotePath).SelectMany(existing => existing is null
