@@ -133,6 +133,27 @@ Cost is negligible: the pulling agent caches a stream's consumer set, so the sto
 use per stream and written only on subscribe/unsubscribe — a per-circuit, per-hub event, not a
 per-message one.
 
+### Two things an operator should know about
+
+**The migration must reach the database before a new silo starts.** `AdoNetGrainStorage` loads its
+four query texts from `OrleansQuery` during the silo lifecycle, so a portal that starts against a
+database without the persistence tables **fails to start** — loudly, in the log's first lines, not
+silently. The self-updater patches the portal and migration Deployments together
+(`KubernetesDeploymentUpdater.PatchToVersionAsync`), and the roll is surge-first
+(`strategy.maxUnavailable: 0`), so the worst case on the deploy that first picks this up is a new
+pod in `CrashLoopBackOff` for a backoff interval while the old pods keep serving — never dropped
+traffic. It self-heals the moment the migration lands; there is nothing to do but read the log if a
+roll seems slow. This is the same ordering dependency AdoNet **clustering** already has.
+
+**`orleansstorage` grows one row per stream, and shrinks again on a clean shutdown.** The row is a
+`PubSubRendezvousGrain`'s state, keyed by stream — i.e. one per hub address that has ever
+subscribed, and portal hubs are per circuit. A clean `UnsubscribeAsync` (which
+`OrleansRoutingService.RegisterStream`'s disposal performs) leaves the grain with no consumers, and
+it clears its own state. A pod that is SIGKILLed does not, so rows can linger. They are inert — a
+stream nobody publishes to is never read — and prunable if the table ever warrants it. Watch it the
+same way you would any other table; do not "fix" it with a shorter grain-collection age, which would
+evict live subscriptions.
+
 ## 🚨 What this does NOT fix
 
 **Durability removes the dominant loss mechanism. It does not make an undeliverable reply
