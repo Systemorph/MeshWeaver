@@ -1151,6 +1151,34 @@ public static class PackageInstaller
         string.IsNullOrWhiteSpace(authorizingUserId) ? existingRecord?.AuthorizedBy : authorizingUserId;
 
     /// <summary>
+    /// The install record's <see cref="PackageManifest.Source"/> on a (re-)stamp: the registry source
+    /// the CURRENT install came from when it is known, otherwise the one already recorded. Same
+    /// carry-forward as <see cref="SeedAuthorizedBy"/>, for the same reason and now with teeth.
+    ///
+    /// <para>🚨 Not every lister stamps the field: it is set by the registry as it merges its sources
+    /// and by the default install's own lister, but a catalog rendered straight off a repo path
+    /// (<c>PluginUpdateWatcher</c>, a <c>PluginCatalog</c> node) hands over a manifest with no source
+    /// at all. Rebuilding the record from that manifest verbatim would ERASE a stamp a real install
+    /// wrote — and since #1772 the bundle route matches the caller's <c>PluginGrant</c> against
+    /// exactly this field, an erased source makes the package unservable to every consumer, silently.
+    /// A distribution lane that goes dark on the first auto-update is the worst kind of regression:
+    /// consumers just quietly compile instead.</para>
+    ///
+    /// <para>🚨 <b>It never INVENTS a source</b> — the result is either the one this install states
+    /// or the one already recorded, never a guess, so it can only ever name a source some real
+    /// install came from. A stated source does WIN over the recorded one: that is the newer fact
+    /// about where the package comes from (a package genuinely moved between sources must stop
+    /// claiming the old one), exactly as <see cref="SeedAuthorizedBy"/> prefers the principal that
+    /// authorized THIS action. The carry-forward applies only where the current install supplies
+    /// nothing.</para>
+    /// </summary>
+    /// <param name="existingRecord">The install record being re-stamped, or null on a first install.</param>
+    /// <param name="manifest">The catalog manifest this install is being written from.</param>
+    /// <returns>The source to record.</returns>
+    internal static string? SeedSource(PackageManifest? existingRecord, PackageManifest manifest) =>
+        string.IsNullOrWhiteSpace(manifest.Source) ? existingRecord?.Source : manifest.Source;
+
+    /// <summary>
     /// Publishes the package's CONTENT-COLLECTION assets — the raw binaries it commits under
     /// <c>{package}/content/**</c> (course videos and their posters, og images, fonts) — into the
     /// target partition root's <c>content</c> collection, so merging a course or plugin publishes it
@@ -1327,6 +1355,10 @@ public static class PackageInstaller
                     // WHO authorized this install — what an unattended update of a commercial
                     // package is re-checked against (#830).
                     AuthorizedBy = SeedAuthorizedBy(existingRecord, authorizingUserId),
+                    // WHICH registry source it came from — what a consumer's PluginGrant is matched
+                    // against when it asks this instance for the package's bundle (#1772). Carried
+                    // forward for the same reason as AuthorizedBy: not every lister stamps it.
+                    Source = SeedSource(existingRecord, manifest),
                 },
             };
             // System-impersonated like every installer write (Using — see Upsert): this runs after
