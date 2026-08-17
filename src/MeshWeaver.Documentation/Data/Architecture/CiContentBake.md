@@ -145,40 +145,58 @@ logged and skipped, and the sweep compiles that type as it always has. Nothing c
 from this path — the bake gate keeps probing the store, which only ever holds what was actually
 adopted.
 
-## Adopt-only: consume the bake, never build it (`PreWarm:AdoptOnly`)
+## Adopt, then compile on demand — the boot bake is retired everywhere
 
-A managed portal both adopts *and* compiles: whatever the bundles did not cover, the sweep builds,
-and the readiness gate certifies the result. That trade is wrong on a developer's laptop. The
-framework identity changes with every image, so every `memex-local update` invalidates the whole
-assembly cache and the startup bake recompiles the entire shipped content set on the same CPU the
-developer is trying to work on. One developer machine had accumulated **15 generations** under
-`/data/assembly-cache/.generations` — fifteen full sweeps of ~38 types, none of which produced
-anything CI had not already built.
+**Adoption and its coverage report are unconditional; only compiling is configurable.** Every boot
+seeds both bundle sources and then probes the assembly store:
 
-`PreWarm:AdoptOnly=true` keeps the adoption and drops the compiling:
-
-1. both bundle sources seed exactly as above (`SeedAll`, then `SeedPublishedRoot`);
+1. both bundle sources seed as above (`SeedAll`, then `SeedPublishedRoot`);
 2. `DynamicTypePreWarmer.ProbeDynamicTypes` enumerates the mesh's dynamic NodeTypes and asks the
    assembly store about each — the same `NodeTypeBakeStatus.Probe` the sweep uses to decide what to
    build, stopping at the answer;
-3. the boot log reports `adopted=N uncovered=M`, and **every uncovered type is NAMED at warning**.
+3. the boot log reports `adopted=N uncovered=M`, and **every uncovered type is NAMED at warning**,
+   with the `BakeState` and detail saying *why*.
 
-Nothing is compiled at boot. An uncovered type is still correct — it builds on first access through
-the ordinary lazy path — it is merely not warm. That is the deliberate escape for content with no CI
-bake *by construction*: a NodeType someone is authoring on a laptop has no published bundle and
-never will, and "bake your own" is the right answer for it. What adopt-only refuses is the silent
-version of that: a gap you only discover when a page renders empty.
+`PreWarm:DynamicTypes` then decides only whether the leftover is **also** compiled at boot. It is
+`false` everywhere, including the fleet.
 
-> 🚨 **`PreWarm:AdoptOnly` is not a synonym for `PreWarm:DynamicTypes=false`.** The bundle seeding
-> runs on the *same hosted service* as the sweep, so switching the service off switches adoption off
-> with it — the instance would adopt nothing **and** still compile everything, lazily and
-> unreported. Adopt-only is the key that removes the compiling; `DynamicTypes` is the key that keeps
-> the adoption. The homebrew defaults set both, and
-> `PlatformBakeLaneGuard.LocalDefaults_AdoptRatherThanPreBake_AndKeepTheSeedingOn` pins the pairing.
+> 🚨 These two used to be one switch, and the fusion was a real defect: the chart's default is
+> `DynamicTypes=false`, so the ordinary deployment adopted **nothing** — it ignored bundles sitting
+> in its own image and lazily compiled every type instead. Splitting them is what makes "no boot
+> bake" cheap rather than a regression.
 
-Adopt-only compiles nothing, so it can prove nothing: it never arms `PreWarm:GateReadiness`, and the
-contradictory combination is logged as an error naming both keys rather than quietly honoured in
-either direction. It is the default for the homebrew/local chart overlay, and off everywhere else.
+Why the sweep is retired rather than tuned: adoption made it redundant. Once the satellite repos
+published under the live identity, a prod boot measured `compiled=0 alreadyBaked=84` — the sweep
+compiled nothing and still charged 32.1 s of warm-up (64.8 s when adoption was broken). On a *miss*
+it was worse than useless: it blocked readiness on compiling types no user had asked for. On a
+laptop it was pure waste — one developer machine had **15 generations** under
+`/data/assembly-cache/.generations`, fifteen full sweeps that rebuilt what CI had already built.
+
+An uncovered type is still correct: it builds on **first access**, via
+`NodeTypeEnrichmentHelpers.WaitForCompileSettled`, when someone actually reaches it. Measured cost
+~2.0–2.1 s per type locally (~2.4 s on the fleet), paid once, by that type's first visitor. That is
+also the deliberate escape for content with no CI bake *by construction* — a NodeType someone is
+authoring on a laptop has no published bundle and never will. What the report refuses is the silent
+version: a gap you only discover when a page renders empty.
+
+### What readiness means now
+
+The bake gate certified a bake by **compiling** every type and refusing readiness when one that used
+to build no longer did. With nothing compiling at boot there is no such verdict, so
+`PreWarm:GateReadiness` is turned **off** rather than left armed — an armed gate with no sweep behind
+it reports healthy on every rollout and protects nothing, which is the exact failure it exists to
+prevent. (The portal already says so at Critical; `NoValuesFileArmsTheBakeGateWithoutTheSweepBehindIt`
+pins it at build time.)
+
+**What that gives up, precisely:** a NodeType that regresses on a new image is no longer caught at
+rollout; it surfaces when a user first reaches it. **What replaces it:** the boot coverage report —
+a broken bake lane (an identity mismatch declines every bundle wholesale, #1725) shows up as a
+coverage collapse in the logs of the *first* pod of a bad roll.
+
+> 🚨 **Do not "fix" this by gating on full adoption coverage.** `uncovered > 0` is the normal steady
+> state of a real portal: users author NodeTypes in their own partitions, and those have no CI bake
+> by construction — the live `memex` share holds two such types under `rbuergi`. A coverage gate
+> would never go ready.
 
 > 🚨 **A `PreWarm__*` key in a values file does nothing until the configmap renders it.**
 > `deploy/helm/templates/memex-portal/config.yaml` enumerates keys explicitly — it does not iterate
