@@ -20,10 +20,18 @@ namespace MeshWeaver.Compiler;
 /// whether their cached workspace is still valid.
 /// </para>
 /// </summary>
+/// <param name="GlobalUsingsSource">The compile's import scope rendered as <c>global using</c>
+/// directives (<c>DynamicMeshNodeAttributeGenerator.GenerateGlobalUsingsSource</c>).
+/// <para>🚨 REQUIRED for correctness, not a convenience. <see cref="Sources"/> is one tree per file
+/// and a C# <c>using</c> is FILE-SCOPED, so without this document the skeleton's imports reach none
+/// of the user trees and the language service reports phantom CS0246/CS0308 on source that compiles
+/// and ships — a false FAIL on a cleanly loaded assembly (Systemorph/MeshWeaver#1802). Any consumer
+/// that assembles a compilation or workspace from these inputs MUST include it as a document.</para></param>
 internal sealed record CompilationInputs(
     string AssemblyName,
     ImmutableArray<(string Path, string Code)> Sources,
     string SkeletonSource,
+    string GlobalUsingsSource,
     ImmutableArray<MetadataReference> References,
     CSharpParseOptions ParseOptions,
     CSharpCompilationOptions CompilationOptions,

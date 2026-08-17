@@ -720,4 +720,92 @@ var c = Controls.Bad";
             .Should().Within(60.Seconds()).Emit();
         diagnostics.Should().BeEmpty("nor any environment to diagnose in");
     }
+
+    /// <summary>
+    /// 🚨 #1802 — the language service must not report errors the EMIT path does not have.
+    ///
+    /// <para>The emit path concatenates every source INTO the generated skeleton, so the skeleton's
+    /// 22-namespace preamble covers all of it. The language service keeps ONE TREE PER FILE (so a
+    /// diagnostic carries the MeshNode path the user edits) and a C# <c>using</c> is FILE-SCOPED —
+    /// so the preamble reached nothing and every source relying on it was reported broken. On
+    /// memex-cloud that produced 12 phantom errors on <c>SocialMedia/PostsHub</c> while
+    /// <c>get_diagnostics</c> said "assembly was built without errors and is loaded", and two agents
+    /// spent a session fixing source that was never broken.</para>
+    ///
+    /// <para>This source is the exact shape that failed: it names <c>IMeshService</c>
+    /// (<c>MeshWeaver.Mesh.Services</c>), <c>IMessageHub</c> (<c>MeshWeaver.Messaging</c>) and the
+    /// GENERIC <c>GetService&lt;T&gt;</c> (<c>Microsoft.Extensions.DependencyInjection</c>) while
+    /// declaring no <c>using</c> of its own — all three come from the preamble.</para>
+    /// </summary>
+    [Fact]
+    public async Task GetDiagnostics_SourceRelyingOnGeneratedPreamble_IsNotReportedBroken()
+    {
+        await SeedNodeType(
+            "PreambleDemo",
+            new NodeTypeDefinition { Configuration = "config => config.WithContentType<PreambleDemo>()" },
+            ("PreambleDemo.cs", @"
+public record PreambleDemo
+{
+    public string Id { get; init; } = string.Empty;
+}
+
+public static class PreambleDemoServices
+{
+    // No `using` in this file: IMeshService, IMessageHub and the generic GetService<T>
+    // all come from the generated import scope, exactly as they do under emit.
+    public static IMeshService? Resolve(IMessageHub hub)
+        => hub.ServiceProvider.GetService<IMeshService>();
+}")).Should().Within(60.Seconds()).Emit();
+
+        var outcome = await LanguageService
+            .GetDiagnostics("type/PreambleDemo")
+            .Should().Within(60.Seconds()).Emit();
+
+        outcome.Status.Should().Be(NodeDiagnosticsStatus.Compiled,
+            "an empty diagnostic list only means 'clean' when a compilation actually produced it");
+        outcome.Diagnostics.Should().NotContain(d => d.Severity == LspDiagnosticSeverity.Error,
+            "source relying on the generated preamble compiles under emit, so the language service "
+            + "must not report it broken (#1802 false FAIL: CS0246 'IMeshService' + CS0308 on the "
+            + "non-generic IServiceProvider.GetService). Got: {0}",
+            string.Join("; ", outcome.Diagnostics.Select(d => $"{d.Id} {d.Severity} {d.Message}")));
+    }
+
+    /// <summary>
+    /// The other half of #1802: emit HOISTS every file's <c>using</c>s to the top of the single
+    /// concatenated file, so under emit each source also sees its SIBLINGS' imports. The generated
+    /// import scope reproduces that, so a file using a type its sibling imported is not a false FAIL
+    /// either. Without it this reports CS0246 on <c>CultureInfo</c>.
+    /// </summary>
+    [Fact]
+    public async Task GetDiagnostics_SourceRelyingOnSiblingUsing_IsNotReportedBroken()
+    {
+        await SeedNodeType(
+            "SiblingUsingDemo",
+            new NodeTypeDefinition { Configuration = "config => config.WithContentType<SiblingUsingDemo>()" },
+            ("SiblingUsingDemo.cs", @"
+using System.Globalization;
+
+public record SiblingUsingDemo
+{
+    public string Id { get; init; } = string.Empty;
+    public string Formatted => 42.ToString(CultureInfo.InvariantCulture);
+}"),
+            ("SiblingUsingConsumer.cs", @"
+public static class SiblingUsingConsumer
+{
+    // `using System.Globalization;` is declared only in the SIBLING file above.
+    public static string Format(double value) => value.ToString(CultureInfo.InvariantCulture);
+}")).Should().Within(60.Seconds()).Emit();
+
+        var outcome = await LanguageService
+            .GetDiagnostics("type/SiblingUsingDemo")
+            .Should().Within(60.Seconds()).Emit();
+
+        outcome.Status.Should().Be(NodeDiagnosticsStatus.Compiled,
+            "an empty diagnostic list only means 'clean' when a compilation actually produced it");
+        outcome.Diagnostics.Should().NotContain(d => d.Severity == LspDiagnosticSeverity.Error,
+            "emit hoists a sibling's usings across the concatenated file, so the language service "
+            + "must resolve CultureInfo here too. Got: {0}",
+            string.Join("; ", outcome.Diagnostics.Select(d => $"{d.Id} {d.Severity} {d.Message}")));
+    }
 }
