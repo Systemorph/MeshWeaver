@@ -379,12 +379,19 @@ public sealed class InstanceSyncWorker : IDisposable
     private IObservable<bool> ConfirmNotDeletedDuringPush(
         IRemoteMeshClient remote, string localPath, string remotePath) =>
         hub.GetMeshNodeOutcome(localPath, LocalReadTimeout, ReadTimeoutBehavior.EmitNull)
-            .SelectMany(after => after.Status is NodeReadStatus.Absent or NodeReadStatus.DeleteInProgress
+            .Select(after => after.Status is NodeReadStatus.Absent or NodeReadStatus.DeleteInProgress)
+            // 🚨 The catch is scoped to the RE-READ, never to the corrective delete below. An
+            // unreadable local node must not fail an entry whose push already succeeded (that would
+            // re-push identical content on every pass), so it reports drained — but a FAILING
+            // DeleteRemote must propagate: swallowing it would mark the entry drained while the
+            // remote still holds the locally-deleted node, which is precisely the defect this
+            // method exists to close. Propagating leaves the entry pending, and DrainPending
+            // classifies it: a connectivity fault aborts the pass for the retry probe, anything
+            // else surfaces on the config as LastError. Either way the next pass tries again.
+            .Catch<bool, Exception>(_ => Observable.Return(false))
+            .SelectMany(mustDelete => mustDelete
                 ? DeleteRemote(remote, remotePath)
-                : Observable.Return(true))
-            // An unreadable local node here must not fail an entry whose push already succeeded:
-            // that would re-push identical content on every pass. Treat it as drained, as before.
-            .Catch<bool, Exception>(_ => Observable.Return(true));
+                : Observable.Return(true));
 
     private static IObservable<bool> DeleteRemote(IRemoteMeshClient remote, string remotePath) =>
         remote.Get(remotePath).SelectMany(existing => existing is null
