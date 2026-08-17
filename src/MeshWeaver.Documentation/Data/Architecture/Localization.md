@@ -93,18 +93,47 @@ ship.
 
 ## Where the viewer's language comes from
 
-1. **Auto-detected once.** `BrowserPreferenceDetector` reads `navigator.language` (alongside the
-   IANA zone, in a single interop call) on first render and writes it **write-once** — a manual
-   choice or an earlier session's value is never clobbered.
-2. **Overridable.** The User → Settings → *Preferences* tab has a language picker. It stores the
-   BCP-47 tag (`de`) but shows the endonym (*Deutsch*) — a German speaker looks for "Deutsch", not
-   "German".
-3. **Stamped onto the context.** `CircuitAccessHandler` resolves `User.Locale` once when the circuit
+**The policy in one line: take the language of the user's own computer, and put it on the user.**
+Never the *server's* culture — see the warning below.
+
+1. **Chosen at onboarding, defaulted from the user's computer.** The onboarding form's first field
+   is a language picker, pre-selected from the visitor's own computer language (the request's
+   `Accept-Language`, already negotiated onto `AccessContext.Locale` by `UserContextMiddleware`).
+   Changing it re-renders the form in the chosen language immediately, and submitting writes
+   `User.Locale` in `UserOnboardingService.CreateUser`.
+
+   This step exists because the auto-detector below **cannot** cover it: `BrowserPreferenceDetector`
+   lives in the authenticated portal shell, so it does not run until *after* onboarding. Without a
+   picker here, a German-speaking user filled in the form — and read the first screens — in English.
+2. **Auto-detected once, afterwards.** `BrowserPreferenceDetector` reads `navigator.language`
+   (alongside the IANA zone, in a single interop call) on first render and writes it **write-once** —
+   a manual choice or an earlier session's value is never clobbered. This now mostly serves users
+   who onboarded before the picker existed.
+3. **Editable in two places, one control.** The **profile editor** (`{user}/EditProfile`) and the
+   User → Settings → *Preferences* tab both carry a language picker. Both are the SAME
+   `MeshNodeContentEditorControl` bound to the same `User.Locale` field on the node stream, so they
+   cannot drift apart. The profile is where a user actually looks for "my language"; Preferences is
+   where it sits next to the display time zone. Both store the BCP-47 tag (`de`) and show the
+   endonym (*Deutsch*) — a German speaker looks for "Deutsch", not "German".
+4. **Stamped onto the context.** `CircuitAccessHandler` resolves `User.Locale` once when the circuit
    context is built; it then rides `AccessContext.Locale` to every render path.
 
-An **unsupported** browser language deliberately writes *nothing*, leaving the profile empty — so a
-translation shipped later applies automatically instead of the user being pinned to a tag we would
-only ever render in English.
+**Unsupported languages: silent guesses store nothing, explicit choices are honoured.** The
+auto-detector (2) writes *nothing* for a language this deployment does not ship, leaving the profile
+empty so a translation shipped later applies automatically instead of pinning the user to a tag we
+would only ever render in English. The onboarding picker (1) always stores its selection, including
+`en` when left at the default — because that value was on screen, labelled, and submitted. The
+distinction is *silent guess* vs *seen and accepted*, and `Locales.TryMatch` (nullable) vs
+`Locales.Resolve` (always a tag) is how it is spelled in code.
+
+> 🚨 **"The computer's language" means the USER's computer, never the server's.**
+> `CultureInfo.CurrentCulture` / `CurrentUICulture` on Blazor Server is the *server process*
+> culture — the machine the portal happens to run on (an `en-US` container, in practice), identical
+> for every simultaneous viewer and unrelated to any of them. `DateTimeView` defaulted its calendar
+> culture to it until 2026-08-17, so month names and date order rendered English for a German user
+> no matter what they had chosen. It now resolves `AccessService.ViewerLocale()`. If you need a
+> `CultureInfo` for formatting, derive it from the viewer's locale — never from ambient culture,
+> which would not survive a hub-scheduler hop anyway.
 
 ### …and where an ANONYMOUS visitor's comes from
 

@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using MeshWeaver.Messaging;
 using CalendarViews = Microsoft.FluentUI.AspNetCore.Components.CalendarViews;
 using DayFormat = Microsoft.FluentUI.AspNetCore.Components.DayFormat;
 using FluentInputAppearance = Microsoft.FluentUI.AspNetCore.Components.FluentInputAppearance;
@@ -13,9 +14,36 @@ namespace MeshWeaver.Blazor.Components;
 /// </summary>
 public partial class DateTimeView
 {
+    /// <summary>
+    /// The VIEWER's culture — month names, day order and date format follow the language the user
+    /// chose, exactly like every other localized surface.
+    ///
+    /// <para>🚨 Never <see cref="CultureInfo.CurrentCulture"/>, which this used to default to. On
+    /// Blazor Server that property is the SERVER PROCESS's culture: it describes the machine the
+    /// portal happens to run on (an `en-US` Linux container, in practice), not the user's computer,
+    /// and it is identical for every simultaneous viewer. So a German user got English month names
+    /// no matter what they picked — and the ambient value would not survive a hub-scheduler hop
+    /// anyway, which is why <c>AccessContext</c> is the one resolution path (Doc/Architecture/
+    /// Localization.md → "resolve explicitly, never from ambient culture").</para>
+    /// </summary>
+    private CultureInfo ViewerCulture()
+    {
+        try
+        {
+            return CultureInfo.GetCultureInfo(AccessService.ViewerLocale());
+        }
+        catch (CultureNotFoundException)
+        {
+            // ViewerLocale only ever returns a tag from Locales.Supported, so this is unreachable
+            // in practice — but a globalization-invariant container has no culture data at all, and
+            // a date picker must not take the page down over month names.
+            return CultureInfo.InvariantCulture;
+        }
+    }
+
     private FluentInputAppearance Appearance { get; set; } = FluentInputAppearance.Outline;
     private CalendarViews View { get; set; } = CalendarViews.Days;
-    private CultureInfo Culture { get; set; } = CultureInfo.CurrentCulture;
+    private CultureInfo Culture { get; set; } = CultureInfo.InvariantCulture;
     private DayFormat? DayFormat { get; set; }
     private DateTime? DoubleClickToDate { get; set; }
     private bool DisabledSelectable { get; set; } = false;
@@ -43,7 +71,10 @@ public partial class DateTimeView
         {
             DataBind(ViewModel.Appearance, x => x.Appearance, defaultValue: FluentInputAppearance.Outline);
             DataBind(ViewModel.View, x => x.View, defaultValue: CalendarViews.Days);
-            DataBind(ViewModel.Culture, x => x.Culture, defaultValue: CultureInfo.CurrentCulture);
+            // Default to the VIEWER's culture, not the server process's — see ViewerCulture().
+            // An explicit Culture on the control still wins, so a deliberately fixed-format picker
+            // is unaffected.
+            DataBind(ViewModel.Culture, x => x.Culture, defaultValue: ViewerCulture());
             DataBind(ViewModel.DayFormat, x => x.DayFormat);
             DataBind(ViewModel.DoubleClickToDate, x => x.DoubleClickToDate);
             DataBind(ViewModel.DisabledSelectable, x => x.DisabledSelectable, defaultValue: false);

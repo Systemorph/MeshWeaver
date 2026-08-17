@@ -80,6 +80,21 @@ else
                 <DataAnnotationsValidator />
 
                 <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+                    @* FIRST field on purpose: it governs the language of every other label on this
+                       form and of the first screens after it. Defaulted to the visitor's own
+                       computer language (Accept-Language → AccessContext.Locale), and changing it
+                       re-renders this form immediately so the choice is visibly real rather than a
+                       promise about some later page. Shows endonyms — a German speaker looks for
+                       "Deutsch", not "German". *@
+                    <FluentSelect Label="@AccessService.Localize("auth.language")"
+                                  TOption="string"
+                                  Items="@Locales.Supported"
+                                  OptionValue="@(tag => tag)"
+                                  OptionText="@(tag => Locales.DisplayNames.TryGetValue(tag, out var name) ? name : tag)"
+                                  SelectedOption="@model.Locale"
+                                  SelectedOptionChanged="OnLocaleChanged"
+                                  Style="width: 100%;" />
+
                     <FluentTextField Label="@AccessService.Localize("auth.fullName")"
                                      Required="true"
                                      @bind-Value="model.FullName"
@@ -157,6 +172,23 @@ else
 
         model.Email = context.Email ?? "";
         emailReadOnly = !string.IsNullOrEmpty(context.Email) && context.Email.Contains('@');
+
+        // The visitor's own COMPUTER language, already negotiated from this request's
+        // Accept-Language header onto AccessContext.Locale by UserContextMiddleware. That is the
+        // only language signal available here: BrowserPreferenceDetector reads navigator.language,
+        // but it lives in the authenticated portal shell and therefore does not run until AFTER
+        // onboarding — which is why a German user used to fill in this form in English.
+        // Resolve (not TryMatch) so the picker always carries a valid selection — a dropdown with
+        // nothing selected is not a choice a user can meaningfully confirm.
+        //
+        // 🚨 This DOES mean onboarding always stores a tag, including "en" for a visitor who leaves
+        // the default. That is deliberately different from BrowserPreferenceDetector's rule (an
+        // unsupported browser language writes NOTHING, so a translation shipped later applies
+        // automatically). The distinction is silent-guess vs seen-and-accepted: the detector infers
+        // without asking, so it must not pin a profile; this picker is on screen, labelled, and
+        // submitted by the user, so honouring it — even when it is the default — is the honest
+        // reading of an explicit choice.
+        model.Locale = Locales.Resolve(context.Locale);
 
         if (!string.IsNullOrEmpty(context.Name) && context.Name != "Unknown")
             model.FullName = context.Name;
@@ -239,6 +271,37 @@ else
                             "Onboarding: existing-user lookup failed for {Email}", email);
                         InvokeAsync(() => { checkCompleted = true; StateHasChanged(); });
                     }));
+    }
+
+    /// <summary>
+    /// Applies the picked language to THIS page immediately, so the choice is visibly real: every
+    /// label here reads through <c>AccessService.Localize</c>, which resolves off
+    /// <see cref="AccessContext.Locale"/>, so restamping the context and re-rendering flips the form
+    /// into the chosen language on the spot. Nothing is persisted here — <c>User.Locale</c> is
+    /// written once, from <c>model.Locale</c>, when the form is submitted (the user may not have a
+    /// user node yet at all).
+    ///
+    /// <para>🚨 BOTH contexts are written, and neither is redundant — the same pairing
+    /// <see cref="OnExistingUserCheckCompleted"/> already does. <c>AccessService.Context</c> is an
+    /// <c>AsyncLocal</c> scoped to the inbound activity: writing it makes THIS render pick the
+    /// language up, but it does not survive to the circuit's next event, so on its own the form
+    /// would snap back to the previous language on the following interaction. The circuit-level
+    /// write is what actually carries the choice forward — and writing only the AsyncLocal would
+    /// also leave a request context stamped with a locale the circuit never agreed to.</para>
+    /// </summary>
+    private void OnLocaleChanged(string? tag)
+    {
+        model.Locale = Locales.Resolve(tag);
+
+        // Explicit restamp — never CultureInfo.CurrentUICulture, which a hub-scheduler hop would
+        // drop and which would leak one viewer's language into another's render.
+        var context = AccessService?.Context ?? AccessService?.CircuitContext;
+        if (context is null)
+            return;
+
+        var relocalized = context with { Locale = model.Locale };
+        AccessService!.SetContext(relocalized);          // this render
+        CircuitAccessHandler.UpdateUserContext(relocalized); // every render after it
     }
 
     private void OnExistingUserCheckCompleted(string email, MeshNode? existing, bool isFirstUser, bool invited)
@@ -353,7 +416,8 @@ else
             FullName: fullName,
             Bio: model.Bio,
             Role: model.Role,
-            AvatarUrl: model.AvatarUrl);
+            AvatarUrl: model.AvatarUrl,
+            Locale: model.Locale);
 
         // Three synced queries — bypass RLS, gated on Initial, deduped on path.
         // workspace.GetQuery is the canonical primitive for reading a set of
@@ -569,6 +633,12 @@ else
         public string? Bio { get; set; }
         public string? Role { get; set; }
         public string? AvatarUrl { get; set; }
+
+        /// <summary>
+        /// The chosen BCP-47 UI language. Pre-filled in <c>OnInitialized</c> from the visitor's own
+        /// computer language and written to <c>User.Locale</c> on submit.
+        /// </summary>
+        public string Locale { get; set; } = Locales.Default;
     }
 
     private static class Icons
