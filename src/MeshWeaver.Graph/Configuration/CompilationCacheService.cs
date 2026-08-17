@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reflection;
 using System.Runtime.Loader;
+using MeshWeaver.Compiler;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -1012,33 +1013,14 @@ internal class CompilationCacheService(
     }
 
     /// <inheritdoc />
-    public string SanitizeNodeName(string nodePath)
-    {
-        // Replace path separators and invalid characters with underscores
-        var sanitized = nodePath
-            .Replace('/', '_')
-            .Replace('\\', '_')
-            .Replace(':', '_')
-            .Replace('*', '_')
-            .Replace('?', '_')
-            .Replace('"', '_')
-            .Replace('<', '_')
-            .Replace('>', '_')
-            .Replace('|', '_')
-            .Replace(' ', '_');
-
-        // Remove leading/trailing underscores and collapse multiple underscores
-        while (sanitized.Contains("__"))
-            sanitized = sanitized.Replace("__", "_");
-
-        sanitized = sanitized.Trim('_');
-
-        // Ensure it starts with a letter (for valid assembly names)
-        if (sanitized.Length > 0 && !char.IsLetter(sanitized[0]))
-            sanitized = "Node_" + sanitized;
-
-        return sanitized;
-    }
+    /// <remarks>
+    /// The rule itself lives in <see cref="CodeConventions.SanitizeNodeName"/> — it names the
+    /// EMITTED ASSEMBLY (<c>DynamicNode_{name}</c>) and the generated provider class, so it shapes
+    /// the compile's output and has to sit inside the toolchain identity boundary (#1707). The
+    /// build-process baker (#1763) calls the same function, which is what makes a compiler-driven
+    /// bake and this mesh-driven one produce identically-named assemblies.
+    /// </remarks>
+    public string SanitizeNodeName(string nodePath) => CodeConventions.SanitizeNodeName(nodePath);
 
     /// <inheritdoc />
     public NodeAssemblyLoadContext GetOrCreateLoadContext(string nodeName)
