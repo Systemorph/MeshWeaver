@@ -4,6 +4,7 @@
 
 @inject IConfiguration Configuration
 @inject AccessService Access
+@inject MeshWeaver.Hosting.AspNetCore.ModuleStaticAssetManifest ModuleAssets
 
 @{
     // Instance identity: when Portal:InstanceName is set (e.g. "Local"), the tab
@@ -34,6 +35,15 @@
     @* No pack tags here: view packs (Radzen, …) self-load their CSS/JS on first render via
        _content/MeshWeaver.Blazor/assetLoader.js — the shell stays pack-free so a pack can be
        added or dropped without touching it. *@
+    @* …with ONE exception that cannot self-load: SCOPED css. A referenced RCL's .razor.css is
+       bundled into the host aggregate linked above at HOST build; a module shipping via
+       modules/<Name>/ is outside that build, so its bundle is published standalone and nothing
+       links it — the module's components would render unstyled while all their JS worked. This
+       loop is data-driven off what actually landed, so it stays empty until a pack flips (#1724). *@
+    @foreach (var stylesheet in ModuleAssets.Stylesheets)
+    {
+        <link href="@stylesheet" rel="stylesheet" />
+    }
     <ImportMap />
     @if (hasInstance)
     {
