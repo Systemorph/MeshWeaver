@@ -11,6 +11,7 @@ using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Hosting.SelfUpdate;
 
 namespace Memex.Portal.Shared.SelfUpdate;
 

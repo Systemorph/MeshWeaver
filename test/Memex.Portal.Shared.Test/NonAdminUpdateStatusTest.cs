@@ -11,6 +11,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using MeshWeaver.Hosting.SelfUpdate;
 
 namespace Memex.Portal.Shared.Test;
 

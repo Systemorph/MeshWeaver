@@ -2,7 +2,6 @@
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Email;
-using Memex.Portal.Shared.Instances;
 using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
@@ -874,9 +873,9 @@ public static class MemexConfiguration
                         // where the concern is defined shows as its own section. Per-item configurable
                         // (label / icon / order / tooltip / href); register more under the same AI context.
                         .AddNodeMenuItems(NodeMenuItemsExtensions.AiMenuContext, [.. AiMenuItems])
-                        // Platform-admin Instances overview: live cluster query (namespaces, versions,
-                        // replica health) + Grafana log links + guided create-instance plan generator.
-                        .AddInstancesAdminSettingsTab()
+                        // (The platform-admin Instances overview — live cluster query, Grafana links,
+                        // create-instance plan generator — rides the MeshWeaver.SelfUpdate.Aks module,
+                        // which registers its own settings tab on the per-node hub.)
                         // The platform's global settings tabs ride the UiContribution lane (WS7):
                         // What's New / About / Privacy (slice 2) plus the Administration tabs —
                         // Invitations + Inbox (invitation-only onboarding, non-user mail), Updates
@@ -927,9 +926,11 @@ public static class MemexConfiguration
                 // (on Kubernetes) patches the portal+migration deployments to the newest version per
                 // policy. On a non-k8s host it degrades to detect-and-notify. See ReleaseStrategy.md.
                 .AddSelfUpdate()
-                // Platform-admin Instances feature: binds InstancesOptions (Instances:*) and the
-                // live cluster-query service backing the admin Instances tab (see Instances.md).
-                .AddInstancesAdmin();
+                ;
+                // (The platform-admin Instances feature — InstancesOptions plus the live cluster-query
+                // service — rides the MeshWeaver.SelfUpdate.Aks module: it is AKS-specific, while the
+                // self-update POLLER above stays here because self-update is how a deployment receives
+                // new bits, modules included.)
         }
 
         /// <summary>

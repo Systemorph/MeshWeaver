@@ -148,6 +148,7 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
 | `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
 | `MeshWeaver.Teams.dll` | Microsoft Teams bot channel: messaging endpoint, inbound routing into threads, proactive replies | `Teams` (inert until bot credentials set) |
+| `MeshWeaver.SelfUpdate.Aks.dll` | AKS/ACR mechanics: ACR tag reads, Kubernetes deployment patching, cluster instance provisioning (the self-update POLLER stays in the platform) | `SelfUpdate`, `Instances` |
 | `MeshWeaver.Courses.dll` | Course delivery: the entitlement-gated `/assets/{Space}/…` route over a Space's synced repo | `GitHub:App:*` (shared with GitSync) |
 | `MeshWeaver.Mail.MicrosoftGraph.dll` | Mail over Microsoft Graph: system email, inbound intake + its webhook, the Executive Assistant's mailbox tools | `Email` (`Enabled`, `InboundEnabled`) |
 | `MeshWeaver.Mcp.dll` | The Model Context Protocol server: the mesh tool surface + the `/mcp` HTTP transport | `Mcp` (`BaseUrl`; the `McpAuth` policy stays platform-side) |

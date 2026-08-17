@@ -1,4 +1,4 @@
-using Memex.Portal.Shared.Instances;
+using MeshWeaver.SelfUpdate.Aks;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;

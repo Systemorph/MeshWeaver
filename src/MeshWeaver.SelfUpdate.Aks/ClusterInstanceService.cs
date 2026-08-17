@@ -3,13 +3,13 @@ using System.Reactive.Linq;
 using System.Runtime.Versioning;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
-using Memex.Portal.Shared.SelfUpdate;
+using MeshWeaver.Hosting.SelfUpdate;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Instances;
+namespace MeshWeaver.SelfUpdate.Aks;
 
 /// <summary>One running platform instance, as observed live from the Kubernetes API.</summary>
 public sealed record InstanceInfo

@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Memex.Portal.Shared.Instances;
+namespace MeshWeaver.SelfUpdate.Aks;
 
 /// <summary>
 /// Configuration for the platform-admin Instances view (<see cref="InstancesAdminLayoutArea"/>).
