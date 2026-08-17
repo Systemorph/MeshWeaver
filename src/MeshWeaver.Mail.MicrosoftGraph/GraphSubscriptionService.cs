@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Email;
+namespace MeshWeaver.Mail.MicrosoftGraph;
 
 /// <summary>
 /// Keeps a Microsoft Graph change-notification subscription alive on the mailbox inbox so inbound mail is

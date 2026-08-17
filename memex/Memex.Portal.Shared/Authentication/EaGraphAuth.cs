@@ -47,6 +47,11 @@ public sealed class EaGraphAuth(
     private string Authority => $"https://login.microsoftonline.com/{TenantId}/oauth2/v2.0";
 
     /// <summary>True when the sign-in app credentials needed for the delegated flow are configured.</summary>
+    /// <inheritdoc />
+    // The route stays defined ONCE, by the controller that registers it; this only
+    // surfaces it through the seam so the module-side EA tools can link to it.
+    public string ConnectPath => EaConsentController.ConnectPath;
+
     public bool IsConfigured => !string.IsNullOrEmpty(ClientId) && !string.IsNullOrEmpty(ClientSecret);
 
     /// <summary>The Microsoft consent/authorize URL to send the user to (incremental consent, forces the prompt).</summary>

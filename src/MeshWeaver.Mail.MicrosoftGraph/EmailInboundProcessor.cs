@@ -14,10 +14,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Models;
 
-namespace Memex.Portal.Shared.Email;
+namespace MeshWeaver.Mail.MicrosoftGraph;
 
 /// <summary>
-/// Routes an inbound email by sender, with all matching driven through <see cref="IMeshQueryCore"/> —
+/// Routes an inbound email by sender, with all matching driven through System-identity queries —
 /// no in-memory registries.
 /// <list type="bullet">
 ///   <item><b>email → user:</b> structured exact query <c>nodeType:User content.email:{from}</c>.</item>
@@ -44,7 +44,6 @@ public sealed class EmailInboundProcessor(
 
     private readonly IMeshService meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
     private readonly AccessService accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-    private readonly IMeshQueryCore query = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
 
     /// <summary>A parsed inbound email — the Graph-free input to <see cref="Route"/>.</summary>
     public sealed record InboundMessage(
@@ -80,10 +79,16 @@ public sealed class EmailInboundProcessor(
         if (string.Equals(m.From, graphMail.Mailbox, StringComparison.OrdinalIgnoreCase))
             return Observable.Return(Unit.Default);
 
-        // email → user: structured exact match through IMeshQueryCore.
-        return query.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"nodeType:{UserNodeType.NodeType} content.email:{m.From} limit:1"),
-                hub.JsonSerializerOptions)
+        // email → user: structured exact match, read AS SYSTEM. An inbound email arrives with no
+        // viewer, so the lookup must see every user regardless of who (nobody) is signed in. This
+        // used the INTERNAL IMeshQueryCore — "raw queries without user context", explicitly
+        // documented as not for application code — which is unreachable from a module without
+        // granting it InternalsVisibleTo on the mesh contract. WellKnownUsers.System is the public
+        // equivalent (Permission.All, so nothing is filtered out) and the same shape the course-asset
+        // endpoint uses for its own viewer-independent reads.
+        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"nodeType:{UserNodeType.NodeType} content.email:{m.From} limit:1",
+                    WellKnownUsers.System))
             .Take(1)
             .Select(change => change.Items.FirstOrDefault(n => n.State == MeshNodeState.Active))
             .SelectMany(userNode => userNode is not null
@@ -151,7 +156,9 @@ public sealed class EmailInboundProcessor(
         var safeSubject = SanitizeForQuery(subject);
         var q = $"{safeSubject} nodeType:{EmailNodeType.NodeType} namespace:{username}/{EmailNodeType.UserEmailSegment} limit:10";
         var jsonOptions = hub.JsonSerializerOptions;
-        return query.Query<MeshNode>(MeshQueryRequest.FromQuery(q), jsonOptions)
+        // Same viewer-independent read as above (was IMeshQueryCore): the thread being searched for
+        // belongs to the recipient, not to any signed-in viewer.
+        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(q, WellKnownUsers.System))
             .Take(1)
             .Select(change => change.Items
                 .Select(n => EmailOf(n, jsonOptions))
