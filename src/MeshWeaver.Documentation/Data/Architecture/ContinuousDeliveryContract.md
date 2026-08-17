@@ -196,7 +196,13 @@ mid-way leaves no sentinel — the next run re-publishes wholesale, and the port
 unsealed or torn directories, so a partial publication can neither freeze nor be seeded.
 Each booting pod seeds its own identity's bundles (`PreWarm:PrebuiltBundleRoot` →
 `ShippedPrebuiltBundles.SeedPublishedRoot`) before its NodeType sweep, and compiles only what CI
-did not bake. Its configuration is **preflighted red, never skipped**: repo variable
+did not bake. 🚨 **For the platform's OWN content that is currently aspiration, not fact** — issue
+#1725: CI bakes platform content from the Build-and-Test *build output*, while the pod resolves
+its identity inside the *shipped image*, so the two identities differ and no pod can adopt the
+platform bake (every boot Roslyn-compiles the shipped types anyway). The satellites are unaffected
+because they bake INSIDE the shipped image, which is why only their publications match today. Read
+the paragraph above as the contract the fix restores, not as current behaviour. Its configuration
+is **preflighted red, never skipped**: repo variable
 `BAKE_PUBLISH_TARGETS` names the Azure Files targets (`<account>/<share>[/<base-path>]`,
 whitespace-separated), and a missing value fails the job naming exactly that — a grey skip here
 would silently restore the every-pod-rebakes-everything regression (#1347). A missing bake
@@ -225,17 +231,52 @@ Provisioning state (2026-08-17): the two halves of this cascade are in different
 
 - **The satellites' publish credentials ARE provisioned.** The Azure managed identity
   `github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
-  portals' storage account, with one federated credential per satellite `main` ref
-  (`repo:Systemorph/{MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia}:ref:refs/heads/main`),
-  and the `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` secrets are set on all
-  four repos. **A red publish-bake was designed debt until 2026-08-17 and is a real failure after
-  it** — read any older "credentials pending" or known-red allowlist reference as historical.
+  portals' storage account, carries **8 federated credentials — the four satellite repos
+  (`MeshWeaver.Plugins`, `MeshWeaver.Education`, `MeshWeaver.Reinsurance`, `MeshWeaver.SocialMedia`)
+  × two subject formats** (below) — and the `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
+  `AZURE_SUBSCRIPTION_ID` secrets are set on all four repos. **A red publish-bake was designed debt
+  until 2026-08-17 and is a real failure after it** — read any older "credentials pending" or
+  known-red allowlist reference as historical.
 - **The dispatch itself remains dormant.** `BAKE_SUBSCRIBER_REPOS` (platform repo variable) and
   `DEPENDENT_DISPATCH_TOKEN` (a human-minted PAT with `repo` scope on the four satellites) are
   still unset, so `notify-dependents` exits with its loud not-configured notice. Until they are
   provisioned, satellites re-bake only on their own `main` pushes, and a release-triggered rebuild
   can be hand-fired by anyone with `repo` scope:
   `gh api repos/Systemorph/<repo>/dispatches -f event_type=meshweaver-framework-released`.
+
+### 🚨 Register BOTH OIDC subject formats — the classic one AND the immutable one
+
+GitHub is rolling out **immutable** OIDC subjects that embed numeric ids
+(`repo:Systemorph@77832550/<Repo>@<repoId>:ref:refs/heads/main`) alongside the classic name-based
+form (`repo:Systemorph/<Repo>:ref:refs/heads/main`) — and **which one a repo presents varies per
+repo inside the same org at the same moment.** Measured 2026-08-17: Education and SocialMedia
+presented the immutable form while MeshWeaver.Plugins presented the classic one, so "tidying" all
+four to immutable broke Plugins with
+
+```
+AADSTS700213: No matching federated identity record found for presented assertion subject '<…>'
+```
+
+**The durable arrangement is two federated credentials per repo — one classic, one immutable** —
+each still precisely scoped to repo + branch (no wildcard subject, no org-wide credential). It
+costs nothing, and it survives a repo flipping format under you:
+
+```bash
+REPO=MeshWeaver.Plugins
+REPO_ID=$(gh api repos/Systemorph/$REPO --jq .id)
+ISSUER=https://token.actions.githubusercontent.com
+# BOTH of the following, never just one:
+az identity federated-credential create -g memex-aks-rg --identity-name github-actions-bake \
+  --name "gh-${REPO,,}-main-classic" --issuer "$ISSUER" \
+  --subject "repo:Systemorph/$REPO:ref:refs/heads/main" --audience api://AzureADTokenExchange
+az identity federated-credential create -g memex-aks-rg --identity-name github-actions-bake \
+  --name "gh-${REPO,,}-main" --issuer "$ISSUER" \
+  --subject "repo:Systemorph@77832550/$REPO@$REPO_ID:ref:refs/heads/main" --audience api://AzureADTokenExchange
+```
+
+When `AADSTS700213` appears, **copy the presented subject verbatim out of the error message and add
+a credential for it, KEEPING the existing one.** Deleting the other format is what turns one repo's
+green lane red.
 
 ## See also
 

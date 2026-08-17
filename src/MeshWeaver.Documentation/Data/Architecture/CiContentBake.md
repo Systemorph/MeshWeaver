@@ -132,10 +132,14 @@ for the job's preflight discipline and the dependent-repo dispatch.
 Every satellite content repo (MeshWeaver.Plugins, MeshWeaver.Education, MeshWeaver.Reinsurance,
 MeshWeaver.SocialMedia) bakes and publishes its own content through the SAME contract, and since
 #1707 the jobs live HERE, as reusable `workflow_call` workflows the satellites call instead of
-vendoring. Adoption is per job: every repo calls `node-repo-publish-bake` (the lane whose script
-contract must not drift), while a repo whose variant of a gate carries repo-specific machinery
-(Plugins' Tests-area ratchet, Education's course checks) keeps that job vendored until the
-machinery generalizes:
+vendoring. Adoption is **per job and still in progress**: the target is that every repo calls
+`node-repo-publish-bake` (the lane whose script contract must not drift), while a repo whose
+variant of a gate carries repo-specific machinery (Plugins' Tests-area ratchet, Education's
+course checks) keeps that job vendored until the machinery generalizes. As of 2026-08-17
+**MeshWeaver.SocialMedia and MeshWeaver.Plugins are merged and green end-to-end including
+publish-bake** (SocialMedia calls the full set, Plugins calls publish-bake only);
+MeshWeaver.Reinsurance and MeshWeaver.Education are in flight; MeshWeaver.Manufacturing is
+deliberately deferred.
 
 | Workflow | Job it unifies |
 |---|---|
@@ -163,7 +167,11 @@ The design rules the extraction preserves:
   affected-modules / tag-modules stay caller-side — they encode the repo's own layout).
 - **Adoption renames the required checks**: a reusable-called workflow's check runs report as
   `<caller job> / <name>`, so each repo's required-status-check contexts are renamed in the same
-  change that adopts a workflow — a context left at the old name would wait forever.
+  change that adopts a workflow — a context left at the old name would wait forever. On a
+  protected repo this is a required step of the adoption, not an afterthought: SocialMedia's
+  contexts are now `validate / Validate node repos`,
+  `compile-check / Compile every NodeType (vs core)` and
+  `test-repos / Compile + render node repos (MeshWeaver from ACR)`.
 - **Staged cross-repo modules are excluded from publication** (e.g. Store is staged so
   `requires` resolve but is owned and published by MeshWeaver.Plugins) — each source directory
   seals independently, which is also why no cross-repo bake ORDERING is needed: a dependent
@@ -172,15 +180,20 @@ The design rules the extraction preserves:
 
 The satellites' OIDC publish is **provisioned** (2026-08-17): the Azure managed identity
 `github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
-portals' storage account, with one federated credential per satellite `main` ref
-(`repo:Systemorph/<repo>:ref:refs/heads/main`), and the `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
-`AZURE_SUBSCRIPTION_ID` secrets are set on all four repos. **A red publish-bake was designed debt
-until 2026-08-17 and is a real failure after it** — treat any surviving allowlist or
-"credentials pending" reference to a satellite's publish lane as historical. The
-framework-release dispatch that fans a platform release out to the satellites is still dormant
-(`BAKE_SUBSCRIBER_REPOS` / `DEPENDENT_DISPATCH_TOKEN` unprovisioned — see
-[The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)); until it is
+portals' storage account and carries 8 federated credentials — the four satellite repos × the two
+GitHub subject formats (classic and immutable; **register both, always** — see
+[The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)) — with the
+`AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` secrets set on all four repos.
+**A red publish-bake was designed debt until 2026-08-17 and is a real failure after it** — treat
+any surviving allowlist or "credentials pending" reference to a satellite's publish lane as
+historical. The framework-release dispatch that fans a platform release out to the satellites is
+still dormant (`BAKE_SUBSCRIBER_REPOS` / `DEPENDENT_DISPATCH_TOKEN` unprovisioned); until it is
 armed, a satellite re-bakes on its own `main` pushes only.
+
+🚨 A satellite's publication is adoptable at boot; **the platform's own is not, today** — issue
+#1725: the platform bakes from CI build output while the pod resolves its identity inside the
+shipped image, so the identities differ and every boot recompiles the shipped types. The
+satellites escape it precisely because they bake INSIDE the image.
 
 ## What this step does not do yet
 
