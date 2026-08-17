@@ -125,6 +125,42 @@ identity as its predecessor — the script skips with a notice instead of re-upl
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)
 for the job's preflight discipline and the dependent-repo dispatch.
 
+## Node repos run the same lane — as reusable workflows
+
+Every satellite content repo (MeshWeaver.Plugins, MeshWeaver.Education, MeshWeaver.Reinsurance,
+MeshWeaver.SocialMedia) bakes and publishes its own content through the SAME contract, and since
+#1707 the jobs live HERE, as reusable `workflow_call` workflows the satellites call instead of
+vendoring:
+
+| Workflow | Job it unifies |
+|---|---|
+| `.github/workflows/node-repo-validate.yml` | JSON/manifest shape gate (`scripts/validate-repos.py`, `gen-manifests.py --check`, main-only `--check-versions`) |
+| `.github/workflows/node-repo-compile-check.yml` | the compile gate — every NodeType's resolved Source vs the assemblies of the digest-pinned platform image |
+| `.github/workflows/node-repo-gate.yml` | the tester gate — `mw-plugin-test` over the (optionally affected-narrowed) mount, cross-repo `requires` staged in |
+| `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — full-repo `--bake-output`, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh` |
+| `.github/workflows/node-repo-tag-modules.yml` | the `<Module>/vX.Y.Z` tag publisher (`scripts/tag-modules.py`) |
+
+The design rules the extraction preserves:
+
+- **Every externally-provisioned value is an explicit input/secret** — nothing implicit, so the
+  publish-bake preflight can assert the full set and fail RED naming what to provision. The
+  caller keeps its own `preflight` job (and the fork exemption) for the gate lane, and gates run
+  unconditionally behind `needs:` — no input-shaped `if:` anywhere (no skip-trapdoors).
+- **The publish script has one home** — `publish-bake-bundles.sh` in this repo, next to the
+  `ShippedPrebuiltBundles` constants its `_complete` sentinel must keep matching. The reusable
+  publish-bake checks this repo out (by `platform-ref`, default `main`) and runs it, retiring
+  the per-repo vendored copies. This repo is public, so private satellites call the workflows
+  and read the script with their default token.
+- **Repo-specific policy stays in the caller**: the digest pin (`MW_IMAGE_DIGEST`) and its bump
+  cadence, gating (`if:`/`needs:` on the `uses:` job), the `repository_dispatch` receiver, the
+  module-bundle job of mixed packages, and each repo's `scripts/` (validate / compile-check /
+  affected-modules / tag-modules stay caller-side — they encode the repo's own layout).
+- **Staged cross-repo modules are excluded from publication** (e.g. Store is staged so
+  `requires` resolve but is owned and published by MeshWeaver.Plugins) — each source directory
+  seals independently, which is also why no cross-repo bake ORDERING is needed: a dependent
+  repo's publication never contains its dependency's bundles, so there is nothing to wait for.
+  The framework-release dispatch fans out to all satellites concurrently.
+
 ## What this step does not do yet
 
 - **DB-resident types** (user/partition content CI cannot see) stay on the runtime bake.

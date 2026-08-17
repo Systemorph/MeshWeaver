@@ -1,0 +1,45 @@
+name: Node repo tag-modules (reusable)
+
+# ♻️ REUSABLE (workflow_call) — publishes the git LABEL for each module's released version:
+# `<Module>/vMAJOR.MINOR.PATCH` (unified per #1707). The caller gates it to main after its
+# whole gate suite (`if:` + `needs:` on the `uses:` job), so a tag never names a tree that
+# failed.
+#
+# 🚨 The tag is the contract a dependent's pin resolves against, so the one thing this must
+# never do is let two different trees ship under one version. The caller's scripts/tag-modules.py
+# enforces that: if the tag already exists, its recorded content hash has to match what is in
+# the tree now; a mismatch fails the job loudly rather than silently moving the tag under
+# everyone who pinned it.
+#
+# Caller contract:
+#
+#   tag-modules:
+#     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+#     needs: [validate, compile-check, test-repos]
+#     permissions: { contents: write }     # tag push — must be granted BY the caller
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-tag-modules.yml@main
+
+on:
+  workflow_call: {}
+
+jobs:
+  tag-modules:
+    name: Tag module versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0          # tags are the version history — a shallow clone has none
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Tag every module whose version is not yet released
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: python3 scripts/tag-modules.py
