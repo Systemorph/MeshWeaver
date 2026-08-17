@@ -232,9 +232,17 @@ public class RenderAreaOperationTest(ITestOutputHelper output) : MonolithMeshTes
     {
         var path = await SeedMarkdownNodeAsync("timeout");
 
-        // A zero budget elapses before any frame can arrive — deterministic. Materialize folds
-        // the OnError into a value so the assertion is reactive (try/catch around an awaited
-        // FirstAsync can miss an Rx OnError).
+        // A non-positive budget is refused by the PIPELINE, not merely by the outer Rx Timeout:
+        // RenderArea carries the budget as a deadline and re-checks it immediately before opening
+        // the layout-area stream, so the fault is deterministic in both directions — no frame can
+        // win the race (the stream is never opened), and no SubscribeRequest is left behind for a
+        // caller that has already been faulted. The old premise here — "a zero budget elapses
+        // before any frame can arrive" — leaned on the outer Timeout alone and was racy: the
+        // continuation still opened the stream and posted a SubscribeRequest to a cold per-node
+        // hub, which parked on its init gates and tripped THIS class's leaked-callback teardown
+        // check on a loaded CI runner (issue #1613; main run 32025437472).
+        // Materialize folds the OnError into a value so the assertion is reactive (try/catch
+        // around an awaited FirstAsync can miss an Rx OnError).
         var notification = await new MeshOperations(Mesh)
             .RenderArea($"@{path}", "Overview", timeoutSeconds: 0)
             .Materialize()
@@ -243,5 +251,30 @@ public class RenderAreaOperationTest(ITestOutputHelper output) : MonolithMeshTes
         notification.Kind.Should().Be(NotificationKind.OnError,
             "an elapsed budget must FAULT the observable — the REST layer maps it to a 504 JSON error");
         notification.Exception.Should().BeOfType<TimeoutException>();
+        // 🚨 This is what PINS the fix, and it is the assertion the old test was missing: the fault
+        // must come from the pipeline REFUSING the render, not from the outer Rx Timeout firing
+        // over a render that went ahead anyway. Only the former guarantees no layout-area stream —
+        // and so no orphaned SubscribeRequest against a cold per-node hub — was opened. Drop the
+        // refusal and this line fails immediately, instead of the leak resurfacing as a CI flake
+        // on somebody else's PR days later.
+        notification.Exception!.Message.Should().Contain("nothing was rendered",
+            "a non-positive budget must be refused outright — no path resolution, no remote stream");
+
+        // A NEGATIVE budget takes the same refusal, and must do so as a FAULTED OBSERVABLE. Without
+        // the refusal it would reach `.Timeout(negative)`, whose argument validation throws
+        // ArgumentOutOfRangeException — synchronously, out of the CALL rather than the subscription,
+        // so a caller composing this verb reactively never gets to see it as an Rx fault at all.
+        // `timeoutSeconds` is a public parameter, so a negative value is externally reachable
+        // (the REST surface clamps to [1,120], but MeshOperations is called directly too).
+        var negative = await new MeshOperations(Mesh)
+            .RenderArea($"@{path}", "Overview", timeoutSeconds: -1)
+            .Materialize()
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask(Ct);
+
+        negative.Kind.Should().Be(NotificationKind.OnError,
+            "a negative budget must fault the observable, not throw out of the call");
+        negative.Exception.Should().BeOfType<TimeoutException>(
+            "the refusal is a TimeoutException, never ArgumentOutOfRangeException from Rx's Timeout");
+        negative.Exception!.Message.Should().Contain("nothing was rendered");
     }
 }
