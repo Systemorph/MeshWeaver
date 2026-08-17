@@ -1,4 +1,4 @@
-namespace Memex.Portal.Shared.SelfUpdate;
+namespace MeshWeaver.Hosting.SelfUpdate;
 
 /// <summary>
 /// Configuration for the self-update poller. Defaults target the standard AKS / local-k3s topology

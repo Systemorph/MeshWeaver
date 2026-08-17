@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using NuGet.Versioning;
+using MeshWeaver.Hosting.SelfUpdate;
 
 namespace Memex.Portal.Shared.SelfUpdate;
 
