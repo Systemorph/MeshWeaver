@@ -608,9 +608,15 @@ public sealed class DynamicTypePreWarmerHostedService(
         // deliver to this instance, so it is either content with no CI bake by construction
         // (authored locally — expected, and the reason this mode still allows lazy compilation) or
         // a hole in the bake/delivery lane that someone can now go and close.
+        // The Detail is the half that says WHY — "record claims <collection>/<path> but the store
+        // has no bytes there", "the stamped dependency record no longer validates here". Naming the
+        // type without it tells an operator that a gap exists but not which lane to go and look at,
+        // which is most of the value of naming it at all.
         var named = string.Join(", ", uncovered
             .Take(UncoveredReported)
-            .Select(e => e.Detail is null ? e.TypePath : $"{e.TypePath} ({e.State})"));
+            .Select(e => e.Detail is null
+                ? $"{e.TypePath} ({e.State})"
+                : $"{e.TypePath} ({e.State}: {e.Detail})"));
         if (uncovered.Count > UncoveredReported)
             named += $", …and {uncovered.Count - UncoveredReported} more";
 

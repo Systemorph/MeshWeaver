@@ -1,18 +1,1 @@
-﻿{
-    "id":  "BalanceSheetEntry",
-    "namespace":  "PensionFund",
-    "name":  "Balance Sheet Entry",
-    "nodeType":  "NodeType",
-    "category":  "Types",
-    "description":  "Atomic balance-sheet fact: the value of one Position in one Year. Entries are mesh nodes - no Id property; dimension columns store dimension node PATHS.",
-    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003cpath d=\u0027M4 4h16v16H4z\u0027/\u003e\u003cpath d=\u0027M4 10h16M10 4v16\u0027/\u003e\u003c/svg\u003e",
-    "isPersistent":  true,
-    "content":  {
-                    "$type":  "NodeTypeDefinition",
-                    "id":  "BalanceSheetEntry",
-                    "namespace":  "PensionFund",
-                    "displayName":  "Balance Sheet Entry",
-                    "iconName":  "DocumentTable",
-                    "configuration":  "config =\u003e config.WithContentType\u003cBalanceSheetEntry\u003e().AddDefaultLayoutAreas()"
-                }
-}
+{"$type":"MeshNode","id":"BalanceSheetEntry","namespace":"PensionFund","path":"PensionFund/BalanceSheetEntry","mainNode":"PensionFund/BalanceSheetEntry","name":"Balance Sheet Entry","description":"Atomic balance-sheet fact: the value of one Position in one Year. Entries are mesh nodes - no Id property; dimension columns store dimension node PATHS.","nodeType":"NodeType","category":"Types","icon":"\u003Csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003E\u003Cpath d=\u0027M4 4h16v16H4z\u0027/\u003E\u003Cpath d=\u0027M4 10h16M10 4v16\u0027/\u003E\u003C/svg\u003E","lastModified":"2026-08-17T11:58:26.2408276+00:00","version":5,"state":"Active","content":{"$type":"NodeTypeDefinition","configuration":"config =\u003E config.WithContentType\u003CBalanceSheetEntry\u003E().AddDefaultLayoutAreas()","includeGlobalTypes":true,"compilationStatus":"Ok","lastCompileStartedAt":"2026-08-17T12:16:18.725965\u002B00:00","lastCompileSucceededAt":"2026-08-17T12:16:18.738127\u002B00:00","lastCompiledVersion":3,"lastCompilationActivityPath":"PensionFund/BalanceSheetEntry/_Activity/compile-20260817121618721e656b51f9a174c9f94c39c65e192e9ac","latestReleasePath":"PensionFund/BalanceSheetEntry/Release/20260817121618-pIlZ0cIz","latestAssemblyCollection":"local","latestAssemblyPath":"PensionFund_BalanceSheetEntry/v3-s6408a66-df2fd1885799.dll","compiledSources":{"PensionFund/BalanceSheetEntry/Source/BalanceSheetEntry":639225647062423918},"currentSourceVersions":{"PensionFund/BalanceSheetEntry/Source/BalanceSheetEntry":639225647062423918},"compiledFrameworkVersion":"s6408a662fcf9398bcff8cac5d0f4bdce","compiledModulesHash":"f59558c7c4a388b3866ccbb91a2bed15aeb7df94378b7fde8c342cef097f1f1a","compiledDependencies":{"!toolchain":"mvid:d0997007a10f7c2887d58f3035b950be","MeshWeaver.Domain":"ref:C101255960AF195B85C552C9BFE40EBC74B6BC58C2515C77C5C6418EEDA1DD7B","MeshWeaver.Graph":"ref:E0E5AE960D476AACAB88F7C0DB7C09E077649B15C9B78A78BFF1FEDB8FD77F4B","MeshWeaver.Mesh.Contract":"ref:B4C3890EB54E343C679F5023F92848057D1D482253535EAE6CDCB305C40AEF49","MeshWeaver.Messaging.Hub":"ref:0D1443C361C1A052BE3473C5BBD829165F53598D8C088742E2B35C29500BCF61"},"id":"BalanceSheetEntry","namespace":"PensionFund","displayName":"Balance Sheet Entry","iconName":"DocumentTable"}}
