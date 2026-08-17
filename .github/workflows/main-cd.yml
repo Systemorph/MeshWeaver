@@ -971,7 +971,9 @@ jobs:
   # sentinel strictly LAST, and pods seed only sealed directories.
   publish-bake:
     name: "Bake platform content in the shipped image + publish"
-    needs: [gate, plugin-test-image, promote]
+    # portal-image is here for its `version` output — the release marker below is keyed by the
+    # platform version the self-updater compares, not by the commit.
+    needs: [gate, plugin-test-image, portal-image, promote]
     if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     runs-on: ubuntu-latest
     # The bake compiles every shipped NodeType twice over (Doc + samples) inside the container;
@@ -1112,6 +1114,7 @@ jobs:
       - name: "Publish bundles to every portal target"
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          RELEASE_VERSION: ${{ needs.portal-image.outputs.version }}
         run: |
           set -euo pipefail
           # The third argument is the CONTENT identity (the commit this bake was taken from).
@@ -1120,11 +1123,19 @@ jobs:
           # the whole surface generation, and pods would keep declining its stale per-type source
           # SHAs and recompiling. With it, a content change under an unchanged surface republishes
           # (cheap uploads), and a truly unchanged bake still skips.
-          .github/scripts/publish-bake-bundles.sh "$BAKE_DIR" meshweaver-content "${{ needs.gate.outputs.sha }}"
+          #
+          # The FOURTH argument is the platform version this run promoted, and it records the
+          # version → framework-identity mapping at prebuilt-bundles/_releases/<version>. That
+          # marker is what lets anything outside the image answer "which framework identity is
+          # release X?" — the release gates (#1754 deployment, #1755 build) hold when it is
+          # absent, so this run publishing it is what OPENS the gate for the release it just armed.
+          .github/scripts/publish-bake-bundles.sh "$BAKE_DIR" meshweaver-content \
+            "${{ needs.gate.outputs.sha }}" "$RELEASE_VERSION"
           {
             echo "### 📦 Platform content bake published"
             echo "- identity: \`$(cat "$BAKE_DIR/framework-mvid.txt")\` (resolved by the image this run promoted)"
             echo "- source: \`meshweaver-content\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
+            echo "- release marker: \`_releases/${RELEASE_VERSION}\` — environments may now be rolled to it"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ────────────────── NOTIFY DEPENDENT REPOS (repository_dispatch) ──────────────────

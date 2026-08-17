@@ -198,6 +198,15 @@ wrong. Architecture is part of the identity too (the amd64 and arm64 variants of
 differently), so the bake is pinned to `--platform linux/amd64`, the architecture every AKS node
 runs.
 
+The same job also records **`prebuilt-bundles/_releases/<version>`**, a one-line marker holding the
+framework identity this release resolved. That marker is the only way anything outside the image can
+answer "which identity is release X?" — the identity is a property of the binaries, so it cannot be
+computed from a tag or a commit — and it is what the [release availability
+gates](../ReleaseGates) read before an environment is rolled or a dependent repo is built. It is
+written on **every** run, deliberately outside the already-published skip below: the skip is the
+common case for an unchanged surface, and a marker that rode along with the bundles would be absent
+for every release after the first of a surface generation.
+
 The identity stays equal across internal-only merges: when the identity's directory is already
 **sealed** (the `_complete` sentinel the publisher writes strictly LAST, after every bundle), the
 script skips with a notice instead of re-uploading ("rebuild only when we need to"). A publish that
