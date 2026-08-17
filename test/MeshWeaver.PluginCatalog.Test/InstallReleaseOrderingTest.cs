@@ -134,14 +134,14 @@ public class InstallReleaseOrderingTest(ITestOutputHelper output) : MonolithMesh
         // root whose in-package type has a build an instance could load. If Kit/Front did not
         // compile there is no recycle to order around and every assertion below would fail for a
         // reason that has nothing to do with ordering.
-        var frontNode = await Mesh.GetWorkspace().GetMeshNodeStream($"{PackageId}/Front")
-            .Where(n => n?.Content is NodeTypeDefinition
-            {
-                CompilationStatus: CompilationStatus.Ok or CompilationStatus.Error
-            })
+        var frontDef = await Mesh.GetWorkspace().GetMeshNodeStream($"{PackageId}/Front")
+            // ContentAs, never `is NodeTypeDefinition`: a cross-hub mirror snapshot is routinely
+            // un-materialized JSON, and a CLR type test blinds this to an in-flight compile — the
+            // same reason MayPublishIntoRoot reads it this way.
+            .Select(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Where(def => def?.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
             .FirstAsync().Timeout(StepTimeout).ToTask();
-        var frontDef = (NodeTypeDefinition)frontNode!.Content!;
-        frontDef.CompilationStatus.Should().Be(CompilationStatus.Ok,
+        frontDef!.CompilationStatus.Should().Be(CompilationStatus.Ok,
             $"the root's own type must compile or there is no recycle to order around; error: {frontDef.CompilationError}");
 
         var recycles = _rootRecycles.ToArray();
@@ -183,11 +183,13 @@ public class InstallReleaseOrderingTest(ITestOutputHelper output) : MonolithMesh
     /// </summary>
     private async Task<DateTimeOffset> ReleaseTrigger(string typePath)
     {
-        var node = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition { RequestedReleaseAt: not null })
+        // ContentAs, never a CLR type test — see the note at the precondition read above.
+        var def = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Select(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Where(d => d?.RequestedReleaseAt is not null)
             .FirstAsync()
             .Timeout(TimeSpan.FromSeconds(30))
             .ToTask();
-        return ((NodeTypeDefinition)node!.Content!).RequestedReleaseAt!.Value;
+        return def!.RequestedReleaseAt!.Value;
     }
 }
