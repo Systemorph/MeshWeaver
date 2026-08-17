@@ -241,8 +241,8 @@ service index and dependency ranges would be surfaces that can drift with no cli
 
 | Route | Serves |
 |---|---|
-| `GET /api/plugins/bundles/index.json` | This instance's framework MVID, and every plugin it can serve |
-| `GET /api/plugins/bundles/{plugin}/{version}` | That plugin's assemblies + manifest |
+| `GET /api/plugins/bundles/index.json` | This instance's framework MVID, and every plugin it can serve **the calling instance** |
+| `GET /api/plugins/bundles/{plugin}/{version}` | That plugin's assemblies + manifest, if the caller is granted it |
 
 Both are gated by the **instance key** (`mwi_`, as `Bearer` or `Basic`) resolving to the admin-owned
 `PluginGrant` — the same gate as `/api/plugins`, deliberately, because that is already what purchases
