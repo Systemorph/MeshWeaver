@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Net.Http.Headers;
 using System.Runtime.Versioning;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -73,6 +75,42 @@ public sealed class KubernetesDeploymentUpdater : IDeploymentUpdater
 
     public bool CanPatch => _http is not null && _apiBase is not null && !string.IsNullOrEmpty(_namespace);
 
+    /// <summary>Annotation self-update stamps on the deployments it rolls; the floor reads it back.</summary>
+    internal const string LastRolledAnnotation = "meshweaver.io/self-update-rolled-at";
+
+    /// <inheritdoc />
+    public async Task<DateTimeOffset?> LastRolledAtAsync(CancellationToken ct)
+    {
+        if (!CanPatch)
+            return null;
+        var token = SafeRead(TokenFile)?.Trim();
+        if (string.IsNullOrEmpty(token) || _http is null)
+            return null;
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get,
+                $"{_apiBase}/apis/apps/v1/namespaces/{_namespace}/deployments/{_options.PortalDeployment}");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var res = await _http.SendAsync(req, ct).ConfigureAwait(false);
+            if (!res.IsSuccessStatusCode)
+                return null;   // cannot tell ⇒ do not hold the roll on evidence we could not gather
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+            return doc.RootElement.TryGetProperty("metadata", out var meta)
+                   && meta.TryGetProperty("annotations", out var annotations)
+                   && annotations.TryGetProperty(LastRolledAnnotation, out var stamp)
+                   && DateTimeOffset.TryParse(stamp.GetString(), out var rolledAt)
+                ? rolledAt
+                : null;        // never rolled by self-update (or a stamp we cannot parse)
+        }
+        catch (Exception ex)
+        {
+            // Never let the floor's own read block a roll: an unreadable deployment reports "no
+            // stamp", which lets the roll proceed rather than freezing this install silently.
+            _logger?.LogWarning(ex, "[SelfUpdate] could not read the last-rolled annotation; treating as never.");
+            return null;
+        }
+    }
+
     public async Task PatchToVersionAsync(string versionTag, CancellationToken ct)
     {
         if (!CanPatch)
@@ -95,8 +133,21 @@ public sealed class KubernetesDeploymentUpdater : IDeploymentUpdater
 
         // Strategic-merge patch: matches the container by name and sets ONLY its image. Built with
         // JsonSerializer so the (deeply-nested) braces are never a string-literal hazard.
+        // Strategic-merge patch: matches the container by name and sets ONLY its image, and stamps
+        // WHEN self-update rolled this deployment. The stamp is the floor's restart-surviving state
+        // (MinRollInterval): a successful roll restarts this process, so anything held in memory is
+        // gone exactly when the floor needs it, while an annotation on the object being patched
+        // outlives the pod — and a pod that crash-restarts on an OLD image reads the OLD stamp and
+        // is correctly free to roll at once.
         var body = JsonSerializer.Serialize(new
         {
+            metadata = new
+            {
+                annotations = new Dictionary<string, string>
+                {
+                    [LastRolledAnnotation] = DateTimeOffset.UtcNow.ToString("O"),
+                },
+            },
             spec = new { template = new { spec = new { containers = new[] { new { name = container, image } } } } }
         });
         using var req = new HttpRequestMessage(HttpMethod.Patch,

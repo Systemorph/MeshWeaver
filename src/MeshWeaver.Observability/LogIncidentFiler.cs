@@ -193,6 +193,13 @@ public sealed class LogIncidentFiler(
         if (!incident.Pods.IsEmpty)
             sb.AppendLine(CultureInfo.InvariantCulture, $"| Pods | {string.Join(", ", incident.Pods.Select(p => $"`{p}`"))} |");
         sb.AppendLine(CultureInfo.InvariantCulture, $"| Occurrences | {incident.Occurrences} |");
+        if (incident.Variants > 1)
+            sb.Append(CultureInfo.InvariantCulture, $"| Message shapes | **{incident.Variants}** — ")
+                .AppendLine(
+                    "this log site fanned out past the watcher's per-site budget in one window, so "
+                    + "its bursts were folded onto THIS one incident rather than opening that many "
+                    + "tickets. The masking rule is not normalizing something in this message; the "
+                    + "shapes are in the samples below. |");
         sb.AppendLine(CultureInfo.InvariantCulture, $"| First seen | {Format(incident.FirstSeen)} |");
         sb.AppendLine(CultureInfo.InvariantCulture, $"| Last seen | {Format(incident.LastSeen)} |");
         if (route.Overridden)

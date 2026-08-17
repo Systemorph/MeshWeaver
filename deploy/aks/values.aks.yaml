@@ -244,24 +244,31 @@ config:
     # cadence and your rollback headroom.
     AssemblyCache__Retention__Delete: "false"
     # ---- Platform self-update cadence --------------------------------------
-    # 🚨 `SelfUpdate__PollInterval: "1.00:00:00"` WAS SET HERE AND IS NOW DELETED,
-    # because since #1773 there is no such option to bind and a key that binds to
-    # nothing is worse than no key: it reads as a live throttle to whoever greps
-    # this file next. Self-update is event-driven now — one pass at startup, then
-    # a check per build-completion event — so nothing here paces it.
+    # The check is EVENT-DRIVEN (#1773): one pass at startup, then a check per
+    # published build of the platform or of any module this environment deploys.
+    # There is no polling interval any more — SelfUpdate__PollInterval was renamed
+    # and this key sat here inert, reading like a live daily throttle while binding
+    # to nothing (#1778).
     #
-    # What that key expressed is still a real constraint and is NOT re-expressible
-    # today, so record it rather than lose it. It held prod to ONE roll/day
-    # (2026-08-10, measured): every roll invalidated the whole NodeType compile
-    # cache — the framework MVID changes on every CI image — costing a full
-    # sequential rebuild (~2.4 s/type; ~10 min on the largest mesh) plus a
-    # degraded warm-up window. Adopt-before-compile has since largely removed THAT
-    # cost (prod: 80 compiles/64.8 s → 0 compiles, 84 adopted, 32.1 s), but the
-    # pod RESTART per roll remains, and nothing bounds how often it happens.
-    # Re-expressing it needs a roll floor in SelfUpdateOptions — tracked as #1778.
+    # What this number now sets is the floor between two AUTOMATIC rolls. It is a
+    # RESTART budget, not a delivery speed: a roll restarts the pod and drops every
+    # live circuit on it. The trade, so this can be changed by editing one number:
     #
-    # For an URGENT fix: `kubectl rollout restart` the portal — the startup pass
-    # picks the newest image immediately.
+    #     24h  ->  <=1 restart/day,     a merged fix reaches prod the NEXT DAY
+    #      6h  ->  <=4 restarts/day,    same working day
+    #      1h  ->  <=24 restarts/day,   ~1.5 h after merge   <-- current
+    #
+    # 1h matches CD's reconcile tick, so hourly publication actually means hourly
+    # delivery. The former 24h is deliberately NOT restored: it predates
+    # adopt-before-compile (a prod roll went from 80 compiles / 64.8 s to 0
+    # compiles / 32.1 s), so the compile-cost half of its 2026-08-10 rationale is
+    # gone, and "tomorrow" is the answer that prompted the faster tick in the first
+    # place. What remains true is the restart cost, which is what this bounds.
+    #
+    # Neither extreme delays an URGENT fix: `kubectl rollout restart` takes the
+    # newest image immediately (the startup pass), and `gh workflow run
+    # main-cd.yml --ref main` bypasses the batch window.
+    SelfUpdate__MinRollInterval: "01:00:00"
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider

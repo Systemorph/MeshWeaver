@@ -92,6 +92,7 @@ public class FileFormatParserRegistry
         Action<string, Exception>? onError = null)
     {
         var parsers = GetParsers(extension);
+        content = WithoutBom(content);
         Exception? lastError = null;
         foreach (var parser in parsers)
         {
@@ -112,6 +113,32 @@ public class FileFormatParserRegistry
             onError?.Invoke(relativePath, lastError);
         return null;
     }
+
+    /// <summary>
+    /// Drops a leading UTF-8 BOM (U+FEFF) from decoded file text.
+    ///
+    /// <para>🚨 #1767: this is not cosmetic. A BOM'd file reached every parser as text beginning
+    /// with U+FEFF and each format failed differently — JSON threw (the file was SKIPPED), and a
+    /// C# node parsed but stopped recognising its <c>// &lt;meshweaver&gt;</c> heading, so it kept
+    /// its code and silently lost its declared Id/DisplayName. `PensionFund` lost <b>62 of 72
+    /// files</b> that way and gated ZERO NodeTypes while the run reported success.</para>
+    ///
+    /// <para>The BOM survives to this layer because package content arrives as BYTES (git tree,
+    /// archive, API response) and is decoded with <c>Encoding.UTF8.GetString</c>, which preserves
+    /// U+FEFF as a character — unlike <c>File.ReadAllText</c>, whose encoding detection strips it.
+    /// So a path that only ever read from disk never saw this, which is why it went unnoticed for
+    /// years: the defect lives on the package path, and only the package path.</para>
+    ///
+    /// <para>Stripping belongs HERE, once, rather than in each parser: a BOM is a property of the
+    /// text encoding, not of any file format, and three parsers each remembering to handle it is
+    /// three chances to forget.</para>
+    /// </summary>
+    public static string WithoutBom(string content) =>
+        // '\uFEFF', spelled as an escape ON PURPOSE: the literal character is invisible in every
+        // editor, so a copy-paste or a formatter could drop it and turn this into a no-op that
+        // still compiles and still reads correctly (Copilot review, #1781). An invisible constant
+        // is the last thing a BOM fix should contain.
+        content.Length > 0 && content[0] == '\uFEFF' ? content[1..] : content;
 
     /// <summary>
     /// Gets a parser that can serialize the given node.

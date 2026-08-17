@@ -49,8 +49,8 @@ public class LokiQueryShapeTest
         // What the OLD filtered query returned — headers only.
         var headersOnly = new[] { whole[0] };
 
-        var fromWhole = BurstAggregator.Aggregate(whole, maxSamples: 5, maxSampleLength: 2000)[0];
-        var fromHeaders = BurstAggregator.Aggregate(headersOnly, maxSamples: 5, maxSampleLength: 2000)[0];
+        var fromWhole = BurstAggregator.Aggregate(whole, maxSamples: 5, maxSampleLength: 2000).Reports[0];
+        var fromHeaders = BurstAggregator.Aggregate(headersOnly, maxSamples: 5, maxSampleLength: 2000).Reports[0];
 
         // With the burst intact the incident identifies the actual defect…
         fromWhole.ExceptionType.Should().Be("System.InvalidOperationException");

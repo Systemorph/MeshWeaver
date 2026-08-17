@@ -80,7 +80,8 @@ public sealed class LogWatchWorker(
     private IObservable<Unit> Collect(string ns)
     {
         var now = DateTimeOffset.UtcNow;
-        var start = state.CursorFor(ns, now);
+        var cursor = state.CursorFor(ns, now);
+        var start = cursor.From;
         var end = now - options.IngestLag;
         if (end <= start)
             return Observable.Return(Unit.Default);
@@ -91,8 +92,15 @@ public sealed class LogWatchWorker(
 
         return loki.Query(ns, start, end, options.QueryLimit).SelectMany(entries =>
         {
-            var reports = BurstAggregator.Aggregate(
-                entries, options.MaxSamplesPerReport, options.MaxSampleLength, options.IgnoreCategories);
+            var aggregation = BurstAggregator.Aggregate(
+                entries, options.MaxSamplesPerReport, options.MaxSampleLength, options.IgnoreCategories,
+                options.MaxVariantsPerSite);
+            var reports = aggregation.Reports;
+
+            // 🚨 A stretch the cursor was dragged past is the ONE thing this watcher loses outright.
+            // Report it; a LogWarning in the watcher's own pod log is not a place any verdict is read.
+            if (cursor.SkippedFrom is { } skippedFrom)
+                reports = reports.Add(LogPipelineGap.SkippedWindowReport(ns, skippedFrom, start));
 
             // 🚨 REACHABLE BUT EMPTY over a LONG window WE WATCHED = the store lost that stretch.
             // Report it instead of accepting silence as good news. Both qualifiers matter: a short
@@ -118,27 +126,44 @@ public sealed class LogWatchWorker(
                 reports = reports.Add(LogPipelineGap.Report(ns, start, end));
             }
 
-            if (reports.Count > 0)
-                logger?.LogInformation(
-                    "{Namespace}: {Bursts} distinct fingerprint(s) from {Lines} red line(s)",
-                    ns, reports.Count, entries.Count);
-
             // Truncation guard: at the query limit the window was not fully read, so advancing the
             // cursor to `end` would skip the remainder. Advance only to the last line actually seen
             // and let the next tick pick up from there.
-            var truncated = entries.Count >= options.QueryLimit;
-            var cursor = truncated && entries.Count > 0
+            //
+            // 🚨 And REPORT it. "5000 lines" is a CAP, not a count: while it holds, the watcher is
+            // reading a prefix of the window, so a dominant noisy source crowds every quieter error
+            // out of the sample it ever looks at. Raising the limit is not the fix — the fix is
+            // finding what out-talks the watcher — so this travels the normal ingest path and becomes
+            // a ticket like any other finding (#1787).
+            var truncated = LogPipelineGap.IsTruncated(entries.Count, options.QueryLimit);
+            var resumeAt = truncated && entries.Count > 0
                 ? entries[^1].Timestamp
                 : end;
             if (truncated)
+            {
                 logger?.LogWarning(
-                    "{Namespace}: hit the {Limit}-entry query limit — resuming at {Cursor:u} instead of {End:u}",
-                    ns, options.QueryLimit, cursor.UtcDateTime, end.UtcDateTime);
+                    "{Namespace}: hit the {Limit}-entry query limit — resuming at {Cursor:u} instead of "
+                    + "{End:u}, leaving a {Backlog:F0}s backlog. The window was NOT fully read.",
+                    ns, options.QueryLimit, resumeAt.UtcDateTime, end.UtcDateTime,
+                    (end - resumeAt).TotalSeconds);
+                reports = reports.Add(
+                    LogPipelineGap.TruncatedReport(ns, start, end, resumeAt, options.QueryLimit));
+            }
+
+            if (reports.Count > 0)
+                logger?.LogInformation(
+                    "{Namespace}: {Fingerprints} distinct fingerprint(s) from {Bursts} red burst(s) "
+                    + "({Lines} line(s) read{Truncated}){Folded}",
+                    ns, reports.Count, aggregation.RedBursts, aggregation.TotalLines,
+                    truncated ? " — TRUNCATED at the query limit" : "",
+                    aggregation.FoldedSites > 0
+                        ? $"; {aggregation.FoldedSites} log site(s) folded past the per-site variant budget"
+                        : "");
 
             // Queue BEFORE the cursor moves: if the process dies between these two writes the
             // window is simply re-read, which the fingerprint makes harmless.
             return (reports.Count > 0 ? state.Enqueue(reports) : Observable.Return(Unit.Default))
-                .SelectMany(_ => state.Advance(ns, cursor));
+                .SelectMany(_ => state.Advance(ns, resumeAt));
         });
     }
 
