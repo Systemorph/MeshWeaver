@@ -132,10 +132,14 @@ for the job's preflight discipline and the dependent-repo dispatch.
 Every satellite content repo (MeshWeaver.Plugins, MeshWeaver.Education, MeshWeaver.Reinsurance,
 MeshWeaver.SocialMedia) bakes and publishes its own content through the SAME contract, and since
 #1707 the jobs live HERE, as reusable `workflow_call` workflows the satellites call instead of
-vendoring. Adoption is per job: every repo calls `node-repo-publish-bake` (the lane whose script
-contract must not drift), while a repo whose variant of a gate carries repo-specific machinery
-(Plugins' Tests-area ratchet, Education's course checks) keeps that job vendored until the
-machinery generalizes:
+vendoring. Adoption is **per job and still in progress**: the target is that every repo calls
+`node-repo-publish-bake` (the lane whose script contract must not drift), while a repo whose
+variant of a gate carries repo-specific machinery (Plugins' Tests-area ratchet, Education's
+course checks) keeps that job vendored until the machinery generalizes. As of 2026-08-17
+**MeshWeaver.SocialMedia and MeshWeaver.Plugins are merged and green end-to-end including
+publish-bake** (SocialMedia calls the full set, Plugins calls publish-bake only);
+MeshWeaver.Reinsurance and MeshWeaver.Education are in flight; MeshWeaver.Manufacturing is
+deliberately deferred.
 
 | Workflow | Job it unifies |
 |---|---|
@@ -157,14 +161,46 @@ The design rules the extraction preserves:
   the per-repo vendored copies. This repo is public, so private satellites call the workflows
   and read the script with their default token.
 - **Repo-specific policy stays in the caller**: the digest pin (`MW_IMAGE_DIGEST`) and its bump
-  cadence, gating (`if:`/`needs:` on the `uses:` job), the `repository_dispatch` receiver, the
+  cadence — an unpinned image is an explicit `allow-unpinned` opt-in, never a silent fallback —
+  gating (`if:`/`needs:` on the `uses:` job), the `repository_dispatch` receiver, the
   module-bundle job of mixed packages, and each repo's `scripts/` (validate / compile-check /
   affected-modules / tag-modules stay caller-side — they encode the repo's own layout).
+- **Adoption renames the required checks**: a reusable-called workflow's check runs report as
+  `<caller job> / <name>`, so each repo's required-status-check contexts are renamed in the same
+  change that adopts a workflow — a context left at the old name would wait forever. On a
+  protected repo this is a required step of the adoption, not an afterthought: SocialMedia's
+  contexts are now `validate / Validate node repos`,
+  `compile-check / Compile every NodeType (vs core)` and
+  `test-repos / Compile + render node repos (MeshWeaver from ACR)`.
 - **Staged cross-repo modules are excluded from publication** (e.g. Store is staged so
   `requires` resolve but is owned and published by MeshWeaver.Plugins) — each source directory
   seals independently, which is also why no cross-repo bake ORDERING is needed: a dependent
   repo's publication never contains its dependency's bundles, so there is nothing to wait for.
   The framework-release dispatch fans out to all satellites concurrently.
+
+The satellites' OIDC publish is **provisioned** (2026-08-17): the Azure managed identity
+`github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
+portals' storage account and carries 8 federated credentials — the four satellite repos × the two
+GitHub subject formats (classic and immutable; **register both, always** — see
+[The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)) — with the
+`AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` secrets set on all four repos.
+**A red publish-bake was designed debt until 2026-08-17 and is a real failure after it** —
+treat any surviving allowlist or "credentials pending" reference to a satellite's publish lane
+as historical. The framework-release dispatch that fans a platform release out to the satellites is
+still dormant (`BAKE_SUBSCRIBER_REPOS` / `DEPENDENT_DISPATCH_TOKEN` unprovisioned); until it is
+armed, a satellite re-bakes on its own `main` pushes only.
+
+**Measured in production, 2026-08-17** — for satellite content the lane is not a design any more,
+it is observed behaviour. On `memex` running `3.0.0-rc4.ci.4049` (identity
+`s377941f549f721e01ac764e0fb8db84a`), boot
+**adopted 68 prebuilt assemblies from 31 sealed bundles in 18.9 s**
+and Roslyn-compiled **zero** healthy types (warm-up 32.1 s, `compiled=0`, `alreadyBaked=84`).
+The comparable boot before any satellite bake existed did **80 compiles in 64.8 s**.
+
+🚨 That measurement is **satellite content only**. The platform's own publication is NOT adoptable
+today — issue #1725: the platform bakes from CI build output while the pod resolves its identity
+inside the shipped image, so the identities differ and every boot recompiles the platform's shipped
+types. The satellites escape it precisely because they bake INSIDE the image.
 
 ## What this step does not do yet
 
