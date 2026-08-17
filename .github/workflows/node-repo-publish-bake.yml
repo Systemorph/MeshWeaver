@@ -33,7 +33,15 @@ name: Node repo publish-bake (reusable)
 #       github.event_name == 'repository_dispatch'
 #     needs: [preflight, validate, compile-check, test-repos]
 #     permissions: { contents: read, id-token: write }   # OIDC — must be granted BY the caller
-#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@main
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@<40-char platform commit sha>
+#
+# 🔒 PIN THE REF — `@main` is wrong here. The image is pinned by digest so CI is reproducible;
+# the CI logic is pinned for the same reason and with a wider blast radius, since one edit here
+# would otherwise change EVERY satellite's gates at once and make "did my change break this, or
+# did the shared workflow move?" unanswerable. A mutable TAG does not fix that — only a commit
+# sha makes the bump a commit in the CALLER. GitHub forbids an expression in `uses:`, so the sha
+# is literal in each caller and they are bumped together. Procedure: CiContentBake.md ->
+# "Node repos run the same lane" -> "The workflow ref is PINNED".
 #     with:
 #       bake-source: socialmedia
 #       test-image: ${{ vars.MW_TEST_IMAGE }}
