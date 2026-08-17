@@ -15,6 +15,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Hosting.SelfUpdate;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 

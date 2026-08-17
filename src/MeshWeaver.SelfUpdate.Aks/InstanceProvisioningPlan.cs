@@ -1,4 +1,4 @@
-namespace Memex.Portal.Shared.Instances;
+namespace MeshWeaver.SelfUpdate.Aks;
 
 /// <summary>
 /// Generates the vetted, copy-pasteable command sequence to provision a NEW instance on the shared

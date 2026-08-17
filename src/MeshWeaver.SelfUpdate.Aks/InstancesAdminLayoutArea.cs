@@ -13,7 +13,7 @@ using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Instances;
+namespace MeshWeaver.SelfUpdate.Aks;
 
 /// <summary>
 /// Platform-admin "Instances" overview. Queries the live Kubernetes cluster and lists every portal

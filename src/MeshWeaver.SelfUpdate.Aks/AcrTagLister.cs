@@ -4,18 +4,10 @@ using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.Logging;
+using MeshWeaver.Hosting.SelfUpdate;
 
-namespace Memex.Portal.Shared.SelfUpdate;
+namespace MeshWeaver.SelfUpdate.Aks;
 
-/// <summary>Lists the image tags for a repository on the container registry. The single async/IO
-/// leaf — its sole caller wraps it in <c>IIoPool.Invoke</c> so the network round-trip runs off the
-/// hub scheduler and is bounded (see <c>ControlledIoPooling.md</c>). An injectable seam so tests
-/// substitute a fake without touching the network or core hub interfaces.</summary>
-public interface IAcrTagLister
-{
-    /// <summary>All tags on <paramref name="repository"/> in the configured registry.</summary>
-    Task<IReadOnlyList<string>> ListTagsAsync(string repository, CancellationToken ct);
-}
 
 /// <summary>
 /// Lists ACR tags via the registry's REST data-plane — zero extra SDK dependency, reusing the
