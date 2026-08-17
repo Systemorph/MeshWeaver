@@ -145,40 +145,58 @@ logged and skipped, and the sweep compiles that type as it always has. Nothing c
 from this path — the bake gate keeps probing the store, which only ever holds what was actually
 adopted.
 
-## Adopt-only: consume the bake, never build it (`PreWarm:AdoptOnly`)
+## Adopt, then compile on demand — the boot bake is retired everywhere
 
-A managed portal both adopts *and* compiles: whatever the bundles did not cover, the sweep builds,
-and the readiness gate certifies the result. That trade is wrong on a developer's laptop. The
-framework identity changes with every image, so every `memex-local update` invalidates the whole
-assembly cache and the startup bake recompiles the entire shipped content set on the same CPU the
-developer is trying to work on. One developer machine had accumulated **15 generations** under
-`/data/assembly-cache/.generations` — fifteen full sweeps of ~38 types, none of which produced
-anything CI had not already built.
+**Adoption and its coverage report are unconditional; only compiling is configurable.** Every boot
+seeds both bundle sources and then probes the assembly store:
 
-`PreWarm:AdoptOnly=true` keeps the adoption and drops the compiling:
-
-1. both bundle sources seed exactly as above (`SeedAll`, then `SeedPublishedRoot`);
+1. both bundle sources seed as above (`SeedAll`, then `SeedPublishedRoot`);
 2. `DynamicTypePreWarmer.ProbeDynamicTypes` enumerates the mesh's dynamic NodeTypes and asks the
    assembly store about each — the same `NodeTypeBakeStatus.Probe` the sweep uses to decide what to
    build, stopping at the answer;
-3. the boot log reports `adopted=N uncovered=M`, and **every uncovered type is NAMED at warning**.
+3. the boot log reports `adopted=N uncovered=M`, and **every uncovered type is NAMED at warning**,
+   with the `BakeState` and detail saying *why*.
 
-Nothing is compiled at boot. An uncovered type is still correct — it builds on first access through
-the ordinary lazy path — it is merely not warm. That is the deliberate escape for content with no CI
-bake *by construction*: a NodeType someone is authoring on a laptop has no published bundle and
-never will, and "bake your own" is the right answer for it. What adopt-only refuses is the silent
-version of that: a gap you only discover when a page renders empty.
+`PreWarm:DynamicTypes` then decides only whether the leftover is **also** compiled at boot. It is
+`false` everywhere, including the fleet.
 
-> 🚨 **`PreWarm:AdoptOnly` is not a synonym for `PreWarm:DynamicTypes=false`.** The bundle seeding
-> runs on the *same hosted service* as the sweep, so switching the service off switches adoption off
-> with it — the instance would adopt nothing **and** still compile everything, lazily and
-> unreported. Adopt-only is the key that removes the compiling; `DynamicTypes` is the key that keeps
-> the adoption. The homebrew defaults set both, and
-> `PlatformBakeLaneGuard.LocalDefaults_AdoptRatherThanPreBake_AndKeepTheSeedingOn` pins the pairing.
+> 🚨 These two used to be one switch, and the fusion was a real defect: the chart's default is
+> `DynamicTypes=false`, so the ordinary deployment adopted **nothing** — it ignored bundles sitting
+> in its own image and lazily compiled every type instead. Splitting them is what makes "no boot
+> bake" cheap rather than a regression.
 
-Adopt-only compiles nothing, so it can prove nothing: it never arms `PreWarm:GateReadiness`, and the
-contradictory combination is logged as an error naming both keys rather than quietly honoured in
-either direction. It is the default for the homebrew/local chart overlay, and off everywhere else.
+Why the sweep is retired rather than tuned: adoption made it redundant. Once the satellite repos
+published under the live identity, a prod boot measured `compiled=0 alreadyBaked=84` — the sweep
+compiled nothing and still charged 32.1 s of warm-up (64.8 s when adoption was broken). On a *miss*
+it was worse than useless: it blocked readiness on compiling types no user had asked for. On a
+laptop it was pure waste — one developer machine had **15 generations** under
+`/data/assembly-cache/.generations`, fifteen full sweeps that rebuilt what CI had already built.
+
+An uncovered type is still correct: it builds on **first access**, via
+`NodeTypeEnrichmentHelpers.WaitForCompileSettled`, when someone actually reaches it. Measured cost
+~2.0–2.1 s per type locally (~2.4 s on the fleet), paid once, by that type's first visitor. That is
+also the deliberate escape for content with no CI bake *by construction* — a NodeType someone is
+authoring on a laptop has no published bundle and never will. What the report refuses is the silent
+version: a gap you only discover when a page renders empty.
+
+### What readiness means now
+
+The bake gate certified a bake by **compiling** every type and refusing readiness when one that used
+to build no longer did. With nothing compiling at boot there is no such verdict, so
+`PreWarm:GateReadiness` is turned **off** rather than left armed — an armed gate with no sweep behind
+it reports healthy on every rollout and protects nothing, which is the exact failure it exists to
+prevent. (The portal already says so at Critical; `NoValuesFileArmsTheBakeGateWithoutTheSweepBehindIt`
+pins it at build time.)
+
+**What that gives up, precisely:** a NodeType that regresses on a new image is no longer caught at
+rollout; it surfaces when a user first reaches it. **What replaces it:** the boot coverage report —
+a broken bake lane (an identity mismatch declines every bundle wholesale, #1725) shows up as a
+coverage collapse in the logs of the *first* pod of a bad roll.
+
+> 🚨 **Do not "fix" this by gating on full adoption coverage.** `uncovered > 0` is the normal steady
+> state of a real portal: users author NodeTypes in their own partitions, and those have no CI bake
+> by construction — the live `memex` share holds two such types under `rbuergi`. A coverage gate
+> would never go ready.
 
 > 🚨 **A `PreWarm__*` key in a values file does nothing until the configmap renders it.**
 > `deploy/helm/templates/memex-portal/config.yaml` enumerates keys explicitly — it does not iterate
@@ -191,9 +209,8 @@ either direction. It is the default for the homebrew/local chart overlay, and of
 
 ## The delivery: main-cd bakes IN THE IMAGE, then publishes
 
-`main-cd`'s **`publish-bake`** job runs the platform's own shipped content — the `Doc` tree and the
-`samples/Graph/Data` trees, staged by `.github/scripts/stage-doc-gate.sh` and
-`stage-samples-gate.sh`, the same staging the PR gate judges — through
+`main-cd`'s **`publish-bake`** job runs the content the image itself embeds — the `Doc` tree, staged
+by `.github/scripts/stage-doc-gate.sh`, the same staging the PR gate judges — through
 `docker run … mw-plugin-test … --bake-output` against **the `mw-plugin-test` image this very CD run
 built and promoted**, and copies the resulting bundles to the portals'
 shared storage (`.github/scripts/publish-bake-bundles.sh`), laid out
@@ -206,6 +223,27 @@ identity's directory is already sealed — an internal-only merge resolves the s
 identity as its predecessor — the script skips with a notice instead of re-uploading. See
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)
 for the job's preflight discipline and the dependent-repo dispatch.
+
+### 🚨 CD compiles ONLY what the image embeds — everything else is adopted
+
+The bake is scoped to `src/MeshWeaver.Documentation/Data`, the one tree every portal ships inside
+itself (`Memex.Portal.Shared` references `MeshWeaver.Documentation`). Nothing else, on purpose:
+
+| Content | Who bakes it | Why not CD |
+|---|---|---|
+| node-repo content (Plugins, Education, Reinsurance, SocialMedia) and **Store** packages | each repo's own `node-repo-publish-bake` lane, against the same image ⇒ the same identity | it arrives **already compiled** and is adopted; `main-cd.yml` checks out no other repository, so it could not compile them even by accident |
+| `samples/Graph/Data` | nobody — compile-**gated** only | no deployment embeds them, and memex receives them over the GitHub link into the `MeshWeaver` partition, where node paths read `MeshWeaver/samples/Graph/Data/ACME/…` while bundles are keyed `ACME/…`. The seeder matches by node **path**, so the bundles are inert everywhere. Measured: 7 packages / 24 assemblies per CD run for bytes nothing can adopt |
+
+So the CD bake is **1 package / 4 assemblies**, down from 8 / 28 when it also baked the samples.
+Correctness of the samples content is unaffected — `dotnet-test.yml`'s doc-gate still compiles,
+renders and tests both trees on every PR. What changed is only that CD stops *shipping* assemblies
+no deployment can use. `PlatformBakeLaneGuard` pins both halves of this: the Doc tree must be baked,
+the samples tree must not, and the workflow must check out no other repository.
+
+The end state this serves is a boot that compiles nothing: with the four satellites publishing under
+the pods' identity, a prod portal boot reached `compiled=0 alreadyBaked=84` — everything adopted,
+nothing rebuilt. The platform's own `Doc` types are the remaining slice, and this lane is what
+delivers them.
 
 Three properties fall out of baking in the image rather than shipping a CI artifact across jobs:
 
@@ -269,11 +307,108 @@ The design rules the extraction preserves:
   contexts are now `validate / Validate node repos`,
   `compile-check / Compile every NodeType (vs core)` and
   `test-repos / Compile + render node repos (MeshWeaver from ACR)`.
+  🔒 A later **`@ref` bump does NOT rename anything** — it changes neither the caller's job id nor
+  the inner job's `name:` — so the contexts stay valid across bumps. Only renaming a job in the
+  reusable workflow would break them, which is why that rename is itself a breaking change to
+  every caller's branch protection.
+- **The caller PINS the workflow ref** — `@<40-char commit sha>`, never `@main`. See below; this
+  is the same rule as the image digest, applied to the CI logic instead of the CI runtime.
 - **Staged cross-repo modules are excluded from publication** (e.g. Store is staged so
   `requires` resolve but is owned and published by MeshWeaver.Plugins) — each source directory
   seals independently, which is also why no cross-repo bake ORDERING is needed: a dependent
   repo's publication never contains its dependency's bundles, so there is nothing to wait for.
   The framework-release dispatch fans out to all satellites concurrently.
+
+### 🔒 The workflow ref is PINNED — and bumping it is a deliberate act
+
+Every satellite calls these workflows at an **immutable commit**, never at `@main`:
+
+```yaml
+  test-repos:
+    needs: [preflight, validate]
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@731620dc6be030c964aa2c6a1e87ac11a1e6bfc4
+```
+
+**Why.** The platform *image* is pinned by digest so CI is reproducible and an image regression
+lands on the commit that bumps the pin. The CI *logic* needs that for the same reason and with a
+**wider blast radius**: on `@main`, a single edit to a reusable workflow changes **every
+satellite's gates at once**, no satellite's PR can reproduce yesterday's behaviour, and *"did my
+change break this, or did the shared workflow move under me?"* stops being answerable — that exact
+question cost a full day on MeshWeaver.Education. Pinned, the answer is in `git log` of the
+caller's own `ci.yml`.
+
+**Why a SHA and not a version tag** (`node-repo-workflows-v1` and friends):
+
+- A tag is **mutable**. Moving it changes all satellites simultaneously with **no commit in any
+  satellite** to attribute the change to — the blast radius stays exactly as wide as `@main`, only
+  the trigger moves from "someone edited a workflow" to "someone moved a tag". A SHA is what makes
+  the bump *be* a satellite commit, which is the entire point.
+- It is the digest's analogue: a SHA is to a workflow what a digest is to an image; a tag is
+  `:latest`.
+- It matches what the callers already do — `MW_PLATFORM_REF` is a full 40-char platform SHA with
+  this same rationale beside it. One convention, not two.
+- `node-repo-tag-modules` exists to guarantee a module tag is never *"silently moved under everyone
+  who pinned it"*. A moving `uses:` tag would be precisely that, for CI logic.
+
+GitHub does **not** allow the `uses:` ref to come from an input, an `env`, or any expression — it
+must be a literal — so a `workflow-ref` input is impossible and the SHA lives literally on each
+`uses:` line in each caller.
+
+**A reusable-workflow change does not reach the satellites until each one bumps. That is the
+point, not a bug**: it is what turns a shared-workflow regression from a simultaneous four-repo
+outage into one satellite's PR that goes red and is trivially attributable.
+
+#### How a bump is triggered
+
+The pin is bumped **by the person who changes a reusable workflow**, as the last step of that
+change — the platform PR lands first, then one follow-up PR per satellite. Concretely:
+
+1. Merge the `node-repo-*.yml` change to the platform's `main`; note the merge commit.
+2. In each satellite that calls the changed workflow, replace the SHA on **every**
+   `Systemorph/MeshWeaver/.github/workflows/node-repo-*.yml@…` line — all of them, in **one**
+   commit, so a repo never runs two different revisions of the shared contract.
+3. Open the PR and let the repo's own gate suite run against the new logic. This is where a bad
+   shared workflow surfaces: on the bumping PR, in the repo it affects, attributable to the bump.
+4. Repeat per satellite. They may lag each other; each bump is independently revertable.
+
+Adopting a *new* workflow additionally renames that repo's required contexts (previous bullet); a
+plain bump does not.
+
+#### Staleness is surfaced, not scheduled
+
+A pin nobody bumps is worse than a moving ref: the satellites diverge in silence and the shared
+workflow's fixes never land anywhere. So each caller's **`preflight` job prints the pin's age on
+every run** — in the job someone already opens when a gate goes red:
+
+```
+workflows pinned to 731620dc6…, cut 3 days ago (2026-08-17T09:45:53Z)
+```
+
+Past `STALE_AFTER_DAYS` (30) the step summary adds a **"a bump is due"** callout pointing back
+here. This is the same instinct as the known-debt allow-lists — surface staleness at the point of
+use rather than inventing a place people must remember to check — and it is deliberately *not* a
+scheduled job that opens issues.
+
+Two properties that make the age trustworthy rather than decorative:
+
+- **The SHA is read back out of the caller's own `uses:` lines**, never kept as a second copy that
+  could drift from the pin actually in force. A **partial bump** (one caller moved, the rest left
+  behind) is therefore reported as *"pins disagree"* instead of averaged into one age.
+- **It is a reporter, so it never fails the run** — a red preflight would block every gate on a
+  GitHub API blip. Every miss is announced (`::warning::` plus an explicit *age UNKNOWN*): it can
+  report nothing, but it cannot fake freshness. 🚨 Note `gh` writes its error body to **stdout**,
+  so an emptiness check is not enough to detect an unresolvable SHA — the step validates the
+  timestamp's shape.
+
+#### The one ref that still floats, on purpose
+
+`node-repo-publish-bake`'s **`platform-ref` input still defaults to `main`**. It selects the
+checkout of the canonical `publish-bake-bundles.sh`, whose bundle layout and `_complete` sentinel
+must keep matching the `ShippedPrebuiltBundles` constants in the **portal that consumes** the
+bundles — and the portals self-update from `main`. Pinning that to a satellite's cadence would let
+a satellite publish in a layout the live portals no longer read. It is the publish *script*
+tracking its consumer, not CI logic tracking a moving trunk; pin it (the input exists) only to
+bisect a script regression.
 
 The satellites' OIDC publish is **provisioned** (2026-08-17): the Azure managed identity
 `github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
@@ -303,12 +438,11 @@ types. The satellites escape it precisely because they bake INSIDE the image.
 
 - **DB-resident types** (user/partition content CI cannot see) stay on the runtime bake.
 - **A bundle is matched to a deployment by node PATH**, so a portal that mounts a tree somewhere
-  other than its canonical root adopts nothing from it. Measured on `memex`: the `Doc/…` types match
-  and adopt, while the sample trees live under `MeshWeaver/samples/Graph/Data/ACME/…` there and the
-  bundles are keyed `ACME/…`, so those seven bundles are published but inert on that portal. They do
-  adopt on a deployment that mounts the samples at their canonical roots. Closing that gap means
-  agreeing one canonical path per shipped tree — it is a content-layout question, not an identity
-  one.
+  other than its canonical root adopts nothing from it. That is why CD no longer bakes the samples
+  trees at all (see "CD compiles ONLY what the image embeds"): memex holds them under
+  `MeshWeaver/samples/Graph/Data/ACME/…` while a bundle from that tree is keyed `ACME/…`. If a
+  deployment ever wants them prebuilt, the fix is to agree one canonical path per shipped tree — a
+  content-layout question, not an identity one.
 - **An arm64 install adopts nothing the amd64 lane publishes** — the two architectures of one image
   resolve different identities (see the identity rule above). Local arm64 installs compile at boot
   as they always have; nothing may paper over this by publishing the same bundles twice.
