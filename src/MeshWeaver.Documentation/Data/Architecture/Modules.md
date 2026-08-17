@@ -174,6 +174,20 @@ the Direct/ServiceInterop client, Snowflake ~10 MB — its driver carries Arrow 
 GCS SDKs for stage transfer); `-p:PublishMeshModules=false` skips the whole layout for a host
 that wants none of it.
 
+Being **bootstrap tier** — the mesh cannot read itself without a storage backend, so the Store's
+catalog lives behind the very storage an install would be delivering — is also what leaves these
+two with no compiled reference anywhere in the tree, and therefore nothing that would notice their
+folder going wrong. `StorageModuleLayoutTest` (`test/Memex.Portal.Shared.Test`) is that gate: it
+walks the seam a portal walks and asserts nothing more — `ResolveModulePath` lands inside
+`modules/<Name>/` rather than on its app-folder fallback, the private driver survived the prune and
+loads, `InstallAssemblies` folds the assembly's `MeshNodeProviderAttribute`, and the keyed
+`IStorageAdapterFactory` that `Graph:Storage:Type` resolves comes from THAT DLL. No emulator, no
+endpoint, ~40 ms. It closes two blind spots at once: the compiler proves the SOURCE binds but says
+nothing about the publish layout, and the emulator suites green-SKIP when their backend is
+unreachable, so they can pass by not running. The same test is what a released binary would have to
+satisfy if these backends ever moved out of the platform repo (#1752) — point it at the pinned bytes
+instead of the in-tree build and it answers the question a moved backend raises.
+
 Entries resolve through `MeshBuilder.ResolveModulePath`: a rooted path passes through; a bare
 DLL name probes **`modules/<name>/<name>.dll`** beside the app first (the publish layout below),
 then falls back to the app folder.
@@ -188,6 +202,12 @@ Flipping a module's reference off (one module at a time, its entry upgraded to a
 correct for that module) is what makes the folder carry real content; which modules EXIST then
 becomes a publish (or Store-install) decision while which ACTIVATE stays the boot union above.
 Skip the whole target with `-p:PublishMeshModules=false`.
+
+`-p:MeshModulesClosureSubset=<Name>;<Name>` narrows the closure lane to the named modules, so a
+project that is not a host can lay out a couple of them into its own `bin/` — today only
+`Memex.Portal.Shared.Test`, so `StorageModuleLayoutTest` loads the real layout rather than a copy
+of it. 🚨 A host must never pass it: `-p:` is global to every project in the build. A subset naming
+nothing fails the lane RED instead of laying out nothing and reporting success.
 
 The first flipped module is `MeshWeaver.Markdown.Export`: no host references it any more — its
 targets entry runs a full closure publish pruned against the app root AND the shared-framework
