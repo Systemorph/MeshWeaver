@@ -14,7 +14,7 @@ namespace MeshWeaver.Plugin.Packaging;
 /// producer and a consumer cannot drift. Producers: the CI bake (<c>mw-plugin-test
 /// --bake-output</c>, which persists what the content gate just compiled) and, later, the registry
 /// bundle lane. Consumers: <c>PluginBundleClient</c> (HTTP) and the boot-time shipped-bundle
-/// seeder — all of them go through <see cref="BundleReader.Read"/>.</para>
+/// seeder — all of them go through <see cref="BundleReader.Read(byte[])"/>.</para>
 ///
 /// <para>A bundle is deliberately NOT a nupkg: it carries no content, no nuspec, no dependency
 /// graph — only compiled bytes and the identity they are pinned to. The framework MVID in the
