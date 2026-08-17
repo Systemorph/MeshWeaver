@@ -12,7 +12,7 @@ using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
-namespace Memex.Portal.Shared.Teams;
+namespace MeshWeaver.Teams;
 
 /// <summary>
 /// Real <see cref="ITeamsClient"/> over the Bot Framework REST connector. Inbound activities are

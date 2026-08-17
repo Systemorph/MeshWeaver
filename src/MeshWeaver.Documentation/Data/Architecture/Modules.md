@@ -147,6 +147,7 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.OgCard.dll` | Link-preview (og-card) layout area | — |
 | `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
 | `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
+| `MeshWeaver.Teams.dll` | Microsoft Teams bot channel: messaging endpoint, inbound routing into threads, proactive replies | `Teams` (inert until bot credentials set) |
 | `MeshWeaver.Courses.dll` | Course delivery: the entitlement-gated `/assets/{Space}/…` route over a Space's synced repo | `GitHub:App:*` (shared with GitSync) |
 | `MeshWeaver.Mail.MicrosoftGraph.dll` | Mail over Microsoft Graph: system email, inbound intake + its webhook, the Executive Assistant's mailbox tools | `Email` (`Enabled`, `InboundEnabled`) |
 | `MeshWeaver.Hosting.Grpc.dll` | The mesh gRPC transport: `meshweaver.v1.Mesh` + gRPC-web, `py`/`node` foreign participants AND the React GUI's browser data plane | `Grpc` (`TrustedPort`) |
