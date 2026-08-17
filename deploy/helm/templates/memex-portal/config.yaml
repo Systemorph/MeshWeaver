@@ -89,6 +89,27 @@ data:
          nothing is serving during startup anyway). Empty renders harmlessly: the host skips
          blank values without a warning. */}}
   PreWarm__BetweenTypes: "{{ .Values.config.memex_portal.PreWarm__BetweenTypes }}"
+  {{- /* PreWarm__PrebuiltBundleRoot: where CI's published NodeType bake is mounted
+         (<root>/<framework-identity>/<source>/*.zip). The pod seeds its OWN identity's
+         subdirectory before deciding what to build, so shipped content boots with zero Roslyn.
+
+         🚨 THIS KEY MUST BE TEMPLATED TO EXIST. This configmap enumerates keys explicitly — it
+         does NOT iterate .Values.config — so a key set in a values file but missing HERE is
+         silently dropped, with no warning anywhere. That is exactly what happened to this one:
+         values.aks.yaml has set it since #1660 WS3 while the configmap never rendered it, so
+         every chart-deployed portal ran with the CI-bake lane inert and compiled content CI had
+         already baked. Adding a PreWarm key to a values file is only half the change.
+
+         Empty renders harmlessly: the host skips blank values, and the seeding logs "no published
+         bundle root configured" at debug and stays inert. */}}
+  PreWarm__PrebuiltBundleRoot: "{{ .Values.config.memex_portal.PreWarm__PrebuiltBundleRoot }}"
+  {{- /* PreWarm__AdoptOnly: adopt the prebuilt bundles, then REPORT what they covered instead of
+         compiling the rest. Not the same as PreWarm__DynamicTypes=false — that would turn the
+         bundle seeding off too (it lives on the same service), so the instance would adopt nothing
+         AND compile everything lazily. Uncovered types are named at warning every boot and still
+         compile on first access. Cannot certify a bake, so it refuses to arm PreWarm__GateReadiness
+         and says so. Intended for local/dev instances. */}}
+  PreWarm__AdoptOnly: "{{ .Values.config.memex_portal.PreWarm__AdoptOnly }}"
   # ---- Assembly-cache retention -------------------------------------------
   # The bake writes one WHOLE GENERATION of NodeType assemblies per image, because the store
   # keys every file by the MeshWeaver.Graph MVID and a CI build changes it on every publish.
