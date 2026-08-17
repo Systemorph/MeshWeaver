@@ -151,4 +151,35 @@ public class PublishedBundleCatalogueTest : IDisposable
         // proceeded on it would gate against a half-published upstream.
         Assert.Equal(["plugins"], PublishedBundleCatalogue.SealedSources(root, "sabc"));
     }
+
+    [Fact]
+    public void SealedSources_RejectsATornBeyondTheSealSource_NotJustAnUnsealedOne()
+    {
+        // 🚨 The regression Copilot caught on #1761: keying on the sentinel ALONE would call this
+        // ready, while the portal reading the same directory skips it whole. The optimistic answer
+        // is exactly the direction a gate must never be wrong in — a downstream repo would build
+        // against an upstream whose bytes are not all there.
+        Publish("sabc", "plugins", "Store.zip", "Edu.zip");
+        File.Delete(Path.Combine(root, "sabc", "plugins", "Edu.zip"));
+
+        Assert.Empty(PublishedBundleCatalogue.SealedSources(root, "sabc"));
+        // …and the two readings agree about that directory, which is the actual invariant.
+        Assert.Empty(PublishedBundleCatalogue.SealedBundlesForIdentity(root, "sabc"));
+    }
+
+    [Fact]
+    public void BundleNamesAreMatchedCaseInsensitively()
+    {
+        // The sentinel carries file names off a store that is not everywhere case-sensitive, while
+        // packages are named by id. A case-sensitive set would report ContentBakeMissing for a
+        // package that is in fact published — a hold nobody could act on because nothing is wrong.
+        MarkRelease("3.0.0", "sabc");
+        Publish("sabc", "plugins", "store.zip");
+
+        var observation = PublishedBundleCatalogue.Read(root, "3.0.0");
+
+        Assert.True(ReleaseAvailability.IsUpdatable(
+                observation.Target, [new RequiredPackage("Store", "Store")], observation.Artifacts)
+            .IsUpdatable);
+    }
 }

@@ -172,12 +172,16 @@ public sealed record ReleaseArtifacts(
 {
     /// <summary>An observation that failed — the fail-safe constructor.</summary>
     public static ReleaseArtifacts Unreadable(string reason) =>
-        new([], reason);
+        new(ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase), reason);
 
     /// <summary>An observation of the given sealed bundle names, case-insensitively matched (the
     /// bake writes file names, and the stores this runs against are not all case-sensitive).</summary>
     public static ReleaseArtifacts Of(IEnumerable<string> sealedBundles) =>
-        new([.. sealedBundles.Select(StripBundleExtension)], null);
+        new(
+            ImmutableHashSet.CreateRange(
+                StringComparer.OrdinalIgnoreCase,
+                sealedBundles.Select(StripBundleExtension)),
+            null);
 
     /// <summary>The sentinel lists file names (<c>Store.zip</c>); packages are named by id
     /// (<c>Store</c>). One place converts, so no caller has to remember which side it holds.</summary>
