@@ -1590,13 +1590,45 @@ public sealed class MessageHub : IMessageHub
                         return;
                     logger.LogError(
                         "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within {Timeout}. " +
-                        "RunLevel={RunLevel}. Forcing out-of-band teardown so children/subscriptions cannot leak.",
-                        Address, DisposalWatchdogTimeout, RunLevel);
+                        "RunLevel={RunLevel}. Forcing out-of-band teardown so children/subscriptions cannot leak.\n" +
+                        "{Diagnostics}",
+                        Address, DisposalWatchdogTimeout, RunLevel, DescribeWedge());
                     ForceTeardownAfterWatchdog();
                 },
                 // disposalCompleted faulting (SignalDisposalFaulted) propagates through TakeUntil;
                 // the watchdog is no longer needed — swallow so it isn't an unobserved error.
                 _ => { });
+    }
+
+    /// <summary>
+    /// The evidence that turns "DISPOSAL DEADLOCK DETECTED" into a diagnosis: the recursive
+    /// disposal snapshot (<see cref="GetDisposalDiagnostics"/>) — every hosted hub's RunLevel,
+    /// queue depths, the message currently on its action block, and its pending callbacks.
+    ///
+    /// <para>🚨 Without this the error names a PHASE and nothing else, and the four mechanisms
+    /// that produce <c>RunLevel=DisposeHostedHubs</c> are indistinguishable from the log: a child
+    /// whose pump is starved behind a FIFO backlog (<c>buffer</c> in the hundreds, <c>Executing</c>
+    /// a few ms), a child frozen on one non-terminating turn (<c>buffer</c> small,
+    /// <c>Executing</c> 8000+ ms and NAMED), an in-flight hosted-hub construction the join is
+    /// correctly waiting out, or simply a child that answers on its OWN watchdog — which is armed
+    /// one quiesce budget LATER than this one and therefore cannot answer before it. #1701 sat on
+    /// "the compile-pool children are the prime suspects" for exactly this reason: the log records
+    /// the parent's phase and nothing about the child that is holding it.</para>
+    ///
+    /// <para>Never throws: a diagnostic that can fault the teardown it is diagnosing is worse than
+    /// no diagnostic. The tree walk is depth-capped (<see cref="MaxHostedHubRecursionDepth"/>) and
+    /// runs once, at the moment a deadlock has already been detected.</para>
+    /// </summary>
+    private string DescribeWedge()
+    {
+        try
+        {
+            return GetDisposalDiagnostics();
+        }
+        catch (Exception e)
+        {
+            return $"(disposal diagnostics unavailable: {e.GetType().Name}: {e.Message})";
+        }
     }
 
     /// <summary>
