@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>ASP.NET Core host integration for MeshWeaver modules: the endpoint-contribution hook — a module assembly declares HTTP endpoints the host maps at startup (design #1655).</Description>
+    <Description>ASP.NET Core host integration for MeshWeaver: the endpoint-contribution hook — a module assembly declares HTTP endpoints the host maps at startup (design #1655) — plus the pieces every HTTP transport shares (per-caller session-hub resolution, the portal base-URL option).</Description>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,6 +14,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <!-- SessionHubResolver is the HTTP half of SessionHubFactory, which lives in MeshWeaver.Hosting
+         below the transports so MCP, REST, gRPC and the headless sidecar cannot drift apart. The
+         reference is what lets the resolver stay platform-side now that MCP is a module. -->
+    <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
   </ItemGroup>
 
 </Project>

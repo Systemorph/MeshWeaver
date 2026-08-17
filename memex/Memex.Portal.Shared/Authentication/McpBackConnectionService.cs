@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using MeshWeaver.AI.Connect;
-using MeshWeaver.Mcp;
+using MeshWeaver.Hosting.AspNetCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
