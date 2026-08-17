@@ -314,6 +314,39 @@ public static class FrameworkBuildIdentity
             typeof(FrameworkBuildIdentity).Assembly));
 
     /// <summary>
+    /// The process's surface-manifest pairs (assembly simple name → reference-assembly hash),
+    /// parsed once from <see cref="SurfaceManifestFileName"/> beside the app — EMPTY for
+    /// manifest-less hosts, and empty (never a throw) when the file is torn: the per-type
+    /// dependency record degrades to MVID ids there, exactly as the identity itself degrades to
+    /// its fallback layer.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ProcessSurfacePairs => SurfacePairs.Value;
+
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> SurfacePairs = new(() =>
+    {
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, SurfaceManifestFileName);
+            return File.Exists(path)
+                ? ParseSurfaceManifest(File.ReadAllText(path))
+                : new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+        catch
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    });
+
+    /// <summary>
+    /// An assembly's implementation MVID by simple name in THIS process (loaded assembly, else a
+    /// metadata-only read of the DLL beside the entry assembly, else null) — the same resolution
+    /// the identity uses, exposed for the per-type dependency record
+    /// (<see cref="CompiledDependencies"/>).
+    /// </summary>
+    public static string? ProcessImplMvidOf(string simpleName) =>
+        ImplMvidOf(simpleName, typeof(FrameworkBuildIdentity).Assembly);
+
+    /// <summary>
     /// Reads the stamped <see cref="MetadataKey"/> value off a LOADED assembly, or null when the
     /// assembly carries none. (For reading the same stamp off an assembly FILE without loading it,
     /// see <c>MeshWeaver.Plugin.Build.FrameworkIdentity.ReadIdentity</c>.) Since the surface

@@ -53,6 +53,15 @@ public enum BakeState
     /// was ALREADY broken before this image must not be allowed to block the rollout.
     /// </summary>
     PreviouslyBroken,
+
+    /// <summary>
+    /// The record's per-type DEPENDENCY RECORD (#1707 slice 2) no longer validates against this
+    /// environment — a module the type binds was updated/removed, or the toolchain closure moved
+    /// — while the FRAMEWORK identity still matches. 🚨 Checked BEFORE the store's bytes-win rule:
+    /// the store key carries the framework tag but NOT the dependency record, so a bytes-hit under
+    /// the live framework can be exactly the drifted build this state exists to replace.
+    /// </summary>
+    DependencyStale,
 }
 
 /// <summary>One dynamic NodeType's bake state, as read from the store rather than from its record.</summary>
@@ -176,7 +185,9 @@ public static class NodeTypeBakeStatus
     public static BakeState Classify(
         NodeTypeDefinition definition,
         bool storeHasBytes,
-        string liveFrameworkVersion)
+        string liveFrameworkVersion,
+        Func<string, string?>? liveDependencyIdOf = null,
+        string? liveToolchainId = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
@@ -190,6 +201,18 @@ public static class NodeTypeBakeStatus
 
         if (!hasRecordedAssembly)
             return BakeState.NeverBuilt;
+
+        // 🚨 The per-type dependency record (#1707 slice 2) is checked BEFORE the bytes-win rule:
+        // the store key carries the framework tag but NOT the record, so a bytes-hit under the
+        // live framework can be exactly the drifted build this state exists to replace (a module
+        // the type binds was updated; the framework rule cannot see it). Conservative by design —
+        // a record stamped by a replica whose write-back lagged may cost one redundant rebuild,
+        // never a stale serve.
+        if (definition.CompiledDependencies is { } record
+            && liveDependencyIdOf is not null
+            && Compiler.CompiledDependencies.FindMismatch(
+                record, liveDependencyIdOf, liveToolchainId ?? "") is not null)
+            return BakeState.DependencyStale;
 
         // 🚨 BYTES WIN OVER THE RECORD, in both directions — this is the whole premise.
         //
@@ -232,7 +255,9 @@ public static class NodeTypeBakeStatus
         IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
         IAssemblyStore store,
         string? liveFrameworkVersion = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Func<string, string?>? liveDependencyIdOf = null,
+        string? liveToolchainId = null)
     {
         ArgumentNullException.ThrowIfNull(definitions);
         ArgumentNullException.ThrowIfNull(store);
@@ -242,7 +267,8 @@ public static class NodeTypeBakeStatus
         var probes = definitions
             .Where(kvp => kvp.Value is not null && !string.IsNullOrEmpty(kvp.Key))
             .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(kvp => ProbeOne(kvp.Key, kvp.Value!, store, framework, logger))
+            .Select(kvp => ProbeOne(
+                kvp.Key, kvp.Value!, store, framework, logger, liveDependencyIdOf, liveToolchainId))
             .ToList();
 
         return probes.Count == 0
@@ -258,7 +284,9 @@ public static class NodeTypeBakeStatus
         NodeTypeDefinition definition,
         IAssemblyStore store,
         string framework,
-        ILogger? logger)
+        ILogger? logger,
+        Func<string, string?>? liveDependencyIdOf,
+        string? liveToolchainId)
         => Observable.Defer(() =>
         {
             // Probe whenever there is a version to probe WITH — not only when the record already
@@ -277,13 +305,15 @@ public static class NodeTypeBakeStatus
                 && definition.CompilationStatus != CompilationStatus.Error;
 
             if (!probeable)
-                return Observable.Return(Describe(typePath, definition, Classify(definition, false, framework)));
+                return Observable.Return(Describe(typePath, definition,
+                    Classify(definition, false, framework, liveDependencyIdOf, liveToolchainId)));
 
             return store
                 .TryGetAssemblyPath(typePath, definition.LastCompiledVersion!.Value)
                 .Take(1)
                 .Select(path => Describe(
-                    typePath, definition, Classify(definition, !string.IsNullOrEmpty(path), framework)))
+                    typePath, definition,
+                    Classify(definition, !string.IsNullOrEmpty(path), framework, liveDependencyIdOf, liveToolchainId)))
                 // Fail SAFE, never fail OPEN: an unreadable store must mean "bake it", not "trust
                 // the record and serve bytes that may not exist".
                 .Catch<NodeTypeBakeEntry, Exception>(ex =>
@@ -307,6 +337,8 @@ public static class NodeTypeBakeStatus
                 $"record claims {definition.LatestAssemblyCollection}/{definition.LatestAssemblyPath} "
                 + "but the store has no bytes",
             BakeState.PreviouslyBroken => "last compile settled at Error",
+            BakeState.DependencyStale => "the stamped dependency record no longer validates here "
+                + "(a bound module/toolchain dependency changed)",
             _ => null,
         });
 

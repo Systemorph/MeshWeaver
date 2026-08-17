@@ -90,6 +90,127 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
         }
     }
 
+    /// <summary>#1707 slice 3: install/push-time consumption is scoped to the CALLER's types —
+    /// the mesh-wide enumeration is the boot path's business only.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task SeedForTypes_AdoptsOnlyTheRequestedTypes()
+    {
+        var wantedPath = $"{TestPartition}/WantedThing";
+        var otherPath = $"{TestPartition}/OtherThing";
+        await CreateNodeType("WantedThing");
+        await CreateNodeType("OtherThing");
+
+        var dir = CreateBundleDirectory();
+        try
+        {
+            var bytes = new byte[] { 0xCA, 0xFE, 0x01 };
+            WriteBundle(
+                Path.Combine(dir, "install.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(wantedPath, () => new MemoryStream(bytes)),
+                new BundleWriter.AssemblyEntry(otherPath, () => new MemoryStream(bytes)));
+
+            var adopted = await ShippedPrebuiltBundles
+                .SeedForTypes(Mesh, [wantedPath], null, imageDirectory: dir)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            adopted.Should().Be(1, "only the requested type adopts — the other is not this call's business");
+
+            await Mesh.GetWorkspace().GetMeshNodeStream(wantedPath)
+                .Where(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
+                    ?.CompilationStatus == CompilationStatus.Ok)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+
+            var other = await Mesh.GetWorkspace().GetMeshNodeStream(otherPath)
+                .Where(n => n is not null)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+            other!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!
+                .CompilationStatus.Should().BeNull("the unrequested type must stay untouched");
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    /// <summary>#1707 slice 2: a bundle assembly's per-type dependency record is VALIDATED before
+    /// adoption — a build binding a module this environment does not run declines — and a
+    /// validating record is STAMPED so the ongoing checks judge the adopted build like a locally
+    /// compiled one.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task BundleDependencyRecord_MismatchDeclines_AndAMatchStampsTheRecord()
+    {
+        var stalePath = $"{TestPartition}/ModuleBoundThing";
+        var freshPath = $"{TestPartition}/PlatformBoundThing";
+        await CreateNodeType("ModuleBoundThing");
+        await CreateNodeType("PlatformBoundThing");
+
+        // The live surface-id of a platform assembly and the live toolchain id, resolved exactly
+        // as the seeder resolves them.
+        var liveIdOf = MeshWeaver.Compiler.CompiledDependencies.CreateIdResolver(
+            MeshWeaver.Compiler.FrameworkBuildIdentity.ProcessSurfacePairs,
+            new Dictionary<string, string>(),
+            MeshWeaver.Compiler.FrameworkBuildIdentity.ProcessImplMvidOf);
+        var meshContractId = liveIdOf("MeshWeaver.Mesh.Contract")!;
+        var toolchainId = MeshWeaver.Compiler.CompiledDependencies.ComputeToolchainId(
+            MeshWeaver.Compiler.FrameworkBuildIdentity.ProcessImplMvidOf);
+
+        var dir = CreateBundleDirectory();
+        try
+        {
+            var bytes = new byte[] { 0xCA, 0xFE, 0x02 };
+            WriteBundle(
+                Path.Combine(dir, "records.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                // Binds a module build this environment does not run — must DECLINE (the
+                // toolchain entry is correct, so the decline pins the MODULE mismatch).
+                new BundleWriter.AssemblyEntry(stalePath, () => new MemoryStream(bytes),
+                    Dependencies: new Dictionary<string, string>
+                    {
+                        [MeshWeaver.Compiler.CompiledDependencies.ToolchainKey] = toolchainId,
+                        ["Custom.Module"] = "mvid:some-other-build",
+                    }),
+                // Binds a platform assembly at its live surface-id — must ADOPT and stamp.
+                new BundleWriter.AssemblyEntry(freshPath, () => new MemoryStream(bytes),
+                    Dependencies: new Dictionary<string, string>
+                    {
+                        [MeshWeaver.Compiler.CompiledDependencies.ToolchainKey] = toolchainId,
+                        ["MeshWeaver.Mesh.Contract"] = meshContractId,
+                    }));
+
+            var adopted = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            adopted.Should().Be(1, "the module-mismatched assembly declines; the matching one adopts");
+
+            var fresh = await Mesh.GetWorkspace().GetMeshNodeStream(freshPath)
+                .Where(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
+                    ?.CompilationStatus == CompilationStatus.Ok)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+            fresh!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!
+                .CompiledDependencies.Should().NotBeNull()
+                .And.Subject.Should().ContainKey("MeshWeaver.Mesh.Contract");
+
+            var stale = await Mesh.GetWorkspace().GetMeshNodeStream(stalePath)
+                .Where(n => n is not null)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+            stale!.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!
+                .CompilationStatus.Should().BeNull("a declined assembly leaves the type to compile normally");
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
     [Fact(Timeout = 120_000)]
     public async Task MismatchedFrameworkMvid_DeclinesTheWholeBundle()
     {

@@ -362,7 +362,8 @@ public sealed class PluginBundleClient
 
                 return assemblies
                     .Select(a => PrebuiltAssemblySeeder.Seed(
-                        _hub, a.NodePath, a.Assembly, a.Pdb, manifest!.FrameworkMvid, _logger))
+                        _hub, a.NodePath, a.Assembly, a.Pdb, manifest!.FrameworkMvid, _logger,
+                        a.Dependencies))
                     .Concat()
                     .Count(adopted => adopted)
                     .Do(count => _logger?.LogInformation(

@@ -85,17 +85,24 @@ public static class PrebuiltAssemblySeeder
     /// <param name="nodeTypePath">Mesh path of the NodeType this assembly implements.</param>
     /// <param name="assemblyBytes">The compiled assembly.</param>
     /// <param name="pdbBytes">Symbols, when the assembly does not embed them.</param>
-    /// <param name="frameworkMvid">The MVID of the MeshWeaver.Graph assembly the bytes were
-    /// compiled against, as recorded by the producer. <c>null</c> declines the seed.</param>
+    /// <param name="frameworkMvid">The framework build identity the bytes were compiled against,
+    /// as recorded by the producer. <c>null</c> declines the seed.</param>
     /// <param name="logger">Diagnostics. Every decline is logged with its reason — a silent decline
     /// looks exactly like a successful adoption that later recompiles for no visible cause.</param>
+    /// <param name="dependencies">The producer's per-type DEPENDENCY RECORD for these bytes
+    /// (#1707 slice 2), when the bundle carries one: validated against THIS environment before
+    /// adoption (a module the type binds must be the exact build here too) and stamped onto
+    /// <see cref="NodeTypeDefinition.CompiledDependencies"/> on adopt so the ongoing validity
+    /// checks judge the adopted build the same way they judge a locally-compiled one. Null =
+    /// legacy bundle; the framework gate alone decides, and no record is stamped.</param>
     public static IObservable<bool> Seed(
         IMessageHub hub,
         string nodeTypePath,
         byte[] assemblyBytes,
         byte[]? pdbBytes,
         string? frameworkMvid,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IReadOnlyDictionary<string, string>? dependencies = null)
     {
         // 🚨 THE GATE. FrameworkVersion is the resolved framework build identity — a content/
         // surface identity, not a version string — and the assembly-store key carries the first
@@ -112,6 +119,23 @@ public static class PrebuiltAssemblySeeder
             logger?.LogInformation(
                 "Prebuilt assembly for {NodeTypePath} DECLINED: {Reason} — compiling instead",
                 nodeTypePath, reason);
+            return Observable.Return(false);
+        }
+
+        // The per-type dependency record (#1707 slice 2): the framework gate above proves the
+        // PLATFORM surface matches; this proves the MODULE/toolchain bindings do too — the store
+        // key cannot see either, so an unvalidated adopt would suppress a needed rebuild exactly
+        // like a framework mismatch would.
+        if (dependencies is not null
+            && CompiledDependencies.FindMismatch(
+                dependencies,
+                NodeTypeCompilationHelpers.DependencyIdResolverOf(hub),
+                NodeTypeCompilationHelpers.ProcessToolchainId) is { } dependencyMismatch)
+        {
+            logger?.LogInformation(
+                "Prebuilt assembly for {NodeTypePath} DECLINED: dependency record mismatch — "
+                + "{Mismatch} — compiling instead",
+                nodeTypePath, dependencyMismatch);
             return Observable.Return(false);
         }
 
@@ -165,6 +189,14 @@ public static class PrebuiltAssemblySeeder
                                     // adopting the assembly and then throwing it away.
                                     CompiledSources = def.CurrentSourceVersions?.ToImmutableDictionary()
                                                       ?? def.CompiledSources,
+                                    // The producer's dependency record (#1707 slice 2) — validated
+                                    // above; stamped so ongoing validity checks judge the adopted
+                                    // build like a locally-compiled one. Legacy bundles (null)
+                                    // leave any prior stamp untouched.
+                                    CompiledDependencies = dependencies is null
+                                        ? def.CompiledDependencies
+                                        : dependencies.ToImmutableSortedDictionary(
+                                            kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
                                 },
                             };
                         }))
