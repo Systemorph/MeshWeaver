@@ -1409,15 +1409,7 @@ public static class PackageInstaller
                 // Only recompile when something actually changed — an unchanged re-install must not
                 // kick a redundant Roslyn build.
                 if (written > 0)
-                {
-                    // System-impersonated: the release flip is a stream write posted from a
-                    // continuation with no ambient context (see Upsert).
-                    var accessService = hub.ServiceProvider.GetService<AccessService>();
-                    using (accessService?.ImpersonateAsSystem())
-                        hub.RequestNodeTypeRelease(nodeTypePath,
-                            onError: msg => logger?.LogWarning(
-                                "Release request for {Path} failed: {Msg}", nodeTypePath, msg));
-                }
+                    SeedThenRequestReleases(hub, [nodeTypePath], logger);
                 return WriteInstalledRecord(
                         hub, manifest, installedFromRef, all.Length, authorizingUserId: authorizingUserId)
                     .SelectMany(_ => WarmInstalledRoots(hub, all, logger))
@@ -2088,14 +2080,7 @@ public static class PackageInstaller
                     manifest.Id, result.Written, result.Unchanged, nodes.Length, installedFromRef);
                 // Recompile only the NodeTypes, and only when something changed.
                 if (result.Written > 0)
-                {
-                    // System-impersonated: the release flips are stream writes posted from a
-                    // continuation with no ambient context (see Upsert).
-                    using (accessService?.ImpersonateAsSystem())
-                        foreach (var path in nodeTypePaths)
-                            hub.RequestNodeTypeRelease(path,
-                                onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
-                }
+                    SeedThenRequestReleases(hub, nodeTypePaths, logger);
                 // Same order as the content path: publish the partition BEFORE warming its roots
                 // (activation's gating pass must see the declared shape).
                 return EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
@@ -2287,13 +2272,7 @@ public static class PackageInstaller
                     releaseTargets.Length, installedFromRef, newManifest.ModuleVersion);
 
                 if (releaseTargets.Length > 0)
-                {
-                    var accessService = hub.ServiceProvider.GetService<AccessService>();
-                    using (accessService?.ImpersonateAsSystem())
-                        foreach (var path in releaseTargets)
-                            hub.RequestNodeTypeRelease(path,
-                                onError: msg => logger?.LogWarning("Release request for {Path} failed: {Msg}", path, msg));
-                }
+                    SeedThenRequestReleases(hub, releaseTargets, logger);
                 // An UPDATE re-asserts the declared access too: a package that only just flipped
                 // its declaration (or whose policy was lost) must converge on the next sync rather
                 // than wait for a full re-install. Create-only, so an existing shape is untouched
@@ -2546,6 +2525,53 @@ public static class PackageInstaller
             .Do(_ => logger?.LogInformation(
                 "[PackageInstaller] removed install record {Path}", recordPath));
     }
+
+    /// <summary>
+    /// #1707 slice 3 — adopt-before-compile at INSTALL: give the deployment's prebuilt bundle
+    /// sources one bounded chance to supply the just-installed types' assemblies, THEN issue the
+    /// release requests. An adopted type's request is SATISFIED by the release watcher (Ok +
+    /// sources current + usable build ⇒ no Roslyn); anything not adopted compiles exactly as
+    /// before. Fire-and-forget like the requests it wraps (an install never waits for compiles);
+    /// never faults — every failure degrades to "the installed types compile".
+    /// </summary>
+    private static void SeedThenRequestReleases(
+        IMessageHub hub, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
+    {
+        var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
+        var seed = consumer is null
+            ? Observable.Return(0)
+            : consumer.SeedForTypes(nodeTypePaths)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(60))
+                .Catch<int, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Install: prebuilt adoption attempt failed — the installed types compile instead");
+                    return Observable.Return(0);
+                });
+        seed.Subscribe(
+            adopted =>
+            {
+                if (adopted > 0)
+                    logger?.LogInformation(
+                        "Install: adopted {Adopted} prebuilt assembly(ies) for {Count} installed "
+                        + "type(s) — their release requests settle without compiling",
+                        adopted, nodeTypePaths.Count);
+                // System-impersonated: the release flips are stream writes posted from a pool
+                // continuation with no ambient context — and the seed's own System scope does not
+                // flow across the subscription hop (AsyncLocal), so it is re-established here.
+                var accessService = hub.ServiceProvider.GetService<AccessService>();
+                using (accessService?.ImpersonateAsSystem())
+                    foreach (var path in nodeTypePaths)
+                        hub.RequestNodeTypeRelease(path,
+                            onError: msg => logger?.LogWarning(
+                                "Release request for {Path} failed: {Msg}", path, msg));
+            },
+            ex => logger?.LogWarning(ex,
+                "Install: seed-then-release failed for {Count} type(s) — request releases manually "
+                + "(Compile button) if assemblies stay stale", nodeTypePaths.Count));
+    }
+
 }
 
 /// <summary>
@@ -2568,4 +2594,6 @@ public readonly record struct InstallResult(int Total, int Written)
     /// </summary>
     public System.Collections.Immutable.ImmutableList<string> WrittenPaths { get; init; } =
         System.Collections.Immutable.ImmutableList<string>.Empty;
+
+
 }

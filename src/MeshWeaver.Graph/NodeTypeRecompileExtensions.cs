@@ -28,6 +28,10 @@ public static class NodeTypeRecompileExtensions
 {
     private static readonly TimeSpan TypeEnumerationBudget = TimeSpan.FromSeconds(30);
 
+    /// <summary>Budget for the one adopt-before-compile attempt (#1707 slice 3) — bundle reads
+    /// plus per-type seeds; on elapse every affected type simply compiles, as it always did.</summary>
+    private static readonly TimeSpan PrebuiltSeedBudget = TimeSpan.FromSeconds(60);
+
     /// <summary>
     /// Requests a release for every NodeType affected by <paramref name="changedNodePaths"/>
     /// (written or pruned node paths). Emits the release-requested type paths, in dependency
@@ -97,29 +101,65 @@ public static class NodeTypeRecompileExtensions
                 }
                 return ordered;
             })
-            .Do(ordered =>
+            .SelectMany(ordered =>
             {
                 if (ordered.Count == 0)
-                    return;
+                    return Observable.Return(ordered);
                 logger?.LogInformation(
                     "[Recompile] {Count} NodeType(s) affected by {Changed} changed node(s): {Types}",
                     ordered.Count, changedNodePaths.Count, string.Join(", ", ordered));
                 progress?.Invoke(
                     $"Recompiling {ordered.Count} NodeType(s): {string.Join(", ", ordered)}",
                     LogLevel.Information);
-                // The release trigger is a node write; SYSTEM-impersonated per the channel's own
-                // write identity (RequestNodeTypeRelease captures the caller synchronously, so the
-                // scope around the loop covers every request).
-                using (accessService?.ImpersonateAsSystem())
-                    foreach (var path in ordered)
-                        hub.RequestNodeTypeRelease(path, onError: msg =>
+
+                // #1707 slice 3 — adopt-before-compile: give the deployment's prebuilt bundle
+                // sources one bounded chance to supply these types' assemblies FIRST (a git
+                // push's commit is typically baked by the content repo's CI under this same
+                // framework identity). An adopted type then SATISFIES its release request in the
+                // watcher (Ok + sources current + usable build ⇒ no Roslyn); anything not adopted
+                // compiles exactly as before. Never faults, never blocks past its budget; a host
+                // without bundle consumption has no consumer and skips straight through.
+                var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
+                var seed = consumer is null
+                    ? Observable.Return(0)
+                    : consumer.SeedForTypes(ordered)
+                        .Take(1)
+                        .Timeout(PrebuiltSeedBudget)
+                        .Catch<int, Exception>(ex =>
                         {
-                            logger?.LogError(
-                                "[Recompile] Release request for {Path} failed: {Message}", path, msg);
-                            progress?.Invoke(
-                                $"Recompile of {path} could not be requested: {msg} — its assembly is STALE until compiled manually.",
-                                LogLevel.Error);
+                            logger?.LogWarning(ex,
+                                "[Recompile] Prebuilt adoption attempt failed — every affected type compiles instead.");
+                            return Observable.Return(0);
                         });
+
+                return seed.Select(adopted =>
+                {
+                    if (adopted > 0)
+                    {
+                        logger?.LogInformation(
+                            "[Recompile] Adopted {Adopted} prebuilt assembly(ies) for the affected set — "
+                            + "their release requests settle without compiling.", adopted);
+                        progress?.Invoke(
+                            $"Adopted {adopted} prebuilt assembly(ies) — the rest compile.",
+                            LogLevel.Information);
+                    }
+                    // The release trigger is a node write; SYSTEM-impersonated per the channel's own
+                    // write identity (RequestNodeTypeRelease captures the caller synchronously, so
+                    // the scope around the loop covers every request). Requested for EVERY affected
+                    // type, adopted included — the watcher's satisfied-path consumes the trigger for
+                    // current builds, and this stays the one place that guarantees a request lands.
+                    using (accessService?.ImpersonateAsSystem())
+                        foreach (var path in ordered)
+                            hub.RequestNodeTypeRelease(path, onError: msg =>
+                            {
+                                logger?.LogError(
+                                    "[Recompile] Release request for {Path} failed: {Message}", path, msg);
+                                progress?.Invoke(
+                                    $"Recompile of {path} could not be requested: {msg} — its assembly is STALE until compiled manually.",
+                                    LogLevel.Error);
+                            });
+                    return ordered;
+                });
             })
             .Select(ordered => (IReadOnlyList<string>)ordered)
             .Catch<IReadOnlyList<string>, Exception>(ex =>

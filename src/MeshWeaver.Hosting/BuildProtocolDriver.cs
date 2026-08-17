@@ -441,7 +441,9 @@ public static class BuildProtocolDriver
             fingerprint, go.ReadyAt, holder);
 
         return mesh.WithdrawBuildClaim(holder)
-            .SelectMany(_ => NodeTypeBakeStatus.Probe(definitions, store, logger: logger))
+            .SelectMany(_ => NodeTypeBakeStatus.Probe(definitions, store, logger: logger,
+                liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+                liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId))
             .SelectMany(fresh => fresh.Entries
                 .Select(e => new PreWarmOutcome(
                     e.TypePath,

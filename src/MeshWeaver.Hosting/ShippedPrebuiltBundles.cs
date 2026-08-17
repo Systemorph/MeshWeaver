@@ -6,6 +6,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -183,10 +184,57 @@ public static class ShippedPrebuiltBundles
         return bundles;
     }
 
+    /// <summary>
+    /// Install/push-time consumption (#1707 slice 3): seeds from BOTH bundle sources — the
+    /// image's shipped <c>prebuilt/</c> directory and the CI-published identity root — restricted
+    /// to the caller's type paths. The only boot coupling the seeding core ever had was its
+    /// mesh-wide NodeType enumeration; here the caller (a package install's written set, a git
+    /// push's affected set) supplies the paths, so the cache is consumable the moment content
+    /// lands instead of only at the next boot. Cold, never faults (degrades to "compile as
+    /// today"), and validated per assembly by the seeder's framework + dependency-record gates.
+    /// </summary>
+    public static IObservable<int> SeedForTypes(
+        IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
+        string? imageDirectory = null, string? publishedRoot = null)
+        => Observable.Defer(() =>
+        {
+            if (typePaths.Count == 0)
+                return Observable.Return(0);
+            var configuration = mesh.ServiceProvider.GetService<IConfiguration>();
+            var imageDir = imageDirectory
+                ?? (configuration?[DirectoryConfigKey] is { Length: > 0 } configured
+                    ? configured
+                    : DefaultDirectory);
+            publishedRoot ??= configuration?[PublishedRootConfigKey];
+            var paths = typePaths
+                .Where(p => !string.IsNullOrEmpty(p))
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var seeds = new List<IObservable<int>>
+            {
+                SeedBundles(mesh, imageDir,
+                    () => Directory
+                        .EnumerateFiles(imageDir, "*.zip", SearchOption.TopDirectoryOnly)
+                        .OrderBy(f => f, StringComparer.Ordinal)
+                        .ToList(),
+                    logger, paths),
+            };
+            if (!string.IsNullOrWhiteSpace(publishedRoot))
+            {
+                var identityDir = Path.Combine(publishedRoot, PrebuiltAssemblySeeder.LiveFrameworkMvid);
+                seeds.Add(SeedBundles(mesh, identityDir,
+                    () => CompletePublishedBundlesOf(identityDir, logger), logger, paths));
+            }
+            return seeds.Concat().Aggregate(0, (total, adopted) => total + adopted);
+        });
+
     /// <summary>The shared seeding core: the bundle files <paramref name="enumerateBundles"/>
-    /// resolves (on the pool's blocking leg), through the one bundle pipeline.</summary>
+    /// resolves (on the pool's blocking leg), through the one bundle pipeline.
+    /// <paramref name="typePathFilter"/> replaces the mesh-wide NodeType enumeration when the
+    /// caller already knows which types it is consuming for (#1707 slice 3).</summary>
     private static IObservable<int> SeedBundles(
-        IMessageHub mesh, string dir, Func<List<string>> enumerateBundles, ILogger? logger)
+        IMessageHub mesh, string dir, Func<List<string>> enumerateBundles, ILogger? logger,
+        ImmutableHashSet<string>? typePathFilter = null)
         => Observable.Defer(() =>
         {
             if (!Directory.Exists(dir))
@@ -197,7 +245,7 @@ public static class ShippedPrebuiltBundles
             }
 
             var meshService = mesh.ServiceProvider.GetService<IMeshService>();
-            if (meshService is null)
+            if (meshService is null && typePathFilter is null)
             {
                 logger?.LogDebug("ShippedPrebuiltBundles: no IMeshService registered — nothing to seed");
                 return Observable.Return(0);
@@ -205,6 +253,22 @@ public static class ShippedPrebuiltBundles
             var accessService = mesh.ServiceProvider.GetService<AccessService>();
             var pool = mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>().Get("prebuilt:files");
             var startedAt = DateTimeOffset.UtcNow;
+
+            // ONE enumeration of the NodeType nodes this mesh actually holds — the filter that
+            // keeps a bundle for content this deployment never imported (an image ships one
+            // content set; a mesh serves a subset) from parking the boot on per-path waits for
+            // nodes that do not exist. A caller-supplied set (install/push) skips the query.
+            var existingPaths = typePathFilter is not null
+                ? Observable.Return(typePathFilter)
+                : meshService!
+                    .Query<MeshNode>(MeshQueryRequest
+                        .FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
+                    .Take(1)
+                    .Timeout(EnumerationBudget)
+                    .Select(change => change.Items
+                        .Where(n => !string.IsNullOrEmpty(n.Path))
+                        .Select(n => n.Path!)
+                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
 
             // 🚨 System-scoped end-to-end: reading NodeType records across every partition and
             // stamping adopted builds is framework infrastructure, exactly like the sweep this
@@ -222,19 +286,7 @@ public static class ShippedPrebuiltBundles
                                 return Observable.Return(0);
                             }
 
-                            // ONE enumeration of the NodeType nodes this mesh actually holds — the
-                            // filter that keeps a bundle for content this deployment never imported
-                            // (an image ships one content set; a mesh serves a subset) from parking
-                            // the boot on per-path waits for nodes that do not exist.
-                            return meshService
-                                .Query<MeshNode>(MeshQueryRequest
-                                    .FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
-                                .Take(1)
-                                .Timeout(EnumerationBudget)
-                                .Select(change => change.Items
-                                    .Where(n => !string.IsNullOrEmpty(n.Path))
-                                    .Select(n => n.Path!)
-                                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase))
+                            return existingPaths
                                 .SelectMany(existing => bundles
                                     .Select(bundle => SeedBundle(mesh, pool, bundle, existing, logger))
                                     .Concat()
@@ -298,7 +350,8 @@ public static class ShippedPrebuiltBundles
 
                 return present
                     .Select(a => PrebuiltAssemblySeeder
-                        .Seed(mesh, a.NodePath, a.Assembly, a.Pdb, manifest!.FrameworkMvid, logger)
+                        .Seed(mesh, a.NodePath, a.Assembly, a.Pdb, manifest!.FrameworkMvid, logger,
+                            a.Dependencies)
                         .Take(1)
                         .Timeout(SeedBudget)
                         .Catch<bool, Exception>(ex =>

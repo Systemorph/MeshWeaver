@@ -81,10 +81,11 @@ internal static class NodeTypeCompilationHelpers
         // NodeType whose compile already terminally failed, so a broken type can never drive
         // the recompile storm that saturates this hub's single-threaded action block.
         var parkRegistry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>();
-        // The live installed-module fingerprint (#1664 step 11) — joins HasUsableBuild /
+        // The live build guards (#1664 step 11, #1707 slice 2) — the per-type dependency-record
+        // resolver plus the legacy installed-module fingerprint — join HasUsableBuild /
         // HasStaleFrameworkBuild below so a module-only update re-drives the compile the same
-        // way a framework redeploy does. Null when the mesh registers no fingerprint (legacy).
-        var modulesHash = ModulesHashOf(hub);
+        // way a framework redeploy does, scoped to actual dependents once a record is stamped.
+        var guards = GuardsOf(hub);
 
         var installSeq = System.Threading.Interlocked.Increment(ref _watcherInstallCount);
         logger?.LogDebug(
@@ -320,7 +321,7 @@ internal static class NodeTypeCompilationHelpers
         var firstBuildKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus is null
-                && !HasUsableBuild(node, def, modulesHash)
+                && !HasUsableBuild(node, def, guards)
                 // Same truly-static exclusion as the watcher above: the
                 // HubConfiguration delegate IS the configuration; nothing to
                 // Roslyn-compile.
@@ -447,7 +448,7 @@ internal static class NodeTypeCompilationHelpers
         var frameworkStaleKickoffSub = ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
                 && def.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error
-                && HasStaleFrameworkBuild(def, modulesHash)
+                && HasStaleFrameworkBuild(def, guards)
                 && !IsStaticOnlyNodeType(node, def)
                 && parkRegistry?.IsParked(hubPath) != true)
             .Take(1)
@@ -501,9 +502,16 @@ internal static class NodeTypeCompilationHelpers
                 // framework are EQUAL, and a framework-shaped message would read as a no-op.
                 var staleDef = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
                 if (string.Equals(staleDef?.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal))
+                {
+                    // Record-stamped builds name the exact drifted dependency; legacy stamps
+                    // fall back to the whole-set fingerprint comparison.
+                    var mismatch = staleDef?.CompiledDependencies is { } rec && guards.DependencyIdOf is not null
+                        ? Compiler.CompiledDependencies.FindMismatch(rec, guards.DependencyIdOf, guards.ToolchainId)
+                        : $"installed-module set {staleDef?.CompiledModulesHash ?? "(null)"} vs live {guards.ModulesHash}";
                     logger?.LogInformation(
-                        "Stale-build kickoff: NodeType {HubPath} assembly was compiled under installed-module set {Compiled} but the live set is {Live} (framework unchanged — a module-only update) — flipping CompilationStatus=Pending to rebuild",
-                        hubPath, staleDef?.CompiledModulesHash ?? "(null)", modulesHash);
+                        "Stale-build kickoff: NodeType {HubPath} assembly's dependency set drifted ({Mismatch}; framework unchanged) — flipping CompilationStatus=Pending to rebuild",
+                        hubPath, mismatch);
+                }
                 else
                     logger?.LogInformation(
                         "Framework-stale kickoff: NodeType {HubPath} assembly was compiled against framework {Compiled} but the live framework is {Live} — flipping CompilationStatus=Pending to rebuild",
@@ -520,7 +528,7 @@ internal static class NodeTypeCompilationHelpers
                         return curr;
                     // Re-check staleness inside the lambda — a genuine rebuild may have refreshed
                     // CompiledFrameworkVersion between the outer Where and this write.
-                    if (!HasStaleFrameworkBuild(def, modulesHash)) return curr;
+                    if (!HasStaleFrameworkBuild(def, guards)) return curr;
                     return curr with
                     {
                         Content = def with { CompilationStatus = CompilationStatus.Pending }
@@ -930,6 +938,37 @@ internal static class NodeTypeCompilationHelpers
                         if (def.CompilationStatus is CompilationStatus.Pending
                                                   or CompilationStatus.Compiling)
                             return curr;
+                        // #1707 slice 3 — "if yes, we take it; if no, we generate": a release
+                        // request arriving while the CURRENT state already holds a VALID build of
+                        // the CURRENT sources (typically just ADOPTED from a prebuilt bundle by
+                        // the install/push consumption, or compiled by another replica) is
+                        // SATISFIED, not recompiled — the trigger is consumed on the same commit
+                        // path a compile dispatch would use, so it can never re-fire, and the
+                        // request's outcome is byte-for-byte what a recompile would have produced.
+                        // RequestedReleaseForce stays the user's escape hatch: an explicit force
+                        // always compiles.
+                        if (!def.RequestedReleaseForce
+                            && def.CompilationStatus is CompilationStatus.Ok
+                            && !def.IsDirty
+                            && HasUsableBuild(curr, def, GuardsOf(hub)))
+                        {
+                            logger?.LogInformation(
+                                "[ReleaseRequestWatcher] {HubPath}: release request satisfied by the "
+                                + "existing current build (adopted or already compiled) — no compile "
+                                + "dispatched", hubPath);
+                            dispatchHighWater.Advance(triggerAt);
+                            return curr with
+                            {
+                                Content = def with
+                                {
+                                    LastReleaseRequestHandledAt =
+                                        def.LastReleaseRequestHandledAt is { } sat && sat > triggerAt
+                                            ? sat
+                                            : triggerAt,
+                                    RequestedReleaseBy = null,
+                                }
+                            };
+                        }
                         // COMMIT: this is the one path that stamps
                         // LastReleaseRequestHandledAt — advance the in-memory
                         // high-water in the same breath so the two marks never diverge.
@@ -1048,34 +1087,108 @@ internal static class NodeTypeCompilationHelpers
     /// zero-module mesh and compares like any other value.</para>
     /// </summary>
     internal static bool HasUsableBuild(MeshNode node, NodeTypeDefinition def, string? modulesHash = null) =>
+        HasUsableBuild(node, def, modulesHash is null ? null : new BuildGuards(modulesHash, null, ""));
+
+    /// <summary>
+    /// <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, string?)"/> with the full build
+    /// guards (#1707 slice 2): when the definition carries a per-type
+    /// <see cref="NodeTypeDefinition.CompiledDependencies"/> record AND the guards carry a
+    /// resolver, the RECORD decides — every stamped (name → surface-id) pair must still resolve
+    /// identically in this environment, so a module update invalidates only its dependents and
+    /// the instance-wide fingerprint stops keying anything. Null record or null resolver falls
+    /// back to the legacy whole-set modules-hash rule.
+    /// </summary>
+    internal static bool HasUsableBuild(MeshNode node, NodeTypeDefinition def, BuildGuards? guards) =>
         !string.IsNullOrEmpty(def.LatestAssemblyCollection)
         && !string.IsNullOrEmpty(def.LatestAssemblyPath)
         && string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal)
-        && (modulesHash is null
+        && DependenciesValid(def, guards);
+
+    /// <summary>
+    /// The dependency clause shared by <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/>
+    /// and <see cref="HasStaleFrameworkBuild(NodeTypeDefinition, BuildGuards?)"/>: record-based
+    /// when a record and a resolver are both present, legacy modules-hash otherwise (null stamp
+    /// or null live hash = MATCH, exactly the pre-#1707 grandfathering).
+    /// </summary>
+    private static bool DependenciesValid(NodeTypeDefinition def, BuildGuards? guards)
+    {
+        if (guards is null)
+            return true;
+        if (def.CompiledDependencies is { } record && guards.DependencyIdOf is not null)
+            return Compiler.CompiledDependencies.FindMismatch(
+                record, guards.DependencyIdOf, guards.ToolchainId) is null;
+        return guards.ModulesHash is null
             || def.CompiledModulesHash is null
-            || string.Equals(def.CompiledModulesHash, modulesHash, StringComparison.Ordinal));
+            || string.Equals(def.CompiledModulesHash, guards.ModulesHash, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The live environment a build's validity is judged against: the per-type dependency-record
+    /// resolver + toolchain id (#1707 slice 2) and the legacy installed-module fingerprint.
+    /// Resolve once per watcher install via <see cref="GuardsOf"/>.
+    /// </summary>
+    internal sealed record BuildGuards(
+        string? ModulesHash,
+        Func<string, string?>? DependencyIdOf,
+        string ToolchainId);
+
+    /// <summary>The ONE resolver every call site goes through, so "which live environment" can
+    /// never fork between the usable check and the stale check.</summary>
+    internal static BuildGuards GuardsOf(IMessageHub hub) =>
+        new(ModulesHashOf(hub), DependencyIdResolverOf(hub), ProcessToolchainId);
 
     /// <summary>
     /// The mesh's live installed-module fingerprint, resolved from the hub's service tree
     /// (<see cref="InstalledModulesFingerprint"/> is a mesh-scoped singleton registered by
-    /// <c>AddGraph</c>), or null when the mesh does not register one — the ONE resolver every
-    /// call site that threads <c>modulesHash</c> into <see cref="HasUsableBuild"/> /
-    /// <see cref="HasStaleFrameworkBuild"/> goes through, so "which hash is live" can never fork.
+    /// <c>AddGraph</c>), or null when the mesh does not register one. Legacy rule input — the
+    /// per-type record supersedes it wherever a record is stamped.
     /// </summary>
     internal static string? ModulesHashOf(IMessageHub hub) =>
         hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash;
+
+    /// <summary>
+    /// The surface-id resolver over THIS mesh's environment (process surface manifest + the
+    /// mesh's installed modules) — see <see cref="Compiler.CompiledDependencies.CreateIdResolver"/>.
+    /// </summary>
+    internal static Func<string, string?> DependencyIdResolverOf(IMessageHub hub) =>
+        Compiler.CompiledDependencies.CreateIdResolver(
+            FrameworkBuildIdentity.ProcessSurfacePairs,
+            ModuleMvidsOf(hub),
+            FrameworkBuildIdentity.ProcessImplMvidOf);
+
+    /// <summary>Installed module simple name → implementation MVID ("N"), for the resolver's
+    /// exact-build module ids.</summary>
+    internal static IReadOnlyDictionary<string, string> ModuleMvidsOf(IMessageHub hub)
+    {
+        var modules = hub.ServiceProvider.GetServices<InstalledModuleAssembly>();
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var module in modules)
+        {
+            var name = module.Assembly.GetName().Name;
+            if (!string.IsNullOrEmpty(name))
+                map[name] = module.Assembly.ManifestModule.ModuleVersionId.ToString("N");
+        }
+        return map;
+    }
+
+    /// <summary>The process's toolchain id for the record's reserved entry — constant per
+    /// process (a Lazy of an immutable string, not runtime-mutable state).</summary>
+    internal static string ProcessToolchainId => _toolchainId.Value;
+
+    private static readonly Lazy<string> _toolchainId = new(() =>
+        Compiler.CompiledDependencies.ComputeToolchainId(FrameworkBuildIdentity.ProcessImplMvidOf));
 
     /// <summary>
     /// True when this NodeType has a cached compiled assembly (the durable
     /// <see cref="NodeTypeDefinition.LatestAssemblyCollection"/> /
     /// <see cref="NodeTypeDefinition.LatestAssemblyPath"/> pair is populated) that was built
     /// against a DIFFERENT MeshWeaver framework than the live one — i.e. the ONLY reason
-    /// <see cref="HasUsableBuild"/> is false is the framework-version mismatch, not a missing
+    /// <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/> is false is the framework-version mismatch, not a missing
     /// assembly. This is the "platform self-update left a stale assembly behind" shape
     /// (issue #464, Defect 1): the bytes exist but are ABI-incompatible with the current
     /// process, so they must be rebuilt — a source-clean, never-touched NodeType included.
     ///
-    /// <para>Distinct from <see cref="HasUsableBuild"/>: a NodeType that was never compiled
+    /// <para>Distinct from <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/>: a NodeType that was never compiled
     /// (no assembly fields) is NOT "stale" — it is handled by the first-build kickoff.</para>
     /// </summary>
     /// <summary>
@@ -1098,13 +1211,18 @@ internal static class NodeTypeCompilationHelpers
     // the compile (first-build kickoff needs Status=null, recovery needs Compiling). Null stamp /
     // null caller keep legacy behavior, exactly as in HasUsableBuild.
     internal static bool HasStaleFrameworkBuild(NodeTypeDefinition def, string? modulesHash = null) =>
+        HasStaleFrameworkBuild(def, modulesHash is null ? null : new BuildGuards(modulesHash, null, ""));
+
+    /// <summary>The twin with full build guards — see
+    /// <see cref="HasUsableBuild(MeshNode, NodeTypeDefinition, BuildGuards?)"/>: a build whose
+    /// stamped dependency record no longer validates is STALE the same way a framework mismatch
+    /// is, and this twin is what re-drives the compile for it.</summary>
+    internal static bool HasStaleFrameworkBuild(NodeTypeDefinition def, BuildGuards? guards) =>
         !string.IsNullOrEmpty(def.LatestAssemblyCollection)
         && !string.IsNullOrEmpty(def.LatestAssemblyPath)
         && !string.IsNullOrEmpty(def.CompiledFrameworkVersion)
         && (!string.Equals(def.CompiledFrameworkVersion, FrameworkVersion, StringComparison.Ordinal)
-            || (modulesHash is not null
-                && def.CompiledModulesHash is not null
-                && !string.Equals(def.CompiledModulesHash, modulesHash, StringComparison.Ordinal)));
+            || (guards is not null && !DependenciesValid(def, guards)));
 
     /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
@@ -1159,6 +1277,10 @@ internal static class NodeTypeCompilationHelpers
             // property doc on NodeTypeDefinition carries the full story). Preserved when the
             // caller cannot resolve a fingerprint, so a stamped hash is never erased.
             CompiledModulesHash = modulesHash ?? def.CompiledModulesHash,
+            // The per-type dependency record (#1707 slice 2) — read off the emitted assembly by
+            // CompileResultFromAssembly and DECISIVE over the fingerprint above wherever present.
+            // Preserved when the result carries none (e.g. a legacy producer), never erased.
+            CompiledDependencies = result.CompiledDependencies ?? def.CompiledDependencies,
             // Clear the consumed release-requester so a later System-only recompile doesn't
             // mis-attribute its release to a stale prior user.
             RequestedReleaseBy = null
