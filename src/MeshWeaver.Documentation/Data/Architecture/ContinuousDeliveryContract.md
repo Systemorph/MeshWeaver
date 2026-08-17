@@ -221,6 +221,22 @@ identity, so the next CI run re-bakes by construction.) Reporter-class like the 
 webhook: an unconfigured or lost dispatch is a loud notice, never a red — the next release
 re-notifies, and nothing downstream certifies anything on it.
 
+Provisioning state (2026-08-17): the two halves of this cascade are in different states.
+
+- **The satellites' publish credentials ARE provisioned.** The Azure managed identity
+  `github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
+  portals' storage account, with one federated credential per satellite `main` ref
+  (`repo:Systemorph/{MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia}:ref:refs/heads/main`),
+  and the `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` secrets are set on all
+  four repos. **A red publish-bake was designed debt until 2026-08-17 and is a real failure after
+  it** — read any older "credentials pending" or known-red allowlist reference as historical.
+- **The dispatch itself remains dormant.** `BAKE_SUBSCRIBER_REPOS` (platform repo variable) and
+  `DEPENDENT_DISPATCH_TOKEN` (a human-minted PAT with `repo` scope on the four satellites) are
+  still unset, so `notify-dependents` exits with its loud not-configured notice. Until they are
+  provisioned, satellites re-bake only on their own `main` pushes, and a release-triggered rebuild
+  can be hand-fired by anyone with `repo` scope:
+  `gh api repos/Systemorph/<repo>/dispatches -f event_type=meshweaver-framework-released`.
+
 ## See also
 
 - [Release & Self-Update Strategy](/Doc/Architecture/ReleaseStrategy) — the two channels, the update policy node, and how each install applies an update.
