@@ -426,10 +426,44 @@ public class SelfUpdateHostedService : IHostedService
                 return Observable.Return(Unit.Default);
             }
 
-            _logger?.LogInformation(
-                "[SelfUpdate] applying update {Tag} (was {Current}).",
-                target, ShippedReleaseSeed.InstalledPlatformVersion);
-            return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct));
+            // 🚨 The pacing floor. A roll is a POD RESTART, so without it publication frequency is
+            // restart frequency and every restart drops the live circuits of everyone using the
+            // portal. The floor bounds the AUTOMATIC cadence only: `kubectl rollout restart` still
+            // takes the newest image immediately (the startup pass), and a main-cd dispatch still
+            // bypasses the batch window, so nothing here delays an urgent fix.
+            //
+            // Deferring is safe WITHOUT a timer for the same reason an availability hold is: the
+            // next publication event re-decides it. The floor never schedules anything.
+            // A disabled floor must not pay for the stamp read: LastRolledAtAsync is a Kubernetes GET
+            // in the AKS implementation, and its answer cannot change the decision when the floor is
+            // zero. Skipping it removes an API call and a failure point from the happy path.
+            if (_options.MinRollInterval <= TimeSpan.Zero)
+            {
+                _logger?.LogInformation(
+                    "[SelfUpdate] applying update {Tag} (was {Current}; no roll floor configured).",
+                    target, ShippedReleaseSeed.InstalledPlatformVersion);
+                return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct));
+            }
+
+            return _http.Invoke(ct => _updater.LastRolledAtAsync(ct)).SelectMany(lastRolledAt =>
+            {
+                var since = lastRolledAt is null ? (TimeSpan?)null : DateTimeOffset.UtcNow - lastRolledAt.Value;
+                if (since is { } elapsed && elapsed < _options.MinRollInterval)
+                {
+                    _logger?.LogInformation(
+                        "[SelfUpdate] {Tag} is available but this install rolled {Elapsed} ago, inside the "
+                        + "{Floor} floor — deferring. The next publication re-decides it; "
+                        + "`kubectl rollout restart` applies it now.",
+                        target, elapsed, _options.MinRollInterval);
+                    return Observable.Return(Unit.Default);
+                }
+
+                _logger?.LogInformation(
+                    "[SelfUpdate] applying update {Tag} (was {Current}; last rolled {Last}).",
+                    target, ShippedReleaseSeed.InstalledPlatformVersion,
+                    lastRolledAt?.ToString("O") ?? "never");
+                return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct));
+            });
         });
 
     /// <summary>Record the newest available tag on the policy node (as System). Drives the admin tab
