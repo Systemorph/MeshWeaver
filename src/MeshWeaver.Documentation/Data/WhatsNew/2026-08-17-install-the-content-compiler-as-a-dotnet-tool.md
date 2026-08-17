@@ -12,7 +12,7 @@ The compiler that CI uses to gate and bake mesh content — the same code path t
 with at runtime — can now be installed directly:
 
 ```
-dotnet tool install MeshWeaver.Compiler.Cli
+dotnet tool install -g MeshWeaver.Compiler.Cli
 mw-compiler <checkout-root> --bake-output <dir>
 mw-compiler --print-framework-identity
 ```
