@@ -3,11 +3,13 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -107,6 +109,16 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
 
         var threadPath = await SeedThread();
         var client = GetClient();
+
+        // Open the usage observation BEFORE the round runs — at this point the thread has no
+        // _Usage namespace at all. RecordUsage is subscribed as an INDEPENDENT side effect,
+        // deliberately NOT chained before the terminal status write, so "the round finished" never
+        // implies "the satellite exists"; a consumer (ThreadTokenChip, this test) is routinely
+        // already watching while it does not. Waiting first makes that the DETERMINISTIC ordering
+        // instead of the one CI loses at random.
+        var watchingUsage = WaitForUsage(threadPath, HealthyUsageKey,
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 30_000);
+
         client.SubmitMessage(threadPath, "hello", modelName: StaleModel, createdBy: TestUser);
 
         var thread = await WaitForThread(threadPath,
@@ -125,8 +137,7 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
 
         // …and the same truth flows into token accounting: the per-model satellite is keyed by the
         // model that answered, so its cost is attributed to the right model.
-        var usage = await WaitForUsage(threadPath, HealthyUsageKey,
-            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 30_000);
+        var usage = await watchingUsage;
         usage.Model.Should().Be(HealthyModel);
     }
 
@@ -278,13 +289,40 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
             .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
             .Match(m => predicate(m!)))!;
 
+    /// <summary>
+    /// Watches the per-model <see cref="TokenUsage"/> satellite at
+    /// <c>{threadPath}/_Usage/{modelKey}</c> until it matches <paramref name="predicate"/>.
+    ///
+    /// <para>🚨 Through the LIVE CHILDREN QUERY of <c>{threadPath}/_Usage</c> — byte for byte the
+    /// primitive <c>ThreadTokenChip</c> binds to in the portal, and the same helper
+    /// <c>ThreadTokenUsageTest</c> and <c>DelegationSubThreadUsageTest</c> already use — never a
+    /// point <c>GetMeshNodeStream({threadPath}/_Usage/{modelKey})</c> read. A point read of an
+    /// ABSENT node answers with an authoritative routing NotFound and TERMINATES the stream with an
+    /// error; it cannot wait for a node to appear. The children query starts from the (possibly
+    /// empty) collection and re-emits when the node lands, which is the only shape that serves this
+    /// ordering — and <c>TokenUsageNodeType.RecordUsage</c> is subscribed as an INDEPENDENT side
+    /// effect, deliberately NOT chained before the round's terminal status write, so "the round
+    /// finished" never implies "the satellite exists".</para>
+    ///
+    /// <para>This class was the last straggler on the point read. It cost a red shard on an
+    /// unrelated PR (#1703, 2026-08-17): the round lost the race and the read errored inside a
+    /// second with <c>No node found at …/_Usage/…</c> — an error, not a timeout, so no amount of
+    /// waiting could have saved it. Same defect #1040 fixed in <c>ThreadTokenUsageTest</c>.</para>
+    /// </summary>
     private async Task<TokenUsage> WaitForUsage(string threadPath, string modelKey, Func<TokenUsage, bool> predicate, int timeoutMs)
-        => (await Mesh.GetWorkspace()
-            .GetMeshNodeStream($"{threadPath}/{TokenUsageNodeType.SatelliteSegment}/{modelKey}")
-            .Select(n => n?.Content as TokenUsage)
+    {
+        var usagePath = $"{threadPath}/{TokenUsageNodeType.SatelliteSegment}/{modelKey}";
+        return (await Mesh.GetQuery(
+                $"usage:{threadPath}",
+                $"path:{threadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children "
+                + $"nodeType:{TokenUsageNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
+            .Select(nodes => nodes
+                .FirstOrDefault(n => string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase))
+                .ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
             .Where(u => u is not null)
             .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
             .Match(u => predicate(u!)))!;
+    }
 
     // ─── Scripted chat client ───
 
