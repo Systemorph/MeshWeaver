@@ -297,9 +297,12 @@ whole stack, because of what it *rules out*:
   therefore nothing could have written the zero".
 
 A zero MT inside the swept range means the sweep walked memory the GC believed held an object but that
-is in fact zeroed — a gap that was never filled with a free object, or a walk that ran past the true
-allocated end of the region. That is runtime-internal bookkeeping, so treat it as a **CoreCLR
-background-GC issue** and report it upstream with this dump rather than "fixing" it here. What
+is in fact zeroed. ⚠️ **2026-08-17: the two guesses that used to follow here — "a gap that was never
+filled with a free object, or a walk that ran past the true allocated end" — are both now measured
+FALSE.** The block *was* filled with a free object, correctly sized and correctly linked into the free
+list; only its header word was lost. See the 2026-08-17 section. That is runtime-internal bookkeeping
+either way, so treat it as a **CoreCLR GC issue** and report it upstream with this dump rather than
+"fixing" it here. What
 MeshWeaver contributes is the *workload* that provokes it: per-`[Fact]` mesh build + teardown with
 collectible NodeType assemblies loading and unloading, and 48 gen2 GCs in 75 s.
 
@@ -443,7 +446,9 @@ Two beliefs have repeatedly stalled this investigation. Both are wrong:
   `testResults-shard<N>` upload, and both dumps above came straight out of that artifact.
 - *"The download is infeasible."* Through `gh api` it is — that measures ~11 KB/s, which is where two
   investigations gave up. The artifact's blob URL supports HTTP **range** requests, so fetch it in
-  parallel chunks instead. 208 MB lands in about ten minutes:
+  parallel chunks instead. Budget ten minutes; 2026-08-17 measured **91 seconds** for 199 MB with
+  24 × 8 MB chunks, six at a time (a `xargs -P` spelling dies with *"command line cannot be assembled,
+  too long"* — the SAS URL is enormous, so drive the loop from a script that holds it in a variable):
 
 ```bash
 # 1. mint the redirect (do NOT let gh follow it)
@@ -464,6 +469,54 @@ curl -sf -r "$START-$END" -o "part-$i" "$URL"
   `--retry` it will also do that on top of a chunk that had already completed. The first attempt here
   assembled an 8 MB "208 MB" file that way. Verify every chunk's exact byte length before
   concatenating.
+
+### 2026-08-17: the zeroed block is a **GC free-list item** — read it as a free object FIRST
+
+`dotnet-4418.dmp` (run `32033793544`, commit `8f163c43a`, shard 2, runtime `10.0.11`) faults at a
+**third** RVA — `0x5d5ab2` = `WKS::gc_heap::find_first_object+0x132` — with the same
+`si_addr=0x0` / `TRAPNO=14` / `ERR=0x4` / `mov r14d,[r10]`, `R10=0` state as the six before it. All
+three fingerprints resolved against the *same* `10.0.11` symbols land in **disjoint** functions
+(`background_sweep 0x5ca710+0x140b`, `plan_phase 0x5ccd50+0x4b56`, `find_first_object 0x5d5980+0x387`),
+so the frame keeps genuinely moving while the fault does not.
+
+**Which is why the frame was never the interesting part.** Reading the cursor block as a CoreCLR
+free object identifies it immediately, and that is the finding:
+
+```
++0x00 MethodTable    = g_pFreeObjectMethodTable   (SOS: dumpmt <that MT> -> "Free MethodTable")
++0x08 numComponents  = the free block's length
++0x10 free_list_slot = next item on the free list
++0x18 free_list_undo
+```
+
+The faulting block had **length and both links correct and reciprocal** — its `free_list_slot`
+neighbour's `free_list_undo` pointed back at it, `24 + length` landed exactly on the next valid
+object header, and following the list forward walked a dozen more well-formed free items. **Only the
+header word was zero.** So:
+
+> A **free-list item** lost its `g_pFreeObjectMethodTable` header — one 8-byte zero store on a word
+> only the GC writes — and the next heap walk to reach it faulted reading `MT->m_dwFlags` at 0.
+
+**On the next dump, do this before anything else**: read the cursor as a free object. If length +
+links are consistent, it is this defect and the discovering frame does not matter.
+
+Three further things that recurrence established:
+
+- **`verifyheap` is not the way to get the culprit-vs-victim verdict here** — SOS segfaulted on it
+  (and on several `dumpobj`/`dumpmt` calls) on this 1.29 GB dump. Walk the regions by hand instead:
+  take each region's `begin`/`allocated` from `eeheap -gc` and step object by object. That run
+  covered **1,564,794 objects and 20,492 free items across all 43 regions with zero stalls** and
+  found **exactly one** zero-header block — a stronger statement than `verifyheap` would have made.
+- **Scan for references to the cursor.** Every `PT_LOAD` searched for the cursor's 8-byte value
+  yielded only the two free-list links, one stack slot on the faulting thread, and the saved `RAX`
+  in the signal `ucontext`. **No managed object points at free space** — which is what closes the
+  "could our code have written it" question, without relying on the weaker "no native code in the
+  process" claim corrected above.
+- **The collectible-ALC hypothesis is dead a third time, and this ground is the general one.** A
+  free-list item belongs to no assembly: it has no MethodTable to dangle, no ALC, no
+  `LoaderAllocator`, and the word that broke is in the **GC heap**, not a loader heap. (11
+  collectible NodeType ALCs were live at the fault and the block's stale contents are their dead
+  objects — that is the *workload* that grows gen2 free lists, not the cause.)
 
 ## Reading the result honestly
 
