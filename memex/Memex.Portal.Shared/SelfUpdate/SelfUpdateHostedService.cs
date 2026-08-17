@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
+using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -222,7 +223,119 @@ public class SelfUpdateHostedService : IHostedService
                         target, UpdatePolicyNodeType.NodePath);
                     return Observable.Return(Unit.Default);
                 })
-                .Concat(Apply(target!)));
+                .Concat(GateThenApply(target!)));
+
+    /// <summary>
+    /// 🚨 <b>The release-availability gate (#1754), the last thing between a newer tag and a roll.</b>
+    ///
+    /// <para>"Newer" was never the right precondition. Every package this environment deploys must
+    /// also have a usable artifact FOR the target release — a sealed content bake under its
+    /// framework identity, a module floor it satisfies — or the roll trades a working portal for
+    /// one that Roslyn-compiles its whole content set at boot, parking a hub for the full
+    /// activation budget per type that fails.</para>
+    ///
+    /// <para>It fails SAFE: a verdict that cannot be determined is a HOLD, not a pass. And it fails
+    /// LOUD in both directions — the refusal is logged at Information AND written to the policy node
+    /// (<see cref="UpdatePolicyContent.HeldTag"/>/<see cref="UpdatePolicyContent.HeldReason"/>), so
+    /// the Updates tab reports it. A silent freeze is the outage this gate must never become.</para>
+    ///
+    /// <para>The hold is re-evaluated on EVERY tick and never persists a decision: the moment the
+    /// missing bake is published, the next poll (or the next green-build event) clears the hold and
+    /// rolls. Nothing has to be un-stuck by hand — which is what makes the refusal safe to make.</para>
+    ///
+    /// <para>Like <see cref="RecordAvailable"/>, the bookkeeping write can never gate the roll
+    /// (#1020): recording the hold is best-effort, but the DECISION is taken from the verdict
+    /// itself, and a gate that could not run at all resolves to a hold with its own reason rather
+    /// than to an exception that kills the tick.</para>
+    /// </summary>
+    private IObservable<Unit> GateThenApply(string target) =>
+        Observable.Defer(() =>
+        {
+            var gate = ResolveAvailabilityGate();
+            if (gate is null)
+                // No gate registered at all (a host that wires the poller without it). Say so once
+                // per tick rather than silently rolling as if it had passed.
+                return Observable.Defer(() =>
+                {
+                    _logger?.LogInformation(
+                        "[SelfUpdate] no release-availability gate is registered — rolling {Tag} "
+                        + "without checking whether its packages are available.", target);
+                    return Apply(target);
+                });
+
+            return gate.IsUpdatable(target)
+                .SelectMany(verdict =>
+                {
+                    if (verdict.IsUpdatable)
+                    {
+                        if (verdict.NotEnforcedReason is { } notEnforced)
+                            _logger?.LogInformation(
+                                "[SelfUpdate] release-availability gate not enforced for {Tag}: {Reason}",
+                                target, notEnforced);
+                        // Clearing is unconditional: a previous hold that no longer applies must
+                        // disappear from the admin tab the moment it is resolved.
+                        return RecordHold(target, null).Catch(HoldWriteFailed(target))
+                            .Concat(Apply(target));
+                    }
+
+                    _logger?.LogInformation(
+                        "[SelfUpdate] HOLDING update to {Tag} (staying on {Current}) — {Reason}",
+                        target, ShippedReleaseSeed.InstalledPlatformVersion, verdict.HoldReason);
+                    return RecordHold(target, verdict).Catch(HoldWriteFailed(target));
+                });
+        });
+
+    /// <summary>
+    /// The release-availability gate, resolved from the mesh's services. Virtual: the third
+    /// documented injection seam, so a test can pin what the poller DOES with a verdict without
+    /// also staging an artifact store (the verdict itself is pinned against a real one elsewhere).
+    /// </summary>
+    protected virtual ReleaseAvailabilityService? ResolveAvailabilityGate() =>
+        _hub.ServiceProvider.GetService<ReleaseAvailabilityService>();
+
+    private Func<Exception, IObservable<Unit>> HoldWriteFailed(string target) =>
+        ex =>
+        {
+            _logger?.LogWarning(ex,
+                "[SelfUpdate] could not record the availability hold for {Tag} on {Node}; the "
+                + "verdict itself still stands.", target, UpdatePolicyNodeType.NodePath);
+            return Observable.Return(Unit.Default);
+        };
+
+    /// <summary>
+    /// Writes (or clears, on null) the availability hold on the policy node, as System — the same
+    /// shape and the same reasons as <see cref="RecordAvailable"/>. Virtual so a test can fault it
+    /// and prove the hold DECISION survives a failed hold WRITE.
+    /// </summary>
+    protected virtual IObservable<Unit> RecordHold(string tag, UpdatabilityVerdict? verdict)
+    {
+        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        var jsonOptions = _hub.JsonSerializerOptions;
+        return Observable.Using(
+            () => AccessContextScope.AsSystem(accessService),
+            _ => _hub.GetWorkspace().GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Update(node =>
+                {
+                    var cur = UpdatePolicyNodeType.ParseContent(node.Content, jsonOptions);
+                    return node with
+                    {
+                        Content = verdict is null
+                            ? cur with
+                            {
+                                HeldTag = null, HeldReason = null,
+                                HeldIndeterminate = false, HeldAt = null,
+                            }
+                            : cur with
+                            {
+                                HeldTag = tag,
+                                HeldReason = verdict.HoldReason,
+                                HeldIndeterminate = verdict.IsIndeterminate,
+                                HeldAt = DateTimeOffset.UtcNow,
+                            },
+                    };
+                })
+                .Select(_ => Unit.Default));
+    }
 
     /// <summary>
     /// Applies the picked target: patch the workloads where this install is armed, else record-only

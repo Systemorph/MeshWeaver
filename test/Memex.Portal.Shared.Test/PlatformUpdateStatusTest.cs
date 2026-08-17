@@ -94,4 +94,40 @@ public class PlatformUpdateStatusTest
 
         Assert.Equal(PlatformUpdateAvailability.UpToDate, status.Availability);
     }
+
+    [Fact]
+    public void ANewerTagTheAvailabilityGateHolds_ReadsAsHeld_NotAsAvailable()
+    {
+        // 🚨 An install that has REFUSED a build must not look like one that is about to take it.
+        // Rendering a hold as "update available" is how a deployment stays frozen for weeks while
+        // every surface says it is fine — the outage the gate must never become.
+        var status = PlatformUpdateStatus.Derive(
+            new UpdatePolicyContent
+            {
+                LatestAvailableTag = "3.0.0-ci.2400",
+                HeldTag = "3.0.0-ci.2400",
+                HeldReason = "Store: no sealed content bake for framework identity sabc",
+            },
+            Running);
+
+        Assert.Equal(PlatformUpdateAvailability.UpdateHeld, status.Availability);
+        Assert.Equal("3.0.0-ci.2400", status.LatestVersion);
+    }
+
+    [Fact]
+    public void AHoldRecordedForADIFFERENTTag_DoesNotHoldTheCurrentCandidate()
+    {
+        // A stale hold from an earlier candidate must not suppress a later one. The poller clears
+        // the hold on every successful tick, but the projection must not depend on it having done so.
+        var status = PlatformUpdateStatus.Derive(
+            new UpdatePolicyContent
+            {
+                LatestAvailableTag = "3.0.0-ci.2400",
+                HeldTag = "3.0.0-ci.2350",
+                HeldReason = "an older candidate blocked once",
+            },
+            Running);
+
+        Assert.Equal(PlatformUpdateAvailability.UpdateAvailable, status.Availability);
+    }
 }

@@ -44,7 +44,13 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// composition declares what an environment is SUPPOSED to have, which is strictly better to gate
 /// on; this service's <see cref="RequiredPackages"/> is the one place that would change.</para>
 /// </summary>
-public sealed class ReleaseAvailabilityService(
+/// <remarks>
+/// Not sealed, and <see cref="IsUpdatable"/> is virtual: it is the documented injection seam for the
+/// poller's gate, exactly as <c>SelfUpdateHostedService.ReadPolicyStream</c>/<c>RecordAvailable</c>
+/// are for its two mesh touches. A test can then pin what the POLLER does with a verdict without
+/// also staging an artifact store — the verdict itself is pinned separately, against a real one.
+/// </remarks>
+public class ReleaseAvailabilityService(
     IMessageHub hub,
     IConfiguration configuration,
     ILogger<ReleaseAvailabilityService>? logger = null)
@@ -63,7 +69,7 @@ public sealed class ReleaseAvailabilityService(
     /// action block — and total: every failure resolves to a HOLD carrying its reason, so a
     /// caller can subscribe without a <c>Catch</c> that would turn an incident into a pass.
     /// </summary>
-    public IObservable<UpdatabilityVerdict> IsUpdatable(string? targetVersion) =>
+    public virtual IObservable<UpdatabilityVerdict> IsUpdatable(string? targetVersion) =>
         Observable.Defer(() =>
         {
             var publishedRoot = PublishedRoot;
