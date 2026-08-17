@@ -12,7 +12,7 @@ namespace Memex.Portal.Shared.Test;
 
 /// <summary>
 /// The import stack's deployment-shape gate. <c>MeshWeaver.Import</c> ships as a
-/// <c>modules/&lt;Name&gt;/</c> closure with its ENTIRE private reader family inside it — the five
+/// <c>modules/&lt;Name&gt;/</c> closure with its ENTIRE private reader family inside it — the six
 /// <c>MeshWeaver.DataSetReader.*</c> assemblies plus <c>CsvHelper</c>, none of which any host
 /// references — so the folder either loads as a unit or the first spreadsheet import faults.
 ///

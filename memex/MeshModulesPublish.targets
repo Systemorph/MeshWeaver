@@ -83,8 +83,10 @@
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Courses/MeshWeaver.Courses.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Mail.MicrosoftGraph/MeshWeaver.Mail.MicrosoftGraph.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Mcp/MeshWeaver.Mcp.csproj" />
-    <!-- Import + its PRIVATE MeshWeaver.DataSetReader.* closure (nothing else in the tree
-         references those five projects). No host ever called AddImport() — the portals referenced
+    <!-- Import + its PRIVATE closure: the SIX MeshWeaver.DataSetReader* projects (the base, Csv,
+         Excel, Excel.BinaryFormat, Excel.OpenXmlFormat, Excel.Utils) and MeshWeaver.DataStructures
+         beneath them — nothing outside their own test project references any of them.
+         No host ever called AddImport() — the portals referenced
          this assembly purely so IN-MESH source could `using MeshWeaver.Import`, and the module lane
          carries that surface instead (InstallAssemblies -> InstalledModuleAssembly ->
          CompileReferences.ComposeWithModules). NOT a dependency win: ClosedXML / OpenXml / CsvHelper

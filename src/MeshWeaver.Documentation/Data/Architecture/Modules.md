@@ -174,7 +174,8 @@ that compile surface. Because the reference set is composed in list order, a mod
 content compiles against `MeshWeaver.Import` must be listed **after** it.
 
 Note what a module contributes to that surface: **its entry assembly, not its private closure.** A
-module's own dependencies (here the five `MeshWeaver.DataSetReader.*` assemblies) resolve at
+module's own dependencies (here the six `MeshWeaver.DataSetReader.*` assemblies, plus
+`MeshWeaver.DataStructures` and `CsvHelper`) resolve at
 RUNTIME from the module folder, but they are not metadata references — so in-mesh code may use the
 module's public types freely, and would need the platform to carry any *other* assembly whose types
 appear in those signatures. Keep a module's in-mesh-facing surface self-contained.
