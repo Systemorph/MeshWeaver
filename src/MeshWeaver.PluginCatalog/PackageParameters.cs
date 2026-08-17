@@ -147,7 +147,12 @@ public static class PackageParameters
         foreach (var scheme in EndpointSchemes)
         {
             var section = configuration.GetSection($"Services:{parameter.Reference}:{scheme}");
+            // ORDERED by the array index, not by provider enumeration order: a service publishing
+            // several endpoints must resolve to the same one on every read, and `Services__x__https__0`
+            // is the one the discovery convention treats as primary.
             var first = section.GetChildren()
+                .OrderBy(c => int.TryParse(c.Key, out var i) ? i : int.MaxValue)
+                .ThenBy(c => c.Key, StringComparer.Ordinal)
                 .Select(c => NonEmpty(c.Value))
                 .FirstOrDefault(v => v is not null);
             if (first is not null)
