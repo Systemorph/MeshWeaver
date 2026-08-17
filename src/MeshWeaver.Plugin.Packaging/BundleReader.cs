@@ -21,12 +21,23 @@ public static class BundleReader
     /// <param name="Module">The compiled MODULE this bundle carries (#1664), or null for a
     /// NodeType-only bundle. A MIXED package (content + NodeTypes + a module) carries both
     /// <paramref name="Assemblies"/> and this in ONE bundle — one reader, one transport.</param>
+    /// <param name="Architecture">The portable RID the <paramref name="FrameworkMvid"/> lane belongs
+    /// to (#1751), or null from a producer that predates the link. DIAGNOSTIC, never a second gate:
+    /// the identity is the proof and already folds the architecture in. It is here so a decline can
+    /// say "no arm64 lane" instead of only printing two hashes.</param>
+    /// <param name="Misses">NodeTypes the producer could NOT resolve an assembly for in the
+    /// requested lane, each with its reason (#1751). 🚨 Carried so the miss is COUNTABLE on the
+    /// consumer too — a bundle that quietly arrives with fewer assemblies than the package has types
+    /// is indistinguishable from a complete one, and "adopted N" is the only evidence the whole
+    /// distribution lane works.</param>
     public sealed record Manifest(
         string? Plugin,
         string? Version,
         string? FrameworkMvid,
         IReadOnlyList<AssemblyRef>? Assemblies,
-        ModuleRef? Module = null);
+        ModuleRef? Module = null,
+        string? Architecture = null,
+        IReadOnlyList<string>? Misses = null);
 
     /// <summary>One assembly and the NodeType it implements.</summary>
     /// <param name="NodePath">Mesh path of the NodeType — the key a consumer re-seeds under.</param>
