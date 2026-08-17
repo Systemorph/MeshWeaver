@@ -110,8 +110,11 @@ internal static class NodeTypeEnrichmentHelpers
         }
 
         var nodeType = node.NodeType;
+        // No NodeType at all: there is no node-specific configuration to resolve, so hand the node
+        // back UNCHANGED and let MeshNodeHubFactory apply the mesh default chain — exactly once.
+        // Applying it here as well is what made the chain run twice (#1684).
         if (string.IsNullOrEmpty(nodeType))
-            return Observable.Return(ApplyDefaultConfig(node, meshConfiguration));
+            return Observable.Return(node);
 
         // Static-provider fast-path: IStaticNodeProvider-registered NodeTypes
         // ship HubConfiguration in-process (the delegate doesn't survive
@@ -179,7 +182,7 @@ internal static class NodeTypeEnrichmentHelpers
                         // instance off the overlay.
                         return Observable.Return(
                             WithOverlaySelfHeal(
-                                WithCompilationErrorOverlay(node, nodeType, msg, meshConfiguration),
+                                WithCompilationErrorOverlay(node, nodeType, msg),
                                 meshHub, nodeType, typeVersionAtOverlay: null, logger));
                     }
                     if (outcome == ProbeOutcome.Indeterminate)
@@ -369,7 +372,7 @@ internal static class NodeTypeEnrichmentHelpers
                 // and recycles this instance off the overlay.
                 return Observable.Return(
                     WithOverlaySelfHeal(
-                        WithCompilationErrorOverlay(node, nodeType, userMessage, meshConfiguration,
+                        WithCompilationErrorOverlay(node, nodeType, userMessage,
                             guidance: guidance, intro: intro, callToAction: callToAction),
                         meshHub, nodeType, typeVersionAtOverlay: null, logger));
             });
@@ -475,7 +478,7 @@ internal static class NodeTypeEnrichmentHelpers
             // predicate rejects Pending/Compiling): activate the progress overlay now
             // and let its self-heal recycle the instance when the compile lands.
             .SelectMany(typeNode => IsCompileInFlight(typeNode, meshHub.JsonSerializerOptions)
-                ? WithCompilationInProgressOverlay(node, nodeType, typeNode, meshConfiguration, meshHub, logger)
+                ? WithCompilationInProgressOverlay(node, nodeType, typeNode, meshHub, logger)
                 : ApplyStreamResult(
                     typeNode, node, nodeType, meshConfiguration, compilationService, meshHub, logger));
     }
@@ -498,7 +501,7 @@ internal static class NodeTypeEnrichmentHelpers
     /// "this path holds something that is not a NodeType at all" — admitted the emission as
     /// SETTLED. <see cref="ApplyStreamResult"/> then deserialized the very same node successfully
     /// and acted on a state this gate exists to reject: a pre-compile snapshot
-    /// (<c>CompilationStatus</c> null/Unknown) routes to <see cref="ApplyDefaultConfig"/>, so the
+    /// (<c>CompilationStatus</c> null/Unknown) routes to the no-node-configuration branch, so the
     /// instance hub binds the mesh DEFAULT configuration for the grain's WHOLE lifetime (enrichment
     /// binds once and never re-observes) — the NodeType's real areas, and a broken type's
     /// compilation-error overlay, can then never appear on the instance's page. A Pending/Compiling
@@ -772,21 +775,22 @@ internal static class NodeTypeEnrichmentHelpers
 
         // The NodeType path does not resolve to a NodeTypeDefinition — it is a
         // plain node (or a node mis-used as a type path). There is nothing to
-        // compile; apply the default hub config so the instance is still usable
-        // and queryable, rather than overlaying a (false) compilation error.
+        // compile; emit with no node configuration so the instance still gets the mesh
+        // default chain from MeshNodeHubFactory (and is usable and queryable), rather
+        // than overlaying a (false) compilation error.
         if (def is null)
-            return Observable.Return(ApplyDefaultConfig(node, meshConfiguration));
+            return Observable.Return(node);
 
         // NodeTypeDefinition with no compile lifecycle attached and no
         // HubConfiguration: a test-seeded type definition (or any framework
-        // type that won't be Roslyn-compiled). Apply the default node hub
-        // config so per-instance hubs activate without waiting on a compile
-        // that will never start.
+        // type that won't be Roslyn-compiled). No node configuration to resolve — the
+        // factory's default node chain alone lets per-instance hubs activate without
+        // waiting on a compile that will never start.
         if ((def.CompilationStatus is null
                 || def.CompilationStatus == CompilationStatus.Unknown)
             && typeNode.HubConfiguration is null)
         {
-            return Observable.Return(ApplyDefaultConfig(node, meshConfiguration));
+            return Observable.Return(node);
         }
 
         // Pinned release: when NodeTypeDefinition.RequestedReleasePath is set,
@@ -824,7 +828,6 @@ internal static class NodeTypeEnrichmentHelpers
                             WithOverlaySelfHeal(
                                 WithCompilationErrorOverlay(node, nodeType,
                                     $"Pinned release '{requestedReleasePath}' for '{nodeType}' could not be resolved.",
-                                    meshConfiguration,
                                     guidance: unresolvedGuidance,
                                     intro: unresolvedIntro,
                                     callToAction: unresolvedCta,
@@ -866,7 +869,6 @@ internal static class NodeTypeEnrichmentHelpers
                                         WithOverlaySelfHeal(
                                             WithCompilationErrorOverlay(node, nodeType,
                                                 $"Pinned release '{requestedReleasePath}' assembly not found in store.",
-                                                meshConfiguration,
                                                 guidance: missGuidance,
                                                 intro: missIntro,
                                                 callToAction: missCta,
@@ -1069,7 +1071,6 @@ internal static class NodeTypeEnrichmentHelpers
                     WithOverlaySelfHeal(
                         WithCompilationErrorOverlay(node, nodeType,
                             "Built against a previous framework version",
-                            meshConfiguration,
                             guidance: staleGuidance,
                             intro: staleIntro,
                             callToAction: staleCta,
@@ -1098,7 +1099,6 @@ internal static class NodeTypeEnrichmentHelpers
                     WithCompilationErrorOverlay(node, nodeType,
                         def.CompilationError
                             ?? $"The compile state of NodeType '{nodeType}' could not be determined.",
-                        meshConfiguration,
                         guidance: undeterminedGuidance,
                         intro: undeterminedIntro,
                         callToAction: undeterminedCta,
@@ -1116,7 +1116,7 @@ internal static class NodeTypeEnrichmentHelpers
         // diagnostics the NodeType's own Overview offers.
         return Observable.Return(
             WithOverlaySelfHeal(
-                WithCompilationErrorOverlay(node, nodeType, error, meshConfiguration,
+                WithCompilationErrorOverlay(node, nodeType, error,
                     activityPath: def.LastCompilationActivityPath),
                 meshHub, nodeType, typeNode.Version, logger));
     }
@@ -1226,7 +1226,7 @@ internal static class NodeTypeEnrichmentHelpers
                 // every dynamic type): stop holding the activation and serve the live
                 // progress overlay; its self-heal recycles the instance when the build lands.
                 .SelectMany(newTypeNode => IsCompileInFlight(newTypeNode, meshHub.JsonSerializerOptions)
-                    ? WithCompilationInProgressOverlay(node, nodeType, newTypeNode, meshConfiguration, meshHub, logger)
+                    ? WithCompilationInProgressOverlay(node, nodeType, newTypeNode, meshHub, logger)
                     : ApplyStreamResult(
                         newTypeNode, node, nodeType, meshConfiguration,
                         compilationService, meshHub, logger, recompileAttempts + 1));
@@ -1353,15 +1353,6 @@ internal static class NodeTypeEnrichmentHelpers
         var dash = version.IndexOf('-');
         var head = dash > 0 ? version[..dash] : version;
         return long.TryParse(head, out var v) ? v : 0;
-    }
-
-    public static MeshNode ApplyDefaultConfig(MeshNode node, MeshConfiguration meshConfiguration)
-    {
-        if (node.HubConfiguration != null) return node;
-        var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
-        return defaultConfig != null
-            ? node with { HubConfiguration = defaultConfig }
-            : node;
     }
 
     /// <summary>
@@ -1787,22 +1778,31 @@ internal static class NodeTypeEnrichmentHelpers
     /// anchor the NodeType's OWN Overview offers — the broken INSTANCE page used to be the
     /// one place with no route to the diagnostics (#641). Null simply omits the link.
     /// </param>
+    /// <remarks>
+    /// 🚨 Returns the overlay DELTA ONLY. It must never compose
+    /// <see cref="MeshConfiguration.DefaultNodeHubConfiguration"/> itself —
+    /// <see cref="MeshNodeHubFactory"/> is the single owner of the default node chain and layers
+    /// it UNDERNEATH whatever configuration the node carries. Composing it here as well ran every
+    /// <c>ConfigureDefaultNodeHub</c> lambda TWICE on the overlay path; a lambda contributing a
+    /// type source then produced two entries for one collection name and
+    /// <c>DataContext.Initialize</c> FAILED HUB CREATION with
+    /// <c>An item with the same key has already been added. Key: Approval</c> — production
+    /// memex's <c>Doc</c> hub plus three further addresses in the plugin gate
+    /// (Systemorph/MeshWeaver#1684). Repro: <c>DefaultNodeChainSingleApplicationTest</c>.
+    /// </remarks>
     public static MeshNode WithCompilationErrorOverlay(
         MeshNode node,
         string nodeType,
         string? error,
-        MeshConfiguration meshConfiguration,
         string? guidance = null,
         string? intro = null,
         string? callToAction = null,
         string? activityPath = null)
     {
-        var baseConfig = string.IsNullOrEmpty(error)
-            ? (node.HubConfiguration ?? meshConfiguration.DefaultNodeHubConfiguration)
-            : meshConfiguration.DefaultNodeHubConfiguration;
-
+        // Nothing to overlay: hand the node back untouched and let the factory apply the
+        // default chain (exactly once) around whatever configuration it already carries.
         if (string.IsNullOrEmpty(error))
-            return node with { HubConfiguration = baseConfig };
+            return node;
 
         var overlay = CreateCompilationErrorConfiguration(error, guidance, intro, callToAction, activityPath);
         // Fallback-hub contract: the overlay hub serves what its default config CAN
@@ -1815,9 +1815,8 @@ internal static class NodeTypeEnrichmentHelpers
             $"NodeType '{nodeType}' has no usable hub configuration for '{node.Path}': {error}",
             ErrorType.CompilationFailed,
             nodeType);
-        Func<MessageHubConfiguration, MessageHubConfiguration> composed = baseConfig != null
-            ? (config => overlay(baseConfig(config)).Set(nack))
-            : (config => overlay(config).Set(nack));
+        Func<MessageHubConfiguration, MessageHubConfiguration> composed =
+            config => overlay(config).Set(nack);
         return node with { HubConfiguration = composed };
     }
 
@@ -1838,11 +1837,14 @@ internal static class NodeTypeEnrichmentHelpers
     ///     recycles this instance, and the next access enriches against the settled type.</item>
     /// </list>
     /// </summary>
+    /// <remarks>
+    /// 🚨 Like <see cref="WithCompilationErrorOverlay"/>, this returns the overlay DELTA ONLY —
+    /// <see cref="MeshNodeHubFactory"/> owns applying the default node chain, exactly once.
+    /// </remarks>
     internal static IObservable<MeshNode> WithCompilationInProgressOverlay(
         MeshNode node,
         string nodeType,
         MeshNode typeNode,
-        MeshConfiguration meshConfiguration,
         IMessageHub meshHub,
         ILogger? logger)
     {
@@ -1856,10 +1858,8 @@ internal static class NodeTypeEnrichmentHelpers
             $"NodeType '{nodeType}' is compiling — '{node.Path}' activates when the build settles.",
             ErrorType.CompilationInProgress,
             nodeType);
-        var baseConfig = meshConfiguration.DefaultNodeHubConfiguration;
-        Func<MessageHubConfiguration, MessageHubConfiguration> composed = baseConfig != null
-            ? (config => overlay(baseConfig(config)).Set(nack))
-            : (config => overlay(config).Set(nack));
+        Func<MessageHubConfiguration, MessageHubConfiguration> composed =
+            config => overlay(config).Set(nack);
         return Observable.Return(WithOverlaySelfHeal(
             node with { HubConfiguration = composed },
             meshHub, nodeType, typeVersionAtOverlay: typeNode.Version, logger));

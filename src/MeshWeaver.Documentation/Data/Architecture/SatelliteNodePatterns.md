@@ -250,6 +250,10 @@ var hubConfig = defaultConfig != null
 
 Skipping this composition means the shared registrations — type-registry entries such as `config.TypeRegistry.AddAITypes()`, default layout areas, and the framework's own watchers — are absent from the node hub, so cross-hub messages arrive as raw `JsonElement` and areas silently fail to resolve.
 
+🚨 **Exactly one component composes it: `MeshNodeHubFactory`** — the single funnel both activation paths (Monolith routing, `MessageHubGrain`) go through. Everything that produces a node's *own* `HubConfiguration` — the compilation-error overlay, the compilation-in-progress overlay, static/dynamic NodeType configurations, the self-heal wraps — returns its **own delta only**. Composing `DefaultNodeHubConfiguration` a second time runs **every** `ConfigureDefaultNodeHub` lambda twice for that hub. Lambdas that only add views or types absorb that silently; one that contributes a **type source** does not: `DataContext.Initialize` keys `TypeSources` by collection name, so the second application contributes a second entry for the same collection and **hub creation fails outright** — the node never comes up, and the message (`An item with the same key has already been added. Key: Approval`) names neither the lambda nor the node. That is issue #1684, seen on production memex's `Doc` hub and on three further addresses in the plugin gate; the victim is simply whichever NodeType happened to take the overlay path.
+
+Corollary for anyone writing a `ConfigureDefaultNodeHub` lambda: give any data source you contribute a **stable id** (`DataExtensions.DefaultId` is a fresh `Guid`, which defeats `DataContext.Initialize`'s keep-last-by-id dedupe), and prefer the already-idempotent `AddMeshDataSource`.
+
 ---
 
 ## Type Registry
