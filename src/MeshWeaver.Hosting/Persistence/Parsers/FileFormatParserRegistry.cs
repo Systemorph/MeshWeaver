@@ -134,7 +134,11 @@ public class FileFormatParserRegistry
     /// three chances to forget.</para>
     /// </summary>
     public static string WithoutBom(string content) =>
-        content.Length > 0 && content[0] == '﻿' ? content[1..] : content;
+        // '\uFEFF', spelled as an escape ON PURPOSE: the literal character is invisible in every
+        // editor, so a copy-paste or a formatter could drop it and turn this into a no-op that
+        // still compiles and still reads correctly (Copilot review, #1781). An invisible constant
+        // is the last thing a BOM fix should contain.
+        content.Length > 0 && content[0] == '\uFEFF' ? content[1..] : content;
 
     /// <summary>
     /// Gets a parser that can serialize the given node.

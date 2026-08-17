@@ -2358,28 +2358,41 @@ public static class PackageInstaller
 
         if (unparsed.Count > 0)
             logger?.LogWarning(
-                "Package '{Package}': {Skipped} of {Total} files had no parser and were skipped; "
-                + "{Installed} nodes installed. First skipped: {Sample}.",
-                packageId, unparsed.Count, files.Count, nodes.Length,
-                string.Join(", ", unparsed.Take(5)));
+                "Package '{Package}': {Skipped} of {Candidates} candidate files had no parser and "
+                + "were skipped; {Installed} nodes installed. First skipped: {Sample}.",
+                packageId, unparsed.Count, files.Count(f => !IsNotANodeFile(f.RelativePath)),
+                nodes.Length, string.Join(", ", unparsed.Take(5)));
 
         return nodes;
     }
 
+    /// <summary>
+    /// Files that are NOT nodes by design, and so are neither parsed nor counted as skips.
+    ///
+    /// <para>The README is a GitHub display file. The manifest is the install record's baseline.
+    /// A <c>{package}/content/**</c> asset is not a node — its bytes go to the partition root's
+    /// content collection (SyncPackageContent), which is where the served
+    /// <c>/api/content/{root}/content/…</c> URL resolves. (It used to be
+    /// <c>/static/{root}/content/…</c>; #587 unmounted content from /static entirely, so that shape
+    /// is now 404 for everyone — an authored asset URL must name the access-controlled route.) Same
+    /// split GitHubSyncService.ParseSnapshot makes, and the one NodePathForFile asserts. Excluding
+    /// them also silences the "No parser for …/videos/x.mp4" warning every course emitted per
+    /// install.</para>
+    ///
+    /// <para>ONE predicate, used by both the parse loop and the aggregate line's denominator —
+    /// "3 of 200 skipped" reads very differently when 150 of the 200 were never node candidates
+    /// (Copilot review, #1781). Two copies of this list would drift, and the drift would show up as
+    /// a quietly wrong count rather than as a failure.</para>
+    /// </summary>
+    private static bool IsNotANodeFile(string relativePath) =>
+        string.Equals(relativePath, "README.md", StringComparison.OrdinalIgnoreCase)
+        || ModuleManifest.IsManifestPath(relativePath)
+        || ContentAssetMapper.IsContentPath(relativePath);
+
     private static MeshNode? ParseCanonical(
         FileFormatParserRegistry parsers, PackageFile file, ILogger? logger, List<string>? unparsed = null)
     {
-        if (string.Equals(file.RelativePath, "README.md", StringComparison.OrdinalIgnoreCase)
-            || ModuleManifest.IsManifestPath(file.RelativePath)
-            // A `{package}/content/**` asset is NOT a node — its bytes go to the partition root's
-            // content collection (SyncPackageContent), which is where the served
-            // `/api/content/{root}/content/…` URL resolves. (It used to be `/static/{root}/content/…`;
-            // #587 unmounted content from /static entirely, so that shape is now 404 for everyone —
-            // an authored asset URL must name the access-controlled route.) Same split
-            // GitHubSyncService.ParseSnapshot
-            // makes, and the one NodePathForFile below has always asserted. Skipping it here also
-            // silences the "No parser for …/videos/x.mp4" warning every course emitted per install.
-            || ContentAssetMapper.IsContentPath(file.RelativePath))
+        if (IsNotANodeFile(file.RelativePath))
             return null;
         var ext = System.IO.Path.GetExtension(file.RelativePath);
         var parsed = parsers.TryParse(ext, file.RelativePath, file.Content, file.RelativePath);
