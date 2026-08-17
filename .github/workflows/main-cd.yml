@@ -92,9 +92,6 @@ permissions:
   # packages: write — the mw-plugin-test image is ALSO published to GHCR so the
   # MeshWeaver.Plugins CI can pull it with a GitHub token instead of ACR credentials.
   packages: write
-  # actions: read — publish-bake downloads the Build-and-Test run's baked-assemblies-* artifact
-  # (the CI NodeType bake this CD publishes to the portals' storage, #1660 WS3).
-  actions: read
 
 # Every green main merge ships its OWN image increment — CD runs never supersede each
 # other. The previous shared `main-cd` group dated from when this workflow also ROLLED
@@ -926,29 +923,65 @@ jobs:
             echo "- memex-portal-next \`$V_NEXT\`, \`$SHA\`, \`main\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ────────────────── PUBLISH THE CI NODETYPE BAKE TO PORTAL STORAGE ──────────────────
-  # #1660 WS3 — "bake on CI": the Build-and-Test run of this same commit already compiled every
-  # shipped NodeType (its doc-gate runs mw-plugin-test with --bake-output and uploads the result
-  # as `baked-assemblies-<framework-identity>`). The framework identity is the API-SURFACE hash
-  # (FrameworkBuildIdentity — deterministic per source+references, stable across internal-only
-  # merges), so that artifact's identity EQUALS the identity of the images promote just armed —
-  # and usually equals the PREVIOUS release's too, in which case the publish below skips — this job
-  # copies the bundles into the storage the portals mount, laid out
-  # `prebuilt-bundles/<identity>/<source>/`, and each booting pod seeds its own identity's
-  # directory (ShippedPrebuiltBundles.SeedPublishedRoot) before its NodeType sweep: pending drops
-  # to the user-content remainder, with zero Roslyn for shipped content on the pod.
+  # ────────── BAKE THE PLATFORM'S OWN CONTENT *IN THE SHIPPED IMAGE*, THEN PUBLISH ──────────
+  # #1660 WS3 delivery, corrected by #1725. The portals adopt a prebuilt NodeType bundle only when
+  # its framework identity EQUALS the one the booting process resolves — that identity IS the
+  # ABI-compatibility proof, and adopting bytes from an identity you did not resolve is precisely
+  # what it exists to prevent. So the only sound producer is the very build the consumer runs.
   #
-  # 🚨 The CONFIG is preflighted RED, not skipped: BAKE_PUBLISH_TARGETS missing means no portal
-  # can ever receive a bake, which is exactly the silent regression (#1347) this lane fixes — a
-  # grey skip here would hide it forever (AGENTS.md: a gate never tests its own inputs).
-  # A missing ARTIFACT, by contrast, is a legitimate per-run state (a reuse-green run skips the
-  # doc-gate, so THAT run baked nothing; the pods then compile as before) and only warns.
+  # 🚨 THE REGRESSION THIS SHAPE FIXES. Until #1725 this job downloaded the Build-and-Test run's
+  # `baked-assemblies-*` artifact — a DIFFERENT compilation of the same source — and published it.
+  # Two compilations never agree on the identity. Measured on commit `babb3bc` (Build-and-Test run
+  # 32016820517 vs the images CD run 32018411051 promoted), same sources, same runner path:
+  #   * EVERY implementation assembly's MVID differs between the two hosts — the controls too
+  #     (Data, Layout, AI, Utils) — so every `FrameworkBuildIdentity.FullMvidAssemblies` member
+  #     (the MeshWeaver.Compiler + MeshWeaver.NuGet toolchain closure) contributes a different id;
+  #   * 4 of the 37 canonical REFERENCE assemblies differ as well — MeshWeaver.Graph, .Hosting,
+  #     .Kernel, .Markdown.Collaboration — so the surface half diverges independently.
+  # Result: the artifact resolved `sd0d0daa9398c4d810e0e730a0495b9db` while the running pods
+  # resolve `s377941f549f721e01ac764e0fb8db84a`. `prebuilt-bundles/<runtime-identity>/` never
+  # contained `meshweaver-content`, so every pod Roslyn-compiled ~80 platform types on EVERY boot
+  # (64.8 s warm-up, `compiled=80 alreadyBaked=4`) — the exact regression (#1347 → #1660) this lane
+  # exists to prevent, behind a green tick.
+  #
+  # The satellites never had this problem because they bake INSIDE the shipped image
+  # (`node-repo-publish-bake.yml`: `docker run … mw-plugin-test … --bake-output`). This job now does
+  # the same for the platform's own content: one producer, one toolchain, one identity, and the
+  # producer/consumer question stops existing. The bake is also strictly STRONGER as a gate than the
+  # artifact hop was — it proves the shipped content compiles against the binaries that SHIP, not
+  # against a build output that never leaves CI.
+  #
+  # 🚨 ARCHITECTURE IS PART OF THE IDENTITY, so the platform is pinned explicitly. The same four
+  # reference assemblies differ between the amd64 and arm64 variants of ONE image, so a multi-arch
+  # image carries two identities. Every AKS node is amd64, so the bake must be taken on amd64 —
+  # `--platform linux/amd64` says so out loud instead of inheriting whatever the runner happens to
+  # be. An arm64 install (memex-local) resolves the other identity and compiles locally, exactly as
+  # it does today; publishing under a second identity to "cover" it is forbidden — that is the
+  # adopt-what-you-did-not-resolve shape, not a fix.
+  #
+  # 🚨 The CONFIG is preflighted RED, not skipped: BAKE_PUBLISH_TARGETS missing means no portal can
+  # ever receive a bake — a grey skip would hide that forever (AGENTS.md: a gate never tests its own
+  # inputs). And there is no longer any "nothing to publish" branch to warn about: the bake happens
+  # HERE, from this run's image, so it either produces bundles or fails.
+  #
+  # Ordering: after `promote` (the image is armed) and therefore after `plugin-test-image` pushed
+  # the staging tag this job bakes with. The staging tag is exact and immutable for this run —
+  # `latest`/`main` are moving pointers a concurrent CD run can re-aim mid-job. Publication itself
+  # stays all-or-nothing inside `publish-bake-bundles.sh`: every bundle first, the `_complete`
+  # sentinel strictly LAST, and pods seed only sealed directories.
   publish-bake:
-    name: "Publish CI bake to portal storage"
-    needs: [gate, promote]
+    name: "Bake platform content in the shipped image + publish"
+    needs: [gate, plugin-test-image, promote]
     if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The bake compiles every shipped NodeType twice over (Doc + samples) inside the container;
+    # the doc-gate's equivalent budget is 12 min, and the pull plus the publish add to it.
+    timeout-minutes: 40
+    # Job-level permissions REPLACE the workflow-level map, so every one this job needs is here.
+    # `actions: read` is deliberately GONE — nothing cross-run is downloaded any more.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -960,56 +993,65 @@ jobs:
             echo "::error::Repo variable BAKE_PUBLISH_TARGETS is not provisioned — the CI bake can reach no portal. Set it to the portals' Azure Files targets, whitespace-separated <account>/<share>[/<base-path>] (on AKS: the account/share behind each portal's memex-data PVC — resolve with 'kubectl get pv -o jsonpath' on the claim; the CD identity needs the 'Storage File Data Privileged Contributor' role on those accounts)."
             exit 1
           fi
-      - name: "Locate the Build-and-Test run for this commit"
-        id: bt
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ needs.gate.outputs.sha }}
-        run: |
-          set -euo pipefail
-          run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/dotnet-test.yml/runs?head_sha=$SHA&status=success&per_page=1" \
-            --jq '.workflow_runs[0].id // empty')
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "Build-and-Test run for $SHA: ${run_id:-<none>}"
-      - name: "Download the bake artifact"
-        id: dl
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [ -z "${{ steps.bt.outputs.run_id }}" ]; then
-            echo "::warning::No successful Build-and-Test run found for this commit — nothing to publish; pods bake locally."
-            echo "found=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          mkdir -p "$RUNNER_TEMP/bake-dl"
-          if ! gh run download "${{ steps.bt.outputs.run_id }}" --repo "$GITHUB_REPOSITORY" \
-               --pattern 'baked-assemblies-*' --dir "$RUNNER_TEMP/bake-dl"; then
-            # Legitimate on a reuse-green run (the doc-gate — the bake producer — was skipped
-            # because an identical tree was already proven green): that run baked nothing, and an
-            # earlier commit's bake carries a DIFFERENT identity anyway. Pods compile as before.
-            echo "::warning::Build-and-Test run ${{ steps.bt.outputs.run_id }} carries no baked-assemblies-* artifact (reuse-green run, or expired) — nothing to publish; pods bake locally."
-            echo "### ⚠️ No CI bake artifact for this commit — pods bake locally" >> "$GITHUB_STEP_SUMMARY"
-            echo "found=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          bake_dir=$(find "$RUNNER_TEMP/bake-dl" -maxdepth 1 -type d -name 'baked-assemblies-*' | head -1)
-          if [ -z "$bake_dir" ] || [ ! -s "$bake_dir/framework-mvid.txt" ]; then
-            echo "::error::baked-assemblies artifact downloaded but carries no framework-mvid.txt — the bake artifact contract regressed."
-            exit 1
-          fi
-          echo "found=true" >> "$GITHUB_OUTPUT"
-          echo "bake_dir=$bake_dir" >> "$GITHUB_OUTPUT"
       - name: Ensure Azure CLI
-        if: steps.dl.outputs.found == 'true'
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
       - name: Azure login (OIDC)
-        if: steps.dl.outputs.found == 'true'
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # Both a docker pull credential (the bake image) and, further down, the data-plane token the
+      # publish script uses against Azure Files.
+      - name: ACR login
+        run: az acr login --name meshweaver
+      - name: "Bake the platform's shipped content INSIDE the promoted image"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # The SAME staging the doc-gate judges — one script, so the bake can only ever publish
+          # content that was gated in exactly the shape it was gated in.
+          STAGE="$RUNNER_TEMP/bake-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          bash .github/scripts/stage-doc-gate.sh src/MeshWeaver.Documentation/Data "$STAGE/doc"
+          bash .github/scripts/stage-samples-gate.sh samples/Graph/Data "$STAGE/samples"
+          # The two known-debt ratchets travel INTO the mount: the tester runs in the container and
+          # cannot see the checkout. Same files the doc-gate passes, so the same verdict applies.
+          cp .github/doc-gate.allow "$STAGE/doc-gate.allow"
+          cp .github/samples-gate.allow "$STAGE/samples-gate.allow"
+          # The image's tester runs as a non-root user: it must be able to read the mount and write
+          # the bake directory.
+          chmod -R a+rX "$STAGE"
+          BAKE="$RUNNER_TEMP/bake"
+          rm -rf "$BAKE"
+          mkdir -p "$BAKE"
+          chmod 777 "$BAKE"
+          # Two stages, one bake directory — exactly as the doc-gate runs them. A red tester FAILS
+          # this job: the platform's own shipped content not compiling against the image that ships
+          # it is a release defect, not a reason to publish less.
+          for stage in doc samples; do
+            echo "── baking /repo/$stage against $IMAGE"
+            docker run --rm --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
+              --entrypoint /app/mw-plugin-test "$IMAGE" "/repo/$stage" \
+              --allow "/repo/$stage-gate.allow" --bake-output /bake --source-sha "$SHA"
+          done
+          # Postconditions, not hopes: a green tester that wrote no identity, or no bundles, is a
+          # bake-stage regression — never a quiet publish of nothing.
+          if [ ! -s "$BAKE/framework-mvid.txt" ]; then
+            echo "::error::the tester ran green but wrote no bake identity ($BAKE/framework-mvid.txt) — the bake stage regressed (or the image predates --bake-output support)."
+            exit 1
+          fi
+          if ! ls "$BAKE"/*.zip >/dev/null 2>&1; then
+            echo "::error::the tester ran green but produced no bundles under $BAKE — nothing could be published."
+            exit 1
+          fi
+          echo "BAKE_DIR=$BAKE" >> "$GITHUB_ENV"
+          echo "baked identity: $(cat "$BAKE/framework-mvid.txt")"
+          ls -l "$BAKE"/*.zip
       - name: "Publish bundles to every portal target"
-        if: steps.dl.outputs.found == 'true'
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
         run: |
@@ -1020,10 +1062,10 @@ jobs:
           # the whole surface generation, and pods would keep declining its stale per-type source
           # SHAs and recompiling. With it, a content change under an unchanged surface republishes
           # (cheap uploads), and a truly unchanged bake still skips.
-          .github/scripts/publish-bake-bundles.sh "${{ steps.dl.outputs.bake_dir }}" meshweaver-content "${{ needs.gate.outputs.sha }}"
+          .github/scripts/publish-bake-bundles.sh "$BAKE_DIR" meshweaver-content "${{ needs.gate.outputs.sha }}"
           {
-            echo "### 📦 CI bake published"
-            echo "- identity: \`$(cat "${{ steps.dl.outputs.bake_dir }}/framework-mvid.txt")\`"
+            echo "### 📦 Platform content bake published"
+            echo "- identity: \`$(cat "$BAKE_DIR/framework-mvid.txt")\` (resolved by the image this run promoted)"
             echo "- source: \`meshweaver-content\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
