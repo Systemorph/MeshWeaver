@@ -434,6 +434,17 @@ public class SelfUpdateHostedService : IHostedService
             //
             // Deferring is safe WITHOUT a timer for the same reason an availability hold is: the
             // next publication event re-decides it. The floor never schedules anything.
+            // A disabled floor must not pay for the stamp read: LastRolledAtAsync is a Kubernetes GET
+            // in the AKS implementation, and its answer cannot change the decision when the floor is
+            // zero. Skipping it removes an API call and a failure point from the happy path.
+            if (_options.MinRollInterval <= TimeSpan.Zero)
+            {
+                _logger?.LogInformation(
+                    "[SelfUpdate] applying update {Tag} (was {Current}; no roll floor configured).",
+                    target, ShippedReleaseSeed.InstalledPlatformVersion);
+                return _http.Invoke(ct => _updater.PatchToVersionAsync(target, ct));
+            }
+
             return _http.Invoke(ct => _updater.LastRolledAtAsync(ct)).SelectMany(lastRolledAt =>
             {
                 var since = lastRolledAt is null ? (TimeSpan?)null : DateTimeOffset.UtcNow - lastRolledAt.Value;

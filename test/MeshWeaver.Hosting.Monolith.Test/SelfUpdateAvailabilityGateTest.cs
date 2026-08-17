@@ -65,9 +65,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         public bool CanPatch => true;
 
         /// <summary>No stamp: these fakes exercise the roll decision, not the floor —
-
         /// the floor's own behaviour is pinned in SelfUpdateRollFloorTest.</summary>
-
         public Task<DateTimeOffset?> LastRolledAtAsync(CancellationToken ct) =>
 
             Task.FromResult<DateTimeOffset?>(null);
