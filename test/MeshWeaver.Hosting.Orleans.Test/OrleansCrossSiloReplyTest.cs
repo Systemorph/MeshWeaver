@@ -27,6 +27,21 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <para>The repro is DETERMINISTIC without knowing the grain placement: the same read is
 /// issued from BOTH silos' root mesh hubs — whichever silo does not own the per-node grain is
 /// guaranteed to exercise the cross-silo reply.</para>
+///
+/// <para>🚨 <b>READ THIS BEFORE TRUSTING THIS CLASS AS THE /api/content GUARD — it is not, any
+/// more.</b> The paragraph above still describes the ORIGINAL intent, but <c>2c796d297</c>
+/// (2026-08-10) moved <c>GetMeshNode</c>/<c>GetMeshNodeOutcome</c> onto
+/// <c>MeshExtensions.NodeOperationIssuingHub</c>, so the fact below now exercises the
+/// <c>portal/nodeops-…</c> reply path and no longer posts from <c>mesh/{id}</c> at all. That is
+/// worth keeping — but it silently stopped covering the static-content endpoint it names, and
+/// issue #1729 is what that cost: <c>ContentFileResolver.Resolve</c> was left posting from the
+/// router and hung ~half of all <c>/api/content</c> requests on the 2-replica memex-cloud portal.
+/// The guard for that now lives in
+/// <c>MeshWeaver.Hosting.Blazor.Test.ContentRouteIssuingHubTest</c>, which asserts the SENDER the
+/// owning node hub sees — deliberately NOT here, because an IN-PROCESS <c>TestCluster</c> does not
+/// reproduce the cross-PROCESS reply loss: a two-silo version of that assertion passes with and
+/// without the fix, which is worse than no test. Do not "restore" the coverage by adding a
+/// content-route fact to this class without first proving it FAILS on the unfixed code.</para>
 /// </summary>
 public class OrleansCrossSiloReplyTest : IClassFixture<TwoSiloCacheUpdateFixture>
 {
