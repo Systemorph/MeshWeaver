@@ -259,5 +259,22 @@ public class RenderAreaOperationTest(ITestOutputHelper output) : MonolithMeshTes
         // on somebody else's PR days later.
         notification.Exception!.Message.Should().Contain("nothing was rendered",
             "a non-positive budget must be refused outright — no path resolution, no remote stream");
+
+        // A NEGATIVE budget takes the same refusal, and must do so as a FAULTED OBSERVABLE. Without
+        // the refusal it would reach `.Timeout(negative)`, whose argument validation throws
+        // ArgumentOutOfRangeException — synchronously, out of the CALL rather than the subscription,
+        // so a caller composing this verb reactively never gets to see it as an Rx fault at all.
+        // `timeoutSeconds` is a public parameter, so a negative value is externally reachable
+        // (the REST surface clamps to [1,120], but MeshOperations is called directly too).
+        var negative = await new MeshOperations(Mesh)
+            .RenderArea($"@{path}", "Overview", timeoutSeconds: -1)
+            .Materialize()
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask(Ct);
+
+        negative.Kind.Should().Be(NotificationKind.OnError,
+            "a negative budget must fault the observable, not throw out of the call");
+        negative.Exception.Should().BeOfType<TimeoutException>(
+            "the refusal is a TimeoutException, never ArgumentOutOfRangeException from Rx's Timeout");
+        negative.Exception!.Message.Should().Contain("nothing was rendered");
     }
 }
