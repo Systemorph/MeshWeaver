@@ -55,6 +55,11 @@ public class PackageParameterResolutionTest
         PackageParameters.Resolve(Config(
             ("Services:crm:http:0", "http://crm"),
             ("Services:crm:https:0", "https://crm")), parameter).Should().Be("https://crm");
+        // Several endpoints on one scheme resolve to index 0 DETERMINISTICALLY — not to whichever
+        // one the provider happens to enumerate first.
+        PackageParameters.Resolve(Config(
+            ("Services:crm:https:1", "https://crm-b"),
+            ("Services:crm:https:0", "https://crm-a")), parameter).Should().Be("https://crm-a");
         // …falling back through the schemes Aspire may publish instead.
         PackageParameters.Resolve(Config(("Services:crm:http:0", "http://crm")), parameter)
             .Should().Be("http://crm");
