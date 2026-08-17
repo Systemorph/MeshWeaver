@@ -70,10 +70,24 @@ public static class OrleansClusteringSetup
         }
     }
 
+    /// <summary>
+    /// Whether <paramref name="tableName"/> exists in the schema the Orleans scripts would create it
+    /// in — i.e. the FIRST writable schema on this connection's <c>search_path</c>, which is what an
+    /// unqualified <c>CREATE TABLE</c> resolves to and therefore what <c>current_schema()</c>
+    /// returns.
+    ///
+    /// <para>🚨 The schema predicate is load-bearing, not tidiness. This is the gate that decides
+    /// whether a creation script runs, and <c>information_schema.tables</c> lists EVERY schema — so
+    /// matching on <c>table_name</c> alone lets a same-named table anywhere in the database report
+    /// "already present" and skip a script that in fact never ran. A gate that can pass on the wrong
+    /// evidence is worse than no gate (AGENTS.md → "a verification step that cannot fail is not a
+    /// verification step").</para>
+    /// </summary>
     private static async Task<bool> TableExistsAsync(NpgsqlConnection conn, string tableName)
     {
         await using var check = new NpgsqlCommand(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = @t)", conn);
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+            + "WHERE table_name = @t AND table_schema = current_schema())", conn);
         check.Parameters.AddWithValue("t", tableName);
         return (bool)(await check.ExecuteScalarAsync())!;
     }
