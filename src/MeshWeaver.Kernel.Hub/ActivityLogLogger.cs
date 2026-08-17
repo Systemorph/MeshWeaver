@@ -13,15 +13,39 @@ namespace MeshWeaver.Kernel.Hub;
 
 /// <summary>
 /// <see cref="ILogger"/> implementation that appends each log call to the
-/// <c>Messages</c> list of a target <c>ActivityLog</c> MeshNode. The node's
-/// workspace is the Code hub's owning hub; updates are posted as
-/// <see cref="DataChangeRequest"/> so the hub's workspace stream ticks and
-/// subscribers (<c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>)
-/// receive live message updates.
+/// <c>Messages</c> list of a target <c>ActivityLog</c> MeshNode, through the
+/// canonical <c>GetMeshNodeStream(path).Update(...)</c> mutation API — so the
+/// owning hub's workspace stream ticks and subscribers
+/// (<c>GetRemoteStream&lt;MeshNode, MeshNodeReference&gt;</c>) receive live
+/// message updates.
+///
+/// <para>🚨 <b>Never a hand-posted <c>DataChangeRequest</c> carrying a whole
+/// MeshNode.</b> That write lands in the workspace VERBATIM — the version
+/// stamping in <c>MeshNodeTypeSource.UpdateImpl</c> is side-effect-only and never
+/// reaches the store — so the activity node sat at <c>Version = 0</c> for an
+/// entire run. The persistence sampler then normalises <c>0 → 1</c> when it
+/// writes the row (<c>HandleSaveMeshNode</c>), and the storage change feed echoes
+/// that row back at Version 1. Both of the owner's defences read the version and
+/// therefore both were defeated: the echo-suppression in
+/// <c>SubscribeToOwnDeletion</c> compares <c>persisted.Version (1)</c> against
+/// the live <c>Version (0)</c> and sees no self-write, and
+/// <c>MeshNodeStreamHandle.AdoptPersisted</c>'s forward-only guard reads
+/// <c>1 &gt; 0</c> as "strictly newer" and adopts it. A snapshot sampled MID-RUN
+/// then landed on top of the terminal write and rolled a Succeeded activity back
+/// to <c>Running</c> with <c>End</c> cleared — permanently, since a finished run
+/// never writes again (issue #1784; same defect family as the lagged-echo
+/// data loss of #133). <c>Update</c> mints
+/// <c>MeshNode.NextVersion(...)</c> on the owner, which is what makes both
+/// guards work — and it patches only <c>Content</c>, so <c>MainNode</c>,
+/// <c>HubPath</c>, <c>Start</c>, <c>User</c> and a pending
+/// <c>RequestedStatus</c> survive instead of being clobbered by a rebuilt node.</para>
 ///
 /// Injected into the script's <c>Log</c> global per <see cref="SubmitCodeRequest"/>
 /// so every concurrent run writes to its own ActivityLog.
 /// </summary>
+/// <param name="hub">The hub that OWNS the activity node (the kernel's public hub) — its
+/// workspace carries the MeshNode data source the write goes through.</param>
+/// <param name="activityLogPath">Path of the activity node to append to.</param>
 internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath) : ILogger
 {
     private readonly object _lock = new();
@@ -31,6 +55,11 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
     // RLS-denied on the activity's partition → the activity log never ticks. Publish
     // under System (Permission.All) — same rule as compile (#2) / user-activity (#3).
     private readonly AccessService? _accessService = hub.ServiceProvider.GetService<AccessService>();
+    private readonly ILogger? _diagnostics = hub.ServiceProvider.GetService<ILoggerFactory>()
+        ?.CreateLogger("MeshWeaver.Kernel.ActivityLogLogger");
+    // Resolved lazily on the first publish: the handle needs the hub's workspace, which is not
+    // guaranteed to be built while the hub itself is being configured.
+    private MeshNodeStreamHandle? _stream;
     private ImmutableList<LogMessage> _messages = ImmutableList<LogMessage>.Empty;
     // Incremental severity roll-up, so the published log's terminal status never depends on how much
     // of the transcript the head window still holds.
@@ -204,14 +233,15 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
     }
 
     /// <summary>
-    /// Builds and posts a snapshot of the current message list. MUST be called
+    /// Builds and writes a snapshot of the current message list. MUST be called
     /// under <see cref="_publishLock"/>: the status decision (terminal vs Running)
-    /// and the <c>hub.Post</c> are one atomic step, so post order equals decision
+    /// and the write are one atomic step, so write order equals decision
     /// order — once <see cref="Complete"/> has stored the terminal state, no
-    /// Running-status snapshot can ever be posted after it, and every later
+    /// Running-status snapshot can ever be written after it, and every later
     /// append-flush re-asserts the terminal Status/End/ReturnValue instead of
-    /// clobbering them. <c>hub.Post</c> is a synchronous enqueue (no await, no
-    /// hub-turn wait), so holding the plain lock across it is safe.
+    /// clobbering them. The write is enqueued on the owning stream's hub
+    /// synchronously at Subscribe (no await, no hub-turn wait), so holding the
+    /// plain lock across it is safe and the enqueue order IS the lock order.
     /// </summary>
     private void PublishSnapshotLocked()
     {
@@ -227,45 +257,68 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
             // makes each flush O(1); the sealed lines stay durable in _Log segment satellites.
             SealOverflowLocked(snapshot);
             var window = snapshot.GetRange(_sealedCount, snapshot.Count - _sealedCount);
+            var messageCount = snapshot.Count;
+            var segmentCount = _sealedSegments;
+            var status = _terminalStatus ?? ActivityStatus.Running;
+            var end = _terminalEnd;
+            var returnValue = _terminalReturnValue;
 
-            // We don't round-trip the MeshNode through a query — we just post a
-            // fresh ActivityLog content payload. The node hub's DataChangeRequest
-            // handler merges it (the Content field is a POCO, so Updates([node])
-            // replaces Content wholesale — fine for append-only Messages).
-            var log = new ActivityLog("ScriptExecution")
-            {
-                Messages = window,
-                MessageCount = snapshot.Count,
-                MaxSeverity = maxSeverity,
-                SegmentCount = _sealedSegments,
-                Status = _terminalStatus ?? ActivityStatus.Running,
-                End = _terminalEnd,
-                ReturnValue = _terminalReturnValue
-            };
+            var stream = _stream ??= hub.GetWorkspace().GetMeshNodeStream(activityLogPath);
+            var options = hub.JsonSerializerOptions;
 
-            var segments = activityLogPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            if (segments.Length < 1) return;
-            var id = segments[^1];
-            var ns = segments.Length > 1 ? string.Join('/', segments[..^1]) : "";
-
-            // Dispatch a DataChangeRequest targeting the activity log's address.
-            // The target hub's handler applies the update to its workspace stream,
-            // which ticks any MeshNodeReference subscribers for live visibility.
-            var node = new MeshNode(id, ns)
-            {
-                Name = $"Activity {id[..Math.Min(8, id.Length)]}",
-                NodeType = "Activity",
-                State = MeshNodeState.Active,
-                Content = log
-            };
-            // Publish as System: this fires from the throttle timer thread (no inherited
-            // identity); the activity log is infrastructure observability, not a user write.
-            // ImpersonateAsSystem sets System unconditionally and the post reads the
-            // AccessContext synchronously at Post time, so the scope covers the stamp.
+            // 🚨 THE canonical mutation API — see the class remarks for why a hand-posted
+            // DataChangeRequest carrying a rebuilt MeshNode is a data-loss bug here (#1784).
+            // The lambda patches ONLY the fields this logger owns; everything the dispatcher
+            // stamped at creation (Id, HubPath, Start, User) and anything a concurrent
+            // control-plane writer set (RequestedStatus) rides through untouched.
+            //
+            // 🚨 A SYNCHRONOUS using — never Observable.Using / RunAsSystem here. Impersonation is
+            // an AsyncLocal scope that must be opened and closed on ONE thread. Both reactive
+            // shapes open it on the SUBSCRIBING thread and dispose it when the write's echo
+            // arrives, i.e. on the owning stream hub's thread: the publisher keeps
+            // `system-security` latched and the terminating thread is handed a foreign "previous".
+            // The first publish of a run is issued from the SCRIPT's own thread (Console.WriteLine
+            // → LoggerTextWriter → here, inside RunOnePass), so that latch made the rest of the
+            // script run as System — a `--render` export then resolved embedded areas the
+            // submitting user may not read. Measured, not reasoned: with either reactive shape
+            // DocumentExportAreaAccessTest fails, with this one it passes.
+            // 🚨 RunAsSystem's ContainIdentity does NOT close this hole — it restores the caller's
+            // identity around NOTIFICATIONS only, never around the Subscribe that opened the scope.
+            // The plain `using` is sound here because the capture is synchronous on both paths: the
+            // own-node write captures inside Subscribe (Observable.Create body), and the cross-hub
+            // write captures at the .Update() call — both inside this block.
+            // System at all because this also fires from the throttle TIMER thread, which never
+            // inherited the script runner's AccessContext; the activity log is infrastructure
+            // observability, not a user write.
             using (_accessService?.ImpersonateAsSystem())
-                hub.Post(
-                    DataChangeRequest.Update([node]),
-                    o => o.WithTarget(new Address(activityLogPath)));
+                stream.Update(node =>
+                    {
+                        // ContentAs, never `is ActivityLog`: a degraded JsonElement (a hub whose
+                        // TypeRegistry lacks the discriminator) would make a type test null, the
+                        // lambda would no-op, and the run's output would never surface.
+                        var current = node.ContentAs<ActivityLog>(options, _diagnostics)
+                                      ?? new ActivityLog("ScriptExecution");
+                        return node with
+                        {
+                            Content = current with
+                            {
+                                Messages = window,
+                                MessageCount = messageCount,
+                                MaxSeverity = maxSeverity,
+                                SegmentCount = segmentCount,
+                                Status = status,
+                                End = end,
+                                // Once Complete has recorded the return value every later
+                                // re-assert carries it; before that, keep whatever is there.
+                                ReturnValue = returnValue ?? current.ReturnValue
+                            }
+                        };
+                    })
+                    .Subscribe(
+                        _ => { },
+                        ex => _diagnostics?.LogDebug(ex,
+                            "ActivityLogLogger: publishing the log snapshot for {Path} failed",
+                            activityLogPath));
         }
         catch { /* never let logging break the script */ }
     }

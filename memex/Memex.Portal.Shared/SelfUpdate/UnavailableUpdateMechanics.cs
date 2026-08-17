@@ -51,6 +51,11 @@ internal static class UnavailableUpdateMechanics
     {
         public bool CanPatch => false;
 
+        /// <summary>Never — an install with no patcher has never rolled and never will, so the
+        /// floor can only ever pass. Correct rather than a hole: it cannot roll anyway.</summary>
+        public Task<DateTimeOffset?> LastRolledAtAsync(CancellationToken ct) =>
+            Task.FromResult<DateTimeOffset?>(null);
+
         public Task PatchToVersionAsync(string versionTag, CancellationToken ct) =>
             throw new InvalidOperationException(
                 $"Cannot roll this install to '{versionTag}': no deployment patcher is registered. "
