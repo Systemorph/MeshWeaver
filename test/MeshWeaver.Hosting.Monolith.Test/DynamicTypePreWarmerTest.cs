@@ -92,7 +92,7 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// The ADOPT-ONLY measurement (<c>PreWarm:AdoptOnly</c>): the probe must see the same dynamic
+    /// The ADOPT-ONLY measurement (the default boot, <c>PreWarm:DynamicTypes</c> off): the probe must see the same dynamic
     /// types the compiling sweep does and REPORT the ones that are not covered — without building
     /// anything itself.
     ///
