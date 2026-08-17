@@ -1039,7 +1039,29 @@ jobs:
             echo "::error::could not log in to ${{ env.ACR }} and pull $IMAGE after 5 attempts — this is a REGISTRY/INFRA failure, not a bake failure. The image set for this commit is already promoted; its platform content bake was NOT published, so pods compile shipped content at boot until a later CD run republishes it."
             exit 1
           fi
-      - name: "Bake the platform's shipped content INSIDE the promoted image"
+      # ── WHAT THIS BAKES, AND WHAT IT DELIBERATELY DOES NOT ──────────────────────────────────
+      # 🚨 ONLY the content the IMAGE itself embeds: `src/MeshWeaver.Documentation/Data`, which
+      # `Memex.Portal.Shared` references as MeshWeaver.Documentation and every portal therefore
+      # ships inside itself. Nothing else. Compiling anything a deployment receives ALREADY BUILT
+      # is redoing work someone else's lane already did, and it is the expensive half of a bake.
+      #
+      # Everything else a portal holds arrives compiled and is ADOPTED, not rebuilt:
+      #   * node-repo content (Plugins, Education, Reinsurance, SocialMedia) and Store packages —
+      #     each repo's own `node-repo-publish-bake` lane bakes and publishes them under the SAME
+      #     framework identity, from the same image. main-cd checks out no other repository (there
+      #     is not one `repository:` input in this file), so it could not compile them even by
+      #     accident — and must never be given the chance.
+      #   * `samples/Graph/Data` — REMOVED from this bake deliberately. Measured against the
+      #     shipped image: the samples half compiled 7 packages / 24 assemblies (ACME, Cornerstone,
+      #     FutuRe, MathDemo, Northwind, PythonDemo, Systemorph) whose bundles NO deployment can
+      #     adopt. No portal embeds them (Memex.Portal.Shared references only
+      #     MeshWeaver.Documentation); memex receives them over the GitHub link into the
+      #     `MeshWeaver` partition, where the node paths read `MeshWeaver/samples/Graph/Data/ACME/…`
+      #     while the bundles are keyed `ACME/…` — and the seeder matches by node PATH, so they are
+      #     inert there too. They still compile-GATE on every PR (dotnet-test.yml's doc-gate runs
+      #     the samples stage): correctness of that content is proven, its assemblies are simply
+      #     not worth shipping. Before/after for this job: 8 packages / 28 assemblies → 1 / 4.
+      - name: "Bake the platform's OWN shipped content INSIDE the promoted image"
         env:
           IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
           SHA: ${{ needs.gate.outputs.sha }}
@@ -1051,11 +1073,9 @@ jobs:
           rm -rf "$STAGE"
           mkdir -p "$STAGE"
           bash .github/scripts/stage-doc-gate.sh src/MeshWeaver.Documentation/Data "$STAGE/doc"
-          bash .github/scripts/stage-samples-gate.sh samples/Graph/Data "$STAGE/samples"
-          # The two known-debt ratchets travel INTO the mount: the tester runs in the container and
-          # cannot see the checkout. Same files the doc-gate passes, so the same verdict applies.
+          # The known-debt ratchet travels INTO the mount: the tester runs in the container and
+          # cannot see the checkout. Same file the doc-gate passes, so the same verdict applies.
           cp .github/doc-gate.allow "$STAGE/doc-gate.allow"
-          cp .github/samples-gate.allow "$STAGE/samples-gate.allow"
           # The image's tester runs as a non-root user: it must be able to read the mount and write
           # the bake directory.
           chmod -R a+rX "$STAGE"
@@ -1063,17 +1083,14 @@ jobs:
           rm -rf "$BAKE"
           mkdir -p "$BAKE"
           chmod 777 "$BAKE"
-          # Two stages, one bake directory — exactly as the doc-gate runs them. A red tester FAILS
-          # this job: the platform's own shipped content not compiling against the image that ships
-          # it is a release defect, not a reason to publish less.
+          # A red tester FAILS this job: the platform's own shipped content not compiling against
+          # the image that ships it is a release defect, not a reason to publish less.
           # --pull never: the image is already in the local store (the retrying step above pulled
           # it), so a registry blip here can no longer be mistaken for a bake failure.
-          for stage in doc samples; do
-            echo "── baking /repo/$stage against $IMAGE"
-            docker run --rm --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
-              --entrypoint /app/mw-plugin-test "$IMAGE" "/repo/$stage" \
-              --allow "/repo/$stage-gate.allow" --bake-output /bake --source-sha "$SHA"
-          done
+          echo "── baking /repo/doc against $IMAGE"
+          docker run --rm --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" /repo/doc \
+            --allow /repo/doc-gate.allow --bake-output /bake --source-sha "$SHA"
           # Postconditions, not hopes: a green tester that wrote no identity, or no bundles, is a
           # bake-stage regression — never a quiet publish of nothing.
           if [ ! -s "$BAKE/framework-mvid.txt" ]; then
