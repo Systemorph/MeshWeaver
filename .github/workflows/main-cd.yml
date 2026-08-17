@@ -1001,10 +1001,44 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      # Both a docker pull credential (the bake image) and, further down, the data-plane token the
-      # publish script uses against Azure Files.
-      - name: ACR login
-        run: az acr login --name meshweaver
+      # 🚨 REACHING THE REGISTRY IS INFRA, AND INFRA BLIPS — bounded retries with backoff, then a
+      # LOUD error naming it as infra. Exactly the shape dotnet-test.yml's "Pre-pull Testcontainers
+      # images (infra, not a test)" step already uses, for the same reason.
+      #
+      # Measured, CD run 32028644747: this job died on `az acr login` with
+      # `HTTPSConnectionPool(host='meshweaver.azurecr.io', port=443) … [Errno 111] Connection
+      # refused` while FOUR sibling jobs in the same run logged into the same registry minutes
+      # earlier and pushed to it. A refused TCP connect from one runner is not a defect of ours, and
+      # retrying it suppresses nothing — but LOSING the job to it is expensive and asymmetric: the
+      # `promote` job has already armed the images by the time this runs, so the release ships
+      # WITHOUT its content bake, and the CD reconciler keys on the IMAGE set (complete) rather than
+      # on the publication, so nothing re-attempts it. The bundles are only republished by the next
+      # successful CD publish; until then pods compile shipped content at boot exactly as they did
+      # before the bake lane existed. Seconds of backoff against that trade is the right side.
+      #
+      # The image is PULLED here rather than left to `docker run`'s implicit pull, so the retry
+      # covers the pull too — a login that succeeds and a pull that is refused would otherwise fail
+      # the bake step with a registry error dressed up as a bake failure.
+      - name: "ACR login + pull the bake image (infra, not the bake)"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -uo pipefail
+          ok=0
+          for attempt in 1 2 3 4 5; do
+            if az acr login --name meshweaver && docker pull --quiet --platform linux/amd64 "$IMAGE"; then
+              echo "$IMAGE: registry reached and image pulled on attempt $attempt"
+              ok=1; break
+            fi
+            # Backoff: 5s, 10s, 20s, 40s — registry blips are seconds-to-minutes.
+            delay=$((5 * 2 ** (attempt - 1)))
+            echo "registry attempt $attempt failed; retrying in ${delay}s" >&2
+            sleep $delay
+          done
+          if [ $ok -eq 0 ]; then
+            echo "::error::could not log in to ${{ env.ACR }} and pull $IMAGE after 5 attempts — this is a REGISTRY/INFRA failure, not a bake failure. The image set for this commit is already promoted; its platform content bake was NOT published, so pods compile shipped content at boot until a later CD run republishes it."
+            exit 1
+          fi
       - name: "Bake the platform's shipped content INSIDE the promoted image"
         env:
           IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
@@ -1032,9 +1066,11 @@ jobs:
           # Two stages, one bake directory — exactly as the doc-gate runs them. A red tester FAILS
           # this job: the platform's own shipped content not compiling against the image that ships
           # it is a release defect, not a reason to publish less.
+          # --pull never: the image is already in the local store (the retrying step above pulled
+          # it), so a registry blip here can no longer be mistaken for a bake failure.
           for stage in doc samples; do
             echo "── baking /repo/$stage against $IMAGE"
-            docker run --rm --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
+            docker run --rm --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
               --entrypoint /app/mw-plugin-test "$IMAGE" "/repo/$stage" \
               --allow "/repo/$stage-gate.allow" --bake-output /bake --source-sha "$SHA"
           done

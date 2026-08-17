@@ -219,6 +219,16 @@ would silently restore the every-pod-rebakes-everything regression (#1347). Ther
 or fails red. Because it re-runs the content gate against the binaries that SHIP, a red here is a
 genuine release defect — the images are already promoted, and nothing quietly ships less.
 
+🚨 **The reconciler does not heal a failed bake publication.** `gate` asks the registry whether the
+IMAGE set is complete, and by the time this job runs `promote` has already made it so — so a run
+that publishes its images and then loses this job is not re-attempted, and the bundles land only on
+the next successful CD publish (until then pods compile shipped content at boot, exactly as before
+the lane existed). That asymmetry is why reaching the registry here is retried like the infra it is:
+five attempts with backoff, then a loud error naming it a REGISTRY/INFRA failure. CD run
+`32028644747` lost the job to a single `az acr login` → `[Errno 111] Connection refused` while four
+sibling jobs in the same run reached the same registry fine. `alert-on-failure` still files the red
+on the `ci-failure` issue, so a genuinely broken bake is never silent.
+
 **`notify-dependents`** sends one `repository_dispatch` (`meshweaver-framework-released`, payload:
 commit, version — receivers resolve the framework identity themselves from the new image) to each
 repo in `BAKE_SUBSCRIBER_REPOS`, using
