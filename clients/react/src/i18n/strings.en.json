@@ -596,6 +596,7 @@
   "ui.mdInvitesInSpace": "*Invites are available inside a Space.*",
   "ui.mdNodeToUpdateMissing": "**Error:** Could not find MeshNode to update.",
   "ui.mdRecyclingHub": "**Recycling hub…** redirecting in a moment.",
+  "ui.mdStaleBuildAvailable": "**A newer build of this type is available.** This page is still running the previously compiled one.",
   "ui.mdFillFieldsGeneratePlan": "*Fill in the fields and click **Generate plan**.*",
   "ui.accessDeniedPlain": "Access denied.",
   "ui.accessDeniedAdminsOnly": "Access denied — platform admins only.",

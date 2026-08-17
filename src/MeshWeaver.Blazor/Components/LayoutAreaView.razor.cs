@@ -87,6 +87,14 @@ public partial class LayoutAreaView
     private string? progressMessage;
     private DialogControl? currentDialog;
     private bool showDialog;
+
+    /// <summary>
+    /// The "a newer build of this type is available" adornment, read from the
+    /// <see cref="LayoutAreaSlots.StaleBuildBanner"/> sidecar slot. Null ⇒ nothing is rendered:
+    /// the banner must never take space, and must never show a spinner, on the overwhelming
+    /// majority of pages whose hub is on the current build.
+    /// </summary>
+    private UiControl? staleBuildBanner;
     private bool IsContentLoaded { get; set; }
 
     private void BindViewModel()
@@ -146,6 +154,7 @@ public partial class LayoutAreaView
                 AreaStream.Dispose();
             }
             DialogStream?.Dispose();
+            BannerStream?.Dispose();
             ProgressStream?.Dispose();
             // Menu subscriptions were registered on AreaStream (above) and tore down with its Dispose().
         }
@@ -159,6 +168,7 @@ public partial class LayoutAreaView
         _handover.Dispose();
         AreaStream = null;
         DialogStream = null;
+        BannerStream = null;
         ProgressStream = null;
         await base.DisposeAsync();
     }
@@ -172,10 +182,12 @@ public partial class LayoutAreaView
     {
         AreaStream?.Dispose();
         DialogStream?.Dispose();
+        BannerStream?.Dispose();
         ProgressStream?.Dispose();
         _handover.Dispose();
         AreaStream = null;
         DialogStream = null;
+        BannerStream = null;
         ProgressStream = null;
     }
 
@@ -211,6 +223,16 @@ public partial class LayoutAreaView
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(
                 el => OnDialogStreamChanged(el.Value),
                 ex => OnReducedStreamError(ex, "dialog")));
+
+            // The stale-build banner rides the SAME area stream as the dialog — one more reduced
+            // slot, no extra stream and no address plumbing (the component already knows which
+            // node it is showing). Absent slot ⇒ the reduce simply never yields a control ⇒
+            // nothing renders, which is the case on every page whose hub is on the current build.
+            BannerStream = AreaStream!.Reduce(new JsonPointerReference(
+                LayoutAreaReference.GetControlPointer(LayoutAreaSlots.StaleBuildBanner)));
+            BannerStream?.RegisterForDisposal(BannerStream.DistinctUntilChanged().Subscribe(
+                el => OnBannerStreamChanged(el.Value),
+                ex => OnReducedStreamError(ex, "stale-build banner")));
 
             // Phase-aware loading label: bind the server-side progress item
             // ({ message, progress } in the EntityStore "data" collection — seeded
@@ -249,6 +271,9 @@ public partial class LayoutAreaView
     }
 
     private ISynchronizationStream<JsonElement>? DialogStream { get; set; }
+
+    /// <summary>Reduced view of the <see cref="LayoutAreaSlots.StaleBuildBanner"/> slot.</summary>
+    private ISynchronizationStream<JsonElement>? BannerStream { get; set; }
     private ISynchronizationStream<JsonElement>? ProgressStream { get; set; }
 
     /// <summary>
@@ -349,6 +374,32 @@ public partial class LayoutAreaView
                         SubscribeMenu(key, key);
             },
             ex => OnReducedStreamError(ex, "TopBar menu")));
+    }
+
+    /// <summary>
+    /// Binds the stale-build banner slot. Deserialized to the polymorphic <see cref="UiControl"/>
+    /// base rather than a bespoke control type, so the server is free to change what the banner IS
+    /// (markdown today) without a client change. Any non-control payload leaves the banner absent —
+    /// an adornment must never be able to break the page it adorns.
+    /// </summary>
+    private void OnBannerStreamChanged(JsonElement bannerData)
+    {
+        try
+        {
+            if (!IsNotPreRender)
+                return;
+            var control = bannerData.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+                ? null
+                : bannerData.Deserialize<UiControl>(Hub.JsonSerializerOptions);
+            if (Equals(control, staleBuildBanner))
+                return;
+            staleBuildBanner = control;
+            InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Error processing stale-build banner stream change");
+        }
     }
 
     private void OnDialogStreamChanged(JsonElement dialogData)
