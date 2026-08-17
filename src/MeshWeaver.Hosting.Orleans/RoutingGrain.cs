@@ -91,6 +91,26 @@ internal class RoutingGrain(
     private int saturationReported;
 
     /// <summary>
+    /// Identity of THIS activation, and the episode counter within it — the pair that makes a single
+    /// saturation line self-sufficient (issue #1789).
+    ///
+    /// <para>🚨 <b>Why a log line needs an identity.</b> <see cref="ReportSaturation"/> latches: the
+    /// only writer of <c>0</c> to <see cref="saturationReported"/> is <see cref="ReportDrained"/>, so
+    /// two crossing lines from ONE activation are impossible without a clear between them. On
+    /// 2026-08-17 a pod emitted two crossings ten minutes apart with NO clear line, and answering
+    /// "was this one episode or two?" required knowing whether the grain had been recycled — which
+    /// nothing logged, because <c>RoutingGrain</c> has no lifecycle overrides. The question was
+    /// unanswerable from the evidence, and it was the question that mattered.</para>
+    ///
+    /// <para>With both stamped on every line it is answerable from the Critical channel alone:
+    /// <b>different activation ⇒ the grain was recycled</b>; <b>same activation, higher episode ⇒
+    /// the previous episode really did drain</b>; and the same activation+episode never appears
+    /// twice, by the latch.</para>
+    /// </summary>
+    private readonly string activationId = Guid.NewGuid().ToString("N")[..8];
+    private int saturationEpisode;
+
+    /// <summary>
     /// UTC ticks at which the current saturation episode began, so <see cref="ReportDrained"/> can
     /// say how long it lasted. Written under the same latch that gates the report, read only by the
     /// clearing report — a plain <see cref="Volatile"/> pair is sufficient and costs the hot dispatch
@@ -237,18 +257,27 @@ internal class RoutingGrain(
     {
         if (inFlight < SaturationThreshold) return;
         if (Interlocked.Exchange(ref saturationReported, 1) == 1) return;
-        Volatile.Write(ref saturationSinceTicks, DateTime.UtcNow.Ticks);
+        var startedUtc = DateTime.UtcNow;
+        Volatile.Write(ref saturationSinceTicks, startedUtc.Ticks);
+        var episode = Interlocked.Increment(ref saturationEpisode);
         var (destinations, deepest) = orderedDispatcher.QueueSnapshot();
         logger.LogCritical(
-            "[ROUTE] Routing back-pressure: {InFlight} route dispatches in flight (reporting threshold {Threshold}); "
+            "[ROUTE] Routing back-pressure [{ActivationId}#{Episode} started {StartedUtc:O}]: "
+            + "{InFlight} route dispatches in flight (reporting threshold {Threshold}); "
             + "stream destinations queued {Destinations}, deepest per-destination queue {Deepest}, routing pool subscribing {PoolInFlight}. "
             + "Latest dispatch target {Address} — the address that happened to cross the threshold, NOT a diagnosis. "
             + "A slot is held from dispatch until the leg terminates, INCLUDING the unbounded wait for a ThreadPool "
             + "thread before the leg's own timeouts start, so a CPU-starved silo raises this with nothing stuck. "
             + "A deepest queue of 1 or more means legs are blocked behind a leg (head-of-line on one destination); "
-            + "0 means nothing is waiting on anything, so read it as load and check the 'cleared after' line "
-            + "for how long it really lasted.",
-            inFlight, SaturationThreshold, destinations, deepest, routingPool.CurrentInFlight, addressPath);
+            + "0 means nothing is waiting on anything, so read it as load. "
+            + "🚨 Deepest is sampled AT THE CROSSING, so like the in-flight count it is partly an artefact of the "
+            + "threshold: with N destinations sharing the backlog it is ~InFlight/N whatever is wrong. "
+            + "READ THE EPISODE STAMP, not the depth: a later line with a HIGHER episode on this activation means "
+            + "this episode drained; a line with a DIFFERENT activation id means the grain was recycled; and if "
+            + "neither a clear nor a higher episode ever follows, the in-flight count never fell below half the "
+            + "threshold — which means a leg never terminated and its slot leaked, not that the silo was busy.",
+            activationId, episode, startedUtc, inFlight, SaturationThreshold,
+            destinations, deepest, routingPool.CurrentInFlight, addressPath);
     }
 
     private void ReportDrained(int inFlight)
@@ -260,10 +289,21 @@ internal class RoutingGrain(
         // silo absorbed, minutes is a leg that really was not completing. Without it, five reports
         // in eighteen seconds (prod, 2026-08-10) read as one permanent wedge when they were in fact
         // five separate crossings — each one drained below half the threshold in between.
+        //
+        // 🚨 WARNING, not Information — a permanent level change with a cost/value argument, not a
+        // debugging tweak (AGENTS.md). This line is one HALF of a signal whose other half is
+        // Critical; at Information the two halves ride independently-filterable channels and the
+        // pair cannot be reconstructed. On 2026-08-17 that is exactly what happened: the crossing
+        // lines survived, the clear did not, and "did this episode ever end?" — the whole question —
+        // became unanswerable. It is deliberately NOT raised to Critical: the red-log ticketing path
+        // files an incident per Critical fingerprint, so a Critical "cleared" line would file a
+        // ticket for a RECOVERY and invert the signal. Warning ships reliably and tickets nothing.
+        // The episode stamp below is what actually makes the pair reconstructible; the level only
+        // makes sure both halves arrive.
         var lasted = since == 0 ? TimeSpan.Zero : DateTime.UtcNow - new DateTime(since, DateTimeKind.Utc);
-        logger.LogInformation(
-            "[ROUTE] Routing back-pressure cleared after {ElapsedMs} ms — {InFlight} route(s) in flight",
-            (long)lasted.TotalMilliseconds, inFlight);
+        logger.LogWarning(
+            "[ROUTE] Routing back-pressure [{ActivationId}#{Episode}] cleared after {ElapsedMs} ms — {InFlight} route(s) in flight",
+            activationId, Volatile.Read(ref saturationEpisode), (long)lasted.TotalMilliseconds, inFlight);
     }
 
     /// <summary>

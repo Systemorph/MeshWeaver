@@ -84,6 +84,15 @@
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Courses/MeshWeaver.Courses.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Mail.MicrosoftGraph/MeshWeaver.Mail.MicrosoftGraph.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Mcp/MeshWeaver.Mcp.csproj" />
+    <!-- Import + its PRIVATE closure: the SIX MeshWeaver.DataSetReader* projects (the base, Csv,
+         Excel, Excel.BinaryFormat, Excel.OpenXmlFormat, Excel.Utils) and MeshWeaver.DataStructures
+         beneath them — nothing outside their own test project references any of them.
+         No host ever called AddImport() — the portals referenced
+         this assembly purely so IN-MESH source could `using MeshWeaver.Import`, and the module lane
+         carries that surface instead (InstallAssemblies -> InstalledModuleAssembly ->
+         CompileReferences.ComposeWithModules). NOT a dependency win: ClosedXML / OpenXml / CsvHelper
+         stay in the image via MeshWeaver.Blazor + MeshWeaver.ContentCollections and prune out here. -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
 
     <!-- Alternative storage backends. These were BORN flipped: no host has ever referenced them
          (only their own test projects do), and both attributes state the intent verbatim —
@@ -125,6 +134,24 @@
   -->
   <PropertyGroup>
     <_MeshModulesSubsetNames>;$(MeshModulesClosureSubset);</_MeshModulesSubsetNames>
+
+    <!--
+      MeshModulesGuardPublishAppRoot — the publish-time "a closure module's own DLL is sitting in
+      the app root" refusal. ON by default, and it must stay on for anything that becomes an IMAGE:
+      a DLL in both places means a ships-the-bits ProjectReference came back and the flip is a lie.
+
+      A HOST may set it false in its .csproj, and exactly one does: Memex.Portal.Monolith, the DEV
+      portal, which bundles the Northwind SAMPLE whose data sources compile against
+      MeshWeaver.Import. That transitive reference puts the module in its app closure legitimately —
+      the documented THIN-lane state, where modules/<Name>/ prunes empty and ResolveModulePath falls
+      back to the app folder for the same assembly.
+
+      🚨 HOST-scoped, never module-scoped. Exempting the module (metadata on @(MeshModuleClosure))
+      would disarm the check in the published image too, which is the one place it is load-bearing —
+      a gate that cannot fail is not a gate (AGENTS.md). Exempting the dev HOST leaves
+      Memex.Portal.Distributed refusing every re-added reference, for every module.
+    -->
+    <MeshModulesGuardPublishAppRoot Condition="'$(MeshModulesGuardPublishAppRoot)' == ''">true</MeshModulesGuardPublishAppRoot>
   </PropertyGroup>
 
   <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
@@ -170,11 +197,12 @@
          AND Publish in one instance, so a shared in-instance worker would fire for only one of
          the two directories. MeshModulesGuardAppRoot: only the publish lane hard-fails on the
          module's own dll in the app root (in a dev bin/ that is routinely a STALE file from the
-         pre-flip era, not a re-added reference). -->
+         pre-flip era, not a re-added reference), and a HOST may turn even that off — see
+         MeshModulesGuardPublishAppRoot below. -->
     <MSBuild Projects="$(MSBuildThisFileFullPath)"
              Targets="LayoutMeshModuleClosures"
              BuildInParallel="false"
-             Properties="MeshModulesAppDir=$(_AppPublishDir);Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=true;MeshModulesClosureSubset=$([MSBuild]::Escape('$(MeshModulesClosureSubset)'))" />
+             Properties="MeshModulesAppDir=$(_AppPublishDir);Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=$(MeshModulesGuardPublishAppRoot);MeshModulesClosureSubset=$([MSBuild]::Escape('$(MeshModulesClosureSubset)'))" />
 
     <ItemGroup>
       <_ModuleFileKept Include="$(_AppPublishDir)modules/**/*.*" />

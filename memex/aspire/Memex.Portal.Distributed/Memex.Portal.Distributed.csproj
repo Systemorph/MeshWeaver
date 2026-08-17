@@ -34,14 +34,18 @@
     <Compile Include="..\Memex.Database.Migration\DbVersion.cs" Link="DbVersion.cs" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.NuGet.AzureBlob\MeshWeaver.NuGet.AzureBlob.csproj" />
-    <!-- 🚨 Referenced for IN-MESH compiles, not for this project's own code. NodeType sources are
-         compiled at runtime against TRUSTED_PLATFORM_ASSEMBLIES — i.e. whatever is in the publish
-         output — so an assembly this portal does not reference is invisible to them no matter that
-         the framework ships it. Memex.Portal.Monolith already references it, which is why
-         `Northwind/Product` (and Cornerstone/Pricing's Excel sample loader) compile in dev and fail
-         on memex-cloud with `CS0234: the type or namespace name 'Import' does not exist in the
-         namespace 'MeshWeaver'`. Do not "clean up" as unused. -->
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" />
+    <!-- 🚨 MeshWeaver.Import is deliberately NOT referenced (#1644 step 2), and the reason it was
+         referenced before is preserved rather than dropped. It was here for IN-MESH compiles, never
+         for this project's own code: NodeType sources compile against TRUSTED_PLATFORM_ASSEMBLIES,
+         so an assembly this portal does not reference is invisible to them — which is how
+         Cornerstone/Pricing's Excel sample loader once failed on memex-cloud with `CS0234: the type
+         or namespace name 'Import' does not exist in the namespace 'MeshWeaver'`.
+         The module lane carries that surface now: MeshBuilder.InstallAssemblies registers an
+         InstalledModuleAssembly per listed DLL and CompileReferences.ComposeWithModules adds each
+         one to the reference set, so `MeshWeaver.Import.dll` in Modules:Assemblies IS the
+         declaration. It is listed FIRST there — the reference set is composed from the installed
+         modules, so it must precede anything that compiles against it. The bits ship via the
+         modules/<Name>/ closure layout in MeshModulesPublish.targets. -->
   </ItemGroup>
 
   <!-- Ship nuget.config into the image so the runtime `#r "nuget:..."` resolver can
@@ -88,6 +92,7 @@
     <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" />
     <PackageReference Include="Microsoft.Orleans.Clustering.AdoNet" />
     <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AdoNet" />
     <PackageReference Include="Microsoft.Orleans.Server" />
     <PackageReference Include="Microsoft.Orleans.Sdk" />
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" />

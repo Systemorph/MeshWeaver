@@ -87,6 +87,12 @@ public static class MemexConfiguration
 
         services.AddRazorPages();
 
+        // Static web assets of modules that ship via modules/<Name>/ (#1724). Mounted by
+        // UseMeshModuleStaticAssets below; the manifest it builds also tells App.razor which
+        // module stylesheets to link, since a flipped module's scoped CSS is published
+        // standalone rather than folded into the host's <App>.styles.css aggregate.
+        services.AddMeshModuleStaticAssets();
+
         services.AddRazorComponents()
             .AddInteractiveServerComponents()
             .AddHubOptions(opt =>
@@ -1076,6 +1082,12 @@ public static class MemexConfiguration
 
         // Static files middleware must run before routing to serve _content/* paths from RCLs
         app.UseStaticFiles();
+
+        // …and the same for modules that ship via modules/<Name>/ rather than a ProjectReference,
+        // whose assets are in no build-time manifest of this host (#1724). Registered AFTER the
+        // host's own UseStaticFiles so the platform copy of any shared dependency answers first —
+        // the module lane never shadows a platform asset.
+        app.UseMeshModuleStaticAssets();
 
         app.UseRouting();
 
