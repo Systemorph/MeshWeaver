@@ -185,8 +185,13 @@ public static class ReleaseArtifactResolver
         return ReleaseArtifactMatch.Declined(offered.Count == 0
             ? $"no release records an artifact link at all ({candidates.Length} release(s) examined) "
               + $"— nothing can be resolved for framework {frameworkIdentity} on {architecture}"
-            : $"no artifact for framework {frameworkIdentity} on {architecture}; this release "
-              + $"offers {string.Join(", ", offered.Distinct(StringComparer.Ordinal))}");
+            // 🚨 "the N releases examined offer", not "this release offers": the set is aggregated
+            // across every candidate, and a reason that named a single release would send the reader
+            // to the wrong node. This sentence is the whole diagnostic — it is what a bundle miss
+            // and both ends' logs carry — so it has to describe exactly what was looked at.
+            : $"no artifact for framework {frameworkIdentity} on {architecture}; the "
+              + $"{candidates.Length} release(s) examined offer only "
+              + $"{string.Join(", ", offered.Distinct(StringComparer.Ordinal))}");
     }
 }
 
