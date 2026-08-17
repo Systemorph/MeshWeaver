@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Mcp;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.Configuration;

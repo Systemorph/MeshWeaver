@@ -2,13 +2,11 @@
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Email;
-using Memex.Portal.Shared.Instances;
 using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.Mcp;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Hosting.Grpc;
@@ -88,6 +86,12 @@ public static class MemexConfiguration
         });
 
         services.AddRazorPages();
+
+        // Static web assets of modules that ship via modules/<Name>/ (#1724). Mounted by
+        // UseMeshModuleStaticAssets below; the manifest it builds also tells App.razor which
+        // module stylesheets to link, since a flipped module's scoped CSS is published
+        // standalone rather than folded into the host's <App>.styles.css aggregate.
+        services.AddMeshModuleStaticAssets();
 
         services.AddRazorComponents()
             .AddInteractiveServerComponents()
@@ -875,9 +879,9 @@ public static class MemexConfiguration
                         // where the concern is defined shows as its own section. Per-item configurable
                         // (label / icon / order / tooltip / href); register more under the same AI context.
                         .AddNodeMenuItems(NodeMenuItemsExtensions.AiMenuContext, [.. AiMenuItems])
-                        // Platform-admin Instances overview: live cluster query (namespaces, versions,
-                        // replica health) + Grafana log links + guided create-instance plan generator.
-                        .AddInstancesAdminSettingsTab()
+                        // (The platform-admin Instances overview — live cluster query, Grafana links,
+                        // create-instance plan generator — rides the MeshWeaver.SelfUpdate.Aks module,
+                        // which registers its own settings tab on the per-node hub.)
                         // The platform's global settings tabs ride the UiContribution lane (WS7):
                         // What's New / About / Privacy (slice 2) plus the Administration tabs —
                         // Invitations + Inbox (invitation-only onboarding, non-user mail), Updates
@@ -928,9 +932,11 @@ public static class MemexConfiguration
                 // (on Kubernetes) patches the portal+migration deployments to the newest version per
                 // policy. On a non-k8s host it degrades to detect-and-notify. See ReleaseStrategy.md.
                 .AddSelfUpdate()
-                // Platform-admin Instances feature: binds InstancesOptions (Instances:*) and the
-                // live cluster-query service backing the admin Instances tab (see Instances.md).
-                .AddInstancesAdmin();
+                ;
+                // (The platform-admin Instances feature — InstancesOptions plus the live cluster-query
+                // service — rides the MeshWeaver.SelfUpdate.Aks module: it is AKS-specific, while the
+                // self-update POLLER above stays here because self-update is how a deployment receives
+                // new bits, modules included.)
         }
 
         /// <summary>
@@ -1077,6 +1083,12 @@ public static class MemexConfiguration
         // Static files middleware must run before routing to serve _content/* paths from RCLs
         app.UseStaticFiles();
 
+        // …and the same for modules that ship via modules/<Name>/ rather than a ProjectReference,
+        // whose assets are in no build-time manifest of this host (#1724). Registered AFTER the
+        // host's own UseStaticFiles so the platform copy of any shared dependency answers first —
+        // the module lane never shadows a platform asset.
+        app.UseMeshModuleStaticAssets();
+
         app.UseRouting();
 
         // gRPC-web middleware — lets browsers / React Native reach the mesh gRPC service
@@ -1131,8 +1143,10 @@ public static class MemexConfiguration
         // explicit opt-out (the transport authenticates connections itself — Bearer token in
         // gRPC metadata / trusted loopback port).
 
-        // Map MCP endpoint
-        app.MapMeshMcp();
+        // The MCP endpoint (/mcp) rides MapMeshModuleEndpoints below: the MeshWeaver.Mcp module's
+        // McpEndpointModuleAttribute maps it with the same RequireAuthorization("McpAuth") policy
+        // this line carried. The POLICY itself stays here (AddMcpAuthentication above) — the REST
+        // mirror /api/mesh/* is gated by the same one and is not part of that module.
 
         // REST surface that mirrors MCP — POST /api/mesh/* (1:1 with MCP tools).
         // Same Bearer auth policy as /mcp; multipart upload at /api/mesh/upload.

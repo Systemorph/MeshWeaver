@@ -17,6 +17,8 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Hosting.SelfUpdate;
+using MeshWeaver.GitSync;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -34,7 +36,9 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddUpdatePolicyType();
+        // AddGitHubSyncTypes registers the BuildCompletion satellite the self-update watch reacts
+        // to. Types only, no credentials — the production registration rather than a copy.
+        => base.ConfigureMesh(builder).AddUpdatePolicyType().AddGitHubSyncTypes();
 
     /// <summary>Fake registry (the documented injectable IO seam): a ci build newer than anything
     /// installed plus an even "older" clean release — Continuous picks the ci tag, Stable the clean
@@ -148,7 +152,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
         var updater = new RecordingUpdater();
         var options = new SelfUpdateOptions
         {
-            PollInterval = TimeSpan.FromMilliseconds(500),
+            RetryInterval = TimeSpan.FromMilliseconds(500),
             DefaultPolicy = UpdatePolicyKind.Continuous,
         };
         var service = new FaultingRecordService(
@@ -187,7 +191,7 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
         {
             // The poll interval doubles as the fault-resubscribe delay — short so the test observes
             // the recovery promptly.
-            PollInterval = TimeSpan.FromMilliseconds(500),
+            RetryInterval = TimeSpan.FromMilliseconds(500),
             DefaultPolicy = UpdatePolicyKind.Continuous,
         };
         var service = new FaultingFirstReadService(
@@ -248,7 +252,8 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
         var updater = new RecordingUpdater();
         var options = new SelfUpdateOptions
         {
-            PollInterval = TimeSpan.FromMilliseconds(500),
+            RetryInterval = TimeSpan.FromMilliseconds(500),
+            EventCoalesceWindow = TimeSpan.FromMilliseconds(50),
             DefaultPolicy = UpdatePolicyKind.Continuous, // default ≠ the node's Stable — the wrong-policy tell
         };
 
@@ -272,12 +277,23 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
         await service.StartAsync(CancellationToken.None);
         try
         {
-            // Startup: the default (Continuous) drives polling ONCE until the live Stable emission
-            // arrives (by-design fallback window), then Stable-only patches. Wait for TWO Stable
-            // patches so any in-flight startup Continuous tick has long since drained, then snapshot.
+            // Startup: the default (Continuous) drives the ONE startup pass until the live Stable
+            // emission arrives (by-design fallback window), then Stable-only patches. Checks are
+            // event-driven now, so the second Stable patch is driven by a build completion rather
+            // than by waiting out a timer.
+            // 🚨 The startup pass must be OBSERVED before publishing: StartAsync subscribes via
+            // SubscribeOn(TaskPool), so it returns before the build-completion watch is established,
+            // and a publication racing that subscription is absorbed as the watch's BASELINE rather
+            // than seen as a new build. Waiting for the first patch proves the watch is live.
+            await updater.Patched.FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
+
+            await SelfUpdateEventDriver.PublishBuildAsync(Mesh, "MeshWeaver", runNumber: 1);
+            // ONE publication is ONE check now — the old "two patches" wait was a proxy for "the
+            // interval has ticked enough times", which no longer exists. What the test proves is
+            // unchanged and asserted at the end: nothing after the fault runs under the default.
             await updater.Patched
                 .Where(tag => tag == FakeAcrTagLister.StableTag)
-                .Take(2).LastAsync()
+                .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
                 .ToTask(ct);
             var beforeFault = updater.Tags.Count;
@@ -290,13 +306,16 @@ public class SelfUpdatePollerResilienceTest(ITestOutputHelper output) : Monolith
                 "No response received in hub cache/test within 00:01:00 for request SubscribeRequest "
                 + $"→ target {UpdatePolicyNodeType.NodePath}"));
 
-            // Positive signal: polling continues past the fault (two more Stable patches — a window
-            // in which the pre-fix wrong-policy tick would land, since the retry fires after one
-            // PollInterval with an immediate first tick).
+            // Positive signal: checks continue past the fault (two more Stable patches — the window
+            // in which the pre-fix wrong-policy tick would land, since the retry re-establishes the
+            // read after one RetryInterval). Each check is now driven by a publication, so the
+            // events that must survive a mid-life fault are emitted explicitly.
+            await SelfUpdateEventDriver.PublishBuildAsync(Mesh, "MeshWeaver", runNumber: 2);
+            await SelfUpdateEventDriver.PublishBuildAsync(Mesh, "MeshWeaver.Plugins", runNumber: 1);
             await updater.Patched
                 .Skip(beforeFault)
                 .Where(tag => tag == FakeAcrTagLister.StableTag)
-                .Take(2).LastAsync()
+                .FirstAsync()
                 .Timeout(TimeSpan.FromSeconds(30))
                 .ToTask(ct);
 

@@ -50,6 +50,74 @@ public class SelfUpdateBuildTriggerTest
         Assert.Single(events);
     }
 
+    // ── The collection-wide watch: "a new build of ANY module or the platform" ──────────────
+    //
+    // The self-update check is event-driven with no recurring poll, so these are the events that
+    // wake a DEFERRED roll — one held because some package had no artifact for the target release.
+    // If a module publishing its build is not an event here, that roll waits for a process restart.
+
+    private static MeshNode Repo(string ownerDotRepo, long version) =>
+        new(ownerDotRepo, $"Admin/_Build/{ownerDotRepo}") { Version = version };
+
+    private static (Subject<IEnumerable<MeshNode>?> Input, List<Unit> Events) WatchAll()
+    {
+        var input = new Subject<IEnumerable<MeshNode>?>();
+        var events = new List<Unit>();
+        SelfUpdateHostedService.NewBuildEventsAcross(input).Subscribe(events.Add);
+        return (input, events);
+    }
+
+    [Fact]
+    public void ReplayedCollection_IsBaseline_NotEvents()
+    {
+        var (input, events) = WatchAll();
+        input.OnNext([Repo("Systemorph.MeshWeaver", 5), Repo("Systemorph.MeshWeaver-Education", 2)]);
+        Assert.Empty(events);
+    }
+
+    [Fact]
+    public void AVersionBumpOnAnyRepo_IsOneEvent()
+    {
+        var (input, events) = WatchAll();
+        input.OnNext([Repo("Systemorph.MeshWeaver", 5), Repo("Systemorph.MeshWeaver-Education", 2)]);
+
+        // the SATELLITE published, not the platform — this is the case that unblocks a roll
+        // deferred because that module had no artifact for the target framework.
+        input.OnNext([Repo("Systemorph.MeshWeaver", 5), Repo("Systemorph.MeshWeaver-Education", 3)]);
+        Assert.Single(events);
+    }
+
+    [Fact]
+    public void ARepoPublishingForTheFirstTime_IsAnEvent()
+    {
+        var (input, events) = WatchAll();
+        input.OnNext([Repo("Systemorph.MeshWeaver", 5)]);
+
+        // a newly-installed module publishes its first build: the record APPEARS rather than moving.
+        input.OnNext([Repo("Systemorph.MeshWeaver", 5), Repo("Systemorph.MeshWeaver.Plugins", 1)]);
+        Assert.Single(events);
+    }
+
+    [Fact]
+    public void ARepoDisappearing_IsNotAnEvent()
+    {
+        var (input, events) = WatchAll();
+        input.OnNext([Repo("Systemorph.MeshWeaver", 5), Repo("Systemorph.MeshWeaver.Plugins", 1)]);
+
+        // nothing to update TOWARD, so a vanished record must not trigger a check.
+        input.OnNext([Repo("Systemorph.MeshWeaver", 5)]);
+        Assert.Empty(events);
+    }
+
+    [Fact]
+    public void UnchangedCollectionReEmission_IsNotAnEvent()
+    {
+        var (input, events) = WatchAll();
+        input.OnNext([Repo("Systemorph.MeshWeaver", 5)]);
+        input.OnNext([Repo("Systemorph.MeshWeaver", 5)]);
+        Assert.Empty(events);
+    }
+
     [Fact]
     public void UnchangedVersionReEmission_IsNotAnEvent()
     {

@@ -2,6 +2,7 @@
   <PropertyGroup>
     <ProjectGuid>{2f7d9c14-3b8e-4a6c-9d21-7e5b0a4c8f13}</ProjectGuid>
     <NoWarn>$(NoWarn);NU1510</NoWarn>
+    <Description>Model Context Protocol server for MeshWeaver: the mesh tool surface (get/search/create/update/…), the MCP resources, and the /mcp HTTP transport. Ships as a module — list the DLL under Modules:Assemblies to activate.</Description>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" />
@@ -13,6 +14,10 @@
     <ProjectReference Include="..\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
     <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <!-- The endpoint-contribution hook (/mcp maps through MapMeshModuleEndpoints), plus the two
+         pieces this module SHARES with the platform's REST mirror: SessionHubResolver and
+         McpConfiguration. -->
+    <ProjectReference Include="..\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\MeshWeaver.InstanceSync\MeshWeaver.InstanceSync.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />

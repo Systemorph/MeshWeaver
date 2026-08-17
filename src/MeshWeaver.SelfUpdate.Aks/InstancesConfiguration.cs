@@ -2,7 +2,7 @@ using MeshWeaver.Mesh;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Memex.Portal.Shared.Instances;
+namespace MeshWeaver.SelfUpdate.Aks;
 
 /// <summary>
 /// Wires the platform-admin Instances feature: binds <see cref="InstancesOptions"/> from the

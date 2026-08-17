@@ -89,6 +89,13 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
     // samples/Graph/Data. Every NodeType that has ever compiled carries this stamp, so a fixture
     // without one does not resemble real content at all. If the converter regresses, the tree bake
     // drops Widget/Thing and the bundle-set assertion below goes red.
+    /// <summary>
+    /// A plain data node written WITH a UTF-8 BOM (#1767). Deliberately not a NodeType: what is
+    /// under test is that both producers materialise it identically, not that it compiles.
+    /// </summary>
+    private const string BommedNodeTypeJson =
+        """{"$type":"MeshNode","id":"Bommed","namespace":"Widget","path":"Widget/Bommed","mainNode":"Widget/Bommed","name":"A BOM'd node file","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"Written with a UTF-8 BOM; both bakes must see it."}}""";
+
     private const string ThingNodeTypeJson =
         """{"$type":"MeshNode","id":"Thing","namespace":"Widget","path":"Widget/Thing","mainNode":"Widget/Thing","name":"Thing","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"A thing.","configuration":"config => config.WithContentType<Thing>().AddDefaultLayoutAreas()","includeGlobalTypes":true,"compilationStatus":"Ok","lastCompiledVersion":7,"sources":["namespace:Source scope:subtree","shared=@Lib/Shared/Source"]}}""";
 
@@ -171,13 +178,18 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
             WriteFile(root, "Widget/Thing/Source/Cell.json", ExecutableCellJson);
             WriteFile(root, "Widget/Thing/Test/ThingTests.cs", ThingTestsSource);
             WriteFile(root, "Widget/Snippets/Greeting.cs", GreetingSource);
-            // 🚨 A node file the RUNTIME cannot parse. samples/Graph/Data/PensionFund ships 62 of
-            // these — .json with a UTF-8 BOM — and the mesh's importer skips every one
-            // ("No parser for node-repo file X; skipped"), gating zero NodeTypes in that package.
-            // The bake must skip it too: neither die on it (it is not a bake failure) nor parse it
-            // (that would compile content the mesh never imports). Both producers therefore emit
-            // the SAME bundle set, which is what the assertions below check.
-            WriteFileWithBom(root, "Widget/Unparseable.json", WidgetIndexJson);
+            // 🚨 A node file the RUNTIME cannot parse — malformed JSON. The bake must skip it too:
+            // neither die on it (it is not a bake failure) nor parse it (that would compile content
+            // the mesh never imports). Both producers therefore emit the SAME bundle set, which is
+            // what the assertions below check.
+            WriteFile(root, "Widget/Unparseable.json", "{ this is not json");
+            // 🚨 A BOM'd file is NOT that case any more (#1767). It used to be — PensionFund ships
+            // 62 BOM'd .json files and the importer skipped every one, gating zero NodeTypes while
+            // reporting success — and this test pinned that skip as the contract. The BOM is now
+            // stripped in FileFormatParserRegistry, which both producers share, so the file parses
+            // on BOTH sides and equivalence still holds. Keeping it here means a regression that
+            // re-broke only one of the two loaders would show up as a bundle-set difference.
+            WriteFileWithBom(root, "Widget/Bommed.json", BommedNodeTypeJson);
         });
         var meshDir = Path.Combine(Path.GetTempPath(), "mw-bake-mesh-" + Guid.NewGuid().ToString("N"));
         var treeDir = Path.Combine(Path.GetTempPath(), "mw-bake-tree-" + Guid.NewGuid().ToString("N"));

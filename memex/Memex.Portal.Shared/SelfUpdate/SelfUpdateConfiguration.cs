@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Configuration;
 using MeshWeaver.Mesh;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using MeshWeaver.Hosting.SelfUpdate;
 
 namespace Memex.Portal.Shared.SelfUpdate;
 
@@ -31,9 +33,10 @@ public static class SelfUpdateConfiguration
             // them is not a gate. Platform-neutral (a query plus file-system reads).
             services.AddSingleton<ReleaseAvailabilityService>();
             // Bind from configuration when the caller passes nothing. Without this the defaults were
-            // baked into the image: PollInterval sat at 6h with NO way for an environment to change
-            // it, and a SelfUpdate__PollInterval in the configmap silently did nothing — the failure
-            // mode where an operator sets a knob, sees no effect, and concludes self-update is dead.
+            // baked into the image and a SelfUpdate__* value in the configmap silently did nothing —
+            // the failure mode where an operator sets a knob, sees no effect, and concludes
+            // self-update is dead. (The former PollInterval is now RetryInterval: the check is
+            // event-driven, so the value only paces re-establishing a faulted watch.)
             services.AddSingleton(sp =>
                 options
                 ?? sp.GetService<IConfiguration>()?.GetSection(SelfUpdateOptions.SectionName)
@@ -46,8 +49,18 @@ public static class SelfUpdateConfiguration
             // attribute up through AddSelfUpdate's callers (this is a browser-supporting assembly).
             if (!OperatingSystem.IsBrowser())
             {
-                services.AddSingleton<IAcrTagLister, AcrTagLister>();
-                services.AddSingleton<IDeploymentUpdater, KubernetesDeploymentUpdater>();
+                // 🚨 TryAdd, and the AKS/ACR module registers the real ones with a plain AddSingleton.
+                // The pairing is ORDER-INDEPENDENT: whichever runs first, the LAST registration of a
+                // service type is what GetRequiredService returns and TryAdd declines when any
+                // registration already exists. Module listed ⇒ real ACR reader + Kubernetes patcher;
+                // module absent ⇒ these fallbacks keep the poller's constructor resolvable and put it
+                // in the detect-and-notify state IDeploymentUpdater.CanPatch has always described.
+                //
+                // The POLLER stays here, never in a module: self-update is how a deployment receives
+                // new bits — including modules — so gating it behind one would mean an install that
+                // lost the module could not update anything, including re-installing the module.
+                services.TryAddSingleton<IAcrTagLister, UnavailableUpdateMechanics.NoRegistry>();
+                services.TryAddSingleton<IDeploymentUpdater, UnavailableUpdateMechanics.DetectOnly>();
                 services.AddHostedService<SelfUpdateHostedService>();
             }
             return services;

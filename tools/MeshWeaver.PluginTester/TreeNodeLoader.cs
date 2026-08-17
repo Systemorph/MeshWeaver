@@ -158,16 +158,21 @@ public static class TreeNodeLoader
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(file.Content, ContentJsonDocument);
+            // 🚨 The BOM strip here is REQUIRED, and the requirement inverted on 2026-08-17.
+            // This line used to carry the opposite instruction — "do NOT strip a UTF-8 BOM, the
+            // RUNTIME drops those nodes and a bake that compiled them would be an equivalence
+            // break" — which was correct while the runtime skipped them. #1767 fixed the runtime
+            // (FileFormatParserRegistry.WithoutBom), so NOT stripping here is now the equivalence
+            // break, in the other direction: the bake would resolve a SMALLER tree than the mesh
+            // imports and silently ship no bundle for content the portal then compiles at runtime.
+            // Whichever way the runtime goes, this path follows it — that is the invariant, not
+            // the strip itself, and BakeEquivalenceTest is what holds the two together.
+            document = JsonDocument.Parse(FileFormatParserRegistry.WithoutBom(file.Content), ContentJsonDocument);
         }
         catch (JsonException ex)
         {
-            // 🚨 Matches JsonFileParser: a document that will not parse yields NO node, and the
-            // installer logs "No parser for …; skipped". Do NOT "fix" this by stripping a UTF-8 BOM
-            // here — samples/Graph/Data/PensionFund/*.json carry one, the RUNTIME drops every one of
-            // those nodes for exactly this reason, and a bake that quietly compiled content the mesh
-            // never imports would be the equivalence break this whole change exists to prevent (in
-            // the opposite direction). The BOM is a CONTENT defect and belongs in a content fix.
+            // Matches JsonFileParser: a document that will not parse yields NO node, and the
+            // installer logs "No parser for …; skipped".
             reason = $"malformed JSON: {ex.Message}";
             return null;
         }
