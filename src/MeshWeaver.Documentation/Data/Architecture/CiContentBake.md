@@ -51,23 +51,28 @@ hosts that matter here — the bake host and the portals, which both ship a
 `meshweaver-surface.manifest` — that identity is the **API-surface hash** `s<hash>`: per compile
 reference, the SHA-256 of its *reference assembly* (the compiler's own definition of the API
 surface — byte-stable under body-only and private-member edits, changed by any surface change),
-hashed over the canonical content-surface set, with the generator-bearing exception
-(`MeshWeaver.Graph`, whose code shapes the *generated input* of every NodeType compile)
-contributing its full implementation MVID.
+hashed over the canonical content-surface set, with the generated-input-shaping exceptions
+contributing their full implementation MVID: `MeshWeaver.Compiler` (THE compile toolchain since
+#1707 — skeleton generation, source-query resolution, `@@`-include shaping, aggregation, options,
+generator execution, emit) and `MeshWeaver.NuGet` (the `#r "nuget:"` parser/resolver — what Roslyn
+is fed and which assemblies a directive adds). Before #1707 the toolchain lived inside
+`MeshWeaver.Graph` and pinned ALL of Graph — the highest-churn assembly — so nearly every merge
+rebaked the world; the extraction is what makes "rebuild only when we need to" hold in practice.
 
 Three consequences:
 
 - **a bundle is adoptable across CI runs, images, and internal-only merges** — the bake for
   commit X seeds at boot on the image of commit Y whenever nothing in the content-facing surface
   changed between them ("rebuild only when we need to");
-- **a breaking surface change (or any Graph change) mints a new identity** — every cached and
+- **a breaking surface change (or any toolchain change) mints a new identity** — every cached and
   published build for the old surface is stale, and the next Build-and-Test run bakes fresh;
 - **a declined bundle costs exactly what today costs — a compile.** Shipping bundles is strictly
   safe; declines are logged with both identities.
 
 Manifest-less CI processes (test hosts) fall back to the commit identity `g<sha>` stamped by
-`Directory.Build.props`; local builds fall back to the Graph MVID. The commit stamp doubles as
-provenance everywhere.
+`Directory.Build.props`; local manifest-less builds fall back to the identity anchor's MVID
+(`MeshWeaver.Compiler.dll` — single-file attributable, which is what lets a packer read it without
+loading anything). The commit stamp doubles as provenance everywhere.
 
 ## The image: `prebuilt/` beside the app
 

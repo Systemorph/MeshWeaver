@@ -166,7 +166,8 @@ transport end to end — there is deliberately no second distribution channel:
    card, price, install funnel, pre-install eligibility all unchanged.
 2. **Build** — `MeshWeaver.Plugin.Build`'s `module-pack` mode packs a built module's closure into
    a bundle recording the `minMeshVersion` floor (`--min-mesh-version`) and, as diagnostics, the
-   MVID of the `MeshWeaver.Graph.dll` in the build output. It is a plain dotnet invocation over
+   MVID of the identity anchor (`MeshWeaver.Compiler.dll`, #1707) in the build output. It is a
+   plain dotnet invocation over
    an output folder, so ANY node repo's CI can drive it — SocialMedia builds its own module
    bundle the same way the platform repo does — and because the gate is the floor, ONE bundle
    serves every compatible platform build: nothing is rebundled per CI build. The closure is an

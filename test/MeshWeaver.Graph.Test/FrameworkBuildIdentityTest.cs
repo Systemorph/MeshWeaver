@@ -8,15 +8,20 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Pins the ONE framework build identity (#1660 WS3): the API-surface scheme ("rebuild only when
-/// we need to" — content rebakes exactly when the surface it compiles against changes), its
-/// fallback chain (commit stamp → Graph MVID), and — the pin the whole CI bake stands on — that
-/// every reader resolves the SAME value for the same inputs. The process-level tests run in both
-/// build flavors on purpose: this test host ships no surface manifest, so it exercises the
-/// fallback chain exactly as a manifest-less CI test process does.
+/// Pins the ONE framework build identity (#1660 WS3, anchored on MeshWeaver.Compiler since
+/// #1707): the API-surface scheme ("rebuild only when we need to" — content rebakes exactly when
+/// the surface it compiles against changes), its fallback chain (commit stamp → toolchain-anchor
+/// MVID), and — the pin the whole CI bake stands on — that every reader resolves the SAME value
+/// for the same inputs. The process-level tests run in both build flavors on purpose: this test
+/// host ships no surface manifest, so it exercises the fallback chain exactly as a manifest-less
+/// CI test process does.
 /// </summary>
 public class FrameworkBuildIdentityTest
 {
+    /// <summary>The identity anchor — the toolchain assembly (#1707).</summary>
+    private static readonly System.Reflection.Assembly AnchorAssembly =
+        typeof(FrameworkBuildIdentity).Assembly;
+
     private static readonly IReadOnlyDictionary<string, string> BaselinePairs =
         FrameworkBuildIdentity.ContentSurfaceAssemblies
             .ToDictionary(n => n, n => "hash-of-" + n, StringComparer.Ordinal);
@@ -66,25 +71,39 @@ public class FrameworkBuildIdentityTest
     [Fact]
     public void SurfaceIdentity_UsesTheFullImplMvidForGeneratorAssemblies()
     {
-        // MeshWeaver.Graph carries the NodeType compile pipeline's emitters: a BODY-ONLY change
+        // MeshWeaver.Compiler IS the NodeType compile toolchain (#1707): a BODY-ONLY change
         // there alters the GENERATED input of every compile without any API change, so its full
         // implementation MVID — not its reference-assembly hash — joins the identity.
-        string? MvidV1(string name) => name == "MeshWeaver.Graph" ? "impl-mvid-1" : null;
-        string? MvidV2(string name) => name == "MeshWeaver.Graph" ? "impl-mvid-2" : null;
+        string? MvidV1(string name) => name == "MeshWeaver.Compiler" ? "impl-mvid-1" : null;
+        string? MvidV2(string name) => name == "MeshWeaver.Compiler" ? "impl-mvid-2" : null;
 
         var v1 = FrameworkBuildIdentity.ComputeSurfaceIdentity(BaselinePairs, MvidV1);
         var v2 = FrameworkBuildIdentity.ComputeSurfaceIdentity(BaselinePairs, MvidV2);
         v1.Should().NotBe(v2,
             "an emitter change must rebake even though the surface pairs are identical");
 
-        // …and with the impl MVID pinned, Graph's REF-ASM hash no longer participates: its
-        // surface entry may change without moving the identity (the impl MVID already covers it).
-        var graphSurfaceChanged = new Dictionary<string, string>(BaselinePairs, StringComparer.Ordinal)
+        // …and with the impl MVID pinned, the toolchain's REF-ASM hash no longer participates:
+        // its surface entry may change without moving the identity (the impl MVID already
+        // covers it).
+        var compilerSurfaceChanged = new Dictionary<string, string>(BaselinePairs, StringComparer.Ordinal)
         {
-            ["MeshWeaver.Graph"] = "different-surface",
+            ["MeshWeaver.Compiler"] = "different-surface",
         };
-        FrameworkBuildIdentity.ComputeSurfaceIdentity(graphSurfaceChanged, MvidV1)
+        FrameworkBuildIdentity.ComputeSurfaceIdentity(compilerSurfaceChanged, MvidV1)
             .Should().Be(v1);
+    }
+
+    [Fact]
+    public void FullMvidMembership_IsTheToolchainAndTheDirectiveResolver()
+    {
+        // The membership IS the design (#1707): the toolchain assembly (everything that shapes
+        // generated compile input) plus MeshWeaver.NuGet (the #r directive parser/resolver —
+        // shapes what Roslyn is fed and which assemblies a directive adds; was a HOLE before
+        // #1707: surface-hashed only). Anything else here means either the extraction leaked
+        // input-shaping code back out, or an assembly is being over-pinned.
+        FrameworkBuildIdentity.FullMvidAssemblies
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .Should().Equal("MeshWeaver.Compiler", "MeshWeaver.NuGet");
     }
 
     [Fact]
@@ -156,20 +175,24 @@ public class FrameworkBuildIdentityTest
         Directory.CreateDirectory(dir);
         try
         {
-            var graph = typeof(NodeTypeCompilationHelpers).Assembly;
             File.WriteAllText(
                 Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName),
                 string.Join('\n', FrameworkBuildIdentity.ContentSurfaceAssemblies.Select(n => $"{n}=stub")));
 
-            var identity = FrameworkBuildIdentity.ResolveProcessIdentity(dir, graph);
+            var identity = FrameworkBuildIdentity.ResolveProcessIdentity(dir, AnchorAssembly);
             identity.Should().StartWith("s");
-            // Graph is a full-MVID exception and IS loaded, so its live MVID joins the hash — the
-            // rest resolve their manifest stubs.
+            // The full-MVID exceptions (the toolchain anchor + MeshWeaver.NuGet) are loaded in
+            // this test host, so their live MVIDs join the hash — the rest resolve their
+            // manifest stubs.
+            var nuget = typeof(MeshWeaver.NuGet.NuGetDirectiveParser).Assembly;
             var expected = FrameworkBuildIdentity.ComputeSurfaceIdentity(
                 FrameworkBuildIdentity.ContentSurfaceAssemblies.ToDictionary(n => n, _ => "stub"),
-                n => n == "MeshWeaver.Graph"
-                    ? graph.ManifestModule.ModuleVersionId.ToString("N")
-                    : LoadedMvidOf(n));
+                n => n switch
+                {
+                    "MeshWeaver.Compiler" => AnchorAssembly.ManifestModule.ModuleVersionId.ToString("N"),
+                    "MeshWeaver.NuGet" => nuget.ManifestModule.ModuleVersionId.ToString("N"),
+                    _ => null,
+                });
             identity.Should().Be(expected);
         }
         finally
@@ -188,7 +211,6 @@ public class FrameworkBuildIdentityTest
             Assert.Skip("stages unreadability via unix file modes — POSIX hosts only (CI is linux)");
             return;
         }
-        var graph = typeof(NodeTypeCompilationHelpers).Assembly;
         var dir = Path.Combine(Path.GetTempPath(), "mw-torn-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var manifest = Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName);
@@ -202,10 +224,10 @@ public class FrameworkBuildIdentityTest
             Assert.SkipWhen(!unreadable, "cannot stage an unreadable file on this host");
 
             var (identity, warning) =
-                FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics(dir, graph);
+                FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics(dir, AnchorAssembly);
             identity.Should().Be(FrameworkBuildIdentity.Resolve(
-                    FrameworkBuildIdentity.StampedIdentityOf(graph),
-                    graph.ManifestModule.ModuleVersionId.ToString("N")),
+                    FrameworkBuildIdentity.StampedIdentityOf(AnchorAssembly),
+                    AnchorAssembly.ManifestModule.ModuleVersionId.ToString("N")),
                 "an unreadable manifest degrades to the stamp/MVID layer");
             warning.Should().NotBeNullOrEmpty("the degradation must be sayable where the identity is announced");
         }
@@ -219,7 +241,6 @@ public class FrameworkBuildIdentityTest
     [Fact]
     public void ProcessIdentity_DegradesToTheFallback_WhenTheManifestHoldsNothingUsable()
     {
-        var graph = typeof(NodeTypeCompilationHelpers).Assembly;
         var dir = Path.Combine(Path.GetTempPath(), "mw-empty-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         try
@@ -228,7 +249,7 @@ public class FrameworkBuildIdentityTest
                 Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName),
                 "not-a-pair\n\n");
             var (identity, warning) =
-                FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics(dir, graph);
+                FrameworkBuildIdentity.ResolveProcessIdentityWithDiagnostics(dir, AnchorAssembly);
             identity.Should().NotStartWith("s");
             warning.Should().NotBeNullOrEmpty();
         }
@@ -241,15 +262,14 @@ public class FrameworkBuildIdentityTest
     [Fact]
     public void ProcessIdentity_FallsBackToStampThenMvid_WithoutAManifest()
     {
-        var graph = typeof(NodeTypeCompilationHelpers).Assembly;
         var dir = Path.Combine(Path.GetTempPath(), "mw-nomanifest-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         try
         {
-            FrameworkBuildIdentity.ResolveProcessIdentity(dir, graph)
+            FrameworkBuildIdentity.ResolveProcessIdentity(dir, AnchorAssembly)
                 .Should().Be(FrameworkBuildIdentity.Resolve(
-                    FrameworkBuildIdentity.StampedIdentityOf(graph),
-                    graph.ManifestModule.ModuleVersionId.ToString("N")));
+                    FrameworkBuildIdentity.StampedIdentityOf(AnchorAssembly),
+                    AnchorAssembly.ManifestModule.ModuleVersionId.ToString("N")));
         }
         finally
         {
@@ -258,13 +278,15 @@ public class FrameworkBuildIdentityTest
     }
 
     [Fact]
-    public void FrameworkVersion_IsTheProcessIdentityOfTheGraphAssembly()
+    public void FrameworkVersion_IsTheProcessIdentityOfTheCompilerAssembly()
     {
-        var graph = typeof(NodeTypeCompilationHelpers).Assembly;
-        var expected = FrameworkBuildIdentity.ResolveProcessIdentity(AppContext.BaseDirectory, graph);
+        var expected = FrameworkBuildIdentity.ResolveProcessIdentity(
+            AppContext.BaseDirectory, AnchorAssembly);
 
-        NodeTypeCompilationHelpers.FrameworkVersion.Should().Be(expected,
+        FrameworkBuildIdentity.FrameworkVersion.Should().Be(expected,
             "there is exactly one identity resolution; every consumer flows from it");
+        NodeTypeCompilationHelpers.FrameworkVersion.Should().Be(expected,
+            "the Graph-side shim must delegate, never re-resolve");
         PrebuiltAssemblySeeder.LiveFrameworkMvid.Should().Be(expected,
             "the producer-facing public reading must never diverge from the gate");
     }
@@ -272,14 +294,16 @@ public class FrameworkBuildIdentityTest
     [Fact]
     public void PeRead_AgreesWithTheLoadedAssembly_OnTheFallbackLayer()
     {
-        // The PE-level reading (a producer inspecting a restored Graph.dll) covers the FALLBACK
-        // layer — stamp-or-MVID. In this manifest-less test host that IS the live identity, so
-        // the two must agree; in a manifest-shipping host the surface identity supersedes both
-        // and the PE reading serves as provenance only.
-        var graph = typeof(NodeTypeCompilationHelpers).Assembly;
-        graph.Location.Should().NotBeNullOrEmpty();
+        // The PE-level reading (a producer inspecting a restored MeshWeaver.Compiler.dll — the
+        // identity anchor, Plugin.Build's IdentityAssembly) covers the FALLBACK layer —
+        // stamp-or-MVID. In this manifest-less test host that IS the live identity, so the two
+        // must agree; in a manifest-shipping host the surface identity supersedes both and the
+        // PE reading serves as provenance only.
+        FrameworkIdentity.IdentityAssembly.Should().Be(AnchorAssembly.GetName().Name,
+            "the packer reads the identity off the SAME assembly the runtime anchors on");
+        AnchorAssembly.Location.Should().NotBeNullOrEmpty();
 
-        FrameworkIdentity.ReadIdentity(graph.Location)
+        FrameworkIdentity.ReadIdentity(AnchorAssembly.Location)
             .Should().Be(PrebuiltAssemblySeeder.LiveFrameworkMvid);
     }
 

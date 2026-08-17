@@ -16,9 +16,11 @@ namespace MeshWeaver.Graph.Configuration;
 public static class CodeNodeType
 {
     /// <summary>
-    /// The NodeType value used to identify code nodes.
+    /// The NodeType value used to identify code nodes. Aliases
+    /// <see cref="Compiler.CodeConventions.CodeNodeType"/> — the compile toolchain keys on the
+    /// same convention (#1707), and a const alias cannot drift.
     /// </summary>
-    public const string NodeType = "Code";
+    public const string NodeType = Compiler.CodeConventions.CodeNodeType;
 
     /// <summary>
     /// Registers the built-in "Code" MeshNode on the mesh builder.
@@ -35,14 +37,14 @@ public static class CodeNodeType
     /// <c>{NodeTypePath}/Source/</c> alongside (not inside) their parent NodeType.
     /// This is a content folder, not a satellite namespace.
     /// </summary>
-    public const string SourceSubNamespace = "Source";
+    public const string SourceSubNamespace = Compiler.CodeConventions.SourceSubNamespace;
 
     /// <summary>
     /// The sub-namespace for test code files. Tests live under
     /// <c>{NodeTypePath}/Test/</c> alongside (not inside) their parent NodeType.
     /// This is a content folder, not a satellite namespace.
     /// </summary>
-    public const string TestSubNamespace = "Test";
+    public const string TestSubNamespace = Compiler.CodeConventions.TestSubNamespace;
 
     /// <summary>
     /// Creates a MeshNode definition for the Code node type.

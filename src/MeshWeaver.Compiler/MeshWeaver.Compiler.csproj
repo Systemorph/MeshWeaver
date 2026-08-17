@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>The MeshWeaver NodeType compile toolchain: skeleton generation, source-query resolution, @@-include and #r shaping, Roslyn compilation/emit, and the framework build identity. Everything that shapes a dynamic NodeType compile's input lives here, so the full-MVID framework-identity rule pins THIS small assembly instead of MeshWeaver.Graph (issue #1707).</Description>
+    <RootNamespace>MeshWeaver.Compiler</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The mesh actor half of the compile pipeline (MeshNodeCompilationService,
+         NodeTypeCompilationHelpers) stays in MeshWeaver.Graph and orchestrates the
+         internal toolchain members here. -->
+    <InternalsVisibleTo Include="MeshWeaver.Graph" />
+    <!-- NodeTypeBatchBake / the pre-warmer drive the same toolchain (ApplyQueryChange,
+         EmitCanaryDataKey). -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting" />
+    <!-- The build-time packer calls DynamicMeshNodeAttributeGenerator directly (grant moved
+         here from MeshWeaver.Graph with the generator): a prebuilt assembly MUST carry the
+         same generated skeleton the runtime compiles, or it does not register as a node
+         provider at all. -->
+    <InternalsVisibleTo Include="MeshWeaver.Plugin.Build" />
+    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Query.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="..\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
+  </ItemGroup>
+
+</Project>
