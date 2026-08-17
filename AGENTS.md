@@ -267,6 +267,30 @@ Merge only on `COMPLETED/SUCCESS` for that suite. Two further gotchas:
   token budget into 403s that masquerade as CI-red. Use the GraphQL query above, or a `Monitor` that
   filters on the workflow name.
 
+### 🚨 SUBSCRIBE to a PR — one persistent Monitor over EVERY event you'd act on, never a success-only watch
+
+**Waiting on a PR is event-driven work: arm ONE persistent `Monitor` (the harness tool) when you
+open the PR, and let it wake you.** Hand-re-armed one-shot polls die at their timeout cap and leave
+dead air between "CI finished" and "you noticed" — and a watch that only fires on the happy path is
+the same defect as a gate that skips on missing input: **silence looks identical to
+"still running" while the thing you needed to react to already happened** (maintainer, 2026-08-17:
+"we keep losing time because of such problems"). The monitor's poll loop (GraphQL, ~45s) must emit
+a line on EACH of these transitions, not just green:
+
+- **suite `COMPLETED/SUCCESS`** — the merge signal;
+- **suite `COMPLETED/<anything else>`** (FAILURE / CANCELLED / TIMED_OUT / STALE) — go read the
+  failing job log NOW, not at the next manual check;
+- **a NEW unresolved review thread** (the ruleset's Copilot review lands minutes after open —
+  unwatched, it silently gates the merge);
+- **`mergeStateStatus = DIRTY`** — a dirty PR runs ZERO CI, so with a success-only watch it waits
+  forever;
+- **`MERGED` / `CLOSED`** — the monitor's own exit condition.
+
+One monitor can cover several open PRs (loop over them; emit per-PR lines; exit when all are
+terminal). The same rule applies to any long-running external wait — a deploy, a bake, a
+reconciler: enumerate the terminal states first, subscribe to all of them, and treat "my filter
+only matches success" as a bug to fix before arming.
+
 **Also check the clock before declaring a job stuck.** GitHub timestamps are UTC; a local-time
 comparison makes a healthy 7-minute build look like a 33-minute hang. `date -u` first.
 
