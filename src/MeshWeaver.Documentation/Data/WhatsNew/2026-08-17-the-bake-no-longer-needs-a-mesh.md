@@ -1,8 +1,9 @@
 ---
-nodeType: Markdown
-name: The content bake no longer needs a mesh
+Name: The content bake no longer needs a mesh
 Category: Feature
-Description: mw-compiler grew a `compile` verb that resolves NodeType sources straight from a git checkout and compiles them with the MeshWeaver.Compiler toolchain — no in-process mesh, no import, no per-type activation — and an equivalence test pins its output against the mesh-driven bake it replaces.
+Description: mw-compiler grew a compile verb that resolves NodeType sources straight from a git checkout and compiles them with the MeshWeaver.Compiler toolchain — no in-process mesh, no import, no per-type activation — and an equivalence test pins its output against the mesh-driven bake it replaces.
+Icon: Sparkle
+Order: -20260817
 ---
 
 # The content bake no longer needs a mesh
