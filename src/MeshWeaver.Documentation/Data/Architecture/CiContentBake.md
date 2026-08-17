@@ -315,4 +315,6 @@ types. The satellites escape it precisely because they bake INSIDE the image.
 
 See also: [Plugin Packaging](/Doc/Architecture/PluginPackaging) (the compilation-unit rules and the
 MVID rationale) · [Build Coordination](/Doc/Architecture/BuildCoordination) (who bakes when several
-replicas boot) · [Modules](/Doc/Architecture/Modules).
+replicas boot) · [Modules](/Doc/Architecture/Modules) · [Release Availability
+Gates](/Doc/Architecture/ReleaseGates) (who READS these publications, and the
+`_releases/<version>` marker that names each release's identity).

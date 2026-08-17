@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using MeshWeaver.PluginCatalog;
 using Xunit;
 
 namespace MeshWeaver.Documentation.Test;
@@ -65,6 +66,33 @@ public class PlatformBakeLaneGuard
             $"'{JobName}' in {Workflow} must publish through .github/scripts/publish-bake-bundles.sh "
             + "— the one script whose '_complete' sentinel matches "
             + "ShippedPrebuiltBundles.CompletionSentinelFileName.");
+    }
+
+    /// <summary>
+    /// 🚨 The release marker is what makes a release's framework identity knowable OUTSIDE its own
+    /// image, and the release availability gates (#1754/#1755) HOLD when it is absent. So two
+    /// things must stay true, and neither is visible from the other side:
+    /// the platform bake must PASS the release version to the publisher, and the directory name the
+    /// publisher writes must be the one <see cref="PublishedBundleCatalogue.ReleaseMarkerDirectoryName"/>
+    /// reads. Drift in either direction freezes every environment on a release that is perfectly
+    /// fine, silently.
+    /// </summary>
+    [Fact]
+    public void PlatformBake_RecordsTheReleaseMarker_AndTheDirectoryNameMatchesTheReader()
+    {
+        var job = ExecutableLinesOf(ReadJobBlock());
+        Assert.True(job.Contains("publish-bake-bundles.sh", StringComparison.Ordinal)
+                    && job.Contains("RELEASE_VERSION", StringComparison.Ordinal),
+            $"'{JobName}' in {Workflow} must pass the promoted platform version to "
+            + "publish-bake-bundles.sh as its release-version argument. Without it no "
+            + "_releases/<version> marker is written, the release's framework identity stays "
+            + "unknowable, and every environment holds on a release that is in fact fine.");
+
+        var script = File.ReadAllText(
+            Path.Combine(FindRepoRoot(), ".github", "scripts", "publish-bake-bundles.sh"));
+        Assert.Contains(
+            $"RELEASES_DIR=\"{PublishedBundleCatalogue.ReleaseMarkerDirectoryName}\"", script,
+            StringComparison.Ordinal);
     }
 
     /// <summary>The block's lines that can actually DO something: YAML and shell comment lines

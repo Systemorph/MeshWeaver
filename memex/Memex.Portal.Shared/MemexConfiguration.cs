@@ -1149,6 +1149,10 @@ public static class MemexConfiguration
         // gate as the registry above (Bearer or Basic, since a NuGet client cannot send Bearer),
         // but with NO anonymous mode: it hands out compiled assemblies for paid modules.
         app.MapPluginBundles();
+        // The release gate (#1754) as a readable verdict — the same answer the self-update poller
+        // acts on, so CD's post-promote assertion and a manual roll consult the rule instead of
+        // re-deriving it.
+        app.MapReleaseGate();
 
         // Module endpoint contributions (design #1655): every Modules:Assemblies DLL carrying a
         // MeshEndpointProviderAttribute maps its routes here — authenticated by default, loud
