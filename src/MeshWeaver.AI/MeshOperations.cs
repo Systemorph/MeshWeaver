@@ -512,9 +512,19 @@ public class MeshOperations
         if (string.IsNullOrWhiteSpace(resolvedPath))
             return Observable.Return("Error: path is required.");
 
+        var budget = TimeSpan.FromSeconds(timeoutSeconds);
+        // A caller with no budget has already given up, so do NOTHING — not even resolve the path.
+        // This is the degenerate half of the deadline rule enforced further down, split out so it
+        // is DETERMINISTIC: leaving it to the outer `.Timeout(TimeSpan.Zero)` scheduled a
+        // thread-pool timer that raced the pipeline, and whichever side lost still ran a
+        // continuation that opened a layout-area stream nobody was waiting for.
+        if (budget <= TimeSpan.Zero)
+            return Observable.Throw<string>(new TimeoutException(
+                $"RenderArea budget of {budget.TotalSeconds:0.###}s for '{resolvedPath}' is already "
+                + "elapsed — nothing was rendered."));
+
         var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var budget = TimeSpan.FromSeconds(timeoutSeconds);
         return Observable.Defer(() =>
         {
             // 🚨 The budget is a DEADLINE, not merely the outer `.Timeout(...)` below. Timeout

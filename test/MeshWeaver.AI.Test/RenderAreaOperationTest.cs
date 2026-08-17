@@ -251,5 +251,13 @@ public class RenderAreaOperationTest(ITestOutputHelper output) : MonolithMeshTes
         notification.Kind.Should().Be(NotificationKind.OnError,
             "an elapsed budget must FAULT the observable — the REST layer maps it to a 504 JSON error");
         notification.Exception.Should().BeOfType<TimeoutException>();
+        // 🚨 This is what PINS the fix, and it is the assertion the old test was missing: the fault
+        // must come from the pipeline REFUSING the render, not from the outer Rx Timeout firing
+        // over a render that went ahead anyway. Only the former guarantees no layout-area stream —
+        // and so no orphaned SubscribeRequest against a cold per-node hub — was opened. Drop the
+        // refusal and this line fails immediately, instead of the leak resurfacing as a CI flake
+        // on somebody else's PR days later.
+        notification.Exception!.Message.Should().Contain("nothing was rendered",
+            "a non-positive budget must be refused outright — no path resolution, no remote stream");
     }
 }
