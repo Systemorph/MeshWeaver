@@ -12,9 +12,14 @@ C# stored in mesh nodes compiles **at runtime, in the portal** — see
 [NodeType Compilation](/Doc/Architecture/NodeTypeCompilation). This page is about compiling the same
 source **outside** it: in CI, ahead of time, so the bytes can be shipped rather than recomputed.
 
-`MeshWeaver.Plugin.Build` is the tool that does it. Everything below is what it has to get right to
-produce an assembly the portal would accept — each item established by a build that failed in a way
-that read as author error rather than harness error.
+The compile toolchain itself is **`MeshWeaver.Compiler`** (#1707) — the same code path whether the
+portal compiles at runtime, CI gates and bakes, or you run it by hand — and it is distributed
+three ways: in every portal image, as the **`MeshWeaver.Compiler.Cli` dotnet tool** (command
+`mw-compiler`; version-matched with each platform release, published by the release lane and the
+out-of-band `publish-compiler-tool` workflow), and as the `mw-plugin-test` container image.
+`MeshWeaver.Plugin.Build` is the packaging tool on top. Everything below is what the pipeline has
+to get right to produce an assembly the portal would accept — each item established by a build
+that failed in a way that read as author error rather than harness error.
 
 ---
 
@@ -70,9 +75,11 @@ Two consequences:
   `PostsHub` each still called it from that field — CI green, then all three production portals hit
   `REFUSING READINESS` on the next framework bump.
 
-The tool calls the framework's own `DynamicMeshNodeAttributeGenerator` rather than reproducing it. A
-second implementation is free to drift, and a skeleton that differs from the runtime's is worse than
-none: it compiles, packs, installs, and then behaves differently from everything that was tested.
+The tool calls the framework's own `DynamicMeshNodeAttributeGenerator` (in `MeshWeaver.Compiler`
+since #1707 — the toolchain assembly whose dependency closure keys the framework identity) rather
+than reproducing it. A second implementation is free to drift, and a skeleton that differs from
+the runtime's is worse than none: it compiles, packs, installs, and then behaves differently from
+everything that was tested.
 
 ## The ambient environment is not implicit
 
@@ -95,13 +102,16 @@ environment, is narrower, and reintroduces the `CS0616` above.
 `HasUsableBuild` skips a compile only when `CompiledFrameworkVersion` equals the live
 `NodeTypeCompilationHelpers.FrameworkVersion` — never a semver. Since
 [#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3 that value has three shapes, one
-resolution (`FrameworkBuildIdentity`): hosts shipping a `meshweaver-surface.manifest` — the
-portals and the CI bake host — resolve the **API-surface identity** `s<hash>` (reference-assembly
-hashes over the canonical content-surface set, full impl MVID for the generator-bearing
-`MeshWeaver.Graph`; stable across internal-only merges, moved by breaking changes); manifest-less
-CI processes resolve the **commit identity** `g<sha>` (stamped as
-`AssemblyMetadata("MeshWeaverFrameworkIdentity")`, also everyone's logged provenance); a **local
-build** resolves the **Module Version Id of the MeshWeaver.Graph assembly** — a content identity.
+resolution (`FrameworkBuildIdentity`, in `MeshWeaver.Compiler`): hosts shipping a
+`meshweaver-surface.manifest` — the portals and the CI bake host — resolve the **API-surface
+identity** `s<hash>` (reference-assembly hashes over the canonical content-surface set; full impl
+MVIDs for the TOOLCHAIN — `MeshWeaver.Compiler`, `MeshWeaver.NuGet`, and their computed MeshWeaver
+dependency closure, since their code shapes every compile's generated input; stable across
+internal-only merges, moved by breaking changes and toolchain changes); manifest-less CI processes
+resolve the **commit identity** `g<sha>` (stamped as
+`AssemblyMetadata("MeshWeaverFrameworkIdentity")`, also everyone's logged provenance); a
+**manifest-less local build** resolves the **Module Version Id of the MeshWeaver.Compiler
+assembly** — the toolchain anchor, single-file attributable.
 
 None is derived from `AssemblyInformationalVersion`, on purpose. Deriving identity from the
 version string once forced `Directory.Build.props` to stamp a fresh version into every build,
@@ -147,7 +157,9 @@ runtime will look up, with an MVID that matches. The load side already exists
 ```
 MeshWeaver.Plugin.<Name>.<Version>.nupkg
 ├── MeshWeaver.Plugin.<Name>.nuspec
-├── meshweaver/manifest.json          plugin, version, frameworkVersion, frameworkMvid, assemblies[]
+├── meshweaver/manifest.json          plugin, version, frameworkVersion, frameworkMvid,
+│                                     assemblies[] (each with sourceVersions provenance and its
+│                                     per-type DEPENDENCY RECORD — #1707 slice 2)
 ├── meshweaver/assemblies/<Unit>.dll  one per compilation unit, embedded PDB
 └── meshweaver/content/**             the plugin's node files, verbatim
 ```
@@ -253,7 +265,16 @@ carries content — it is a full install artifact, not an increment.)
 `PluginBundleClient` (in `MeshWeaver.PluginCatalog`) reads the index once per client — a
 `PromiseSlot`, so concurrent callers share one run and a fault evicts rather than replaying forever —
 compares the framework MVID **once, before any download**, then fetches and seeds each assembly
-through `PrebuiltAssemblySeeder`.
+through `PrebuiltAssemblySeeder` — which additionally validates each assembly's per-type
+DEPENDENCY RECORD against this environment (a build binding a module this deployment does not run
+declines) and stamps the record on adopt, so an adopted build is judged by the ongoing validity
+checks exactly like a locally compiled one (#1707 slice 2).
+
+Consumption is no longer boot-only (#1707 slice 3): every package INSTALL and every git-sync PUSH
+runs its written/affected types through the bundle sources first
+(`IPrebuiltAssemblyConsumer.SeedForTypes`), and the release-request watcher satisfies a request
+that arrives on an already-valid current build — see
+[NodeType Compilation](/Doc/Architecture/NodeTypeCompilation) → "Adopt-before-compile".
 
 Two ordering rules, both of which fail silently when broken:
 
