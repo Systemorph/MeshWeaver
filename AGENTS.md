@@ -205,11 +205,18 @@ were 3 h until 2026-08-17, which is the only reason a merge could sit unpublishe
 worst case is ~1 h plus the ~20 min build. If you ever raise the cadence again, you are raising
 publish latency — not saving runner time, which the 3-attempts-per-commit budget already bounds.
 
-🚨 **And publication frequency IS portal-restart frequency** — that, not runner cost, is what stops
-the tick going faster still. Since #1773 an install checks per publication event with no floor
-between rolls (`UpdatePolicyKind` picks a channel, not a cadence), and the AKS
-`SelfUpdate__PollInterval: "1.00:00:00"` that deliberately held prod to ONE roll/day binds to an
-option that no longer exists. Tighten the tick only after a roll floor lands (#1778).
+🚨 **Publication frequency is NOT portal-restart frequency — but only because a floor now exists.**
+Since #1773 an install checks per publication *event*, and `UpdatePolicyKind` picks a channel, not a
+cadence — so for a few hours there was nothing at all between "an image published" and "every portal
+restarted". #1780 closed that with **`SelfUpdate__MinRollInterval`**, a restart budget set to `1h` in
+`values.aks.yaml` beside the 24h/6h/1h trade. It is deliberately matched to this tick, so hourly
+publication means hourly delivery and no more.
+
+**If you change one, change the other, and in this order:** a faster tick with the floor left behind
+buys nothing (the floor gates the roll), while a shorter floor with the tick left behind just
+restarts pods onto the same image. And note the key that used to do this job,
+`SelfUpdate__PollInterval`, was RENAMED rather than deleted — it sat in the chart inert, reading as
+a live daily throttle, until #1778.
 
 `main-cd.yml` builds and pushes the deployment images. Its `workflow_run` path is still gated on
 `event == 'push' && head_branch == 'main'` — that gate is what stops a **fork's** pull_request run
