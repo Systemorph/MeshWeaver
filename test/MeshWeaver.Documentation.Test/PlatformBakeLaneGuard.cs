@@ -40,15 +40,19 @@ public class PlatformBakeLaneGuard
     [Fact]
     public void PlatformBake_RunsInsideTheShippedImage()
     {
-        var job = ReadJobBlock();
+        // 🚨 Comment lines are stripped first, and the probes below name details that appear ONLY on
+        // a real command line (the entrypoint, the bake mount). Otherwise this guard could be
+        // satisfied by the prose explaining the lane while the step doing it was gone — a check
+        // that cannot fail is not a check.
+        var job = ExecutableLinesOf(ReadJobBlock());
 
         Assert.True(job.Contains("docker run", StringComparison.Ordinal)
-                    && job.Contains("mw-plugin-test", StringComparison.Ordinal)
-                    && job.Contains("--bake-output", StringComparison.Ordinal),
+                    && job.Contains("--entrypoint /app/mw-plugin-test", StringComparison.Ordinal)
+                    && job.Contains("--bake-output /bake", StringComparison.Ordinal),
             $"'{JobName}' in {Workflow} must bake the platform's content by running mw-plugin-test "
-            + "INSIDE the image this run built (docker run … mw-plugin-test … --bake-output). The "
-            + "framework identity is a property of the shipped binaries, so only the image the pods "
-            + "run can produce a bake those pods will adopt.");
+            + "INSIDE the image this run built (docker run … --entrypoint /app/mw-plugin-test … "
+            + "--bake-output /bake). The framework identity is a property of the shipped binaries, "
+            + "so only the image the pods run can produce a bake those pods will adopt.");
 
         Assert.True(job.Contains("--platform linux/amd64", StringComparison.Ordinal),
             $"'{JobName}' in {Workflow} must pin the bake platform explicitly. Architecture is part "
@@ -63,13 +67,21 @@ public class PlatformBakeLaneGuard
             + "ShippedPrebuiltBundles.CompletionSentinelFileName.");
     }
 
+    /// <summary>The block's lines that can actually DO something: YAML and shell comment lines
+    /// (first non-blank character <c>#</c>) dropped, everything else kept verbatim.</summary>
+    private static string ExecutableLinesOf(string block) =>
+        string.Join("\n", block.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
+
     [Fact]
     public void PlatformBake_NeverAdoptsAnotherBuildsBundles()
     {
         var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
         var offenders = Directory
             .EnumerateFiles(workflows, "*.yml", SearchOption.TopDirectoryOnly)
-            .Select(f => (file: Path.GetFileName(f), text: File.ReadAllText(f)))
+            // Comments stripped for the same reason as above, in the other direction: a workflow is
+            // judged on what it RUNS, so prose explaining why the artifact hop was removed must
+            // never read as the hop itself.
+            .Select(f => (file: Path.GetFileName(f), text: ExecutableLinesOf(File.ReadAllText(f))))
             .Where(x => x.text.Contains("publish-bake-bundles.sh", StringComparison.Ordinal))
             .Where(x => x.text.Contains("gh run download", StringComparison.Ordinal)
                         || x.text.Contains("download-artifact", StringComparison.Ordinal))
