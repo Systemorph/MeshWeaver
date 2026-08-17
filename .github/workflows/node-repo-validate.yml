@@ -11,7 +11,18 @@ name: Node repo validate (reusable)
 #     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-validate.yml@main
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      check-versions-always:
+        description: >-
+          Run the derived-version check on EVERY event instead of main-only. Correct for a repo
+          whose PRs are expected to regenerate manifests and which has no settle-versions job to
+          repair a miss on main (a miss would otherwise surface as a red MAIN push). A repo with
+          higher PR traffic keeps the default: the derived patch races the moving trunk baseline,
+          so PR-gating it fails PRs for OTHER people's merges.
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   validate:
@@ -41,6 +52,8 @@ jobs:
       # people's merges. What a BRANCH can be held to is `--check` above: your lock describes
       # YOUR tree — content hashes, entirely local. What only MAIN can settle is the derived
       # number, so this runs as that step's POST-condition rather than as a gate.
-      - name: Every module's version matches its content (main only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Every module's version matches its content
+        if: >
+          inputs.check-versions-always ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/main')
         run: python3 scripts/gen-manifests.py --check-versions
