@@ -4,6 +4,15 @@ Exposes MeshWeaver mesh operations as a Model Context Protocol (MCP) server, ena
 
 This is the transport-layer MCP module — **independent of Blazor** (it was previously `MeshWeaver.Blazor.AI`; that name was a misnomer — none of its files are Blazor components). It depends only on ASP.NET Core (`ModelContextProtocol.AspNetCore`) and the mesh feature modules, so any ASP.NET host — Blazor or not — can host it.
 
+## It ships as a MODULE
+
+No host compiles this in. `McpMeshModuleAttribute` folds `AddMeshMcp()` and `McpEndpointModuleAttribute` maps `/mcp` through the host's `MapMeshModuleEndpoints()` hook, so **listing `MeshWeaver.Mcp.dll` under `Modules:Assemblies` is the complete activation** (restart-required — see `Doc/Architecture/Modules.md`). Delisting removes the route wholesale: an MCP client gets a `404` it can act on, not a server with no mesh behind it.
+
+Two things deliberately stay PLATFORM-side, because surfaces that outlive a delisted module depend on them:
+
+- **The authentication scheme.** `McpAuthenticationExtensions` (the `McpAuth` and `MeshApiRead` policies, the ApiToken handler, the Bearer-only challenge) lives in the portal composition root — the REST mirror `/api/mesh/*` is gated by the same policies and is not part of this module, and an auth scheme has to be registered before the pipeline is built either way. This module names the policy by **string** only, so there is no compiled edge back to the host.
+- **`SessionHubResolver` and `McpConfiguration`**, now in `MeshWeaver.Hosting.AspNetCore`. REST callers resolve the same per-caller hub (a second copy is exactly the drift the shared helper exists to prevent), and the co-hosted CLI back-connection reads the same `Mcp:BaseUrl`.
+
 ## Features
 
 - MCP server with HTTP transport via `ModelContextProtocol.AspNetCore`
@@ -31,8 +40,18 @@ The check is deliberately conservative — it must never reject a call the binde
 
 ## Usage
 
+In a deployment, all of it is one line of configuration:
+
+```jsonc
+// appsettings.json
+"Modules": { "Assemblies": [ "MeshWeaver.Mcp.dll" ] }
+```
+
+A fixture or a bespoke host that is not module-driven calls the same registrations directly — the
+two lanes must never drift:
+
 ```csharp
-// In MeshBuilder setup
+// In MeshBuilder setup (ApiToken node type; AddGraph already does this in a portal)
 builder.AddMcp();
 
 // In service registration
