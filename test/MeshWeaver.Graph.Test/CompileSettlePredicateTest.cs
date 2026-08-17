@@ -24,8 +24,9 @@ namespace MeshWeaver.Graph.Test;
 /// the gate exists to reject.</para>
 ///
 /// <para>Consequence, and why it is user-visible rather than merely untidy: a PRE-COMPILE snapshot
-/// (<c>CompilationStatus</c> null/Unknown) routes to <c>ApplyDefaultConfig</c>, so the instance hub
-/// binds the mesh DEFAULT configuration — and enrichment binds ONCE, never re-observing, so it is
+/// (<c>CompilationStatus</c> null/Unknown) routes to the "no node configuration" branch, so the
+/// instance hub binds only the mesh DEFAULT configuration the hub factory applies — and enrichment
+/// binds ONCE, never re-observing, so it is
 /// bound for the grain's whole lifetime. The NodeType's own layout areas never appear on the
 /// instance's page, and for a NON-COMPILING type the compilation-error overlay can never surface:
 /// the page renders (data flows, the area emits) and simply never contains the error. An in-flight
