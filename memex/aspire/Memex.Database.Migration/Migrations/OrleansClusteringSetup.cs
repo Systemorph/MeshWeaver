@@ -58,16 +58,81 @@ public static class OrleansClusteringSetup
             logger.LogInformation("[OrleansClustering] Orleans membership tables created.");
         }
 
-        // Phase 2 — grain persistence (OrleansStorage), which backs PubSubStore.
-        if (await TableExistsAsync(conn, "orleansstorage"))
-            logger.LogInformation("[OrleansClustering] Persistence tables already present — nothing to do.");
-        else
+        // Phase 2 — grain persistence, which backs PubSubStore. TWO independent artefacts, gated
+        // SEPARATELY, because the script produces two things and having one is not having the other.
+        //
+        // 🚨 This cost memex-cloud a failed rollout (#1798). The gate used to be "does the
+        // orleansstorage TABLE exist" — but what AdoNetGrainStorage.Init actually reads is the four
+        // QUERY ROWS in OrleansQuery, and it resolves them with .Single(), so a missing row is an
+        // unhandled `Sequence contains no matching element` that kills silo startup outright. Prod
+        // had the table from an earlier attempt and NOT the rows, so the table-gate reported
+        // "already present — nothing to do" and skipped the INSERTs forever, on exactly the
+        // deployments that needed them. A fresh database creates both together and can never
+        // reproduce it — which is why the original local test passed and prod did not.
+        //
+        // Gate each artefact on ITS OWN evidence, and on the evidence the CONSUMER uses.
+        var hasStorageTable = await TableExistsAsync(conn, "orleansstorage");
+        var missingKeys = await MissingQueryKeysAsync(conn, PersistenceQueryKeys);
+
+        if (hasStorageTable && missingKeys.Count == 0)
+            logger.LogInformation("[OrleansClustering] Persistence table and all {Count} query keys present — nothing to do.",
+                PersistenceQueryKeys.Length);
+
+        if (!hasStorageTable)
         {
-            logger.LogInformation("[OrleansClustering] Creating Orleans persistence tables (PubSubStore) in the 'orleans' database.");
-            await using var cmd = new NpgsqlCommand(PersistenceScript, conn);
+            logger.LogInformation("[OrleansClustering] Creating the Orleans persistence table (PubSubStore).");
+            await using var cmd = new NpgsqlCommand(PersistenceTableScript, conn);
             await cmd.ExecuteNonQueryAsync();
-            logger.LogInformation("[OrleansClustering] Orleans persistence tables created.");
+            logger.LogInformation("[OrleansClustering] Orleans persistence table created.");
         }
+
+        if (missingKeys.Count > 0)
+        {
+            // Delete-then-insert the whole set rather than only the missing ones: the texts are
+            // Orleans' own, versioned with the package, so a row that exists but is STALE is just
+            // as broken as one that is absent — and re-writing all four is what makes this
+            // converge from any prior partial state.
+            logger.LogInformation(
+                "[OrleansClustering] Persistence query keys missing ({Missing}) — writing all {Count}.",
+                string.Join(", ", missingKeys), PersistenceQueryKeys.Length);
+            await using var del = new NpgsqlCommand(
+                "DELETE FROM OrleansQuery WHERE QueryKey = ANY(@keys)", conn);
+            del.Parameters.AddWithValue("keys", PersistenceQueryKeys);
+            await del.ExecuteNonQueryAsync();
+            await using var cmd = new NpgsqlCommand(PersistenceQueriesScript, conn);
+            await cmd.ExecuteNonQueryAsync();
+            logger.LogInformation("[OrleansClustering] Orleans persistence query keys written.");
+        }
+    }
+
+    /// <summary>
+    /// The four <c>OrleansQuery</c> keys <c>AdoNetGrainStorage</c> resolves with <c>.Single()</c> at
+    /// silo start. These — not the table — are what a silo configured with an AdoNet
+    /// <c>PubSubStore</c> fails to start without.
+    /// </summary>
+    private static readonly string[] PersistenceQueryKeys =
+    [
+        "WriteToStorageKey", "ReadFromStorageKey", "ClearStorageKey", "DeleteStorageKey"
+    ];
+
+    /// <summary>
+    /// Which of <paramref name="required"/> are NOT present in <c>OrleansQuery</c>. Returns all of
+    /// them when the table itself is absent, so the caller writes them once membership has created it.
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> MissingQueryKeysAsync(
+        NpgsqlConnection conn, string[] required)
+    {
+        if (!await TableExistsAsync(conn, "orleansquery"))
+            return required;
+
+        await using var cmd = new NpgsqlCommand(
+            "SELECT QueryKey FROM OrleansQuery WHERE QueryKey = ANY(@keys)", conn);
+        cmd.Parameters.AddWithValue("keys", required);
+        var present = new HashSet<string>(StringComparer.Ordinal);
+        await using (var reader = await cmd.ExecuteReaderAsync())
+            while (await reader.ReadAsync())
+                present.Add(reader.GetString(0));
+        return required.Where(k => !present.Contains(k)).ToArray();
     }
 
     /// <summary>
@@ -493,7 +558,7 @@ VALUES
     // Orleans.Persistence.AdoNet/PostgreSQL-Persistence.sql (OrleansStorage + its four queries).
     // Backs the PubSubStore grain storage — see the class remarks and issue #1729.
     // Do not edit — keep in sync with the Microsoft.Orleans.Persistence.AdoNet package version.
-    private const string PersistenceScript = @"
+    private const string PersistenceTableScript = @"
 CREATE TABLE OrleansStorage
 (
     grainidhash integer NOT NULL,
@@ -628,8 +693,11 @@ AS $function$
 END
 
 $function$;
+";
 
-INSERT INTO OrleansQuery(QueryKey, QueryText)
+    // The four OrleansQuery rows AdoNetGrainStorage.Init resolves with .Single(). Split from
+    // the table DDL above so each can be gated on its own evidence (#1798).
+    private const string PersistenceQueriesScript = @"INSERT INTO OrleansQuery(QueryKey, QueryText)
 VALUES
 (
     'WriteToStorageKey','
