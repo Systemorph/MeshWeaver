@@ -28,6 +28,17 @@ namespace MeshWeaver.Compiler;
 /// <c>MeshNodeCompilationService.CompileCore</c> is where the nodes came from — which is precisely
 /// the claim the bake-equivalence test has to pin.</para>
 ///
+/// <para><b>Why it lives in this assembly.</b> Which Code nodes a compile consumes, in what order,
+/// with which includes folded in and under which assembly name, is part of that compile's GENERATED
+/// INPUT — no different from the skeleton generator or the parse options. So it belongs inside the
+/// full-MVID toolchain identity boundary (<see cref="FrameworkBuildIdentity.FullMvidAssemblies"/>).
+/// A resolver sitting OUTSIDE that boundary could change what a bake consumes without moving the
+/// framework identity, and every portal would adopt the changed bytes without a murmur — the
+/// consumer's gates compare identities, and the identity would say nothing had changed. That is the
+/// same hole <see cref="CodeConventions.SanitizeNodeName"/> was in until #1763 moved it down out of
+/// <c>MeshWeaver.Graph</c>: it names the emitted assembly, so it shaped the bytes from outside the
+/// boundary that is supposed to cover them.</para>
+///
 /// <para><b>Synchronous on purpose.</b> This runs in a build process at its console boundary, never
 /// on a hub scheduler, and every leaf it touches is pure CPU or a local file write. The one
 /// reactive helper it reuses (<see cref="NodeCompileShaping.ResolveCodeIncludes"/>) is driven with
