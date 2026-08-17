@@ -1,18 +1,1 @@
-﻿{
-    "id":  "Year",
-    "namespace":  "PensionFund",
-    "name":  "Reporting Year",
-    "nodeType":  "NodeType",
-    "category":  "Types",
-    "description":  "Reporting-year dimension; years are mesh nodes referenced by path.",
-    "icon":  "\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003e\u003crect x=\u00273\u0027 y=\u00274\u0027 width=\u002718\u0027 height=\u002717\u0027 rx=\u00272\u0027/\u003e\u003cpath d=\u0027M3 9h18M8 2v4M16 2v4\u0027/\u003e\u003c/svg\u003e",
-    "isPersistent":  true,
-    "content":  {
-                    "$type":  "NodeTypeDefinition",
-                    "id":  "Year",
-                    "namespace":  "PensionFund",
-                    "displayName":  "Reporting Year",
-                    "iconName":  "Calendar",
-                    "configuration":  "config =\u003e config.WithContentType\u003cYear\u003e().AddDefaultLayoutAreas()"
-                }
-}
+{"$type":"MeshNode","id":"Year","namespace":"PensionFund","path":"PensionFund/Year","mainNode":"PensionFund/Year","name":"Reporting Year","description":"Reporting-year dimension; years are mesh nodes referenced by path.","nodeType":"NodeType","category":"Types","icon":"\u003Csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 viewBox=\u00270 0 24 24\u0027 fill=\u0027none\u0027 stroke=\u0027currentColor\u0027 stroke-width=\u00272\u0027\u003E\u003Crect x=\u00273\u0027 y=\u00274\u0027 width=\u002718\u0027 height=\u002717\u0027 rx=\u00272\u0027/\u003E\u003Cpath d=\u0027M3 9h18M8 2v4M16 2v4\u0027/\u003E\u003C/svg\u003E","lastModified":"2026-08-17T11:58:26.243847+00:00","version":5,"state":"Active","content":{"$type":"NodeTypeDefinition","configuration":"config =\u003E config.WithContentType\u003CYear\u003E().AddDefaultLayoutAreas()","includeGlobalTypes":true,"compilationStatus":"Ok","lastCompileStartedAt":"2026-08-17T12:16:24.845389\u002B00:00","lastCompileSucceededAt":"2026-08-17T12:16:24.861766\u002B00:00","lastCompiledVersion":3,"lastCompilationActivityPath":"PensionFund/Year/_Activity/compile-20260817121624839d5c4762a6a574dd4aa809e5c2c4f2d93","latestReleasePath":"PensionFund/Year/Release/20260817121624-KtDWKxTb","latestAssemblyCollection":"local","latestAssemblyPath":"PensionFund_Year/v3-s6408a66-21b17975ecc2.dll","compiledSources":{"PensionFund/Year/Source/Year":639225647062440679},"currentSourceVersions":{"PensionFund/Year/Source/Year":639225647062440679},"compiledFrameworkVersion":"s6408a662fcf9398bcff8cac5d0f4bdce","compiledModulesHash":"f59558c7c4a388b3866ccbb91a2bed15aeb7df94378b7fde8c342cef097f1f1a","compiledDependencies":{"!toolchain":"mvid:d0997007a10f7c2887d58f3035b950be","MeshWeaver.Graph":"ref:E0E5AE960D476AACAB88F7C0DB7C09E077649B15C9B78A78BFF1FEDB8FD77F4B","MeshWeaver.Mesh.Contract":"ref:B4C3890EB54E343C679F5023F92848057D1D482253535EAE6CDCB305C40AEF49","MeshWeaver.Messaging.Hub":"ref:0D1443C361C1A052BE3473C5BBD829165F53598D8C088742E2B35C29500BCF61"},"id":"Year","namespace":"PensionFund","displayName":"Reporting Year","iconName":"Calendar"}}

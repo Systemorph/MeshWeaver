@@ -1,7 +1,8 @@
 ---
 Name: Platform Version
+Version: 1
 ---
 
 # Platform version
 
-Installed platform version: **1.0.0+00a68d3d426142ff6956b422edd8acfdb56b3349**
+Installed platform version: **3.0.0-rc4.ci.0+4c0cc71d91ee797515764fae509da6e0f5eea982**

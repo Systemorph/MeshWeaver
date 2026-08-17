@@ -137,10 +137,12 @@ public class PlatformBakeLaneGuard
                 .Select(l => l[..l.IndexOf(':', StringComparison.Ordinal)].Trim())
                 .Select(key => (file: Path.GetFileName(f), key)))
             .Distinct()
-            // Templated means the key is RENDERED, i.e. it appears as a configmap entry — not
-            // merely mentioned in one of the explanatory comment blocks around it.
-            .Where(x => !ExecutableLinesOf(configMap)
-                .Contains($"{x.key}:", StringComparison.Ordinal))
+            // 🚨 Templated means the key is BOUND, not merely mentioned. Matching "<key>:" alone
+            // would be satisfied by the explanatory Helm comment blocks that precede each entry —
+            // they are `{{- /* ... */}}`, which no '#'-stripping can remove, and several of them
+            // open with the very key they describe. A check a comment can satisfy is not a check.
+            // Requiring the value binding as well is a shape prose cannot accidentally have.
+            .Where(x => !IsBoundInConfigMap(configMap, x.key))
             .ToList();
 
         Assert.True(missing.Count == 0,
@@ -190,6 +192,25 @@ public class PlatformBakeLaneGuard
                             && l.Contains('/', StringComparison.Ordinal)),
             "The local instance must name a bundle root, otherwise adopt-only has no bundles to "
             + "adopt from and reports every dynamic type as uncovered forever.");
+    }
+
+    /// <summary>
+    /// Whether the configmap actually BINDS <paramref name="key"/> to its values entry, i.e. emits
+    /// <c>&lt;key&gt;: "{{ .Values.config.memex_portal.&lt;key&gt; …}}"</c>. The value binding is the
+    /// discriminator on purpose: every key in that file is preceded by a Helm comment block
+    /// (<c>{{- /* … */}}</c>) that frequently opens with the key name, so a looser "the key appears
+    /// somewhere" test would be satisfied by the prose explaining a key nobody templated — the
+    /// exact failure mode this guard exists to catch. The trailing character must be a space or the
+    /// closing brace so that one key cannot be matched by another that merely starts with it.
+    /// </summary>
+    private static bool IsBoundInConfigMap(string configMap, string key)
+    {
+        var binding = $"{key}: \"{{{{ .Values.config.memex_portal.{key}";
+        var at = configMap.IndexOf(binding, StringComparison.Ordinal);
+        if (at < 0)
+            return false;
+        var next = at + binding.Length;
+        return next < configMap.Length && (configMap[next] == ' ' || configMap[next] == '}');
     }
 
     /// <summary>The <c>publish-bake</c> job's own YAML block: from its two-space-indented key to
