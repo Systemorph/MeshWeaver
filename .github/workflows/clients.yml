@@ -272,5 +272,11 @@ jobs:
         working-directory: clients/grpc-web
         run: npm ci --no-audit --no-fund && npm run gen
       - run: npm ci --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
+      # Bounded for the same reason as dotnet-test.yml's provisioning step: a stalled CDN does
+      # not fail the download, it HANGS it, and an unbounded hang here burns the whole job's
+      # budget and reports as a timeout that names nothing. A red Clients workflow blocks image
+      # publication, so a stall that reads as "the clients broke" is expensive to misdiagnose.
+      # No retry loop here (unlike dotnet-test) — this step has none today, and a bound alone
+      # already converts a silent hang into a visible, re-runnable infra failure.
+      - run: timeout --signal=TERM --kill-after=30 240 npx playwright install --with-deps chromium
       - run: npm run e2e # expo export --platform web → serve dist/ → drive headless Chromium
