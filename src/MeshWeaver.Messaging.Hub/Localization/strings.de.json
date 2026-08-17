@@ -596,6 +596,7 @@
   "ui.mdInvitesInSpace": "*Einladungen sind innerhalb eines Space verfügbar.*",
   "ui.mdNodeToUpdateMissing": "**Fehler:** Zu aktualisierender MeshNode nicht gefunden.",
   "ui.mdRecyclingHub": "**Hub wird recycelt…** Weiterleitung folgt gleich.",
+  "ui.mdStaleBuildAvailable": "**F\u00fcr diesen Typ liegt ein neuerer Build vor.** Diese Seite f\u00fchrt noch den zuvor kompilierten aus.",
   "ui.mdFillFieldsGeneratePlan": "*Felder ausfüllen und auf **Plan erzeugen** klicken.*",
   "ui.accessDeniedPlain": "Zugriff verweigert.",
   "ui.accessDeniedAdminsOnly": "Zugriff verweigert — nur für Plattform-Administratoren.",
