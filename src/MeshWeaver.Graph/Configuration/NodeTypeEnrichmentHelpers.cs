@@ -110,9 +110,9 @@ internal static class NodeTypeEnrichmentHelpers
         }
 
         var nodeType = node.NodeType;
-        // No NodeType at all: there is no node-specific configuration to resolve. Emit the node
-        // with a null HubConfiguration — MeshNodeHubFactory applies the mesh default chain
-        // (exactly once) around it. Setting it here as well is what made the chain run twice.
+        // No NodeType at all: there is no node-specific configuration to resolve, so hand the node
+        // back UNCHANGED and let MeshNodeHubFactory apply the mesh default chain — exactly once.
+        // Applying it here as well is what made the chain run twice (#1684).
         if (string.IsNullOrEmpty(nodeType))
             return Observable.Return(node);
 
