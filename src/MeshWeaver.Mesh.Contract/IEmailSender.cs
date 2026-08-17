@@ -5,14 +5,14 @@ namespace MeshWeaver.Mesh;
 /// invitation flow, and mesh scripts (via <see cref="HubEmailExtensions.SendEmail(MeshWeaver.Messaging.IMessageHub,string,string,string)"/>) — so it
 /// exposes a reactive shape (<see cref="IObservable{T}"/>) that composes cleanly with the rest of
 /// the codebase's reactive pipelines. Implementations bridge their async leaf (e.g. Microsoft
-/// Graph) through a bounded <c>IIoPool</c> — the portal's <c>GraphEmailSender</c> uses
+/// Graph) through a bounded <c>IIoPool</c> — the <c>MeshWeaver.Mail.MicrosoftGraph</c> module's <c>GraphEmailSender</c> uses
 /// <c>_http.Run(...)</c> — and <b>never</b> <c>Observable.FromAsync</c>, which is forbidden
 /// outside <c>IoPool</c>: it runs the prologue on the subscribing thread and bounds nothing
 /// (see <c>Doc/Architecture/ControlledIoPooling.md</c>).
 ///
 /// <para>The abstraction lives in the framework so scripts and framework code can trigger mail
 /// (e.g. notifications) without referencing the hosting app; the concrete sender is registered by
-/// the host (see the portal's <c>GraphEmailSender</c> / <c>NoOpEmailSender</c>).</para>
+/// the host's <c>NoOpEmailSender</c>, or the <c>MeshWeaver.Mail.MicrosoftGraph</c> module's <c>GraphEmailSender</c> when listed).</para>
 /// </summary>
 public interface IEmailSender
 {
