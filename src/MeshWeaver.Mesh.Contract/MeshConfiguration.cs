@@ -84,6 +84,14 @@ public class MeshConfiguration(
     /// Default configuration applied to all node hubs.
     /// Use this to set up content collections, views, or other configuration
     /// that should be available on every node hub.
+    ///
+    /// <para>🚨 <b>Exactly ONE component applies this: <c>MeshNodeHubFactory</c></b> (the single
+    /// funnel both activation paths — Monolith routing and <c>MessageHubGrain</c> — go through).
+    /// Never compose it into a node's own <c>HubConfiguration</c> as well: the chain would then run
+    /// TWICE for that hub, doubling every <c>ConfigureDefaultNodeHub</c> lambda's contribution. A
+    /// lambda that registers a type source then contributes two type sources for one collection
+    /// name and <c>DataContext.Initialize</c> FAILS HUB CREATION — the node never comes up
+    /// (Systemorph/MeshWeaver#1684).</para>
     /// </summary>
     public Func<MessageHubConfiguration, MessageHubConfiguration>? DefaultNodeHubConfiguration { get; } = defaultNodeHubConfiguration;
 

@@ -11,6 +11,24 @@ namespace MeshWeaver.Graph.Configuration;
 /// <see cref="NodeTypeEnrichmentHelpers.EnrichWithNodeType"/>, then composes
 /// with <c>DefaultNodeHubConfiguration</c>. Stateless — the persisted
 /// NodeType MeshNode is the cache.
+///
+/// <para>🚨 <b>THIS CLASS OWNS the default node chain — it is the ONE place that applies
+/// <see cref="MeshConfiguration.DefaultNodeHubConfiguration"/>, and it applies it EXACTLY ONCE.</b>
+/// Both real activation paths funnel through here (<c>MonolithRoutingService.CreateHub</c> and
+/// <c>MessageHubGrain.ResolveHubConfigurationObservable</c>), so nothing downstream needs to —
+/// and nothing upstream may. Every producer of a node's own <c>HubConfiguration</c>
+/// (<see cref="NodeTypeEnrichmentHelpers.WithCompilationErrorOverlay"/>, the
+/// compilation-in-progress overlay, the static/dynamic NodeType configurations, the self-heal
+/// wraps) returns its OWN delta only; this factory layers the default chain underneath it.</para>
+///
+/// <para>The rule is not cosmetic. When <c>WithCompilationErrorOverlay</c> also composed the
+/// default chain, an overlaid hub ran EVERY <c>ConfigureDefaultNodeHub</c> lambda twice. Lambdas
+/// that only add views or types absorb that silently; one that contributes a <b>type source</b>
+/// does not — <c>DataContext.Initialize</c> keys <c>TypeSources</c> by collection name, so two
+/// applications produced two <c>Approval</c> collections and <b>hub creation failed outright</b>
+/// (<c>An item with the same key has already been added. Key: Approval</c>) on production
+/// memex's <c>Doc</c> hub and on three further addresses in the plugin gate — the victim being
+/// simply whichever NodeType happened to take the overlay path (Systemorph/MeshWeaver#1684).</para>
 /// </summary>
 internal class MeshNodeHubFactory(
     IMessageHub meshHub,
@@ -56,6 +74,9 @@ internal class MeshNodeHubFactory(
                 // Repro: NodeTypePathRegistrationTest.ActivatingANodeTypeDefinition_DoesNotClaimItsOwnPathForItsInstances.
                 var nodeTypePath = enriched.NodeType;
 
+                // 🚨 The SINGLE application of the default node chain (see the class remarks).
+                // `nodeConfig` is the node's OWN delta and never contains `defaultConfig` —
+                // applying it here a second time is the #1684 defect.
                 var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
                 var nodeConfig = enriched.HubConfiguration;
                 if (defaultConfig != null)
