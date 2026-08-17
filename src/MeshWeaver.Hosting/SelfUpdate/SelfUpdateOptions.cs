@@ -45,6 +45,26 @@ public record SelfUpdateOptions
     public TimeSpan RetryInterval { get; init; } = TimeSpan.FromHours(6);
 
     /// <summary>
+    /// The minimum time between two automatic rolls of this install.
+    ///
+    /// <para>Since the check became event-driven, a publication is a roll and a roll is a pod
+    /// restart — so without a floor, publication frequency IS restart frequency, and every restart
+    /// drops the live circuits of everyone using the portal. This paces the AUTOMATIC cadence only:
+    /// an operator who wants a fix now still has <c>kubectl rollout restart</c> (which picks the
+    /// newest image immediately via the startup pass) and a <c>main-cd.yml</c> dispatch.</para>
+    ///
+    /// <para>The default is one hour, matching CD's reconcile tick — the value that makes hourly
+    /// publication actually mean hourly delivery. It is deliberately NOT the 24 h the AKS chart
+    /// used to impose: that predates adopt-before-compile (which took a prod roll from 80 compiles
+    /// / 64.8 s to 0 compiles / 32.1 s) and it answers "how fast can a fix reach prod" with
+    /// "tomorrow", which is the complaint that prompted the faster tick in the first place.</para>
+    ///
+    /// <para>A roll deferred by this floor is re-decided by the next publication event, exactly
+    /// like one deferred for a missing artifact — the floor introduces no timer.</para>
+    /// </summary>
+    public TimeSpan MinRollInterval { get; init; } = TimeSpan.FromHours(1);
+
+    /// <summary>
     /// How long a burst of build-completion events is coalesced before one check runs.
     ///
     /// <para>Several repositories publishing at once (a platform release plus its satellites
