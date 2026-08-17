@@ -216,9 +216,12 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
     }
 
     /// <summary>
-    /// The pure edit transition: replaces the first occurrence of <paramref name="originalText"/>
-    /// with <paramref name="newText"/> (empty original ⇒ prepend). Throws when the text is no longer
-    /// there — silently splicing at offset 0 would corrupt the document.
+    /// The pure edit transition: replaces the single occurrence of <paramref name="originalText"/>
+    /// with <paramref name="newText"/> (empty original ⇒ prepend). Delegates to the ONE anchored
+    /// replace (<see cref="MeshOperations.AnchoredReplace"/>, #1716) with <c>replaceAll:false</c>,
+    /// so it keeps its single-replace semantics but gains the uniqueness check: it throws when the
+    /// text is no longer there (silently splicing at offset 0 would corrupt the document) AND when
+    /// the anchor is ambiguous (splicing an arbitrary one of several would too).
     /// </summary>
     internal static string Splice(string? content, string originalText, string newText)
     {
@@ -226,11 +229,20 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         if (string.IsNullOrEmpty(originalText))
             return newText + text;
 
-        var start = text.IndexOf(originalText, StringComparison.Ordinal);
-        if (start < 0)
+        try
+        {
+            return MeshOperations.AnchoredReplace(text, originalText, newText ?? "", replaceAll: false, out _);
+        }
+        catch (AnchorNotFoundException)
+        {
             throw new InvalidOperationException(
                 $"Text '{Truncate(originalText)}' is not present in the document — it may have been edited since you read it.");
-        return text.Remove(start, originalText.Length).Insert(start, newText ?? "");
+        }
+        catch (AmbiguousAnchorException ex)
+        {
+            throw new InvalidOperationException(
+                $"Text '{Truncate(originalText)}' occurs {ex.OccurrenceCount} times in the document — include more surrounding context to make the match unique.");
+        }
     }
 
     private static string Describe(string documentPath, string originalText, string newText)
