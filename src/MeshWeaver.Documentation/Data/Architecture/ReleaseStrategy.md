@@ -226,7 +226,7 @@ git tag v3.0.0-rc1 && git push origin v3.0.0-rc1
 > on a `push` to main — a hand-kicked `workflow_dispatch` of that workflow turns main green and CD
 > still skips. Verify the IMAGE (`.github/scripts/check-image-set.sh <short-sha>`), and re-drive CD
 > with `gh workflow run main-cd.yml --ref main` if it is missing (it also self-heals HEAD on a
-> 3-hourly schedule).
+> hourly schedule).
 
 (a) and (b) are **independent**: a merge always ships a continuous build; a tag always ships a
 clean release. (c) follows (b) once per release line. The version mechanics behind each step are in

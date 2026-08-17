@@ -78,11 +78,27 @@ on:
     workflows: ["MeshWeaver Build and Test"]
     types: [completed]
   # Reconcile cadence. Off the hour on purpose (the top of the hour is GitHub's most contended
-  # scheduling slot). 3 h sits comfortably inside the installs' 6 h self-update poll, so a healed
-  # image is picked up on the very next poll. A healthy tick is ONE ~40 s job — ~5 min of runner
-  # time a day — because `gate` stops the moment ACR says the set is complete.
+  # scheduling slot).
+  #
+  # 🚨 THIS CADENCE IS THE PUBLISH-LATENCY BOUND, not the batch window. A merge that batching
+  # declines leaves main's HEAD without an image set, which is precisely the state the reconciler
+  # exists to close — so it ships on the NEXT tick whatever the window is set to. At the former
+  # 3 h that made the worst case ~3 h from merge to published image, which the maintainer rejected
+  # on 2026-08-17 ("3 hour window is not acceptable"). Hourly bounds it at ~1 h + the ~20 min
+  # build (~30 min expected), and makes the batch window safe: coalescing no longer buys the tail.
+  #
+  # A healthy tick is ONE ~40 s job — `gate` stops the moment ACR says the set is complete — so
+  # 24 ticks/day costs ~15 min of runner time a day, up from ~5 min. Runner time is NOT what caps
+  # this, though; the 3-attempts-per-commit budget already bounds the failing case.
+  #
+  # 🚨 WHY NOT FASTER: since #1773 an install rolls per PUBLICATION event, and nothing paces the
+  # rolls — `UpdatePolicyKind` picks a channel (Continuous/Stable/None), not a cadence, and the
+  # `SelfUpdate__PollInterval: 1.00:00:00` that deliberately held AKS to ONE roll/day (2026-08-10)
+  # binds to an option that no longer exists. So publication frequency is now portal-RESTART
+  # frequency, one-for-one. Hourly is the fastest tick that is defensible until a roll floor lands
+  # (#1778); tighten it once an install can decline to roll, not before.
   schedule:
-    - cron: "23 */3 * * *"
+    - cron: "23 * * * *"
   workflow_dispatch:
 
 # id-token: write is required for OIDC federated login to Azure (no stored client secret).
@@ -277,7 +293,7 @@ jobs:
       # what separates "nothing is wrong" from "main's HEAD cannot ship AND has no images", and the
       # second one has to be said out loud: if Build-and-Test never ran on HEAD (a CI incident, a
       # stalled queue — AGENTS.md's trap #1), the check reads `missing`, nothing can publish that
-      # commit, and without this the reconciler would go quiet about it every 3 h forever.
+      # commit, and without this the reconciler would go quiet about it on every tick forever.
       - name: Ensure Azure CLI
         if: steps.target.outputs.reason == 'reconcile' || vars.CD_BATCH_WINDOW_MINUTES != ''
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
@@ -290,9 +306,16 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       # ── BATCHING (push path only, opt-in via repo var CD_BATCH_WINDOW_MINUTES) ─────────────
       # Maintainer 2026-08-16: "batch updates are ok." A merge landing while the NEWEST published
-      # version tag is younger than the window does not publish; the 3-hourly reconciler then
+      # version tag is younger than the window does not publish; the hourly reconciler then
       # publishes main's tip on its next tick (its registry-first probe sees the missing set and
       # heals it — that machinery predates batching and re-checks the required check itself).
+      #
+      # 🚨 So the WINDOW controls coalescing, and the RECONCILE CADENCE controls the tail — they
+      # are not the same knob, and raising the window does not delay a merge by the window. Both
+      # were 3 h until 2026-08-17, which is why a merge could sit unpublished that long; the
+      # maintainer rejected that ("3 hour window is not acceptable"). Window now 30 min (repo var),
+      # ticks every 30 min: a lone fix more than 30 min after the last publish ships at once, and
+      # a batched one waits at most one tick.
       # `workflow_dispatch` bypasses the window by construction (it enters via the reconcile
       # branch), so an urgent fix ships immediately with one manual run.
       # 🚨 FAILS OPEN: if the registry cannot be read, the age reports 999999 and the merge
@@ -335,13 +358,16 @@ jobs:
       # ── The decision, and (reconcile only) the ATTEMPT BUDGET ──────────────────────────────
       # A reconciler that cannot succeed must not grind forever. Persistent failure here means
       # main's HEAD genuinely does not build an image — a human has to act — and re-attempting
-      # every 3 h would burn ~75 min of runner time a tick and drip identical comments onto an
+      # on every tick would burn ~75 min of runner time a tick and drip identical comments onto an
       # issue nobody would keep reading. So the budget is 3 attempts PER COMMIT, and the ledger
       # is the `ci-failure` issue itself: the surface a human already watches, no new state store.
       #
       #   * The slot is consumed when an attempt STARTS, not when it fails — a run that dies
       #     without reporting must not buy an infinite supply of retries.
       #   * A new HEAD resets the budget naturally (the marker carries the SHA).
+      #   * 🚨 This budget is also what makes the hourly cadence affordable: a broken HEAD
+      #     costs 3 attempts PER COMMIT, not per tick, so a 6× faster reconcile multiplies only
+      #     the ~40 s healthy probe — never the ~75 min failing one.
       #   * On exhaustion it stops attempting, says so ONCE, and labels the issue `cd-unhealed`.
       #     Later ticks then cost ~40 s and print nothing — loud once, then quiet, which is the
       #     opposite of a repeating alarm nobody reads. Closing the issue is a deliberate human
@@ -379,7 +405,7 @@ jobs:
             # defers to the reconciler's next tick. Deliberately SILENT beyond the summary — this
             # is intentional cadence, not a fault, and the reconciler self-heals it by design.
             elif [ -n "${BATCH_WINDOW:-}" ] && [ "${FRESH_AGE_MIN:-999999}" -lt "$BATCH_WINDOW" ]; then
-              decision false "🕐 Batched: newest published set is ${FRESH_AGE_MIN} min old (< ${BATCH_WINDOW} min window) — the 3-hourly reconciler will publish main's tip; run this workflow manually to ship now"
+              decision false "🕐 Batched: newest published set is ${FRESH_AGE_MIN} min old (< ${BATCH_WINDOW} min window) — the reconciler publishes main's tip within the hour; run this workflow manually to ship now"
             else
               decision true "✅ Required check green — publishing the full image set for \`$SHORT\`"
             fi
@@ -468,7 +494,7 @@ jobs:
               gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$(printf '%s\n\n%s\n\n%s' \
                 "<!-- cd-heal-stopped:$SHORT -->" \
                 "🛑 **Automatic healing STOPPED for \`$SHORT\`** after $MAX_ATTEMPTS attempts." \
-                "main's HEAD still has no complete image set, so **no install will ever roll forward** until a human acts: fix whatever fails in the image jobs of the linked runs and merge, or close this issue to grant the reconciler a fresh budget. The 3-hourly reconcile will not attempt \`$SHORT\` again.")"
+                "main's HEAD still has no complete image set, so **no install will ever roll forward** until a human acts: fix whatever fails in the image jobs of the linked runs and merge, or close this issue to grant the reconciler a fresh budget. The reconciler will not attempt \`$SHORT\` again.")"
             fi
             decision false "🛑 heal budget exhausted for \`$SHORT\` ($MAX_ATTEMPTS attempts) — not retrying"
             exit 0
@@ -822,7 +848,7 @@ jobs:
   #   * a failure IN C is a single PUT that either happened or did not — there is no half-armed
   #     state to unwind.
   #   * whatever the failure, `verify-images` below still fails and `alert-on-failure` still
-  #     files the issue, and the 3-hourly reconciler re-drives HEAD.
+  #     files the issue, and the hourly reconciler re-drives HEAD.
   # Deliberately NOT here: a cleanup pass that untags staging. It would buy nothing — accumulating
   # tags per .NET repo per run go DOWN, 6 → 5 (staging index + its two RID variants + version +
   # sha, versus today's version/sha indexes plus four RID-suffixed variants) — and it would add a
@@ -894,7 +920,7 @@ jobs:
           # 🚨 In phase B ON PURPOSE, so a GHCR outage BLOCKS the release rather than silently
           # leaving the plugins repo's `latest` stale. It is a real coupling and it is the lesser
           # evil: check-image-set.sh only sees ACR, so a GHCR miss after phase C would never be
-          # reconciled and nothing would ever notice. Here it fails CD, alerts, and the 3-hourly
+          # reconciled and nothing would ever notice. Here it fails CD, alerts, and the hourly
           # reconciler re-drives HEAD until it lands or the budget escalates.
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
           docker buildx imagetools create \
@@ -1352,7 +1378,7 @@ jobs:
             --color B60205 --force
           body="CD failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) for commit \`${HEAD_SHA}\` (entered via \`${REASON:-unknown}\`).
 
-          No complete image set was published - publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set. Triage the failed job in the linked run. The 3-hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
+          No complete image set was published - publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set. Triage the failed job in the linked run. The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then

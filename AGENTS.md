@@ -190,12 +190,26 @@ gh pr merge PR_NUMBER --merge
 ### 🚨 A merged fix can look SHIPPED while producing no image — verify the IMAGE, never the tick
 
 **Publishes are BATCHED (maintainer, 2026-08-16).** When repo var `CD_BATCH_WINDOW_MINUTES` is set,
-a green merge whose newest published set is younger than the window does NOT publish — the 3-hourly
-reconciler publishes main's tip on its next tick instead. The decision step's summary says
+a green merge whose newest published set is younger than the window does NOT publish — the
+hourly reconciler publishes main's tip on its next tick instead. The decision step's summary says
 `🕐 Batched` when this happened, so "merged + green + no new tag" inside the window is INTENTIONAL,
 not the trap below. To ship a specific fix immediately: `gh workflow run main-cd.yml --ref main`
 (the manual path bypasses the window by construction). The probe fails OPEN — an unreadable
 registry publishes rather than blocks.
+
+🚨 **The window is NOT the wait.** A batched merge leaves main's HEAD without an image set, which is
+exactly what the reconciler heals — so it ships on the next TICK, whatever the window says. The
+window controls how many merges ride one image; the **reconcile cadence controls the tail**. Both
+were 3 h until 2026-08-17, which is the only reason a merge could sit unpublished that long
+(maintainer: *"3 hour window is not acceptable"*). Now: window 60 min, one tick at `:23`, so the
+worst case is ~1 h plus the ~20 min build. If you ever raise the cadence again, you are raising
+publish latency — not saving runner time, which the 3-attempts-per-commit budget already bounds.
+
+🚨 **And publication frequency IS portal-restart frequency** — that, not runner cost, is what stops
+the tick going faster still. Since #1773 an install checks per publication event with no floor
+between rolls (`UpdatePolicyKind` picks a channel, not a cadence), and the AKS
+`SelfUpdate__PollInterval: "1.00:00:00"` that deliberately held prod to ONE roll/day binds to an
+option that no longer exists. Tighten the tick only after a roll floor lands (#1778).
 
 `main-cd.yml` builds and pushes the deployment images. Its `workflow_run` path is still gated on
 `event == 'push' && head_branch == 'main'` — that gate is what stops a **fork's** pull_request run
@@ -209,7 +223,7 @@ so never relax it. Two consequences that trip people up, both SILENT:
    Build-and-Test** — but its `event` is `workflow_dispatch`, not `push`, so CD still skips. The
    most convincing possible "it shipped" signal, and no image.
 
-**Neither is terminal any more.** CD carries a **reconciler**: a 3-hourly `schedule` (plus its own
+**Neither is terminal any more.** CD carries a **reconciler**: an hourly `schedule` (plus its own
 `workflow_dispatch`) resolves main's tip through the API, asks ACR whether that commit has the
 complete four-image set, and publishes only when it does not — bounded at 3 attempts per commit,
 with every attempt and the final give-up written to the `ci-failure` issue. So:
@@ -232,8 +246,11 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
 .github/scripts/check-image-set.sh <short-sha>   # the exact assertion CD itself makes
 ```
 
-Then the portals self-update on their 6 h poll (`SelfUpdateOptions.PollInterval`), or immediately
-after `kubectl rollout restart` (the poll fires on startup via `StartWith(-1L)`).
+Then the portals self-update **on the publication event, not on a poll** (#1773): one pass at
+startup, then a check per build-completion event. `SelfUpdateOptions.PollInterval` no longer exists
+— `RetryInterval` (6 h) is only the backstop for a faulted watch — so an install that is behind is
+behind for a reason worth reading, not because a timer has not fired yet. `kubectl rollout restart`
+still forces an immediate check via the startup pass.
 
 ### 🚨 "Is the build finished?" — filter by WORKFLOW, never wait for all check suites
 

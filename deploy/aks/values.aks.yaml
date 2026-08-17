@@ -244,23 +244,24 @@ config:
     # cadence and your rollback headroom.
     AssemblyCache__Retention__Delete: "false"
     # ---- Platform self-update cadence --------------------------------------
-    # The poller's built-in default is 6h, which is why a freshly published image
-    # could sit unpicked for hours and look like "self-update is broken" (memex,
-    # 2026-08-03: running ci.1672 while ci.1674 had been in ACR since 07:34).
+    # 🚨 `SelfUpdate__PollInterval: "1.00:00:00"` WAS SET HERE AND IS NOW DELETED,
+    # because since #1773 there is no such option to bind and a key that binds to
+    # nothing is worse than no key: it reads as a live throttle to whoever greps
+    # this file next. Self-update is event-driven now — one pass at startup, then
+    # a check per build-completion event — so nothing here paces it.
     #
-    # DAILY, deliberately (2026-08-10, measured): every roll invalidates the whole
-    # NodeType compile cache — the framework MVID changes on every CI image — so a
-    # roll costs a full sequential rebuild (~2.4 s/type; ~10 min on the largest
-    # mesh) plus a degraded warm-up window while the 3 s enrichment probe is
-    # starved. CI publishes ~44 images/day; polling faster than the rebuild is
-    # worth just multiplies that cost. One roll per day keeps fixes flowing daily
-    # at a quarter of the compile cost and a quarter of the degraded windows.
-    # For an URGENT fix, don't shorten this — `kubectl rollout restart` the
-    # portal: the poll fires on startup (StartWith(-1L)) and picks the newest
-    # image immediately. Binding only works from the image that added
-    # SelfUpdateOptions.SectionName — before that this key is inert, because
-    # AddSelfUpdate() constructed its options directly.
-    SelfUpdate__PollInterval: "1.00:00:00"
+    # What that key expressed is still a real constraint and is NOT re-expressible
+    # today, so record it rather than lose it. It held prod to ONE roll/day
+    # (2026-08-10, measured): every roll invalidated the whole NodeType compile
+    # cache — the framework MVID changes on every CI image — costing a full
+    # sequential rebuild (~2.4 s/type; ~10 min on the largest mesh) plus a
+    # degraded warm-up window. Adopt-before-compile has since largely removed THAT
+    # cost (prod: 80 compiles/64.8 s → 0 compiles, 84 adopted, 32.1 s), but the
+    # pod RESTART per roll remains, and nothing bounds how often it happens.
+    # Re-expressing it needs a roll floor in SelfUpdateOptions — tracked as #1778.
+    #
+    # For an URGENT fix: `kubectl rollout restart` the portal — the startup pass
+    # picks the newest image immediately.
     Mcp__BaseUrl: "http://memex-portal-service:8080"
     # ---- AI model providers (templated by the chart) ------------------------
     # These seed the system model catalog on deploy (BuiltInLanguageModelProvider
