@@ -1,5 +1,5 @@
 using System.Net.Http;
-using Memex.Portal.Shared.Teams;
+using MeshWeaver.Teams;
 using MeshWeaver.Mesh;
 using Xunit;
 
