@@ -3,7 +3,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
-using Memex.Portal.Shared.Courses;
+using MeshWeaver.Courses;
 using MeshWeaver.GitSync;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Options;

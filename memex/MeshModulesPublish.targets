@@ -79,6 +79,7 @@
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.WebSearch/MeshWeaver.AI.WebSearch.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Courses/MeshWeaver.Courses.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Mail.MicrosoftGraph/MeshWeaver.Mail.MicrosoftGraph.csproj" />
 
     <!-- Alternative storage backends. These were BORN flipped: no host has ever referenced them
