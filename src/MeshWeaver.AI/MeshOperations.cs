@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Reactive.Concurrency;
@@ -511,10 +512,32 @@ public class MeshOperations
         if (string.IsNullOrWhiteSpace(resolvedPath))
             return Observable.Return("Error: path is required.");
 
+        var budget = TimeSpan.FromSeconds(timeoutSeconds);
+        // A caller with no budget has already given up, so do NOTHING — not even resolve the path.
+        // This is the degenerate half of the deadline rule enforced further down, split out so it
+        // is DETERMINISTIC: leaving it to the outer `.Timeout(TimeSpan.Zero)` scheduled a
+        // thread-pool timer that raced the pipeline, and whichever side lost still ran a
+        // continuation that opened a layout-area stream nobody was waiting for.
+        if (budget <= TimeSpan.Zero)
+            return Observable.Throw<string>(new TimeoutException(
+                $"RenderArea budget of {budget.TotalSeconds:0.###}s for '{resolvedPath}' is already "
+                + "elapsed — nothing was rendered."));
+
         var pathResolver = hub.ServiceProvider.GetRequiredService<IPathResolver>();
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return Observable.Defer(() =>
         {
+            // 🚨 The budget is a DEADLINE, not merely the outer `.Timeout(...)` below. Timeout
+            // faults the CALLER; it does not stop this pipeline. Rx disposal is unsynchronised, so
+            // a resolution emission already in flight still runs its continuation — and that
+            // continuation is the expensive, resource-ALLOCATING half: GetRemoteStream mints a
+            // `sync/` hub and posts a SubscribeRequest that WAKES a cold per-node hub. Opened
+            // after the budget is gone, that subscribe is owned by nobody: the caller has already
+            // been faulted, so the reply is awaited by no one and the request parks on the target's
+            // DataContextInit/Initialize/MeshNodeInit gates (issue #1613 — reported as a leaked
+            // callback, and in a portal an orphaned sync hub + heartbeat per abandoned render).
+            // So the remaining budget is re-checked at the last instant before committing to it.
+            var startedAt = Stopwatch.GetTimestamp();
             // Capture the CALLER's ambient identity at subscribe time (the transport request
             // thread / test context — same precedence the sync-stream uses). The remote-stream
             // creation below happens inside a reactive continuation on a hub scheduler where the
@@ -524,9 +547,10 @@ public class MeshOperations
             var caller = accessService?.Context ?? accessService?.CircuitContext;
             return pathResolver.ResolvePath(resolvedPath)
                 .Take(1)
-                .SelectMany(resolution => RenderResolvedArea(resolution, resolvedPath, area, id, caller));
+                .SelectMany(resolution => RenderResolvedArea(
+                    resolution, resolvedPath, area, id, caller, startedAt, budget));
         })
-            .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
+            .Timeout(budget)
             .Catch((Exception ex) =>
             {
                 // A timeout stays a FAULT (transports map it to a gateway timeout); everything
@@ -541,14 +565,17 @@ public class MeshOperations
     /// <summary>
     /// Second half of <see cref="RenderArea"/>: builds the <see cref="LayoutAreaReference"/> from
     /// the resolution + explicit arguments and opens the one-shot area stream under the captured
-    /// caller identity.
+    /// caller identity — unless the budget handed down from <see cref="RenderArea"/> is already
+    /// spent, in which case it faults WITHOUT opening the stream (see the deadline note there).
     /// </summary>
     private IObservable<string> RenderResolvedArea(
         AddressResolution? resolution,
         string resolvedPath,
         string? area,
         string? id,
-        AccessContext? caller)
+        AccessContext? caller,
+        long startedAt,
+        TimeSpan budget)
     {
         if (resolution is null)
             return Observable.Return($"Not found: {resolvedPath}");
@@ -578,6 +605,18 @@ public class MeshOperations
         // and Finally guarantees disposal on every terminal path.
         return Observable.Defer(() =>
         {
+            // 🚨 LAST GATE before the only step in this verb that allocates mesh resources. The
+            // budget covers "path resolution + the first materialised frame" (see the parameter
+            // doc), so once it is spent there is nothing left to buy by opening the stream — only
+            // an orphaned `sync/` hub and a SubscribeRequest that wakes a cold per-node hub for a
+            // caller who is already gone. Faulting here is what makes a non-positive budget
+            // DETERMINISTIC (elapsed >= 0 always holds, so the stream is never opened) instead of
+            // a race between the outer Timeout and this continuation.
+            if (Stopwatch.GetElapsedTime(startedAt) >= budget)
+                return Observable.Throw<string>(new TimeoutException(
+                    $"RenderArea budget of {budget.TotalSeconds:0.###}s elapsed for '{resolvedPath}' "
+                    + "before the layout-area stream could be opened."));
+
             // This factory runs inside a reactive continuation where the ambient AsyncLocal
             // identity is NOT the caller's. GetRemoteStream captures the ambient AccessContext
             // at stream creation (it stamps the SubscribeRequest's identity), so re-apply the
