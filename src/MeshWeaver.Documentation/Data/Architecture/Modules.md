@@ -53,9 +53,13 @@ Not every route belonging to a module's feature belongs *in* the module. The div
 - **The PORTAL's client API stays in the host, behind a 503 seam** — even when the engine it calls
   ships as a module. `POST /api/log-incidents` (Observability) and `POST /api/speech/transcribe`
   (Speech) are both this shape: the route is part of the portal's REST surface that clients are
-  configured against, it is gated by the host's own authorization policy, and it resolves the
-  module's service **optionally**, answering an actionable 503 that names the missing module rather
-  than a 500 or a bare 404.
+  configured against, its access rule is the HOST's to state, and it resolves the module's service
+  **optionally**, answering an actionable 503 that names the missing module rather than a 500 or a
+  bare 404. Note the two state that rule differently — speech requires the portal's Bearer-only
+  `McpAuth` policy, while log-incidents is `AllowAnonymous` at the ASP.NET layer and gates on the
+  `LogWatch:IngestToken` shared secret (its caller is a cluster service, not a signed-in user), and
+  is not mapped at all when that token is unset. What makes them the same case is not a shared
+  policy but a shared owner: the host decides who may call, and the module only supplies the engine.
 
 Two things go wrong when a portal-API route is pushed onto the hook. The caller loses the
 diagnosis — "the module is not listed" becomes an indistinguishable 404 — and, more sharply, the
