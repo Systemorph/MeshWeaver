@@ -21,28 +21,51 @@ name: Chart Drift
 # defect: the honest report of "drift detection is not wired up" is a failing check that names the
 # missing pieces, not a green one that checked nothing.
 #
-#   1. AKS command access for the CI identity. The AZURE_* OIDC secrets already exist (main-cd.yml
-#      uses them for ACR), but publishing images needs no cluster rights. The app registration
-#      behind secrets.AZURE_CLIENT_ID additionally needs a role granting
-#      `Microsoft.ContainerService/managedClusters/runCommand/action` on the cluster — "Azure
-#      Kubernetes Service Cluster User Role" plus "Azure Kubernetes Service RBAC Reader", scoped to
-#      the cluster resource, is enough (this check only ever issues `kubectl get`).
+#   1. [DONE 2026-08-17] AKS command access for the CI identity. This item was written from an
+#      ASSUMPTION — that the AZURE_* OIDC identity had ACR rights only — and the assumption was
+#      wrong. The app registration behind secrets.AZURE_CLIENT_ID is `github-actions-deploy`
+#      (appId fb51b7e9-6554-4857-80d7-23608d8347fc) and it ALREADY holds "Azure Kubernetes Service
+#      Cluster Admin Role" scoped to the cluster, which includes
+#      `Microsoft.ContainerService/managedClusters/runCommand/action`. No role assignment needed.
+#      Re-check with:  az role assignment list --scope $(az aks show -g "$AKS_RESOURCE_GROUP" \
+#                        -n "$AKS_CLUSTER" --query id -o tsv) -o table
 #
-#   2. A SECRET-FREE per-env values file, committed. check-chart-drift.sh refuses to render with
-#      chart defaults — comparing against a chart nobody deployed produces confident nonsense — so
-#      it needs each environment's real overlay. Those overlays (values.memexcloud.yaml and its
-#      siblings) exist only on operators' disks today: they are not in this repo, and they are not
-#      committed to the private Systemorph/Memex repo either, because they carry OAuth client
-#      secrets and the Postgres password.
-#      The fix is NOT to commit them. This check compares the ConfigMap and the pod spec — it never
-#      reads a secret value — so what it needs is the non-secret half: commit
-#      `deployments/aks/<env>/values.<env>.public.yaml` to Systemorph/Memex (everything under
-#      `config:`, `persistence:`, `keda:`, `probes:`, `ingress:`; nothing under `secrets:`), and
-#      add a fine-grained read-only PAT for that repo as secrets.MEMEX_DEPLOY_REPO_TOKEN.
+#   2. [DONE 2026-08-17] A SECRET-FREE per-env values file, committed. check-chart-drift.sh refuses
+#      to render with chart defaults — comparing against a chart nobody deployed produces confident
+#      nonsense — so it needs each environment's real overlay, and those lived only on operators'
+#      disks. Now committed to the PRIVATE Systemorph/Memex repo (2cd3eee) as
+#      `deployments/aks/<ns>/values.<release>.public.yaml`, captured from the live releases with
+#      `helm get values <release> -n <ns> -o yaml`.
 #
-# Until both land, every run fails with the list above and nobody is misled about whether the
-# cluster matches the chart. Drift found by a run that DOES complete is reported the same way: red,
-# with each divergence classified CLUSTER-ONLY / CHART-ONLY / DIFFERS.
+#      🚨 REGENERATING THEM: build the file as an ALLOW-LIST — copy ONLY the `config`, `ingress`,
+#      `persistence`, `image`, `replicas`, `resources` sections. This paragraph used to say
+#      "everything under config:/persistence:/keda:/probes:/ingress:; nothing under secrets:", and
+#      that DENY-LIST rule is UNSAFE: `pgbackrest.azure.accountKey` is a live Azure storage account
+#      key and it sits OUTSIDE the `secrets:` block, so following the old instruction would have
+#      committed a working credential to git permanently. Drop `parameters:` and `pgbackrest:`
+#      wholesale — neither feeds the two objects this check compares. Scan the result for
+#      secret-shaped AND high-entropy values before committing; the only legitimate `secret`-ish
+#      match is `ingress.secretName`, a Kubernetes object name.
+#
+#      Regenerate after any deliberate helm change, or the gate compares against a stale intent.
+#
+#   3. [OUTSTANDING] A fine-grained read-only PAT for Systemorph/Memex (Contents: Read-only, nothing
+#      else) added as secrets.MEMEX_DEPLOY_REPO_TOKEN. A PAT cannot be minted through the API or
+#      CLI, so this step is necessarily manual. Do NOT substitute the existing broad `GH_PAT` (it
+#      widens what this job can reach for no benefit), and do NOT move the overlays into this public
+#      repo to dodge the token — that would publish the deployment inventory.
+#
+# Until 3 lands, every run fails with the list above and nobody is misled about whether the cluster
+# matches the chart. Drift found by a run that DOES complete is reported the same way: red, with
+# each divergence classified CLUSTER-ONLY / CHART-ONLY / DIFFERS.
+#
+# ⚠️ EXPECT THE FIRST COMPLETING RUN TO BE VERY RED, legitimately. A local run of
+# check-chart-drift.sh against ns memex on 2026-08-17 compared 149 fields and found 121
+# divergences — the accumulated backlog of `kubectl patch`-applied config the chart has never heard
+# of (AzureFoundry/ModelTier routing, probe initialDelaySeconds, replicas 2-vs-1), plus the one
+# that bites hardest: ConfigMap Authentication__Microsoft__ClientId is still
+# `CHANGE_ME_aad_application_client_id` in the chart, so a `helm upgrade` today would overwrite
+# working auth with the placeholder. That backlog is the finding, not a defect in the gate.
 
 on:
   schedule:
@@ -125,9 +148,18 @@ jobs:
           VALUES="$ENV_DIR/values.${{ matrix.env.release }}.public.yaml"
           if [ ! -f "$VALUES" ]; then
             echo "::error::$VALUES is missing. Commit the SECRET-FREE half of this environment's"
-            echo "  helm overlay there (config/persistence/keda/probes/ingress — nothing under"
-            echo "  secrets:). Rendering with chart defaults instead would compare the cluster"
-            echo "  against a chart nobody deployed, so this is a failure, not a fallback."
+            echo "  helm overlay there, captured with:"
+            echo "      helm get values ${{ matrix.env.release }} -n ${{ matrix.env.ns }} -o yaml"
+            echo "  🚨 Copy it as an ALLOW-LIST — ONLY these top-level sections:"
+            echo "      config, ingress, persistence, image, replicas, resources"
+            echo "  Do NOT use the deny-list 'everything except secrets:'. pgbackrest.azure.accountKey"
+            echo "  is a live Azure storage account key and it sits OUTSIDE the secrets: block, so a"
+            echo "  deny-list commits a working credential to git permanently. Drop parameters: and"
+            echo "  pgbackrest: wholesale — neither feeds the ConfigMap or Deployment compared here."
+            echo "  Scan for secret-shaped AND high-entropy values before committing; the only"
+            echo "  legitimate 'secret'-ish match is ingress.secretName, a Kubernetes object name."
+            echo "  Rendering with chart defaults instead would compare the cluster against a chart"
+            echo "  nobody deployed, so this is a failure, not a fallback."
             exit 1
           fi
           PATCH_ARG=""
