@@ -47,6 +47,12 @@ public static class CompileDiagnostics
     internal const string SkeletonDiagnosticsPath = "__skeleton__.cs";
 
     /// <summary>
+    /// Sentinel FilePath for the generated <c>global using</c> import scope (#1802) — filtered out
+    /// of results for the same reason as the skeleton: generated, and not editable by the user.
+    /// </summary>
+    internal const string GlobalUsingsDiagnosticsPath = "__global_usings__.cs";
+
+    /// <summary>
     /// Re-derives a failed compile's diagnostics in their structured, per-source-file form by
     /// assembling ONE LSP-style compilation (skeleton tree + one tree per src/test Code node,
     /// each carrying the MeshNode path as its <c>FilePath</c>) — exactly the model
@@ -57,11 +63,19 @@ public static class CompileDiagnostics
     /// </summary>
     internal static IReadOnlyList<Lsp.DiagnosticInfo> DiagnoseInputs(CompilationInputs inputs)
     {
-        var trees = new List<SyntaxTree>(inputs.Sources.Length + 1)
+        var trees = new List<SyntaxTree>(inputs.Sources.Length + 2)
         {
             CSharpSyntaxTree.ParseText(
                 Microsoft.CodeAnalysis.Text.SourceText.From(inputs.SkeletonSource),
                 inputs.ParseOptions, path: SkeletonDiagnosticsPath),
+            // 🚨 The import scope, as `global using`. The per-file trees below give each diagnostic
+            // the Code node's path (the whole point here), but a C# `using` is FILE-SCOPED, so
+            // without this document the skeleton's preamble covers none of them and this reports
+            // errors the emit path does not have — #1802, which put 12 phantom CS0246/CS0308 on a
+            // NodeType whose assembly had built and loaded.
+            CSharpSyntaxTree.ParseText(
+                Microsoft.CodeAnalysis.Text.SourceText.From(inputs.GlobalUsingsSource),
+                inputs.ParseOptions, path: GlobalUsingsDiagnosticsPath),
         };
         foreach (var (path, code) in inputs.Sources)
             trees.Add(CSharpSyntaxTree.ParseText(
@@ -81,8 +95,9 @@ public static class CompileDiagnostics
         foreach (var d in diags)
         {
             if (d.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)) continue;
-            // Skeleton-internal diagnostics are framework noise the user can't act on.
-            if (d.Location.SourceTree?.FilePath == SkeletonDiagnosticsPath) continue;
+            // Generated-tree diagnostics are framework noise the user can't act on.
+            var treePath = d.Location.SourceTree?.FilePath;
+            if (treePath == SkeletonDiagnosticsPath || treePath == GlobalUsingsDiagnosticsPath) continue;
             result.Add(ToDiagnosticInfo(d));
         }
         // Errors first, then by file then position — stable order for the GUI.

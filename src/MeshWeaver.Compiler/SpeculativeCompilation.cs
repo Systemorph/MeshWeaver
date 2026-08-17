@@ -30,6 +30,12 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
 {
     private const string SkeletonDocumentPath = Compiler.CompileDiagnostics.SkeletonDiagnosticsPath;
 
+    /// <summary>
+    /// Document path of the generated <c>global using</c> scope. Like the skeleton it is framework
+    /// output the user cannot edit, so its own diagnostics are filtered out of the result.
+    /// </summary>
+    internal const string GlobalUsingsDocumentPath = Compiler.CompileDiagnostics.GlobalUsingsDiagnosticsPath;
+
     public async Task<IReadOnlyList<DiagnosticInfo>> GetDiagnosticsAsync(
         CompilationInputs inputs,
         string sourcePath,
@@ -53,37 +59,51 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
             }
         }
 
-        var trees = new List<SyntaxTree>(inputs.Sources.Length + 1)
-        {
-            CSharpSyntaxTree.ParseText(
-                SourceText.From(inputs.SkeletonSource),
-                inputs.ParseOptions,
-                path: SkeletonDocumentPath),
-        };
-
+        // Resolve the EFFECTIVE source set first (proposed body substituted), because the import
+        // scope below is derived from it: a `using` the user just typed in Monaco has to count.
+        var effectiveSources = new List<(string Path, string Code)>(inputs.Sources.Length + 1);
         var substituted = false;
         foreach (var (path, code) in inputs.Sources)
         {
-            string treeCode;
             if (string.Equals(path, sourcePath, StringComparison.OrdinalIgnoreCase))
             {
-                treeCode = cleanedProposed;
+                effectiveSources.Add((path, cleanedProposed));
                 substituted = true;
             }
             else
             {
-                treeCode = code;
+                effectiveSources.Add((path, code));
             }
-
-            trees.Add(CSharpSyntaxTree.ParseText(
-                SourceText.From(treeCode), inputs.ParseOptions, path: path));
         }
 
         if (!substituted)
         {
             // Proposed source path doesn't match any existing source — treat as a new file.
+            effectiveSources.Add((sourcePath, cleanedProposed));
+        }
+
+        var trees = new List<SyntaxTree>(effectiveSources.Count + 2)
+        {
+            CSharpSyntaxTree.ParseText(
+                SourceText.From(inputs.SkeletonSource),
+                inputs.ParseOptions,
+                path: SkeletonDocumentPath),
+            // 🚨 Not optional. Each source below is its OWN tree (so a diagnostic carries the
+            // MeshNode path the user edits), and a C# `using` is FILE-SCOPED — so without this
+            // document the skeleton's imports cover nothing and every source that relies on them
+            // reports phantom CS0246/CS0308 while the emit path compiles it cleanly (#1802).
+            // Recomputed here, not taken from `inputs`, so the proposed body's own usings apply.
+            CSharpSyntaxTree.ParseText(
+                SourceText.From(new DynamicMeshNodeAttributeGenerator()
+                    .GenerateGlobalUsingsSource(effectiveSources.Select(s => (string?)s.Code))),
+                inputs.ParseOptions,
+                path: GlobalUsingsDocumentPath),
+        };
+
+        foreach (var (path, code) in effectiveSources)
+        {
             trees.Add(CSharpSyntaxTree.ParseText(
-                SourceText.From(cleanedProposed), inputs.ParseOptions, path: sourcePath));
+                SourceText.From(code), inputs.ParseOptions, path: path));
         }
 
         var compilation = CSharpCompilation.Create(
@@ -98,8 +118,11 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
         var result = new List<DiagnosticInfo>(diags.Length);
         foreach (var d in diags)
         {
-            // Skeleton-tree diagnostics are framework noise — the user can't act on them.
-            if (d.Location.SourceTree?.FilePath == SkeletonDocumentPath) continue;
+            // Skeleton- and global-usings-tree diagnostics are framework noise — the user can't
+            // act on them. (A CS8019 "unnecessary using" on the generated scope is expected: it
+            // imports for the whole compilation, so most files use only part of it.)
+            var treePath = d.Location.SourceTree?.FilePath;
+            if (treePath == SkeletonDocumentPath || treePath == GlobalUsingsDocumentPath) continue;
             result.Add(ToDiagnosticInfo(d));
         }
         return result;
