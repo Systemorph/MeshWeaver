@@ -67,6 +67,42 @@ public class PlatformBakeLaneGuard
             + "ShippedPrebuiltBundles.CompletionSentinelFileName.");
     }
 
+    /// <summary>
+    /// 🚨 CD bakes ONLY the content the image itself embeds. Everything a deployment receives
+    /// already built — node-repo content (Plugins, Education, Reinsurance, SocialMedia), Store
+    /// packages, and the samples trees — is ADOPTED from a bundle its own lane published under the
+    /// same framework identity. Re-compiling it here would redo that work, burn CD wall-clock, and
+    /// re-derive assemblies that were meant to be authoritative.
+    /// </summary>
+    [Fact]
+    public void PlatformBake_CompilesOnlyWhatTheImageEmbeds()
+    {
+        var job = ExecutableLinesOf(ReadJobBlock());
+
+        Assert.True(job.Contains("stage-doc-gate.sh", StringComparison.Ordinal),
+            $"'{JobName}' must bake the Doc tree — it is the content every portal embeds "
+            + "(Memex.Portal.Shared references MeshWeaver.Documentation), so it is the one tree "
+            + "no other lane can publish.");
+
+        Assert.False(job.Contains("stage-samples-gate.sh", StringComparison.Ordinal),
+            $"'{JobName}' must NOT bake samples/Graph/Data. No deployment embeds those trees, and "
+            + "memex receives them over the GitHub link into the `MeshWeaver` partition — where the "
+            + "node paths read `MeshWeaver/samples/Graph/Data/ACME/…` while the bundles are keyed "
+            + "`ACME/…`, so the seeder (which matches by node PATH) can never adopt them. Measured: "
+            + "7 packages / 24 assemblies compiled per CD run for bundles nothing can use. They "
+            + "still compile-GATE on every PR in dotnet-test.yml's doc-gate — that proves the "
+            + "content, which is the part worth paying for.");
+
+        // The strongest form of "CD cannot compile someone else's module": it never checks out
+        // someone else's repository. One `repository:` input would make it possible.
+        var text = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
+        Assert.False(text.Contains("repository:", StringComparison.Ordinal),
+            $"{Workflow} must check out no repository but this one. Node-repo and Store content "
+            + "arrives already compiled and is adopted; a checkout of another repo here would let "
+            + "CD re-derive assemblies whose authoritative build belongs to that repo's own "
+            + "publish-bake lane.");
+    }
+
     /// <summary>The block's lines that can actually DO something: YAML and shell comment lines
     /// (first non-blank character <c>#</c>) dropped, everything else kept verbatim.</summary>
     private static string ExecutableLinesOf(string block) =>
