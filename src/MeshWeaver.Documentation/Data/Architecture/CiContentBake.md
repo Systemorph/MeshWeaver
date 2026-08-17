@@ -157,14 +157,30 @@ The design rules the extraction preserves:
   the per-repo vendored copies. This repo is public, so private satellites call the workflows
   and read the script with their default token.
 - **Repo-specific policy stays in the caller**: the digest pin (`MW_IMAGE_DIGEST`) and its bump
-  cadence, gating (`if:`/`needs:` on the `uses:` job), the `repository_dispatch` receiver, the
+  cadence — an unpinned image is an explicit `allow-unpinned` opt-in, never a silent fallback —
+  gating (`if:`/`needs:` on the `uses:` job), the `repository_dispatch` receiver, the
   module-bundle job of mixed packages, and each repo's `scripts/` (validate / compile-check /
   affected-modules / tag-modules stay caller-side — they encode the repo's own layout).
+- **Adoption renames the required checks**: a reusable-called workflow's check runs report as
+  `<caller job> / <name>`, so each repo's required-status-check contexts are renamed in the same
+  change that adopts a workflow — a context left at the old name would wait forever.
 - **Staged cross-repo modules are excluded from publication** (e.g. Store is staged so
   `requires` resolve but is owned and published by MeshWeaver.Plugins) — each source directory
   seals independently, which is also why no cross-repo bake ORDERING is needed: a dependent
   repo's publication never contains its dependency's bundles, so there is nothing to wait for.
   The framework-release dispatch fans out to all satellites concurrently.
+
+The satellites' OIDC publish is **provisioned** (2026-08-17): the Azure managed identity
+`github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
+portals' storage account, with one federated credential per satellite `main` ref
+(`repo:Systemorph/<repo>:ref:refs/heads/main`), and the `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
+`AZURE_SUBSCRIPTION_ID` secrets are set on all four repos. **A red publish-bake was designed debt
+until 2026-08-17 and is a real failure after it** — treat any surviving allowlist or
+"credentials pending" reference to a satellite's publish lane as historical. The
+framework-release dispatch that fans a platform release out to the satellites is still dormant
+(`BAKE_SUBSCRIBER_REPOS` / `DEPENDENT_DISPATCH_TOKEN` unprovisioned — see
+[The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)); until it is
+armed, a satellite re-bakes on its own `main` pushes only.
 
 ## What this step does not do yet
 
