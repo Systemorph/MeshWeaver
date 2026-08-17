@@ -95,22 +95,42 @@ public static class BundleReader
     public static (Manifest? Manifest, IReadOnlyList<Payload> Assemblies) Read(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+        return Read(buffer);
+    }
 
-        var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
-        if (manifestEntry is null)
-            return (null, []);
+    /// <summary>
+    /// <see cref="Read(byte[])"/> over a STREAM, optionally extracting only the node paths
+    /// <paramref name="nodePaths"/> names.
+    ///
+    /// <para>🚨 Both parameters exist to keep bytes OUT of memory that nobody is going to use. A
+    /// bundle's assemblies are the whole of its weight, and a consumer that has already adopted
+    /// them needs none of it: reading a file as a stream avoids holding the compressed archive,
+    /// and the filter avoids materialising decompressed assemblies the caller will discard. The
+    /// boot-time seeder (<c>ShippedPrebuiltBundles</c>) asks
+    /// <see cref="ReadManifest(string)"/> first and comes back here for the DEVIATING subset only
+    /// — on a steady-state boot that subset is empty and this is never called at all.</para>
+    ///
+    /// <para><paramref name="nodePaths"/> <c>null</c> extracts everything, which is what a
+    /// consumer holding a freshly-downloaded bundle wants.</para>
+    /// </summary>
+    /// <param name="bundle">The archive, positioned at its start.</param>
+    /// <param name="nodePaths">Node paths to extract, or null for all of them.</param>
+    /// <returns>The manifest (null when the archive carries none) and the payloads found.</returns>
+    public static (Manifest? Manifest, IReadOnlyList<Payload> Assemblies) Read(
+        Stream bundle, IReadOnlySet<string>? nodePaths = null)
+    {
+        using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
-        Manifest? manifest;
-        using (var stream = manifestEntry.Open())
-            manifest = JsonSerializer.Deserialize<Manifest>(stream, Json);
-
+        var manifest = ManifestOf(archive);
         if (manifest?.Assemblies is null)
             return (manifest, []);
 
         var payloads = new List<Payload>();
         foreach (var reference in manifest.Assemblies)
         {
+            if (nodePaths is not null && !nodePaths.Contains(reference.NodePath))
+                continue;
+
             var dll = archive.GetEntry($"{NuGetPackageWriter.AssemblyFolder}/{reference.Assembly}");
 
             if (dll is null)
@@ -129,10 +149,63 @@ public static class BundleReader
     }
 
     /// <summary>
-    /// Extracts the manifest and the MODULE closure files it names (#1664) — the module half of the
-    /// same bundle <see cref="Read"/> serves NodeType assemblies from.
+    /// The bundle's MANIFEST alone — every assembly's node path, dependency record and the
+    /// framework identity, WITHOUT decompressing a single assembly.
     ///
-    /// <para>Manifest-driven like <see cref="Read"/>, for the same reason: the manifest is the
+    /// <para>This is what makes "load the manifest, then touch only what deviates" possible. The
+    /// manifest is a few KB of JSON at a known entry; the assemblies it describes are megabytes.
+    /// A consumer can therefore decide the whole adoption question — is this bundle for our
+    /// framework, which of its types does this mesh hold, which of those are already on the
+    /// store — before paying for any of the payload.</para>
+    /// </summary>
+    /// <param name="bundle">The archive, positioned at its start.</param>
+    /// <returns>The manifest, or null when the archive carries none.</returns>
+    public static Manifest? ReadManifest(Stream bundle)
+    {
+        using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
+        return ManifestOf(archive);
+    }
+
+    /// <summary>
+    /// <see cref="ReadManifest(Stream)"/> for a bundle on disk — opened for sequential read and
+    /// closed again, so the file's bytes never sit in the managed heap.
+    /// </summary>
+    /// <param name="bundlePath">Path to the bundle file.</param>
+    /// <returns>The manifest, or null when the archive carries none.</returns>
+    public static Manifest? ReadManifest(string bundlePath)
+    {
+        using var file = File.OpenRead(bundlePath);
+        return ReadManifest(file);
+    }
+
+    /// <summary>
+    /// <see cref="Read(Stream, IReadOnlySet{string})"/> for a bundle on disk.
+    /// </summary>
+    /// <param name="bundlePath">Path to the bundle file.</param>
+    /// <param name="nodePaths">Node paths to extract, or null for all of them.</param>
+    /// <returns>The manifest (null when the archive carries none) and the payloads found.</returns>
+    public static (Manifest? Manifest, IReadOnlyList<Payload> Assemblies) ReadFile(
+        string bundlePath, IReadOnlySet<string>? nodePaths = null)
+    {
+        using var file = File.OpenRead(bundlePath);
+        return Read(file, nodePaths);
+    }
+
+    private static Manifest? ManifestOf(ZipArchive archive)
+    {
+        var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
+        if (manifestEntry is null)
+            return null;
+
+        using var stream = manifestEntry.Open();
+        return JsonSerializer.Deserialize<Manifest>(stream, Json);
+    }
+
+    /// <summary>
+    /// Extracts the manifest and the MODULE closure files it names (#1664) — the module half of the
+    /// same bundle <see cref="Read(byte[])"/> serves NodeType assemblies from.
+    ///
+    /// <para>Manifest-driven like <see cref="Read(byte[])"/>, for the same reason: the manifest is the
     /// producer's statement of which files belong to the module, and enumerating
     /// <see cref="NuGetPackageWriter.ModuleFolder"/> instead would adopt any stray entry a future
     /// writer happens to place there. A file the manifest names but the archive lacks is FATAL here,
