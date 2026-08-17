@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -75,10 +76,18 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>The PUBLISHED shape: the host's static web assets are materialised under wwwroot,
+    /// so the web root and what the host serves are the same directory.</summary>
     private ModuleStaticAssetManifest Discover(params System.Reflection.Assembly[] modules)
+        => Discover(
+            new StubWebHostEnvironment(HostWebRoot, new PhysicalFileProvider(HostWebRoot)),
+            modules);
+
+    private ModuleStaticAssetManifest Discover(
+        IWebHostEnvironment environment, params System.Reflection.Assembly[] modules)
         => MeshModuleStaticAssetExtensions.Discover(
             modules.Select(a => new InstalledModuleAssembly(a)),
-            new StubWebHostEnvironment(HostWebRoot),
+            environment,
             NullLogger.Instance,
             root);
 
@@ -127,6 +136,37 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
 
         manifest.Mounts.Should().NotContain(m => m.RequestPath == "/_content/SharedDep",
             "the host's copy is authoritative — the module lane must never shadow a platform asset");
+    }
+
+    /// <summary>
+    /// 🚨 …and the host still wins when it serves that dependency WITHOUT a directory on disk.
+    /// Only a published layout materialises <c>wwwroot/_content/&lt;Dep&gt;</c>; a dev run serves the
+    /// very same URLs out of the manifest-backed provider composed over the web root, with nothing
+    /// under <c>wwwroot</c> to stat. A <c>Directory.Exists</c> probe concludes "the host does not
+    /// have it" for EVERY referenced RCL there and mounts the module's copy over a live platform
+    /// mapping — so the shadowing check has to ask what the host SERVES, not what it stores.
+    /// </summary>
+    [Fact]
+    public void DependencyTheHostServesWithoutAPhysicalDirectory_IsNotMounted()
+    {
+        var emptyWebRoot = Path.Combine(root, "wwwroot-dev");
+        Directory.CreateDirectory(emptyWebRoot);
+
+        // What the host SERVES — the dev stand-in for the composed static-web-assets provider.
+        var servedRoot = Path.Combine(root, "host-served");
+        Directory.CreateDirectory(Path.Combine(servedRoot, "_content", "SharedDep"));
+
+        var manifest = Discover(
+            new StubWebHostEnvironment(emptyWebRoot, new PhysicalFileProvider(servedRoot)),
+            WithAssets);
+
+        Directory.Exists(Path.Combine(emptyWebRoot, "_content", "SharedDep")).Should().BeFalse(
+            "the premise: outside a published layout the host's asset has no directory to find");
+        manifest.Mounts.Should().NotContain(m => m.RequestPath == "/_content/SharedDep",
+            "the host serves it through its file provider, so the module must not shadow it");
+
+        // …while a dependency the host genuinely lacks is still served from the module.
+        manifest.Mounts.Should().Contain(m => m.RequestPath == "/_content/PrivateDep");
     }
 
     /// <summary>
@@ -188,17 +228,7 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
     [Fact]
     public async Task MountedAsset_IsServedOverHttp()
     {
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddSingleton(
-            MeshModuleStaticAssetExtensions.Discover(
-                [new InstalledModuleAssembly(WithAssets)],
-                new StubWebHostEnvironment(HostWebRoot),
-                NullLogger.Instance,
-                root));
-
-        await using var app = builder.Build();
-        app.UseMeshModuleStaticAssets();
+        await using var app = BuildHost();
         await app.StartAsync();
 
         var client = app.GetTestClient();
@@ -206,7 +236,7 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
         var served = await client.GetAsync($"/_content/{ModuleName}/PackView.razor.js");
         served.StatusCode.Should().Be(HttpStatusCode.OK,
             "the module's own asset must answer at the URL its component hard-codes");
-        (await served.Content.ReadAsStringAsync()).Should().Be("export {};");
+        (await served.Content.ReadAsStringAsync()).Should().Be(IdentityBody);
 
         var dependency = await client.GetAsync("/_content/PrivateDep/dep.js");
         dependency.StatusCode.Should().Be(HttpStatusCode.OK,
@@ -219,10 +249,108 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
         await app.StopAsync();
     }
 
-    private sealed class StubWebHostEnvironment(string webRootPath) : IWebHostEnvironment
+    /// <summary>
+    /// PUBLISHED layout: a module publish lays a <c>.br</c> beside every compressible asset
+    /// (measured: <c>GoogleMapView.razor.js</c> 12,649 B → 1,945 B). Plain <c>UseStaticFiles</c>
+    /// ignores that sibling and ships the full-size file, so the mount negotiates it — the client
+    /// gets the compressed representation under the IDENTITY media type, which is the whole point:
+    /// <c>Content-Encoding</c> says how to decode it, <c>Content-Type</c> says what it then is.
+    /// </summary>
+    [Fact]
+    public async Task PrecompressedSibling_IsServedWhenTheClientAcceptsIt()
+    {
+        var brotli = Compress(IdentityBody);
+        await File.WriteAllBytesAsync(
+            Path.Combine(ModuleWwwroot, "PackView.razor.js.br"), brotli);
+
+        await using var app = BuildHost();
+        await app.StartAsync();
+
+        var request = new HttpRequestMessage(
+            HttpMethod.Get, $"/_content/{ModuleName}/PackView.razor.js");
+        request.Headers.AcceptEncoding.ParseAdd("br");
+
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentEncoding.Should().Equal(new[] { "br" },
+            "the response must say which encoding it carries, or the browser cannot decode it");
+        response.Content.Headers.ContentType!.MediaType.Should().Be("text/javascript",
+            "the media type is the identity file's — .br is an encoding, not a type");
+        response.Headers.Vary.Should().Contain("Accept-Encoding",
+            "a shared cache must not hand this body to a client that did not ask for brotli");
+        (await response.Content.ReadAsByteArrayAsync()).Should().Equal(brotli);
+
+        await app.StopAsync();
+    }
+
+    /// <summary>
+    /// DEV/CI layout: nothing published the module, so no <c>.br</c> exists next to the asset and
+    /// negotiation must fall straight through to the identity file rather than 404 on a sibling
+    /// that was never laid down.
+    ///
+    /// <para>Deliberately asserted as its own behaviour rather than by comparing route counts
+    /// across the two worlds: a published layout exposes three representations per asset and a dev
+    /// one exposes a single file, and a whole-table assertion over that is exactly how #1680
+    /// shipped a check that passed everywhere except production.</para>
+    /// </summary>
+    [Fact]
+    public async Task WithNoPrecompressedSibling_TheIdentityFileIsServed()
+    {
+        await using var app = BuildHost();
+        await app.StartAsync();
+
+        var request = new HttpRequestMessage(
+            HttpMethod.Get, $"/_content/{ModuleName}/PackView.razor.js");
+        request.Headers.AcceptEncoding.ParseAdd("br");
+
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentEncoding.Should().BeEmpty(
+            "there is no compressed representation to announce");
+        (await response.Content.ReadAsStringAsync()).Should().Be(IdentityBody);
+
+        await app.StopAsync();
+    }
+
+    private const string IdentityBody = "export {};";
+
+    private static byte[] Compress(string content)
+    {
+        using var output = new MemoryStream();
+        using (var brotli = new BrotliStream(output, CompressionLevel.Optimal))
+            brotli.Write(System.Text.Encoding.UTF8.GetBytes(content));
+        return output.ToArray();
+    }
+
+    private WebApplication BuildHost()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(
+            MeshModuleStaticAssetExtensions.Discover(
+                [new InstalledModuleAssembly(WithAssets)],
+                new StubWebHostEnvironment(HostWebRoot, new PhysicalFileProvider(HostWebRoot)),
+                NullLogger.Instance,
+                root));
+
+        var app = builder.Build();
+        app.UseMeshModuleStaticAssets();
+        return app;
+    }
+
+    /// <summary>
+    /// A host environment whose WEB ROOT and whose SERVED assets can be pointed at different
+    /// places — which is not an artificial split but the ordinary dev shape: outside a published
+    /// layout the host's <c>_content/*</c> paths exist only in the manifest-backed provider
+    /// <c>StaticWebAssetsLoader</c> composes over the physical web root.
+    /// </summary>
+    private sealed class StubWebHostEnvironment(string webRootPath, IFileProvider served)
+        : IWebHostEnvironment
     {
         public string WebRootPath { get; set; } = webRootPath;
-        public IFileProvider WebRootFileProvider { get; set; } = new NullFileProvider();
+        public IFileProvider WebRootFileProvider { get; set; } = served;
         public string ApplicationName { get; set; } = "test";
         public string ContentRootPath { get; set; } = webRootPath;
         public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();

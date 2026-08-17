@@ -1,9 +1,12 @@
 using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
+using Microsoft.Net.Http.Headers;
 
 namespace MeshWeaver.Hosting.AspNetCore;
 
@@ -45,6 +48,16 @@ public static class MeshModuleStaticAssetExtensions
     internal const string ContentRoot = "_content";
 
     /// <summary>
+    /// The precompressed sibling encodings a module publish emits, best ratio first. Immutable
+    /// lookup — a constant, not state.
+    /// </summary>
+    private static readonly (string Suffix, string Encoding)[] PrecompressedVariants =
+        [(".br", "br"), (".gz", "gzip")];
+
+    /// <summary>Resolves <c>x.js.br</c> to the media type of <c>x.js</c>. See the negotiation.</summary>
+    private static readonly PrecompressedContentTypeProvider PrecompressedContentTypes = new();
+
+    /// <summary>
     /// Registers the <see cref="ModuleStaticAssetManifest"/> — what each installed module
     /// contributes, resolved once on first use. Pair it with
     /// <see cref="UseMeshModuleStaticAssets"/>; a host that mounts without registering gets a
@@ -63,6 +76,24 @@ public static class MeshModuleStaticAssetExtensions
     /// Mounts every installed module's static web assets. Call it with the host's other
     /// <c>UseStaticFiles</c> registrations — BEFORE <c>UseRouting</c>, because these are middleware
     /// and not endpoints.
+    ///
+    /// <para><b>Precompressed variants.</b> A module publish emits <c>.br</c> and <c>.gz</c>
+    /// siblings beside every compressible asset (measured on a real publish:
+    /// <c>GoogleMapView.razor.js</c> 12,649 B → 1,945 B brotli). The host's own assets reach the
+    /// browser compressed because <c>MapStaticAssets</c> serves them off an endpoint manifest that
+    /// declares one endpoint per encoding — a manifest whose routes are relative to the module's
+    /// OWN wwwroot root, so it cannot be re-based onto <c>_content/&lt;Name&gt;/</c> and cannot be
+    /// reused here. Plain <c>UseStaticFiles</c> has no notion of a precompressed sibling and would
+    /// ship every module asset at full size, so the mounts negotiate it themselves: a request that
+    /// accepts an encoding whose sibling EXISTS is rewritten onto that sibling and answered with
+    /// the matching <c>Content-Encoding</c>, keeping the identity file's media type.</para>
+    ///
+    /// <para>Where no sibling is on disk — a module folder produced by anything other than a
+    /// publish — nothing is rewritten and the identity file is served exactly as before, so this
+    /// is a payload optimisation in the published container and a no-op everywhere else. It is
+    /// deliberately NOT a route-count property: a published layout exposes three representations
+    /// per asset and a dev one exposes a single file, and asserting one number across both is how
+    /// #1680 shipped a check that passed everywhere except production.</para>
     /// </summary>
     /// <param name="app">The application to add the middleware to.</param>
     /// <returns>The same <paramref name="app"/> for chaining.</returns>
@@ -77,14 +108,135 @@ public static class MeshModuleStaticAssetExtensions
                 + "collection — without it the module manifest is never built, and a flipped "
                 + "module's CSS/JS would 404 at runtime with nothing in the log to say why.");
 
-        foreach (var mount in manifest.Mounts)
+        if (manifest.Mounts.Count == 0)
+            return app;
+
+        var mounts = manifest.Mounts
+            .Select(mount => (
+                RequestPath: new PathString(mount.RequestPath),
+                Provider: new PhysicalFileProvider(mount.PhysicalPath)))
+            .ToArray();
+
+        // Encoding negotiation runs ONCE, in front of every mount: it only rewrites the path, so
+        // the mounts below stay ordinary static-file middleware.
+        app.Use((context, next) =>
+        {
+            NegotiatePrecompressed(context, mounts);
+            return next();
+        });
+
+        foreach (var (requestPath, provider) in mounts)
             app.UseStaticFiles(new StaticFileOptions
             {
-                FileProvider = new PhysicalFileProvider(mount.PhysicalPath),
-                RequestPath = mount.RequestPath,
+                FileProvider = provider,
+                RequestPath = requestPath,
+                ContentTypeProvider = PrecompressedContentTypes,
+                // Every representation of these URLs varies by Accept-Encoding — including the
+                // identity one, or a shared cache hands a brotli body to a client that cannot
+                // decode it.
+                OnPrepareResponse = static served =>
+                    served.Context.Response.Headers.Vary = HeaderNames.AcceptEncoding,
             });
 
         return app;
+    }
+
+    /// <summary>
+    /// Points the request at the best precompressed sibling the client accepts, and states the
+    /// encoding it is getting. A no-op when the client accepts none, or when the publish laid down
+    /// no sibling — in which case the identity file is served unchanged.
+    /// </summary>
+    private static void NegotiatePrecompressed(
+        HttpContext context,
+        (PathString RequestPath, PhysicalFileProvider Provider)[] mounts)
+    {
+        var path = context.Request.Path;
+        if (!path.HasValue)
+            return;
+
+        foreach (var (requestPath, provider) in mounts)
+        {
+            // Mount request paths are distinct and StartsWithSegments is segment-aware, so at
+            // most one mount owns a path — the first match is the answer either way.
+            if (!path.StartsWithSegments(requestPath, out var remainder) || !remainder.HasValue)
+                continue;
+
+            var subpath = remainder.Value!;
+
+            // A URL that already names a variant is a request for THAT representation. Its media
+            // type still resolves off the identity name (below), so it needs the matching
+            // Content-Encoding or the client receives compressed bytes labelled as JavaScript.
+            foreach (var (suffix, encoding) in PrecompressedVariants)
+                if (subpath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    context.Response.Headers.ContentEncoding = encoding;
+                    return;
+                }
+
+            foreach (var (suffix, encoding) in PrecompressedVariants)
+            {
+                if (!Accepts(context.Request, encoding)
+                    || !provider.GetFileInfo(subpath + suffix).Exists)
+                    continue;
+
+                context.Response.Headers.ContentEncoding = encoding;
+                context.Request.Path = new PathString(path.Value + suffix);
+                return;
+            }
+
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Whether the client accepts <paramref name="encoding"/>, honouring an explicit
+    /// <c>q=0</c> rejection the way the framework's own content negotiation does.
+    /// </summary>
+    private static bool Accepts(HttpRequest request, string encoding)
+    {
+        if (!StringWithQualityHeaderValue.TryParseList(
+                request.Headers.AcceptEncoding, out var accepted))
+            return false;
+
+        foreach (var candidate in accepted)
+            if (string.Equals(candidate.Value.Value, encoding, StringComparison.OrdinalIgnoreCase))
+                return candidate.Quality is not 0;
+
+        return false;
+    }
+
+    /// <summary>
+    /// Gives a precompressed file the media type of what it decodes TO — <c>x.js.br</c> is
+    /// <c>text/javascript</c> carried under <c>Content-Encoding: br</c>, not a media type of its
+    /// own. Without this the static-file middleware finds no type for <c>.br</c> and refuses to
+    /// serve it (and, worse, maps <c>.gz</c> to <c>application/x-gzip</c>, which would break a
+    /// negotiated response that the browser has already decoded).
+    /// </summary>
+    private sealed class PrecompressedContentTypeProvider : IContentTypeProvider
+    {
+        private readonly FileExtensionContentTypeProvider inner = new();
+
+        public bool TryGetContentType(string subpath, out string contentType)
+        {
+            foreach (var (suffix, _) in PrecompressedVariants)
+                if (subpath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+                    && inner.TryGetContentType(subpath[..^suffix.Length], out var identityType)
+                    && identityType is not null)
+                {
+                    contentType = identityType;
+                    return true;
+                }
+
+            // A genuinely-shipped archive (`data.gz`, nothing underneath it) keeps its own type.
+            if (inner.TryGetContentType(subpath, out var ownType) && ownType is not null)
+            {
+                contentType = ownType;
+                return true;
+            }
+
+            contentType = null!;
+            return false;
+        }
     }
 
     /// <summary>
@@ -92,7 +244,11 @@ public static class MeshModuleStaticAssetExtensions
     /// against a laid-out folder without standing up a web host.
     /// </summary>
     /// <param name="modules">The boot-installed modules to inspect.</param>
-    /// <param name="environment">Supplies the host's web root, used for the shadowing check.</param>
+    /// <param name="environment">
+    /// Supplies <see cref="IWebHostEnvironment.WebRootFileProvider"/> — what the host actually
+    /// SERVES, which is what the shadowing check must ask. Outside a published layout the host's
+    /// <c>_content/*</c> paths have no directory on disk at all.
+    /// </param>
     /// <param name="logger">Receives one line per mounted or skipped dependency.</param>
     /// <param name="baseDirectory">
     /// Where <c>modules/</c> lives; defaults to <see cref="AppContext.BaseDirectory"/>, which is
@@ -106,12 +262,15 @@ public static class MeshModuleStaticAssetExtensions
         string? baseDirectory = null)
     {
         baseDirectory ??= AppContext.BaseDirectory;
-        // The host's own _content/<dep> roots. A published app materialises them physically under
-        // wwwroot, so their presence is the cheap, checkable form of "the platform already serves
-        // this dependency" — and the reason a module's copy is skipped rather than racing it.
-        var hostContentRoot = string.IsNullOrEmpty(environment.WebRootPath)
-            ? null
-            : Path.Combine(environment.WebRootPath, ContentRoot);
+        // 🚨 "Does the host already serve _content/<dep>?" is a question for the WEB ROOT FILE
+        // PROVIDER, never for the filesystem. Only a PUBLISHED app materialises its static web
+        // assets physically under wwwroot; a dev run leaves wwwroot/_content empty on disk and
+        // serves those paths through the manifest-backed provider StaticWebAssetsLoader composes
+        // over the physical one. A Directory.Exists probe therefore answers "the host does not
+        // have it" for EVERY referenced RCL outside a published layout — and the module's copy
+        // gets mounted straight on top of a live platform mapping, which is the shadowing this
+        // check exists to prevent. The provider is the one source that is right in both.
+        var hostAssets = environment.WebRootFileProvider;
 
         var mounts = new List<ModuleStaticAssetMount>();
         var stylesheets = new List<string>();
@@ -159,8 +318,7 @@ public static class MeshModuleStaticAssetExtensions
                 // The host wins, always. Serving a module's copy over a platform-provided one is
                 // how you get two versions of the same RCL's JS answering the same URL depending
                 // on middleware order — a shadowing bug that presents as a caching bug.
-                if (hostContentRoot is not null
-                    && Directory.Exists(Path.Combine(hostContentRoot, dependencyName)))
+                if (hostAssets.GetDirectoryContents($"{ContentRoot}/{dependencyName}").Exists)
                 {
                     logger.LogDebug(
                         "Module {Module}: not serving _content/{Dependency} — the host already provides it",
