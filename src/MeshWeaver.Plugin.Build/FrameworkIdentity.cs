@@ -2,6 +2,7 @@ using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using MeshWeaver.Graph.Configuration;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Plugin.Build;
 
 /// <summary>

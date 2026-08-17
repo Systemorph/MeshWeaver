@@ -9,6 +9,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 
+using MeshWeaver.Compiler;
 var builder = WebApplication.CreateBuilder(args);
 
 // Configure Memex services (pattern from MeshWeaver.Portal's ConfigureWebPortalServices)

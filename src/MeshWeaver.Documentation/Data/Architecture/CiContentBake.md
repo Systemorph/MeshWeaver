@@ -52,10 +52,15 @@ hosts that matter here — the bake host and the portals, which both ship a
 reference, the SHA-256 of its *reference assembly* (the compiler's own definition of the API
 surface — byte-stable under body-only and private-member edits, changed by any surface change),
 hashed over the canonical content-surface set, with the generated-input-shaping exceptions
-contributing their full implementation MVID: `MeshWeaver.Compiler` (THE compile toolchain since
-#1707 — skeleton generation, source-query resolution, `@@`-include shaping, aggregation, options,
-generator execution, emit) and `MeshWeaver.NuGet` (the `#r "nuget:"` parser/resolver — what Roslyn
-is fed and which assemblies a directive adds). Before #1707 the toolchain lived inside
+contributing their full implementation MVID: the toolchain roots `MeshWeaver.Compiler` (THE
+compile toolchain since #1707 — skeleton generation, source-query resolution, `@@`-include
+shaping, aggregation, options, generator execution, emit; namespace `MeshWeaver.Compiler`) and
+`MeshWeaver.NuGet` (the `#r "nuget:"` parser/resolver — what Roslyn is fed and which assemblies a
+directive adds), **plus their computed MeshWeaver dependency closure** (Mesh.Contract,
+ContentCollections, transitives — the toolchain CALLS into what it links, so a body-only change
+in a closure member can change what it emits; the set is derived from the shipped assemblies'
+AssemblyRef metadata, so every host computes the identical set and a new toolchain dependency can
+never be silently outside the identity). Before #1707 the toolchain lived inside
 `MeshWeaver.Graph` and pinned ALL of Graph — the highest-churn assembly — so nearly every merge
 rebaked the world; the extraction is what makes "rebuild only when we need to" hold in practice.
 

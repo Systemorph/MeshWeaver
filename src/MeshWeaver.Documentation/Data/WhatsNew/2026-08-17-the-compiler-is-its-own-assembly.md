@@ -16,9 +16,10 @@ compilation options, source-generator execution, and the emit itself — now liv
 Why it matters: a compiled type stays valid exactly as long as nothing it was built from changed.
 The identity that decides this used to pin the whole graph assembly — the busiest code in the
 platform — so nearly any platform change forced every compiled type to rebuild. It now pins the
-small toolchain assembly (plus the `#r` directive resolver, whose effect on compiles was
-previously invisible to the identity), so rebuilds happen when the toolchain or a public surface
-actually changes — and only then.
+small toolchain assembly together with everything the toolchain itself depends on (including the
+`#r` directive resolver, whose effect on compiles was previously invisible to the identity), so
+rebuilds happen when the toolchain, one of its dependencies, or a public surface actually
+changes — and only then.
 
 One pipeline, every path: the portal compiling an edited type on demand, the startup batch bake,
 and the CI bake that ships prebuilt assemblies all run the same toolchain code, so what CI built

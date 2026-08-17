@@ -24,6 +24,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Acme.Test;
 
 /// <summary>

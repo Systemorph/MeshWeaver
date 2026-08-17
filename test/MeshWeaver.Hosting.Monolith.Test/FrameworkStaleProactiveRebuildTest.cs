@@ -12,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>

@@ -14,6 +14,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Sqlite.Test;
 
 /// <summary>

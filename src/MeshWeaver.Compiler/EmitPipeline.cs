@@ -1,4 +1,3 @@
-using MeshWeaver.Graph.Configuration;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;

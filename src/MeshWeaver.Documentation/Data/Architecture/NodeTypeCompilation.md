@@ -400,10 +400,13 @@ resolved once per process (`FrameworkBuildIdentity`,
   (the compiler's own definition of the API surface — byte-stable under
   body-only and private-member edits, changed by any surface change), hashed
   over the canonical content-surface set, with the generated-input-shaping
-  exceptions contributing their full implementation MVID: `MeshWeaver.Compiler`
-  (THE compile toolchain since #1707 — skeleton generation, source-query
-  resolution, include shaping, aggregation, options, generator execution, emit)
-  and `MeshWeaver.NuGet` (the `#r "nuget:"` parser/resolver).
+  exceptions contributing their full implementation MVID: the toolchain roots
+  `MeshWeaver.Compiler` (THE compile toolchain since #1707 — skeleton
+  generation, source-query resolution, include shaping, aggregation, options,
+  generator execution, emit) and `MeshWeaver.NuGet` (the `#r "nuget:"`
+  parser/resolver), plus their computed MeshWeaver dependency closure — the
+  toolchain calls into what it links, so a body-only change in a closure member
+  (Mesh.Contract, ContentCollections, …) must recompile content too.
   "Rebuild only when we need to": an internal-only
   framework release keeps the identity, so every cached and CI-published build
   stays valid; a breaking surface change mints a new one, and the CI bake for

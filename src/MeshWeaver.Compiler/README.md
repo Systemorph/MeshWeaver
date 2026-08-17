@@ -23,6 +23,9 @@ The mesh-actor half of the pipeline — source discovery against the live mesh, 
 impersonation, IoPool scheduling, compile status write-backs — stays in `MeshWeaver.Graph`
 (`MeshNodeCompilationService`, `NodeTypeCompilationHelpers`) and orchestrates this toolchain.
 
-Types moved from `MeshWeaver.Graph` keep their original `MeshWeaver.Graph.Configuration`
-namespace and are type-forwarded from `MeshWeaver.Graph`, so modules compiled against earlier
-releases keep binding. New toolchain code uses the `MeshWeaver.Compiler` namespace.
+Everything in this assembly lives in the `MeshWeaver.Compiler` namespace (unified in #1712 —
+swept clean: no in-mesh source and no live-portal content references the moved types by their old
+`MeshWeaver.Graph.Configuration` names, so no forwards are carried). The framework identity's
+full-MVID rule covers this assembly plus its computed MeshWeaver dependency closure — the
+toolchain calls into what it links, so a body-only change in a closure member must recompile
+content too.

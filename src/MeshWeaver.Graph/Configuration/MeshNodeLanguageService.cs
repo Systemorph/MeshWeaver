@@ -19,6 +19,7 @@ using Microsoft.Extensions.Logging;
 using RoslynDiagnosticSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
 using LspDiagnosticSeverity = MeshWeaver.Mesh.Services.LanguageServer.DiagnosticSeverity;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>

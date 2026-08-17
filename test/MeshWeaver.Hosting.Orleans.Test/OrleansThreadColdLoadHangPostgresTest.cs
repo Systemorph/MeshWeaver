@@ -26,6 +26,7 @@ using Orleans.TestingHost;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>

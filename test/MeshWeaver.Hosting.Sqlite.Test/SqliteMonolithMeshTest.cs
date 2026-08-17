@@ -10,6 +10,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Sqlite.Test;
 
 /// <summary>

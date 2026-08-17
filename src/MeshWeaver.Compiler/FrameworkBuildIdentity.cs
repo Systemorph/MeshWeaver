@@ -4,7 +4,7 @@ using System.Reflection.Metadata;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// THE framework build identity every compiled NodeType release is pinned to (issue #1660 WS3) —
@@ -147,10 +147,84 @@ public static class FrameworkBuildIdentity
     /// the resolver decides which assemblies a directive adds to the reference set. A body-only
     /// change to either alters compile inputs with no API change — before #1707 this was a HOLE:
     /// the assembly was surface-hashed only.</description></item>
+    /// <item><description><b>…and each root's MeshWeaver DEPENDENCY CLOSURE</b> (maintainer,
+    /// 2026-08-17: "must track dependencies of compiler itself — if any have changed, need to
+    /// recompile"): the toolchain CALLS into what it links (Mesh.Contract's data types,
+    /// ContentCollections' config shapes, the NuGet resolver), so a body-only change in a closure
+    /// member can change what the toolchain emits without any API change. The set is COMPUTED
+    /// from the roots' AssemblyRef metadata — fixed bytes of the shipped assemblies, so every
+    /// host derives the identical set — rather than hand-listed, so a new toolchain dependency
+    /// can never be silently outside the identity. Under deterministic builds this still keeps
+    /// "rebuild only when we need to": a platform update that provably touches none of the
+    /// closure members' bytes moves nothing.</description></item>
     /// </list>
     /// </summary>
-    public static readonly ImmutableArray<string> FullMvidAssemblies =
+    public static ImmutableArray<string> FullMvidAssemblies => _fullMvidAssemblies.Value;
+
+    /// <summary>The toolchain roots the full-MVID closure is computed from.</summary>
+    internal static readonly ImmutableArray<string> ToolchainRoots =
         ["MeshWeaver.Compiler", "MeshWeaver.NuGet"];
+
+    private static readonly Lazy<ImmutableArray<string>> _fullMvidAssemblies = new(() =>
+        ComputeToolchainClosure(ToolchainRoots, ReferencedMeshWeaverAssembliesOf));
+
+    /// <summary>
+    /// The MeshWeaver-only transitive closure of <paramref name="roots"/> over
+    /// <paramref name="referencedOf"/> — pure and injectable so the closure rule is unit-testable
+    /// against a staged reference graph. Sorted ordinal; roots always included.
+    /// </summary>
+    internal static ImmutableArray<string> ComputeToolchainClosure(
+        IEnumerable<string> roots,
+        Func<string, IEnumerable<string>> referencedOf)
+    {
+        var seen = new SortedSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<string>(roots);
+        while (stack.Count > 0)
+        {
+            var name = stack.Pop();
+            if (!seen.Add(name))
+                continue;
+            foreach (var reference in referencedOf(name))
+                if (reference.StartsWith("MeshWeaver.", StringComparison.Ordinal))
+                    stack.Push(reference);
+        }
+        return [.. seen];
+    }
+
+    /// <summary>
+    /// An assembly's MeshWeaver.* AssemblyRef simple names: from the loaded assembly when
+    /// present, else a metadata-only read of the DLL beside the entry assembly, else empty
+    /// (the name still joins the closure via its root/parent; its MVID then resolves
+    /// <see cref="AbsentMarker"/>, which is itself identity-relevant).
+    /// </summary>
+    private static IEnumerable<string> ReferencedMeshWeaverAssembliesOf(string simpleName)
+    {
+        var loaded = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => !a.IsDynamic
+                && string.Equals(a.GetName().Name, simpleName, StringComparison.Ordinal));
+        if (loaded is not null)
+            return loaded.GetReferencedAssemblies()
+                .Select(n => n.Name)
+                .Where(n => !string.IsNullOrEmpty(n))!;
+
+        var candidate = Path.Combine(AppContext.BaseDirectory, simpleName + ".dll");
+        if (!File.Exists(candidate))
+            return [];
+        try
+        {
+            using var stream = File.OpenRead(candidate);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            var md = pe.GetMetadataReader();
+            return md.AssemblyReferences
+                .Select(h => md.GetString(md.GetAssemblyReference(h).Name))
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
 
     /// <summary>Marker recorded for a canonical assembly absent from the manifest/process — the
     /// absence itself is part of the identity (two hosts with different presence sets must never

@@ -3,6 +3,7 @@ using System.Linq;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>

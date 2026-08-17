@@ -18,6 +18,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>

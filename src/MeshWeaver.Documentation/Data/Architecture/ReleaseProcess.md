@@ -86,8 +86,9 @@ The `PublicRelease` flag picks the channel (think **CI** vs **CD**):
   `NodeTypeCompilationHelpers.FrameworkVersion` (`FrameworkBuildIdentity`): hosts that
   ship a `meshweaver-surface.manifest` (portals, the CI bake host) resolve the
   **API-surface hash** (`s<hash>` — stable across internal-only changes, moved by
-  breaking surface changes and by any change to the toolchain full-MVID exceptions,
-  `MeshWeaver.Compiler` / `MeshWeaver.NuGet`, #1707); manifest-less CI
+  breaking surface changes and by any change to the toolchain full-MVID set:
+  `MeshWeaver.Compiler` / `MeshWeaver.NuGet` plus their computed MeshWeaver
+  dependency closure, #1707); manifest-less CI
   processes fall back to the **stamped commit identity** (`g<sha>`,
   `AssemblyMetadata("MeshWeaverFrameworkIdentity")`, kept as provenance everywhere);
   manifest-less local builds fall back to the **identity anchor's MVID**

@@ -26,6 +26,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.AI.Test;
 
 /// <summary>

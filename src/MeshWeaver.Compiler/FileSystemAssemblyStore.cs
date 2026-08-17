@@ -4,7 +4,7 @@ using MeshWeaver.Mesh.Persistence;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Compiler;
 
 /// <summary>
 /// Filesystem-backed <see cref="IAssemblyStore"/>. Used by the monolith portal and

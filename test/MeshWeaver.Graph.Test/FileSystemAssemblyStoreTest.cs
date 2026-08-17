@@ -5,6 +5,7 @@ using MeshWeaver.Graph.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>

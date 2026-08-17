@@ -1,10 +1,12 @@
 #pragma warning disable CS1591
 
+using System.Reflection.Metadata;
 using System.Text.RegularExpressions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Plugin.Build;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
@@ -94,16 +96,46 @@ public class FrameworkBuildIdentityTest
     }
 
     [Fact]
-    public void FullMvidMembership_IsTheToolchainAndTheDirectiveResolver()
+    public void FullMvidMembership_IsTheToolchainClosureIncludingItsDirectDependencies()
     {
-        // The membership IS the design (#1707): the toolchain assembly (everything that shapes
-        // generated compile input) plus MeshWeaver.NuGet (the #r directive parser/resolver —
-        // shapes what Roslyn is fed and which assemblies a directive adds; was a HOLE before
-        // #1707: surface-hashed only). Anything else here means either the extraction leaked
-        // input-shaping code back out, or an assembly is being over-pinned.
-        FrameworkBuildIdentity.FullMvidAssemblies
-            .OrderBy(n => n, StringComparer.Ordinal)
-            .Should().Equal("MeshWeaver.Compiler", "MeshWeaver.NuGet");
+        // The membership IS the design (#1707, maintainer 2026-08-17: "must track dependencies of
+        // the compiler itself — if any have changed, need to recompile"): the toolchain roots
+        // (MeshWeaver.Compiler — everything that shapes generated compile input — and
+        // MeshWeaver.NuGet, the #r directive parser/resolver) PLUS their MeshWeaver dependency
+        // closure, because the toolchain CALLS into what it links, so a body-only change in a
+        // closure member can change what it emits with no API change.
+        var members = FrameworkBuildIdentity.FullMvidAssemblies;
+
+        members.Should().Contain("MeshWeaver.Compiler").And.Contain("MeshWeaver.NuGet",
+            "the roots are always members");
+        members.Should().OnlyContain(n => n.StartsWith("MeshWeaver.", StringComparison.Ordinal),
+            "non-MeshWeaver dependencies roll with the image/TFM and stay outside the identity");
+        // Known DIRECT dependencies of the toolchain — a regression here means the closure walk
+        // silently stopped resolving references.
+        members.Should().Contain("MeshWeaver.Mesh.Contract").And.Contain("MeshWeaver.ContentCollections");
+        members.Should().Equal(members.OrderBy(n => n, StringComparer.Ordinal),
+            "the closure is sorted so the hash text is deterministic");
+    }
+
+    [Fact]
+    public void ToolchainClosure_WalksTransitivesAndFiltersNonMeshWeaver()
+    {
+        // The pure closure rule over a staged graph: transitive MeshWeaver refs join, diamonds
+        // dedupe, non-MeshWeaver refs are dropped, and a name with no resolvable refs still
+        // joins (its MVID then resolves 'absent', which is itself identity-relevant).
+        var graph = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["MeshWeaver.Compiler"] = ["MeshWeaver.A", "System.Runtime", "MeshWeaver.B"],
+            ["MeshWeaver.NuGet"] = ["MeshWeaver.B", "NuGet.Protocol"],
+            ["MeshWeaver.A"] = ["MeshWeaver.C"],
+            ["MeshWeaver.B"] = [],
+        };
+        var closure = FrameworkBuildIdentity.ComputeToolchainClosure(
+            ["MeshWeaver.Compiler", "MeshWeaver.NuGet"],
+            name => graph.TryGetValue(name, out var refs) ? refs : []);
+        closure.Should().Equal(
+            "MeshWeaver.A", "MeshWeaver.B", "MeshWeaver.C",
+            "MeshWeaver.Compiler", "MeshWeaver.NuGet");
     }
 
     [Fact]
@@ -181,18 +213,12 @@ public class FrameworkBuildIdentityTest
 
             var identity = FrameworkBuildIdentity.ResolveProcessIdentity(dir, AnchorAssembly);
             identity.Should().StartWith("s");
-            // The full-MVID exceptions (the toolchain anchor + MeshWeaver.NuGet) are loaded in
-            // this test host, so their live MVIDs join the hash — the rest resolve their
-            // manifest stubs.
-            var nuget = typeof(MeshWeaver.NuGet.NuGetDirectiveParser).Assembly;
+            // The full-MVID exceptions (the toolchain closure) resolve their LIVE MVIDs in this
+            // process — mirrored here with the same loaded-else-PE resolution the identity uses —
+            // while everything else resolves its manifest stub.
             var expected = FrameworkBuildIdentity.ComputeSurfaceIdentity(
                 FrameworkBuildIdentity.ContentSurfaceAssemblies.ToDictionary(n => n, _ => "stub"),
-                n => n switch
-                {
-                    "MeshWeaver.Compiler" => AnchorAssembly.ManifestModule.ModuleVersionId.ToString("N"),
-                    "MeshWeaver.NuGet" => nuget.ManifestModule.ModuleVersionId.ToString("N"),
-                    _ => null,
-                });
+                TestImplMvidOf);
             identity.Should().Be(expected);
         }
         finally
@@ -329,6 +355,21 @@ public class FrameworkBuildIdentityTest
             .FirstOrDefault(a => !a.IsDynamic
                 && string.Equals(a.GetName().Name, simpleName, StringComparison.Ordinal))
             ?.ManifestModule.ModuleVersionId.ToString("N");
+
+    /// <summary>The identity's ImplMvidOf resolution, mirrored independently: loaded assembly,
+    /// else a metadata-only read of the DLL beside the test host, else null.</summary>
+    private static string? TestImplMvidOf(string simpleName)
+    {
+        if (LoadedMvidOf(simpleName) is { } loaded)
+            return loaded;
+        var candidate = Path.Combine(AppContext.BaseDirectory, simpleName + ".dll");
+        if (!File.Exists(candidate))
+            return null;
+        using var stream = File.OpenRead(candidate);
+        using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+        var md = pe.GetMetadataReader();
+        return md.GetGuid(md.GetModuleDefinition().Mvid).ToString("N");
+    }
 
     private static string? FindRepositoryRoot()
     {
