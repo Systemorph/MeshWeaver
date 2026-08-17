@@ -378,6 +378,15 @@ config:
     # pre-run bake Job used to enforce from outside the portal as Bake__AllowEmpty. It never
     # relaxes a real regression, and the /health payload keeps saying the bake was unproven.
     PreWarm__AllowUnprovenBake: "false"
+    # Adopt CI-baked NodeType assemblies instead of compiling them, and REPORT (by name, at
+    # warning) whatever the adoption did not cover. Off here because the chart's default
+    # deployment is a managed one that gates on a proven bake; the homebrew/local overlay turns
+    # it on, because a laptop should run the modules CI already built rather than rebuild them.
+    # Not a synonym for PreWarm__DynamicTypes:"false" — that disables the bundle SEEDING too.
+    PreWarm__AdoptOnly: "false"
+    # Mount point of CI's published bake, consumed as <root>/<framework-identity>/<source>/*.zip.
+    # Empty = the lane is inert and every dynamic type is compiled/lazily built as before.
+    PreWarm__PrebuiltBundleRoot: ""
     # Arms DELETION of framework generations nothing is running any more (the claim + the
     # report happen regardless). Off by default — see config.yaml for what is kept and why
     # this is a decision taken against a report rather than a default.

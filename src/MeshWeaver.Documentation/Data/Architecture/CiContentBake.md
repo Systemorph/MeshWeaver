@@ -145,6 +145,50 @@ logged and skipped, and the sweep compiles that type as it always has. Nothing c
 from this path — the bake gate keeps probing the store, which only ever holds what was actually
 adopted.
 
+## Adopt-only: consume the bake, never build it (`PreWarm:AdoptOnly`)
+
+A managed portal both adopts *and* compiles: whatever the bundles did not cover, the sweep builds,
+and the readiness gate certifies the result. That trade is wrong on a developer's laptop. The
+framework identity changes with every image, so every `memex-local update` invalidates the whole
+assembly cache and the startup bake recompiles the entire shipped content set on the same CPU the
+developer is trying to work on. One developer machine had accumulated **15 generations** under
+`/data/assembly-cache/.generations` — fifteen full sweeps of ~38 types, none of which produced
+anything CI had not already built.
+
+`PreWarm:AdoptOnly=true` keeps the adoption and drops the compiling:
+
+1. both bundle sources seed exactly as above (`SeedAll`, then `SeedPublishedRoot`);
+2. `DynamicTypePreWarmer.ProbeDynamicTypes` enumerates the mesh's dynamic NodeTypes and asks the
+   assembly store about each — the same `NodeTypeBakeStatus.Probe` the sweep uses to decide what to
+   build, stopping at the answer;
+3. the boot log reports `adopted=N uncovered=M`, and **every uncovered type is NAMED at warning**.
+
+Nothing is compiled at boot. An uncovered type is still correct — it builds on first access through
+the ordinary lazy path — it is merely not warm. That is the deliberate escape for content with no CI
+bake *by construction*: a NodeType someone is authoring on a laptop has no published bundle and
+never will, and "bake your own" is the right answer for it. What adopt-only refuses is the silent
+version of that: a gap you only discover when a page renders empty.
+
+> 🚨 **`PreWarm:AdoptOnly` is not a synonym for `PreWarm:DynamicTypes=false`.** The bundle seeding
+> runs on the *same hosted service* as the sweep, so switching the service off switches adoption off
+> with it — the instance would adopt nothing **and** still compile everything, lazily and
+> unreported. Adopt-only is the key that removes the compiling; `DynamicTypes` is the key that keeps
+> the adoption. The homebrew defaults set both, and
+> `PlatformBakeLaneGuard.LocalDefaults_AdoptRatherThanPreBake_AndKeepTheSeedingOn` pins the pairing.
+
+Adopt-only compiles nothing, so it can prove nothing: it never arms `PreWarm:GateReadiness`, and the
+contradictory combination is logged as an error naming both keys rather than quietly honoured in
+either direction. It is the default for the homebrew/local chart overlay, and off everywhere else.
+
+> 🚨 **A `PreWarm__*` key in a values file does nothing until the configmap renders it.**
+> `deploy/helm/templates/memex-portal/config.yaml` enumerates keys explicitly — it does not iterate
+> `.Values.config` — so an untemplated key is dropped with no warning from helm, kubectl, or the
+> portal. `PreWarm__PrebuiltBundleRoot` was set in `values.aks.yaml` from the day this lane shipped
+> while the configmap never rendered it, so every chart-deployed portal ran with the consuming half
+> inert and recompiled content CI had already baked for it. Adding a key to a values file is half
+> the change; `PlatformBakeLaneGuard.EveryPreWarmKeyInValues_IsTemplatedInTheConfigMap` asserts the
+> other half.
+
 ## The delivery: main-cd bakes IN THE IMAGE, then publishes
 
 `main-cd`'s **`publish-bake`** job runs the platform's own shipped content — the `Doc` tree and the
