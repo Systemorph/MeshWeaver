@@ -41,10 +41,12 @@
               class="@(chip.IsUpdate ? "platform-build-chip platform-build-chip--update" : "platform-build-chip")"
               Title="@chip.Tooltip" aria-label="@chip.Tooltip"
               OnClick="@Activate">
-    @if (Glyph is { } glyph)
-    {
-        <FluentIcon Value="@glyph" Color="@GlyphColor" />
-    }
+    @* 🚨 The glyph is UNCONDITIONAL, and that is load-bearing rather than decorative: the narrow
+       viewport rule below hides the version text, so a state with no glyph would render an empty
+       button — invisible, still clickable, and with nothing to hover for the tooltip. Keeping every
+       state glyphed means "the chip always shows something" holds by construction instead of by
+       two rules agreeing with each other. *@
+    <FluentIcon Value="@Glyph" Color="@GlyphColor" />
     <span class="platform-build-chip__version">@chip.DisplayVersion</span>
 </FluentButton>
 
@@ -62,17 +64,22 @@
     /// <summary>The serving process; under Kubernetes this is the pod name.</summary>
     private static string InstanceName => Environment.MachineName;
 
-    private Icon? Glyph => status.Availability switch
+    private Icon Glyph => status.Availability switch
     {
         PlatformUpdateAvailability.UpdateAvailable => new Size20.ArrowCircleUp(),
         PlatformUpdateAvailability.UpdateHeld => new Size20.PauseCircle(),
-        // Nothing to act on: the version text alone, no glyph competing with the buttons beside it.
-        _ => null,
+        // Nothing to act on — so the glyph says "here is information", not "do something".
+        _ => new Size20.Info(),
     };
 
-    private Color GlyphColor => status.Availability == PlatformUpdateAvailability.UpdateHeld
-        ? Color.Warning
-        : Color.Success;
+    private Color GlyphColor => status.Availability switch
+    {
+        PlatformUpdateAvailability.UpdateAvailable => Color.Success,
+        PlatformUpdateAvailability.UpdateHeld => Color.Warning,
+        // FillInverse, matching the settings and theme buttons this sits between: with nothing
+        // pending the chip is chrome, and colouring it would make an idle install look eventful.
+        _ => Color.FillInverse,
+    };
 
     protected override void OnInitialized()
     {
