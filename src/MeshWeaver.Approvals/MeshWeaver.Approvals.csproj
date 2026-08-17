@@ -5,10 +5,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
   </ItemGroup>
 
