@@ -272,14 +272,15 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
             // stamped at creation (Id, HubPath, Start, User) and anything a concurrent
             // control-plane writer set (RequestedStatus) rides through untouched.
             //
-            // Observable.Using holds the System scope across the COLD write's Subscribe — a
-            // plain `using` would have lapsed before the subscribe ran and the write would
-            // carry no identity. System because this fires from the throttle TIMER thread,
-            // which never inherited the script runner's AccessContext; the activity log is
-            // infrastructure observability, not a user write.
-            Observable.Using<MeshNode, IDisposable>(
-                    () => _accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                    _ => stream.Update(node =>
+            // 🚨 RunAsSystem, never a hand-rolled Observable.Using / plain `using` (#1444). It
+            // enters the impersonation at SUBSCRIBE — which a plain `using` cannot promise for a
+            // COLD write — and, through ContainIdentity, restores the subscriber's own identity
+            // around every notification, so the AsyncLocal is neither left latched on the
+            // publishing thread nor handed to whichever thread the write's echo terminates on.
+            // System at all because this fires from the throttle TIMER thread, which never
+            // inherited the script runner's AccessContext; the activity log is infrastructure
+            // observability, not a user write.
+            _accessService.RunAsSystem(() => stream.Update(node =>
                     {
                         // ContentAs, never `is ActivityLog`: a degraded JsonElement (a hub whose
                         // TypeRegistry lacks the discriminator) would make a type test null, the
@@ -354,11 +355,11 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
         _sealInFlight = true;
         // CreateOrUpdateNode (not CreateNode): a retried seal re-writes the SAME index with the same
         // content rather than failing on an existing path.
-        // Observable.Using holds the System scope across the COLD write's Subscribe — a plain `using`
-        // would have lapsed before the subscribe ran and the write would post context-null.
-        Observable.Using<MeshNode, IDisposable>(
-                () => _accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                _ => meshService.CreateOrUpdateNode(segmentNode))
+        // 🚨 RunAsSystem, never a hand-rolled Observable.Using (#1444): it holds the System scope
+        // across the COLD write's Subscribe (a plain `using` would have lapsed before the subscribe
+        // ran and the write would post context-null) AND contains the identity, so the callbacks
+        // below — and the thread the write terminates on — never inherit System.
+        _accessService.RunAsSystem(() => meshService.CreateOrUpdateNode(segmentNode))
             .Subscribe(
                 _ =>
                 {
