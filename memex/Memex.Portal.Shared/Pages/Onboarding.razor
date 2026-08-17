@@ -280,6 +280,14 @@ else
     /// into the chosen language on the spot. Nothing is persisted here — <c>User.Locale</c> is
     /// written once, from <c>model.Locale</c>, when the form is submitted (the user may not have a
     /// user node yet at all).
+    ///
+    /// <para>🚨 BOTH contexts are written, and neither is redundant — the same pairing
+    /// <see cref="OnExistingUserCheckCompleted"/> already does. <c>AccessService.Context</c> is an
+    /// <c>AsyncLocal</c> scoped to the inbound activity: writing it makes THIS render pick the
+    /// language up, but it does not survive to the circuit's next event, so on its own the form
+    /// would snap back to the previous language on the following interaction. The circuit-level
+    /// write is what actually carries the choice forward — and writing only the AsyncLocal would
+    /// also leave a request context stamped with a locale the circuit never agreed to.</para>
     /// </summary>
     private void OnLocaleChanged(string? tag)
     {
@@ -288,8 +296,12 @@ else
         // Explicit restamp — never CultureInfo.CurrentUICulture, which a hub-scheduler hop would
         // drop and which would leak one viewer's language into another's render.
         var context = AccessService?.Context ?? AccessService?.CircuitContext;
-        if (context is not null)
-            AccessService!.SetContext(context with { Locale = model.Locale });
+        if (context is null)
+            return;
+
+        var relocalized = context with { Locale = model.Locale };
+        AccessService!.SetContext(relocalized);          // this render
+        CircuitAccessHandler.UpdateUserContext(relocalized); // every render after it
     }
 
     private void OnExistingUserCheckCompleted(string email, MeshNode? existing, bool isFirstUser, bool invited)
