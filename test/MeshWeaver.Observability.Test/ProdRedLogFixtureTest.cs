@@ -44,11 +44,12 @@ public class ProdRedLogFixtureTest
         BurstAggregator.Aggregate(Fixture(), maxSamples: 5, maxSampleLength: 4000).Reports;
 
     /// <summary>
-    /// The headline claim: three NodeTypes that failed to compile are three incidents, even though
-    /// the identity's old inputs are identical across all three.
+    /// The headline claim: NodeTypes that failed to compile are separate incidents, even though the
+    /// identity's old inputs are identical across all of them. The fixture carries three of the
+    /// thirteen bursts memex-cloud produced — enough to pin the split, small enough to read.
     /// </summary>
     [Fact]
-    public void ThirteenParkedNodeTypes_AreNotOneTicket()
+    public void ParkedNodeTypes_WithDifferentCompilerErrors_AreSeparateIncidents()
     {
         var compile = Reports()
             .Where(r => r.Category == "MeshWeaver.Graph.Configuration.MeshNodeCompilationService")
