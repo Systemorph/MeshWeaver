@@ -7,7 +7,7 @@ namespace MeshWeaver.Hosting.SelfUpdate;
 /// </summary>
 public record SelfUpdateOptions
 {
-    /// <summary>Configuration section this binds from (e.g. <c>SelfUpdate__PollInterval</c>).</summary>
+    /// <summary>Configuration section this binds from (e.g. <c>SelfUpdate__RetryInterval</c>).</summary>
     public const string SectionName = "SelfUpdate";
 
     /// <summary>The container registry login server the running install pulls from and polls.</summary>
@@ -33,18 +33,26 @@ public record SelfUpdateOptions
     /// <summary>The migration container name within <see cref="MigrationDeployment"/>.</summary>
     public string MigrationContainer { get; init; } = "memex-migration";
 
-    /// <summary>How often the running install polls the registry ("a few times a day").</summary>
-    public TimeSpan PollInterval { get; init; } = TimeSpan.FromHours(6);
+    /// <summary>
+    /// The RETRY interval — how long a faulted watch waits before re-establishing itself.
+    ///
+    /// <para>🚨 No longer a poll cadence. The update check is event-driven: exactly one pass at
+    /// startup (to catch publications missed while this install was down), and after that a check
+    /// per build-completion event from the platform or from any module the environment deploys.
+    /// This value survives because a stream that faults still has to come back, and it must not
+    /// come back in a hot loop.</para>
+    /// </summary>
+    public TimeSpan RetryInterval { get; init; } = TimeSpan.FromHours(6);
 
     /// <summary>
-    /// The repository ("owner/repo") whose green builds trigger an IMMEDIATE check, on top of the
-    /// interval. The platform image is built by this repo's CD, so reacting to its
-    /// <c>BuildCompletion</c> node (written by the GitHub webhook — see
-    /// <c>Doc/Architecture/PluginUpdateOnGreenBuild</c>) turns "up to a PollInterval late" into
-    /// "minutes after the image lands". On an install without the webhook the stream simply never
-    /// emits and the interval still drives everything. Empty disables the trigger.
+    /// How long a burst of build-completion events is coalesced before one check runs.
+    ///
+    /// <para>Several repositories publishing at once (a platform release plus its satellites
+    /// re-baking) should cost ONE availability check, not one per repository. Configurable rather
+    /// than hard-coded so tests can drive the event path without waiting out the production
+    /// window.</para>
     /// </summary>
-    public string BuildTriggerRepository { get; init; } = "Systemorph/MeshWeaver";
+    public TimeSpan EventCoalesceWindow { get; init; } = TimeSpan.FromMinutes(1);
 
     /// <summary>The policy seeded onto <c>Admin/UpdatePolicy</c> when it doesn't exist yet, and the
     /// fallback used before the policy node's first live emission.</summary>

@@ -16,6 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
 using MeshWeaver.Hosting.SelfUpdate;
+using MeshWeaver.GitSync;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
@@ -41,7 +42,10 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
     private const string CandidateTag = "9999.0.0-ci.1";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddUpdatePolicyType();
+        // AddGitHubSyncTypes registers the BuildCompletion satellite — the record the workflow_run
+        // webhook writes and the self-update watch reacts to. Types only, no credentials: the same
+        // production registration rather than a duplicate declaration that could drift from it.
+        => base.ConfigureMesh(builder).AddUpdatePolicyType().AddGitHubSyncTypes();
 
     /// <summary>Fake registry (the documented IO seam): one build newer than anything installed.</summary>
     private sealed class FakeAcrTagLister : IAcrTagLister
@@ -111,7 +115,10 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
 
     private static SelfUpdateOptions FastPoll() => new()
     {
-        PollInterval = TimeSpan.FromMilliseconds(500),
+        RetryInterval = TimeSpan.FromMilliseconds(500),
+        // Coalescing is a production concern (one check for a burst of publications); a test that
+        // drives one event must not wait out the real window.
+        EventCoalesceWindow = TimeSpan.FromMilliseconds(50),
         DefaultPolicy = UpdatePolicyKind.Continuous,
     };
 
@@ -175,9 +182,14 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
                 .Timeout(TimeSpan.FromSeconds(30))
                 .ToTask(ct);
 
-            // The bake lands. Nothing is un-stuck by hand — the hold is re-evaluated every tick, and
-            // that is precisely what makes refusing safe.
+            // The bake lands...
             gate.Allow();
+
+            // ...and the PUBLICATION that carries it is the event that re-decides the hold. The check
+            // is event-driven now, so nothing is re-evaluated on a timer: what makes refusing safe is
+            // that the very act of the missing artifact becoming available is itself a build
+            // completion, and this watch reacts to ANY repository's — platform or module.
+            await SelfUpdateEventDriver.PublishBuildAsync(Mesh, "MeshWeaver.Plugins", runNumber: 1);
 
             var applied = await updater.Patched
                 .FirstAsync()
