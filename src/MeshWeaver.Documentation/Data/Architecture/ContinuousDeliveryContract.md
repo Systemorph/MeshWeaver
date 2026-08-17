@@ -274,6 +274,13 @@ Provisioning state (2026-08-17): the two halves of this cascade are in different
   provisioned, satellites re-bake only on their own `main` pushes, and a release-triggered rebuild
   can be hand-fired by anyone with `repo` scope:
   `gh api repos/Systemorph/<repo>/dispatches -f event_type=meshweaver-framework-released`.
+- **The cascade is now a DAG, not a fan-out.** A satellite that depends on another declares
+  `upstream-sources` and, if its upstream has not published for the target framework, exits without
+  building — waking again on that upstream's own `meshweaver-upstream-published` event, which
+  `node-repo-publish-bake` fires to its `dependent-repos`. See [Release Availability
+  Gates](../ReleaseGates) → "The build gate". One provisioning consequence: naming only the ROOT
+  repos in `BAKE_SUBSCRIBER_REPOS` (those with no upstreams) produces the same wave without the
+  dependent repos each painting one red per release before their upstream publishes.
 
 ### 🚨 Register BOTH OIDC subject formats — the classic one AND the immutable one
 
