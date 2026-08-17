@@ -1407,11 +1407,15 @@ public static class PackageInstaller
                     "Installed code package {Id} v{Version}: {Written} written, {Unchanged} unchanged ({Path}) @ {Ref}",
                     manifest.Id, manifest.Version, result.Written, result.Unchanged, nodeTypePath, installedFromRef);
                 // Only recompile when something actually changed — an unchanged re-install must not
-                // kick a redundant Roslyn build.
-                if (written > 0)
-                    SeedThenRequestReleases(hub, [nodeTypePath], logger);
-                return WriteInstalledRecord(
-                        hub, manifest, installedFromRef, all.Length, authorizingUserId: authorizingUserId)
+                // kick a redundant Roslyn build. SEQUENCED, never fire-and-forget: the observable is
+                // cold, so a bare call would request no release at all, and an install that cannot
+                // order against the compiles it starts is the defect #1732 is about.
+                var releases = written > 0
+                    ? SeedThenRequestReleases(hub, [nodeTypePath], logger)
+                    : Observable.Return(System.Reactive.Unit.Default);
+                return releases
+                    .SelectMany(_ => WriteInstalledRecord(
+                        hub, manifest, installedFromRef, all.Length, authorizingUserId: authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, all, logger))
                     .Select(_ => result);
             });
@@ -2078,22 +2082,43 @@ public static class PackageInstaller
                 logger?.LogInformation(
                     "Installed node-repo plugin {Id}: {Written} written, {Unchanged} unchanged ({Count} node(s)) @ {Ref}",
                     manifest.Id, result.Written, result.Unchanged, nodes.Length, installedFromRef);
-                // Recompile only the NodeTypes, and only when something changed.
-                if (result.Written > 0)
-                    SeedThenRequestReleases(hub, nodeTypePaths, logger);
+
+                // Recompile only the NodeTypes, and only when something changed — in TWO ORDERED
+                // WAVES around the root's recycle. See ReleaseWaves for why the split exists and
+                // why the root's own type has to be in the first one (#1732).
+                var retypedRoot = placeholderRoot is not null ? root?.Path : null;
+                var (firstWave, deferredWave) = ReleaseWaves(retypedRoot, nodeTypePaths, nodes);
+                var releases = result.Written > 0
+                    ? SeedPrebuiltAssemblies(hub, nodeTypePaths, logger)
+                    : Observable.Return(0);
+
                 // Same order as the content path: publish the partition BEFORE warming its roots
                 // (activation's gating pass must see the declared shape).
                 return EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
                         logger, nodes.Select(n => n.Path))
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId))
+                    // Adoption first (it can settle a release without compiling at all), then the
+                    // FIRST wave: the root's own in-package NodeType, whose rebuild is precisely
+                    // what SettleRetypedRoot waits for.
+                    .SelectMany(_ => releases)
+                    .SelectMany(_ => result.Written > 0
+                        ? RequestReleases(hub, firstWave, logger)
+                        : Observable.Return(System.Reactive.Unit.Default))
                     // The retyped root's recycle, moved here from the write stage and made ORDERED
                     // (see the note there). Only now can it do its job: the in-package type has had
                     // its rebuild, so the hub that comes back binds the package's own configuration
                     // instead of the fallback — and the install no longer returns while a teardown
                     // it started is still running.
-                    .SelectMany(_ => SettleRetypedRoot(
-                        hub, placeholderRoot is not null ? root?.Path : null, nodes, logger))
+                    .SelectMany(_ => SettleRetypedRoot(hub, retypedRoot, nodes, logger))
+                    // …and ONLY NOW the rest of the package's types. Their compiles read the root
+                    // (ValidateCellSurfaceSingleHome → GetMeshNode('<packageRoot>') for every
+                    // `shared=` consumer), so launching them before the recycle above pointed a
+                    // whole package's compiles at a hub this very method was about to dispose
+                    // (#1732).
+                    .SelectMany(_ => result.Written > 0
+                        ? RequestReleases(hub, deferredWave, logger)
+                        : Observable.Return(System.Reactive.Unit.Default))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
                     // …then the package's committed binaries (course videos/posters) into the
                     // warmed root's content collection — the half of "publish" that merging used
@@ -2271,14 +2296,19 @@ public static class PackageInstaller
                     manifest.Id, result.Written, result.Unchanged, t.Pruned,
                     releaseTargets.Length, installedFromRef, newManifest.ModuleVersion);
 
-                if (releaseTargets.Length > 0)
-                    SeedThenRequestReleases(hub, releaseTargets, logger);
+                // SEQUENCED, never fire-and-forget (the observable is cold — a bare call requests
+                // nothing). A delta runs no placeholder dance, so there is no root recycle to split
+                // the waves around; one wave is the whole set.
+                var releases = releaseTargets.Length > 0
+                    ? SeedThenRequestReleases(hub, releaseTargets, logger)
+                    : Observable.Return(System.Reactive.Unit.Default);
                 // An UPDATE re-asserts the declared access too: a package that only just flipped
                 // its declaration (or whose policy was lost) must converge on the next sync rather
                 // than wait for a full re-install. Create-only, so an existing shape is untouched
                 // and this is free on the common path.
-                return EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
-                        logger, nodes.Select(n => n.Path))
+                return releases
+                    .SelectMany(_ => EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
+                        logger, nodes.Select(n => n.Path)))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest, authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
@@ -2527,50 +2557,136 @@ public static class PackageInstaller
     }
 
     /// <summary>
-    /// #1707 slice 3 — adopt-before-compile at INSTALL: give the deployment's prebuilt bundle
-    /// sources one bounded chance to supply the just-installed types' assemblies, THEN issue the
-    /// release requests. An adopted type's request is SATISFIED by the release watcher (Ok +
-    /// sources current + usable build ⇒ no Roslyn); anything not adopted compiles exactly as
-    /// before. Fire-and-forget like the requests it wraps (an install never waits for compiles);
-    /// never faults — every failure degrades to "the installed types compile".
+    /// Splits the package's installed NodeTypes into the two release waves the install issues
+    /// around <see cref="SettleRetypedRoot"/>.
+    ///
+    /// <para>🚨 <b>Why a split, and not simply "release everything after the recycle"</b> (#1732).
+    /// The recycle exists to re-activate the retyped root against its FINAL type, and
+    /// <see cref="MayPublishIntoRoot"/> — the wait that decides whether recycling is even worth it
+    /// — is a wait for exactly that type's rebuild. Deferring the root type's own release behind
+    /// the settle would therefore wait for a compile nobody asked for, and answer only when
+    /// <see cref="RootTypeSettleTimeout"/> elapsed: a 90 s stall on every self-typed package (the
+    /// Store shape). So the root's own in-package type goes in wave ONE.</para>
+    ///
+    /// <para>Everything else goes in wave TWO, AFTER the root has been torn down and answered
+    /// again. Those are the compiles that read the root: a <c>shared=</c> consumer's compile runs
+    /// the cell-surface single-home gate, which reads the owning package root
+    /// (<c>ValidateCellSurfaceSingleHome</c> → <c>ReadCompileSourceNode</c> →
+    /// <c>GetMeshNode('&lt;packageRoot&gt;')</c>). Launching them before the recycle made the
+    /// installer race its own teardown — the faulting set in every incident was exactly the
+    /// module's <c>shared=</c> consumers, never anything else. #1726 made those reads PATIENT
+    /// (they re-probe across a recycle and, if it outlasts the budget, report
+    /// <c>CompilationStatus.Unavailable</c> rather than a code verdict); this makes them
+    /// UNNECESSARY, which is the half #1726 deliberately did not do.</para>
+    ///
+    /// <para>With no recycle to order against (<paramref name="retypedRoot"/> null — the common
+    /// re-install, where the root already carries its final type) there is nothing to defer and
+    /// every type stays in wave one, exactly as before.</para>
     /// </summary>
-    private static void SeedThenRequestReleases(
+    private static (IReadOnlyCollection<string> First, IReadOnlyCollection<string> Deferred) ReleaseWaves(
+        string? retypedRoot, IReadOnlyCollection<string> nodeTypePaths, IReadOnlyCollection<MeshNode> nodes)
+    {
+        if (retypedRoot is null || nodeTypePaths.Count == 0)
+            return (nodeTypePaths, Array.Empty<string>());
+        var rootType = InPackageTypeOf(retypedRoot, nodes);
+        if (rootType is null)
+            return (Array.Empty<string>(), nodeTypePaths);
+        // OrdinalIgnoreCase to match InPackageTypeOf's own type↔path comparison.
+        var first = nodeTypePaths
+            .Where(p => string.Equals(p, rootType, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var deferred = nodeTypePaths
+            .Where(p => !string.Equals(p, rootType, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return (first, deferred);
+    }
+
+    /// <summary>
+    /// #1707 slice 3 — adopt-before-compile at INSTALL: give the deployment's prebuilt bundle
+    /// sources one bounded chance to supply the just-installed types' assemblies, BEFORE any
+    /// release request is issued. An adopted type's request is SATISFIED by the release watcher
+    /// (Ok + sources current + usable build ⇒ no Roslyn); anything not adopted compiles exactly as
+    /// before. Never faults — every failure degrades to "the installed types compile".
+    /// </summary>
+    /// <returns>A cold observable of the number of adopted assemblies; Subscribe to run.</returns>
+    private static IObservable<int> SeedPrebuiltAssemblies(
         IMessageHub hub, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
     {
         var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
-        var seed = consumer is null
-            ? Observable.Return(0)
-            : consumer.SeedForTypes(nodeTypePaths)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(60))
-                .Catch<int, Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "Install: prebuilt adoption attempt failed — the installed types compile instead");
-                    return Observable.Return(0);
-                });
-        seed.Subscribe(
-            adopted =>
+        if (consumer is null || nodeTypePaths.Count == 0)
+            return Observable.Return(0);
+        return consumer.SeedForTypes(nodeTypePaths)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(60))
+            .Catch<int, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "Install: prebuilt adoption attempt failed — the installed types compile instead");
+                return Observable.Return(0);
+            })
+            .Do(adopted =>
             {
                 if (adopted > 0)
                     logger?.LogInformation(
                         "Install: adopted {Adopted} prebuilt assembly(ies) for {Count} installed "
                         + "type(s) — their release requests settle without compiling",
                         adopted, nodeTypePaths.Count);
-                // System-impersonated: the release flips are stream writes posted from a pool
-                // continuation with no ambient context — and the seed's own System scope does not
-                // flow across the subscription hop (AsyncLocal), so it is re-established here.
-                var accessService = hub.ServiceProvider.GetService<AccessService>();
-                using (accessService?.ImpersonateAsSystem())
-                    foreach (var path in nodeTypePaths)
-                        hub.RequestNodeTypeRelease(path,
-                            onError: msg => logger?.LogWarning(
-                                "Release request for {Path} failed: {Msg}", path, msg));
-            },
-            ex => logger?.LogWarning(ex,
-                "Install: seed-then-release failed for {Count} type(s) — request releases manually "
-                + "(Compile button) if assemblies stay stale", nodeTypePaths.Count));
+            });
     }
+
+    /// <summary>
+    /// Flips the release trigger on each of <paramref name="nodeTypePaths"/> and completes once
+    /// every flip has LANDED.
+    ///
+    /// <para>🚨 The completion is the whole point: an install must be able to ORDER a teardown
+    /// against the compiles it starts, and the previous fire-and-forget shape returned nothing to
+    /// order against (#1732). Merged, not concatenated — the flips are independent writes to
+    /// different per-type hubs, exactly as concurrent as the old synchronous <c>foreach</c> made
+    /// them; only the "and now they have all landed" signal is new.</para>
+    ///
+    /// <para>Never faults: a refused or failed flip is logged and the install carries on, so one
+    /// unreleasable type can neither fail the install nor strand the types after it.</para>
+    /// </summary>
+    /// <returns>A cold observable; Subscribe to request the releases.</returns>
+    private static IObservable<System.Reactive.Unit> RequestReleases(
+        IMessageHub hub, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
+    {
+        if (nodeTypePaths.Count == 0)
+            return Observable.Return(System.Reactive.Unit.Default);
+        // System-impersonated: the release flips are stream writes posted from a pool continuation
+        // with no ambient context — and the seed's own System scope does not flow across the
+        // subscription hop (AsyncLocal), so it is re-established here. Observable.Using keeps the
+        // scope alive for the SUBSCRIBE of every flip (each is cold), which a bare `using` around
+        // the composition would not.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return Observable.Using(
+                () => accessService?.ImpersonateAsSystem()
+                      ?? System.Reactive.Disposables.Disposable.Empty,
+                _ => nodeTypePaths
+                    .Select(path => hub.ObserveNodeTypeRelease(path,
+                        onError: msg => logger?.LogWarning(
+                            "Release request for {Path} failed: {Msg}", path, msg)))
+                    .Merge()
+                    .ToList())
+            .Select(_ => System.Reactive.Unit.Default)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex,
+                    "Install: seed-then-release failed for {Count} type(s) — request releases manually "
+                    + "(Compile button) if assemblies stay stale", nodeTypePaths.Count);
+                return Observable.Return(System.Reactive.Unit.Default);
+            });
+    }
+
+    /// <summary>
+    /// The composed <see cref="SeedPrebuiltAssemblies"/> → <see cref="RequestReleases"/> pair, for
+    /// the paths that have no root recycle to order around (the incremental delta update). Cold:
+    /// Subscribe to run, and the completion means every release trigger has landed.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> SeedThenRequestReleases(
+        IMessageHub hub, IReadOnlyCollection<string> nodeTypePaths, ILogger? logger)
+        => SeedPrebuiltAssemblies(hub, nodeTypePaths, logger)
+            .SelectMany(_ => RequestReleases(hub, nodeTypePaths, logger));
 
 }
 
