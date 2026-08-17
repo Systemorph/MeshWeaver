@@ -228,6 +228,47 @@ public static class ShippedPrebuiltBundles
             return seeds.Concat().Aggregate(0, (total, adopted) => total + adopted);
         });
 
+    /// <summary>
+    /// What one seeding pass did, split by the only distinction that matters operationally:
+    /// assemblies this pass actually ADOPTED (bytes uploaded, record stamped, the type's hub
+    /// activated to do it) versus assemblies that were ALREADY CURRENT and therefore cost nothing.
+    ///
+    /// <para>The split has to be reported, not just acted on. <c>deploy/aks/values.aks.yaml</c>
+    /// makes the boot coverage report the replacement for the retired bake readiness gate — "an
+    /// identity mismatch declines every bundle wholesale and shows up as a coverage collapse in the
+    /// logs on the FIRST pod of a bad roll". A skip-when-current optimisation that reported only
+    /// the newly-adopted count would drive that number to zero on every healthy steady-state boot
+    /// and destroy the signal. <see cref="Covered"/> is therefore what callers see, and the log
+    /// names both halves.</para>
+    /// </summary>
+    private readonly record struct SeedTally(int Adopted, int AlreadyCurrent)
+    {
+        /// <summary>Assemblies this bundle has BACKED on the store — adopted now or already there.
+        /// This is the coverage number; it is unchanged by the skip optimisation.</summary>
+        public int Covered => Adopted + AlreadyCurrent;
+
+        public static SeedTally operator +(SeedTally left, SeedTally right) =>
+            new(left.Adopted + right.Adopted, left.AlreadyCurrent + right.AlreadyCurrent);
+    }
+
+    /// <summary>
+    /// The NodeType nodes this mesh holds, as one snapshot: the PATHS (which types exist at all)
+    /// and, when the snapshot came from the mesh-wide enumeration, the NODES themselves.
+    ///
+    /// <para>The nodes are what make the deviation check possible — a node carries its
+    /// <see cref="MeshNode.Version"/> and its <see cref="NodeTypeDefinition"/>, which together are
+    /// the entire record half of "has this bundle entry already been adopted". They come for free:
+    /// the boot path already ran this exact query for the paths and threw the rest away.</para>
+    ///
+    /// <para>An EMPTY <see cref="Nodes"/> map means "no record snapshot available", and the
+    /// deviation check then answers "deviates" for everything — the install/push caller
+    /// (<see cref="SeedForTypes"/>) supplies paths rather than a query, and it is called precisely
+    /// when content just changed, so re-adopting is the right answer there anyway.</para>
+    /// </summary>
+    private sealed record TypeSnapshot(
+        ImmutableHashSet<string> Paths,
+        ImmutableDictionary<string, MeshNode> Nodes);
+
     /// <summary>The shared seeding core: the bundle files <paramref name="enumerateBundles"/>
     /// resolves (on the pool's blocking leg), through the one bundle pipeline.
     /// <paramref name="typePathFilter"/> replaces the mesh-wide NodeType enumeration when the
@@ -252,23 +293,36 @@ public static class ShippedPrebuiltBundles
             }
             var accessService = mesh.ServiceProvider.GetService<AccessService>();
             var pool = mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>().Get("prebuilt:files");
+            var store = mesh.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
             var startedAt = DateTimeOffset.UtcNow;
 
             // ONE enumeration of the NodeType nodes this mesh actually holds — the filter that
             // keeps a bundle for content this deployment never imported (an image ships one
             // content set; a mesh serves a subset) from parking the boot on per-path waits for
             // nodes that do not exist. A caller-supplied set (install/push) skips the query.
-            var existingPaths = typePathFilter is not null
-                ? Observable.Return(typePathFilter)
+            //
+            // 🚨 The NODES are kept, not just their paths. The same snapshot then answers the far
+            // more valuable question — "has this entry already been adopted?" — from the record it
+            // was already carrying. Keeping it costs nothing; throwing it away cost 43 hub
+            // activations and 13.5 s on every memex-cloud boot.
+            var snapshot = typePathFilter is not null
+                ? Observable.Return(new TypeSnapshot(
+                    typePathFilter, ImmutableDictionary<string, MeshNode>.Empty))
                 : meshService!
                     .Query<MeshNode>(MeshQueryRequest
                         .FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
                     .Take(1)
                     .Timeout(EnumerationBudget)
-                    .Select(change => change.Items
-                        .Where(n => !string.IsNullOrEmpty(n.Path))
-                        .Select(n => n.Path!)
-                        .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
+                    .Select(change =>
+                    {
+                        var nodes = change.Items
+                            .Where(n => !string.IsNullOrEmpty(n.Path))
+                            .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
+                            .ToImmutableDictionary(
+                                g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+                        return new TypeSnapshot(
+                            nodes.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase), nodes);
+                    });
 
             // 🚨 System-scoped end-to-end: reading NodeType records across every partition and
             // stamping adopted builds is framework infrastructure, exactly like the sweep this
@@ -286,15 +340,21 @@ public static class ShippedPrebuiltBundles
                                 return Observable.Return(0);
                             }
 
-                            return existingPaths
+                            return snapshot
                                 .SelectMany(existing => bundles
-                                    .Select(bundle => SeedBundle(mesh, pool, bundle, existing, logger))
+                                    .Select(bundle => SeedBundle(
+                                        mesh, pool, store, bundle, existing, logger))
                                     .Concat()
-                                    .Aggregate(0, (total, adopted) => total + adopted))
-                                .Do(adopted => logger?.LogInformation(
-                                    "ShippedPrebuiltBundles: adopted {Adopted} prebuilt assembly(ies) "
-                                    + "from {Bundles} shipped bundle(s) under {Directory} in {Elapsed}",
-                                    adopted, bundles.Count, dir, DateTimeOffset.UtcNow - startedAt));
+                                    .Aggregate(default(SeedTally), (total, one) => total + one))
+                                .Do(tally => logger?.LogInformation(
+                                    "ShippedPrebuiltBundles: {Covered} prebuilt assembly(ies) from "
+                                    + "{Bundles} shipped bundle(s) under {Directory} are backed by "
+                                    + "the assembly store — {Adopted} adopted now, {Current} already "
+                                    + "current and skipped WITHOUT activating their NodeType hubs — "
+                                    + "in {Elapsed}",
+                                    tally.Covered, bundles.Count, dir, tally.Adopted,
+                                    tally.AlreadyCurrent, DateTimeOffset.UtcNow - startedAt))
+                                .Select(tally => tally.Covered);
                         }))
                 // The seeding is an optimisation in front of the sweep — a fault here must degrade
                 // to "compile as today", never hold or fail the boot. Loud, so an operator can see
@@ -308,36 +368,46 @@ public static class ShippedPrebuiltBundles
                 });
         });
 
-    /// <summary>One bundle: read, gate on the framework MVID once, seed every payload whose
-    /// NodeType exists on this mesh. Emits the adopted count; folds its own faults to 0.</summary>
-    private static IObservable<int> SeedBundle(
+    /// <summary>
+    /// One bundle: read its MANIFEST, gate on the framework MVID once, and seed only the entries
+    /// that actually deviate from what the mesh already records and the store already holds.
+    ///
+    /// <para>🚨 <b>Manifest first, payload last.</b> The manifest is a few KB naming every entry's
+    /// node path and dependency record; the assemblies are the bundle's entire weight. Reading the
+    /// manifest alone is enough to answer the whole adoption question, so a bundle whose types are
+    /// all current is answered without decompressing a single assembly — on top of the per-type hub
+    /// activation and store upload that <see cref="PrebuiltAssemblySeeder.Seed"/> would cost.</para>
+    ///
+    /// <para>Emits the tally; folds its own faults to zero.</para>
+    /// </summary>
+    private static IObservable<SeedTally> SeedBundle(
         IMessageHub mesh,
         IIoPool pool,
+        IAssemblyStore store,
         string bundlePath,
-        ImmutableHashSet<string> existingTypePaths,
+        TypeSnapshot snapshot,
         ILogger? logger)
         => pool
-            .InvokeBlocking(_ => Plugin.Packaging.BundleReader.Read(File.ReadAllBytes(bundlePath)))
-            .SelectMany(payload =>
+            .InvokeBlocking(_ => Plugin.Packaging.BundleReader.ReadManifest(bundlePath))
+            .SelectMany(manifest =>
             {
-                var (manifest, assemblies) = payload;
                 if (PrebuiltAssemblySeeder.DeclineReason(manifest?.FrameworkMvid) is { } reason)
                 {
                     logger?.LogInformation(
                         "ShippedPrebuiltBundles: bundle {Bundle} DECLINED whole: {Reason} — "
                         + "the sweep compiles instead", Path.GetFileName(bundlePath), reason);
-                    return Observable.Return(0);
+                    return Observable.Return(default(SeedTally));
                 }
-                if (assemblies.Count == 0)
+                if (manifest!.Assemblies is not { Count: > 0 } assemblies)
                 {
                     logger?.LogWarning(
                         "ShippedPrebuiltBundles: bundle {Bundle} carries no assemblies (or no "
                         + "readable manifest) — nothing to adopt", Path.GetFileName(bundlePath));
-                    return Observable.Return(0);
+                    return Observable.Return(default(SeedTally));
                 }
 
                 var present = assemblies
-                    .Where(a => existingTypePaths.Contains(a.NodePath))
+                    .Where(a => snapshot.Paths.Contains(a.NodePath))
                     .ToList();
                 if (present.Count < assemblies.Count)
                     logger?.LogDebug(
@@ -346,34 +416,136 @@ public static class ShippedPrebuiltBundles
                         + "serves a subset)",
                         Path.GetFileName(bundlePath), assemblies.Count - present.Count);
                 if (present.Count == 0)
-                    return Observable.Return(0);
+                    return Observable.Return(default(SeedTally));
 
+                // Sequential (Concat, never Merge) for the same reason NodeTypeBakeStatus.Probe is:
+                // the store is typically a shared network volume or blob container, and a fan-out
+                // of lookups across every type at startup is the cold burst this whole mechanism
+                // exists to remove. Each probe is a glob or a blob-exists.
                 return present
-                    .Select(a => PrebuiltAssemblySeeder
-                        .Seed(mesh, a.NodePath, a.Assembly, a.Pdb, manifest!.FrameworkMvid, logger,
-                            a.Dependencies)
-                        .Take(1)
-                        .Timeout(SeedBudget)
-                        .Catch<bool, Exception>(ex =>
-                        {
-                            logger?.LogWarning(ex,
-                                "ShippedPrebuiltBundles: seeding {NodePath} from {Bundle} did not "
-                                + "complete — the sweep compiles it instead",
-                                a.NodePath, Path.GetFileName(bundlePath));
-                            return Observable.Return(false);
-                        }))
+                    .Select(entry => IsAlreadyCurrent(store, snapshot, mesh, entry, logger)
+                        .Select(current => (Entry: entry, Current: current)))
                     .Concat()
-                    .Count(adopted => adopted)
-                    .Do(adopted => logger?.LogInformation(
-                        "ShippedPrebuiltBundles: bundle {Bundle}: adopted {Adopted}/{Present} "
-                        + "prebuilt assembly(ies)",
-                        Path.GetFileName(bundlePath), adopted, present.Count));
+                    .ToList()
+                    .SelectMany(checks =>
+                    {
+                        var deviating = checks
+                            .Where(c => !c.Current)
+                            .Select(c => c.Entry.NodePath)
+                            .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                        var alreadyCurrent = checks.Count - deviating.Count;
+
+                        if (deviating.IsEmpty)
+                        {
+                            logger?.LogDebug(
+                                "ShippedPrebuiltBundles: bundle {Bundle}: all {Current} NodeType(s) "
+                                + "already carry this build and the store holds their bytes — no "
+                                + "assembly read, no hub activated, no write",
+                                Path.GetFileName(bundlePath), alreadyCurrent);
+                            return Observable.Return(new SeedTally(0, alreadyCurrent));
+                        }
+
+                        return pool
+                            .InvokeBlocking(_ => Plugin.Packaging.BundleReader
+                                .ReadFile(bundlePath, deviating))
+                            .SelectMany(payload => SeedPayloads(
+                                mesh, bundlePath, manifest.FrameworkMvid,
+                                payload.Assemblies, alreadyCurrent, logger));
+                    });
             })
-            .Catch<int, Exception>(ex =>
+            .Catch<SeedTally, Exception>(ex =>
             {
                 logger?.LogWarning(ex,
                     "ShippedPrebuiltBundles: bundle {Bundle} could not be read — skipped "
                     + "(the sweep compiles instead)", Path.GetFileName(bundlePath));
-                return Observable.Return(0);
+                return Observable.Return(default(SeedTally));
             });
+
+    /// <summary>
+    /// Whether this bundle entry is ALREADY on the store under the record the mesh already holds,
+    /// so seeding it would change nothing.
+    ///
+    /// <para>Two witnesses, and both are required. The RECORD
+    /// (<see cref="PrebuiltAssemblySeeder.IsAlreadyAdopted"/>, which defers to
+    /// <see cref="NodeTypeBakeStatus.Classify"/>) says the last adoption stamped exactly what this
+    /// entry would stamp; the STORE says the bytes are still there. Trusting the record alone is
+    /// the <see cref="BakeState.BytesMissing"/> trap — a cleared, remounted or partially-restored
+    /// assembly volume leaves every record pristine over bytes that are gone, and a skip decided on
+    /// it would leave those types permanently unbuilt.</para>
+    ///
+    /// <para>Fails SAFE: no node, unreadable content, no recorded version, or a store that throws
+    /// all answer "not current", so the entry is seeded exactly as it is today.</para>
+    /// </summary>
+    private static IObservable<bool> IsAlreadyCurrent(
+        IAssemblyStore store,
+        TypeSnapshot snapshot,
+        IMessageHub mesh,
+        Plugin.Packaging.BundleReader.AssemblyRef entry,
+        ILogger? logger)
+    {
+        if (!snapshot.Nodes.TryGetValue(entry.NodePath, out var node))
+            return Observable.Return(false);
+
+        // .ContentAs, never a cast: the enumeration crosses hubs, and a NodeTypeDefinition that
+        // arrives as an untyped JsonElement (a TypeRegistry without the discriminator) would read
+        // as null under `is` and silently re-seed everything.
+        var definition = node.ContentAs<NodeTypeDefinition>(mesh.JsonSerializerOptions);
+        if (definition is null)
+            return Observable.Return(false);
+
+        // 🚨 Probe at LastCompiledVersion, never at node.Version — that is the key the bytes were
+        // uploaded under, and the key NodeTypeBakeStatus.ProbeOne will ask about in a moment. (The
+        // two differ by design: Seed stamps the version it read BEFORE its own write, and that
+        // write bumps the node.) No recorded version means no key to ask about, which Classify
+        // already reads as NeverBuilt — resolved here as "not current", so it is seeded.
+        if (definition.LastCompiledVersion is not { } version || version < 0)
+            return Observable.Return(false);
+
+        return store
+            .TryGetAssemblyPath(entry.NodePath, version)
+            .Take(1)
+            .Select(path => PrebuiltAssemblySeeder.IsAlreadyAdopted(
+                definition,
+                storeHasBytes: !string.IsNullOrEmpty(path),
+                entry.Dependencies,
+                liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+                liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId))
+            .Catch<bool, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "ShippedPrebuiltBundles: assembly store lookup failed for {NodePath} — "
+                    + "re-seeding it (an unreadable store must never read as 'already there')",
+                    entry.NodePath);
+                return Observable.Return(false);
+            });
+    }
+
+    /// <summary>Seed the extracted payloads — the unchanged half of the pipeline.</summary>
+    private static IObservable<SeedTally> SeedPayloads(
+        IMessageHub mesh,
+        string bundlePath,
+        string? frameworkMvid,
+        IReadOnlyList<Plugin.Packaging.BundleReader.Payload> assemblies,
+        int alreadyCurrent,
+        ILogger? logger)
+        => assemblies
+            .Select(a => PrebuiltAssemblySeeder
+                .Seed(mesh, a.NodePath, a.Assembly, a.Pdb, frameworkMvid, logger, a.Dependencies)
+                .Take(1)
+                .Timeout(SeedBudget)
+                .Catch<bool, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "ShippedPrebuiltBundles: seeding {NodePath} from {Bundle} did not "
+                        + "complete — the sweep compiles it instead",
+                        a.NodePath, Path.GetFileName(bundlePath));
+                    return Observable.Return(false);
+                }))
+            .Concat()
+            .Count(adopted => adopted)
+            .Select(adopted => new SeedTally(adopted, alreadyCurrent))
+            .Do(tally => logger?.LogInformation(
+                "ShippedPrebuiltBundles: bundle {Bundle}: adopted {Adopted}/{Deviating} "
+                + "prebuilt assembly(ies); {Current} were already current",
+                Path.GetFileName(bundlePath), tally.Adopted, assemblies.Count, tally.AlreadyCurrent));
 }
