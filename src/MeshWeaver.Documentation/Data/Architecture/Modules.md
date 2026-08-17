@@ -319,4 +319,12 @@ UI contributed as data (menus, settings tabs, whole top-bar menus — `UiContrib
 [UI Extensibility](/Doc/Architecture/UiExtensibility). Content plugins and their registry are
 [Plugins](/Doc/Architecture/Plugins) and [Plugin Packaging](/Doc/Architecture/PluginPackaging).
 Deployment surfaces: [Feature Flags](/Doc/Architecture/FeatureFlags) ·
+[Environment Composition](/Doc/Architecture/EnvironmentComposition) ·
 [Deployment](/Doc/Architecture/Deployment).
+
+**Modules and composition are different axes, deliberately.** Which compiled ASSEMBLIES a deployment
+loads is `Modules:Assemblies` (plus the persisted store installs above) — decided before the DI
+container exists, so it cannot be a mesh-level decision. Which CONTENT PACKAGES an environment
+carries is [Environment Composition](/Doc/Architecture/EnvironmentComposition)'s `Features:Flags:*`,
+reconciled by the boot install pass. A Store package that carries a module rides both: its content
+lands through the composition lane, its assemblies through the bundle lane above.

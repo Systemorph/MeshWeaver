@@ -85,6 +85,43 @@ pluginCatalog:
   # source-scoped: an install also granted paid course content must NOT auto-install it. Empty =
   # install nothing (the platform default; an admin installs by hand).
   installByDefault: ["Plugins/*"]
+  # CONSUMER: the platform's own baseline — packages whose manifest declares `preInstalled`, the
+  # Agents/Skills libraries and Essentials. Reconciled on EVERY boot (that is what heals an instance
+  # whose baseline partition was lost) and ON by default in code. Set false only for an air-gapped or
+  # hand-curated install that manages its own content. Rendered only when set, so the code default
+  # stands otherwise.
+  # installPreInstalledPackages: true
+
+# ---- Per-environment composition: FEATURE FLAGS ------------------------------
+# A named switch this environment turns on or off, optionally carrying the packages the environment
+# ALWAYS has — reconciled on every boot, unlike pluginCatalog.installByDefault, which seeds once and
+# is therefore a no-op on an already-populated portal.
+#
+#   • an ENABLED flag INSTALLS the packages it names
+#   • a declared-but-DISABLED flag EXCLUDES them, and the exclusion wins over every other signal
+#   • a flag with no packages is a plain named boolean, and may be written as a bare bool:
+#       features:
+#         betaChat: true
+#
+# Declare the flags once in a shared values file, then let each environment flip `enabled` — the
+# per-environment delta is one line. "All of Plugins, without the games and fun stuff":
+#
+#   features:
+#     plugins:
+#       description: "The whole platform plugin repo."
+#       packages: ["Plugins/*"]
+#     games:
+#       description: "Games and demos — Chess, the pendulums, the fractals."
+#       packages: ["Plugins/Chess", "Plugins/DoublePendulum", "Plugins/FractalStars", "Plugins/ThreeBody"]
+#
+# …and, in the values file of the environment that does not want them:
+#
+#   features:
+#     games:
+#       enabled: false
+#
+# See Doc/Architecture/EnvironmentComposition.
+features: {}
 # ---- Platform-admin Instances overview -------------------------------------
 # The admin "Instances" tab lists every portal on the cluster by querying the k8s API. Reading
 # deployments/ingresses ACROSS namespaces needs a cluster-scoped read grant — enable it ONLY on the

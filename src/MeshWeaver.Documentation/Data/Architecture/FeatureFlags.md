@@ -7,6 +7,16 @@ Category: Architecture
 
 # Feature Flags
 
+There are **two kinds of flag in the `Features` section**, and they answer different questions:
+
+- **Capability toggles** — fixed fields on `MemexFeatureOptions` (`Features:Ai:Providers:OpenAI`,
+  `Features:Onboarding:InvitationOnly`, …). The platform knows them by name and binds them once at
+  startup. That is this page.
+- **Declared flags** — `Features:Flags:{name}`, declared by the ENVIRONMENT rather than by the
+  platform's C#, read reactively, and able to carry the packages an environment always installs. That
+  is [Environment Composition](/Doc/Architecture/EnvironmentComposition) — the surface to use when a
+  deployment needs a switch (or a content set) the platform does not already have a field for.
+
 Memex deployments are shaped by **deploy-time capability toggles** bound from the `Features`
 configuration section into `MemexFeatureOptions`.
 A flag declares which capabilities a deployment ships — independent of whether a given credential
@@ -63,6 +73,7 @@ Configuration is layered (last wins):
 | `Features:SignalR` | bool | `true` | Opens the SignalR mesh transport (`/signalr`) for external participants (native clients). `false` closes the connection surface. |
 | `Features:StaticRepoSync:Partitions` | string[] | `[]` | Partitions whose build-time static content is **materialized into and served from the database** instead of the in-memory read-only static provider (e.g. `["Doc","Agent","Provider","Harness","Skill"]` — what the default Helm deployment sets). Empty = every partition keeps the in-memory provider. Matching is case-insensitive; `Model` is a legacy alias for `Provider`. See [Static Repo Import](/Doc/Architecture/StaticRepoImport). |
 | `Features:StaticRepoSync:Modes:{Partition}` | enum | *(source default)* | Per-partition prune policy for that import: `FullReplace` (mirror), `Additive` (keep user-added nodes), `UpsertOnly` (never prune). Unlisted partitions use their source's default — `FullReplace` for most, but the built-in AI catalogs (Skill/Agent/Provider/Harness) default to `Additive`. Distinct from the per-**node** `SyncBehavior`. |
+| `Features:Flags:{name}` | bool *or* object | *(undeclared = off)* | An environment-DECLARED flag, read reactively through `IFeatureFlags`. The object form adds `Packages` — what this environment pre-installs, reconciled on every boot, with a declared-but-disabled flag EXCLUDING them. See [Environment Composition](/Doc/Architecture/EnvironmentComposition). |
 
 There is no `Features:Grpc` any more: the gRPC mesh transport (`meshweaver.v1.Mesh` + gRPC-web —
 foreign-language participants AND the React GUI's browser data plane) is the
