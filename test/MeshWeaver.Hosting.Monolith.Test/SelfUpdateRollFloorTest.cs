@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
@@ -75,16 +76,34 @@ public class SelfUpdateRollFloorTest(ITestOutputHelper output) : MonolithMeshTes
         DefaultPolicy = UpdatePolicyKind.Continuous,
     };
 
-    private async Task<ImmutableList<string>> RunStartupPassAsync(StampedUpdater updater, TimeSpan floor)
+    /// <summary>Runs the startup pass and waits for the roll it is expected to produce — a positive
+    /// signal on the Patched stream, never a fixed delay.</summary>
+    private async Task<ImmutableList<string>> ExpectRollAsync(StampedUpdater updater, TimeSpan floor)
     {
-        var service = new SelfUpdateHostedService(
-            Mesh, new OneTagLister(), updater, Options(floor),
-            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>());
+        var service = NewService(updater, floor);
         await service.StartAsync(CancellationToken.None);
         try
         {
-            // Give the startup pass room to reach the roll decision either way. A patch that is
-            // going to happen has happened well inside this; a deferral never will.
+            await updater.Patched.FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+            return updater.Tags;
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>Runs the startup pass and confirms NO roll happens. This is the one shape with no
+    /// positive signal to wait for — the sanctioned "wait to confirm nothing happened" case — so it
+    /// is the only place a bounded delay is correct.</summary>
+    private async Task<ImmutableList<string>> ExpectNoRollAsync(StampedUpdater updater, TimeSpan floor)
+    {
+        var service = NewService(updater, floor);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
             await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
             return updater.Tags;
         }
@@ -94,11 +113,15 @@ public class SelfUpdateRollFloorTest(ITestOutputHelper output) : MonolithMeshTes
         }
     }
 
+    private SelfUpdateHostedService NewService(StampedUpdater updater, TimeSpan floor) =>
+        new(Mesh, new OneTagLister(), updater, Options(floor),
+            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>());
+
     [Fact(Timeout = 60000)]
     public async Task AFreshRoll_DefersTheNextOne()
     {
         var updater = new StampedUpdater(DateTimeOffset.UtcNow.AddMinutes(-5));
-        var tags = await RunStartupPassAsync(updater, floor: TimeSpan.FromHours(1));
+        var tags = await ExpectNoRollAsync(updater, floor: TimeSpan.FromHours(1));
         tags.Should().BeEmpty(
             "the install rolled 5 minutes ago and the floor is an hour — rolling again would restart "
             + "the pod and drop every live circuit for a version it just took");
@@ -110,7 +133,7 @@ public class SelfUpdateRollFloorTest(ITestOutputHelper output) : MonolithMeshTes
         // The shape process uptime gets wrong: a pod that has just started (young process) on an
         // image rolled long ago (old stamp) must roll AT ONCE, not wait out the floor.
         var updater = new StampedUpdater(DateTimeOffset.UtcNow.AddHours(-9));
-        var tags = await RunStartupPassAsync(updater, floor: TimeSpan.FromHours(1));
+        var tags = await ExpectRollAsync(updater, floor: TimeSpan.FromHours(1));
         tags.Should().Equal([CandidateTag],
             "the last roll is older than the floor, so a freshly-restarted pod on an old image "
             + "must take the update immediately rather than waiting");
@@ -122,7 +145,7 @@ public class SelfUpdateRollFloorTest(ITestOutputHelper output) : MonolithMeshTes
         // A first-ever roll has no stamp to compare against. It must not be held: an install that
         // has never self-updated is the one most in need of the update.
         var updater = new StampedUpdater(null);
-        var tags = await RunStartupPassAsync(updater, floor: TimeSpan.FromHours(1));
+        var tags = await ExpectRollAsync(updater, floor: TimeSpan.FromHours(1));
         tags.Should().Equal([CandidateTag]);
     }
 
@@ -131,7 +154,7 @@ public class SelfUpdateRollFloorTest(ITestOutputHelper output) : MonolithMeshTes
     {
         // The opt-out an install with no restart cost (a single-user dev portal) can set.
         var updater = new StampedUpdater(DateTimeOffset.UtcNow.AddSeconds(-1));
-        var tags = await RunStartupPassAsync(updater, floor: TimeSpan.Zero);
+        var tags = await ExpectRollAsync(updater, floor: TimeSpan.Zero);
         tags.Should().Equal([CandidateTag]);
     }
 }
