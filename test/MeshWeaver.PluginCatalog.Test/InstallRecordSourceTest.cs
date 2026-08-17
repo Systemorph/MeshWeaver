@@ -77,10 +77,14 @@ public class InstallRecordSourceTest(ITestOutputHelper output) : MonolithMeshTes
                 + "bundle route's grant check is matched against");
     }
 
-    /// <summary>The rule on its own: it can only FILL IN, never change or invent — so it cannot
-    /// widen what any grant matches.</summary>
+    /// <summary>
+    /// The rule on its own. It NEVER invents a source — the answer is always either what this
+    /// install states or what was already recorded — and the carry-forward applies only where the
+    /// current install supplies nothing. A stated source does win: a package that genuinely moved
+    /// between sources must stop claiming the old one, and the grant must follow it.
+    /// </summary>
     [Fact(Timeout = 30_000)]
-    public void TheCarryForwardIsMonotone()
+    public void TheCarryForwardNeverInventsASource()
     {
         PackageInstaller.SeedSource(Manifest(RegistrySource), Manifest(null))
             .Should().Be(RegistrySource, "a source-less manifest keeps what was recorded");

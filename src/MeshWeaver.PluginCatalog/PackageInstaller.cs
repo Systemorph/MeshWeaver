@@ -1164,8 +1164,13 @@ public static class PackageInstaller
     /// A distribution lane that goes dark on the first auto-update is the worst kind of regression:
     /// consumers just quietly compile instead.</para>
     ///
-    /// <para>Monotone by construction — it can only fill a source in where there was none, never
-    /// change or invent one, so it cannot widen what any grant matches.</para>
+    /// <para>🚨 <b>It never INVENTS a source</b> — the result is either the one this install states
+    /// or the one already recorded, never a guess, so it can only ever name a source some real
+    /// install came from. A stated source does WIN over the recorded one: that is the newer fact
+    /// about where the package comes from (a package genuinely moved between sources must stop
+    /// claiming the old one), exactly as <see cref="SeedAuthorizedBy"/> prefers the principal that
+    /// authorized THIS action. The carry-forward applies only where the current install supplies
+    /// nothing.</para>
     /// </summary>
     /// <param name="existingRecord">The install record being re-stamped, or null on a first install.</param>
     /// <param name="manifest">The catalog manifest this install is being written from.</param>
