@@ -33,9 +33,10 @@ public static class SelfUpdateConfiguration
             // them is not a gate. Platform-neutral (a query plus file-system reads).
             services.AddSingleton<ReleaseAvailabilityService>();
             // Bind from configuration when the caller passes nothing. Without this the defaults were
-            // baked into the image: PollInterval sat at 6h with NO way for an environment to change
-            // it, and a SelfUpdate__PollInterval in the configmap silently did nothing — the failure
-            // mode where an operator sets a knob, sees no effect, and concludes self-update is dead.
+            // baked into the image and a SelfUpdate__* value in the configmap silently did nothing —
+            // the failure mode where an operator sets a knob, sees no effect, and concludes
+            // self-update is dead. (The former PollInterval is now RetryInterval: the check is
+            // event-driven, so the value only paces re-establishing a faulted watch.)
             services.AddSingleton(sp =>
                 options
                 ?? sp.GetService<IConfiguration>()?.GetSection(SelfUpdateOptions.SectionName)
