@@ -234,9 +234,9 @@ public static class MemexConfiguration
         // Register the AI chat services (must be after all factory registrations)
         services.AddAgentChatServices();
 
-        // Register WebSearch plugin (agents declare it in frontmatter; gracefully degrades without Bing API key)
-        services.AddWebSearchPlugin(config =>
-            builder.Configuration.GetSection("WebSearch").Bind(config));
+        // (The WebSearch agent tools ride the MeshWeaver.AI.WebSearch module — listed under
+        // Modules:Assemblies, binding its own WebSearch configuration section. Agent plugins
+        // resolve by name out of DI, so the composition root carries no reference to them.)
 
         services.AddHttpContextAccessor();
         services.AddHttpClient();
