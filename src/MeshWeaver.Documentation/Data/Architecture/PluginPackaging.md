@@ -260,6 +260,77 @@ content through the registry (`PackageInstaller`), so shipping it again is weigh
 a second copy that can disagree with the one the installer wrote. (A CI-produced package still
 carries content — it is a full install artifact, not an increment.)
 
+### The `Release` node is the link (#1751)
+
+Three concerns, three homes — and the third is the one this section is about.
+
+| concern | home |
+|---|---|
+| **Compilation** — DLL + PDB keyed by node path, with the framework identity and per-type dependency records | the **assembly / bundle** |
+| **Node definitions** — what exists, its type, its content | the **mesh**, synced from its repo, unchanged |
+| **The link** — which release, which identity, where its assemblies live, per architecture | a **`Release` node** |
+
+A `Release` MeshNode already exists per NodeType at `{nodeTypePath}/Release/{version}` and is minted
+by the compile watcher. It now also carries `NodeTypeRelease.Artifacts` — a list of
+`ReleaseArtifact` records, each stating **one** `(frameworkIdentity, architecture)` lane and where
+that lane's bytes are (`assemblyStoreVersion`, `collection`/`contentPath`, and optionally a routable
+`url`). Resolution is "read the release, follow its link", not "ask an index what this instance
+happens to have installed".
+
+`ReleaseArtifactResolver.Resolve(releases, identity, architecture)` is the one rule, stated as a pure
+function so a producer and a consumer cannot reach different verdicts:
+
+- the identity must match **exactly** — the same ordinal comparison
+  `PrebuiltAssemblySeeder.DeclineReason` makes, for the same reason;
+- the architecture must match too, case-insensitively, with the single widening that a **producer**
+  may declare `any`. A consumer never widens itself: "I do not know" is not "it does not matter";
+- later releases win, so a re-bake supersedes its predecessor without anything deleting the old
+  record (old releases stay on purpose — a live ALC may still hold the previous DLL);
+- there is **no nearest match**. Declining costs one compile; adopting unproven bytes costs a
+  `TypeLoadException` inside a collectible ALC at activation, with no overlay and nothing to grep.
+
+**Why the architecture is recorded even though the identity already folds it in.** The four
+reference assemblies differ between the amd64 and arm64 variants of one image, so a multi-arch image
+resolves **two** framework identities — CD's `publish-bake` job says so and pins the bake to
+`--platform linux/amd64`. That makes the identity a sufficient *proof* but an opaque *label*: given
+`s1a2b3c…` nobody can tell which lane produced it, so an arm64 install that resolves the other
+identity finds nothing and is told only "not adoptable". Recording the architecture beside the
+identity turns that silent nothing into a sentence — *this release has `linux-x64` under `s1a2…`;
+you are `linux-arm64` under `s9f8…`* — which is the difference between "adoption regressed" and "no
+bake exists for my architecture".
+
+🚨 **Several artifacts on one release is how two lanes are published honestly — never how one lane's
+bytes are re-labelled.** Each record names the identity *its own* bytes were compiled against.
+Publishing one bake under a second identity to "cover" the other architecture is forbidden by the CD
+lane and would void the only compatibility proof there is.
+
+The download route takes the consumer's lane:
+
+```
+GET /api/plugins/bundles/{plugin}/{version}?identity=<framework-identity>&arch=<portable-rid>
+```
+
+Both default to the serving instance's own lane. Two branches, and the order is load-bearing:
+
+1. **The caller is on this instance's own lane** → serve `LastCompiledVersion`, exactly as before the
+   link existed. Not a legacy fallback but the *correct* answer: on its own lane the identity claim is
+   true by construction, and `LastCompiledVersion` is the CURRENT build. A `Release` record can
+   legitimately lag it — `PrebuiltAssemblySeeder` stamps `LastCompiledVersion` on adopt without
+   minting a release at all — so resolving this case through releases would quietly ship an older
+   assembly than the portal itself runs, while looking perfectly healthy.
+2. **The caller is on another lane** → resolve through *that type's* `Release` node. Only a record
+   written beside the bytes can prove them for a lane this process is not in, and `LastCompiledVersion`
+   is explicitly *not* a fallback here: it is a different lane's build, and handing it over under the
+   requested identity is precisely the unprovable adoption the gate exists to prevent.
+
+The served manifest records the resolved `frameworkMvid` and `architecture`, so its identity claim is
+always backed by a record the producer wrote — never inferred. A type with no artifact for a foreign
+lane contributes nothing and is counted as a **miss**: the manifest carries a `misses[]` array, and
+both ends log it. That matters more than it looks. A bundle that quietly arrives with fewer assemblies
+than the package has types is indistinguishable from a complete one, and the adopted-vs-compiled count
+is the only evidence the whole distribution lane works — a miss that nobody can see is a miss nobody
+can count.
+
 ### The consuming side
 
 `PluginBundleClient` (in `MeshWeaver.PluginCatalog`) reads the index once per client — a

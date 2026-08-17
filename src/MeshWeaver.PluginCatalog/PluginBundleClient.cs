@@ -77,7 +77,16 @@ public sealed class PluginBundleClient
 
     /// <summary>What the registry advertises: the framework its assemblies were built against, and
     /// the bundles it can serve.</summary>
-    public sealed record BundleIndex(string? FrameworkMvid, IReadOnlyList<BundleRef> Bundles);
+    /// <param name="FrameworkMvid">The registry's resolved framework build identity — the whole
+    /// compatibility proof, compared EXACTLY.</param>
+    /// <param name="Bundles">What it can serve.</param>
+    /// <param name="Architecture">The portable RID that identity belongs to (#1751), or null from a
+    /// registry that predates the link. 🚨 Never a second gate — the identity already folds the
+    /// architecture in (the amd64 and arm64 variants of one image resolve DIFFERENT identities). It
+    /// exists so a decline can name the lane: without it an arm64 install can only be told "not
+    /// adoptable" and #1728 stays invisible, which is precisely how it stayed invisible.</param>
+    public sealed record BundleIndex(
+        string? FrameworkMvid, IReadOnlyList<BundleRef> Bundles, string? Architecture = null);
 
     /// <summary>One servable bundle.</summary>
     /// <param name="Plugin">The plugin/package id.</param>
@@ -136,9 +145,20 @@ public sealed class PluginBundleClient
                 // different build.
                 if (PrebuiltAssemblySeeder.DeclineReason(index.FrameworkMvid) is { } reason)
                 {
+                    // 🚨 The reason names the LANE, not only the opaque hashes (#1751/#1728). The
+                    // framework identity folds the architecture in, so an arm64 install reading an
+                    // amd64-baked registry sees two unrelated-looking hashes and no way to tell
+                    // "incompatible framework" from "no arm64 lane was ever published" — which is
+                    // exactly why the arm64 lane went unnoticed. Naming both architectures makes the
+                    // miss diagnosable from one log line.
                     _logger?.LogInformation(
-                        "Prebuilt assemblies at {Registry} are not adoptable: {Reason} — compiling",
-                        _registryUrl, reason);
+                        "Prebuilt assemblies at {Registry} are not adoptable: {Reason} — compiling. "
+                        + "The registry bakes {RegistryArchitecture}; this instance is "
+                        + "{LiveArchitecture}. Adoption needs a bake published for THIS lane; "
+                        + "re-publishing another lane's bytes under this identity is never the fix.",
+                        _registryUrl, reason,
+                        index.Architecture ?? "(an architecture it does not state)",
+                        ReleaseArchitecture.Live);
                     return Observable.Return(0);
                 }
 
@@ -304,8 +324,15 @@ public sealed class PluginBundleClient
     private IObservable<byte[]?> Download(string pluginId, string version) =>
         _httpPool.Invoke(async ct =>
         {
+            // 🚨 The consumer asks IN ITS OWN LANE (#1751): the registry resolves each NodeType's
+            // assembly through that type's Release node for exactly this (identity, architecture)
+            // pair, so a deployment whose lane is not the registry's own can still be served the
+            // moment a bake for its lane is recorded. Omitting them would make the registry answer
+            // for ITS lane and silently hand back bytes this instance must then decline.
             var url = $"{_registryUrl}{RoutePrefix}/{Uri.EscapeDataString(pluginId)}"
-                      + $"/{Uri.EscapeDataString(version)}";
+                      + $"/{Uri.EscapeDataString(version)}"
+                      + $"?identity={Uri.EscapeDataString(PrebuiltAssemblySeeder.LiveFrameworkMvid)}"
+                      + $"&arch={Uri.EscapeDataString(ReleaseArchitecture.Live)}";
             using var request = Request(HttpMethod.Get, url);
             using var resp = await _http.SendAsync(request, ct).ConfigureAwait(false);
 
@@ -352,6 +379,19 @@ public sealed class PluginBundleClient
                         pluginId, reason);
                     return Observable.Return(0);
                 }
+
+                // 🚨 The producer's per-type MISSES (#1751), surfaced here rather than only in the
+                // registry's log: this is the consumer side of "a fetch miss must stay loud and
+                // countable". Without it a bundle that resolved nothing for this lane looks exactly
+                // like a package that has no NodeTypes, and the compile that follows looks like
+                // normal behaviour rather than a regression in the distribution lane.
+                if (manifest?.Misses is { Count: > 0 } misses)
+                    _logger?.LogWarning(
+                        "Bundle for {Plugin}: the registry could resolve NO artifact for {Missed} "
+                        + "NodeType(s) on framework {Identity}/{Architecture} — they will be "
+                        + "compiled here: {Misses}",
+                        pluginId, misses.Count, PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                        ReleaseArchitecture.Live, string.Join(" | ", misses));
 
                 if (assemblies.Count == 0)
                 {
