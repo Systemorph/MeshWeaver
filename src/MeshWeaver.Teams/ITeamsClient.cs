@@ -1,4 +1,4 @@
-namespace Memex.Portal.Shared.Teams;
+namespace MeshWeaver.Teams;
 
 /// <summary>
 /// Seam for talking to the Microsoft Teams / Bot Framework connector: validate that an inbound activity

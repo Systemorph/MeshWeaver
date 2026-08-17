@@ -147,6 +147,7 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.OgCard.dll` | Link-preview (og-card) layout area | — |
 | `MeshWeaver.Notifications.Channels.dll` | Notification delivery channels (rule/channel node types + AI triage escalation) | `Email` (triage self-skips unless `Email:Enabled`) |
 | `MeshWeaver.Social.dll` | LinkedIn publishing: connect/publish/page-sync endpoints + node-menu actions | `Social:LinkedIn` |
+| `MeshWeaver.Teams.dll` | Microsoft Teams bot channel: messaging endpoint, inbound routing into threads, proactive replies | `Teams` (inert until bot credentials set) |
 | `MeshWeaver.SelfUpdate.Aks.dll` | AKS/ACR mechanics: ACR tag reads, Kubernetes deployment patching, cluster instance provisioning (the self-update POLLER stays in the platform) | `SelfUpdate`, `Instances` |
 | `MeshWeaver.Courses.dll` | Course delivery: the entitlement-gated `/assets/{Space}/…` route over a Space's synced repo | `GitHub:App:*` (shared with GitSync) |
 | `MeshWeaver.Mail.MicrosoftGraph.dll` | Mail over Microsoft Graph: system email, inbound intake + its webhook, the Executive Assistant's mailbox tools | `Email` (`Enabled`, `InboundEnabled`) |
@@ -320,4 +321,12 @@ UI contributed as data (menus, settings tabs, whole top-bar menus — `UiContrib
 [UI Extensibility](/Doc/Architecture/UiExtensibility). Content plugins and their registry are
 [Plugins](/Doc/Architecture/Plugins) and [Plugin Packaging](/Doc/Architecture/PluginPackaging).
 Deployment surfaces: [Feature Flags](/Doc/Architecture/FeatureFlags) ·
+[Environment Composition](/Doc/Architecture/EnvironmentComposition) ·
 [Deployment](/Doc/Architecture/Deployment).
+
+**Modules and composition are different axes, deliberately.** Which compiled ASSEMBLIES a deployment
+loads is `Modules:Assemblies` (plus the persisted store installs above) — decided before the DI
+container exists, so it cannot be a mesh-level decision. Which CONTENT PACKAGES an environment
+carries is [Environment Composition](/Doc/Architecture/EnvironmentComposition)'s `Features:Flags:*`,
+reconciled by the boot install pass. A Store package that carries a module rides both: its content
+lands through the composition lane, its assemblies through the bundle lane above.

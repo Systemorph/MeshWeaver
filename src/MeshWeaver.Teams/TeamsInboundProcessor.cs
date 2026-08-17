@@ -4,13 +4,14 @@ using System.Text.Json;
 using MeshWeaver.AI;                       // StartThread / SubmitMessage
 using MeshWeaver.Graph.Configuration;      // TeamsConversationNodeType, UserNodeType
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;            // IMeshService, IMeshQueryCore, MeshQueryRequest
+using MeshWeaver.Mesh.Security;            // WellKnownUsers — System-identity reads
+using MeshWeaver.Mesh.Services;            // IMeshService, MeshQueryRequest
 using MeshWeaver.Mesh.Threading;           // IoPool — bounded HTTP pool (replaces bare Observable.FromAsync)
 using MeshWeaver.Messaging;                // IMessageHub, AccessService
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Teams;
+namespace MeshWeaver.Teams;
 
 /// <summary>A parsed inbound Teams message (Graph/Bot-Framework free, so it is unit-testable).</summary>
 public record InboundTeamsMessage(
@@ -35,7 +36,6 @@ public sealed class TeamsInboundProcessor : IDisposable
     private readonly ILogger<TeamsInboundProcessor>? logger;
     private readonly IMeshService meshService;
     private readonly AccessService accessService;
-    private readonly IMeshQueryCore query;
     private readonly JsonSerializerOptions jsonOptions;
 
     // Dedicated bounded HTTP pool, ALWAYS created fresh and owned by this instance — never resolved
@@ -52,7 +52,6 @@ public sealed class TeamsInboundProcessor : IDisposable
         this.logger = logger;
         meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        query = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
         jsonOptions = hub.JsonSerializerOptions;
     }
 
@@ -64,8 +63,14 @@ public sealed class TeamsInboundProcessor : IDisposable
         if (string.IsNullOrWhiteSpace(m.Text) || string.IsNullOrEmpty(m.AadObjectId))
             return Observable.Return(Unit.Default);
 
-        return query.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"nodeType:{UserNodeType.NodeType} content.objectId:{m.AadObjectId} limit:1"), jsonOptions)
+        // Read AS SYSTEM: an inbound Teams message arrives with no viewer, so the sender lookup must
+        // see every user regardless of who (nobody) is signed in. This used the INTERNAL
+        // IMeshQueryCore — "raw queries without user context", explicitly not for application code —
+        // which a module cannot reach without InternalsVisibleTo on the mesh contract.
+        // WellKnownUsers.System is the public equivalent (Permission.All, so nothing is filtered).
+        return meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"nodeType:{UserNodeType.NodeType} content.objectId:{m.AadObjectId} limit:1",
+                    WellKnownUsers.System))
             .Take(1)
             .Select(change => change.Items.FirstOrDefault(n => n.State == MeshNodeState.Active))
             .SelectMany(userNode => userNode is not null
@@ -126,8 +131,11 @@ public sealed class TeamsInboundProcessor : IDisposable
     }
 
     private IObservable<string?> FindThread(string conversationId) =>
-        query.Query<MeshNode>(MeshQueryRequest.FromQuery(
-                $"nodeType:{TeamsConversationNodeType.NodeType} content.conversationId:{conversationId} limit:1"), jsonOptions)
+        // Same viewer-independent read as above: the conversation link belongs to the channel, not
+        // to any signed-in viewer.
+        meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"nodeType:{TeamsConversationNodeType.NodeType} content.conversationId:{conversationId} limit:1",
+                WellKnownUsers.System))
             .Take(1)
             .Select(change => change.Items
                 .Select(n => LinkOf(n)?.ThreadPath)

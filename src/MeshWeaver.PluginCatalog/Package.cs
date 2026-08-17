@@ -126,6 +126,22 @@ public record PackageManifest
     public ImmutableList<string> Requires { get; init; } = [];
 
     /// <summary>
+    /// The parameters this package needs its ENVIRONMENT to supply — a connection string, another
+    /// service's endpoint, a provisioned value (the package root's <c>parameters</c> array).
+    ///
+    /// <para>🚨 A declared parameter the environment does not supply REFUSES the install, loudly,
+    /// naming the exact env var to provision (<see cref="PackageParameters.Require"/>, on the one
+    /// install funnel). Never a half-configured install and never a silent skip: content that
+    /// installs without its connection string fails at first use with nothing pointing back at the
+    /// missing key. <c>Optional = true</c> opts a parameter out of the gate.</para>
+    ///
+    /// <para>Empty (the default) = the package needs nothing beyond the platform, which is every
+    /// package before this field existed; the empty default round-trips loss-free under
+    /// default-suppressing serialization.</para>
+    /// </summary>
+    public ImmutableList<PackageParameter> Parameters { get; init; } = [];
+
+    /// <summary>
     /// The compiled MODULE this package delivers (#1664): the module's entry-assembly name WITHOUT
     /// extension (e.g. <c>MeshWeaver.Social</c>) — the same identity <c>Modules:Assemblies</c>
     /// entries and <c>modules/&lt;name&gt;/</c> folders use. Null (the default) = a pure content /

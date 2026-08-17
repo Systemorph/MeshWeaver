@@ -161,6 +161,11 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // its declared platform floor, the module lane's landing gate.
                         Module = peeked.Module,
                         MinMeshVersion = peeked.MinMeshVersion,
+                        // What this package needs its ENVIRONMENT to supply. Read here for the same
+                        // dead-metadata reason as everything above: the install funnel's parameter
+                        // gate keys on the manifest, so a field the listing drops is a gate that
+                        // never fires.
+                        Parameters = peeked.Parameters,
                     });
                 }
                 return (IReadOnlyList<PackageManifest>)manifests
@@ -190,7 +195,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
         string? NodeType, string? Name, string? Description,
         string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
         bool PreInstalled, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
-        string? License, string? ContactEmail, string? Module, string? MinMeshVersion);
+        string? License, string? ContactEmail, string? Module, string? MinMeshVersion,
+        ImmutableList<PackageParameter> Parameters);
 
     // Reads the node's type/name/description — plus the storefront card fields (category/icon on
     // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
@@ -212,6 +218,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             var publicSegments = ImmutableList<string>.Empty;
             string? module = null;
             string? minMeshVersion = null;
+            var parameters = ImmutableList<PackageParameter>.Empty;
             if (r.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object)
             {
                 if (content.TryGetProperty("price", out var p) && p.ValueKind == JsonValueKind.Number
@@ -267,6 +274,19 @@ public sealed class NodeRepoPackageSource : IPackageSource
                     && floor.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(floor.GetString()))
                     minMeshVersion = floor.GetString();
+                // What the package needs its ENVIRONMENT to supply ("parameters": [{name, kind,
+                // service, description, optional}]). Deserialized with the same web-style options
+                // the package.json sources use, so one authored shape reads identically in both
+                // repo formats. A malformed entry is dropped rather than taking the whole listing
+                // down — but a DROPPED required parameter would silently disarm the install gate,
+                // so the drop is logged.
+                if (content.TryGetProperty("parameters", out var pars)
+                    && pars.ValueKind == JsonValueKind.Array)
+                    parameters = pars.EnumerateArray()
+                        .Select(e => Parameter(e, path))
+                        .Where(p => p is not null)
+                        .Select(p => p!)
+                        .ToImmutableList();
             }
             return new PeekedRoot(
                 r.TryGetProperty("nodeType", out var nt) ? nt.GetString() : null,
@@ -275,12 +295,48 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
                 price, currency, poster, preInstalled, requires, publicSegments, license,
-                contactEmail, module, minMeshVersion);
+                contactEmail, module, minMeshVersion, parameters);
         }
         catch (JsonException ex)
         {
             logger?.LogWarning(ex, "Node-repo catalog: {Path} is not valid JSON; skipped.", path);
             return default;
+        }
+    }
+
+    /// <summary>Web-style options, so one authored <c>parameters</c> shape reads identically here and
+    /// in the <c>package.json</c> sources (which deserialize the whole manifest with the same).</summary>
+    private static readonly JsonSerializerOptions ParameterJson = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// One entry of the root's <c>parameters</c> array. A malformed entry — or one with no name — is
+    /// DROPPED and NAMED: silently dropping a required parameter would disarm the install gate that
+    /// exists to refuse a half-configured install, which is worse than the malformed manifest.
+    /// </summary>
+    private PackageParameter? Parameter(JsonElement element, string path)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            logger?.LogWarning(
+                "Node-repo catalog: {Path} declares a non-object entry in `parameters`; skipped.", path);
+            return null;
+        }
+        try
+        {
+            var parameter = element.Deserialize<PackageParameter>(ParameterJson);
+            if (parameter is null || string.IsNullOrWhiteSpace(parameter.Name))
+            {
+                logger?.LogWarning(
+                    "Node-repo catalog: {Path} declares a parameter with no name; skipped.", path);
+                return null;
+            }
+            return parameter;
+        }
+        catch (JsonException ex)
+        {
+            logger?.LogWarning(ex,
+                "Node-repo catalog: {Path} declares an unreadable parameter; skipped.", path);
+            return null;
         }
     }
 }

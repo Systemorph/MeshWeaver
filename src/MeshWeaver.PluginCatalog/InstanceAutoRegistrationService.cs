@@ -8,6 +8,7 @@ using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Features;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -387,7 +388,7 @@ public sealed class InstanceAutoRegistrationService(
     /// manifest-diff fast path and the per-node <c>SyncBehavior</c> claim all apply unchanged.
     /// There is no parallel installer.
     ///
-    /// <para><b>Two selection signals, one decision.</b> They answer different questions and both
+    /// <para><b>Three selection signals, one decision.</b> They answer different questions and all
     /// feed the same ordered install:</para>
     /// <list type="bullet">
     ///   <item><b>The package's own <c>preInstalled</c> declaration</b> — the PLATFORM's baseline
@@ -395,11 +396,20 @@ public sealed class InstanceAutoRegistrationService(
     ///     is what the platform requires to function and what must survive a self-update; it is
     ///     also the only thing that can heal an instance whose baseline partition was lost (#902).
     ///     Suppressible with <see cref="PluginCatalogOptions.InstallPreInstalledPackages"/>.</item>
+    ///   <item><b>The ENVIRONMENT's feature flags</b> (<c>Features:Flags:{name}:Packages</c>) —
+    ///     what THIS deployment always has. Reconciled on EVERY boot, because that is the whole
+    ///     difference between a policy and a seed: an environment declaring "I have the Store"
+    ///     must still have it after a self-update, a lost partition, or a boot whose install
+    ///     failed. An enabled flag includes its packages; a declared-but-DISABLED flag EXCLUDES
+    ///     them, and the exclusion wins over every other signal here — that is how
+    ///     "all of Plugins, without the games" is one line per environment.</item>
     ///   <item><b>The operator's <see cref="PluginCatalogOptions.InstallByDefault"/> patterns</b> —
     ///     the extras a FRESH deployment seeds itself with, source-scoped so an instance granted
-    ///     paid course content never auto-installs it. Gated on having NO install records: this
-    ///     seeds a new deployment rather than asserting a policy, so an admin who later uninstalls
-    ///     a package is not fought by the next restart.</item>
+    ///     paid course content never auto-installs it. Gated on the ledger: this seeds a new
+    ///     deployment rather than asserting a policy, so an admin who later uninstalls a package is
+    ///     not fought by the next restart. 🚨 Deliberately UNCHANGED by the flag lane — the two
+    ///     coexist, and an already-populated installation is exactly the case the seed cannot
+    ///     express and the flags can.</item>
     /// </list>
     ///
     /// <para>Installs run SEQUENTIALLY (<c>Concat</c>) — each one writes a partition's worth of
@@ -414,7 +424,42 @@ public sealed class InstanceAutoRegistrationService(
             .Select(e => e!)
             .ToList();
         var baseline = options.InstallPreInstalledPackages;
-        if (!baseline && wanted.Count == 0)
+        // The environment's own composition, read ONCE per boot pass off the live flag surface. The
+        // reader is reactive (configuration reloads push a new value), but a boot pass is a single
+        // decision taken at a point in time — re-deciding mid-install would mean two passes writing
+        // the same partitions.
+        var composition = hub.ServiceProvider.GetService<IFeatureFlags>() is { } flags
+            ? flags.Composition.Take(1).Timeout(TimeSpan.FromSeconds(5))
+                .Catch((Exception ex) =>
+                {
+                    // Loud, not silent: a composition that could not be read means this
+                    // environment's declared packages are NOT asserted this boot. The pass still
+                    // proceeds — the platform baseline is what keeps the portal usable, and
+                    // withholding it would turn one unreadable setting into a dead deployment — but
+                    // "the flags installed nothing" must never look like "the flags declared
+                    // nothing".
+                    logger.LogError(ex,
+                        "[DefaultInstall] the environment's feature flags could not be read; NOTHING "
+                        + "this environment declares is asserted this boot. The platform baseline "
+                        + "and the seed still apply.");
+                    return Observable.Return(FeatureComposition.Empty);
+                })
+            : Observable.Return(FeatureComposition.Empty);
+
+        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, composed));
+    }
+
+    /// <summary>The decision, once the three selection signals are known: list the sources, select,
+    /// close over dependencies, drop what the seed already delivered, install in order.</summary>
+    private IObservable<DefaultInstallSummary> InstallSelection(
+        PluginCatalogOptions options,
+        IReadOnlyList<PluginGrantEntry> wanted,
+        bool baseline,
+        FeatureComposition composition)
+    {
+        var included = Parse(composition.Included);
+        var excluded = Parse(composition.Excluded);
+        if (!baseline && wanted.Count == 0 && included.Count == 0)
             return Observable.Return(DefaultInstallSummary.Empty);
 
         return Sources(options).SelectMany(sources => sources.Count == 0
@@ -423,13 +468,16 @@ public sealed class InstanceAutoRegistrationService(
             // the same shape, one layer up. Say it, and say what to set.
             ? Observable.Defer(() =>
             {
-                if (wanted.Count > 0)
+                if (wanted.Count + included.Count > 0)
                     logger.LogError(
-                        "[DefaultInstall] {Count} InstallByDefault pattern(s) are configured "
-                        + "([{Wanted}]) but this installation has NO package sources — nothing can "
-                        + "be installed. Configure PluginCatalog:Sources (a registry serving its own "
-                        + "repos) or PluginCatalog:RegistryUrl (a consumer).",
-                        wanted.Count, string.Join(", ", wanted));
+                        "[DefaultInstall] {Count} composition pattern(s) are configured "
+                        + "(InstallByDefault [{Wanted}]; feature flags [{Included}]) but this "
+                        + "installation has NO package sources — nothing can be installed. "
+                        + "Configure PluginCatalog:Sources (a registry serving its own repos) or "
+                        + "PluginCatalog:RegistryUrl (a consumer).",
+                        wanted.Count + included.Count,
+                        string.Join(", ", wanted),
+                        string.Join(", ", included.Select(c => $"{c.Flag}:{c.Entry}")));
                 return Observable.Return(DefaultInstallSummary.Empty);
             })
             : SeedLedger().SelectMany(seeded =>
@@ -454,12 +502,18 @@ public sealed class InstanceAutoRegistrationService(
                         "Default-install ledger holds {Count} package(s) already seeded; they are "
                         + "not re-installed even if absent (an operator removed them).", seeded.Count);
 
-                return Candidates(sources, baseline, wanted)
+                return Candidates(sources, baseline, wanted, included, excluded)
                     // Drop anything the seed has already delivered once. Done AFTER listing because
                     // the decision is per PACKAGE, and only the listing knows which packages a
                     // pattern covers.
+                    //
+                    // 🚨 A RECONCILED candidate is exempt: the ledger records what the SEED
+                    // delivered, and the seed's whole point is that it does not re-assert. A
+                    // package this environment's flags declare must re-assert on every boot — that
+                    // is the difference between the two lanes — so it is never dropped here, the
+                    // same exemption the platform's own preInstalled baseline already has.
                     .Select(candidates => (IReadOnlyList<InstallCandidate>)candidates
-                        .Where(c => c.Package.PreInstalled || !seeded.Contains(c.Package.Id))
+                        .Where(c => c.Reconciled || !seeded.Contains(c.Package.Id))
                         .ToList())
                     .SelectMany(InstallAll)
                     .SelectMany(summary => RecordSeeded(seeded, summary).Select(_ => summary));
@@ -666,22 +720,75 @@ public sealed class InstanceAutoRegistrationService(
                 n => string.Equals(n, w.Source, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
+    /// <summary>
+    /// One package pattern a feature flag contributes, and the flag that declared it — so an error
+    /// message can name the flag an operator has to fix, not just the pattern.
+    /// </summary>
+    /// <param name="Flag">The declaring flag's name.</param>
+    /// <param name="Entry">The parsed <c>Source/Package</c> pattern.</param>
+    internal readonly record struct FlagPattern(string Flag, PluginGrantEntry Entry);
+
+    /// <summary>Parses a flag's raw <c>Source/Package</c> strings, dropping the malformed ones (a
+    /// bad entry must not take the whole boot down — <see cref="PluginGrantEntry.TryParse"/>).</summary>
+    /// <param name="packages">The declared package patterns with their flags.</param>
+    /// <returns>The parseable patterns.</returns>
+    internal static IReadOnlyList<FlagPattern> Parse(IEnumerable<FeaturePackage> packages) =>
+        packages
+            .Select(p => (p.Flag, Entry: PluginGrantEntry.TryParse(p.Package)))
+            .Where(p => p.Entry is not null)
+            .Select(p => new FlagPattern(p.Flag, p.Entry!))
+            .ToList();
+
+    /// <summary>
+    /// Whether the environment's flags EXCLUDE this package — the declared-but-disabled side of the
+    /// composition. Pure, and deliberately checked against every other signal (the platform
+    /// baseline included): "this environment does not have that" is an explicit statement and the
+    /// only reading under which "all of Plugins, WITHOUT the games" is expressible at all.
+    /// </summary>
+    /// <param name="excluded">The disabled flags' patterns.</param>
+    /// <param name="package">The candidate package.</param>
+    /// <returns>The excluding flag's name, or null when nothing excludes it.</returns>
+    internal static string? ExcludedBy(
+        IReadOnlyList<FlagPattern> excluded, PackageManifest package) =>
+        excluded.FirstOrDefault(e => e.Entry.Matches(package.Source ?? "", package.Id)) is
+            { Flag.Length: > 0 } hit
+            ? hit.Flag
+            : null;
+
     private IObservable<IReadOnlyList<InstallCandidate>> Candidates(
         IReadOnlyList<ConfiguredPackageSource> sources,
         bool baseline,
-        IReadOnlyList<PluginGrantEntry> wanted) =>
+        IReadOnlyList<PluginGrantEntry> wanted,
+        IReadOnlyList<FlagPattern> included,
+        IReadOnlyList<FlagPattern> excluded) =>
         Observable.Defer(() =>
         {
+            var sourceNames = sources.Select(s => s.Name).ToList();
             // Config error, reported BEFORE any listing: a pattern naming a source that does not
             // exist here can never install anything, and silence is the worst possible answer.
-            if (UnmatchablePatterns(wanted, sources.Select(s => s.Name).ToList()) is { Count: > 0 } bad)
+            if (UnmatchablePatterns(wanted, sourceNames) is { Count: > 0 } bad)
                 logger.LogError(
                     "[DefaultInstall] {Count} InstallByDefault pattern(s) name a source this "
                     + "installation does not have: [{Bad}]. Configured sources: [{Sources}]. Those "
                     + "patterns will install NOTHING — fix the names so they agree (a source's name "
                     + "is what grants and install-defaults are written against).",
-                    bad.Count, string.Join(", ", bad),
-                    string.Join(", ", sources.Select(s => s.Name)));
+                    bad.Count, string.Join(", ", bad), string.Join(", ", sourceNames));
+            // The same check for the flag lane, and for BOTH directions. A misspelled source in an
+            // EXCLUSION is the more dangerous of the two: it fails open — the packages the operator
+            // meant to keep out are installed, and nothing says so.
+            foreach (var (label, patterns) in new[] { ("includes", included), ("excludes", excluded) })
+                if (patterns
+                        .Where(p => !sourceNames.Any(
+                            n => string.Equals(n, p.Entry.Source, StringComparison.OrdinalIgnoreCase)))
+                        .ToList() is { Count: > 0 } unmatchable)
+                    logger.LogError(
+                        "[DefaultInstall] {Count} feature-flag {Direction} name a source this "
+                        + "installation does not have: [{Bad}]. Configured sources: [{Sources}]. "
+                        + "They will match NOTHING — an unmatchable exclusion in particular fails "
+                        + "OPEN, so the packages it names WILL be installed.",
+                        unmatchable.Count, label,
+                        string.Join(", ", unmatchable.Select(p => $"{p.Flag}:{p.Entry}")),
+                        string.Join(", ", sourceNames));
             return Observable.Return(Unit.Default);
         }).SelectMany(_ => sources
             .Select(source => source.Source.ListPackages(source.GitRef)
@@ -719,10 +826,22 @@ public sealed class InstanceAutoRegistrationService(
                     .Select(g => g.First())
                     .OrderBy(c => c.Package.Id, StringComparer.Ordinal)
                     .ToList();
+                bool IsIncluded(InstallCandidate c) =>
+                    included.Any(i => i.Entry.Matches(c.Package.Source ?? "", c.Package.Id));
                 var selected = catalog
                     .Where(c => (baseline && c.Package.PreInstalled)
+                                || IsIncluded(c)
                                 || wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id)))
                     .ToList();
+                // Judge the FLAG lane on its own too, for the same reason the operator's patterns
+                // are judged on their own below: with a baseline selected, "matched something" is
+                // true overall while every flag pattern matched nothing.
+                if (included.Count > 0 && !selected.Any(IsIncluded))
+                    logger.LogWarning(
+                        "[DefaultInstall] the environment's feature flags matched no packages "
+                        + "([{Included}]). If the registry predates source-stamped catalog entries, "
+                        + "a Source/* pattern cannot match — it fails closed rather than guessing.",
+                        string.Join(", ", included.Select(i => $"{i.Flag}:{i.Entry}")));
                 // 🚨 Judge the OPERATOR'S patterns on their own, not on whether the pass matched
                 // anything overall. `selected.Count == 0` alone is masked by the pre-installed
                 // baseline: with 8 baseline packages selected, "matched something" is true while
@@ -761,6 +880,38 @@ public sealed class InstanceAutoRegistrationService(
                 var bySource = catalog.ToDictionary(c => c.Package.Id, StringComparer.Ordinal);
                 return (IReadOnlyList<InstallCandidate>)ordered
                     .Select(p => bySource[p.Id])
+                    // 🚨 The EXCLUSION is applied LAST — after the dependency closure, so it also
+                    // removes a package the closure pulled back in as somebody's requirement. That
+                    // is the honest reading of "this environment does not have that": the operator's
+                    // explicit statement outranks an inferred edge. It is not silent — a package
+                    // removed after being pulled in is named at Warning, because whatever required
+                    // it will now fail at use and the operator has to un-exclude it or drop the
+                    // dependent.
+                    .Where(c =>
+                    {
+                        if (ExcludedBy(excluded, c.Package) is not { } flag)
+                            return true;
+                        if (selected.Any(s =>
+                                string.Equals(s.Package.Id, c.Package.Id, StringComparison.Ordinal)))
+                            logger.LogInformation(
+                                "[DefaultInstall] {Id} is excluded here by the disabled feature flag "
+                                + "'{Flag}'", c.Package.Id, flag);
+                        else
+                            logger.LogWarning(
+                                "[DefaultInstall] {Id} is excluded here by the disabled feature flag "
+                                + "'{Flag}', but another selected package REQUIRES it — whatever "
+                                + "needs it will install and then fail at use. Enable that flag, or "
+                                + "stop selecting the dependent.", c.Package.Id, flag);
+                        return false;
+                    })
+                    // Whether this candidate belongs to a RECONCILED lane (the platform baseline or
+                    // this environment's flags) rather than the seed-once one. Read by the ledger
+                    // filter: a reconciled package re-asserts on every boot, a seeded one never
+                    // does.
+                    .Select(c => c with
+                    {
+                        Reconciled = (baseline && c.Package.PreInstalled) || IsIncluded(c),
+                    })
                     .ToList();
             }));
 
@@ -964,7 +1115,19 @@ public sealed class InstanceAutoRegistrationService(
     }
 
     /// <summary>One package the default install should carry, and the source it came from.</summary>
-    private sealed record InstallCandidate(ConfiguredPackageSource Source, PackageManifest Package);
+    /// <param name="Source">The source the package was listed from.</param>
+    /// <param name="Package">The package manifest.</param>
+    private sealed record InstallCandidate(ConfiguredPackageSource Source, PackageManifest Package)
+    {
+        /// <summary>
+        /// Whether a RECONCILED lane selected it — the platform's own <c>preInstalled</c> baseline or
+        /// this environment's feature flags — as opposed to the seed-once
+        /// <see cref="PluginCatalogOptions.InstallByDefault"/>. A reconciled candidate is exempt from
+        /// the seed ledger: it re-asserts on every boot, which is the entire difference between a
+        /// per-environment policy and a seed.
+        /// </summary>
+        public bool Reconciled { get; init; }
+    }
 
     /// <summary>
     /// The default install run against an EXPLICIT source list — the one seam
@@ -976,11 +1139,17 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="sources">The sources to list, in precedence order.</param>
     /// <param name="baseline">Whether packages declaring <c>preInstalled</c> are selected.</param>
     /// <param name="wanted">The operator's source-scoped <c>Source/Package</c> patterns.</param>
+    /// <param name="composition">The environment's feature-flag composition (includes + excludes).</param>
     internal IObservable<DefaultInstallSummary> InstallFrom(
         IReadOnlyList<ConfiguredPackageSource> sources,
         bool baseline,
-        IReadOnlyList<PluginGrantEntry> wanted) =>
-        Candidates(sources, baseline, wanted).SelectMany(InstallAll);
+        IReadOnlyList<PluginGrantEntry> wanted,
+        FeatureComposition? composition = null) =>
+        Candidates(
+                sources, baseline, wanted,
+                Parse((composition ?? FeatureComposition.Empty).Included),
+                Parse((composition ?? FeatureComposition.Empty).Excluded))
+            .SelectMany(InstallAll);
 
     /// <summary>
     /// Runs the PRODUCTION default-install pass on demand — the identical selection, ordering and

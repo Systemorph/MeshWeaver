@@ -194,20 +194,11 @@ public static class MemexConfiguration
         // Microsoft Teams bot channel (bidirectional). Registered always but INERT unless Teams:Enabled
         // and Bot credentials are set (TeamsClient.IsConfigured gates the endpoint + sender). Activate by
         // provisioning an Azure Bot resource + Teams app and setting the Teams config.
-        var teamsOptions = builder.Configuration.GetSection(MeshWeaver.Mesh.TeamsOptions.SectionName)
-            .Get<MeshWeaver.Mesh.TeamsOptions>() ?? new MeshWeaver.Mesh.TeamsOptions();
-        services.AddSingleton(teamsOptions);
-        services.AddHttpClient<Teams.ITeamsClient, Teams.TeamsClient>();
-        services.AddSingleton<Teams.TeamsInboundProcessor>(sp => new Teams.TeamsInboundProcessor(
-            sp.GetRequiredService<PortalApplication>().Hub,
-            sp.GetRequiredService<Teams.ITeamsClient>(),
-            sp.GetService<Microsoft.Extensions.Logging.ILogger<Teams.TeamsInboundProcessor>>()));
-        if (teamsOptions.Enabled)
-            // Delivers agent replies back into Teams, reading them via the shared
-            // ThreadFlow.ObserveResponses abstraction (same read-side primitive the GUI uses).
-            // Only the hosted service is feature-gated; the client + inbound processor stay registered
-            // so the messaging endpoint can resolve them and return NotFound when disabled.
-            services.AddHostedService<Teams.TeamsReplySender>();
+        // (The Teams bot channel rides the MeshWeaver.Teams module: the client, the inbound router
+        // and the reply sender register through its attribute, and POST /api/teams/messages is
+        // contributed through MapMeshModuleEndpoints. Everything stays inert until the bot
+        // credentials are configured — the client reports IsConfigured false, the endpoint answers
+        // 404 and the reply sender self-skips at ApplicationStarted.)
 
         // Shared on-disk WORKSPACE dir the agent→skill sync maintains (.claude/skills + AGENTS.md); both
         // CLI harnesses set it as the session's working directory so every session sees the MeshWeaver
@@ -911,6 +902,13 @@ public static class MemexConfiguration
                         // MeshWeaver installation may pull. Registration is self-service; granting
                         // is not, and the grants live in the Admin partition out of the owner's reach.
                         .AddInstanceGrantAdminSettingsTab()
+                        // Composition (platform admins only) — WHY this environment carries what it
+                        // carries: the deployment's feature flags (Features:Flags:*, which also
+                        // decide what it pre-installs) and the parameters its installed packages
+                        // declare, with the exact env var to provision for any this environment does
+                        // not supply. Read-only: composition arrives through the values file, and a
+                        // browser edit would be reverted by the next helm upgrade.
+                        .AddCompositionAdminSettingsTab()
                         // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
                         // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).
