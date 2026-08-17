@@ -92,12 +92,29 @@ public static class PluginBundleEndpoints
         group.MapGet("/index.json", (HttpContext http, CancellationToken ct) =>
             Index(http, RootHub(http), ct));
 
+        // 🚨 `identity`/`arch` are the CONSUMER's lane (#1751), not a filter the caller invents: they
+        // say which framework build identity and which architecture the caller can actually run, and
+        // the assemblies are resolved through each NodeType's Release node for exactly that pair.
+        // Absent ⇒ this instance's own lane, which is what every pre-#1751 client asks for, so the
+        // route's behaviour for them is unchanged.
         group.MapGet("/{plugin}/{version}",
             (HttpContext http, string plugin, string version, CancellationToken ct) =>
-                Bundle(RootHub(http), plugin, version, ct));
+                Bundle(
+                    RootHub(http), plugin, version,
+                    Requested(http, "identity", FrameworkMvid),
+                    Requested(http, "arch", ReleaseArchitecture.Live),
+                    ct));
 
         return endpoints;
     }
+
+    /// <summary>One query-string value, or the serving instance's own value when the caller did not
+    /// state one. Blank is treated as absent — an empty <c>?identity=</c> is a client bug, and
+    /// answering it with "nothing resolves" would look identical to an incompatible lane.</summary>
+    private static string Requested(HttpContext http, string key, string fallback) =>
+        http.Request.Query[key].ToString() is { Length: > 0 } value && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : fallback;
 
     private static IMessageHub RootHub(HttpContext http) =>
         http.RequestServices.GetRequiredService<IMessageHub>();
@@ -123,6 +140,13 @@ public static class PluginBundleEndpoints
                 .Select(modules => Results.Json(new
                 {
                     frameworkMvid = FrameworkMvid,
+                    // The architecture that identity belongs to (#1751). The identity already FOLDS
+                    // the architecture in — the amd64 and arm64 variants of one image resolve
+                    // different identities — but it is opaque, so a consumer on the other variant
+                    // sees only "not adoptable" with no way to tell an incompatible framework from
+                    // the wrong lane. Stating the architecture makes that miss diagnosable. Additive:
+                    // a pre-#1751 client ignores it, and its BundleIndex simply reads null.
+                    architecture = ReleaseArchitecture.Live,
                     bundles = packages.Select(p => new
                     {
                         plugin = p.PluginId,
@@ -183,7 +207,8 @@ public static class PluginBundleEndpoints
     /// can disagree with what the portal runs.</para>
     /// </summary>
     private static Task<IResult> Bundle(
-        IMessageHub rootHub, string plugin, string version, CancellationToken ct) =>
+        IMessageHub rootHub, string plugin, string version, string identity, string architecture,
+        CancellationToken ct) =>
         InstalledPackages(rootHub, ct)
             .SelectMany(packages =>
             {
@@ -193,19 +218,41 @@ public static class PluginBundleEndpoints
 
                 return match is null
                     ? Observable.Return(Results.NotFound())
-                    : Assemble(rootHub, match);
+                    : Assemble(rootHub, match, identity, architecture);
             })
             .FirstAsync()
             .ToTask(ct);
 
     /// <summary>
     /// Reads the plugin's nodes and their assemblies, then builds the archive.
+    ///
+    /// <para>🚨 <b>A caller on ANOTHER lane is answered by resolving through each NodeType's
+    /// <c>Release</c> node (#1751)</b> — the release records, per framework identity and per
+    /// architecture, which assembly-store version holds bytes PROVEN built for that lane. That is
+    /// what lets this route serve at all across lanes: the amd64 and arm64 variants of one image
+    /// resolve different framework identities, so before the link existed an arm64 caller could only
+    /// be told "not adoptable" and never "here is yours". The <c>Release/</c> nodes arrive on the
+    /// very same subtree read the NodeTypes do, so resolving through them costs no extra query.</para>
+    ///
+    /// <para>🚨 <b>The instance's OWN lane is still served from <c>LastCompiledVersion</c>, and is
+    /// checked first.</b> Not a legacy fallback — the correct answer. A Release record can legitimately
+    /// LAG the current build (adoption stamps <c>LastCompiledVersion</c> without minting a release at
+    /// all), so resolving the own-lane case through releases would quietly ship an older assembly than
+    /// this portal itself runs. On its own lane the identity claim is true by construction; off it,
+    /// only a record written beside the bytes can make that claim, and a type without one contributes
+    /// nothing and is COUNTED as a miss.</para>
     /// </summary>
-    private static IObservable<IResult> Assemble(IMessageHub rootHub, BundleEntry package)
+    private static IObservable<IResult> Assemble(
+        IMessageHub rootHub, BundleEntry package, string identity, string architecture)
     {
         var meshService = rootHub.ServiceProvider.GetRequiredService<IMeshService>();
         var store = rootHub.ServiceProvider.GetService<IAssemblyStore>() ?? NullAssemblyStore.Instance;
         var options = rootHub.JsonSerializerOptions;
+        var logger = rootHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(PluginBundleEndpoints));
+        var servesOwnLane =
+            string.Equals(identity, FrameworkMvid, StringComparison.Ordinal)
+            && ReleaseArchitecture.Matches(ReleaseArchitecture.Live, architecture);
 
         return meshService
             .Query<MeshNode>(MeshQueryRequest.FromQuery(
@@ -215,6 +262,8 @@ public static class PluginBundleEndpoints
             .SelectMany(change =>
             {
                 var nodes = change.Items.ToArray();
+                var releases = ReleasesByType(nodes, options);
+                var misses = new List<string>();
 
                 // Each NodeType contributes the assembly the bake produced for it. A type with no
                 // usable build contributes nothing rather than failing the bundle: a plugin whose
@@ -223,8 +272,12 @@ public static class PluginBundleEndpoints
                 var lookups = nodes
                     .Select(n => (Node: n, Definition: n.ContentAs<NodeTypeDefinition>(options)))
                     .Where(x => x.Definition?.LastCompiledVersion is not null)
+                    .Select(x => (x.Node, x.Definition, Version: ResolveStoreVersion(
+                        x.Node.Path, x.Definition!, releases, identity, architecture, servesOwnLane,
+                        misses)))
+                    .Where(x => x.Version is not null)
                     .Select(x => store
-                        .TryGetAssemblyPath(x.Node.Path, x.Definition!.LastCompiledVersion!.Value)
+                        .TryGetAssemblyPath(x.Node.Path, x.Version!.Value)
                         .Take(1)
                         .Catch<string?, Exception>(_ => Observable.Return<string?>(null))
                         .Select(path => (x.Node.Path, Path: path,
@@ -236,9 +289,87 @@ public static class PluginBundleEndpoints
                         Array.Empty<(string NodePath, string? Path, IReadOnlyDictionary<string, string>? Dependencies)>())
                     : lookups.CombineLatest().Select(x => x.ToArray());
 
+                if (misses.Count > 0)
+                    // 🚨 LOUD and COUNTABLE. A fetch that quietly yields nothing is indistinguishable
+                    // from one that yielded everything, and the adopted-vs-compiled count is the only
+                    // evidence the distribution lane works at all.
+                    logger?.LogWarning(
+                        "Plugin bundles: {Plugin} could resolve NO artifact for {Missed} of its "
+                        + "NodeType(s) on framework {Identity}/{Architecture} — those types are NOT "
+                        + "in the bundle and the consumer will compile them: {Misses}",
+                        package.PluginId, misses.Count, identity, architecture,
+                        string.Join(" | ", misses.Take(MissesReported)));
+
                 return assemblies.SelectMany(found => ModuleFiles(rootHub, package)
-                    .Select(moduleFiles => BuildResult(package, found, moduleFiles)));
+                    .Select(moduleFiles =>
+                        BuildResult(package, found, moduleFiles, identity, architecture, misses)));
             });
+    }
+
+    /// <summary>How many per-type misses the warning names before it truncates — enough to diagnose,
+    /// bounded so a wholesale lane mismatch cannot write a log line per type.</summary>
+    private const int MissesReported = 10;
+
+    /// <summary>
+    /// The <c>Release</c> nodes from a package's subtree, grouped by the NodeType they belong to.
+    /// Keyed off the release CONTENT's <c>NodeTypePath</c> rather than the node's path, because the
+    /// content is what the resolver reasons about and a path-derived key would silently disagree with
+    /// it if the release were ever moved.
+    /// </summary>
+    private static IReadOnlyDictionary<string, IReadOnlyList<NodeTypeRelease>> ReleasesByType(
+        IReadOnlyList<MeshNode> nodes, System.Text.Json.JsonSerializerOptions options) =>
+        nodes
+            .Where(n => string.Equals(
+                n.NodeType, ReleaseNodeType.NodeType, StringComparison.OrdinalIgnoreCase))
+            .Select(n => n.ContentAs<NodeTypeRelease>(options))
+            .Where(r => r is { NodeTypePath.Length: > 0 })
+            .GroupBy(r => r!.NodeTypePath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyList<NodeTypeRelease>)g.Select(r => r!).ToArray(),
+                StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Which assembly-store version to serve for one NodeType in the caller's lane, or null when
+    /// nothing may be served for it (the miss is appended to <paramref name="misses"/>).
+    /// </summary>
+    /// <remarks>Internal rather than private for <c>PluginBundleLaneResolutionTest</c>: this is the
+    /// whole distribution decision and both of its branches fail SILENTLY when wrong — serving a
+    /// lagging build looks healthy, and serving a foreign lane's build fails only at activation.
+    /// Reaching it through an HTTP round trip would need a live portal to pin a pure choice.</remarks>
+    internal static long? ResolveStoreVersion(
+        string nodePath,
+        NodeTypeDefinition definition,
+        IReadOnlyDictionary<string, IReadOnlyList<NodeTypeRelease>> releases,
+        string identity,
+        string architecture,
+        bool servesOwnLane,
+        List<string> misses)
+    {
+        // 🚨 OWN LANE FIRST, and deliberately not through the releases. The bytes this portal runs
+        // were produced (or adopted) under its own live identity, so the claim is true by
+        // construction — and they are the CURRENT build, which a Release record can legitimately lag:
+        // PrebuiltAssemblySeeder stamps LastCompiledVersion without minting a release at all, so a
+        // release-first rule would ship the older assembly of the two while looking perfectly
+        // healthy. This branch is byte-for-byte the pre-#1751 behaviour.
+        if (servesOwnLane)
+            return definition.LastCompiledVersion;
+
+        var candidates = releases.TryGetValue(nodePath, out var forType) ? forType : [];
+        var match = ReleaseArtifactResolver.Resolve(candidates, identity, architecture);
+
+        // Off this instance's lane, ONLY a record written beside the bytes can prove them. The
+        // artifact's own store version, and never LastCompiledVersion as a fallback: that is a
+        // DIFFERENT lane's build, and handing it over under the requested identity is exactly the
+        // unprovable adoption the whole gate exists to prevent.
+        if (match.IsResolved && match.Artifact!.AssemblyStoreVersion is { } storeVersion)
+            return storeVersion;
+
+        misses.Add($"{nodePath}: {(match.IsResolved
+            ? "an artifact was recorded for this lane but without an assembly-store version, so its "
+              + "bytes cannot be located"
+            : match.DeclineReason)}");
+        return null;
     }
 
     /// <summary>
@@ -295,7 +426,10 @@ public static class PluginBundleEndpoints
     private static IResult BuildResult(
         BundleEntry package,
         IReadOnlyList<(string NodePath, string? Path, IReadOnlyDictionary<string, string>? Dependencies)> assemblies,
-        IReadOnlyList<string> moduleFiles)
+        IReadOnlyList<string> moduleFiles,
+        string identity,
+        string architecture,
+        IReadOnlyList<string> misses)
     {
         var entries = new List<NuGetPackageWriter.Entry>();
         var assemblyRecords = new List<object>();
@@ -332,10 +466,21 @@ public static class PluginBundleEndpoints
             {
                 plugin = package.PluginId,
                 version = package.Version,
-                // The framework this instance RUNS — these assemblies came out of its bake (and its
-                // own modules/ tree), so that is the only framework they are known good against.
-                frameworkMvid = FrameworkMvid,
+                // 🚨 The framework identity these bytes were RESOLVED for (#1751) — every assembly
+                // above either carries a Release artifact recorded under exactly this identity, or
+                // was served on this instance's own lane, where this equals FrameworkMvid. It is
+                // never inferred: a lane that could not be proven contributed no bytes at all, so
+                // the claim is always backed by the record the producer wrote beside them.
+                frameworkMvid = identity,
+                // The architecture that identity belongs to, so a consumer's decline can name the
+                // lane instead of only the opaque hash.
+                architecture,
                 assemblies = assemblyRecords,
+                // NodeTypes this bundle could NOT cover for the requested lane, each with its reason.
+                // Carried in the manifest — not merely logged on the server — so the CONSUMER can
+                // count and surface the miss too: a fetch that silently returns fewer assemblies
+                // than the package has types is exactly how adoption regresses unnoticed.
+                misses = misses.Count == 0 ? null : misses.ToArray(),
                 // The module section — the manifest names every closure file; a consumer reads
                 // this list, never the folder (BundleReader.ReadModule). Null (omitted) when the
                 // bundle carries no module. minMeshVersion is the consumer's landing gate (a

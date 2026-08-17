@@ -88,8 +88,38 @@ public record NodeTypeRelease
 
     /// <summary>
     /// Version of the MeshWeaver.Graph framework used for compilation.
+    /// <para>
+    /// 🚨 This is an ASSEMBLY VERSION string (<c>3.0.0.0</c>) and has never gated adoption. The
+    /// value that does is the resolved framework BUILD identity, and it lives on
+    /// <see cref="ReleaseArtifact.FrameworkIdentity"/> in <see cref="Artifacts"/> — see the note
+    /// there. The two are kept apart deliberately: #1696 was exactly a producer and a gate
+    /// disagreeing about which of them "the framework version" meant.
+    /// </para>
     /// </summary>
     public required string FrameworkVersion { get; init; }
+
+    /// <summary>
+    /// 🚨 <b>THE LINK (#1751): where this release's assemblies live, per framework identity and per
+    /// architecture.</b>
+    ///
+    /// <para>The mesh keeps node definitions; an assembly keeps compilation; this list is the third
+    /// concern — which release, which identity, where its bytes are — and it makes that a queryable
+    /// property of the release rather than an index a consumer has to poll. A consumer resolves it
+    /// with <see cref="ReleaseArtifactResolver.Resolve"/> against its OWN
+    /// <see cref="PrebuiltAssemblySeeder.LiveFrameworkMvid"/> and
+    /// <see cref="ReleaseArchitecture.Live"/>, and adopts only on an exact hit.</para>
+    ///
+    /// <para>Normally ONE entry — the process that compiled the release stamps its own identity and
+    /// architecture. Several entries mean several lanes genuinely baked the same release (an amd64
+    /// and an arm64 image each resolving their own identity), each recorded honestly under the
+    /// identity its own bytes were built against. It is NEVER a way to advertise one bake's bytes
+    /// under a second identity — the CD lane forbids that, and it would void the only compatibility
+    /// proof there is.</para>
+    ///
+    /// <para>Null on releases minted before #1751: they predate the link, so nothing resolves through
+    /// them and consumers fall back exactly as they did before.</para>
+    /// </summary>
+    public IReadOnlyList<ReleaseArtifact>? Artifacts { get; init; }
 
     /// <summary>
     /// When this release was created.

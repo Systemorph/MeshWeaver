@@ -852,6 +852,22 @@ public static class MeshDataSourceExtensions
                 // `Version` string (yyyyMMddHHmmss-hash), which doesn't preserve
                 // the underlying integer.
                 AssemblyStoreVersion = result.Version,
+                // 🚨 THE LINK (#1751). The two neighbours above are WHERE the bytes are; this is
+                // what they may be used FOR — the resolved framework build identity they were
+                // compiled against and the architecture that produced them. Recorded here, at the
+                // one moment both facts are known for certain (this process just compiled them),
+                // so a consumer can resolve "are these mine?" from the node instead of inferring it
+                // from an index. FrameworkVersion above stays the assembly version string it always
+                // was; conflating the two is what #1696 was.
+                Artifacts =
+                [
+                    new ReleaseArtifact(
+                        NodeTypeCompilationHelpers.FrameworkVersion,
+                        ReleaseArchitecture.Live,
+                        result.Version,
+                        result.Collection,
+                        result.ContentPath)
+                ],
                 Status = "Succeeded",
                 CompilationActivityPath = activityPath,
                 SourceVersions = sourceVersions,
