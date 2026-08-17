@@ -253,4 +253,104 @@ public class ActivityTerminalSettleTest(ITestOutputHelper output) : MonolithMesh
             && l.Messages.Any(m =>
                 m.Message.Contains("Owner cannot be the same as the subscriber")));
     }
+
+    // ── Root cause 3 (#1784): the write must MINT a version ─────────────────
+
+    /// <summary>
+    /// The THIRD way a Succeeded activity reverted to <c>Running</c>, and the one that survived
+    /// the two fixes above: <see cref="ActivityLogLogger"/> used to publish by hand-posting a
+    /// <c>DataChangeRequest</c> carrying a rebuilt whole MeshNode. That write lands in the
+    /// workspace VERBATIM — <c>MeshNodeTypeSource.UpdateImpl</c> is side-effect-only, so its
+    /// <c>NextVersion</c> stamping never reaches the store — and the activity node therefore sat
+    /// at <c>Version = 0</c> for an entire run.
+    ///
+    /// <para>Version 0 is what defeats the owner's two lagged-echo defences at once. The
+    /// persistence sampler normalises <c>0 → 1</c> when it writes the row
+    /// (<c>HandleSaveMeshNode</c>), so the storage change feed echoes back a node at Version 1:
+    /// <c>SubscribeToOwnDeletion</c>'s echo-suppression compares <c>1 == 0</c> and sees a foreign
+    /// write, and <c>MeshNodeStreamHandle.AdoptPersisted</c>'s forward-only guard reads
+    /// <c>1 &gt; 0</c> as "strictly newer" and adopts it. The sampler's 200 ms window routinely
+    /// closes on a MID-RUN snapshot, so under load that echo landed AFTER the terminal write and
+    /// rolled the activity back to <c>Running</c> with <c>End</c> cleared — permanently, because a
+    /// finished run never writes again. CI run 32054991912 shard 3 caught exactly that state:
+    /// <c>Status=Running, Messages=1, End=</c>, with the output pane rendering the spinner.</para>
+    ///
+    /// <para>Pinned in two independent ways, both deterministic — no sleep, no race:</para>
+    /// <list type="number">
+    ///   <item>the run's writes MINT versions (the invariant every forward-only guard rests on);</item>
+    ///   <item>replaying the durable echo of a PRE-RUN revision — the same call the change feed
+    ///   makes — leaves the terminal state untouched.</item>
+    /// </list>
+    /// </summary>
+    [Fact(Timeout = DefaultTimeoutMs)]
+    public async Task LaggedPersistenceEcho_NeverRevertsTerminalStatus()
+    {
+        var client = GetClient();
+        var kernelAddress = await CreateKernelSession();
+        var path = kernelAddress.Path;
+        var nodeStream = client.GetWorkspace().GetMeshNodeStream(path);
+
+        var created = await nodeStream.Should().Within(30.Seconds()).Match(n => n is not null);
+        var createdVersion = created!.Version;
+
+        client.Post(
+            new SubmitCodeRequest("Console.WriteLine(\"echo-probe-line\");\n\"done\"") { Id = "cell-1" },
+            o => o.WithTarget(kernelAddress));
+
+        var settled = await nodeStream.Should().Within(30.Seconds()).Match(n =>
+            n.ContentAs<ActivityLog>(client.JsonSerializerOptions) is
+                { Status: ActivityStatus.Succeeded, End: not null } l
+            && l.Messages.Any(m => m.Message.Contains("echo-probe-line")));
+
+        // (1) THE invariant. Every activity-log publish is a real revision of the node, so the
+        //     owner's version must have advanced past the one creation minted. At Version 0 the
+        //     node is indistinguishable from "older than anything storage holds".
+        settled!.Version.Should().BeGreaterThan(createdVersion,
+            "each activity-log publish must MINT a version — a write that leaves the node at "
+            + "Version 0 makes every persisted echo look strictly newer than live state");
+
+        // (2) The echo itself, replayed deterministically. This is the exact call the storage
+        //     change feed makes on the owner: the node as some EARLIER revision persisted it —
+        //     here a mid-run Running snapshot at the pre-run version. It must not move the live
+        //     node backwards.
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var staleEcho = new MeshNode(segments[^1], string.Join('/', segments[..^1]))
+        {
+            Name = created.Name,
+            NodeType = "Activity",
+            MainNode = OwnerPath,
+            State = MeshNodeState.Active,
+            Version = createdVersion,
+            Content = new ActivityLog("ScriptExecution")
+            {
+                Status = ActivityStatus.Running,
+                MessageCount = 1,
+                Messages = [new LogMessage("echo-probe-line", LogLevel.Information)]
+            }
+        };
+        var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        // InMemoryStorageAdapter publishes its change notification SYNCHRONOUSLY before this
+        // observable emits, and the owner's change-feed handler enqueues the adoption on the
+        // same stream hub synchronously from there — so once this emits, the adoption (if the
+        // guard lets one through) is already queued AHEAD of the marker write below.
+        await storage.Write(staleEcho, Mesh.JsonSerializerOptions)
+            .Should().Within(30.Seconds()).Emit();
+
+        // A marker write is the SYNCHRONISATION POINT — it is applied on the owner strictly after
+        // anything the echo queued, so the emission that carries it also carries whatever the
+        // echo did to the node. Positive signal, no "wait and hope" delay.
+        const string marker = "echo-probe-settled";
+        await nodeStream.Update(n => n with { Name = marker })
+            .Should().Within(30.Seconds()).Emit();
+
+        var afterEcho = await nodeStream.Should().Within(30.Seconds())
+            .Match(n => n.Name == marker);
+        var log = afterEcho!.ContentAs<ActivityLog>(client.JsonSerializerOptions);
+        log.Should().NotBeNull();
+        log!.Status.Should().Be(ActivityStatus.Succeeded,
+            "a lagged durable echo of a pre-terminal revision must never roll a settled activity "
+            + "back to Running");
+        log.End.Should().NotBeNull(
+            "the terminal End timestamp must survive a lagged durable echo");
+    }
 }
