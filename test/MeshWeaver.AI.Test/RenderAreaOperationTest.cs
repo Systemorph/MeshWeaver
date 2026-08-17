@@ -232,9 +232,17 @@ public class RenderAreaOperationTest(ITestOutputHelper output) : MonolithMeshTes
     {
         var path = await SeedMarkdownNodeAsync("timeout");
 
-        // A zero budget elapses before any frame can arrive — deterministic. Materialize folds
-        // the OnError into a value so the assertion is reactive (try/catch around an awaited
-        // FirstAsync can miss an Rx OnError).
+        // A non-positive budget is refused by the PIPELINE, not merely by the outer Rx Timeout:
+        // RenderArea carries the budget as a deadline and re-checks it immediately before opening
+        // the layout-area stream, so the fault is deterministic in both directions — no frame can
+        // win the race (the stream is never opened), and no SubscribeRequest is left behind for a
+        // caller that has already been faulted. The old premise here — "a zero budget elapses
+        // before any frame can arrive" — leaned on the outer Timeout alone and was racy: the
+        // continuation still opened the stream and posted a SubscribeRequest to a cold per-node
+        // hub, which parked on its init gates and tripped THIS class's leaked-callback teardown
+        // check on a loaded CI runner (issue #1613; main run 32025437472).
+        // Materialize folds the OnError into a value so the assertion is reactive (try/catch
+        // around an awaited FirstAsync can miss an Rx OnError).
         var notification = await new MeshOperations(Mesh)
             .RenderArea($"@{path}", "Overview", timeoutSeconds: 0)
             .Materialize()
