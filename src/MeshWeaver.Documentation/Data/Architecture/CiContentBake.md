@@ -130,7 +130,10 @@ for the job's preflight discipline and the dependent-repo dispatch.
 Every satellite content repo (MeshWeaver.Plugins, MeshWeaver.Education, MeshWeaver.Reinsurance,
 MeshWeaver.SocialMedia) bakes and publishes its own content through the SAME contract, and since
 #1707 the jobs live HERE, as reusable `workflow_call` workflows the satellites call instead of
-vendoring:
+vendoring. Adoption is per job: every repo calls `node-repo-publish-bake` (the lane whose script
+contract must not drift), while a repo whose variant of a gate carries repo-specific machinery
+(Plugins' Tests-area ratchet, Education's course checks) keeps that job vendored until the
+machinery generalizes:
 
 | Workflow | Job it unifies |
 |---|---|

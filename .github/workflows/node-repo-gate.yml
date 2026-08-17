@@ -81,6 +81,13 @@ on:
         required: false
         type: boolean
         default: true
+      capture-coredumps:
+        description: >-
+          Run the tester with minidump-on-crash enabled and upload any dumps as a run artifact
+          — for a repo whose gate has crashed in ways a log cannot explain.
+        required: false
+        type: boolean
+        default: false
     secrets:
       acr-username:
         description: Registry user able to pull the test image.
@@ -195,6 +202,24 @@ jobs:
           fi
           ALLOW_ARGS=()
           [ -n "${ALLOW_PATH:-}" ] && ALLOW_ARGS=(--allow "$ALLOW_PATH")
-          docker run --rm -v "$REPO_MOUNT:/repo" \
+          DUMP_ARGS=()
+          if [ "${{ inputs.capture-coredumps }}" = "true" ]; then
+            mkdir -p "${RUNNER_TEMP:-/tmp}/coredumps"
+            chmod 0777 "${RUNNER_TEMP:-/tmp}/coredumps"
+            DUMP_ARGS=(-v "${RUNNER_TEMP:-/tmp}/coredumps:/coredumps"
+              --cap-add=SYS_PTRACE
+              -e DOTNET_DbgEnableMiniDump=1
+              -e DOTNET_DbgMiniDumpType=2
+              -e DOTNET_DbgMiniDumpName=/coredumps/%e-%p.dmp)
+          fi
+          docker run --rm -v "$REPO_MOUNT:/repo" "${DUMP_ARGS[@]}" \
             --entrypoint /app/mw-plugin-test "$IMAGE" /repo \
             "${ALLOW_ARGS[@]}"
+      - name: Upload core dumps (if the gate crashed)
+        if: always() && inputs.capture-coredumps
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-coredumps
+          path: ${{ runner.temp }}/coredumps
+          if-no-files-found: ignore
+          retention-days: 15
