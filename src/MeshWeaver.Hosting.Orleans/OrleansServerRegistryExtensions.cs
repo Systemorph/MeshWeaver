@@ -24,17 +24,22 @@ public static class OrleansServerRegistryExtensions
     /// <param name="hostBuilder">The application host builder to configure.</param>
     /// <param name="address">The mesh address this server hosts.</param>
     /// <param name="orleansConfiguration">Optional additional Orleans silo configuration applied after the standard setup.</param>
+    /// <param name="configurePubSubStore">Optional DURABLE backing for the streaming pub-sub
+    /// subscription registry — see <see cref="ConfigureMeshWeaverServer"/>. A host that can ever run
+    /// more than one silo MUST supply this; leaving it null keeps the single-silo-only in-memory
+    /// store.</param>
     /// <returns>The configured mesh host application builder for further chaining.</returns>
     public static MeshHostApplicationBuilder UseOrleansMeshServer(
         this IHostApplicationBuilder hostBuilder,
         Address address,
-        Func<ISiloBuilder, ISiloBuilder>? orleansConfiguration = null
+        Func<ISiloBuilder, ISiloBuilder>? orleansConfiguration = null,
+        Action<ISiloBuilder>? configurePubSubStore = null
         )
     {
         var meshBuilder = hostBuilder.CreateOrleansConnectionBuilder(address);
         meshBuilder.Host.UseOrleans(silo =>
         {
-            silo.ConfigureMeshWeaverServer();
+            silo.ConfigureMeshWeaverServer(configurePubSubStore);
             if(orleansConfiguration is not null)
                 orleansConfiguration.Invoke(silo);
         });
@@ -71,10 +76,37 @@ public static class OrleansServerRegistryExtensions
     /// <summary>
     /// Applies the standard MeshWeaver silo configuration: memory streams, the PubSub store
     /// grain storage, and the access-context incoming grain call filter.
+    ///
+    /// <para>🚨 <b><paramref name="configurePubSubStore"/> is a correctness decision, not a tuning
+    /// knob (issue #1729).</b> Cross-silo delivery to every <c>StreamRoutedAddressTypes</c> hub
+    /// (<c>mesh</c>, <c>portal</c>, <c>client</c>, <c>cache</c>, <c>import</c>) — which includes
+    /// every REPLY to such a hub — rides an Orleans memory stream, and whether that stream can find
+    /// its subscriber is decided entirely by what backs <see cref="StreamProviders.PubSubStore"/>.
+    /// With the in-memory default, the subscription registry dies with the silo that happened to
+    /// host the <c>PubSubRendezvousGrain</c>: the consumer's handle stays valid, the publish still
+    /// reports success, and the message is DISCARDED with no error anywhere. Every rolling deploy
+    /// creates that silo departure, which is how memex-cloud served ~50 % of anonymous content reads
+    /// and hung the rest for a full 60 s reply budget across several image rolls.</para>
+    ///
+    /// <para>So: <b>a host that can ever run more than one silo MUST pass a durable store</b> (the
+    /// portal derives it from its clustering provider — Postgres for AdoNet clustering). Leaving it
+    /// null selects <c>AddMemoryGrainStorage</c>, which is correct ONLY for a process that is a
+    /// cluster of one by construction: the Monolith, a local <c>UseLocalhostClustering</c> silo, the
+    /// bake silo, and in-process <c>TestCluster</c> fixtures (whose "silos" share one process and one
+    /// memory store, which is exactly why an in-process cluster cannot reproduce this defect).</para>
+    ///
+    /// <para>Full reference:
+    /// <c>src/MeshWeaver.Documentation/Data/Architecture/OrleansStreamPubSubDurability.md</c>.</para>
     /// </summary>
     /// <param name="silo">The Orleans silo builder to configure.</param>
+    /// <param name="configurePubSubStore">Registers the grain storage named
+    /// <see cref="StreamProviders.PubSubStore"/>. When null, an in-memory store is registered —
+    /// single-silo hosts only. The delegate is invoked INSTEAD of the memory registration, so the
+    /// store has exactly one provider and no accidental last-one-wins shadowing.</param>
     /// <returns>The same silo builder for further chaining.</returns>
-    public static ISiloBuilder ConfigureMeshWeaverServer(this ISiloBuilder silo)
+    public static ISiloBuilder ConfigureMeshWeaverServer(
+        this ISiloBuilder silo,
+        Action<ISiloBuilder>? configurePubSubStore = null)
     {
         // 🚨 SILO-ONLY, deliberately not in AddOrleansMeshServices. IClusterMembershipService and
         // ILocalSiloDetails exist only in a silo's container, and AddOrleansMeshServices also runs on
@@ -84,9 +116,18 @@ public static class OrleansServerRegistryExtensions
         silo.ConfigureServices(services =>
             services.TryAddSingleton<IClusterMembership, OrleansClusterMembership>());
 
-        return silo.AddMemoryStreams(StreamProviders.Memory)
-            .AddMemoryGrainStorage("PubSubStore")
-            .AddIncomingGrainCallFilter<AccessContextGrainCallFilter>();
+        silo.AddMemoryStreams(StreamProviders.Memory);
+
+        // 🚨 INSTEAD of, never in addition to. Two providers under the same name leave the
+        // effective store decided by registration order — a deployment that had correctly asked
+        // for durability could still be running on RAM. OrleansPubSubStoreConfigurationTest pins
+        // "exactly one, and it is the caller's" for precisely that reason.
+        if (configurePubSubStore is null)
+            silo.AddMemoryGrainStorage(StreamProviders.PubSubStore);
+        else
+            configurePubSubStore(silo);
+
+        return silo.AddIncomingGrainCallFilter<AccessContextGrainCallFilter>();
     }
 
     internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address address)
