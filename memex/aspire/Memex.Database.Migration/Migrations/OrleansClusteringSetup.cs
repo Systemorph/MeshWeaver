@@ -92,17 +92,43 @@ public static class OrleansClusteringSetup
             // Orleans' own, versioned with the package, so a row that exists but is STALE is just
             // as broken as one that is absent — and re-writing all four is what makes this
             // converge from any prior partial state.
+            //
+            // 🚨 ONE TRANSACTION, and the reason is the whole point of this file. The DELETE alone
+            // produces exactly the state #1798 was: rows absent, AdoNetGrainStorage.Init .Single()s
+            // for WriteToStorageKey, every silo crash-loops. So a repair that deleted and then
+            // failed to reinsert would not merely leave the problem unfixed — it would MANUFACTURE
+            // the outage on a database that was previously fine, and it is reachable in precisely
+            // the population this method exists for (an existing deployment, mid-repair). Wrapped,
+            // the failure mode is "nothing changed" instead of "the keys are gone"; the exception
+            // then propagates and fails the migration loudly, which is the correct outcome.
             logger.LogInformation(
                 "[OrleansClustering] Persistence query keys missing ({Missing}) — writing all {Count}.",
                 string.Join(", ", missingKeys), PersistenceQueryKeys.Length);
-            await using var del = new NpgsqlCommand(
-                "DELETE FROM OrleansQuery WHERE QueryKey = ANY(@keys)", conn);
-            del.Parameters.AddWithValue("keys", PersistenceQueryKeys);
-            await del.ExecuteNonQueryAsync();
-            await using var cmd = new NpgsqlCommand(PersistenceQueriesScript, conn);
-            await cmd.ExecuteNonQueryAsync();
+            await using (var tx = await conn.BeginTransactionAsync())
+            {
+                await using (var del = new NpgsqlCommand(
+                    "DELETE FROM OrleansQuery WHERE QueryKey = ANY(@keys)", conn, tx))
+                {
+                    del.Parameters.AddWithValue("keys", PersistenceQueryKeys);
+                    await del.ExecuteNonQueryAsync();
+                }
+                await using (var cmd = new NpgsqlCommand(PersistenceQueriesScript, conn, tx))
+                    await cmd.ExecuteNonQueryAsync();
+                await tx.CommitAsync();
+            }
             logger.LogInformation("[OrleansClustering] Orleans persistence query keys written.");
         }
+
+        // 🚨 Assert on the SAME evidence the gate reads and the consumer uses — the query keys, not
+        // the table. A transaction that rolled back leaves the database unchanged, which is the
+        // safe outcome but NOT a provisioned one, and a migration that reported success there would
+        // hand the silo a database it cannot start against. Fail loudly instead.
+        var stillMissing = await MissingQueryKeysAsync(conn, PersistenceQueryKeys);
+        if (stillMissing.Count > 0)
+            throw new InvalidOperationException(
+                $"Orleans persistence query keys are still missing after provisioning: "
+                + $"{string.Join(", ", stillMissing)}. A silo configured with an AdoNet PubSubStore "
+                + "cannot start without them (AdoNetGrainStorage.Init resolves them with .Single()).");
     }
 
     /// <summary>
