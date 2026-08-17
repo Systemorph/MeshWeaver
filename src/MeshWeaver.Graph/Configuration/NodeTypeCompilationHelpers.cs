@@ -1317,8 +1317,11 @@ internal static class NodeTypeCompilationHelpers
     ///
     /// <para>🚨 The status is <see cref="CompilationStatus.Error"/> — Roslyn's verdict — EXCEPT
     /// when the compile never ran because its SOURCE SET could not be established
-    /// (<see cref="SourceDiscoveryUnavailableException"/>). That is an availability failure, so it
-    /// stamps <see cref="CompilationStatus.Unavailable"/>: "the compile state could not be
+    /// (<see cref="SourceDiscoveryUnavailableException"/>) or because a mesh address it had to
+    /// read was RECYCLING for the reader's whole budget
+    /// (<see cref="AddressRecyclingException"/> — a package-root hub's install-recycle wedging
+    /// dispose is MeshWeaver#1701's trigger). Those are availability failures, so they stamp
+    /// <see cref="CompilationStatus.Unavailable"/>: "the compile state could not be
     /// determined; nothing is known to be wrong with the source". Everything downstream already
     /// reads the two apart — the instance overlay drops "please correct the code",
     /// <c>EnsureCompileDispatched</c> re-dispatches on the next request, and the bake gate files it
@@ -1331,7 +1334,7 @@ internal static class NodeTypeCompilationHelpers
         string? activityPath)
         => def with
         {
-            CompilationStatus = error is SourceDiscoveryUnavailableException
+            CompilationStatus = error is SourceDiscoveryUnavailableException or AddressRecyclingException
                 ? CompilationStatus.Unavailable
                 : CompilationStatus.Error,
             CompilationError = SummarizeCompileError(result, error),
@@ -1727,9 +1730,15 @@ internal static class NodeTypeCompilationHelpers
                         // snapshot that never answered is the log-line version of the #1218 bug:
                         // Roslyn was never invoked, so a reader (or an operator reading a stalled
                         // rollout's activity log) must not be told it rejected anything.
-                        var failureLead = outcome.Error is SourceDiscoveryUnavailableException
-                            ? "Compile NOT ATTEMPTED — source set could not be established"
-                            : "Roslyn failed";
+                        var failureLead = outcome.Error switch
+                        {
+                            SourceDiscoveryUnavailableException =>
+                                "Compile NOT ATTEMPTED — source set could not be established",
+                            AddressRecyclingException =>
+                                "Compile NOT SETTLED — a mesh address it reads was recycling "
+                                + "for the reader's whole budget",
+                            _ => "Roslyn failed"
+                        };
                         activityMessages.Add(new LogMessage(
                             $"{failureLead}: {outcome.Error?.Message ?? (outcome.Result?.Log?.Errors() is { Count: > 0 } errs ? string.Join("; ", errs.Select(m => m.Message)) : "Compilation produced no assembly")}",
                             LogLevel.Error));
