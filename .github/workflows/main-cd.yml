@@ -416,9 +416,21 @@ jobs:
           # Past this line the tick has something real to say, so it may touch the ledger. Nothing
           # above it writes anything at all: a healthy tick, and a tick that is merely early, are
           # both completely silent.
+          # 🚨 `|| true` ON THE LABEL ONLY, and it is load-bearing. This step runs under
+          # `set -euo pipefail`, so on 2026-08-17 a GitHub API 503 on `/labels` — ensuring a
+          # COSMETIC label, idempotently, with --force — killed the Decide step and blocked
+          # publication outright. The gate had already resolved everything correctly: the required
+          # check read `completed/success` and the image set was genuinely incomplete, i.e. it was
+          # about to publish. It also burned one of the 3 heal attempts for that commit.
+          #
+          # A label is decoration on the ledger, not the ledger. The ledger is the marker COMMENT
+          # below, and that write stays fatal — an attempt that is not written down is an attempt
+          # that can be repeated forever. Same test AGENTS.md applies to the green-marker push:
+          # what does a failure here hide? Nothing — losing a label costs a colour, never
+          # correctness. Do NOT extend this to the issue create/comment calls.
           gh label create ci-failure --repo "$GITHUB_REPOSITORY" \
             --description "A main-branch CD run failed - no deployable image was published" \
-            --color B60205 --force >/dev/null
+            --color B60205 --force >/dev/null || echo "::warning::could not ensure the ci-failure label (continuing — the ledger is the comment, not the label)"
           issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
 
@@ -1346,10 +1358,13 @@ jobs:
           REASON: ${{ needs.gate.outputs.reason }}
         run: |
           set -euo pipefail
-          # Ensure the label exists (--force = update-or-create, idempotent).
+          # Ensure the label exists (--force = update-or-create, idempotent). Non-fatal for the
+          # same reason as in `gate`: this is the ALERT path, so a 503 here must not swallow the
+          # alert it is decorating. If the label genuinely does not exist, the `--label` on the
+          # create below still fails loudly — which is the signal that matters.
           gh label create ci-failure --repo "$GITHUB_REPOSITORY" \
             --description "A main-branch CD run failed - no deployable image was published" \
-            --color B60205 --force
+            --color B60205 --force || echo "::warning::could not ensure the ci-failure label (continuing to file the alert)"
           body="CD failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) for commit \`${HEAD_SHA}\` (entered via \`${REASON:-unknown}\`).
 
           No complete image set was published - publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set. Triage the failed job in the linked run. The 3-hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
