@@ -1,0 +1,335 @@
+name: Node repo publish-bake (reusable)
+
+# ♻️ REUSABLE (workflow_call) — the ONE bake-and-publish lane for every MeshWeaver.* content repo
+# (#1660 WS3, unified per #1707). Each node repo used to vendor a near-identical `publish-bake`
+# job plus its own copy of `publish-bake-bundles.sh`; five copies of a script whose `_complete`
+# sentinel name must keep matching `ShippedPrebuiltBundles.CompletionSentinelFileName` is five
+# chances for silent drift. This workflow runs the canonical script from THIS repo (checked out
+# by ref), so the sentinel contract has exactly one home next to the C# constant it mirrors.
+#
+# What it does: run the caller repo's full content through mw-plugin-test with `--bake-output`
+# (the run IS a full gate — import + compile + render + Tests areas), then publish the resulting
+# bundles to every portal storage target under
+# `<base>/prebuilt-bundles/<framework-identity>/<bake-source>/`. A portal whose own framework
+# identity matches seeds them at boot and compiles nothing the repo ships.
+#
+# The bake is ALWAYS the FULL repo — never a PR-style affected narrowing. The publication is
+# atomic per identity: the `_complete` sentinel (written LAST) lists the whole bundle set and the
+# portal seeds only what the sentinel lists, so a partial publish would SHRINK what portals
+# adopt. Callers gate this job to main pushes + `repository_dispatch` (framework releases) via
+# the job-level `if:`/`needs:` on the `uses:` job.
+#
+# Caller contract (see the SocialMedia/Plugins ci.yml for a worked example):
+#
+#   publish-bake:
+#     if: >
+#       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+#       github.event_name == 'repository_dispatch'
+#     needs: [preflight, validate, compile-check, test-repos]
+#     permissions: { contents: read, id-token: write }   # OIDC — must be granted BY the caller
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@main
+#     with:
+#       bake-source: socialmedia
+#       test-image: ${{ vars.MW_TEST_IMAGE }}
+#       image-digest: ${{ vars.MW_IMAGE_DIGEST }}     # or a workflow env / literal pin
+#       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
+#       stage-repo: Systemorph/MeshWeaver.Plugins
+#       stage-modules: Store
+#     secrets:
+#       acr-username: ${{ secrets.ACR_USERNAME }}
+#       acr-password: ${{ secrets.ACR_PASSWORD }}
+#       azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+#       azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+#       azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+#       stage-repo-token: ${{ secrets.MESHWEAVER_REPO_TOKEN }}
+#
+# Every externally-provisioned value is an EXPLICIT input/secret — nothing is read from the
+# caller's `vars`/`env` implicitly — so the preflight step below can assert the complete set and
+# fail RED naming exactly what to provision (AGENTS.md: a gate never tests its own inputs, and a
+# grey skip is indistinguishable from a pass).
+
+on:
+  workflow_call:
+    inputs:
+      bake-source:
+        description: >-
+          The producing repo's source segment in the publication layout
+          (prebuilt-bundles/<identity>/<bake-source>/...), e.g. plugins, education,
+          reinsurance, socialmedia. Multiple producers publish without clobbering.
+        required: true
+        type: string
+      test-image:
+        description: The mw-plugin-test image reference (the caller's vars.MW_TEST_IMAGE).
+        required: true
+        type: string
+      image-digest:
+        description: >-
+          Digest pin for push-triggered bakes (tag@digest — reproducible, bump deliberately).
+          Ignored for repository_dispatch, which always bakes against the released version tag
+          from the payload. Leaving it empty is an ERROR unless allow-unpinned is set.
+        required: false
+        type: string
+        default: ''
+      allow-unpinned:
+        description: >-
+          Explicitly accept an empty image-digest and bake against the tag verbatim (a repo
+          that tracks :main accepts that its runs are not reproducible). Never a silent
+          fallback: an empty digest WITHOUT this flag fails red.
+        required: false
+        type: boolean
+        default: false
+      bake-publish-targets:
+        description: >-
+          Whitespace-separated portal storage targets, <account>/<share>[/<base-path>]
+          (the caller's vars.BAKE_PUBLISH_TARGETS — same value the platform repo carries).
+        required: true
+        type: string
+      stage-repo:
+        description: >-
+          Repository to stage cross-repo modules from (e.g. Systemorph/MeshWeaver.Plugins),
+          so the caller's packages' `requires` resolve. Empty = no staging.
+        required: false
+        type: string
+        default: ''
+      stage-modules:
+        description: >-
+          Module directories to sparse-checkout from stage-repo and copy into the bake mount
+          (newline-separated for several). Staged modules are OWNED by stage-repo: their bundles
+          are excluded from this repo's publication so no package is ever seeded from two
+          sources.
+        required: false
+        type: string
+        default: ''
+      pre-bake-script:
+        description: >-
+          Optional shell run in the caller checkout after staging, before the bake — e.g. a
+          package-snapshot filter. Keep it minimal; anything load-bearing belongs in the repo.
+          A script that builds its own bake mount (Education's snapshot) writes
+          `BAKE_MOUNT_DIR=<path>` to $GITHUB_ENV; the bake then mounts THAT as /repo instead of
+          the checkout, and staged modules are NOT auto-copied (the script owns the mount's
+          composition — the staged checkout is available at cross-repo-stage/).
+        required: false
+        type: string
+        default: ''
+      node-version:
+        description: Set to install Node (actions/setup-node) before the pre-bake script. Empty = skip.
+        required: false
+        type: string
+        default: ''
+      timeout-minutes:
+        description: Job timeout.
+        required: false
+        type: number
+        default: 40
+      allow-file:
+        description: Known-debt ratchet file passed as --allow (repo-relative). Empty = none.
+        required: false
+        type: string
+        default: 'plugin-gate.allow'
+      platform-ref:
+        description: >-
+          Ref of Systemorph/MeshWeaver to take the canonical publish script from. Default main;
+          pin only to bisect a script regression.
+        required: false
+        type: string
+        default: 'main'
+    secrets:
+      acr-username:
+        description: Registry user able to pull the test image.
+        required: true
+      acr-password:
+        description: Registry password for that user.
+        required: true
+      azure-client-id:
+        description: >-
+          Client id of an Azure identity holding "Storage File Data Privileged Contributor" on
+          the portals' storage accounts, with a federated credential for the caller repo's main.
+        required: true
+      azure-tenant-id:
+        description: Tenant of that identity.
+        required: true
+      azure-subscription-id:
+        description: Subscription of the storage accounts.
+        required: true
+      stage-repo-token:
+        description: Token able to read stage-repo (needed only when stage-modules is set).
+        required: false
+
+jobs:
+  publish-bake:
+    name: Bake + publish NodeType assemblies to portal storage
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      id-token: write     # azure/login OIDC — no long-lived storage secret in any node repo
+    steps:
+      # 🚨 NO SKIP-TRAPDOOR: the publish credentials are asserted RED here, naming exactly what
+      # to provision — never `continue-on-error`, never an if-secret-set skip. A grey skip would
+      # silently restore the every-pod-rebakes-everything regression this lane closes.
+      - name: "Preflight: the publish credentials must be provisioned"
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.azure-client-id }}
+          AZURE_TENANT_ID: ${{ secrets.azure-tenant-id }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.azure-subscription-id }}
+          ACR_USERNAME: ${{ secrets.acr-username }}
+          ACR_PASSWORD: ${{ secrets.acr-password }}
+          STAGE_TOKEN: ${{ secrets.stage-repo-token }}
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          STAGE_MODULES: ${{ inputs.stage-modules }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${AZURE_CLIENT_ID:-}" ]        || missing+=("azure-client-id (secret) — client id of an Azure identity holding 'Storage File Data Privileged Contributor' on the portals' storage account, with a federated credential for repo:${GITHUB_REPOSITORY}:ref:refs/heads/main")
+          [ -n "${AZURE_TENANT_ID:-}" ]        || missing+=("azure-tenant-id (secret) — tenant of that identity")
+          [ -n "${AZURE_SUBSCRIPTION_ID:-}" ]  || missing+=("azure-subscription-id (secret) — subscription of the storage account")
+          [ -n "${ACR_USERNAME:-}" ]           || missing+=("acr-username (secret) — registry user able to pull the test image")
+          [ -n "${ACR_PASSWORD:-}" ]           || missing+=("acr-password (secret) — registry password for that user")
+          [ -n "${BAKE_PUBLISH_TARGETS:-}" ]   || missing+=("bake-publish-targets (input, from the caller's repo VARIABLE) — the portals' Azure Files targets, whitespace-separated <account>/<share>[/<base-path>]")
+          if [ -n "${STAGE_MODULES:-}" ] && [ -z "${STAGE_TOKEN:-}" ]; then
+            missing+=("stage-repo-token (secret) — token able to read the stage repo (stage-modules is set)")
+          fi
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::The bake publication cannot reach any portal — required credentials are not provisioned. This job fails RED rather than skipping: a grey skip is indistinguishable from a pass and would silently leave every portal re-compiling this repo's content at boot."
+            for m in "${missing[@]}"; do echo "::error::missing: ${m}"; done
+            exit 1
+          fi
+          echo "All publish credentials are provisioned."
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 1 }
+      - name: Resolve the bake image
+        id: image
+        env:
+          TEST_IMAGE: ${{ inputs.test-image }}
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          RELEASED_VERSION: ${{ github.event.client_payload.version }}
+          RELEASED_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            # The release's own identity tag (main-cd promote, phase A). A dispatch without a
+            # resolvable image is a platform CD contract break — fail loudly, never fall back to
+            # the pinned digest (that would publish the OLD identity and call it a re-bake).
+            if [ -z "${RELEASED_VERSION:-}" ]; then
+              echo "::error::repository_dispatch payload carries no client_payload.version — cannot resolve the released image."
+              exit 1
+            fi
+            echo "ref=${TEST_IMAGE%%:*}:${RELEASED_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "baking against released ${RELEASED_VERSION} (${RELEASED_SHA:-sha unknown})"
+          elif [ -n "${IMAGE_DIGEST:-}" ]; then
+            # tag@digest: the tag names the image, the digest pins the build (reproducible runs;
+            # an image regression lands on the commit that bumps the pin).
+            echo "ref=${TEST_IMAGE%%:*}@${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "baking against the pinned digest ${IMAGE_DIGEST}"
+          elif [ "${{ inputs.allow-unpinned }}" = "true" ]; then
+            echo "ref=${TEST_IMAGE}" >> "$GITHUB_OUTPUT"
+            echo "baking against ${TEST_IMAGE} verbatim (allow-unpinned — runs are not reproducible; pin a digest to change that)"
+          else
+            # Never a silent fallback: an unset pin without the explicit opt-in is a
+            # provisioning error, not a mode.
+            echo "::error::image-digest is empty and allow-unpinned is not set — pin a digest (reproducible) or opt in to following the tag."
+            exit 1
+          fi
+      - name: Log in to the image registry
+        env:
+          TEST_IMAGE: ${{ inputs.test-image }}
+        run: >
+          echo "${{ secrets.acr-password }}" |
+          docker login "${TEST_IMAGE%%/*}" -u "${{ secrets.acr-username }}" --password-stdin
+      # Same staging the caller's gate does, for the same reason: cross-repo `requires` must
+      # resolve for the package roots to bind.
+      - name: Stage cross-repo modules
+        if: inputs.stage-modules != ''
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.stage-repo }}
+          token: ${{ secrets.stage-repo-token }}
+          path: cross-repo-stage
+          sparse-checkout: ${{ inputs.stage-modules }}
+      - name: Set up Node for the pre-bake hook
+        if: inputs.node-version != ''
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Pre-bake hook
+        if: inputs.pre-bake-script != ''
+        run: ${{ inputs.pre-bake-script }}
+      - name: Bake the full repo (import + compile + render + tests, --bake-output)
+        env:
+          STAGE_MODULES: ${{ inputs.stage-modules }}
+          ALLOW_FILE: ${{ inputs.allow-file }}
+        run: |
+          set -euo pipefail
+          # The mount the tester sees: the checkout, unless the pre-bake hook built its own
+          # (BAKE_MOUNT_DIR via $GITHUB_ENV — Education's package snapshot). When the hook owns
+          # the mount it owns its composition too, so staged modules are only auto-copied into
+          # the plain checkout (cross-repo-stage/ itself has no root index.json, so the tester
+          # never treats it as a module; only the copied module dirs count).
+          REPO_MOUNT="${BAKE_MOUNT_DIR:-$GITHUB_WORKSPACE}"
+          if [ -z "${BAKE_MOUNT_DIR:-}" ]; then
+            for m in ${STAGE_MODULES:-}; do
+              cp -R "$GITHUB_WORKSPACE/cross-repo-stage/$m" "$GITHUB_WORKSPACE/"
+            done
+          fi
+          BAKE="${RUNNER_TEMP:-/tmp}/bake"
+          mkdir -p "$BAKE"
+          # The image's tester runs as a non-root user; the bind-mounted bake dir must be
+          # writable for it.
+          chmod 777 "$BAKE"
+          ALLOW_ARGS=()
+          [ -n "${ALLOW_FILE:-}" ] && ALLOW_ARGS=(--allow "/repo/${ALLOW_FILE}")
+          docker run --rm -v "$REPO_MOUNT:/repo" -v "$BAKE:/bake" \
+            --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" /repo \
+            "${ALLOW_ARGS[@]}" \
+            --bake-output /bake --source-sha "$GITHUB_SHA"
+          # Postcondition, not a hope: a green tester that wrote no identity is a bake-stage
+          # regression (or an image predating --bake-output support).
+          if [ ! -s "$BAKE/framework-mvid.txt" ]; then
+            echo "::error::the tester ran green but wrote no bake identity ($BAKE/framework-mvid.txt) — the bake stage regressed (or the image predates --bake-output support)."
+            exit 1
+          fi
+          # 🚨 LOUD, never silent: staged modules were brought in only so the requires resolve —
+          # they are OWNED and published by the stage repo. Publishing them from here too would
+          # seed the same package from two sources.
+          for m in ${STAGE_MODULES:-}; do
+            name=$(basename "$m")
+            if [ -f "$BAKE/$name.zip" ]; then
+              rm "$BAKE/$name.zip"
+              echo "excluded from publication: $name.zip (owned by ${{ inputs.stage-repo }} — staged here only to resolve the packages' requires)"
+            fi
+          done
+          echo "BAKE_DIR=$BAKE" >> "$GITHUB_ENV"
+          echo "baked identity: $(cat "$BAKE/framework-mvid.txt")"
+          echo "baked bundles:"; ls -l "$BAKE"/*.zip
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+      # The CANONICAL script — one home, next to the ShippedPrebuiltBundles constants its
+      # `_complete` sentinel must keep matching. Checked out after the bake so it never sits in
+      # the tester's /repo mount. Public repo: the default token reads it from any caller.
+      - name: Fetch the canonical publish script (platform repo)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: mw-platform
+          sparse-checkout: .github/scripts
+      - name: Publish bundles to every portal target
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+        # Contract: layout <base>/prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip,
+        # every bundle first, the `_complete` sentinel strictly LAST; an already-sealed identity
+        # with the same source sha skips (the surface identity is breaking-change-keyed, so
+        # internal platform merges re-resolve the SAME identity and the re-publish is a no-op by
+        # design).
+        run: |
+          set -euo pipefail
+          mw-platform/.github/scripts/publish-bake-bundles.sh "$BAKE_DIR" "${{ inputs.bake-source }}" "$GITHUB_SHA"
+          {
+            echo "### 📦 CI bake published"
+            echo "- identity: \`$(cat "$BAKE_DIR/framework-mvid.txt")\`"
+            echo "- source: \`${{ inputs.bake-source }}\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,115 @@
+name: Node repo compile-check (reusable)
+
+# ♻️ REUSABLE (workflow_call) — 🧱 THE COMPILE GATE for MeshWeaver.* content repos (unified per
+# #1707). validate-repos.py checks JSON shape only — it does NOT compile. This gate compiles
+# every NodeType's resolved Source against the framework assemblies exactly as the mesh does
+# (concatenated sources, hoisted usings), so async-broken / API-drifted Source can no longer
+# merge "green" and PARK on a live mesh at the next pod restart (the 2026-07-21 UWDeepfield
+# outage in MeshWeaver.Plugins). The reference set is taken FROM the digest-pinned platform
+# image — the same assemblies the mesh loads at run time — instead of building the core repo
+# from source (~10 minutes per run for a dependency that changes far less often than the repo).
+#
+# The caller's `scripts/compile-check.py` does the work; `scripts/compile-check.allow`
+# grandfathers known debt with a one-way ratchet: a NEW non-allowlisted failure fails the PR;
+# a fixed allowlisted type must be removed from the file.
+#
+# NOT gated on the image inputs being set: the compile gate is unconditional. If the image
+# reference or the registry credentials are missing, the login/pull steps fail LOUDLY — a
+# silently skipped compile gate is exactly how the 2026-07-21 outage shipped.
+#
+# Caller contract:
+#
+#   compile-check:
+#     needs: validate
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-compile-check.yml@main
+#     with:
+#       test-image: ${{ vars.MW_TEST_IMAGE }}
+#       image-digest: ${{ vars.MW_IMAGE_DIGEST }}
+#     secrets:
+#       acr-username: ${{ secrets.ACR_USERNAME }}
+#       acr-password: ${{ secrets.ACR_PASSWORD }}
+
+on:
+  workflow_call:
+    inputs:
+      test-image:
+        description: The platform image whose /app assemblies are the reference set.
+        required: true
+        type: string
+      image-digest:
+        description: >-
+          Digest pin (tag@digest). Leaving it empty is an ERROR unless allow-unpinned is set.
+        required: false
+        type: string
+        default: ''
+      allow-unpinned:
+        description: >-
+          Explicitly accept an empty image-digest and take the reference assemblies from the
+          tag verbatim. Never a silent fallback.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      acr-username:
+        description: Registry user able to pull the image.
+        required: true
+      acr-password:
+        description: Registry password for that user.
+        required: true
+
+jobs:
+  compile-check:
+    name: Compile every NodeType (vs core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the node repo
+        uses: actions/checkout@v7
+        with:
+          path: repo
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # compile-check.py shells out to `dotnet build` on a generated net10.0 check.csproj — pin
+      # the SDK rather than depend on whatever the runner image happens to preinstall.
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - name: Log in to the image registry
+        env:
+          TEST_IMAGE: ${{ inputs.test-image }}
+        run: >
+          echo "${{ secrets.acr-password }}" |
+          docker login "${TEST_IMAGE%%/*}" -u "${{ secrets.acr-username }}" --password-stdin
+      - name: Take the framework assemblies from the platform image
+        env:
+          TEST_IMAGE: ${{ inputs.test-image }}
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+        # The image already CONTAINS the built framework — the same assemblies the mesh loads at
+        # run time. Copying them out costs seconds, and checking Source against what actually
+        # ships is the question this gate exists to answer.
+        run: |
+          set -euo pipefail
+          if [ -n "${IMAGE_DIGEST:-}" ]; then
+            IMAGE="${TEST_IMAGE%%:*}@${IMAGE_DIGEST}"
+          elif [ "${{ inputs.allow-unpinned }}" = "true" ]; then
+            IMAGE="$TEST_IMAGE"
+            echo "checking against ${TEST_IMAGE} verbatim (allow-unpinned — runs are not reproducible)"
+          else
+            echo "::error::image-digest is empty and allow-unpinned is not set — pin a digest (reproducible) or opt in to following the tag."
+            exit 1
+          fi
+          docker pull -q "$IMAGE"
+          id=$(docker create "$IMAGE")
+          mkdir -p refs
+          docker cp "$id:/app/." refs/ >/dev/null
+          docker rm -v "$id" >/dev/null
+          echo "framework assemblies: $(find refs -name 'MeshWeaver.*.dll' | wc -l)"
+      - name: Compile-check every NodeType
+        working-directory: repo
+        # --refs points at the assemblies unpacked from the platform image — a FLAT directory;
+        # compile-check.py globs it recursively, dedupes by filename, and compiles each
+        # NodeType's resolved source-set.
+        run: python3 scripts/compile-check.py --refs ../refs

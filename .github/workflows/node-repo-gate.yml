@@ -1,0 +1,225 @@
+name: Node repo gate (reusable)
+
+# ♻️ REUSABLE (workflow_call) — the heavy tester gate every MeshWeaver.* content repo runs
+# (unified per #1707): install each package into a real MeshWeaver mesh (in-process,
+# SQLite/filesystem persistence) and assert code packages compile live, render, AND that each
+# type's `Tests` layout area runs green — tests are EXECUTED, not just compiled; a red test
+# fails the PR. The tester ships in the mw-plugin-test image; contract is `docker run` with the
+# checkout mounted (NOT a `container:` job — see MeshWeaver.Plugins ci.yml history).
+#
+# NO input-shaped `if:` anywhere in here, deliberately (AGENTS.md: a gate never tests its own
+# inputs). The caller's `preflight` job asserts the image/registry inputs red-fail-naming-them,
+# the fork exemption lives there too, and this gate runs unconditionally behind
+# `needs: [preflight, ...]`.
+#
+# Caller contract:
+#
+#   test-repos:
+#     needs: [validate, preflight]
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@main
+#     with:
+#       test-image: ${{ vars.MW_TEST_IMAGE }}
+#       image-digest: ${{ vars.MW_IMAGE_DIGEST }}
+#       stage-repo: Systemorph/MeshWeaver.Plugins
+#       stage-modules: Store
+#     secrets:
+#       acr-username: ${{ secrets.ACR_USERNAME }}
+#       acr-password: ${{ secrets.ACR_PASSWORD }}
+#       stage-repo-token: ${{ secrets.MESHWEAVER_REPO_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      test-image:
+        description: The mw-plugin-test image reference (the caller's vars.MW_TEST_IMAGE).
+        required: true
+        type: string
+      image-digest:
+        description: >-
+          Digest pin (tag@digest — reproducible; an image regression lands on the commit that
+          bumps the pin, and a pin that lags the platform by days is a gate reporting on a
+          framework nobody runs, so bump it routinely). Leaving it empty is an ERROR unless
+          allow-unpinned is set.
+        required: false
+        type: string
+        default: ''
+      allow-unpinned:
+        description: >-
+          Explicitly accept an empty image-digest and gate against the tag verbatim. Never a
+          silent fallback: an empty digest WITHOUT this flag fails red.
+        required: false
+        type: boolean
+        default: false
+      stage-repo:
+        description: Repository to stage cross-repo modules from. Empty = no staging.
+        required: false
+        type: string
+        default: ''
+      stage-modules:
+        description: >-
+          Module directories to sparse-checkout from stage-repo and copy into the gate mount
+          (newline-separated for several) so the caller's packages' `requires` resolve. Without
+          them the package roots land on the unresolvable-NodeType error overlay — an
+          arrangement production never runs (MeshWeaver#1701).
+        required: false
+        type: string
+        default: ''
+      allow-file:
+        description: >-
+          Known-debt ratchet file passed as --allow (repo-relative; one-way — a NEW
+          non-allowlisted failure fails the PR, a fixed allowlisted type must be removed).
+          Empty = none.
+        required: false
+        type: string
+        default: 'plugin-gate.allow'
+      affected-narrowing:
+        description: >-
+          On pull_request diffs, gate only the affected module closure computed by the caller's
+          scripts/affected-modules.py (mirrors the runtime's edge semantics; full-run fallbacks
+          are built into the script's classification). Main pushes / dispatches never narrow.
+          Set false for a repo without that script — every event then gates the full set.
+        required: false
+        type: boolean
+        default: true
+      capture-coredumps:
+        description: >-
+          Run the tester with minidump-on-crash enabled and upload any dumps as a run artifact
+          — for a repo whose gate has crashed in ways a log cannot explain.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      acr-username:
+        description: Registry user able to pull the test image.
+        required: true
+      acr-password:
+        description: Registry password for that user.
+        required: true
+      stage-repo-token:
+        description: Token able to read stage-repo (needed only when stage-modules is set).
+        required: false
+
+jobs:
+  test-repos:
+    name: Compile + render node repos (MeshWeaver from ACR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The affected computation diffs against the PR base — it needs the base commits.
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Compute the affected module closure
+        id: affected
+        env:
+          NARROWING: ${{ inputs.affected-narrowing }}
+        # 🎯 PRs gate only the AFFECTED dependency closure — changed modules, plus every
+        # transitive DEPENDENT, plus the affected set's own dependencies (the fresh gate mesh
+        # needs them present to install and to resolve `shared=@…`).
+        # 🚨 FAIL LOUD: `set -euo pipefail` — an errored computation fails the job; the script
+        # itself refuses an empty diff, so a wrong empty set can never pass as "nothing to test".
+        run: |
+          set -euo pipefail
+          if [ "$NARROWING" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 scripts/affected-modules.py \
+              --range "origin/${{ github.base_ref }}...HEAD" --json > affected.json
+          else
+            echo "${{ github.event_name }} on ${{ github.ref_name }} — full run (narrowing applies only to PR diffs)"
+            echo '{"mount": [], "runAll": true}' > affected.json
+          fi
+          {
+            echo "mount=$(jq -r '.mount | join(" ")' affected.json)"
+            echo "run_all=$(jq -r '.runAll' affected.json)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Log in to the image registry
+        env:
+          TEST_IMAGE: ${{ inputs.test-image }}
+        run: >
+          echo "${{ secrets.acr-password }}" |
+          docker login "${TEST_IMAGE%%/*}" -u "${{ secrets.acr-username }}" --password-stdin
+      # Cross-repo `requires` must resolve for the package roots to bind — the tester installs
+      # whatever the mount holds, so the required modules are STAGED into it, exactly like
+      # production resolves the requires from the store's package sources.
+      - name: Stage cross-repo modules
+        if: inputs.stage-modules != ''
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.stage-repo }}
+          token: ${{ secrets.stage-repo-token }}
+          path: cross-repo-stage
+          sparse-checkout: ${{ inputs.stage-modules }}
+      - name: Import + compile + render + run tests for each node repo
+        env:
+          TEST_IMAGE: ${{ inputs.test-image }}
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+          STAGE_MODULES: ${{ inputs.stage-modules }}
+          ALLOW_FILE: ${{ inputs.allow-file }}
+          AFFECTED_MOUNT: ${{ steps.affected.outputs.mount }}
+          AFFECTED_RUN_ALL: ${{ steps.affected.outputs.run_all }}
+        # Allow entries whose module is not mounted on a narrowed run are "unverifiable" —
+        # warned, never failed — so narrowing cannot trip the ratchet. On a narrowed run the
+        # affected closure is STAGED into its own tree and mounted as /repo — the tester gates
+        # every package it discovers, so the mount IS the filter.
+        run: |
+          set -euo pipefail
+          if [ "$AFFECTED_RUN_ALL" = "true" ]; then
+            REPO_MOUNT="$GITHUB_WORKSPACE"
+            ALLOW_PATH="${ALLOW_FILE:+/repo/$ALLOW_FILE}"
+            echo "full run: gating every module"
+          elif [ -z "$AFFECTED_MOUNT" ]; then
+            echo "no module content affected (see the affected computation above) — nothing for the gate to test"
+            exit 0
+          else
+            REPO_MOUNT="${RUNNER_TEMP:-/tmp}/gate-stage"
+            mkdir "$REPO_MOUNT"
+            for m in $AFFECTED_MOUNT; do cp -R "$GITHUB_WORKSPACE/$m" "$REPO_MOUNT/"; done
+            ALLOW_PATH=""
+            if [ -n "${ALLOW_FILE:-}" ]; then
+              cp "$GITHUB_WORKSPACE/$ALLOW_FILE" "$REPO_MOUNT/"
+              ALLOW_PATH="/repo/$(basename "$ALLOW_FILE")"
+            fi
+            echo "narrowed run: gating $AFFECTED_MOUNT"
+          fi
+          # Staged modules join the mount so every package's requires resolve. On the full-run
+          # path the workspace IS the mount — cross-repo-stage/ itself has no root index.json,
+          # so the tester never treats it as a module; only the copied module dirs count.
+          for m in ${STAGE_MODULES:-}; do
+            cp -R "$GITHUB_WORKSPACE/cross-repo-stage/$m" "$REPO_MOUNT/"
+          done
+          if [ -n "${IMAGE_DIGEST:-}" ]; then
+            IMAGE="${TEST_IMAGE%%:*}@${IMAGE_DIGEST}"
+          elif [ "${{ inputs.allow-unpinned }}" = "true" ]; then
+            IMAGE="$TEST_IMAGE"
+            echo "gating against ${TEST_IMAGE} verbatim (allow-unpinned — runs are not reproducible)"
+          else
+            echo "::error::image-digest is empty and allow-unpinned is not set — pin a digest (reproducible) or opt in to following the tag."
+            exit 1
+          fi
+          ALLOW_ARGS=()
+          [ -n "${ALLOW_PATH:-}" ] && ALLOW_ARGS=(--allow "$ALLOW_PATH")
+          DUMP_ARGS=()
+          if [ "${{ inputs.capture-coredumps }}" = "true" ]; then
+            mkdir -p "${RUNNER_TEMP:-/tmp}/coredumps"
+            chmod 0777 "${RUNNER_TEMP:-/tmp}/coredumps"
+            DUMP_ARGS=(-v "${RUNNER_TEMP:-/tmp}/coredumps:/coredumps"
+              --cap-add=SYS_PTRACE
+              -e DOTNET_DbgEnableMiniDump=1
+              -e DOTNET_DbgMiniDumpType=2
+              -e DOTNET_DbgMiniDumpName=/coredumps/%e-%p.dmp)
+          fi
+          docker run --rm -v "$REPO_MOUNT:/repo" "${DUMP_ARGS[@]}" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" /repo \
+            "${ALLOW_ARGS[@]}"
+      - name: Upload core dumps (if the gate crashed)
+        if: always() && inputs.capture-coredumps
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-coredumps
+          path: ${{ runner.temp }}/coredumps
+          if-no-files-found: ignore
+          retention-days: 15

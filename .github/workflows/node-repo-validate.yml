@@ -1,0 +1,59 @@
+name: Node repo validate (reusable)
+
+# ♻️ REUSABLE (workflow_call) — the cheap shape gate for MeshWeaver.* content repos (unified per
+# #1707): every node JSON validates, every manifest.lock is current, and — on main only — every
+# module's derived version matches its content. The caller's `scripts/` do the work
+# (validate-repos.py, gen-manifests.py); this workflow is only the unified harness around them.
+#
+# Caller contract:
+#
+#   validate:
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-validate.yml@main
+
+on:
+  workflow_call:
+    inputs:
+      check-versions-always:
+        description: >-
+          Run the derived-version check on EVERY event instead of main-only. Correct for a repo
+          whose PRs are expected to regenerate manifests and which has no settle-versions job to
+          repair a miss on main (a miss would otherwise surface as a red MAIN push). A repo with
+          higher PR traffic keeps the default: the derived patch races the moving trunk baseline,
+          so PR-gating it fails PRs for OTHER people's merges.
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  validate:
+    name: Validate node repos
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0          # tags are the version history — --check-versions needs them
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Validate every node JSON (+ NodeType Source)
+        run: python3 scripts/validate-repos.py
+      # manifest.lock calls itself CI-verified; this is what verifies it. A stale lock means a
+      # module's recorded content hash — and the version derived from it — describes a tree that
+      # no longer exists, which is exactly what a dependent's pin would be trusting.
+      - name: Every manifest.lock is current (and carries a version)
+        run: python3 scripts/gen-manifests.py --check
+      # 🚨 …and the version is the RIGHT one — but ONLY on main, and that restriction is the
+      # point. The patch is derived from a baseline that MOVES (the highest published tag plus
+      # the trunk's committed lock), so a branch is correct the moment it is pushed and wrong as
+      # soon as anyone else merges. Run as a PR gate it spends its time failing PRs for OTHER
+      # people's merges. What a BRANCH can be held to is `--check` above: your lock describes
+      # YOUR tree — content hashes, entirely local. What only MAIN can settle is the derived
+      # number, so this runs as that step's POST-condition rather than as a gate.
+      - name: Every module's version matches its content
+        if: >
+          inputs.check-versions-always ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        run: python3 scripts/gen-manifests.py --check-versions
