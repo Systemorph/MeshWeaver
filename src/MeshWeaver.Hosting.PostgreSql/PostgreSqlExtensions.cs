@@ -120,7 +120,12 @@ public static class PostgreSqlExtensions
         // MCP find / agent tools resolve vector-search via the contract.
         services.AddSingleton<PostgreSqlMeshQuery>(sp =>
         {
-            var adapter = sp.GetRequiredService<IStorageAdapter>() as PostgreSqlStorageAdapter
+            // GetRawStorageAdapter, never `GetRequiredService<IStorageAdapter>() as …` — the
+            // default registration is a three-deep decorator chain, so the plain cast is always
+            // null once AddCoreAndWrapperServices has run. Latent here only because this lane
+            // has no callers today (the portals use AddPartitionedPostgreSqlPersistence); it is
+            // the SAME defect that made the Cosmos lane unbootable.
+            var adapter = sp.GetRawStorageAdapter<PostgreSqlStorageAdapter>()
                 ?? throw new InvalidOperationException(
                     "PostgreSqlMeshQuery requires PostgreSqlStorageAdapter.");
             return new PostgreSqlMeshQuery(

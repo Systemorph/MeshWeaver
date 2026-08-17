@@ -142,7 +142,22 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => _ioPool.Invoke(async ct => { await WriteAsyncCore(node, options, ct).ConfigureAwait(false); return node; });
+        => _ioPool.Invoke(async ct =>
+        {
+            await WriteAsyncCore(node, options, ct).ConfigureAwait(false);
+            // Fire the in-process Changes feed so same-process synced-query subscribers re-emit
+            // — the same shape PostgreSqlStorageAdapter.Write uses. Without this the adapter
+            // published NOTHING on write: its only producer was CosmosChangeFeedProcessor, which
+            // no live registration path ever constructs, so EVERY live query and every
+            // databound view froze at its initial snapshot (CosmosPortalShapeTests
+            // .LiveQuery_EmitsAgain_WhenNodeWrittenAfterSubscribe pins it).
+            // No try/catch: IsolatedChangeFeed already isolates and LOGS a faulty observer.
+            // When the lease-based CosmosChangeFeedProcessor is wired for cross-replica delivery
+            // it must dedup against this in-process fire, exactly as the PG listener does.
+            _changes.OnNext(DataChangeNotification.Updated(
+                string.IsNullOrEmpty(node.Path) ? node.Id : node.Path, node));
+            return node;
+        });
 
     private async Task WriteAsyncCore(MeshNode node, JsonSerializerOptions options, CancellationToken ct)
     {
@@ -158,7 +173,13 @@ public class CosmosStorageAdapter : IScopedQueryStorageAdapter, IAsyncDisposable
 
     /// <inheritdoc />
     public IObservable<string> Delete(string path)
-        => _ioPool.Invoke(async ct => { await DeleteAsyncCore(path, ct).ConfigureAwait(false); return path; });
+        => _ioPool.Invoke(async ct =>
+        {
+            await DeleteAsyncCore(path, ct).ConfigureAwait(false);
+            // Mirrors PostgreSqlStorageAdapter.Delete — see the note on Write.
+            _changes.OnNext(DataChangeNotification.Deleted(path));
+            return path;
+        });
 
     private async Task DeleteAsyncCore(string path, CancellationToken ct)
     {
