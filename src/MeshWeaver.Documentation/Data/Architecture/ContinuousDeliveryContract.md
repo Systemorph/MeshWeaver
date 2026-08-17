@@ -182,17 +182,24 @@ produces it rather than silently "fixed". This is also why `check-image-set.sh` 
 
 Two post-promote legs ride every armed release (#1660 WS3):
 
-**`publish-bake`** copies the Build-and-Test run's CI NodeType bake (the
-`baked-assemblies-<framework-identity>` artifact its doc-gate produced with
-`mw-plugin-test --bake-output`) onto the portals' shared storage, laid out
-`prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip`
-(`.github/scripts/publish-bake-bundles.sh`). The framework identity is the **API-surface hash**
-(`FrameworkBuildIdentity` — reference-assembly hashes, deterministic per source+references), so
-the identity the bake was keyed under equals the identity of the images promote just armed — and
-stays equal across internal-only merges: when the identity's directory is already **sealed** (the
-`_complete` sentinel the publisher writes strictly LAST, after every bundle), the script skips
-with a notice instead of re-uploading ("rebuild only when we need to"). A publish that died
-mid-way leaves no sentinel — the next run re-publishes wholesale, and the portal reader refuses
+**`publish-bake`** runs the platform's own shipped content (the `Doc` tree and the
+`samples/Graph/Data` trees) through `mw-plugin-test --bake-output` **inside the `mw-plugin-test`
+image this run just built and promoted**, then copies the bundles onto the portals' shared storage,
+laid out `prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip`
+(`.github/scripts/publish-bake-bundles.sh`). Baking in the image is not an implementation detail —
+it is the whole correctness argument. The framework identity is derived from the **binaries a host
+ships**, so two different compilations of one source resolve different identities; until #1725 this
+job published a Build-and-Test *artifact* — a different compilation — under an identity **no pod
+ever resolves**, and every pod re-compiled ~80 platform NodeTypes on every boot behind a green
+tick. Producer and consumer are now the same binaries, so the compatibility question cannot be got
+wrong. Architecture is part of the identity too (the amd64 and arm64 variants of one image resolve
+differently), so the bake is pinned to `--platform linux/amd64`, the architecture every AKS node
+runs.
+
+The identity stays equal across internal-only merges: when the identity's directory is already
+**sealed** (the `_complete` sentinel the publisher writes strictly LAST, after every bundle), the
+script skips with a notice instead of re-uploading ("rebuild only when we need to"). A publish that
+died mid-way leaves no sentinel — the next run re-publishes wholesale, and the portal reader refuses
 unsealed or torn directories, so a partial publication can neither freeze nor be seeded.
 Each booting pod seeds its own identity's bundles (`PreWarm:PrebuiltBundleRoot` →
 `ShippedPrebuiltBundles.SeedPublishedRoot`) before its NodeType sweep, and compiles only what CI
@@ -207,9 +214,10 @@ because they bake INSIDE the shipped image, which is why only their publications
 configuration is **preflighted red, never skipped**: repo variable
 `BAKE_PUBLISH_TARGETS` names the Azure Files targets (`<account>/<share>[/<base-path>]`,
 whitespace-separated), and a missing value fails the job naming exactly that — a grey skip here
-would silently restore the every-pod-rebakes-everything regression (#1347). A missing bake
-*artifact* only warns: a reuse-green run legitimately skips the doc-gate, and that run simply has
-nothing to publish.
+would silently restore the every-pod-rebakes-everything regression (#1347). There is no
+"nothing to publish" branch any more: the bake happens in this job, so it either produces bundles
+or fails red. Because it re-runs the content gate against the binaries that SHIP, a red here is a
+genuine release defect — the images are already promoted, and nothing quietly ships less.
 
 **`notify-dependents`** sends one `repository_dispatch` (`meshweaver-framework-released`, payload:
 commit, version — receivers resolve the framework identity themselves from the new image) to each

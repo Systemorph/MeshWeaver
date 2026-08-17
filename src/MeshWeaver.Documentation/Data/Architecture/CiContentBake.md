@@ -41,9 +41,14 @@ tolerates simply has no entry — the consumer compiles it as it would have anyw
 *claims* Ok while the run's assembly store has no bytes for it faults the run: an artifact stage
 that ships less than the verdict claims would be the skip-trapdoor shape CI forbids.
 
-The workflow uploads the directories as **`baked-assemblies-<mvid>`** (Doc + samples) and
-**`baked-plugins-<mvid>`** (vital plugin modules), and fails RED when a green gate produced no bake
-identity.
+Both gates fail RED when a green run produced no bake identity — the bake stage is a
+postcondition of the verdict, never an optional extra.
+
+🚨 **What the gates' bake is FOR: proving the bake stage still works, on the PR that breaks it.** It
+is *not* the delivery lane. A gate job's bundles are keyed to that job's own binaries, and no
+shipped image ever contains those (see "The identity rule" below), so `doc-gate` uploads nothing;
+`plugin-gate` still uploads `baked-plugins-<mvid>` for in-run diagnosis. What the portals adopt is
+baked **inside the shipped image** — see "The delivery" below.
 
 ## The identity rule: adoptable when the SURFACE is unchanged
 
@@ -68,13 +73,41 @@ rebaked the world; the extraction is what makes "rebuild only when we need to" h
 
 Three consequences:
 
-- **a bundle is adoptable across CI runs, images, and internal-only merges** — the bake for
-  commit X seeds at boot on the image of commit Y whenever nothing in the content-facing surface
-  changed between them ("rebuild only when we need to");
+- **a bundle is adoptable across images and internal-only merges** — the bake taken from image X
+  seeds at boot on image Y whenever nothing in the content-facing surface changed between them
+  ("rebuild only when we need to");
 - **a breaking surface change (or any toolchain change) mints a new identity** — every cached and
-  published build for the old surface is stale, and the next Build-and-Test run bakes fresh;
+  published build for the old surface is stale, and the next release bakes fresh;
 - **a declined bundle costs exactly what today costs — a compile.** Shipping bundles is strictly
   safe; declines are logged with both identities.
+
+### 🚨 The identity is a property of the BINARIES, not of the source (#1725)
+
+The stability above holds across *rebuilds of the same build invocation*. It does **not** hold
+across *different* build invocations of the same source, and a delivery lane was once built on the
+belief that it did. Measured on commit `babb3bc` — same sources, same runner path — between the
+Build-and-Test job's `dotnet build` output and the `dotnet publish -t:PublishContainer` image the
+same commit shipped:
+
+| half of the identity | result |
+|---|---|
+| implementation MVIDs (`FullMvidAssemblies` — the toolchain closure) | **all differ**, controls (Data, Layout, AI, Utils) included |
+| reference-assembly hashes (the other 33 canonical entries) | 29 identical, **4 differ**: `MeshWeaver.Graph`, `MeshWeaver.Hosting`, `MeshWeaver.Kernel`, `MeshWeaver.Markdown.Collaboration` |
+
+The two hosts therefore resolved `sd0d0daa…` and `s377941f…` for one commit. The same four
+reference assemblies also differ between the **amd64 and arm64 variants of one multi-arch image**,
+so a multi-arch image carries two identities and a bake is valid for the architecture it was taken
+on. Every AKS node is amd64, so the platform bake is pinned to `--platform linux/amd64`; an arm64
+install resolves the other identity and compiles locally.
+
+None of this is a defect in the identity — it is the identity doing its job. A bake is an ABI
+claim about *bytes*, and bytes from another compilation are not the bytes a pod loaded. The
+operational rule that follows is absolute:
+
+> **The producer of a bake must be the binaries the consumer runs.** Never publish a bake under
+> several identities, never let a pod scan for a "nearest" one, never relax the sentinel or the
+> identity check — adopting bytes from an identity you did not resolve is exactly what the check
+> exists to prevent.
 
 Manifest-less CI processes (test hosts) fall back to the commit identity `g<sha>` stamped by
 `Directory.Build.props`; local manifest-less builds fall back to the identity anchor's MVID
@@ -112,10 +145,13 @@ logged and skipped, and the sweep compiles that type as it always has. Nothing c
 from this path — the bake gate keeps probing the store, which only ever holds what was actually
 adopted.
 
-## The delivery: main-cd publishes, boot seeds
+## The delivery: main-cd bakes IN THE IMAGE, then publishes
 
-Since #1660 WS3, `main-cd`'s **`publish-bake`** job downloads the Build-and-Test run's
-`baked-assemblies-*` artifact for the promoted commit and copies the bundles to the portals'
+`main-cd`'s **`publish-bake`** job runs the platform's own shipped content — the `Doc` tree and the
+`samples/Graph/Data` trees, staged by `.github/scripts/stage-doc-gate.sh` and
+`stage-samples-gate.sh`, the same staging the PR gate judges — through
+`docker run … mw-plugin-test … --bake-output` against **the `mw-plugin-test` image this very CD run
+built and promoted**, and copies the resulting bundles to the portals'
 shared storage (`.github/scripts/publish-bake-bundles.sh`), laid out
 `prebuilt-bundles/<identity>/<source>/<bundle>.zip`, sealed by a `_complete` sentinel written
 strictly LAST. Each booting pod seeds ONLY its own identity's SEALED source directories
@@ -126,6 +162,23 @@ identity's directory is already sealed — an internal-only merge resolves the s
 identity as its predecessor — the script skips with a notice instead of re-uploading. See
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)
 for the job's preflight discipline and the dependent-repo dispatch.
+
+Three properties fall out of baking in the image rather than shipping a CI artifact across jobs:
+
+- **the identity always matches**, by construction — producer and consumer are the same binaries,
+  so there is no compatibility question left to get wrong;
+- **the bake is a stronger gate**, not just a producer: it proves the platform's shipped content
+  compiles, renders and passes its `Tests` areas against the binaries that actually SHIP. A red
+  bake fails CD loudly (the images are already promoted; nothing silently ships less);
+- **there is no "nothing to publish" state.** The old lane had one — a reuse-green Build-and-Test
+  run produced no artifact and the publish warned and skipped — which is the shape that let a lane
+  publishing to an unusable identity look healthy for a whole release train.
+
+The platform deliberately does not call `node-repo-publish-bake.yml` even though the two lanes are
+the same idea: it authenticates to the registry by OIDC rather than the reusable workflow's
+username/password secrets, and it bakes **two** trees against **two** known-debt ratchets in one
+bake directory, where the reusable workflow bakes one mount. Both run the identical publish script,
+which is the part that must never drift.
 
 ## Node repos run the same lane — as reusable workflows
 
@@ -205,8 +258,16 @@ types. The satellites escape it precisely because they bake INSIDE the image.
 ## What this step does not do yet
 
 - **DB-resident types** (user/partition content CI cannot see) stay on the runtime bake.
-- Test lanes do not consume the artifact yet — it is named stably (`baked-assemblies-<identity>`)
-  precisely so they can start.
+- **A bundle is matched to a deployment by node PATH**, so a portal that mounts a tree somewhere
+  other than its canonical root adopts nothing from it. Measured on `memex`: the `Doc/…` types match
+  and adopt, while the sample trees live under `MeshWeaver/samples/Graph/Data/ACME/…` there and the
+  bundles are keyed `ACME/…`, so those seven bundles are published but inert on that portal. They do
+  adopt on a deployment that mounts the samples at their canonical roots. Closing that gap means
+  agreeing one canonical path per shipped tree — it is a content-layout question, not an identity
+  one.
+- **An arm64 install adopts nothing the amd64 lane publishes** — the two architectures of one image
+  resolve different identities (see the identity rule above). Local arm64 installs compile at boot
+  as they always have; nothing may paper over this by publishing the same bundles twice.
 
 See also: [Plugin Packaging](/Doc/Architecture/PluginPackaging) (the compilation-unit rules and the
 MVID rationale) · [Build Coordination](/Doc/Architecture/BuildCoordination) (who bakes when several
