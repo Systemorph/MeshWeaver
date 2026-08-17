@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -133,7 +134,37 @@ public static class ContentFileResolver
                 ? new[] { explicitCollection, defaultCollection }
                 : [defaultCollection];
 
-            return hub.Observe(
+            // 🚨 NEVER issue this read on the ROOT MESH HUB — the router. The /api/content endpoint
+            // holds the DI-injected IMessageHub, which in the mesh's root container IS mesh/{id}
+            // (MeshHostApplicationBuilder makes the mesh hub's provider the ASP.NET root provider),
+            // so this GetDataRequest used to make the router an END of the delivery in BOTH
+            // directions: the request reached the per-node hub stamped Sender = mesh/{id}, and the
+            // GetDataResponse (or, for a denied/missing node, the DeliveryFailure) was addressed
+            // straight back at mesh/{id}. Same-silo that reply short-circuits on the routing
+            // service's local table and everything looks fine; CROSS-silo it has to arrive over the
+            // cluster-wide memory stream, and it does not — so the request never answers, the
+            // caller waits out its full 60 s budget and the route 500s with a TimeoutException.
+            //
+            // Prod signature (memex-cloud, 2 replicas, issue #1729): each pod served /api/content
+            // ONLY for the nodes whose per-node hub grain it happened to host and hung for ~60 s on
+            // every other node, so round-robin across the two replicas made ~half of all requests to
+            // ANY given asset hang — broken images on course/doc pages, and a red live-smoke gate.
+            // The pod's own diagnostics named the caller exactly as documented:
+            //   [STALE-CALLBACK] mesh/IJ1R4… : GetDataRequest@AgenticEngineering(55672ms)
+            //     → ROUTED onTarget=False state=Forwarded ⇒ no handler was ever entered
+            //   System.TimeoutException: No response received in hub mesh/IJ1R4… within 00:01:00
+            // while the OWNING silo logged the matching pair:
+            //   ROUTER_TRAFFIC: GetDataResponse has the mesh hub as target (sender: MeshWeaver,
+            //   target: mesh/IJ1R4…)
+            // i.e. the reply WAS produced and had nowhere to go.
+            //
+            // NodeOperationIssuingHub is the one shared seam for this: it hops a root-hub caller onto
+            // portal/nodeops-{meshId} — routing-registered so responses land on it cross-silo, and
+            // sharing the mesh's type registry and permission evaluator — and returns any NON-router
+            // hub unchanged, so in-mesh callers (the deck export's SlideAssetInliner, a portal hub,
+            // a test client) keep their identity byte-for-byte. GetMeshNode/GetMeshNodeOutcome and
+            // every node-CRUD path already went this way (2c796d297); this read was the straggler.
+            return hub.NodeOperationIssuingHub().Observe(
                     new GetDataRequest(new ContentCollectionReference(candidates)),
                     o =>
                     {
