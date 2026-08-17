@@ -188,12 +188,23 @@ public static class TreeBake
         foreach (var candidate in compilable)
         {
             var definition = (NodeTypeDefinition)candidate.Node.Content!;
-            // A type with neither a configuration lambda nor any source has nothing to compile —
-            // the same "Compiles" predicate the gate applies.
             var resolution = nodeSet.ResolveSources(
                 definition.Sources, definition.Tests, candidate.Node.Path);
-            if (string.IsNullOrWhiteSpace(definition.Configuration)
-                && (!resolution.IsEstablished || resolution.Sources.IsEmpty))
+
+            // A type with neither a configuration lambda nor any source has nothing to compile —
+            // the same "Compiles" predicate the gate applies.
+            //
+            // 🚨 ESTABLISHED is a precondition of that judgement, not part of it. An unestablished
+            // resolution means the bake could not evaluate one of the type's source queries — it
+            // does NOT mean the type has no sources, and collapsing the two would be a
+            // skip-trapdoor of exactly the shape CI forbids: a source-only type whose query this
+            // evaluator cannot answer would vanish from the bake with no bundle entry, no RED and
+            // no line anywhere saying a type was dropped. So an unestablished resolution falls
+            // THROUGH to Compile, which throws SourceDiscoveryUnavailableException and lands in the
+            // catch below as a failed type — loud, named, and non-zero exit.
+            if (resolution.IsEstablished
+                && resolution.Sources.IsEmpty
+                && string.IsNullOrWhiteSpace(definition.Configuration))
                 continue;
 
             try

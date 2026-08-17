@@ -301,6 +301,54 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// 🚨 A type the bake CANNOT resolve must go RED, never quietly vanish.
+    ///
+    /// <para>A NodeType with no <c>configuration</c> lambda compiles only if it has sources, so the
+    /// bake needs a "nothing to compile here" skip. The trap is judging that on the resolved set
+    /// alone: a source-only type whose query this evaluator cannot answer resolves to nothing, and
+    /// the skip then drops it from the bundle with no entry, no RED and no line saying a type was
+    /// dropped — a consumer would simply compile it, and the bake would have shipped less than it
+    /// claimed while exiting 0. That is the skip-trapdoor shape AGENTS.md forbids, and the reason
+    /// "established" is a PRECONDITION of the emptiness judgement rather than part of it.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void ASourceOnlyTypeWithAnUnevaluableQuery_FailsLoudly_NeverSilentlySkipped()
+    {
+        const string unevaluableNodeType =
+            """{"$type":"MeshNode","id":"Ghost","namespace":"Widget","path":"Widget/Ghost","mainNode":"Widget/Ghost","name":"Ghost","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"Sources only, via a query the bake cannot evaluate.","sources":["namespace:*/Source scope:subtree"]}}""";
+
+        var repo = CreateRepo(root =>
+        {
+            WriteFile(root, "Widget/index.json", WidgetIndexJson);
+            WriteFile(root, "Widget/Ghost.json", unevaluableNodeType);
+            WriteFile(root, "Widget/Ghost/Source/Ghost.cs", DeepSource);
+        });
+        var bakeDir = Path.Combine(Path.GetTempPath(), "mw-bake-ghost-" + Guid.NewGuid().ToString("N"));
+        var log = new StringWriter();
+        try
+        {
+            var report = TreeBake.Run(new TreeBake.Options
+            {
+                RepoRoot = repo,
+                OutputDirectory = bakeDir,
+                Output = log,
+            });
+            output.WriteLine(log.ToString());
+
+            var ghost = Assert.Single(report.Types, t => t.NodePath == "Widget/Ghost");
+            Assert.False(ghost.Success);
+            Assert.Contains("could not be ESTABLISHED", ghost.Error);
+            // …and the run does not report success on it.
+            Assert.NotEqual(0, report.ExitCode);
+        }
+        finally
+        {
+            Cleanup(repo);
+            Cleanup(bakeDir);
+        }
+    }
+
     // ── reading a bake directory back through the consumers' own codec ──
 
     private sealed record BakeEntry(
