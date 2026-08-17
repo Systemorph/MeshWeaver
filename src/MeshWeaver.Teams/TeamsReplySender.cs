@@ -8,14 +8,14 @@ using MeshWeaver.Data;                      // IWorkspace, GetWorkspace, GetMesh
 using MeshWeaver.Graph.Configuration;      // TeamsConversationNodeType
 using MeshWeaver.Mesh;                      // TeamsConversation, MeshNode
 using MeshWeaver.Mesh.Security;             // ImpersonateAsSystem
-using MeshWeaver.Mesh.Services;             // IMeshQueryCore, MeshQueryRequest
+using MeshWeaver.Mesh.Services;             // IMeshService, MeshQueryRequest
 using MeshWeaver.Mesh.Threading;           // IoPool — bounded HTTP pool (replaces bare Observable.FromAsync)
 using MeshWeaver.Messaging;                 // IMessageHub, AccessService
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Memex.Portal.Shared.Teams;
+namespace MeshWeaver.Teams;
 
 /// <summary>
 /// Delivers agent replies back into Teams. Watches the <see cref="TeamsConversation"/> link nodes; for
@@ -60,14 +60,17 @@ public sealed class TeamsReplySender(
             var hub = scope.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
             var teams = hub.ServiceProvider.GetService<ITeamsClient>();
             if (teams is null || !teams.IsConfigured) return;   // Teams bot off → inert
-            var query = hub.ServiceProvider.GetRequiredService<IMeshQueryCore>();
+            // System-identity reads (was the internal IMeshQueryCore, unreachable from a module):
+            // the sender watches conversation links across ALL users, so it is viewer-independent
+            // infrastructure by construction.
+            var query = hub.ServiceProvider.GetRequiredService<IMeshService>();
             var access = hub.ServiceProvider.GetRequiredService<AccessService>();
             var jsonOptions = hub.JsonSerializerOptions;
 
             // Watch the Teams conversation links; subscribe to each link's thread exactly once.
             subscriptions.Add(query
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"nodeType:{TeamsConversationNodeType.NodeType}"), jsonOptions)
+                    $"nodeType:{TeamsConversationNodeType.NodeType}", WellKnownUsers.System))
                 .Select(change => change.Items)
                 .Subscribe(
                     items =>

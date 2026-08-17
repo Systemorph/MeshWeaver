@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Microsoft Teams bot channel for MeshWeaver: the Bot Framework messaging endpoint, inbound routing into agent threads, and proactive reply delivery. Ships as a module — list the DLL under Modules:Assemblies to activate.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- AI: the thread surface inbound messages are routed into, and ThreadFlow.ObserveResponses
+         that the reply sender reads replies from. Blazor: PortalApplication, whose hub the inbound
+         processor must run on. Hosting.AspNetCore: the endpoint-contribution hook. -->
+    <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- TeamsClientValidationTests pins the Bot Framework JWT validation and the configured-ness
+         gate; the visibility moves with the code. -->
+    <InternalsVisibleTo Include="MeshWeaver.Auth.Test" />
+  </ItemGroup>
+</Project>
