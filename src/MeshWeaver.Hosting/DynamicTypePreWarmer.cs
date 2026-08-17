@@ -408,7 +408,7 @@ public static class DynamicTypePreWarmer
     }
 
     /// <summary>
-    /// 🚨 ASKS, NEVER BUILDS — the adopt-only pass (<c>PreWarm:AdoptOnly</c>).
+    /// 🚨 ASKS, NEVER BUILDS — the adopt-only pass that every boot runs.
     ///
     /// <para>Enumerates the mesh's dynamic NodeTypes and probes the assembly store for each,
     /// returning the same <see cref="NodeTypeBakeReport"/> the compiling sweep uses to decide what

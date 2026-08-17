@@ -173,8 +173,44 @@ config:
     # Failure mode if the gate DOES fire on a real regression: a stalled rollout
     # with the old image still serving — no outage, but self-update stops
     # advancing, so a stalled roll must be investigated, not waited out.
-    PreWarm__DynamicTypes: "true"
-    PreWarm__GateReadiness: "true"
+    # ---- 2026-08-17: the boot-time bake is RETIRED on the fleet too ----------
+    # Everything above describes the compiling sweep and the gate that rode on it.
+    # Both are now OFF, deliberately, and this is the reasoning — read it before
+    # turning either back on.
+    #
+    # WHY. Adoption made the sweep redundant. Once the four satellite repos
+    # published under the live framework identity, a prod boot measured
+    # `compiled=0 alreadyBaked=84` — the sweep compiled NOTHING and still charged
+    # 32.1 s of warm-up (64.8 s when adoption was broken). What it did on a MISS
+    # was worse than useless: it blocked readiness on compiling types no user had
+    # asked for. Adoption + the coverage report still run on every boot (they no
+    # longer sit behind PreWarm__DynamicTypes); what is left uncovered compiles on
+    # first access, when someone actually reaches it — measured at ~2.4 s per type
+    # on the fleet, paid once, by that type's first visitor.
+    #
+    # WHAT READINESS MEANS NOW — say it out loud, because it is strictly weaker.
+    # The gate certified a bake by COMPILING every type and refusing readiness if
+    # one that USED to build no longer did. With nothing compiling at boot there is
+    # no such verdict to reach, so the gate is turned OFF rather than left armed:
+    # armed-with-nothing-behind-it reports healthy on every rollout and protects
+    # NOTHING, which is the failure it exists to prevent. (The portal already
+    # screams that combination at Critical — Memex.Portal.Distributed/Program.cs.)
+    #
+    # WHAT WE GIVE UP, precisely: a NodeType that regresses on a new image is no
+    # longer caught at rollout. It now surfaces when a user first reaches it. That
+    # is the trade this change makes knowingly.
+    #
+    # WHAT REPLACES IT: the boot coverage report. Every uncovered type is named at
+    # warning with WHY, so "the bake lane broke" (an identity mismatch declines
+    # every bundle wholesale — #1725) shows up as a coverage collapse in the logs
+    # on the FIRST pod of a bad roll, before users meet it.
+    #
+    # 🚨 Do NOT "fix" this by gating on full adoption coverage. Uncovered>0 is the
+    # normal steady state of a real portal: users author NodeTypes in their own
+    # partitions and those have no CI bake by construction (the live memex share
+    # holds two such types under `rbuergi`). A coverage gate would never go ready.
+    PreWarm__DynamicTypes: "false"
+    PreWarm__GateReadiness: "false"
     # A sweep that ERRORED verified nothing, so it refuses readiness like a regression does —
     # the guard the retired pre-run bake Job enforced from outside ("FINDING NOTHING IS NOT
     # PASSING"), restored on the surviving path. Note "empty" is NOT "unproven": a mesh with no

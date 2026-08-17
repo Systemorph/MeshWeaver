@@ -32,10 +32,16 @@ data:
   Deployment__Backend: "{{ .Values.config.memex_portal.Deployment__Backend }}"
   Deployment__DataRoot: "{{ .Values.config.memex_portal.Deployment__DataRoot }}"
   # ---- NodeType bake ------------------------------------------------------
-  # PreWarm__DynamicTypes: compile every dynamic NodeType at startup, sequentially and in
-  #   dependency order, RESUMING from the shared assembly cache under Deployment__DataRoot
-  #   (already-baked types for this framework are skipped). Off → types compile lazily on
-  #   first access, which is what makes the first visitor after each image roll wait.
+  # 🚨 ADOPTION IS NOT CONFIGURED HERE — it is unconditional. Every boot seeds the prebuilt
+  #   bundles (PreWarm__PrebuiltBundleRoot below, plus the image's own prebuilt/ directory) and
+  #   logs what that covered, naming every type it did not. The keys below control only whether
+  #   the LEFTOVER is also compiled at boot. They used to gate the seeding too, which meant the
+  #   default deployment (DynamicTypes=false) adopted nothing at all.
+  # PreWarm__DynamicTypes: ALSO compile every uncovered dynamic NodeType at startup, sequentially
+  #   and in dependency order, RESUMING from the shared assembly cache under Deployment__DataRoot.
+  #   Off (the default, and now the fleet's setting too) → whatever adoption did not cover
+  #   compiles on first access, i.e. when a user reaches that type — ~2.4 s once, for that type's
+  #   first visitor, instead of a boot-time sweep of everything nobody asked for.
   # PreWarm__GateReadiness: hold /health RED until that bake is green. With the
   #   startupProbe on /health and maxUnavailable:0, a NodeType that REGRESSED on the new
   #   image stalls the rollout with the previous image still serving, instead of erroring
@@ -103,13 +109,6 @@ data:
          Empty renders harmlessly: the host skips blank values, and the seeding logs "no published
          bundle root configured" at debug and stays inert. */}}
   PreWarm__PrebuiltBundleRoot: "{{ .Values.config.memex_portal.PreWarm__PrebuiltBundleRoot }}"
-  {{- /* PreWarm__AdoptOnly: adopt the prebuilt bundles, then REPORT what they covered instead of
-         compiling the rest. Not the same as PreWarm__DynamicTypes=false — that would turn the
-         bundle seeding off too (it lives on the same service), so the instance would adopt nothing
-         AND compile everything lazily. Uncovered types are named at warning every boot and still
-         compile on first access. Cannot certify a bake, so it refuses to arm PreWarm__GateReadiness
-         and says so. Intended for local/dev instances. */}}
-  PreWarm__AdoptOnly: "{{ .Values.config.memex_portal.PreWarm__AdoptOnly }}"
   # ---- Assembly-cache retention -------------------------------------------
   # The bake writes one WHOLE GENERATION of NodeType assemblies per image, because the store
   # keys every file by the MeshWeaver.Graph MVID and a CI build changes it on every publish.
