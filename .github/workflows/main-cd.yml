@@ -1003,11 +1003,72 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      # Both a docker pull credential (the bake image) and, further down, the data-plane token the
-      # publish script uses against Azure Files.
-      - name: ACR login
-        run: az acr login --name meshweaver
-      - name: "Bake the platform's shipped content INSIDE the promoted image"
+      # 🚨 REACHING THE REGISTRY IS INFRA, AND INFRA BLIPS — bounded retries with backoff, then a
+      # LOUD error naming it as infra. Exactly the shape dotnet-test.yml's "Pre-pull Testcontainers
+      # images (infra, not a test)" step already uses, for the same reason.
+      #
+      # Measured, CD run 32028644747: this job died on `az acr login` with
+      # `HTTPSConnectionPool(host='meshweaver.azurecr.io', port=443) … [Errno 111] Connection
+      # refused` while FOUR sibling jobs in the same run logged into the same registry minutes
+      # earlier and pushed to it. A refused TCP connect from one runner is not a defect of ours, and
+      # retrying it suppresses nothing — but LOSING the job to it is expensive and asymmetric: the
+      # `promote` job has already armed the images by the time this runs, so the release ships
+      # WITHOUT its content bake, and the CD reconciler keys on the IMAGE set (complete) rather than
+      # on the publication, so nothing re-attempts it. The bundles are only republished by the next
+      # successful CD publish; until then pods compile shipped content at boot exactly as they did
+      # before the bake lane existed. Seconds of backoff against that trade is the right side.
+      #
+      # The image is PULLED here rather than left to `docker run`'s implicit pull, so the retry
+      # covers the pull too — a login that succeeds and a pull that is refused would otherwise fail
+      # the bake step with a registry error dressed up as a bake failure.
+      - name: "ACR login + pull the bake image (infra, not the bake)"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -uo pipefail
+          attempts=5
+          ok=0
+          for attempt in $(seq 1 $attempts); do
+            if az acr login --name meshweaver && docker pull --quiet --platform linux/amd64 "$IMAGE"; then
+              echo "$IMAGE: registry reached and image pulled on attempt $attempt"
+              ok=1; break
+            fi
+            # Backoff: 5s, 10s, 20s, 40s — registry blips are seconds-to-minutes. Only BETWEEN
+            # attempts: sleeping after the last failure would add 80s to reporting an outage we
+            # have already decided not to retry.
+            if [ "$attempt" -lt "$attempts" ]; then
+              delay=$((5 * 2 ** (attempt - 1)))
+              echo "registry attempt $attempt failed; retrying in ${delay}s" >&2
+              sleep $delay
+            fi
+          done
+          if [ $ok -eq 0 ]; then
+            echo "::error::could not log in to ${{ env.ACR }} and pull $IMAGE after $attempts attempts — this is a REGISTRY/INFRA failure, not a bake failure. The image set for this commit is already promoted; its platform content bake was NOT published, so pods compile shipped content at boot until a later CD run republishes it."
+            exit 1
+          fi
+      # ── WHAT THIS BAKES, AND WHAT IT DELIBERATELY DOES NOT ──────────────────────────────────
+      # 🚨 ONLY the content the IMAGE itself embeds: `src/MeshWeaver.Documentation/Data`, which
+      # `Memex.Portal.Shared` references as MeshWeaver.Documentation and every portal therefore
+      # ships inside itself. Nothing else. Compiling anything a deployment receives ALREADY BUILT
+      # is redoing work someone else's lane already did, and it is the expensive half of a bake.
+      #
+      # Everything else a portal holds arrives compiled and is ADOPTED, not rebuilt:
+      #   * node-repo content (Plugins, Education, Reinsurance, SocialMedia) and Store packages —
+      #     each repo's own `node-repo-publish-bake` lane bakes and publishes them under the SAME
+      #     framework identity, from the same image. main-cd checks out no other repository (there
+      #     is not one `repository:` input in this file), so it could not compile them even by
+      #     accident — and must never be given the chance.
+      #   * `samples/Graph/Data` — REMOVED from this bake deliberately. Measured against the
+      #     shipped image: the samples half compiled 7 packages / 24 assemblies (ACME, Cornerstone,
+      #     FutuRe, MathDemo, Northwind, PythonDemo, Systemorph) whose bundles NO deployment can
+      #     adopt. No portal embeds them (Memex.Portal.Shared references only
+      #     MeshWeaver.Documentation); memex receives them over the GitHub link into the
+      #     `MeshWeaver` partition, where the node paths read `MeshWeaver/samples/Graph/Data/ACME/…`
+      #     while the bundles are keyed `ACME/…` — and the seeder matches by node PATH, so they are
+      #     inert there too. They still compile-GATE on every PR (dotnet-test.yml's doc-gate runs
+      #     the samples stage): correctness of that content is proven, its assemblies are simply
+      #     not worth shipping. Before/after for this job: 8 packages / 28 assemblies → 1 / 4.
+      - name: "Bake the platform's OWN shipped content INSIDE the promoted image"
         env:
           IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
           SHA: ${{ needs.gate.outputs.sha }}
@@ -1019,11 +1080,9 @@ jobs:
           rm -rf "$STAGE"
           mkdir -p "$STAGE"
           bash .github/scripts/stage-doc-gate.sh src/MeshWeaver.Documentation/Data "$STAGE/doc"
-          bash .github/scripts/stage-samples-gate.sh samples/Graph/Data "$STAGE/samples"
-          # The two known-debt ratchets travel INTO the mount: the tester runs in the container and
-          # cannot see the checkout. Same files the doc-gate passes, so the same verdict applies.
+          # The known-debt ratchet travels INTO the mount: the tester runs in the container and
+          # cannot see the checkout. Same file the doc-gate passes, so the same verdict applies.
           cp .github/doc-gate.allow "$STAGE/doc-gate.allow"
-          cp .github/samples-gate.allow "$STAGE/samples-gate.allow"
           # The image's tester runs as a non-root user: it must be able to read the mount and write
           # the bake directory.
           chmod -R a+rX "$STAGE"
@@ -1031,15 +1090,14 @@ jobs:
           rm -rf "$BAKE"
           mkdir -p "$BAKE"
           chmod 777 "$BAKE"
-          # Two stages, one bake directory — exactly as the doc-gate runs them. A red tester FAILS
-          # this job: the platform's own shipped content not compiling against the image that ships
-          # it is a release defect, not a reason to publish less.
-          for stage in doc samples; do
-            echo "── baking /repo/$stage against $IMAGE"
-            docker run --rm --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
-              --entrypoint /app/mw-plugin-test "$IMAGE" "/repo/$stage" \
-              --allow "/repo/$stage-gate.allow" --bake-output /bake --source-sha "$SHA"
-          done
+          # A red tester FAILS this job: the platform's own shipped content not compiling against
+          # the image that ships it is a release defect, not a reason to publish less.
+          # --pull never: the image is already in the local store (the retrying step above pulled
+          # it), so a registry blip here can no longer be mistaken for a bake failure.
+          echo "── baking /repo/doc against $IMAGE"
+          docker run --rm --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" /repo/doc \
+            --allow /repo/doc-gate.allow --bake-output /bake --source-sha "$SHA"
           # Postconditions, not hopes: a green tester that wrote no identity, or no bundles, is a
           # bake-stage regression — never a quiet publish of nothing.
           if [ ! -s "$BAKE/framework-mvid.txt" ]; then

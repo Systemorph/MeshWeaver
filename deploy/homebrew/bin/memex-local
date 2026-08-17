@@ -469,10 +469,10 @@ helm_deploy() {
   done
 
   # Layering: chart defaults < TRACKED local defaults (ship with the brew package, so existing
-  # installs pick up new behaviour — e.g. adopt-only startup, PreWarm__AdoptOnly — on upgrade)
+  # installs pick up new behaviour — e.g. the adopt-only startup — on upgrade)
   # < the user's overlay (their secrets + overrides — generated once, never regenerated, always
   # wins). That last layer is also the supported escape hatch: someone AUTHORING NodeTypes
-  # locally, who therefore has no CI bake to adopt, sets PreWarm__AdoptOnly: "false" in the
+  # locally, who therefore has no CI bake to adopt, sets PreWarm__DynamicTypes: "true" in the
   # overlay and gets the compiling startup bake back.
   local share_dir; share_dir="$(resolve_share)"
   helm upgrade --install "$RELEASE" "$chart" \

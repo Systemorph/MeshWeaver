@@ -924,8 +924,25 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests the complete flow: node loading, type compilation, and HubConfiguration setting.
+    /// Tests the complete flow: node loading, type resolution, and HubConfiguration setting.
     /// This is the end-to-end test for the production scenario.
+    ///
+    /// <para>🚨 It resolves through <see cref="IMeshNodeHubFactory"/> — the component production
+    /// actually uses (<c>MonolithRoutingService.CreateHub</c>, <c>MessageHubGrain</c>) and the ONE
+    /// owner of the mesh default node chain — NOT <c>INodeConfigurationResolver</c>, which returns
+    /// only the node's OWN configuration.</para>
+    ///
+    /// <para>It used to use the resolver and claim the configuration came "from the compiled
+    /// assembly". It never did, and could not: measured on this fixture, <c>Type/Organizations</c>
+    /// stays at <c>CompilationStatus = null</c> indefinitely (45 s, exactly one emission — no
+    /// compile is ever driven), its <c>NodeTypeDefinition</c> declares no <c>Configuration</c>
+    /// lambda and no <c>Sources</c>, and <c>LatestAssemblyPath</c> is never set. What the assertion
+    /// actually observed was the mesh DEFAULT chain, which the enrichment used to stamp onto the
+    /// node in its "NodeTypeDefinition with no compile lifecycle" branch. #1684 moved that single
+    /// application to the factory, which is why this test has to ask the factory for it. The
+    /// property under test is real and still fails if it breaks — a node whose type resolves to
+    /// nothing compilable must STILL come out with a usable hub configuration — it just no longer
+    /// claims a provenance it never had.</para>
     /// </summary>
     // 🚨 The waits below are EXPLICIT because this test performs a real on-demand Roslyn compile.
     // The default stream-assertion budget is 10s (ObservableAssertions.DefaultTimeout), which a
@@ -933,24 +950,27 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     // on PRs that changed nothing (#834). The declared Fact budget already anticipated a slow
     // operation; the inner waits now match it instead of silently capping at half.
     [Fact(Timeout = 60_000)]
-    public async Task FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
+    public async Task FileSystem_Organizations_GetsUsableHubConfiguration()
     {
-        var compileBudget = TimeSpan.FromSeconds(30);
+        var resolveBudget = TimeSpan.FromSeconds(30);
 
-        // Act - get the Organizations node (triggers on-demand compilation from disk files)
-        var node = await ReadNode("Organizations").Should(compileBudget).Emit();
+        // Act - get the Organizations node from disk
+        var node = await ReadNode("Organizations").Should(resolveBudget).Emit();
 
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
 
-        // Resolve via INodeConfigurationResolver to trigger compilation and populate HubConfiguration.
-        var resolver = Mesh.ServiceProvider.GetRequiredService<INodeConfigurationResolver>();
-        node = await resolver.ResolveConfiguration(node!).Should(compileBudget).Emit();
+        // Resolve through the production funnel: enrichment PLUS the single application of the
+        // mesh default node chain. This is exactly what routing does before creating the hub.
+        var factory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeHubFactory>();
+        node = await factory.ResolveHubConfiguration(node!).Should(resolveBudget).Emit();
 
         node.HubConfiguration.Should().NotBeNull(
-            "Organizations node should have HubConfiguration from the compiled assembly. " +
-            "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeConfiguration " +
-            "were not properly deserialized from JSON (returned as JsonElement instead).");
+            "the Organizations node must come out of hub-configuration resolution with a usable " +
+            "configuration — routing keys its fail-fast NACK-fallback hub on a null one. If this " +
+            "is null, either enrichment produced nothing AND the mesh registers no default node " +
+            "chain, or NodeTypeDefinition/CodeConfiguration failed to deserialize from JSON " +
+            "(returned as JsonElement instead of the typed content).");
     }
 }
 

@@ -1,4 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- ═════════ The storage-backend contract gate (#1752) ═════════
+       StorageModuleLayoutTest loads the Cosmos/Snowflake backends the way a PORTAL does — off
+       disk, from modules/<Name>/, with NO compiled reference — so the layout has to exist in THIS
+       project's own bin. Reuse the real lane (MeshModulesClosureSubset narrows it to these two)
+       rather than hand-copying a publish+prune here: a copy would be a second detector, free to
+       agree with itself while the shipped layout is broken.
+
+       🚨 Deliberately NO ProjectReference to either backend. One would put the module's own DLL in
+       this bin's root, where prune (a) deletes it from modules/ as a same-identity duplicate — the
+       gate would then load the app-root copy and assert nothing about the shipped layout. -->
+  <PropertyGroup>
+    <MeshModulesClosureSubset>MeshWeaver.Hosting.Cosmos;MeshWeaver.Hosting.Snowflake</MeshModulesClosureSubset>
+  </PropertyGroup>
+  <Import Project="..\..\memex\MeshModulesPublish.targets" />
+
   <ItemGroup>
     <!-- VersionEndpointTest drives GET /api/version over a real HTTP pipeline (TestServer) to
          prove it answers with NO authenticated session — the whole point of the endpoint. -->

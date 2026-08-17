@@ -182,9 +182,11 @@ produces it rather than silently "fixed". This is also why `check-image-set.sh` 
 
 Two post-promote legs ride every armed release (#1660 WS3):
 
-**`publish-bake`** runs the platform's own shipped content (the `Doc` tree and the
-`samples/Graph/Data` trees) through `mw-plugin-test --bake-output` **inside the `mw-plugin-test`
-image this run just built and promoted**, then copies the bundles onto the portals' shared storage,
+**`publish-bake`** runs the content the image itself embeds (the `Doc` tree — and **only** that:
+node-repo content, Store packages and the samples trees arrive already compiled or are gate-only,
+see [CI Content Bake](/Doc/Architecture/CiContentBake)) through `mw-plugin-test --bake-output`
+**inside the `mw-plugin-test` image this run just built and promoted**, then copies the bundles onto
+the portals' shared storage,
 laid out `prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip`
 (`.github/scripts/publish-bake-bundles.sh`). Baking in the image is not an implementation detail —
 it is the whole correctness argument. The framework identity is derived from the **binaries a host
@@ -227,6 +229,16 @@ would silently restore the every-pod-rebakes-everything regression (#1347). Ther
 "nothing to publish" branch any more: the bake happens in this job, so it either produces bundles
 or fails red. Because it re-runs the content gate against the binaries that SHIP, a red here is a
 genuine release defect — the images are already promoted, and nothing quietly ships less.
+
+🚨 **The reconciler does not heal a failed bake publication.** `gate` asks the registry whether the
+IMAGE set is complete, and by the time this job runs `promote` has already made it so — so a run
+that publishes its images and then loses this job is not re-attempted, and the bundles land only on
+the next successful CD publish (until then pods compile shipped content at boot, exactly as before
+the lane existed). That asymmetry is why reaching the registry here is retried like the infra it is:
+five attempts with backoff, then a loud error naming it a REGISTRY/INFRA failure. CD run
+`32028644747` lost the job to a single `az acr login` → `[Errno 111] Connection refused` while four
+sibling jobs in the same run reached the same registry fine. `alert-on-failure` still files the red
+on the `ci-failure` issue, so a genuinely broken bake is never silent.
 
 **`notify-dependents`** sends one `repository_dispatch` (`meshweaver-framework-released`, payload:
 commit, version — receivers resolve the framework identity themselves from the new image) to each

@@ -31,6 +31,12 @@ public interface IMeshNodeHubFactory
     /// configuration with the mesh's <c>DefaultNodeHubConfiguration</c> so
     /// per-node hubs inherit cross-cutting concerns (security pipeline, layout
     /// areas, etc.) registered globally.
+    ///
+    /// <para>🚨 This is the SINGLE place the default node chain is applied, and it is applied
+    /// EXACTLY ONCE. The node configuration it composes is the node's own delta; anything that
+    /// also folds <c>DefaultNodeHubConfiguration</c> in makes the chain run twice for that hub,
+    /// which fails hub creation for any <c>ConfigureDefaultNodeHub</c> lambda that registers a
+    /// type source (Systemorph/MeshWeaver#1684).</para>
     /// </summary>
     IObservable<MeshNode> ResolveHubConfiguration(MeshNode node);
 }
