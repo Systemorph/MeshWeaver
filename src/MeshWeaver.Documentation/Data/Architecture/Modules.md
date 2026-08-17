@@ -151,6 +151,7 @@ The current first-party inventory and each module's configuration section:
 | `MeshWeaver.Courses.dll` | Course delivery: the entitlement-gated `/assets/{Space}/…` route over a Space's synced repo | `GitHub:App:*` (shared with GitSync) |
 | `MeshWeaver.Mail.MicrosoftGraph.dll` | Mail over Microsoft Graph: system email, inbound intake + its webhook, the Executive Assistant's mailbox tools | `Email` (`Enabled`, `InboundEnabled`) |
 | `MeshWeaver.Import.dll` | Tabular import: Excel/CSV readers (its private `MeshWeaver.DataSetReader.*` closure), mapping configuration, the `ImportRequest` handler | — (🚨 list it FIRST — see below) |
+| `MeshWeaver.Mcp.dll` | The Model Context Protocol server: the mesh tool surface + the `/mcp` HTTP transport | `Mcp` (`BaseUrl`; the `McpAuth` policy stays platform-side) |
 | `MeshWeaver.Hosting.Grpc.dll` | The mesh gRPC transport: `meshweaver.v1.Mesh` + gRPC-web, `py`/`node` foreign participants AND the React GUI's browser data plane | `Grpc` (`TrustedPort`) |
 | `MeshWeaver.Hosting.Cosmos.dll` | Cosmos DB storage backend (keyed adapter factory + native query) | selected by `Graph:Storage:Type` = `Cosmos` |
 | `MeshWeaver.Hosting.Snowflake.dll` | Snowflake storage backend (persistence, change feed, cross-schema query, access projection) | selected by `Graph:Storage:Type` = `Snowflake` |

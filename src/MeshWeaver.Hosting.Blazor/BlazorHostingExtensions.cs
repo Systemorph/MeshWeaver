@@ -3,7 +3,6 @@ using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using MeshWeaver.Blazor;
 using MeshWeaver.Blazor.Infrastructure;
-using MeshWeaver.Mcp;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
@@ -71,7 +70,10 @@ public static class BlazorHostingExtensions
                 // scoped, because Blazor resolves circuit handlers per circuit.
                 .AddSingleton<ActiveCircuitTracker>()
                 .AddScoped<CircuitHandler, CircuitDrainHandler>()
-                .AddMeshMcp()
+            // 🚨 The MCP server used to be registered here. It rides the MeshWeaver.Mcp module
+            // now (Modules:Assemblies -> McpMeshModuleAttribute folds the identical
+            // AddMeshMcp()), so a Blazor portal that publishes no MCP surface no longer
+            // compiles one in. The /mcp route comes from the same module's endpoint half.
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 

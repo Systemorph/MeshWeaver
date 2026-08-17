@@ -9,7 +9,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Mcp\MeshWeaver.Mcp.csproj" />
+    <!-- MeshWeaver.Mcp is deliberately NOT referenced (#1644 step 2): the MCP server ships via
+         the modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
+         Modules:Assemblies -> McpMeshModuleAttribute (services) + McpEndpointModuleAttribute
+         (the /mcp route). The pieces the platform's REST mirror shares with it —
+         SessionHubResolver, McpConfiguration — stay in MeshWeaver.Hosting.AspNetCore. -->
     <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
   </ItemGroup>
