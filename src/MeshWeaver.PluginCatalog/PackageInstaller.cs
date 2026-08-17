@@ -1706,10 +1706,7 @@ public static class PackageInstaller
             .Where(f => ModuleManifest.IsManifestPath(f.RelativePath))
             .Select(f => ModuleManifest.TryParse(f.Content, logger))
             .FirstOrDefault(m => m is not null);
-        var nodes = files
-            .Select(f => ParseCanonical(parsers, f, logger))
-            .Where(n => n is not null).Select(n => n!)
-            .ToArray();
+        var nodes = ParseAll(parsers, files, manifest.Id, logger);
 
         if (nodes.Length == 0)
             return Observable.Throw<InstallResult>(new InvalidOperationException(
@@ -2219,10 +2216,7 @@ public static class PackageInstaller
     {
 
         var parsers = new FileFormatParserRegistry(hub.JsonSerializerOptions);
-        var nodes = changedFiles
-            .Select(f => ParseCanonical(parsers, f, logger))
-            .Where(n => n is not null).Select(n => n!)
-            .ToArray();
+        var nodes = ParseAll(parsers, changedFiles, manifest.Id, logger);
 
         if (RefuseIfStaticShadowed(hub, manifest, nodes, logger) is { } shadowed)
             return shadowed;
@@ -2370,25 +2364,74 @@ public static class PackageInstaller
     // Parses a node-per-file file into a MeshNode at its CANONICAL path (no partition rebase) — the
     // file's repo-relative path IS the node's path. The export's top-level README.md is a GitHub
     // display file, never a node (mirrors GitHubSyncService.ParseFile, minus the space rebase).
-    private static MeshNode? ParseCanonical(FileFormatParserRegistry parsers, PackageFile file, ILogger? logger)
+    /// <summary>
+    /// Parses every file of an install and reports the UNPARSEABLE ones as ONE aggregate line.
+    ///
+    /// <para>🚨 #1767: a per-file "skipped" warning is not a signal. `PensionFund` shipped 72
+    /// BOM'd files, 62 of them were skipped, the package gated ZERO NodeTypes — and the install
+    /// reported success for years, because the only evidence was 62 lines in a log nobody reads.
+    /// "I installed nothing" and "I installed everything" must never look alike at the level where
+    /// the verdict is read.</para>
+    ///
+    /// <para>Loud and counted, NOT fatal: the runtime itself skips unmaterialisable files and
+    /// installs the rest, so refusing here would resolve a SMALLER tree than the mesh does — the
+    /// equivalence break #1763 exists to prevent, in the opposite direction. Files that are not
+    /// nodes by design (README, manifest, `content/**` assets) are not skips and are not counted.
+    /// </para>
+    /// </summary>
+    private static MeshNode[] ParseAll(
+        FileFormatParserRegistry parsers, IReadOnlyList<PackageFile> files, string packageId, ILogger? logger)
     {
-        if (string.Equals(file.RelativePath, "README.md", StringComparison.OrdinalIgnoreCase)
-            || ModuleManifest.IsManifestPath(file.RelativePath)
-            // A `{package}/content/**` asset is NOT a node — its bytes go to the partition root's
-            // content collection (SyncPackageContent), which is where the served
-            // `/api/content/{root}/content/…` URL resolves. (It used to be `/static/{root}/content/…`;
-            // #587 unmounted content from /static entirely, so that shape is now 404 for everyone —
-            // an authored asset URL must name the access-controlled route.) Same split
-            // GitHubSyncService.ParseSnapshot
-            // makes, and the one NodePathForFile below has always asserted. Skipping it here also
-            // silences the "No parser for …/videos/x.mp4" warning every course emitted per install.
-            || ContentAssetMapper.IsContentPath(file.RelativePath))
+        var unparsed = new List<string>();
+        var nodes = files
+            .Select(f => ParseCanonical(parsers, f, logger, unparsed))
+            .Where(n => n is not null).Select(n => n!)
+            .ToArray();
+
+        if (unparsed.Count > 0)
+            logger?.LogWarning(
+                "Package '{Package}': {Skipped} of {Candidates} candidate files had no parser and "
+                + "were skipped; {Installed} nodes installed. First skipped: {Sample}.",
+                packageId, unparsed.Count, files.Count(f => !IsNotANodeFile(f.RelativePath)),
+                nodes.Length, string.Join(", ", unparsed.Take(5)));
+
+        return nodes;
+    }
+
+    /// <summary>
+    /// Files that are NOT nodes by design, and so are neither parsed nor counted as skips.
+    ///
+    /// <para>The README is a GitHub display file. The manifest is the install record's baseline.
+    /// A <c>{package}/content/**</c> asset is not a node — its bytes go to the partition root's
+    /// content collection (SyncPackageContent), which is where the served
+    /// <c>/api/content/{root}/content/…</c> URL resolves. (It used to be
+    /// <c>/static/{root}/content/…</c>; #587 unmounted content from /static entirely, so that shape
+    /// is now 404 for everyone — an authored asset URL must name the access-controlled route.) Same
+    /// split GitHubSyncService.ParseSnapshot makes, and the one NodePathForFile asserts. Excluding
+    /// them also silences the "No parser for …/videos/x.mp4" warning every course emitted per
+    /// install.</para>
+    ///
+    /// <para>ONE predicate, used by both the parse loop and the aggregate line's denominator —
+    /// "3 of 200 skipped" reads very differently when 150 of the 200 were never node candidates
+    /// (Copilot review, #1781). Two copies of this list would drift, and the drift would show up as
+    /// a quietly wrong count rather than as a failure.</para>
+    /// </summary>
+    private static bool IsNotANodeFile(string relativePath) =>
+        string.Equals(relativePath, "README.md", StringComparison.OrdinalIgnoreCase)
+        || ModuleManifest.IsManifestPath(relativePath)
+        || ContentAssetMapper.IsContentPath(relativePath);
+
+    private static MeshNode? ParseCanonical(
+        FileFormatParserRegistry parsers, PackageFile file, ILogger? logger, List<string>? unparsed = null)
+    {
+        if (IsNotANodeFile(file.RelativePath))
             return null;
         var ext = System.IO.Path.GetExtension(file.RelativePath);
         var parsed = parsers.TryParse(ext, file.RelativePath, file.Content, file.RelativePath);
         if (parsed is null)
         {
             logger?.LogWarning("No parser for node-repo file {Path}; skipped.", file.RelativePath);
+            unparsed?.Add(file.RelativePath);
             return null;
         }
         var (id, ns) = NodeFileMapper.FromRelativePath(file.RelativePath);
