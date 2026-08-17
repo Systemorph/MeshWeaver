@@ -79,6 +79,12 @@
     "   that forced clients/typescript off transpileModule onto amaro.",
     "",
     "Moving forward is issue #1584: react-native 0.82 peers are exactly react ^19.1.1 — the Expo",
-    "SDK 52->57 upgrade, which also has to port expo-av. Do that deliberately, not by sweep."
+    "SDK 52->57 upgrade, which also has to port expo-av. Do that deliberately, not by sweep.",
+    "",
+    "This note is now ENFORCED, not just documented: .github/dependabot.yml gives this directory",
+    "its own npm update config whose `ignore` holds back exactly the majors listed above (expo*,",
+    "@expo/*, react, react-dom, react-test-renderer, @types/react*, typescript). Before that split",
+    "the sweep re-opened the same unmergeable PR every Monday (#1704 was the second). Lift those",
+    "holdbacks as PART of the #1584 migration — they and this note retire together."
   ]
 }
