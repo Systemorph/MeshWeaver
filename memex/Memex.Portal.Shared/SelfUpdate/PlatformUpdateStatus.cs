@@ -21,6 +21,18 @@ public enum PlatformUpdateAvailability
 
     /// <summary>A newer build exists; <see cref="PlatformUpdateStatus.LatestVersion"/> names it.</summary>
     UpdateAvailable,
+
+    /// <summary>
+    /// A newer build exists but the release-availability gate (#1754) is HOLDING it: a package this
+    /// deployment runs has no usable artifact for that release. <see cref="PlatformUpdateStatus.LatestVersion"/>
+    /// still names the build.
+    ///
+    /// <para>🚨 This state exists so a hold cannot be silent. Rendering a held update as
+    /// "update available" would leave an install looking normal while it never moves; rendering it
+    /// as "up to date" would be a lie. An environment frozen for weeks because one stale package
+    /// blocks it is its own outage, and the only defence is that it SAYS so.</para>
+    /// </summary>
+    UpdateHeld,
 }
 
 /// <summary>
@@ -65,7 +77,13 @@ public record PlatformUpdateStatus(PlatformUpdateAvailability Availability, stri
     {
         var latest = policy.LatestAvailableTag;
         if (!string.IsNullOrEmpty(latest) && VersionSelect.IsNewer(latest, runningVersion))
-            return new(PlatformUpdateAvailability.UpdateAvailable, latest);
+            // A held update is still an available one — but saying only "available" about a build
+            // this install has refused would make an indefinitely-frozen deployment look healthy.
+            return new(
+                policy.IsHeld(latest)
+                    ? PlatformUpdateAvailability.UpdateHeld
+                    : PlatformUpdateAvailability.UpdateAvailable,
+                latest);
         return policy.Policy == UpdatePolicyKind.None
             ? Unknown
             : new(PlatformUpdateAvailability.UpToDate, null);

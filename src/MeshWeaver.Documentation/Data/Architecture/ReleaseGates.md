@@ -124,6 +124,43 @@ composition lands, the *declared* package set becomes answerable centrally, and
 environment's ability to update. When its catalogue cannot be read the answer is `Indeterminate` —
 a hold, with its own named reason — never a pass, and never a compatibility verdict.
 
+## The deployment gate — all three roll paths read the one verdict
+
+A version reaches an environment three ways, and a gate honoured by only one of them is not a gate.
+
+| Path | How it consults the verdict | What a refusal looks like |
+|---|---|---|
+| **The self-update poll** | `SelfUpdateHostedService` calls the service in-process after `VersionSelect` picks a target and before `KubernetesDeploymentUpdater` patches anything | the roll does not happen; the hold is written to `Admin/UpdatePolicy` (`HeldTag`/`HeldReason`/`HeldAt`) and shown on the Updates tab |
+| **CD's promote** | `main-cd`'s `publish-bake` job asserts, right after publishing, that the release it armed resolves an identity and carries a sealed platform bake (`.github/scripts/check-release-availability.sh`) | the CD run goes **red**, naming what is missing — never a grey skip, which renders identically to a pass |
+| **A manual roll** | the operator asks the target portal `GET /api/plugins/is-updatable?version=…` before `kubectl set image`; the in-product **Apply update now** button consults the same service | the button reports the hold and patches nothing |
+
+### A hold is a state, not a silence
+
+The refusal is written where update state already lives, so it renders on the surfaces an operator
+and a user already look at:
+
+- **About tab** (any user): `⏸️ Update held — a package this deployment runs is not available for
+  that build`, deliberately distinct from `⬆️ Update available`. An install that has *refused* a
+  build must not look like one that is about to take it.
+- **Updates tab** (platform admin): the held tag, the reason naming the package, and when it was
+  held — plus a different sentence when the hold is `Indeterminate`, because "we could not check"
+  and "this package cannot survive the release" have different fixes.
+
+### The hold is re-evaluated every tick, never persisted as a decision
+
+The poller re-asks on every poll and on every green-build event, and clears the hold the moment the
+verdict flips. So the missing bake being published is the whole remedy — nothing has to be un-stuck
+by hand, and no operator has to remember that an environment was held. That is what makes refusing
+safe to do at all.
+
+### The gate never gates itself out of existence
+
+Recording the hold is best-effort and can never block the roll (the same rule the availability
+bookkeeping has carried since the 37-hour stall of #1020): the DECISION comes from the verdict, and
+a gate that could not run resolves to a hold with its own reason rather than to an exception that
+kills the tick. An install with no gate registered at all logs that fact and rolls — said out loud,
+never inferred from silence.
+
 ## See also
 
 - [CI Content Bake](../CiContentBake) — where the sealed bundles and the framework identity come from
