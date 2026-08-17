@@ -78,6 +78,39 @@ public record UpdatePolicyContent
     [Browsable(false)]
     public ImmutableList<ComboVerification> ComboVerifications { get; init; } = [];
 
+    /// <summary>
+    /// The tag the release-availability gate (#1754) most recently REFUSED, or null when nothing is
+    /// held. Written by the poller beside <see cref="HeldReason"/>; not user-editable.
+    ///
+    /// <para>🚨 This exists so a hold is a VISIBLE, recoverable state rather than a silence. An
+    /// instance that quietly stops updating for weeks because one stale package blocks it is its own
+    /// outage — worse than the roll it prevented, because nothing shows it happened.</para>
+    /// </summary>
+    [Browsable(false)]
+    public string? HeldTag { get; init; }
+
+    /// <summary>Why <see cref="HeldTag"/> was refused, in one sentence naming the package(s).
+    /// Not user-editable.</summary>
+    [Browsable(false)]
+    public string? HeldReason { get; init; }
+
+    /// <summary>
+    /// True when the hold is "the catalogue could not be read" rather than "a package cannot survive
+    /// this release". Kept apart because they are different incidents with different fixes, and a UI
+    /// that blurred them would send an operator to re-bake something that was never broken.
+    /// </summary>
+    [Browsable(false)]
+    public bool HeldIndeterminate { get; init; }
+
+    /// <summary>When the hold was last recorded — so a stale hold is recognisable as stale.</summary>
+    [Browsable(false)]
+    public DateTimeOffset? HeldAt { get; init; }
+
+    /// <summary>Whether <paramref name="tag"/> is the tag currently held by the availability gate.</summary>
+    public bool IsHeld(string? tag) =>
+        !string.IsNullOrEmpty(tag)
+        && string.Equals(HeldTag, tag, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The recorded verdict for <paramref name="tag"/>, when one exists.</summary>
     public ComboVerification? VerificationFor(string? tag) =>
         string.IsNullOrEmpty(tag)

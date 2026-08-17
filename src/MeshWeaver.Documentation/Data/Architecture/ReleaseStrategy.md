@@ -135,6 +135,24 @@ applies the update.
 | **Monolith** (non-k8s) | No self-patch (no service-account token) → detect-only: records `LatestAvailableTag` for visibility; the operator updates the binary. |
 | **MAUI app** | **Detect + notify.** A sandboxed app can't replace its own binary, so on connecting to a remote mesh that runs a newer platform version it shows an in-app alert: update from the store and relaunch. |
 
+### The availability gate — "newer" is not sufficient
+
+Whichever target it is, a newer tag is **not** on its own a reason to roll. Before patching
+anything, the poller asks the [release availability gate](../ReleaseGates) whether every package
+this deployment runs actually has a usable artifact for that release. If one does not, the update is
+**held**: the poller stays on the current image, writes the refusal to `Admin/UpdatePolicy`
+(`HeldTag`, `HeldReason`, `HeldAt`), and the Updates tab reports it — the About tab shows
+`⏸️ Update held` rather than `⬆️ Update available`, because an install that has refused a build must
+not look like one that is about to take it.
+
+A hold is not sticky. It is re-evaluated on every poll and every green-build event and clears itself
+the moment the missing artifact is published, so nothing has to be un-stuck by hand. The manual
+**Apply update now** button consults the same verdict — a gate the unattended path respects and the
+manual one does not is no gate at all.
+
+🚨 "Cannot determine" is a hold too, and it says so distinctly: an unreadable artifact catalogue is
+an availability incident to fix, not an incompatible release to re-bake.
+
 ### Postgres ("auto-update pg")
 
 - **Schema / `db_version` is kept in step automatically:** the **migration** container is rolled to

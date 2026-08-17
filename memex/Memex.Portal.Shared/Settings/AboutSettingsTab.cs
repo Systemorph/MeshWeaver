@@ -107,6 +107,13 @@ public static class AboutSettingsTab
             PlatformUpdateAvailability.UpdateAvailable =>
                 $"**{localize("about.updateStatus")}:** ⬆️ {localize("about.updateAvailable")} — " +
                 $"`{status.LatestVersion}`",
+            // A held update reads DIFFERENTLY from an available one on purpose: an install that has
+            // refused a build must not look like one that is simply about to take it. The reason
+            // itself is admin-scoped and lives on the Updates tab; here the ordinary user learns
+            // that the deployment is deliberately not moving.
+            PlatformUpdateAvailability.UpdateHeld =>
+                $"**{localize("about.updateStatus")}:** ⏸️ {localize("about.updateHeld")} — " +
+                $"`{status.LatestVersion}`",
             PlatformUpdateAvailability.UpToDate =>
                 $"**{localize("about.updateStatus")}:** ✅ {localize("about.upToDate")}",
             _ => null,

@@ -44,7 +44,13 @@ namespace Memex.Portal.Shared.SelfUpdate;
 /// composition declares what an environment is SUPPOSED to have, which is strictly better to gate
 /// on; this service's <see cref="RequiredPackages"/> is the one place that would change.</para>
 /// </summary>
-public sealed class ReleaseAvailabilityService(
+/// <remarks>
+/// Not sealed, and <see cref="IsUpdatable"/> is virtual: it is the documented injection seam for the
+/// poller's gate, exactly as <c>SelfUpdateHostedService.ReadPolicyStream</c>/<c>RecordAvailable</c>
+/// are for its two mesh touches. A test can then pin what the POLLER does with a verdict without
+/// also staging an artifact store — the verdict itself is pinned separately, against a real one.
+/// </remarks>
+public class ReleaseAvailabilityService(
     IMessageHub hub,
     IConfiguration configuration,
     ILogger<ReleaseAvailabilityService>? logger = null)
@@ -63,7 +69,7 @@ public sealed class ReleaseAvailabilityService(
     /// action block — and total: every failure resolves to a HOLD carrying its reason, so a
     /// caller can subscribe without a <c>Catch</c> that would turn an incident into a pass.
     /// </summary>
-    public IObservable<UpdatabilityVerdict> IsUpdatable(string? targetVersion) =>
+    public virtual IObservable<UpdatabilityVerdict> IsUpdatable(string? targetVersion) =>
         Observable.Defer(() =>
         {
             var publishedRoot = PublishedRoot;
@@ -79,10 +85,27 @@ public sealed class ReleaseAvailabilityService(
                     .Select(observation => ReleaseAvailability.IsUpdatable(
                         observation.Target, required, observation.Artifacts)));
         })
+        // 🚨 The gate must ANSWER, always. Its two inputs can each stall indefinitely — a mesh
+        // query that never emits its initial snapshot, an I/O pool slot that never frees — and a
+        // gate that hangs is strictly worse than one that refuses: the poller's tick never
+        // completes, so the update neither applies NOR records a hold, and the environment freezes
+        // with nothing anywhere saying why. The timeout converts a stall into the honest answer
+        // (Indeterminate ⇒ HOLD, named), which the very next tick re-evaluates from scratch.
+        .Timeout(AnswerBudget)
         .Catch((Exception ex) => Observable.Return(ReleaseAvailability.IsUpdatable(
             new ReleaseTarget(targetVersion, null),
             [],
-            ReleaseArtifacts.Unreadable(ex.Message))));
+            ReleaseArtifacts.Unreadable(ex is TimeoutException
+                ? $"the availability check did not answer within {AnswerBudget.TotalSeconds:0}s"
+                : ex.Message))));
+
+    /// <summary>
+    /// How long the whole verdict may take. Generous — it bounds a stall, it is not a performance
+    /// budget: the reads behind it are a mesh query and a handful of directory stats, so anything
+    /// approaching this is wedged rather than slow. Deliberately shorter than the poll interval, so
+    /// a stalled tick can never overlap the next one.
+    /// </summary>
+    private static readonly TimeSpan AnswerBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// What this environment deploys, as the gate's inputs.
