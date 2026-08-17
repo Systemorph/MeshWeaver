@@ -209,9 +209,8 @@ coverage collapse in the logs of the *first* pod of a bad roll.
 
 ## The delivery: main-cd bakes IN THE IMAGE, then publishes
 
-`main-cd`'s **`publish-bake`** job runs the platform's own shipped content — the `Doc` tree and the
-`samples/Graph/Data` trees, staged by `.github/scripts/stage-doc-gate.sh` and
-`stage-samples-gate.sh`, the same staging the PR gate judges — through
+`main-cd`'s **`publish-bake`** job runs the content the image itself embeds — the `Doc` tree, staged
+by `.github/scripts/stage-doc-gate.sh`, the same staging the PR gate judges — through
 `docker run … mw-plugin-test … --bake-output` against **the `mw-plugin-test` image this very CD run
 built and promoted**, and copies the resulting bundles to the portals'
 shared storage (`.github/scripts/publish-bake-bundles.sh`), laid out
@@ -224,6 +223,27 @@ identity's directory is already sealed — an internal-only merge resolves the s
 identity as its predecessor — the script skips with a notice instead of re-uploading. See
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)
 for the job's preflight discipline and the dependent-repo dispatch.
+
+### 🚨 CD compiles ONLY what the image embeds — everything else is adopted
+
+The bake is scoped to `src/MeshWeaver.Documentation/Data`, the one tree every portal ships inside
+itself (`Memex.Portal.Shared` references `MeshWeaver.Documentation`). Nothing else, on purpose:
+
+| Content | Who bakes it | Why not CD |
+|---|---|---|
+| node-repo content (Plugins, Education, Reinsurance, SocialMedia) and **Store** packages | each repo's own `node-repo-publish-bake` lane, against the same image ⇒ the same identity | it arrives **already compiled** and is adopted; `main-cd.yml` checks out no other repository, so it could not compile them even by accident |
+| `samples/Graph/Data` | nobody — compile-**gated** only | no deployment embeds them, and memex receives them over the GitHub link into the `MeshWeaver` partition, where node paths read `MeshWeaver/samples/Graph/Data/ACME/…` while bundles are keyed `ACME/…`. The seeder matches by node **path**, so the bundles are inert everywhere. Measured: 7 packages / 24 assemblies per CD run for bytes nothing can adopt |
+
+So the CD bake is **1 package / 4 assemblies**, down from 8 / 28 when it also baked the samples.
+Correctness of the samples content is unaffected — `dotnet-test.yml`'s doc-gate still compiles,
+renders and tests both trees on every PR. What changed is only that CD stops *shipping* assemblies
+no deployment can use. `PlatformBakeLaneGuard` pins both halves of this: the Doc tree must be baked,
+the samples tree must not, and the workflow must check out no other repository.
+
+The end state this serves is a boot that compiles nothing: with the four satellites publishing under
+the pods' identity, a prod portal boot reached `compiled=0 alreadyBaked=84` — everything adopted,
+nothing rebuilt. The platform's own `Doc` types are the remaining slice, and this lane is what
+delivers them.
 
 Three properties fall out of baking in the image rather than shipping a CI artifact across jobs:
 
@@ -321,12 +341,11 @@ types. The satellites escape it precisely because they bake INSIDE the image.
 
 - **DB-resident types** (user/partition content CI cannot see) stay on the runtime bake.
 - **A bundle is matched to a deployment by node PATH**, so a portal that mounts a tree somewhere
-  other than its canonical root adopts nothing from it. Measured on `memex`: the `Doc/…` types match
-  and adopt, while the sample trees live under `MeshWeaver/samples/Graph/Data/ACME/…` there and the
-  bundles are keyed `ACME/…`, so those seven bundles are published but inert on that portal. They do
-  adopt on a deployment that mounts the samples at their canonical roots. Closing that gap means
-  agreeing one canonical path per shipped tree — it is a content-layout question, not an identity
-  one.
+  other than its canonical root adopts nothing from it. That is why CD no longer bakes the samples
+  trees at all (see "CD compiles ONLY what the image embeds"): memex holds them under
+  `MeshWeaver/samples/Graph/Data/ACME/…` while a bundle from that tree is keyed `ACME/…`. If a
+  deployment ever wants them prebuilt, the fix is to agree one canonical path per shipped tree — a
+  content-layout question, not an identity one.
 - **An arm64 install adopts nothing the amd64 lane publishes** — the two architectures of one image
   resolve different identities (see the identity rule above). Local arm64 installs compile at boot
   as they always have; nothing may paper over this by publishing the same bundles twice.
