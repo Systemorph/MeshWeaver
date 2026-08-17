@@ -192,10 +192,13 @@ public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
             // boolean — the cheapest thing to write in a values file, and the whole point of a
             // dynamic flag. The OBJECT form adds the packages and the note.
             var flag = child.Value is not null
-                ? new FeatureFlag(name, Enabled(name, child.Value), [], null)
+                // 🚨 The key named in a malformed-value warning must be the key the operator
+                // actually wrote. The leaf shape has NO `Enabled` subkey, so telling them to fix
+                // `Features:Flags:betaChat:Enabled` sends them to a key that does not exist.
+                ? new FeatureFlag(name, Enabled(child.Value, $"{SectionName}:{name}"), [], null)
                 : new FeatureFlag(
                     name,
-                    Enabled(name, child["Enabled"]),
+                    Enabled(child["Enabled"], $"{SectionName}:{name}:Enabled"),
                     child.GetSection("Packages").GetChildren()
                         .Select(p => p.Value?.Trim())
                         .Where(p => !string.IsNullOrEmpty(p))
@@ -215,7 +218,11 @@ public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
     /// Warning, because a non-boolean must never be taken as consent (the same rule
     /// <c>PackageSources.Flag</c> applies to the auto-sync switches).
     /// </summary>
-    private bool Enabled(string name, string? raw)
+    /// <param name="raw">The configured value, or null when the key is absent.</param>
+    /// <param name="key">The FULL key the value was read from — named verbatim in the warning, so
+    /// an operator is sent to the key they actually wrote (the leaf shape has no
+    /// <c>Enabled</c> subkey).</param>
+    private bool Enabled(string? raw, string key)
     {
         var trimmed = raw?.Trim();
         if (string.IsNullOrEmpty(trimmed))
@@ -223,8 +230,8 @@ public sealed class ConfigurationFeatureFlags : IFeatureFlags, IDisposable
         if (bool.TryParse(trimmed, out var parsed))
             return parsed;
         logger?.LogWarning(
-            "Feature flag '{Flag}' has a non-boolean Enabled value '{Value}' — reading it as OFF. "
-            + "Set {Key}:{Flag}:Enabled to true or false.", name, trimmed, SectionName, name);
+            "Feature flag key '{Key}' has the non-boolean value '{Value}' — reading it as OFF. "
+            + "Set it to true or false.", key, trimmed);
         return false;
     }
 }

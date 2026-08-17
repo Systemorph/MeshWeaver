@@ -350,6 +350,13 @@ data:
   # line in an environment's values file on top of a shared declaration. A flag with no packages is
   # a plain named boolean. See Doc/Architecture/EnvironmentComposition.
   {{- range $name, $flag := .Values.features }}
+  {{- if kindIs "bool" $flag }}
+  {{- /* The LEAF form — `betaChat: true` — a plain named boolean with no content behind it. It
+         must be handled explicitly: `hasKey`/field access on a bool aborts the whole render
+         ("wrong type for value; expected map[string]interface {}; got bool"), which would make the
+         documented shorthand break every deploy that used it. */}}
+  Features__Flags__{{ $name }}: "{{ $flag }}"
+  {{- else }}
   {{- if hasKey $flag "enabled" }}
   Features__Flags__{{ $name }}__Enabled: "{{ $flag.enabled }}"
   {{- end }}
@@ -358,6 +365,7 @@ data:
   {{- end }}
   {{- range $i, $p := $flag.packages }}
   Features__Flags__{{ $name }}__Packages__{{ $i }}: "{{ $p }}"
+  {{- end }}
   {{- end }}
   {{- end }}
   {{- if .Values.pluginCatalog.instanceId }}

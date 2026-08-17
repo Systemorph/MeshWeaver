@@ -4,8 +4,10 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
+using System;
 using MeshWeaver.Mesh.Features;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.PluginCatalog.Test;
@@ -86,6 +88,50 @@ public class FeatureFlagReaderTest
         // boolean must never be read as "yes". These flags install content.
         Read(Config(("Features:Flags:store:Enabled", value))).GetValueOrDefault("store")!
             .Enabled.Should().BeFalse();
+        // …and the LEAF shape too, which has no Enabled subkey at all.
+        Read(Config(("Features:Flags:betaChat", value))).GetValueOrDefault("betaChat")!
+            .Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void AMalformedValueNamesTheKEYTHEOPERATORACTUALLYWROTE()
+    {
+        // 🚨 The leaf shape has NO `Enabled` subkey, so a warning telling the operator to fix
+        // `Features:Flags:betaChat:Enabled` sends them to a key that does not exist. The warning has
+        // to name the key the value was read FROM — the whole value of the log line is that it is
+        // paste-able.
+        var logger = new CapturingLogger();
+        using var leaf = new ConfigurationFeatureFlags(
+            Config(("Features:Flags:betaChat", "yes")), logger);
+        leaf.All.FirstAsync().Wait();
+        logger.Warnings.Should().ContainSingle()
+            .Which.Should().Contain("Features:Flags:betaChat").And.NotContain("betaChat:Enabled");
+
+        var objectLogger = new CapturingLogger();
+        using var obj = new ConfigurationFeatureFlags(
+            Config(("Features:Flags:store:Enabled", "yes")), objectLogger);
+        obj.All.FirstAsync().Wait();
+        objectLogger.Warnings.Should().ContainSingle()
+            .Which.Should().Contain("Features:Flags:store:Enabled");
+    }
+
+    /// <summary>Collects the warnings the reader emits, so the guidance in them can be asserted —
+    /// a log line nobody can act on is the defect being pinned here.</summary>
+    private sealed class CapturingLogger : ILogger<ConfigurationFeatureFlags>
+    {
+        public List<string> Warnings { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings.Add(formatter(state, exception));
+        }
     }
 
     [Fact]

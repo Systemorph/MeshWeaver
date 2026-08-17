@@ -99,7 +99,9 @@ pluginCatalog:
 #
 #   • an ENABLED flag INSTALLS the packages it names
 #   • a declared-but-DISABLED flag EXCLUDES them, and the exclusion wins over every other signal
-#   • a flag with no packages is a plain named boolean
+#   • a flag with no packages is a plain named boolean, and may be written as a bare bool:
+#       features:
+#         betaChat: true
 #
 # Declare the flags once in a shared values file, then let each environment flip `enabled` — the
 # per-environment delta is one line. "All of Plugins, without the games and fun stuff":
