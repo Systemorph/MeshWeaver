@@ -121,10 +121,14 @@ generation; bake = pre-compiling every dynamic NodeType for the NEW framework fi
 — the old pod is torn down grains-and-all (rule 1 violated: every active hub dies with its pod);
 the pre-run bake IMAGE stays retired
 ([#1347](https://github.com/Systemorph/MeshWeaver/issues/1347)), but since
-[#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3 the framework identity is
-commit-scoped (`g<sha>` — CI builds are commit-deterministic, so the old "every `dotnet publish`
-mints a fresh Graph MVID" barrier is gone) and the Build-and-Test run's NodeType bake is published
-to the portals' storage, where the booting pod adopts it before its sweep — the sweep compiles
+[#1660](https://github.com/Systemorph/MeshWeaver/issues/1660) WS3 the framework identity is the
+API-surface hash `s<hash>` (stable across internal-only merges, so the old "every `dotnet publish`
+mints a fresh Graph MVID" barrier is gone) and the release's NodeType bake — taken by CD **inside
+the image it just promoted**, since [#1725](https://github.com/Systemorph/MeshWeaver/issues/1725) —
+is published to the portals' storage, where the booting pod adopts it before its sweep. Baking in
+the image is what makes the adoption possible at all: the identity is a property of the shipped
+binaries, so a bake taken from any other build resolves an identity no pod ever asks for. The sweep
+then compiles
 only what CI did not bake, instead of racing the first visitors with a cold 76-second full bake
 (rules 2–4 approximated only by the readiness gate). The sweep no longer warms the most user-visible types last — the
 `Store/Coupon → Store/Order → Store/Plugin` cycle trio and the store chain behind it are now warmed

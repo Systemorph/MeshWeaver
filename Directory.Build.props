@@ -315,10 +315,26 @@
        (FrameworkBuildIdentity.ResolveProcessIdentity) hashes the manifest's canonical subset into
        the framework build identity `s<hash>` — so a NodeType bake stays valid across
        internal-only framework merges and is invalidated exactly by breaking changes.
-       Deterministic by construction: ref-assembly bytes are deterministic per source+references
-       (proven: byte-identical across independent from-clean, non-incremental rebuilds), so the
-       Build-and-Test bake host and the main-cd image compute the SAME identity for the same
-       surfaces — which is what lets the CI bake seed at boot without rebaking per commit. -->
+
+       🚨 SCOPE OF THAT STABILITY — corrected by #1725, because the previous claim here ("so the
+       Build-and-Test bake host and the main-cd image compute the SAME identity") was FALSE and a
+       whole delivery lane was built on it. Ref-assembly bytes are stable across REBUILDS OF THE
+       SAME BUILD INVOCATION (from-clean, non-incremental, same project, same output paths) — that
+       is what makes an internal-only merge keep its identity. They are NOT stable across DIFFERENT
+       build invocations. Measured on commit babb3bc, same sources, same runner path, Build-and-Test
+       `dotnet build` output vs the `dotnet publish -t:PublishContainer` image:
+         * all 37 canonical assemblies' IMPLEMENTATION MVIDs differ (Data, Layout, AI, Utils
+           included) — so every FullMvidAssemblies member contributes a different id;
+         * 4 of the 37 canonical REFERENCE assemblies differ too (MeshWeaver.Graph, .Hosting,
+           .Kernel, .Markdown.Collaboration), and the same four differ between the amd64 and arm64
+           variants of ONE multi-arch image.
+       So: the identity is a property of the exact binaries a host SHIPS, not of the source they
+       were built from — which is what makes it a real ABI proof. The consequence for delivery is
+       absolute: a NodeType bake is adoptable only when its producer ran the SAME binaries as the
+       consumer. That is why the platform's own content is baked INSIDE the shipped image
+       (main-cd's publish-bake, exactly as every satellite repo bakes), never from a CI build
+       output. Do NOT reintroduce a cross-build bake hop on the strength of "the sources are
+       identical". See Doc/Architecture/CiContentBake. -->
   <Target Name="_MeshWeaverWriteSurfaceManifest"
           AfterTargets="Build"
           Condition="'$(MeshWeaverSurfaceManifest)' == 'true'">

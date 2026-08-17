@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Web search and page fetch tools for MeshWeaver agents: the SearchWeb / FetchWebPage / feed-reading tools an agent declares as "WebSearch". Ships as a module — list the DLL under Modules:Assemblies to activate.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Page fetch turns HTML into readable text. The app closure carries HtmlAgilityPack via
+         MeshWeaver.Blazor and MeshWeaver.Markdown too, so the closure publish prunes it back
+         out of this module's folder — the reference is here because THIS code needs it, not
+         because it ships from here. -->
+    <PackageReference Include="HtmlAgilityPack" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The search/fetch/feed cores are internal and pinned directly by WebSearchPluginTest
+         (parsing fixtures, provider selection, the not-configured paths). The visibility moved
+         here with the code — MeshWeaver.AI granted exactly this before the split. -->
+    <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
+  </ItemGroup>
+</Project>
