@@ -181,18 +181,47 @@ public class AnchoredEditContentTest(ITestOutputHelper output) : MonolithMeshTes
     // ── IsEditApplied: the landed-write verification predicate ───────────────────────────────
 
     [Fact]
-    public void IsEditApplied_ReplacementPresent_IsTrue()
-        => MeshOperations.IsEditApplied(Markdown("v1", "abc NEW def"), "OLD", "NEW").Should().BeTrue();
+    public void IsEditApplied_LiveMatchesExpectedText_IsTrue()
+        => MeshOperations.IsEditApplied(Markdown("v1", "abc NEW def"), "OLD", "NEW", "abc NEW def")
+            .Should().BeTrue();
 
     [Fact]
     public void IsEditApplied_ReplacementAbsent_IsFalse()
-        => MeshOperations.IsEditApplied(Markdown("v2", "abc OLD def"), "OLD", "NEW").Should().BeFalse();
+        => MeshOperations.IsEditApplied(Markdown("v2", "abc OLD def"), "OLD", "NEW", "abc NEW def")
+            .Should().BeFalse();
+
+    /// <summary>
+    /// Regression pin for the Copilot finding on #1717: when newText ALREADY occurred elsewhere
+    /// in the document before the edit, a bare "contains newText" probe reports a LOST write as
+    /// landed. The structural predicate must refuse: the live text still holds the anchor and
+    /// only the pre-existing newText occurrence, not the occurrence the edit would have added.
+    /// </summary>
+    [Fact]
+    public void IsEditApplied_NewTextPreexistingElsewhere_LostWrite_IsFalse()
+        => MeshOperations.IsEditApplied(
+                Markdown("v3", "x NEW y OLD z"), "OLD", "NEW", expectedText: "x NEW y NEW z")
+            .Should().BeFalse("a pre-existing newText occurrence must not satisfy the gate for a write that never landed");
+
+    [Fact]
+    public void IsEditApplied_ConcurrentLaterEdit_StillRecognizesOurLandedEdit()
+        // Our edit (OLD→NEW) landed, then a concurrent writer appended text — the mirror never
+        // shows exactly our expected text, but the occurrence structure proves the edit is in.
+        => MeshOperations.IsEditApplied(
+                Markdown("v4", "x NEW y NEW z PLUS"), "OLD", "NEW", expectedText: "x NEW y NEW z")
+            .Should().BeTrue("a later concurrent edit on top of ours must not read as a conflict");
+
+    [Fact]
+    public void IsEditApplied_ShrinkingReplace_LostWrite_IsFalse()
+        // newText is a substring of oldText ("cats"→"cat"): the live text trivially contains
+        // newText, so only the anchor-count bound can tell a lost write from a landed one.
+        => MeshOperations.IsEditApplied(Markdown("v5", "cats"), "cats", "cat", expectedText: "cat")
+            .Should().BeFalse("the anchor still being present proves the write did not land");
 
     [Fact]
     public void IsEditApplied_Deletion_TrueOnlyWhenAnchorGone()
     {
-        MeshOperations.IsEditApplied(Markdown("v3", "abc def"), "OLD", "").Should().BeTrue();
-        MeshOperations.IsEditApplied(Markdown("v4", "abc OLD def"), "OLD", "").Should().BeFalse();
+        MeshOperations.IsEditApplied(Markdown("v6", "abc def"), "OLD", "", "abc def").Should().BeTrue();
+        MeshOperations.IsEditApplied(Markdown("v7", "abc OLD def"), "OLD", "", "abc def").Should().BeFalse();
     }
 
     // ── Integration: the tool contract through the real write pipeline ───────────────────────

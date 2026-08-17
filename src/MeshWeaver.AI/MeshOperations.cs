@@ -1847,16 +1847,22 @@ public class MeshOperations
 
                 var versionBefore = existing.Version;
                 var appliedCount = 0;
+                string? expectedText = null;
                 return hub.GetWorkspace().GetMeshNodeStream(resolvedPath)
                     // The anchored check-and-replace runs against the LIVE node the framework
                     // hands the lambda (the CollaborationPlugin.SuggestEdit shape). On a
                     // Conflict NACK the re-enqueued lambda re-counts against fresh state, so
                     // the uniqueness check and the replacement always see the same text the
-                    // write applies to.
+                    // write applies to. The lambda records the EXACT post-edit text it
+                    // produced (a re-run overwrites it) — the landed-write gate below compares
+                    // against that, never against bare newText presence: newText can occur
+                    // elsewhere in the document BEFORE the edit, which would satisfy a
+                    // presence check even for a write that never applied.
                     .Update(live =>
                     {
                         var updated = ApplyAnchoredEdit(live, oldText, newText, replaceAll, out var count);
                         appliedCount = count;
+                        expectedText = ExtractEditableText(updated);
                         return updated;
                     })
                     .Take(1)
@@ -1866,9 +1872,11 @@ public class MeshOperations
                     // 🚨 Gate the success string on the edit provably landing (#1716):
                     // UpdateRemote emits OPTIMISTICALLY after its short owner-response bound,
                     // and an exhausted late-NACK retry only logs LATE_NACK_TERMINAL. Wait
-                    // (bounded) until the live mirror actually contains the edit; name the
-                    // conflict when it never does, instead of lying "Edited:".
-                    .SelectMany(_ => WaitForEditApplied(resolvedPath, oldText, newText))
+                    // (bounded) until the live mirror provably reflects OUR edit; name the
+                    // conflict when it never does, instead of lying "Edited:". The expected
+                    // text is read per emission (Func) so a Conflict re-enqueue's re-run —
+                    // which rewrites expectedText — is picked up by the live predicate.
+                    .SelectMany(_ => WaitForEditApplied(resolvedPath, oldText, newText, () => expectedText))
                     .Select(after =>
                     {
                         if (after is null)
@@ -1917,33 +1925,47 @@ public class MeshOperations
 
     /// <summary>
     /// Bounded wait for the anchored edit to be OBSERVABLE in the live mirror: emits the
-    /// first node state that provably contains the edit, or <c>null</c> when it never
-    /// appears within the budget (the write was NACKed away or lost). Subscribes the
-    /// cache mirror's READ stream — same non-deadlocking shape as
-    /// <see cref="WaitForReadYourWrites"/>.
+    /// first node state that provably reflects the edit (see <see cref="IsEditApplied"/>),
+    /// or <c>null</c> when it never appears within the budget (the write was NACKed away
+    /// or lost). <paramref name="expectedText"/> is a live read of the post-edit text the
+    /// update lambda produced — a Func, not a snapshot, because a Conflict re-enqueue
+    /// re-runs the lambda and rewrites the expectation. Subscribes the cache mirror's
+    /// READ stream — same non-deadlocking shape as <see cref="WaitForReadYourWrites"/>.
     /// </summary>
-    private IObservable<MeshNode?> WaitForEditApplied(string path, string oldText, string newText) =>
+    private IObservable<MeshNode?> WaitForEditApplied(
+        string path, string oldText, string newText, Func<string?> expectedText) =>
         hub.GetWorkspace().GetMeshNodeStream(path)
-            .Where(n => n is not null && IsEditApplied(n, oldText, newText))
+            .Where(n => n is not null
+                && expectedText() is { } expected
+                && IsEditApplied(n, oldText, newText, expected))
             .Take(1)
             .Select(n => (MeshNode?)n)
             .Timeout(TimeSpan.FromSeconds(5))
             .Catch<MeshNode?, Exception>(_ => Observable.Return<MeshNode?>(null));
 
     /// <summary>
-    /// Whether <paramref name="node"/>'s text provably contains the applied edit. A successful
-    /// single replace covers the ONLY occurrence and <c>replaceAll</c> covers all of them, so a
-    /// landed deletion (empty <paramref name="newText"/>) means the anchor is gone; otherwise
-    /// the replacement text must be present.
+    /// Whether <paramref name="node"/>'s text provably reflects the applied edit, given
+    /// <paramref name="expectedText"/> — the EXACT post-edit text the update lambda produced.
+    /// 🚨 STRUCTURAL, never a bare "contains newText" probe: <paramref name="newText"/> can
+    /// occur elsewhere in the document BEFORE the edit, so presence alone would report a lost
+    /// write as landed. Exact equality with the expectation is the primary check; the fallback
+    /// tolerates a concurrent writer landing AFTER our edit (so the mirror never shows exactly
+    /// our expected text) by requiring the occurrence structure the edit produced: at least the
+    /// expectation's count of <paramref name="newText"/>, and no more than the expectation's
+    /// count of <paramref name="oldText"/> (0 unless <paramref name="newText"/> re-contains it).
+    /// For a deletion (empty <paramref name="newText"/>) only the anchor-count bound applies.
     /// </summary>
-    internal static bool IsEditApplied(MeshNode node, string oldText, string newText)
+    internal static bool IsEditApplied(MeshNode node, string oldText, string newText, string expectedText)
     {
         var text = ExtractEditableText(node);
         if (text is null)
             return false;
+        if (string.Equals(text, expectedText, StringComparison.Ordinal))
+            return true;
+        var anchorGone = CountOccurrences(text, oldText) <= CountOccurrences(expectedText, oldText);
         return newText.Length > 0
-            ? text.Contains(newText, StringComparison.Ordinal)
-            : !text.Contains(oldText, StringComparison.Ordinal);
+            ? anchorGone && CountOccurrences(text, newText) >= CountOccurrences(expectedText, newText)
+            : anchorGone;
     }
 
     /// <summary>
