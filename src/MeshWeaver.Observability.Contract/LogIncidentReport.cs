@@ -27,8 +27,23 @@ public record LogIncidentReport
     /// <summary>The exception type name, when the burst carried one.</summary>
     public string? ExceptionType { get; init; }
 
-    /// <summary>The message with volatile parts masked (what the fingerprint covers).</summary>
+    /// <summary>The logged message with volatile parts masked.</summary>
     public required string NormalizedMessage { get; init; }
+
+    /// <summary>
+    /// The masked text the fingerprint discriminates on within the fault site: the exception's own
+    /// message when the burst carried one, else the logged message. This is what tells thirteen
+    /// different compiler errors at one frame apart from each other.
+    /// </summary>
+    public string NormalizedDetail { get; init; } = string.Empty;
+
+    /// <summary>
+    /// How many distinct message shapes this report covers. Always <c>1</c> except when a log site
+    /// blew past the watcher's per-site variant budget in one window and its bursts were folded onto
+    /// a single site-level incident — then it is the number of shapes that were folded in, and the
+    /// ticket says so instead of opening that many tickets.
+    /// </summary>
+    public int Variants { get; init; } = 1;
 
     /// <summary>The top application stack frame, when the burst carried a stack trace.</summary>
     public string? TopFrame { get; init; }

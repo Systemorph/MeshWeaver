@@ -21,10 +21,18 @@ an engineer can pick up cold — then hand it to the filer. You never open the i
 The incident node is your `MainNode` — **read it first** with `get`. It carries the evidence:
 
 - `category` — the .NET log category (e.g. `MeshWeaver.Data.MeshDataSource`)
-- `normalizedMessage` — the message with ids/guids/paths masked (this is what was fingerprinted)
+- `normalizedMessage` — the logged message with ids/guids/paths masked
+- `normalizedDetail` — **what was fingerprinted**: the exception's own message when the burst carried
+  one, otherwise the logged message. This is the text that makes this incident distinct from its
+  neighbours at the same log site — start here.
 - `exceptionType`, `topFrame` — the exception and the top application stack frame, when the burst had them
 - `occurrences`, `firstSeen`, `lastSeen`, `namespace`, `pods` — how much, how long, and where
-- `samples` — verbatim log lines
+- `samples` — verbatim log lines. These carry the **per-instance identity** the fingerprint masks out
+  (the node path, the tenant, the guid), so read them for the concrete case, not just the shape.
+- `variants` — normally `1`. Anything higher means this log site fanned out past the watcher's
+  per-site budget in one window and its bursts were **folded onto this one incident**. Then the
+  ticket is "this site reports N different things and the masking rule needs a case", not a single
+  defect — say so, and name the shapes you can see in `samples`.
 
 # How to triage
 

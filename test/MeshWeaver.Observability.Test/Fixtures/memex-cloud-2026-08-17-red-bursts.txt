@@ -1,0 +1,80 @@
+fail: MeshWeaver.Graph.Configuration.MeshNodeCompilationService[0]
+      Failed to compile assembly for node MeshWeaver/samples/Graph/Data/Doc/Architecture/BusinessRules/Cession. Executed source queries (2):
+        - namespace:MeshWeaver/samples/Graph/Data/Doc/Architecture/BusinessRules/Cession/Source scope:subtree nodeType:Code
+        - namespace:MeshWeaver/samples/Graph/Data/Doc/Architecture/BusinessRules/Cession/Test scope:subtree nodeType:Code
+      Matched Code nodes (0):
+        (none) — the configuration lambda cannot reference types because no source files were included. Check that your Source Code nodes exist and that the NodeType's `sources` list points at them.
+
+      MeshWeaver.Compiler.CompilationException: Compilation failed for 'MeshWeaver/samples/Graph/Data/Doc/Architecture/BusinessRules/Cession':
+      CS0246 Error (line 58): The type or namespace name 'CessionData' could not be found (are you missing a using directive or an assembly reference?)
+      CS0246 Error (line 58): The type or namespace name 'Cashflow' could not be found (are you missing a using directive or an assembly reference?)
+      CS0103 Error (line 58): The name 'CessionSampleData' does not exist in the current context
+      CS0246 Error (line 58): The type or namespace name 'ExcessOfLossLayer' could not be found (are you missing a using directive or an assembly reference?)
+      CS0103 Error (line 58): The name 'CessionSampleData' does not exist in the current context
+      CS0103 Error (line 58): The name 'CessionResultsArea' does not exist in the current context
+      CS1591 Warning (line 32): Missing XML comment for publicly visible type or member 'MeshWeaver_samples_Graph_Data_Doc_Architecture_BusinessRules_CessionMeshNodeProviderAttribute'
+      CS1591 Warning (line 34): Missing XML comment for publicly visible type or member 'MeshWeaver_samples_Graph_Data_Doc_Architecture_BusinessRules_CessionMeshNodeProviderAttribute.Nodes'
+         at MeshWeaver.Compiler.EmitPipeline.EmitCompilationToDirectory(CSharpCompilation compilation, String nodeName, String nodePath, String releaseDir, CancellationToken ct) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Compiler/EmitPipeline.cs:line 114
+         at MeshWeaver.Graph.Configuration.MeshNodeCompilationService.<>c__DisplayClass49_0.<CompileAsyncCore>b__0(String releaseDir) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs:line 1648
+         at MeshWeaver.Compiler.EmitPipeline.EmitToDiskWithRetry(String cacheDirectory, String nodeName, Int32 maxAttempts, ILogger logger, Func`2 emitToReleaseDir) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Compiler/EmitPipeline.cs:line 358
+         at MeshWeaver.Graph.Configuration.MeshNodeCompilationService.CompileAsyncCore(CodeConfiguration codeFile, String hubConfiguration, IReadOnlyList`1 contentCollections, MeshNode node, String nodeName, CancellationToken ct) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs:line 1646
+         at MeshWeaver.Graph.Configuration.MeshNodeCompilationService.RunCompileAndEvict(CodeConfiguration codeFile, String hubConfiguration, IReadOnlyList`1 contentCollections, MeshNode node, String nodeName, CancellationToken ct) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs:line 1570
+         at MeshWeaver.Graph.Configuration.MeshNodeCompilationService.<>c__DisplayClass8_0`1.<<OnThreadPool>b__1>d.MoveNext() in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs:line 76
+info: MeshWeaver.Hosting.DynamicTypePreWarmerHostedService[0]
+      BatchBake: MeshWeaver/samples/Graph/Data/Doc/Architecture/BusinessRules/Cession → NoSources
+fail: MeshWeaver.Graph.Configuration.MeshNodeCompilationService[0]
+      Failed to compile assembly for node MeshWeaver/samples/Graph/Data/Northwind/Product. Executed source queries (2):
+        - namespace:MeshWeaver/samples/Graph/Data/Northwind/Product/Source scope:subtree nodeType:Code
+        - namespace:MeshWeaver/samples/Graph/Data/Northwind/Product/Test scope:subtree nodeType:Code
+      Matched Code nodes (2):
+        - MeshWeaver/samples/Graph/Data/Northwind/Product/Source/ProductContent
+        - MeshWeaver/samples/Graph/Data/Northwind/Product/Source/ProductNodeLayoutAreas
+
+      MeshWeaver.Compiler.CompilationException: Compilation failed for 'MeshWeaver/samples/Graph/Data/Northwind/Product':
+      CS0246 Error (line 51): The type or namespace name 'Supplier' could not be found (are you missing a using directive or an assembly reference?)
+      CS0246 Error (line 55): The type or namespace name 'Category' could not be found (are you missing a using directive or an assembly reference?)
+      CS0105 Warning (line 27): The using directive for 'System.ComponentModel' appeared previously in this namespace
+      CS0105 Warning (line 28): The using directive for 'System.ComponentModel.DataAnnotations' appeared previously in this namespace
+      CS0105 Warning (line 29): The using directive for 'MeshWeaver.Domain' appeared previously in this namespace
+      CS8632 Warning (line 93): The annotation for nullable reference types should only be used in code within a '#nullable' annotations context.
+      CS1591 Warning (line 44): Missing XML comment for publicly visible type or member 'ProductContent.ProductId'
+      CS1591 Warning (line 206): Missing XML comment for publicly visible type or member 'MeshWeaver_samples_Graph_Data_Northwind_ProductMeshNodeProviderAttribute'
+         at MeshWeaver.Compiler.EmitPipeline.EmitCompilationToDirectory(CSharpCompilation compilation, String nodeName, String nodePath, String releaseDir, CancellationToken ct) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Compiler/EmitPipeline.cs:line 114
+         at MeshWeaver.Graph.Configuration.MeshNodeCompilationService.<>c__DisplayClass49_0.<CompileAsyncCore>b__0(String releaseDir) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs:line 1648
+         at MeshWeaver.Compiler.EmitPipeline.EmitToDiskWithRetry(String cacheDirectory, String nodeName, Int32 maxAttempts, ILogger logger, Func`2 emitToReleaseDir) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Compiler/EmitPipeline.cs:line 358
+         at MeshWeaver.Graph.Configuration.MeshNodeCompilationService.CompileAsyncCore(CodeConfiguration codeFile, String hubConfiguration, IReadOnlyList`1 contentCollections, MeshNode node, String nodeName, CancellationToken ct) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs:line 1646
+info: MeshWeaver.Hosting.DynamicTypePreWarmerHostedService[0]
+      BatchBake: MeshWeaver/samples/Graph/Data/Northwind/Product → CompileError
+fail: MeshWeaver.Graph.Configuration.MeshNodeCompilationService[0]
+      Failed to compile assembly for node MeshWeaver/samples/Graph/Data/SocialMedia/Post. Executed source queries (2):
+        - namespace:MeshWeaver/samples/Graph/Data/SocialMedia/Post/Source scope:subtree nodeType:Code
+        - namespace:MeshWeaver/samples/Graph/Data/SocialMedia/Post/Test scope:subtree nodeType:Code
+      Matched Code nodes (0):
+        (none) — the configuration lambda cannot reference types because no source files were included. Check that your Source Code nodes exist and that the NodeType's `sources` list points at them.
+
+      MeshWeaver.Compiler.CompilationException: Compilation failed for 'MeshWeaver/samples/Graph/Data/SocialMedia/Post':
+      CS0246 Error (line 58): The type or namespace name 'SocialMediaPost' could not be found (are you missing a using directive or an assembly reference?)
+      CS0246 Error (line 58): The type or namespace name 'Platform' could not be found (are you missing a using directive or an assembly reference?)
+      CS0103 Error (line 58): The name 'Platform' does not exist in the current context
+      CS1061 Error (line 58): 'LayoutDefinition' does not contain a definition for 'AddSocialMediaPostLayoutAreas' and no accessible extension method 'AddSocialMediaPostLayoutAreas' accepting a first argument of type 'LayoutDefinition' could be found (are you missing a using directive or an assembly reference?)
+      CS1591 Warning (line 32): Missing XML comment for publicly visible type or member 'MeshWeaver_samples_Graph_Data_SocialMedia_PostMeshNodeProviderAttribute'
+      CS1591 Warning (line 34): Missing XML comment for publicly visible type or member 'MeshWeaver_samples_Graph_Data_SocialMedia_PostMeshNodeProviderAttribute.Nodes'
+         at MeshWeaver.Compiler.EmitPipeline.EmitCompilationToDirectory(CSharpCompilation compilation, String nodeName, String nodePath, String releaseDir, CancellationToken ct) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Compiler/EmitPipeline.cs:line 114
+         at MeshWeaver.Graph.Configuration.MeshNodeCompilationService.<>c__DisplayClass49_0.<CompileAsyncCore>b__0(String releaseDir) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs:line 1648
+         at MeshWeaver.Compiler.EmitPipeline.EmitToDiskWithRetry(String cacheDirectory, String nodeName, Int32 maxAttempts, ILogger logger, Func`2 emitToReleaseDir) in /home/runner/work/MeshWeaver/MeshWeaver/src/MeshWeaver.Compiler/EmitPipeline.cs:line 358
+info: MeshWeaver.Hosting.DynamicTypePreWarmerHostedService[0]
+      BatchBake: MeshWeaver/samples/Graph/Data/SocialMedia/Post → NoSources
+fail: Polly[0]
+      Resilience event occurred. EventName: 'OnTimeout', Source: 'plugin-registry-standard//Standard-AttemptTimeout', Operation Key: '', Result: ''
+warn: Polly[3]
+      Execution attempt. Source: 'plugin-registry-standard//Standard-Retry', Operation Key: '', Result: 'The operation didn't complete within the allowed timeout of '00:00:10'.', Handled: 'True', Attempt: '0', Execution Time: 10018.8844ms
+fail: Microsoft.Extensions.Diagnostics.HealthChecks.DefaultHealthCheckService[103]
+      Health check nodetype_bake with status Unhealthy completed after 0.7493ms with message 'NodeType bake in progress — enumerating dynamic NodeTypes'
+info: MeshWeaver.Hosting.DynamicTypePreWarmerHostedService[0]
+      Prebuilt assembly ADOPTED for AgenticPrimer/DiceGame at version 374 (framework sc2308d7c5e16fa71cc93f4a8ed20549f) — no compile needed
+fail: Microsoft.Extensions.Diagnostics.HealthChecks.DefaultHealthCheckService[103]
+      Health check nodetype_bake with status Unhealthy completed after 0.0297ms with message 'NodeType bake in progress — enumerating dynamic NodeTypes'
+info: MeshWeaver.Hosting.DynamicTypePreWarmerHostedService[0]
+      Prebuilt assembly ADOPTED for Store/Order at version 1344 (framework sc2308d7c5e16fa71cc93f4a8ed20549f) — no compile needed
+fail: Microsoft.Extensions.Diagnostics.HealthChecks.DefaultHealthCheckService[103]
+      Health check nodetype_bake with status Unhealthy completed after 0.0063ms with message 'NodeType bake in progress — enumerating dynamic NodeTypes'

@@ -64,25 +64,41 @@ public sealed class WatcherState(
     });
 
     /// <summary>
+    /// Where reading resumes for a namespace.
+    /// </summary>
+    /// <param name="From">The window's start.</param>
+    /// <param name="SkippedFrom">The cursor that was dragged forward, when
+    /// <see cref="LogWatcherOptions.MaxCatchUp"/> floored it — so the caller can REPORT the stretch
+    /// that will never be read. Null when nothing was skipped.</param>
+    public readonly record struct CursorStart(DateTimeOffset From, DateTimeOffset? SkippedFrom);
+
+    /// <summary>
     /// Where reading should resume for <paramref name="ns"/>. A cold start reads only
     /// <see cref="LogWatcherOptions.ColdStartLookback"/>; a cursor older than
     /// <see cref="LogWatcherOptions.MaxCatchUp"/> is dragged forward so one poll after a long
     /// outage cannot ask Loki for days of logs and time out on every attempt.
+    ///
+    /// <para>🚨 The floored case returns the skipped stretch as well, because that stretch is the
+    /// one thing this watcher can lose outright — and a loss that only ever appeared in the
+    /// watcher's own pod log is a loss nobody sees (#1787).</para>
     /// </summary>
-    public DateTimeOffset CursorFor(string ns, DateTimeOffset now)
+    /// <param name="ns">The namespace.</param>
+    /// <param name="now">The current time the window is derived from.</param>
+    /// <returns>The window start, and the skipped stretch when the cursor was floored.</returns>
+    public CursorStart CursorFor(string ns, DateTimeOffset now)
     {
         lock (gate)
         {
             if (!cursors.TryGetValue(ns, out var cursor))
-                return now - options.ColdStartLookback;
+                return new CursorStart(now - options.ColdStartLookback, null);
             var floor = now - options.MaxCatchUp;
             if (cursor >= floor)
-                return cursor;
+                return new CursorStart(cursor, null);
             logger?.LogWarning(
                 "Cursor for {Namespace} was {Cursor:u}, older than the {MaxCatchUp} catch-up cap — "
                 + "resuming at {Floor:u}. Red logs in the skipped window were NOT ticketed.",
                 ns, cursor.UtcDateTime, options.MaxCatchUp, floor.UtcDateTime);
-            return floor;
+            return new CursorStart(floor, cursor);
         }
     }
 
