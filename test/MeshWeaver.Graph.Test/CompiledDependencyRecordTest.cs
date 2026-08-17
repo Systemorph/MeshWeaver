@@ -82,6 +82,22 @@ public class CompiledDependencyRecordTest
             .Should().Contain(CompiledDependencies.ToolchainKey);
     }
 
+    [Fact]
+    public void FindMismatch_ARecordWithoutTheToolchainKeyIsNeverTrusted()
+    {
+        // FindMismatch compares only PRESENT entries, so a record lacking the reserved toolchain
+        // entry would validate forever across toolchain changes — fail-open. It must decline
+        // (Copilot finding on #1719); Compute always writes the key, so only an empty or
+        // hand-assembled record can hit this.
+        var handAssembled = System.Collections.Immutable.ImmutableSortedDictionary<string, string>
+            .Empty.Add("MeshWeaver.Layout", "ref:aaa");
+
+        CompiledDependencies.FindMismatch(
+                handAssembled, Resolver(("MeshWeaver.Layout", "ref:aaa")), Toolchain)
+            .Should().Contain(CompiledDependencies.ToolchainKey,
+                "a record that cannot invalidate on toolchain changes must not validate at all");
+    }
+
     // ---- the resolver ---------------------------------------------------------------------------
 
     [Fact]

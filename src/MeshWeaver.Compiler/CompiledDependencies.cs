@@ -111,6 +111,15 @@ public static class CompiledDependencies
         Func<string, string?> liveIdOf,
         string liveToolchainId)
     {
+        // 🚨 A record WITHOUT the reserved toolchain entry is never trusted: FindMismatch only
+        // compares entries that are PRESENT, so such a record would validate forever across
+        // toolchain changes — fail-open. Compute always writes the key, so a legitimate record
+        // always carries it; anything else (an empty or hand-assembled record) declines and the
+        // type compiles, the always-safe direction.
+        if (!record.ContainsKey(ToolchainKey))
+            return $"the record carries no '{ToolchainKey}' entry, so it cannot invalidate on "
+                + "toolchain changes and is not trusted";
+
         foreach (var (name, stamped) in record)
         {
             var live = string.Equals(name, ToolchainKey, StringComparison.Ordinal)

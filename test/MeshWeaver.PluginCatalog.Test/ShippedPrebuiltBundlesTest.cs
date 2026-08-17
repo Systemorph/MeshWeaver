@@ -149,12 +149,15 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
         await CreateNodeType("ModuleBoundThing");
         await CreateNodeType("PlatformBoundThing");
 
-        // The live surface-id of a platform assembly, resolved exactly as the seeder resolves it.
+        // The live surface-id of a platform assembly and the live toolchain id, resolved exactly
+        // as the seeder resolves them.
         var liveIdOf = MeshWeaver.Compiler.CompiledDependencies.CreateIdResolver(
             MeshWeaver.Compiler.FrameworkBuildIdentity.ProcessSurfacePairs,
             new Dictionary<string, string>(),
             MeshWeaver.Compiler.FrameworkBuildIdentity.ProcessImplMvidOf);
         var meshContractId = liveIdOf("MeshWeaver.Mesh.Contract")!;
+        var toolchainId = MeshWeaver.Compiler.CompiledDependencies.ComputeToolchainId(
+            MeshWeaver.Compiler.FrameworkBuildIdentity.ProcessImplMvidOf);
 
         var dir = CreateBundleDirectory();
         try
@@ -163,16 +166,19 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
             WriteBundle(
                 Path.Combine(dir, "records.zip"),
                 PrebuiltAssemblySeeder.LiveFrameworkMvid,
-                // Binds a module build this environment does not run — must DECLINE.
+                // Binds a module build this environment does not run — must DECLINE (the
+                // toolchain entry is correct, so the decline pins the MODULE mismatch).
                 new BundleWriter.AssemblyEntry(stalePath, () => new MemoryStream(bytes),
                     Dependencies: new Dictionary<string, string>
                     {
+                        [MeshWeaver.Compiler.CompiledDependencies.ToolchainKey] = toolchainId,
                         ["Custom.Module"] = "mvid:some-other-build",
                     }),
                 // Binds a platform assembly at its live surface-id — must ADOPT and stamp.
                 new BundleWriter.AssemblyEntry(freshPath, () => new MemoryStream(bytes),
                     Dependencies: new Dictionary<string, string>
                     {
+                        [MeshWeaver.Compiler.CompiledDependencies.ToolchainKey] = toolchainId,
                         ["MeshWeaver.Mesh.Contract"] = meshContractId,
                     }));
 
