@@ -27,16 +27,11 @@ config:
     # sweep, all of it paid on the same CPU the developer is trying to work on.
     #
     # So: keep the ADOPTION (the CI-baked bytes are exactly what a local
-    # instance should be running) and drop the compiling.
-    #
-    # 🚨 The obvious spelling of this — PreWarm__DynamicTypes: "false" — is
-    # WRONG, and quietly so. The bundle seeding lives on the pre-warmer's own
-    # path, so switching the pre-warmer off switches ADOPTION off with it: the
-    # instance would adopt nothing AND still compile everything, just later and
-    # one hub activation at a time. PreWarm__AdoptOnly keeps the seeding and
-    # replaces only the compiling half with a report.
-    PreWarm__DynamicTypes: "true"
-    PreWarm__AdoptOnly: "true"
+    # instance should be running) and drop the compiling. Adoption + the
+    # coverage report now run on EVERY boot regardless of this key, which
+    # controls only whether the leftover is compiled at boot as well.
+    # Anything uncovered compiles on first access, when someone reaches it.
+    PreWarm__DynamicTypes: "false"
     # Where an adopted bake is read from: <root>/<framework-identity>/<source>/
     # *.zip, on the /data hostPath the chart already mounts. Absent (the normal
     # state today — nothing populates it on a laptop yet) the lane is simply
@@ -44,9 +39,9 @@ config:
     # Drop a `mw-plugin-test --bake-output` tree in here and it is adopted on
     # the next boot with no further configuration.
     PreWarm__PrebuiltBundleRoot: "/data/prebuilt-bundles"
-    # Batch/pacing only matter to the compiling sweep, which adopt-only does not
-    # run. Kept so that flipping PreWarm__AdoptOnly back to "false" — the escape
-    # hatch for authoring NodeTypes locally, where there is no CI bake by
+    # Batch/pacing only matter to the compiling sweep, which is off above. Kept
+    # so that flipping PreWarm__DynamicTypes back to "true" — the escape hatch
+    # for AUTHORING NodeTypes locally, where there is no CI bake by
     # construction and baking your own is the right answer — restores exactly
     # the previous behaviour rather than a slower variant of it.
     PreWarm__BatchBake: "true"
