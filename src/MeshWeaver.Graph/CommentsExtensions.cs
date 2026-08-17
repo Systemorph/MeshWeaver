@@ -40,13 +40,23 @@ public static class CommentsExtensions
     /// </summary>
     public static MessageHubConfiguration AddComments(this MessageHubConfiguration configuration)
     {
+        // 🚨 Idempotent BY CONSTRUCTION, twice over — same defect class as Approvals (#1700).
+        // Content configuration lambdas call AddComments() and a re-applied default-node chain
+        // can run the same registration twice on ONE hub: (1) the CommentsEnabled marker
+        // short-circuits a second application on the same chain; (2) the data source carries a
+        // STABLE id (the partition name), so even when two applications land anyway,
+        // DataContext.Initialize's documented keep-last-by-id dedupe collapses them instead of
+        // throwing 'duplicate key: Comment' at hub creation. A Guid.NewGuid() id defeats that
+        // dedupe by definition — never use one for a role-shaped data source.
+        if (configuration.HasComments())
+            return configuration;
         return configuration
             .WithType<CreateCommentRequest>(nameof(CreateCommentRequest))
             .WithType<CreateCommentResponse>(nameof(CreateCommentResponse))
             .Set(new CommentsEnabled())
             .WithHandler<CreateCommentRequest>(HandleCreateCommentRequest)
             .AddData(data => data.WithDataSource(_ =>
-                new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace)
+                new MeshDataSource(CommentPartition, data.Workspace)
                     .WithType<Comment>(CommentPartition, nameof(Comment))))
             .AddLayout(layout => layout
                 .WithView(MeshNodeLayoutAreas.CommentsArea, CommentsView.Comments));
