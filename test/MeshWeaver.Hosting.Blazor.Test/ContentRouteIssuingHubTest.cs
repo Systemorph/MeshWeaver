@@ -121,6 +121,24 @@ public class ContentRouteIssuingHubTest(ITestOutputHelper output) : MonolithMesh
         client = portal.GetTestClient();
     }
 
+    /// <inheritdoc />
+    public override async ValueTask DisposeAsync()
+    {
+        client?.Dispose();
+        if (portal is not null)
+            await portal.DisposeAsync();
+        try
+        {
+            if (Directory.Exists(storageRoot))
+                Directory.Delete(storageRoot, recursive: true);
+        }
+        catch (IOException)
+        {
+            // A leftover fixture directory is harmless; never fail teardown on it.
+        }
+        await base.DisposeAsync();
+    }
+
     /// <summary>The REAL <c>MapMeshWeaver()</c> endpoints, behind the anonymous-stamping middleware
     /// production runs (the never-null <c>AccessContext</c> invariant).</summary>
     private WebApplication BuildPortal()
@@ -154,6 +172,12 @@ public class ContentRouteIssuingHubTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 30000)]
     public async Task ContentRead_IsNotIssuedFromTheRootMeshHub()
     {
+        // 🚨 Clear it IMMEDIATELY before the request, so the assertion can only ever be about THIS
+        // HTTP call. Mesh start-up also reads collection configs, and an earlier observation from a
+        // legitimately non-router hub would otherwise satisfy the assertion while the route itself
+        // still posted from the router — a test that cannot fail is not a test.
+        collectionConfigSender = null;
+
         var response = await client.GetAsync(
             $"{ContentCollectionsExtensions.ContentFileRoutePrefix}/{Space}/{CoverFile}",
             TestContext.Current.CancellationToken);
