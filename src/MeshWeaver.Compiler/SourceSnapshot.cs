@@ -79,7 +79,7 @@ internal readonly record struct SourceSnapshot(
 /// <summary>
 /// The compile refused to run because its SOURCE SET COULD NOT BE ESTABLISHED — a discovery
 /// query errored, or never answered within
-/// <see cref="CompilationCacheOptions.SourceSnapshotTimeout"/>.
+/// <c>CompilationCacheOptions.SourceSnapshotTimeout</c> (MeshWeaver.Graph).
 ///
 /// <para>🚨 Deliberately its own type so the terminal write-back can record
 /// <see cref="Mesh.Services.CompilationStatus.Unavailable"/> ("the compile state could not be

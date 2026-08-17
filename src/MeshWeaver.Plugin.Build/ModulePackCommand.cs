@@ -29,9 +29,10 @@ namespace MeshWeaver.Plugin.Build;
 /// plain assembly binding by simple name; its contract is API compatibility, so the bundle records
 /// the platform floor the module requires (absent = no constraint) and the consumer lands anything
 /// whose floor it satisfies — one bundle serves every compatible platform build, and nothing needs
-/// rebundling per CI build. The MVID of the <c>MeshWeaver.Graph.dll</c> in the build output is
-/// still recorded when found, as DIAGNOSTIC metadata naming the exact build behind the bytes;
-/// MVID equality remains the NodeType (bake) lane's gate only.</para>
+/// rebundling per CI build. The MVID of the identity anchor
+/// (<c>MeshWeaver.Compiler.dll</c>, #1707) in the build output is still recorded when found, as
+/// DIAGNOSTIC metadata naming the exact build behind the bytes; MVID equality remains the
+/// NodeType (bake) lane's gate only.</para>
 /// </summary>
 public static class ModulePackCommand
 {
@@ -83,11 +84,13 @@ public static class ModulePackCommand
                                               consumer's landing gate (API compatibility as a
                                               semver floor). Omit for no constraint; mirror the
                                               package's content.minMeshVersion when it declares one
-                  --graph-dll <path>          the MeshWeaver.Graph.dll the module was built against
-                                              (default: <moduleOutputDir>/MeshWeaver.Graph.dll).
-                                              Its MVID is recorded as DIAGNOSTIC metadata — the
-                                              exact build behind the bytes — never a gate; a
-                                              missing DLL warns and records none
+                  --graph-dll <path>          the identity-anchor assembly the module was built
+                                              against — MeshWeaver.Compiler.dll since #1707
+                                              (default: <moduleOutputDir>/MeshWeaver.Compiler.dll;
+                                              the flag name predates the anchor move). Its MVID is
+                                              recorded as DIAGNOSTIC metadata — the exact build
+                                              behind the bytes — never a gate; a missing DLL warns
+                                              and records none
                   --with <fileName>           an additional closure file from <moduleOutputDir>
                                               (repeatable). <name>.dll is always included, and its
                                               .pdb rides along when present.
@@ -178,11 +181,12 @@ public static class ModulePackCommand
         }
 
         // The framework identity is DIAGNOSTIC metadata (which exact platform build produced these
-        // bytes) — recorded when the restored MeshWeaver.Graph.dll is at hand, warned-and-omitted
-        // when not. It is deliberately not required and never a gate: the consumer lands on the
-        // minMeshVersion floor (API compatibility), and identity equality stays with the NodeType
-        // bake lane. ReadIdentity (not ReadMvid) so a CI-built Graph records its stamped commit
-        // identity — the value the runtime actually compares (#1660 WS3).
+        // bytes) — recorded when the restored identity-anchor DLL (MeshWeaver.Compiler.dll, #1707)
+        // is at hand, warned-and-omitted when not. It is deliberately not required and never a
+        // gate: the consumer lands on the minMeshVersion floor (API compatibility), and identity
+        // equality stays with the NodeType bake lane. ReadIdentity (not ReadMvid) so a CI-built
+        // anchor records its stamped commit identity — the value the runtime actually compares
+        // (#1660 WS3).
         graphDll ??= Path.Combine(moduleDirectory, FrameworkIdentity.IdentityAssembly + ".dll");
         string? frameworkMvid = null;
         if (File.Exists(graphDll))

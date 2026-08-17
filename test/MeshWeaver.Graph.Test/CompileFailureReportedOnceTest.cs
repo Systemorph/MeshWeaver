@@ -9,6 +9,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
@@ -114,9 +115,9 @@ public class CompileFailureReportedOnceTest : IDisposable
         var logger = new RecordingLogger();
 
         var ex = Assert.Throws<CompilationException>(() =>
-            MeshNodeCompilationService.EmitToDiskWithRetry(
-                _cacheDir, nodeName, MeshNodeCompilationService.DiskEmitAttempts, logger,
-                releaseDir => MeshNodeCompilationService.EmitCompilationToDirectory(
+            EmitPipeline.EmitToDiskWithRetry(
+                _cacheDir, nodeName, EmitPipeline.DiskEmitAttempts, logger,
+                releaseDir => EmitPipeline.EmitCompilationToDirectory(
                     BrokenCompilation(nodeName), nodeName, "Acme/BrokenSource", releaseDir,
                     CancellationToken.None)));
 
@@ -142,12 +143,12 @@ public class CompileFailureReportedOnceTest : IDisposable
         var emits = 0;
 
         Assert.Throws<CompilationException>(() =>
-            MeshNodeCompilationService.EmitToDiskWithRetry(
-                _cacheDir, nodeName, MeshNodeCompilationService.DiskEmitAttempts, new RecordingLogger(),
+            EmitPipeline.EmitToDiskWithRetry(
+                _cacheDir, nodeName, EmitPipeline.DiskEmitAttempts, new RecordingLogger(),
                 releaseDir =>
                 {
                     emits++;
-                    return MeshNodeCompilationService.EmitCompilationToDirectory(
+                    return EmitPipeline.EmitCompilationToDirectory(
                         BrokenCompilation(nodeName), nodeName, "Acme/BrokenOnce", releaseDir,
                         CancellationToken.None);
                 }));
@@ -167,9 +168,9 @@ public class CompileFailureReportedOnceTest : IDisposable
         const string nodeName = "Demo_ValidSource";
         var logger = new RecordingLogger();
 
-        var dllPath = MeshNodeCompilationService.EmitToDiskWithRetry(
-            _cacheDir, nodeName, MeshNodeCompilationService.DiskEmitAttempts, logger,
-            releaseDir => MeshNodeCompilationService.EmitCompilationToDirectory(
+        var dllPath = EmitPipeline.EmitToDiskWithRetry(
+            _cacheDir, nodeName, EmitPipeline.DiskEmitAttempts, logger,
+            releaseDir => EmitPipeline.EmitCompilationToDirectory(
                 ValidCompilation(nodeName), nodeName, "Acme/ValidSource", releaseDir,
                 CancellationToken.None));
 
@@ -190,12 +191,12 @@ public class CompileFailureReportedOnceTest : IDisposable
         var logger = new RecordingLogger();
         var emits = 0;
 
-        MeshNodeCompilationService.EmitToDiskWithRetry(
-            _cacheDir, nodeName, MeshNodeCompilationService.DiskEmitAttempts, logger,
+        EmitPipeline.EmitToDiskWithRetry(
+            _cacheDir, nodeName, EmitPipeline.DiskEmitAttempts, logger,
             releaseDir =>
             {
                 emits++;
-                var emitted = MeshNodeCompilationService.EmitCompilationToDirectory(
+                var emitted = EmitPipeline.EmitCompilationToDirectory(
                     ValidCompilation(nodeName), nodeName, "Acme/LostWrite", releaseDir,
                     CancellationToken.None);
                 if (emits == 1)
@@ -217,7 +218,7 @@ public class CompileFailureReportedOnceTest : IDisposable
     [Fact]
     public void The_emit_canary_reports_healthy_shared_state_on_a_healthy_process()
     {
-        var verdict = MeshNodeCompilationService.ProbeSharedEmitState(ValidCompilation("Demo_Canary"));
+        var verdict = EmitPipeline.ProbeSharedEmitState(ValidCompilation("Demo_Canary"));
 
         verdict.Should().StartWith("canary=OK",
             "nothing has poisoned this process, so a trivial nested-generic emit against the "
@@ -240,7 +241,7 @@ public class CompileFailureReportedOnceTest : IDisposable
             references: [],
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-        var verdict = MeshNodeCompilationService.ProbeSharedEmitState(unusable);
+        var verdict = EmitPipeline.ProbeSharedEmitState(unusable);
 
         verdict.Should().NotBeNullOrWhiteSpace();
         verdict.Should().NotStartWith("canary=OK",
@@ -268,7 +269,7 @@ public class CompileFailureReportedOnceTest : IDisposable
             references: [],
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-        var verdict = MeshNodeCompilationService.ProbeSharedEmitState(unusable);
+        var verdict = EmitPipeline.ProbeSharedEmitState(unusable);
 
         verdict.Should().StartWith("canary=REFERENCES",
             "the pristine leg must be able to emit on a healthy process — otherwise the "
@@ -294,7 +295,7 @@ public class CompileFailureReportedOnceTest : IDisposable
             references: [],
             options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-        var verdict = MeshNodeCompilationService.ProbeSharedEmitState(unusable);
+        var verdict = EmitPipeline.ProbeSharedEmitState(unusable);
 
         // On any host where this test can run at all, CoreLib is on disk, so the control builds
         // and the verdict is a real discrimination — never INCONCLUSIVE, never BELOW-ROSLYN.

@@ -28,7 +28,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolver)
 {
-    private const string SkeletonDocumentPath = "__skeleton__.cs";
+    private const string SkeletonDocumentPath = Compiler.CompileDiagnostics.SkeletonDiagnosticsPath;
 
     public async Task<IReadOnlyList<DiagnosticInfo>> GetDiagnosticsAsync(
         CompilationInputs inputs,

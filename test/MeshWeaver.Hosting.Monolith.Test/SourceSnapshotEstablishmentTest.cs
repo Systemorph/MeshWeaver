@@ -8,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -44,7 +45,7 @@ public class SourceSnapshotEstablishmentTest
         // stale-synced-query class), which has never been allowed to settle the snapshot (#612).
         var cachedFirst = Observable.Return(SourceSnapshot.Established(Array.Empty<MeshNode>()));
 
-        var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
+        var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
         snapshot.IsEstablished.Should().BeFalse(
@@ -70,7 +71,7 @@ public class SourceSnapshotEstablishmentTest
         var cachedFirst = Observable.Timer(TimeSpan.FromMilliseconds(200))
             .Select(_ => SourceSnapshot.Established(new[] { Source("Acme/Scope/Source/self") }));
 
-        var snapshot = await MeshNodeCompilationService.RaceSourceSnapshot(probe, cachedFirst)
+        var snapshot = await NodeCompileShaping.RaceSourceSnapshot(probe, cachedFirst)
             .FirstAsync().Timeout(TimeSpan.FromSeconds(10)).ToTask(ct);
 
         snapshot.IsEstablished.Should().BeTrue(

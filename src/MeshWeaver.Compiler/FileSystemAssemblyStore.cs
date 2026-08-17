@@ -180,7 +180,7 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
 
     /// <summary>
     /// The root directory this cache lives in — the same directory
-    /// <see cref="AssemblyCacheGenerations"/> sweeps and claims against.
+    /// <c>AssemblyCacheGenerations</c> (MeshWeaver.Graph) sweeps and claims against.
     /// </summary>
     public string RootDirectory => rootDirectory;
 
@@ -191,15 +191,17 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     /// produce INCOMPATIBLE DLLs. Without this tag a freshly-deployed image's lookup matched (and
     /// first-write-wins RETURNED) the PREVIOUS image's DLL → System.BadImageFormatException on ALC
     /// load, which cascaded into failed grain activations and a portal-wide wedge on deploy (prod
-    /// 2026-06-20). The MVID (Graph module content hash) changes only when the framework bytes
-    /// change, so a new image misses the old DLLs (clean recompile) while an unchanged framework
-    /// still hits the cache.
+    /// 2026-06-20). The identity (<see cref="FrameworkBuildIdentity.FrameworkVersion"/>)
+    /// changes only when the framework's content-facing surface / toolchain changes, so a new
+    /// image misses the old DLLs (clean recompile) while an unchanged framework still hits the
+    /// cache.
     ///
     /// <para>It is also the GENERATION key: a whole new set of files is written per image, and
-    /// nothing in the store removes an old one — see <see cref="AssemblyCacheGenerations"/> for the
-    /// retention sweep and for why the growth is by design while the unboundedness was not.</para>
+    /// nothing in the store removes an old one — see <c>AssemblyCacheGenerations</c> (in
+    /// MeshWeaver.Graph) for the retention sweep and for why the growth is by design while the
+    /// unboundedness was not.</para>
     /// </summary>
-    public static readonly string FrameworkTag = NodeTypeCompilationHelpers.FrameworkVersion[..8];
+    public static readonly string FrameworkTag = FrameworkBuildIdentity.FrameworkVersion[..8];
 
     private string GetDllPath(string nodeTypePath, long version, byte[] bytes)
     {

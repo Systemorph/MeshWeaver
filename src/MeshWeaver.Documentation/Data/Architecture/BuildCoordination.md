@@ -41,7 +41,8 @@ Admin/Build/{chunkName}/_Activity ← the chunk's execution activity (standard A
 ```
 
 - The **root** carries the build's identity — the framework fingerprint it targets
-  (`MeshWeaver.Graph`'s MVID, the same value `HasUsableBuild` compares against), the
+  (the resolved framework build identity, `FrameworkBuildIdentity.FrameworkVersion` —
+  the same value `HasUsableBuild` compares against), the
   commit set of the synced sources, the chunk plan, and the aggregate `Status`.
 - A **chunk** is a named unit of work defined by an array of mesh queries — as simple as a
   list of paths, or a module such as `namespace:MyPlugin scope:subtree nodeType:Code`.
@@ -233,8 +234,8 @@ hub), the assembly store under `/data` (content-addressed writes), and the sourc
 Every portal silo — old and new — **subscribes** to the build root and holds its health
 probe accordingly:
 
-- On startup a silo computes its own framework fingerprint (its Graph MVID — a local,
-  mesh-independent computation) and subscribes to `Admin/Build`.
+- On startup a silo computes its own framework fingerprint (its resolved framework
+  identity — a local, mesh-independent computation) and subscribes to `Admin/Build`.
 - The readiness probe reports **not ready** until the observed root says
   `Status = Ready && FrameworkVersion == <my fingerprint>`.
 - Old pods keep serving through a rollout untouched: the GO for *their* fingerprint was

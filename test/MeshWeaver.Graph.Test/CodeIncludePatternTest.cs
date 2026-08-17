@@ -2,11 +2,12 @@ using System.Linq;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// Pins the compile-source include scanner's pattern
-/// (<see cref="MeshNodeCompilationService.CodeIncludePattern"/>) against the 2026-07-29 Store
+/// (<see cref="NodeCompileShaping.CodeIncludePattern"/>) against the 2026-07-29 Store
 /// outage: the permissive predecessor (<c>@@([^\s#\]]+)</c>) ran over RAW C# source and scraped
 /// prose — XML doc comments citing the markdown embed idiom, and test string literals asserting
 /// it — as include paths. Each garbage match cost a SERIAL 15s GetMeshNode timeout on the
@@ -29,7 +30,7 @@ public class CodeIncludePatternTest
     [InlineData("@@<markup>")]
     public void ProseNeverMatches(string sourceLine)
     {
-        Assert.Empty(MeshNodeCompilationService.CodeIncludePattern.Matches(sourceLine));
+        Assert.Empty(NodeCompileShaping.CodeIncludePattern.Matches(sourceLine));
     }
 
     /// <summary>Genuine include directives — a node path after the marker — must keep resolving.</summary>
@@ -40,7 +41,7 @@ public class CodeIncludePatternTest
     [InlineData("@@my-space/sub_dir/File", "my-space/sub_dir/File")]
     public void NodePathsStillMatch(string sourceLine, string expectedPath)
     {
-        var match = Assert.Single(MeshNodeCompilationService.CodeIncludePattern.Matches(sourceLine).Cast<System.Text.RegularExpressions.Match>());
+        var match = Assert.Single(NodeCompileShaping.CodeIncludePattern.Matches(sourceLine).Cast<System.Text.RegularExpressions.Match>());
         Assert.Equal(expectedPath, match.Groups[1].Value);
     }
 
@@ -51,13 +52,13 @@ public class CodeIncludePatternTest
     [InlineData("(@@Doc/Guide)", "Doc/Guide")]
     public void CaptureStopsAtPathBoundary(string sourceLine, string expectedPath)
     {
-        var match = Assert.Single(MeshNodeCompilationService.CodeIncludePattern.Matches(sourceLine).Cast<System.Text.RegularExpressions.Match>());
+        var match = Assert.Single(NodeCompileShaping.CodeIncludePattern.Matches(sourceLine).Cast<System.Text.RegularExpressions.Match>());
         Assert.Equal(expectedPath, match.Groups[1].Value);
     }
 
     /// <summary>
     /// An include path is authored MOUNT-relative, so it must resolve from whichever prefix the
-    /// including node is served under (<see cref="MeshNodeCompilationService.AnchorIncludePath"/>).
+    /// including node is served under (<see cref="NodeCompileShaping.AnchorIncludePath"/>).
     ///
     /// <para>memex-cloud 2026-08-12: <c>samples/Graph/Data/FutuRe/GroupAnalysis/Source/ExternalDependencies</c>
     /// is nothing but <c>@@FutuRe/&lt;sibling&gt;/Source/…</c> lines. Mounted at the mesh root (what
@@ -98,7 +99,7 @@ public class CodeIncludePatternTest
     public void IncludePathAnchorsOntoTheIncludingNodesMount(
         string authored, string anchorPath, string expected)
     {
-        Assert.Equal(expected, MeshNodeCompilationService.AnchorIncludePath(authored, anchorPath));
+        Assert.Equal(expected, NodeCompileShaping.AnchorIncludePath(authored, anchorPath));
     }
 
     /// <summary>With no anchor there is nothing to rebase against — the authored path stands.</summary>
@@ -109,6 +110,6 @@ public class CodeIncludePatternTest
     {
         Assert.Equal(
             "FutuRe/AmountType/Source/AmountType",
-            MeshNodeCompilationService.AnchorIncludePath("FutuRe/AmountType/Source/AmountType", anchorPath));
+            NodeCompileShaping.AnchorIncludePath("FutuRe/AmountType/Source/AmountType", anchorPath));
     }
 }

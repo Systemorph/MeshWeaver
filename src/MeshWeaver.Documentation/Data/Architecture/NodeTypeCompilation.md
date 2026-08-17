@@ -23,6 +23,17 @@ recompiled.
 > For compiling the same source **outside** the portal — in CI, so the bytes can be shipped rather
 > than recomputed — see [Plugin Packaging](/Doc/Architecture/PluginPackaging).
 
+**Where the code lives (since #1707):** everything that shapes a compile's *generated input* —
+the skeleton generator (`DynamicMeshNodeAttributeGenerator`), source-query resolution
+(`CodeQueryResolver`), `@@`-include shaping, source aggregation/filter/join order, the reference
+set, parse/compilation options, source-generator execution, and the emit itself — lives in the
+dedicated **`MeshWeaver.Compiler`** assembly, whose full MVID pins the framework build identity.
+The mesh-actor half — source discovery against the live mesh, access impersonation, scheduling,
+compile-status write-backs — stays in `MeshWeaver.Graph` (`MeshNodeCompilationService`,
+`NodeTypeCompilationHelpers`) and orchestrates that toolchain. One pipeline serves every path:
+the portal's on-demand compile, the batch bake, and the CI bake host all call the same
+`MeshWeaver.Compiler` code.
+
 <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -341,21 +352,35 @@ compile freely, then unpin (or re-point) when you're ready to adopt the new buil
 
 The kickoff does **not** trust a bare `CompilationStatus == Ok`. That value is
 persisted into the NodeType MeshNode's JSON, so a stale `Ok` can easily outlive
-the assembly that produced it. `NodeTypeCompilationHelpers.HasUsableBuild` is the
-gate: a compile is **skipped only when all three conditions hold** —
+the assembly that produced it — and, conversely, a later failed compile can leave
+`Status=Error` behind a perfectly usable earlier build.
+`NodeTypeCompilationHelpers.HasUsableBuild` is the gate: a compile is **skipped
+only when all of these hold** —
 
-1. `CompilationStatus == Ok`
-2. `MeshNode.AssemblyLocation` points at a DLL that **still exists on disk**
-3. `CompiledFrameworkVersion` equals the **current** framework version (`NodeTypeCompilationHelpers.FrameworkVersion`)
+1. `LatestAssemblyCollection` is populated (only a *successful* compile write-back sets it)
+2. `LatestAssemblyPath` is populated
+3. `CompiledFrameworkVersion` equals the **current** framework identity
+   (`FrameworkBuildIdentity.FrameworkVersion` in `MeshWeaver.Compiler`)
+4. `CompiledModulesHash`, when both it and the mesh's live
+   `InstalledModulesFingerprint` are non-null, matches (a module-only update must
+   invalidate builds that could bind the replaced module; null stamp or null
+   caller keep the framework-only behavior)
 
-Anything else triggers a recompile. This makes a cold hub start **self-healing** against a range of real-world conditions:
+`CompilationStatus` is deliberately **not** a condition — the assembly fields
+self-heal across a stray `Status=Error`. The check is also **metadata-only**: no
+store probe, no `File.Exists` — the kickoff prefers a redundant compile over a
+blocking store round-trip, and a store that has lost the bytes is caught at
+activation (`TryGetAssemblyPath` misses → `TriggerRecompileAndRetry`); the bake
+probe's `NodeTypeBakeStatus.Classify` has the `BytesMissing` state for exactly
+that gap.
 
-| Situation | Why the bare `Ok` lies | Caught by |
+Anything else triggers a recompile. This makes a cold hub start **self-healing**:
+
+| Situation | Why the bare record lies | Caught by |
 |---|---|---|
-| Seed-data pollution — a prior run stamped `Ok` into sample/seed JSON | The DLL was a per-process temp artefact | Rule 2 |
-| Cleaned-up `.mesh-cache` / temp DLL | File deleted since | Rule 2 |
-| Cross-machine checkout / fresh CI agent | The DLL never existed here | Rule 2 |
-| **MeshWeaver redeployed at a new version** | The cached DLL bound against the *old* framework assemblies (ABI-stale) | Rule 3 |
+| Cleaned-up cache / lost store bytes | The record still points at them | Activation store probe (`BytesMissing`) |
+| **MeshWeaver redeployed with a breaking change** | The cached DLL bound against the *old* framework surface (ABI-stale) | Rule 3 |
+| Module updated | The cached DLL may bind the replaced module's old ABI | Rule 4 |
 
 ### Framework-version freezing
 
@@ -374,9 +399,12 @@ resolved once per process (`FrameworkBuildIdentity`,
   `s<hash>`: per compile reference, the SHA-256 of its *reference assembly*
   (the compiler's own definition of the API surface — byte-stable under
   body-only and private-member edits, changed by any surface change), hashed
-  over the canonical content-surface set, with `MeshWeaver.Graph` contributing
-  its full implementation MVID because its code shapes the *generated input*
-  of every NodeType compile. "Rebuild only when we need to": an internal-only
+  over the canonical content-surface set, with the generated-input-shaping
+  exceptions contributing their full implementation MVID: `MeshWeaver.Compiler`
+  (THE compile toolchain since #1707 — skeleton generation, source-query
+  resolution, include shaping, aggregation, options, generator execution, emit)
+  and `MeshWeaver.NuGet` (the `#r "nuget:"` parser/resolver).
+  "Rebuild only when we need to": an internal-only
   framework release keeps the identity, so every cached and CI-published build
   stays valid; a breaking surface change mints a new one, and the CI bake for
   the new surface seeds at boot instead of recompiling per pod.
@@ -385,10 +413,14 @@ resolved once per process (`FrameworkBuildIdentity`,
   `Directory.Build.props` (CI compile inputs are commit-deterministic — no run
   number or timestamp reaches any compiled attribute). Kept everywhere as
   logged PROVENANCE.
-- **Local builds** — the `MeshWeaver.Graph` assembly's **MVID** (a content hash
-  of the compiled module; no stamp is present). Content-exact for a dirty
-  working tree — stable across rebuilds that don't change Graph's bytes,
-  changed whenever they do.
+- **Manifest-less local builds** — the identity anchor's **MVID**
+  (`MeshWeaver.Compiler.dll`; a content hash of the compiled module, no stamp
+  present). Content-exact for a dirty working tree — stable across rebuilds
+  that don't change the toolchain's bytes, changed whenever they do. Note that
+  every host compiling against a *persistent* assembly store (the portals, the
+  CI bake host, mw-plugin-test) ships a surface manifest and resolves the
+  surface identity even locally — the MVID fallback governs test hosts and
+  ad-hoc tools.
 
 On a framework-version mismatch the NodeType recompiles and **mints a new release**
 for the new framework. The old release is left intact as history so instances still

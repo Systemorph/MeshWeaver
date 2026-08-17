@@ -12,6 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+using MeshWeaver.Compiler;
 namespace MeshWeaver.Hosting;
 
 /// <summary>
@@ -324,7 +325,7 @@ internal static class NodeTypeBatchBake
     /// <summary>
     /// One mesh query, chunk-accumulated to a settled path→node map: fold every
     /// <see cref="QueryResultChange{T}"/> (the compiler's own pure fold,
-    /// <see cref="MeshNodeCompilationService.ApplyQueryChange"/>) and treat a
+    /// <see cref="NodeCompileShaping.ApplyQueryChange"/>) and treat a
     /// <see cref="QueryQuietWindow"/> of silence as completion — a bare <c>Take(1)</c> on a
     /// chunked Initial would hand the compiler a PARTIAL source set, which compiles wrong.
     ///
@@ -361,7 +362,7 @@ internal static class NodeTypeBatchBake
             }.AsSystem()))
             .Scan(
                 ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase),
-                MeshNodeCompilationService.ApplyQueryChange)
+                NodeCompileShaping.ApplyQueryChange)
             .Throttle(QueryQuietWindow)
             .Take(1)
             .SelectMany(nodes => nodes.Count < SourceDiscoveryLimit
