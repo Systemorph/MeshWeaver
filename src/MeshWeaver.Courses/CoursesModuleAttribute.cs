@@ -1,7 +1,11 @@
+using MeshWeaver.GitSync;
 using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Threading;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 [assembly: MeshWeaver.Courses.CoursesMeshModule]
 [assembly: MeshWeaver.Courses.CoursesEndpointModule]
@@ -58,6 +62,9 @@ public sealed class CoursesEndpointModuleAttribute : MeshEndpointProviderAttribu
 /// </summary>
 public static class CoursesExtensions
 {
+    /// <summary>The named <see cref="HttpClient"/> the asset resolver fetches GitHub contents with.</summary>
+    public const string HttpClientName = "MeshWeaver.Courses.CourseAssets";
+
     /// <summary>
     /// Registers the course-asset resolver. It reads the GitHub App credentials the GitSync
     /// module already binds (<c>GitHub:App:*</c>) — a Space's assets resolve as the installation,
@@ -65,11 +72,25 @@ public static class CoursesExtensions
     /// </summary>
     public static IServiceCollection AddCourses(this IServiceCollection services)
     {
-        // 🚨 SINGLETON, never a typed HttpClient. CourseAssetService holds the resolved
-        // download_url promise cache as an INSTANCE field, so concurrent requests for one file
-        // share a round-trip; AddHttpClient<T> registers T as TRANSIENT, which would give every
-        // request its own empty cache and silently defeat the whole design.
-        services.AddSingleton<CourseAssetService>();
+        // Two constraints that pull in opposite directions, satisfied together:
+        //
+        // 🚨 SINGLETON, never AddHttpClient<CourseAssetService>. The service holds the resolved
+        //    download_url promise cache as an INSTANCE field so concurrent requests for one file
+        //    share a round-trip; a typed client registers T as TRANSIENT, which would give every
+        //    request its own empty cache and silently defeat the whole design.
+        //
+        // 🚨 …but a singleton must not capture a bare HttpClient either. Holding one for the
+        //    process lifetime pins a single HttpMessageHandler — no connection recycling, and DNS
+        //    changes are never picked up (the classic long-lived-HttpClient trap). A NAMED client
+        //    from IHttpClientFactory gives the factory's rotating handler pool while leaving the
+        //    consumer a singleton, which is exactly the combination this needs.
+        services.AddHttpClient(HttpClientName);
+        services.AddSingleton(sp => new CourseAssetService(
+            ioPools: sp.GetRequiredService<IoPoolRegistry>(),
+            options: sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
+            appTokens: sp.GetService<GitHubAppTokenService>(),
+            logger: sp.GetService<ILogger<CourseAssetService>>(),
+            httpClient: sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
         return services;
     }
 }
