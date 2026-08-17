@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# publish-bake-bundles.sh <bake-dir> <source-name> [<source-sha>]
+# publish-bake-bundles.sh <bake-dir> <source-name> [<source-sha>] [<release-version>]
 #
 # Publishes a CI NodeType bake (the directory mw-plugin-test's --bake-output wrote: one
 # <package>.zip per package + framework-mvid.txt) to the shared storage the portals read at boot
@@ -34,13 +34,34 @@
 # --auth-mode login with --backup-intent, which requires the identity to hold the
 # "Storage File Data Privileged Contributor" role on the target storage accounts.
 #
+# <release-version> is the PLATFORM VERSION this publication belongs to (main-cd passes the
+# promoted `memex-portal-ai:<version>`; node repos pass nothing — they do not define a platform
+# release). When given, the script also records the version → framework-identity mapping at
+#
+#     <base>/prebuilt-bundles/_releases/<release-version>
+#
+# 🚨 That marker is the ONLY way anything outside the image can learn a release's framework
+# identity: the identity is a property of the BINARIES (#1725), resolved by the image itself, so it
+# cannot be computed from a tag or a commit. The release gates (#1754 deployment, #1755 build) read
+# it to answer "is every deployed package available for the release we are about to roll to"; a
+# missing marker therefore means one precise thing — that release published no platform content
+# bake — and both gates HOLD on it rather than guessing (fail safe).
+#
+# 🚨 The marker is written on EVERY run, deliberately OUTSIDE the already-sealed skip below. The
+# skip keys on content × framework, and the API-surface identity is breaking-change-keyed, so an
+# ordinary release re-resolves the SAME identity and skips the upload — if the marker rode along
+# with the bundles, the second and every later release of a surface generation would have no marker
+# at all and every environment would be held forever on a release that is in fact perfectly fine.
+#
 # Loud by design: a missing/empty target list, identity file, or bundle set FAILS — a publish
 # step that silently ships nothing is exactly the regression (#1347 → #1660) this lane fixes.
 set -euo pipefail
 
-BAKE_DIR="${1:?usage: publish-bake-bundles.sh <bake-dir> <source-name> [<source-sha>]}"
-SOURCE="${2:?usage: publish-bake-bundles.sh <bake-dir> <source-name> [<source-sha>]}"
+USAGE="usage: publish-bake-bundles.sh <bake-dir> <source-name> [<source-sha>] [<release-version>]"
+BAKE_DIR="${1:?$USAGE}"
+SOURCE="${2:?$USAGE}"
 SOURCE_SHA="${3:-}"
+RELEASE_VERSION="${4:-}"
 
 # Whitespace-only counts as unset: `for target in $BAKE_PUBLISH_TARGETS` would iterate zero
 # times and the script would report success having published nowhere — the silent-nothing
@@ -96,8 +117,22 @@ SOURCE_MARKER="source-commit.txt"
 SOURCE_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$SOURCE_MARKER"
 printf '%s\n' "${SOURCE_SHA:-unknown}" > "$SOURCE_MARKER_LOCAL"
 
-publish_one_target() { # <account> <share> <dest-dir> <resealing>
-  local account="$1" share="$2" dest="$3" resealing="$4" path="" part
+# The release-marker directory (must match PublishedBundleCatalogue.ReleaseMarkerDirectoryName).
+# Leading underscore so it can never collide with a framework-identity directory (s… / g…).
+RELEASES_DIR="_releases"
+RELEASE_MARKER_LOCAL=""
+if [ -n "${RELEASE_VERSION:-}" ]; then
+  # A version containing a path separator would escape the directory; the platform's versions are
+  # semver tags, so anything else is a caller bug and must be loud, not silently rewritten.
+  case "$RELEASE_VERSION" in
+    */*|..|.) echo "::error::release-version '$RELEASE_VERSION' is not a plain version string"; exit 1;;
+  esac
+  RELEASE_MARKER_LOCAL="$SENTINEL_LOCAL_DIR/$RELEASE_VERSION"
+  printf '%s\n' "$IDENTITY" > "$RELEASE_MARKER_LOCAL"
+fi
+
+ensure_directory() { # <account> <share> <dir-path>
+  local account="$1" share="$2" dest="$3" path="" part
   # az storage directory create is not recursive and errors on an existing directory on some CLI
   # versions — create each level only when absent.
   local IFS='/'
@@ -111,6 +146,27 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
         --name "$path" --auth-mode login --backup-intent --only-show-errors > /dev/null
     fi
   done
+}
+
+# The version → framework-identity mapping the release gates read (#1754/#1755). Written on every
+# run for every target, never gated on the sealed-skip — see the header. The file NAME is the
+# platform version and its CONTENT is the identity, so a reader needs one stat plus one read and
+# no listing.
+publish_release_marker() { # <account> <share> <base>
+  local account="$1" share="$2" base="$3"
+  local dir="${base:+$base/}prebuilt-bundles/$RELEASES_DIR"
+  ensure_directory "$account" "$share" "$dir"
+  # Same directory-as---path trick as the sentinel below: the CLI appends the source basename, and
+  # the local file is already named after the version.
+  az storage file upload --account-name "$account" --share-name "$share" \
+    --path "$dir" --source "$RELEASE_MARKER_LOCAL" \
+    --auth-mode login --backup-intent --only-show-errors > /dev/null
+  echo "release marker: $account/$share/$dir/$RELEASE_VERSION → $IDENTITY"
+}
+
+publish_one_target() { # <account> <share> <dest-dir> <resealing>
+  local account="$1" share="$2" dest="$3" resealing="$4"
+  ensure_directory "$account" "$share" "$dest"
   # Republishing OVER a sealed directory: UNSEAL first. Readers must never seed a mid-replace
   # mix of old and new bundles under a stale sentinel — deleting the sentinel returns the
   # directory to the not-yet-complete state readers skip, and the re-seal below closes it again.
@@ -141,6 +197,7 @@ publish_one_target() { # <account> <share> <dest-dir> <resealing>
 }
 
 PUBLISHED=0
+MARKERS=0
 for target in $BAKE_PUBLISH_TARGETS; do
   ACCOUNT="${target%%/*}"
   REST="${target#*/}"
@@ -150,6 +207,15 @@ for target in $BAKE_PUBLISH_TARGETS; do
   if [ -z "$ACCOUNT" ] || [ -z "$SHARE" ] || [ "$ACCOUNT" = "$target" ]; then
     echo "::error::malformed BAKE_PUBLISH_TARGETS entry '$target' — expected <account>/<share>[/<base-path>]"
     exit 1
+  fi
+  # 🚨 BEFORE the sealed-skip below, which `continue`s past everything that follows it. The
+  # version → identity mapping must land on EVERY run — including the (common) run whose bundles
+  # are already published — or the release gates would hold every environment on a release that is
+  # perfectly fine, and an environment frozen for weeks is its own outage. A failure here is fatal
+  # by `set -e`, deliberately: a silently missing marker holds everything.
+  if [ -n "${RELEASE_MARKER_LOCAL:-}" ]; then
+    publish_release_marker "$ACCOUNT" "$SHARE" "$BASE"
+    MARKERS=$((MARKERS + 1))
   fi
   DEST="${BASE:+$BASE/}prebuilt-bundles/$IDENTITY/$SOURCE"
   # "Rebuild only when we need to" applies to the publish too (#1660 WS3), but the key is
@@ -191,4 +257,4 @@ for target in $BAKE_PUBLISH_TARGETS; do
   PUBLISHED=$((PUBLISHED + 1))
 done
 
-echo "bake published: identity=$IDENTITY source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} targets-published=$PUBLISHED"
+echo "bake published: identity=$IDENTITY source=$SOURCE source-sha=${SOURCE_SHA:-unknown} bundles=${#BUNDLES[@]} targets-published=$PUBLISHED release=${RELEASE_VERSION:-none} release-markers=$MARKERS"
