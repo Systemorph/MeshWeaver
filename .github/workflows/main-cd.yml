@@ -1024,19 +1024,24 @@ jobs:
           IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
         run: |
           set -uo pipefail
+          attempts=5
           ok=0
-          for attempt in 1 2 3 4 5; do
+          for attempt in $(seq 1 $attempts); do
             if az acr login --name meshweaver && docker pull --quiet --platform linux/amd64 "$IMAGE"; then
               echo "$IMAGE: registry reached and image pulled on attempt $attempt"
               ok=1; break
             fi
-            # Backoff: 5s, 10s, 20s, 40s — registry blips are seconds-to-minutes.
-            delay=$((5 * 2 ** (attempt - 1)))
-            echo "registry attempt $attempt failed; retrying in ${delay}s" >&2
-            sleep $delay
+            # Backoff: 5s, 10s, 20s, 40s — registry blips are seconds-to-minutes. Only BETWEEN
+            # attempts: sleeping after the last failure would add 80s to reporting an outage we
+            # have already decided not to retry.
+            if [ "$attempt" -lt "$attempts" ]; then
+              delay=$((5 * 2 ** (attempt - 1)))
+              echo "registry attempt $attempt failed; retrying in ${delay}s" >&2
+              sleep $delay
+            fi
           done
           if [ $ok -eq 0 ]; then
-            echo "::error::could not log in to ${{ env.ACR }} and pull $IMAGE after 5 attempts — this is a REGISTRY/INFRA failure, not a bake failure. The image set for this commit is already promoted; its platform content bake was NOT published, so pods compile shipped content at boot until a later CD run republishes it."
+            echo "::error::could not log in to ${{ env.ACR }} and pull $IMAGE after $attempts attempts — this is a REGISTRY/INFRA failure, not a bake failure. The image set for this commit is already promoted; its platform content bake was NOT published, so pods compile shipped content at boot until a later CD run republishes it."
             exit 1
           fi
       # ── WHAT THIS BAKES, AND WHAT IT DELIBERATELY DOES NOT ──────────────────────────────────
