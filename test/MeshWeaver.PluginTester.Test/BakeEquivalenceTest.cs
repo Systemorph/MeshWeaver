@@ -83,8 +83,14 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
     private const string WidgetIndexJson =
         """{"$type":"MeshNode","id":"Widget","namespace":"","path":"Widget","mainNode":"Widget","name":"Widget Plugin","nodeType":"Space","state":"Active","content":{"$type":"PluginManifest","description":"A widget plugin."}}""";
 
+    // 🚨 `"compilationStatus":"Ok"` is not decoration. Enums persist as STRINGS, and a content
+    // reader built on plain web defaults cannot convert them — which silently made 28 NodeTypes
+    // across ACME/Cornerstone/FutuRe/Northwind unmaterialisable when this bake was first run over
+    // samples/Graph/Data. Every NodeType that has ever compiled carries this stamp, so a fixture
+    // without one does not resemble real content at all. If the converter regresses, the tree bake
+    // drops Widget/Thing and the bundle-set assertion below goes red.
     private const string ThingNodeTypeJson =
-        """{"$type":"MeshNode","id":"Thing","namespace":"Widget","path":"Widget/Thing","mainNode":"Widget/Thing","name":"Thing","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"A thing.","configuration":"config => config.WithContentType<Thing>().AddDefaultLayoutAreas()","includeGlobalTypes":true,"sources":["namespace:Source scope:subtree","shared=@Lib/Shared/Source"]}}""";
+        """{"$type":"MeshNode","id":"Thing","namespace":"Widget","path":"Widget/Thing","mainNode":"Widget/Thing","name":"Thing","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"A thing.","configuration":"config => config.WithContentType<Thing>().AddDefaultLayoutAreas()","includeGlobalTypes":true,"compilationStatus":"Ok","lastCompiledVersion":7,"sources":["namespace:Source scope:subtree","shared=@Lib/Shared/Source"]}}""";
 
     // Pulls Helper (cross-package), Deep (nested subtree) and — through the @@ directive — a Code
     // node no source query matches.
@@ -165,6 +171,13 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
             WriteFile(root, "Widget/Thing/Source/Cell.json", ExecutableCellJson);
             WriteFile(root, "Widget/Thing/Test/ThingTests.cs", ThingTestsSource);
             WriteFile(root, "Widget/Snippets/Greeting.cs", GreetingSource);
+            // 🚨 A node file the RUNTIME cannot parse. samples/Graph/Data/PensionFund ships 62 of
+            // these — .json with a UTF-8 BOM — and the mesh's importer skips every one
+            // ("No parser for node-repo file X; skipped"), gating zero NodeTypes in that package.
+            // The bake must skip it too: neither die on it (it is not a bake failure) nor parse it
+            // (that would compile content the mesh never imports). Both producers therefore emit
+            // the SAME bundle set, which is what the assertions below check.
+            WriteFileWithBom(root, "Widget/Unparseable.json", WidgetIndexJson);
         });
         var meshDir = Path.Combine(Path.GetTempPath(), "mw-bake-mesh-" + Guid.NewGuid().ToString("N"));
         var treeDir = Path.Combine(Path.GetTempPath(), "mw-bake-tree-" + Guid.NewGuid().ToString("N"));
@@ -454,6 +467,14 @@ public class BakeEquivalenceTest(ITestOutputHelper output)
         var full = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         File.WriteAllText(full, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+    }
+
+    /// <summary>Writes a file WITH a UTF-8 BOM — the shape the runtime's JSON parser rejects.</summary>
+    private static void WriteFileWithBom(string root, string relative, string content)
+    {
+        var full = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
     }
 
     private static void Cleanup(string directory)
