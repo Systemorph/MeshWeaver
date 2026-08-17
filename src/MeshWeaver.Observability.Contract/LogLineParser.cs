@@ -44,6 +44,14 @@ public static partial class LogLineParser
     /// line, or recovered from the message when the call site formatted the exception into it.</param>
     /// <param name="TopFrame">The top application stack frame, when present — where the fault IS,
     /// and therefore the incident's locator in preference to the reporting category.</param>
+    /// <param name="ExceptionMessage">The exception's OWN message — everything after
+    /// <c>Some.Type:</c> up to the first stack frame — read from the exception line, or from the
+    /// message when the call site formatted the exception into it. Null when the burst carries no
+    /// exception.</param>
+    /// <param name="NormalizedDetail">What the fingerprint discriminates on WITHIN a fault site:
+    /// the normalized <see cref="ExceptionMessage"/> when the burst carries an exception, otherwise
+    /// the normalized logged message. See <see cref="StructuralLogIncidentIdentity"/> for why the
+    /// exception's own text wins over the reporter's prose.</param>
     public record ParsedBurst(
         LogSeverity Severity,
         string Category,
@@ -51,7 +59,9 @@ public static partial class LogLineParser
         string Message,
         string NormalizedMessage,
         string? ExceptionType,
-        string? TopFrame);
+        string? TopFrame,
+        string? ExceptionMessage = null,
+        string NormalizedDetail = "");
 
     /// <summary>
     /// True when <paramref name="line"/> opens a red burst (<c>fail:</c> / <c>crit:</c>), with the
@@ -106,21 +116,72 @@ public static partial class LogLineParser
         // property of the caller's formatting, not of the fault, and it is half of why #1170 and
         // #1171 became two tickets for one ObjectDisposedException. Recover the type from the message
         // when no exception line exists; an own-line header always wins.
-        exceptionType ??= InlineException().Match(message) switch
+        string? exceptionMessage = null;
+        if (exceptionIndex >= 0)
         {
-            { Success: true } inline => inline.Groups["type"].Value,
-            _ => null,
-        };
+            exceptionMessage = ExceptionText(body, exceptionIndex);
+        }
+        else if (InlineException().Match(message) is { Success: true } inline)
+        {
+            exceptionType = inline.Groups["type"].Value;
+            // The exception's own words start right after the `Type: ` the regex consumed — the same
+            // text an own-line header would have carried, so both shapes yield the same detail.
+            exceptionMessage = message[(inline.Index + inline.Length)..].Trim();
+        }
+
+        var normalizedMessage = Normalize(message);
 
         return new ParsedBurst(
             severity,
             category,
             eventId,
             message,
-            Normalize(message),
+            normalizedMessage,
             exceptionType,
-            TopApplicationFrame(body));
+            TopApplicationFrame(body),
+            exceptionMessage,
+            // 🚨 The fault's OWN text wins over the reporter's prose. Two catch sites printing one
+            // unwinding exception word it differently ("Error during shutdown of hub …" vs "Hub …
+            // disposal faulted") but quote the SAME exception message, so keying on the exception
+            // text folds them — the property that stopped #1170/#1171 from being two tickets —
+            // while still telling thirteen different compiler errors apart. Only a burst with no
+            // exception at all falls back to the logged message, because then it is all there is.
+            exceptionMessage is { Length: > 0 } detail ? Normalize(detail) : normalizedMessage);
     }
+
+    /// <summary>
+    /// The exception's own message: the remainder of the exception line after <c>Some.Type:</c>,
+    /// plus the continuation lines up to the first stack frame.
+    ///
+    /// <para>Multi-line on purpose. A <c>CompilationException</c> puts every Roslyn diagnostic in
+    /// its message, and its FIRST line ("Compilation failed for '…'") normalizes to the same text
+    /// for every node — so a first-line-only rule would collapse thirteen parked NodeTypes back
+    /// onto one ticket, which is the defect this exists to fix (#1787). Bounded by
+    /// <see cref="MaxDetailLength"/> so one pathological exception cannot make every window's
+    /// hashing quadratic.</para>
+    /// </summary>
+    private static string ExceptionText(IReadOnlyList<string> body, int exceptionIndex)
+    {
+        var match = ExceptionLine().Match(body[exceptionIndex]);
+        var builder = new StringBuilder(body[exceptionIndex][match.Length..].TrimStart(' ', ':'));
+
+        for (var i = exceptionIndex + 1; i < body.Count && builder.Length < MaxDetailLength; i++)
+        {
+            if (StackFrame().IsMatch(body[i]))
+                break;
+            builder.Append('\n').Append(body[i]);
+        }
+
+        var text = builder.ToString().Trim();
+        return text.Length > MaxDetailLength ? text[..MaxDetailLength] : text;
+    }
+
+    /// <summary>
+    /// How much exception text may reach the fingerprint. Generous enough that a compiler's whole
+    /// diagnostic list fits (the ERRORS come first, before the warning tail), small enough that the
+    /// masking regexes stay cheap over thousands of lines per poll.
+    /// </summary>
+    private const int MaxDetailLength = 8000;
 
     /// <summary>
     /// The first <c>at …</c> stack frame belonging to application code. Framework and BCL frames
@@ -166,22 +227,97 @@ public static partial class LogLineParser
     {
         var masked = Guid().Replace(message, "{guid}");
         masked = Timestamp().Replace(masked, "{time}");
+        // Collected BEFORE the path rule eats them — see MaskSubjects.
+        var subjects = PathSegments(masked);
         masked = Path().Replace(masked, "{path}");
         masked = Quoted().Replace(masked, "'{value}'");
         masked = HexBlob().Replace(masked, "{hex}");
         masked = LabelledIdentifier().Replace(masked, "${label}: {id}");
+        masked = MaskSubjects(masked, subjects);
         masked = Number().Replace(masked, "{n}");
         return WhitespaceRun().Replace(masked, " ").Trim();
     }
+
+    /// <summary>
+    /// The distinct segments of every slash path in <paramref name="message"/> — the tokens the
+    /// message itself has told us are identifiers rather than prose.
+    /// </summary>
+    private static ImmutableHashSet<string> PathSegments(string message)
+    {
+        var segments = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+        foreach (Match match in Path().Matches(message))
+        {
+            foreach (var segment in match.Value.Split('/', '\\'))
+            {
+                // Placeholder names are excluded or a segment called "path" would rewrite the
+                // `{path}` this very method is about to produce.
+                if (segment.Length < 2 || !char.IsLetter(segment[0]) || segment.Contains('{')
+                    || PlaceholderNames.Contains(segment))
+                    continue;
+                segments.Add(segment);
+                if (segments.Count >= MaxSubjects)
+                    return segments.ToImmutable();
+            }
+        }
+        return segments.ToImmutable();
+    }
+
+    /// <summary>
+    /// Masks a token elsewhere in the message when that same token appears as a segment of a slash
+    /// path in it — <b>the message's own evidence that the token names an instance</b>.
+    ///
+    /// <para>🚨 This is what makes the message safe to hash at all. Round 4 of the fingerprint
+    /// (2026-08-09) produced ~22 incidents for ONE reconcile defect because the subject sat BEFORE
+    /// the colon — <c>[PluginGating] Chess: reconcile is NOT CONVERGING — rewrote
+    /// Chess/_Access/Public_Access …</c> — where a <c>label: value</c> rule cannot see it. No masking
+    /// rule can anticipate where the next message will put its subject, so this one does not try:
+    /// it reads the subject OUT of the message, from the paths the message already spells out.
+    /// <c>Chess</c> is a path segment, therefore <c>Chess</c> anywhere in that message is an
+    /// identifier, whatever position it occupies.</para>
+    ///
+    /// <para>Word-boundary and case-sensitive, so <c>Cession</c> does not swallow
+    /// <c>CessionData</c>, and bounded at <see cref="MaxSubjects"/> tokens. The failure direction is
+    /// over-collapsing (a prose word that happens to be a path segment), which costs one ticket a
+    /// human can split rather than fifty nobody reads.</para>
+    /// </summary>
+    private static string MaskSubjects(string message, ImmutableHashSet<string> subjects)
+    {
+        if (subjects.IsEmpty)
+            return message;
+
+        // Longest first, so a subject that is a prefix of another cannot shadow it.
+        var pattern = @"\b(?:"
+                      + string.Join('|', subjects.OrderByDescending(s => s.Length).Select(Regex.Escape))
+                      + @")\b";
+        return Regex.Replace(message, pattern, "{id}",
+            RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+    }
+
+    /// <summary>How many path segments may become subjects. Bounds the constructed regex.</summary>
+    private const int MaxSubjects = 32;
+
+    /// <summary>The masks <see cref="Normalize"/> itself emits — never re-masked.</summary>
+    private static readonly ImmutableHashSet<string> PlaceholderNames =
+        ImmutableHashSet.Create<string>(StringComparer.Ordinal,
+            "path", "value", "guid", "time", "id", "hex", "n");
 
     /// <summary>
     /// The stable identity of a fault. Delegates to <see cref="StructuralLogIncidentIdentity"/> —
     /// there is ONE definition of "the same incident", and it lives behind
     /// <see cref="ILogIncidentIdentity"/> so a Code node can replace it without a redeploy.
     /// </summary>
-    public static string Fingerprint(ParsedBurst burst) => StructuralLogIncidentIdentity.Compute(
-        new LogBurst(burst.Category, burst.EventId, burst.Severity, burst.Message,
-            burst.NormalizedMessage, burst.ExceptionType, burst.TopFrame));
+    public static string Fingerprint(ParsedBurst burst) =>
+        StructuralLogIncidentIdentity.Compute(ToBurst(burst));
+
+    /// <summary>The identity function's input, as this parser saw the burst.</summary>
+    /// <param name="burst">The parsed burst.</param>
+    /// <returns>The <see cref="LogBurst"/> handed to <see cref="ILogIncidentIdentity"/>.</returns>
+    public static LogBurst ToBurst(ParsedBurst burst)
+    {
+        ArgumentNullException.ThrowIfNull(burst);
+        return new LogBurst(burst.Category, burst.EventId, burst.Severity, burst.Message,
+            burst.NormalizedMessage, burst.ExceptionType, burst.TopFrame, burst.NormalizedDetail);
+    }
 
     [GeneratedRegex(@"^(?<type>[A-Z][\w.]*(?:Exception|Error))(?::|\s*$)", RegexOptions.CultureInvariant)]
     private static partial Regex ExceptionLine();

@@ -90,6 +90,23 @@ public sealed record LogWatcherOptions
     /// </summary>
     public TimeSpan SilentWindowAlarm { get; init; } = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// How many distinct fingerprints ONE log site (category + event id, or top frame + exception)
+    /// may open from a single window before they are folded onto one site-level incident.
+    ///
+    /// <para>🚨 This is the FLOOR under the "too fine" direction, not a tuning knob. The identity
+    /// discriminates on the fault's masked text, and masking cannot anticipate every message shape;
+    /// when it misses, one defect fans out into one ticket per subject — 2026-08-09 produced ~50
+    /// that way. Past this budget the watcher stops believing its own split and files ONE incident
+    /// carrying <c>Variants</c>, which says the masking rule needs a case rather than burying a
+    /// human in tickets.</para>
+    ///
+    /// <para>The default sits between the two numbers production has actually produced: the 13
+    /// NodeTypes parked at <c>CompileError</c> on 2026-08-17 stay 13 tickets (each needs its own
+    /// fix), and the ~50-way fan-out folds. Zero or less disables the fold entirely.</para>
+    /// </summary>
+    public int MaxVariantsPerSite { get; init; } = 20;
+
     /// <summary>Evidence lines sent per report.</summary>
     public int MaxSamplesPerReport { get; init; } = 5;
 

@@ -11,9 +11,12 @@ namespace MeshWeaver.Observability.Test;
 public class StructuralIdentityTest
 {
     private static LogBurst Burst(string category, int eventId, string message,
-        string? exception = null, string? frame = null) =>
+        string? exception = null, string? frame = null, string? exceptionMessage = null) =>
         new(category, eventId, LogSeverity.Error, message,
-            LogLineParser.Normalize(message), exception, frame);
+            LogLineParser.Normalize(message), exception, frame,
+            exceptionMessage is { Length: > 0 } detail
+                ? LogLineParser.Normalize(detail)
+                : LogLineParser.Normalize(message));
 
     /// <summary>
     /// Round 3's failure: one ROUTER_TRAFFIC defect, reported once per target hub, produced ~50
@@ -241,24 +244,98 @@ public class StructuralIdentityTest
     }
 
     /// <summary>
-    /// A burst with neither exception nor frame is identified by its log SITE alone — the message
-    /// contributes nothing, so no wording change can fork it.
+    /// A burst with neither exception nor frame is identified by its log site AND its masked message —
+    /// the message is the only thing left that says WHICH fault it is.
+    ///
+    /// <para>🚨 The second half of this test used to assert the opposite: that "something else
+    /// entirely" at the same site was the SAME incident, because prose contributed nothing at all.
+    /// That is the rule #1787 measured in production and found indefensible — one log site became one
+    /// ticket no matter how many different things it reported, so thousands of red lines a window
+    /// collapsed onto one to three fingerprints and thirteen parked NodeTypes were never ticketed.
+    /// Volatile parts are still masked, so a COUNT changing cannot fork anything.</para>
     /// </summary>
     [Fact]
-    public void BareDiagnostics_AreIdentifiedByTheirLogSite()
+    public void BareDiagnostics_AreIdentifiedByTheirLogSiteAndMaskedMessage()
     {
         var a = StructuralLogIncidentIdentity.Compute(
             Burst("DynamicTypePreWarmer", 0, "REFUSING READINESS — 3 NodeType(s) regressed on this image"));
         var b = StructuralLogIncidentIdentity.Compute(
             Burst("DynamicTypePreWarmer", 0, "REFUSING READINESS — 17 NodeType(s) regressed on this image"));
 
-        b.Should().Be(a);
+        b.Should().Be(a, "the count is masked — the same diagnostic with a different number is the "
+                         + "same fault, and this is what keeps a storm to one ticket");
 
-        // …and the same holds for a wholly different wording at the same site: prose is not part of
-        // the key at all, which is the property four earlier rules lacked.
         StructuralLogIncidentIdentity.Compute(
                 Burst("DynamicTypePreWarmer", 0, "something else entirely"))
-            .Should().Be(a);
+            .Should().NotBe(a,
+                "a different thing reported by the same logger is a different fault — collapsing "
+                + "those was the #1787 defect: one site, one ticket, whatever it said");
+    }
+
+    /// <summary>
+    /// 🚨 THE #1787 CASE, in miniature: same category, same event id, same exception type, same top
+    /// frame — everything the identity used to consist of — and thirteen genuinely different faults.
+    /// The exception's OWN message is what tells them apart, and it is now what the identity keys on.
+    /// (<c>ProdRedLogFixtureTest</c> runs this on the verbatim production bursts.)
+    /// </summary>
+    [Fact]
+    public void SameFrameAndException_DifferentExceptionMessages_StayApart()
+    {
+        LogBurst Compile(string diagnostic) => Burst(
+            "MeshWeaver.Graph.Configuration.MeshNodeCompilationService", 0,
+            "Failed to compile assembly for node MeshWeaver/samples/Graph/Data/X.",
+            exception: "MeshWeaver.Compiler.CompilationException",
+            frame: "MeshWeaver.Compiler.EmitPipeline.EmitCompilationToDirectory(CSharpCompilation compilation)",
+            exceptionMessage: diagnostic);
+
+        var missingType = StructuralLogIncidentIdentity.Compute(
+            Compile("CS0246 Error (line 58): The type or namespace name 'Cashflow' could not be found"));
+        var missingMethod = StructuralLogIncidentIdentity.Compute(
+            Compile("CS1061 Error (line 58): 'LayoutDefinition' does not contain a definition for 'AddX'"));
+
+        missingMethod.Should().NotBe(missingType,
+            "a missing type and a missing extension method are two fixes, so two tickets");
+    }
+
+    /// <summary>
+    /// …and the counterweight: the SAME fault repeated is still one incident, however many times and
+    /// on however many nodes it fires. Everything that varies per occurrence is masked out of the
+    /// exception message before it is hashed.
+    /// </summary>
+    [Fact]
+    public void SameExceptionMessage_OnDifferentNodes_IsOneIncident()
+    {
+        LogBurst Compile(string node, string symbol) => Burst(
+            "MeshWeaver.Graph.Configuration.MeshNodeCompilationService", 0,
+            $"Failed to compile assembly for node MeshWeaver/samples/Graph/Data/{node}.",
+            exception: "MeshWeaver.Compiler.CompilationException",
+            frame: "MeshWeaver.Compiler.EmitPipeline.EmitCompilationToDirectory(CSharpCompilation compilation)",
+            exceptionMessage:
+            $"Compilation failed for 'MeshWeaver/samples/Graph/Data/{node}':\n"
+            + $"CS0246 Error (line 58): The type or namespace name '{symbol}' could not be found");
+
+        StructuralLogIncidentIdentity.Compute(Compile("SocialMedia/Post", "SocialMediaPost"))
+            .Should().Be(StructuralLogIncidentIdentity.Compute(Compile("SocialMedia/Profile", "SocialMediaProfile")),
+                "two nodes failing the same way is ONE defect with two instances — the node paths and "
+                + "the symbol names are masked, so the identity is the failure SHAPE");
+    }
+
+    /// <summary>
+    /// The site fold is a different key space from the per-detail one. Otherwise a folded site and a
+    /// burst that genuinely carries no detail would share an incident node.
+    /// </summary>
+    [Fact]
+    public void SiteFold_IsDistinctFromEveryPerDetailIdentity()
+    {
+        var burst = Burst("PluginGating", 0, "reconcile is NOT CONVERGING");
+
+        StructuralLogIncidentIdentity.ComputeSiteFold(burst)
+            .Should().NotBe(StructuralLogIncidentIdentity.Compute(burst));
+        StructuralLogIncidentIdentity.ComputeSiteFold(burst)
+            .Should().Be(StructuralLogIncidentIdentity.ComputeSiteFold(
+                    Burst("PluginGating", 0, "a completely different message")),
+                "the fold is the SITE's identity — that is what makes it one ticket");
+        StructuralLogIncidentIdentity.ComputeSiteFold(burst).Should().HaveLength(16);
     }
 
     [Fact]

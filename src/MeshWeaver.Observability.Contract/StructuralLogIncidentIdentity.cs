@@ -4,37 +4,44 @@ using System.Text;
 namespace MeshWeaver.Observability;
 
 /// <summary>
-/// The default identity: <b>the fault, not the reporter</b>.
+/// The default identity: <b>the fault, not the reporter</b> — located by frame or site, and
+/// discriminated by the fault's own text.
 ///
-/// <para>Two rules, and which one applies is decided by the burst itself:</para>
+/// <para>Three parts, and the first two are decided by the burst itself:</para>
 /// <list type="number">
-/// <item><b>The burst names an application frame</b> ⇒ the incident IS
-/// <c>(top application frame, exception type)</c>. The log category and event id are DISCARDED —
-/// they say who caught and printed the fault, not where it is. One exception unwinding through two
-/// catch sites is one defect however many of them log it.</item>
-/// <item><b>It names no application frame</b> ⇒ there is no location to key on, so the log SITE
-/// (category + event id) is the locator, plus the exception type when there is one. This is the
-/// #1002 rule, unchanged: a bare diagnostic is identified by the site the code assigns it.</item>
+/// <item><b>WHERE.</b> The burst names an application frame ⇒ the locator IS that frame, and the log
+/// category and event id are DISCARDED — they say who caught and printed the fault, not where it is.
+/// No frame ⇒ there is no location to key on, so the log SITE (category + event id) is the locator.
+/// This is the #1002 rule, unchanged.</item>
+/// <item><b>WHAT.</b> The exception type, by simple name.</item>
+/// <item><b>WHICH.</b> The normalized <i>detail</i>: the exception's OWN message when there is one,
+/// else the logged message. Masked first — guids, timestamps, paths, quoted literals, hex blobs,
+/// labelled identifiers, numbers, and any token the message itself uses as a path segment
+/// (<see cref="LogLineParser.Normalize"/>).</item>
 /// </list>
 ///
-/// <para>The message never participates, in either branch. That is the correction for four rounds
-/// of getting this wrong: every failure came from prose being part of the key, because a message
-/// embeds its subject in an arbitrary position (<c>target: Claims</c>, <c>[PluginGating] Chess:</c>)
-/// and no amount of masking anticipates the next shape.</para>
+/// <para>🚨 <b>Why the detail had to come back (#1787).</b> Without it, "same frame + same exception
+/// type" was the whole key, and on 2026-08-17 that mapped THIRTEEN NodeTypes parked at
+/// <c>CompileError</c> onto ONE fingerprint: every one of them throws <c>CompilationException</c>
+/// from <c>EmitPipeline.EmitCompilationToDirectory</c>, so thirteen independently-actionable
+/// compiler errors produced one ticket — and #1786 had to be filed by hand. Thousands of red lines
+/// per window were collapsing to one to three fingerprints; the contract is one triaged issue per
+/// distinct error.</para>
 ///
-/// <para>🚨 <b>Why the category had to go.</b> Keying on it split #1170 from #1171 — ONE
-/// <c>ObjectDisposedException</c> raised at <c>SynchronizationStream&lt;T&gt;.OnCompleted()</c>
-/// during one hub teardown on one pod at one instant, logged once by
-/// <c>MeshWeaver.Messaging.MessageHub</c> ("Error during shutdown of hub …") and once by
-/// <c>MeshWeaver.Messaging.HostedHubsCollection</c> ("Hub … disposal faulted"). Same fault, same
-/// frame, two reporters, two tickets. The frame is a strictly more specific locator than the
-/// category — it names the exact method — so dropping the category where a frame exists cannot
-/// merge anything the category was keeping apart for a good reason.</para>
+/// <para>🚨 <b>Why the detail is the EXCEPTION's message, not the reporter's.</b> That is the whole
+/// lesson of #1170/#1171: ONE <c>ObjectDisposedException</c> raised at
+/// <c>SynchronizationStream&lt;T&gt;.OnCompleted()</c> during one hub teardown, logged once by
+/// <c>MessageHub</c> ("Error during shutdown of hub …") and once by <c>HostedHubsCollection</c>
+/// ("Hub … disposal faulted"). The prose differs per reporter; the exception message
+/// ("Cannot access a disposed object.") does not. Keying on the fault's own words folds the
+/// reporters and still splits genuinely different faults. Only a burst with NO exception falls back
+/// to the logged message — there it is the only text there is.</para>
 ///
-/// <para>The remaining trade is deliberate and unchanged: two genuinely different faults raised at
-/// the same frame with the same exception type collapse into one incident. That is the SAFE
-/// direction — an under-split incident is one ticket a human can split, whereas an over-split one
-/// is fifty tickets nobody reads, and fifty was what production actually produced.</para>
+/// <para>Four earlier rounds fanned out because they hashed the reporter's prose with the subject
+/// still in it, in whatever position the message happened to put it. Masking now reads the subject
+/// out of the message rather than guessing at its position — see
+/// <c>LogLineParser.MaskSubjects</c> — and <see cref="ComputeSiteFold"/> bounds whatever that still
+/// misses.</para>
 ///
 /// <para>Override it by implementing <see cref="ILogIncidentIdentity"/> in a Code node; this stays
 /// the fallback when none is compiled.</para>
@@ -54,23 +61,51 @@ public sealed class StructuralLogIncidentIdentity : ILogIncidentIdentity
     public static string Compute(LogBurst burst)
     {
         ArgumentNullException.ThrowIfNull(burst);
+        return Hash(Payload(burst, Detail(burst)));
+    }
 
+    /// <summary>
+    /// The identity of a whole log SITE, with the detail deliberately dropped — the fold the
+    /// aggregator applies when one site produced more distinct details in a single window than the
+    /// configured budget allows.
+    ///
+    /// <para>This is the deliberate floor under the "too fine" direction. Masking cannot anticipate
+    /// every message shape, and the cost of guessing wrong is asymmetric: an under-split incident is
+    /// one ticket a human can split, an over-split one is fifty tickets nobody reads — and fifty is
+    /// what production actually produced on 2026-08-09. So a site that fans out past the budget
+    /// stops being N tickets and becomes ONE, whose body says how many shapes it covered.</para>
+    /// </summary>
+    /// <param name="burst">Any burst from the site being folded.</param>
+    /// <returns>A 16-hex-character token, distinct from every per-detail identity.</returns>
+    public static string ComputeSiteFold(LogBurst burst)
+    {
+        ArgumentNullException.ThrowIfNull(burst);
+        // The "fold" tag keeps this out of the per-detail namespace: a site fold and a genuine burst
+        // with an empty detail must never share a fingerprint.
+        return Hash("fold\n" + Payload(burst, ""));
+    }
+
+    private static string Payload(LogBurst burst, string detail)
+    {
         var fault = SimpleTypeName(burst.ExceptionType);
 
         // The branch tag ("frame"/"site") is part of the payload so the two rules can never collide
         // on a hash — a category that happens to read like a frame stays its own incident.
-        var payload = burst.TopFrame is { Length: > 0 } frame
-            ? $"frame\n{frame}\n{fault}"
-            // 🚨 No application frame — a bare diagnostic, or a fault whose whole stack is framework.
-            // The message contributes NOTHING here either: the subject sits in an arbitrary position
-            // (`[PluginGating] Chess:` puts it before the colon, where a `label: value` rule cannot
-            // see it), and masking only ever anticipates the shape you have already seen. Category +
-            // EventId identifies the log SITE, which is what the code itself asserts.
-            : $"site\n{burst.Category}\n{burst.EventId}\n{fault}";
-
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
-        return Convert.ToHexStringLower(hash.AsSpan(0, 8));
+        return burst.TopFrame is { Length: > 0 } frame
+            ? $"frame\n{frame}\n{fault}\n{detail}"
+            : $"site\n{burst.Category}\n{burst.EventId}\n{fault}\n{detail}";
     }
+
+    /// <summary>
+    /// The discriminating text. <see cref="LogBurst.NormalizedDetail"/> when the parser supplied one;
+    /// otherwise the normalized message, so a hand-built burst (or an older caller) still splits on
+    /// what it has rather than silently collapsing a whole site onto one ticket.
+    /// </summary>
+    private static string Detail(LogBurst burst) =>
+        burst.NormalizedDetail is { Length: > 0 } detail ? detail : burst.NormalizedMessage;
+
+    private static string Hash(string payload) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(payload)).AsSpan(0, 8));
 
     /// <summary>
     /// The exception type without its namespace. One fault reaches the watcher in two spellings —
