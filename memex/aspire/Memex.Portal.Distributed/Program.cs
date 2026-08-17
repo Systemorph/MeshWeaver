@@ -9,6 +9,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.PostgreSql;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using MeshWeaver.NuGet.AzureBlob;
@@ -199,6 +200,53 @@ if (bakeMode)
 var orleansClustering = builder.Configuration["Features:Orleans:Clustering"]
     ?? builder.Configuration["Deployment:Orleans:Clustering"]
     ?? "AzureTables";
+
+// 🚨 AdoNet clustering is the MULTI-SILO shape, and multi-silo is precisely when the streaming
+// pub-sub subscription registry may not be in-memory (issue #1729). Derived from the clustering
+// provider rather than exposed as its own knob, so the two can never drift apart: a deployment
+// that turned on real clustering has, by that single act, also made its reply path survivable.
+//
+// What goes wrong without it: every cross-silo delivery to a stream-routed hub — mesh/, portal/,
+// client/, cache/, import/, and therefore every REPLY to one — is published to an Orleans memory
+// stream. The pulling agent asks PubSubStore who is subscribed; with AddMemoryGrainStorage that
+// answer lives in the RAM of whichever silo happened to host the PubSubRendezvousGrain, so when
+// that silo departs (EVERY rolling deploy overlaps two silos and then drops one) the answer
+// becomes "nobody" — permanently, for that stream. The consumer's handle stays valid and silent,
+// the publish still reports success, and the message is discarded with nothing logged anywhere.
+// On memex-cloud that surfaced as one replica serving /api/content in 6–57 ms while the other ran
+// out its entire 60 s reply budget, deterministically, across several image rolls.
+//
+// Postgres — the same `orleans` database that already holds cluster membership — makes the
+// registry outlive any single silo, so the surviving consumer's subscription is still there after
+// the departure. The migration creates the Orleans persistence tables next to the membership ones.
+var useAdoNetClustering = !bakeMode
+    && string.Equals(orleansClustering, "AdoNet", StringComparison.OrdinalIgnoreCase);
+string? orleansConnectionString = null;
+if (useAdoNetClustering)
+{
+    // The `orleans` database and its connection string are declared in the Aspire AppHost and
+    // injected as ConnectionStrings:orleans; the db-migration creates the Orleans membership AND
+    // persistence tables. (AzureTables — the ACA path — is configured by the Aspire Orleans
+    // integration via WithReference(orleans), so it needs no explicit call here.)
+    orleansConnectionString = builder.Configuration.GetConnectionString("orleans")
+        ?? throw new InvalidOperationException(
+            "Features:Orleans:Clustering=AdoNet but ConnectionStrings:orleans is not set. " +
+            "The Aspire AppHost must add an 'orleans' database and WithReference it on the portal.");
+    if (!System.Data.Common.DbProviderFactories.GetProviderInvariantNames().Contains("Npgsql"))
+        System.Data.Common.DbProviderFactories.RegisterFactory("Npgsql", Npgsql.NpgsqlFactory.Instance);
+}
+
+// Null ⇒ ConfigureMeshWeaverServer keeps the in-memory store, which is correct ONLY for a cluster
+// of one: bake mode (localhost clustering by construction), Localhost clustering, and the
+// single-process Monolith.
+var configurePubSubStore = useAdoNetClustering
+    ? new Action<ISiloBuilder>(silo => silo.AddAdoNetGrainStorage(StreamProviders.PubSubStore, o =>
+    {
+        o.Invariant = "Npgsql";
+        o.ConnectionString = orleansConnectionString!;
+    }))
+    : null;
+
 var address = AddressExtensions.CreateMeshAddress();
 builder.UseOrleansMeshServer(address, silo =>
     {
@@ -242,27 +290,20 @@ builder.UseOrleansMeshServer(address, silo =>
         {
             silo.UseLocalhostClustering();
         }
-        else if (string.Equals(orleansClustering, "AdoNet", StringComparison.OrdinalIgnoreCase))
+        else if (useAdoNetClustering)
         {
-            // Real, Postgres-backed cluster membership (self-host / HA). The `orleans`
-            // database and its connection string are declared in the Aspire AppHost and
-            // injected as ConnectionStrings:orleans; the db-migration creates the Orleans
-            // membership tables. (AzureTables — the ACA path — is configured by the Aspire
-            // Orleans integration via WithReference(orleans), so it needs no explicit call.)
-            var orleansConnectionString = builder.Configuration.GetConnectionString("orleans")
-                ?? throw new InvalidOperationException(
-                    "Features:Orleans:Clustering=AdoNet but ConnectionStrings:orleans is not set. " +
-                    "The Aspire AppHost must add an 'orleans' database and WithReference it on the portal.");
-            if (!System.Data.Common.DbProviderFactories.GetProviderInvariantNames().Contains("Npgsql"))
-                System.Data.Common.DbProviderFactories.RegisterFactory("Npgsql", Npgsql.NpgsqlFactory.Instance);
+            // Real, Postgres-backed cluster membership (self-host / HA). Connection string and
+            // Npgsql provider-factory registration are hoisted above, because the streaming
+            // pub-sub store derives from the SAME decision and is configured before this lambda.
             silo.UseAdoNetClustering(o =>
             {
                 o.Invariant = "Npgsql";
-                o.ConnectionString = orleansConnectionString;
+                o.ConnectionString = orleansConnectionString!;
             });
         }
         return silo;
-    }
+    },
+    configurePubSubStore
     )
     .ConfigureServices(services => services
         .AddPartitionedPostgreSqlPersistence(
