@@ -105,6 +105,25 @@
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Snowflake/MeshWeaver.Hosting.Snowflake.csproj" />
   </ItemGroup>
 
+  <!--
+    MeshModulesClosureSubset — narrow the CLOSURE lane to the named modules (semicolon-separated,
+    no extension). The inventory above stays the ONE place a module's path is written; a consumer
+    picks from it by name, never restates it.
+
+    Today exactly one consumer sets it: test/Memex.Portal.Shared.Test, which lays the two storage
+    backends into its OWN bin so StorageModuleLayoutTest can load the very layout the image ships
+    (#1752 — the backends have no ProjectReference anywhere, so nothing else proves their folder is
+    loadable). Reusing THIS worker is the whole point: a hand-copied publish+prune in the test would
+    be a second detector, free to agree with itself while the shipped layout is broken.
+
+    🚨 A HOST must never set it: -p: makes a property global to every project in the build, so one
+    stray flag would narrow the image's own layout too. A subset naming nothing fails the lane RED
+    (below) rather than laying out nothing and reporting success.
+  -->
+  <PropertyGroup>
+    <_MeshModulesSubsetNames>;$(MeshModulesClosureSubset);</_MeshModulesSubsetNames>
+  </PropertyGroup>
+
   <Target Name="PublishMeshModules" AfterTargets="Publish" Condition="'$(PublishMeshModules)' != 'false'">
     <PropertyGroup>
       <!-- EnsureTrailingSlash: GetFullPath does not guarantee one, and every use below
@@ -152,7 +171,7 @@
     <MSBuild Projects="$(MSBuildThisFileFullPath)"
              Targets="LayoutMeshModuleClosures"
              BuildInParallel="false"
-             Properties="MeshModulesAppDir=$(_AppPublishDir);Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=true" />
+             Properties="MeshModulesAppDir=$(_AppPublishDir);Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=true;MeshModulesClosureSubset=$([MSBuild]::Escape('$(MeshModulesClosureSubset)'))" />
 
     <ItemGroup>
       <_ModuleFileKept Include="$(_AppPublishDir)modules/**/*.*" />
@@ -170,7 +189,7 @@
     <MSBuild Projects="$(MSBuildThisFileFullPath)"
              Targets="LayoutMeshModuleClosures"
              BuildInParallel="false"
-             Properties="MeshModulesAppDir=$([System.IO.Path]::GetFullPath('$(OutDir)', '$(MSBuildProjectDirectory)'));Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=false" />
+             Properties="MeshModulesAppDir=$([System.IO.Path]::GetFullPath('$(OutDir)', '$(MSBuildProjectDirectory)'));Configuration=$(Configuration);MeshModulesTargetFramework=$(TargetFramework);NetCoreTargetingPackRoot=$(NetCoreTargetingPackRoot);MeshModulesGuardAppRoot=false;MeshModulesClosureSubset=$([MSBuild]::Escape('$(MeshModulesClosureSubset)'))" />
   </Target>
 
   <!-- The closure-lane worker. Runs against THIS file as its own project (see the callers for
@@ -181,6 +200,18 @@
     <PropertyGroup>
       <_AppDir>$([MSBuild]::EnsureTrailingSlash('$(MeshModulesAppDir)'))</_AppDir>
     </PropertyGroup>
+
+    <!-- Narrow to @(MeshModuleClosure) entries named by MeshModulesClosureSubset. INSIDE the
+         target on purpose: %(Filename) in a top-level ItemGroup condition evaluates to EMPTY
+         rather than erroring, which silently drops EVERY module — a lane that lays out nothing
+         while reporting success. Batching only binds metadata within a target. -->
+    <ItemGroup Condition="'$(MeshModulesClosureSubset)' != ''">
+      <_MeshModuleClosureDropped Include="@(MeshModuleClosure)"
+                                 Condition="!$(_MeshModulesSubsetNames.Contains(';%(Filename);'))" />
+      <MeshModuleClosure Remove="@(_MeshModuleClosureDropped)" />
+    </ItemGroup>
+    <Error Condition="'$(MeshModulesClosureSubset)' != '' And '@(MeshModuleClosure->Count())' == '0'"
+           Text="LayoutMeshModuleClosures: MeshModulesClosureSubset='$(MeshModulesClosureSubset)' names no module in the inventory, so this lane would lay out nothing and report success. Use the bare assembly names from the @(MeshModuleClosure) list above." />
 
     <!-- The module's own dll in the APP root means a ships-the-bits ProjectReference came back
          (the same-identity double-load trap — #1644's fail-if-referenced guard) or the publish
@@ -205,7 +236,7 @@
              Targets="Restore"
              BuildInParallel="false"
              Properties="Configuration=$(Configuration)"
-             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
+             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
 
     <!-- Build, then Publish with NoBuild — deliberately TWO invocations, and the Build one runs
          with the module's ordinary global properties (RemoveProperties strips everything this
@@ -219,7 +250,7 @@
              Targets="Build"
              BuildInParallel="false"
              Properties="Configuration=$(Configuration)"
-             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
+             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishDir;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
     <!-- SatelliteResourceLanguages=en: without it the closure publish lays out a culture folder
          per Roslyn localization (cs/de/es/… via Kernel.Hub), every one a same-identity duplicate
          of the app's own satellite folders. Suppressing them at the SOURCE beats deleting them
@@ -230,7 +261,7 @@
              Targets="Publish"
              BuildInParallel="false"
              Properties="Configuration=$(Configuration);NoBuild=true;SatelliteResourceLanguages=en;PublishDir=$(_AppDir)modules/%(Filename)/"
-             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;NetCoreTargetingPackRoot;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
+             RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
 
     <!-- Prune (0): RID trees. A module loads via Assembly.LoadFrom, which never consults the
          module's deps.json — the fallback probe is the module's FLAT folder only — so a
