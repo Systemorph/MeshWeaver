@@ -176,15 +176,18 @@ public class SilentReadNackTest(ITestOutputHelper output) : MonolithMeshTestBase
     ///
     /// <para>This is what the fix is FOR. Before it the same sequence produced
     /// <c>GetMeshNode('…') timed out after 60.0s … Target: NO LOCAL HUB</c> — a minute of stall
-    /// ending in a wrong explanation. Now the NACK arrives, <c>GetMeshNode</c> re-probes ONCE
-    /// against the fresh activation, and the read resolves.</para>
+    /// ending in a wrong explanation. Now the NACK arrives, <c>GetMeshNode</c> re-probes the
+    /// fresh activation immediately, and the read resolves.</para>
     ///
     /// <para>🚨 It also bounds the re-probe by demonstration rather than by assertion, which
     /// matters because a transient NACK a consumer answers by asking again is the shape behind the
-    /// 2026-06-08 resubscribe-storm outage. The claim is <c>Interlocked.Exchange(ref reProbed, 1)</c>
-    /// on a local declared INSIDE <c>GetMeshNode</c>'s <c>Observable.Create</c> — one per
-    /// subscription, no timer, no <c>Retry</c> operator, no shared counter. A loop would never
-    /// settle on a value; this settles on the real node, far inside the budget.</para>
+    /// 2026-06-08 resubscribe-storm outage. The re-probing is per-subscription state declared
+    /// INSIDE <c>GetMeshNode</c>'s <c>Observable.Create</c> — first NACK immediately, later NACKs
+    /// on a half-second pacing timer, everything disposed with the read and terminated by the
+    /// caller's own budget CTS (see <c>GetMeshNodeShuttingDownIsNotAbsentTest</c> for the paced
+    /// bound). No <c>Retry</c> operator, no shared counter, no re-arm outside the read's
+    /// lifetime — a storm has nothing to ride. Here the FIRST re-probe already lands on a healthy
+    /// activation, so the read settles on the real node far inside the budget.</para>
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task GetMeshNode_WhenOwnerIsDisposedMidRead_RecoversOnTheReProbe()
