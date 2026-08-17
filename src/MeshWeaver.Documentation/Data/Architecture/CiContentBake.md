@@ -184,16 +184,23 @@ portals' storage account and carries 8 federated credentials — the four satell
 GitHub subject formats (classic and immutable; **register both, always** — see
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)) — with the
 `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` secrets set on all four repos.
-**A red publish-bake was designed debt until 2026-08-17 and is a real failure after it** — treat
-any surviving allowlist or "credentials pending" reference to a satellite's publish lane as
-historical. The framework-release dispatch that fans a platform release out to the satellites is
+**A red publish-bake was designed debt until 2026-08-17 and is a real failure after it** —
+treat any surviving allowlist or "credentials pending" reference to a satellite's publish lane
+as historical. The framework-release dispatch that fans a platform release out to the satellites is
 still dormant (`BAKE_SUBSCRIBER_REPOS` / `DEPENDENT_DISPATCH_TOKEN` unprovisioned); until it is
 armed, a satellite re-bakes on its own `main` pushes only.
 
-🚨 A satellite's publication is adoptable at boot; **the platform's own is not, today** — issue
-#1725: the platform bakes from CI build output while the pod resolves its identity inside the
-shipped image, so the identities differ and every boot recompiles the shipped types. The
-satellites escape it precisely because they bake INSIDE the image.
+**Measured in production, 2026-08-17** — for satellite content the lane is not a design any more,
+it is observed behaviour. On `memex` running `3.0.0-rc4.ci.4049` (identity
+`s377941f549f721e01ac764e0fb8db84a`), boot
+**adopted 68 prebuilt assemblies from 31 sealed bundles in 18.9 s**
+and Roslyn-compiled **zero** healthy types (warm-up 32.1 s, `compiled=0`, `alreadyBaked=84`).
+The comparable boot before any satellite bake existed did **80 compiles in 64.8 s**.
+
+🚨 That measurement is **satellite content only**. The platform's own publication is NOT adoptable
+today — issue #1725: the platform bakes from CI build output while the pod resolves its identity
+inside the shipped image, so the identities differ and every boot recompiles the platform's shipped
+types. The satellites escape it precisely because they bake INSIDE the image.
 
 ## What this step does not do yet
 
