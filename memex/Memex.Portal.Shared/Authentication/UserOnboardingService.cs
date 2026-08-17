@@ -63,6 +63,14 @@ public sealed class UserOnboardingService(
             Email = request.Email.Trim(),
             Bio = string.IsNullOrWhiteSpace(request.Bio) ? null : request.Bio!.Trim(),
             Role = string.IsNullOrWhiteSpace(request.Role) ? null : request.Role!.Trim(),
+            // The UI language, chosen on the onboarding form and defaulted there from the visitor's
+            // own computer language (Accept-Language → AccessContext.Locale). Set HERE, at user
+            // creation, rather than left to the browser detector: the detector only runs inside the
+            // authenticated portal shell, i.e. AFTER onboarding, so a German-speaking user filled in
+            // this form — and saw the first screens — in English. Resolved through Locales.TryMatch
+            // so an unshipped tag stores nothing rather than pinning the profile to a language we
+            // would render in English anyway.
+            Locale = Locales.TryMatch(request.Locale),
             // Pin the four documentation sections so a new user's Pinned tab opens
             // onto a clean grid of doc landing pages (each with its own TOC).
             PinnedPaths = ["Doc/Architecture", "Doc/DataMesh", "Doc/GUI", "Doc/AI"],
@@ -236,4 +244,10 @@ public sealed record UserOnboardingRequest(
     string? FullName = null,
     string? Bio = null,
     string? Role = null,
-    string? AvatarUrl = null);
+    string? AvatarUrl = null,
+    // The BCP-47 UI language for the new user ("de"), from the onboarding form's language picker —
+    // which itself defaults to the visitor's own computer language, negotiated from the request's
+    // Accept-Language header onto AccessContext.Locale. Resolved through Locales.TryMatch at the
+    // point of use, so a tag this deployment does not ship stores nothing rather than pinning the
+    // profile to a language we would only ever render in English anyway.
+    string? Locale = null);
