@@ -612,9 +612,13 @@ jobs:
     # it gives the unbounded operation INSIDE it a bound, so a stall is reported as the infra
     # failure it is instead of consuming the whole job silently.
     #
-    # 240 s × 3 attempts + backoff ≈ 12.5 min worst case, comfortably inside the job cap, while
-    # a healthy install takes well under a minute. (`timeout` exists on the Linux runners; the
-    # AGENTS.md warning about it is specific to the macOS dev host.)
+    # Worst case, counting EVERY term: 3 attempts × (240 s timeout + up to 30 s `--kill-after`
+    # grace, if the process ignores SIGTERM) + 10 s + 20 s backoff ≈ 14 min — inside the shard's
+    # 20-minute `timeout-minutes`, with ~6 min of headroom for the rest of the job. A healthy
+    # install takes well under a minute. 🚨 Keep this arithmetic honest if you change either bound:
+    # it is the reason the step cannot itself become the thing that exhausts the job, which is the
+    # exact failure being fixed. (`timeout` exists on the Linux runners; the AGENTS.md warning
+    # about it is specific to the macOS dev host.)
     #
     # Keep PLAYWRIGHT_VERSION in step with deploy/base-images/portal-ai/Dockerfile.
     - name: "Provision the headless browser (infra, not a test)"
