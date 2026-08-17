@@ -40,6 +40,32 @@ hook: the gRPC-web MIDDLEWARE must run between `UseRouting` and the endpoint map
 keeps a single compiled `UseMeshWeaverGrpcWebWhenInstalled()` line that self-gates on the module
 being listed — the module listing stays the only switch.
 
+### Which routes ride the module, and which stay in the host
+
+Not every route belonging to a module's feature belongs *in* the module. The dividing question is
+**whose API is it**:
+
+- **The module's OWN protocol surface rides the module.** LinkedIn's OAuth callbacks and the
+  `meshweaver.v1.Mesh` gRPC service exist only because that module exists; nobody calls them when
+  it is delisted, and a 404 is the honest answer. They also carry their own auth story
+  (`AllowAnonymous` plus a CSRF cookie; per-connection Bearer metadata), so nothing is left behind
+  in the host.
+- **The PORTAL's client API stays in the host, behind a 503 seam** — even when the engine it calls
+  ships as a module. `POST /api/log-incidents` (Observability) and `POST /api/speech/transcribe`
+  (Speech) are both this shape: the route is part of the portal's REST surface that clients are
+  configured against, it is gated by the host's own authorization policy, and it resolves the
+  module's service **optionally**, answering an actionable 503 that names the missing module rather
+  than a 500 or a bare 404.
+
+Two things go wrong when a portal-API route is pushed onto the hook. The caller loses the
+diagnosis — "the module is not listed" becomes an indistinguishable 404 — and, more sharply, the
+route loses the host's authorization policy. The module hook's group applies the **default**
+policy; a route that needs a specific one (the portal's Bearer-only `McpAuth`, whose challenge
+forwarding is what makes an unauthenticated API call answer `401 + WWW-Authenticate` instead of
+`302` to an HTML login) would have to name that policy by string across the assembly boundary,
+which throws at request time in any host that never registered it. Both failures pass CI and
+surface as "the mobile app logs me out".
+
 Module DI options bind through the options pipeline —
 `services.AddOptions<T>().BindConfiguration("Section")` — never `services.Configure(section)`:
 there is no `IConfiguration` instance at install time. A module whose activation depends on
