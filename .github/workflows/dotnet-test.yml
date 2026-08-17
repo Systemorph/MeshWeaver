@@ -596,26 +596,58 @@ jobs:
     # input-shaped `if:` — a browser this step failed to install must redden the shard, not
     # silently leave the tests asserting the "no browser here" branch and calling it green.
     #
+    # 🚨 EVERY ATTEMPT IS TIME-BOUNDED, because the retry loop below defends against the
+    # download FAILING and a stalled CDN does not fail — it hangs. Observed on PR #1808
+    # (run 32071216434, shard 0): `npx playwright-core install` sat for the shard's whole
+    # 20-minute `timeout-minutes` budget, was killed with the job, and was still alive at
+    # cleanup ("Terminate orphan process: npm exec playwright-core@1.62.1 install"). Because
+    # the command never returned, `ok` stayed 0, no retry ever ran, and the step's own INFRA
+    # error never printed. The shard executed ZERO tests — no `test-results.log`, no `.trx` —
+    # so `Consolidate test results` failed on missing results and the run reported CANCELLED:
+    # a shape that reads like a test problem and names nothing.
+    #
+    # `timeout` turns the hang into an ordinary non-zero exit, which the retry loop ALREADY
+    # handles correctly, so one bound restores the behaviour the step was written to have.
+    # This is not raising a budget to make something pass — the 20-minute job cap is unchanged;
+    # it gives the unbounded operation INSIDE it a bound, so a stall is reported as the infra
+    # failure it is instead of consuming the whole job silently.
+    #
+    # 240 s × 3 attempts + backoff ≈ 12.5 min worst case, comfortably inside the job cap, while
+    # a healthy install takes well under a minute. (`timeout` exists on the Linux runners; the
+    # AGENTS.md warning about it is specific to the macOS dev host.)
+    #
     # Keep PLAYWRIGHT_VERSION in step with deploy/base-images/portal-ai/Dockerfile.
     - name: "Provision the headless browser (infra, not a test)"
       env:
         PLAYWRIGHT_VERSION: 1.62.1
         PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
+        BROWSER_INSTALL_TIMEOUT: 240
       run: |
         set -euo pipefail
         sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
         sudo chown "$(id -u):$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
         ok=0
         for attempt in 1 2 3; do
-          if npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium; then
+          rc=0
+          timeout --signal=TERM --kill-after=30 "$BROWSER_INSTALL_TIMEOUT" \
+            npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium || rc=$?
+          if [ $rc -eq 0 ]; then
             ok=1; break
           fi
+          # 124 is `timeout`'s own "the command was still running" code — call it out, because a
+          # STALL and a FAILED download want different follow-up (CDN/runner network vs a bad
+          # version pin), and the two are indistinguishable once both read as "attempt failed".
+          if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then
+            echo "::warning::browser install attempt $attempt HUNG (no output for ${BROWSER_INSTALL_TIMEOUT}s) and was killed — treating as a failed attempt" >&2
+          else
+            echo "browser install attempt $attempt failed (exit $rc); retrying" >&2
+          fi
           delay=$((10 * attempt))
-          echo "browser install attempt $attempt failed; retrying in ${delay}s" >&2
+          echo "retrying in ${delay}s" >&2
           sleep $delay
         done
         if [ $ok -eq 0 ]; then
-          echo "::error::could not install the headless browser after 3 attempts — this is an INFRA failure, not a test failure."
+          echo "::error::could not install the headless browser after 3 attempts (each bounded at ${BROWSER_INSTALL_TIMEOUT}s) — this is an INFRA failure, not a test failure."
           exit 1
         fi
         # The binary is named differently per platform (see the Dockerfile); match both so this
