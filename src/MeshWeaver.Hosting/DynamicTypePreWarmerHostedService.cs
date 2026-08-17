@@ -2,6 +2,7 @@ using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Diagnostics;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -41,6 +42,31 @@ public sealed class DynamicTypePreWarmerHostedService(
 {
     /// <summary>Config key that opts a deployment into the startup warm-up (default: off).</summary>
     public const string EnabledConfigKey = "PreWarm:DynamicTypes";
+
+    /// <summary>
+    /// Config key selecting ADOPT-ONLY boot (default <c>false</c>): seed the prebuilt bundles, then
+    /// REPORT what that covered instead of compiling the remainder.
+    ///
+    /// <para><b>Why this is a separate key and not just <c>PreWarm:DynamicTypes=false</c>.</b> The
+    /// bundle seeding lives on this service's path — turning the warm-up off turns ADOPTION off with
+    /// it, which is the exact opposite of what a deployment that wants "adopt, don't compile" is
+    /// asking for: it would adopt nothing AND compile everything, just later and one hub activation
+    /// at a time. Adopt-only splits the two halves that were fused here: keep the adoption, drop the
+    /// Roslyn.</para>
+    ///
+    /// <para><b>The uncovered types are NAMED, at warning, every boot.</b> A type the adoption did
+    /// not cover is not silently broken and it is not silently compiled — it is reported, and it
+    /// still builds on first access through the ordinary lazy path
+    /// (<c>NodeTypeEnrichmentHelpers.WaitForCompileSettled</c>). That is the deliberate escape for
+    /// content that has no CI bake by construction — a type someone is authoring on a laptop —
+    /// which must keep working without a silent boot-time compile storm behind it.</para>
+    ///
+    /// <para><b>It cannot certify a bake.</b> Adopt-only verifies nothing by compiling, so it never
+    /// arms the readiness gate; combined with <c>PreWarm:GateReadiness=true</c> the gate is refused
+    /// LOUDLY rather than passed on no evidence. Intended for local/dev instances (the homebrew
+    /// chart defaults it on), not for a fleet that gates rollouts on a proven bake.</para>
+    /// </summary>
+    public const string AdoptOnlyConfigKey = "PreWarm:AdoptOnly";
 
     /// <summary>
     /// How many of the costliest NodeTypes the warm-up summary NAMES (issue #1439). Small on
@@ -138,6 +164,14 @@ public sealed class DynamicTypePreWarmerHostedService(
             return;
         }
 
+        // Adopt-only: keep the bundle seeding, drop the Roslyn. Read here — before the gate is
+        // armed and before the sweep's knobs are parsed — because it decides which of the two
+        // terminals below this method takes. See AdoptOnlyConfigKey for why it is not just
+        // "PreWarm:DynamicTypes=false".
+        var adoptOnly = bool.TryParse(
+            services.GetService<IConfiguration>()?[AdoptOnlyConfigKey], out var adoptOnlyParsed)
+            && adoptOnlyParsed;
+
         // Optional per-type budget override — raw string + TryParse like EnabledConfigKey, so a
         // malformed value degrades to the default rather than faulting the warm-up. Zero/negative
         // is refused for the same reason: a budget that can never elapse into a verdict would turn
@@ -178,7 +212,28 @@ public sealed class DynamicTypePreWarmerHostedService(
         // AddNodeTypeBakeGate simply warms without gating — the warmer stays a latency optimisation
         // unless a deployment explicitly opts into making it a rollout gate.
         var gate = services.GetService<NodeTypeBakeGateState>();
-        gate?.MarkRunning("enumerating dynamic NodeTypes");
+        if (adoptOnly)
+        {
+            // 🚨 A GATE NEVER PASSES ON NO EVIDENCE. Adopt-only compiles nothing, so it can prove
+            // nothing about whether this image's NodeTypes build — arming the gate here would let a
+            // pod go Ready having verified strictly less than a sweep that merely RAN. The
+            // combination is a configuration mistake, so it is named rather than quietly honoured
+            // in either direction: the gate is left NotStarted (the documented fail-OPEN state for
+            // a misconfiguration, so it can never black-hole a pod) and the operator is told which
+            // of the two keys to change.
+            if (gate is { GatesReadiness: true })
+                logger.LogError(
+                    "DynamicTypePreWarmer: '{AdoptKey}'=true and '{GateKey}'=true are "
+                    + "CONTRADICTORY — adopt-only never compiles, so it cannot verify the bake the "
+                    + "readiness gate exists to certify. The gate is NOT armed for this boot. Set "
+                    + "'{AdoptKeyAgain}'=false to gate on a real sweep, or '{GateKeyAgain}'=false to "
+                    + "accept an ungated adopt-only boot (the intended shape for local/dev "
+                    + "instances).",
+                    AdoptOnlyConfigKey, NodeTypeBakeGateExtensions.EnabledConfigKey,
+                    AdoptOnlyConfigKey, NodeTypeBakeGateExtensions.EnabledConfigKey);
+        }
+        else
+            gate?.MarkRunning("enumerating dynamic NodeTypes");
 
         // Pacing: explicit config wins; otherwise a readiness-GATED pod sweeps at full speed (it
         // serves nobody while it bakes — the initial-bake case) and an ungated pod keeps the
@@ -317,9 +372,38 @@ public sealed class DynamicTypePreWarmerHostedService(
             ?[ShippedPrebuiltBundles.DirectoryConfigKey];
         var publishedBundleRoot = services.GetService<IConfiguration>()
             ?[ShippedPrebuiltBundles.PublishedRootConfigKey];
-        _warmSubscription = (importSettled?.Settled ?? Observable.Return(Unit.Default))
+        var seeded = (importSettled?.Settled ?? Observable.Return(Unit.Default))
             .SelectMany(_ => ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
-            .SelectMany(_ => ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger))
+            .SelectMany(_ => ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
+
+        if (adoptOnly)
+        {
+            _warmSubscription = seeded
+                .SelectMany(_ => DynamicTypePreWarmer.ProbeDynamicTypes(mesh, logger))
+                .Subscribe(
+                    report => ReportAdoption(report, startedAt, sweepMemory, publishedBundleRoot),
+                    ex =>
+                    {
+                        // The enumeration is the whole measurement here. Losing it means the pod
+                        // cannot say WHICH types the adoption missed — and the uncovered set is the
+                        // one thing adopt-only owes its operator. Lazy compilation still covers
+                        // correctness, so this is loud but not fatal.
+                        logger.LogError(ex,
+                            "DynamicTypePreWarmer: adopt-only boot could not enumerate its dynamic "
+                            + "NodeTypes, so it cannot report which ones the prebuilt bundles "
+                            + "covered. Adoption itself already ran; every type still compiles on "
+                            + "first access. Re-run with '{Key}'=false to fall back to a compiling "
+                            + "sweep if this persists.", AdoptOnlyConfigKey);
+                        bake?.MarkSettled(PreWarmSettlement.Faulted);
+                    },
+                    // NotApplicable, deliberately: no bake ran. Consumers sequenced behind the
+                    // barrier (the default-install pass adopts plugin bundles behind it) still get
+                    // their signal once the seeding has landed, and learn that nothing was compiled.
+                    () => bake?.MarkSettled(PreWarmSettlement.NotApplicable));
+            return;
+        }
+
+        _warmSubscription = seeded
             .SelectMany(_ => DynamicTypePreWarmer
                 .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol))
             .Subscribe(
@@ -482,6 +566,66 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // installs repair content, and the broken type is already terminal.
                     bake?.MarkSettled(PreWarmSettlement.Completed);
                 });
+    }
+
+    /// <summary>
+    /// How many uncovered NodeTypes the adopt-only summary NAMES before it truncates. Generous on
+    /// purpose — the whole point of the report is that the gap is actionable, and a gap you cannot
+    /// see the members of is a gap nobody fixes — but still bounded, because an instance that
+    /// adopted nothing at all would otherwise put its entire type list on one line.
+    /// </summary>
+    private const int UncoveredReported = 25;
+
+    /// <summary>
+    /// The adopt-only verdict: what the prebuilt bundles COVERED, and — by name — what they did
+    /// not. The uncovered types are not broken and they are not compiled here; they build on first
+    /// access through the ordinary lazy path. Naming them is the whole contract of this mode:
+    /// "adopt, don't compile" must never degrade into "a type silently never works", so the gap is
+    /// stated every boot instead of being discovered by a user opening a page.
+    /// </summary>
+    private void ReportAdoption(
+        NodeTypeBakeReport report,
+        DateTimeOffset startedAt,
+        MemoryDelta memory,
+        string? publishedBundleRoot)
+    {
+        var elapsed = DateTimeOffset.UtcNow - startedAt;
+        var uncovered = report.Pending;
+        var covered = report.Entries.Count - uncovered.Count;
+
+        logger.LogInformation(
+            "DynamicTypePreWarmer: ADOPT-ONLY boot complete in {Elapsed} — adopted={Adopted} "
+            + "uncovered={Uncovered} of {Total} dynamic NodeType(s); nothing was compiled "
+            + "({Key}=true). {Summary} — {Memory}",
+            elapsed, covered, uncovered.Count, report.Entries.Count, AdoptOnlyConfigKey,
+            report.Summary, memory);
+
+        if (uncovered.Count == 0)
+            return;
+
+        // WARNING, and NAMED. This is the line that makes "we ship pre-compiled modules" a
+        // checkable claim rather than a hope: every entry here is a type whose bytes CI did not
+        // deliver to this instance, so it is either content with no CI bake by construction
+        // (authored locally — expected, and the reason this mode still allows lazy compilation) or
+        // a hole in the bake/delivery lane that someone can now go and close.
+        var named = string.Join(", ", uncovered
+            .Take(UncoveredReported)
+            .Select(e => e.Detail is null ? e.TypePath : $"{e.TypePath} ({e.State})"));
+        if (uncovered.Count > UncoveredReported)
+            named += $", …and {uncovered.Count - UncoveredReported} more";
+
+        logger.LogWarning(
+            "DynamicTypePreWarmer: {Uncovered} dynamic NodeType(s) were NOT covered by the "
+            + "prebuilt bundles and will each pay a Roslyn compile on FIRST ACCESS: {Types}. "
+            + "This instance adopts rather than pre-bakes ({Key}=true), so nothing is compiled at "
+            + "boot — these are correct, just not warm. If they should have been covered, the "
+            + "bundle source is the thing to check: image bundles at '{ImageKey}' and the "
+            + "CI-published root '{Root}' (via '{RootKey}'); an identity mismatch declines every "
+            + "bundle wholesale and is reported by ShippedPrebuiltBundles above.",
+            uncovered.Count, named, AdoptOnlyConfigKey,
+            ShippedPrebuiltBundles.DirectoryConfigKey,
+            string.IsNullOrWhiteSpace(publishedBundleRoot) ? "(unset)" : publishedBundleRoot,
+            ShippedPrebuiltBundles.PublishedRootConfigKey);
     }
 
     /// <inheritdoc />

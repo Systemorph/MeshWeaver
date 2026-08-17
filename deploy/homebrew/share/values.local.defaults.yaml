@@ -18,16 +18,36 @@
 
 config:
   memex_portal:
-    # ---- Startup bake — same process as prod, in this same silo --------------
-    # Compile every dynamic NodeType at startup through the build protocol
-    # (Doc/Architecture/BuildCoordination): the portal is the sole claim
-    # candidate locally, so it claims Admin/Build, bakes in one linked batch at
-    # full speed, publishes the per-fingerprint GO — and the first open of
-    # every type after a `memex-local update` stops paying a cold Roslyn
-    # compile. The readiness GATE stays off: a single-replica k3s has no
-    # previous pod to keep serving while it bakes, and arming the gate
-    # requires raising the startup-probe budget in the same change
-    # (deploy/helm/values.yaml).
+    # ---- Startup: ADOPT prebuilt modules, do NOT compile them ----------------
+    # A laptop is not a build farm. The startup bake this replaced compiled
+    # EVERY dynamic NodeType in-process, and it did so again from scratch on
+    # every framework identity — which changes on every image, i.e. on every
+    # `memex-local update`. Measured on one developer machine: 15 generations
+    # under /data/assembly-cache/.generations, each one a full ~38-type Roslyn
+    # sweep, all of it paid on the same CPU the developer is trying to work on.
+    #
+    # So: keep the ADOPTION (the CI-baked bytes are exactly what a local
+    # instance should be running) and drop the compiling.
+    #
+    # 🚨 The obvious spelling of this — PreWarm__DynamicTypes: "false" — is
+    # WRONG, and quietly so. The bundle seeding lives on the pre-warmer's own
+    # path, so switching the pre-warmer off switches ADOPTION off with it: the
+    # instance would adopt nothing AND still compile everything, just later and
+    # one hub activation at a time. PreWarm__AdoptOnly keeps the seeding and
+    # replaces only the compiling half with a report.
     PreWarm__DynamicTypes: "true"
+    PreWarm__AdoptOnly: "true"
+    # Where an adopted bake is read from: <root>/<framework-identity>/<source>/
+    # *.zip, on the /data hostPath the chart already mounts. Absent (the normal
+    # state today — nothing populates it on a laptop yet) the lane is simply
+    # inert and every type is reported uncovered, which is the honest signal.
+    # Drop a `mw-plugin-test --bake-output` tree in here and it is adopted on
+    # the next boot with no further configuration.
+    PreWarm__PrebuiltBundleRoot: "/data/prebuilt-bundles"
+    # Batch/pacing only matter to the compiling sweep, which adopt-only does not
+    # run. Kept so that flipping PreWarm__AdoptOnly back to "false" — the escape
+    # hatch for authoring NodeTypes locally, where there is no CI bake by
+    # construction and baking your own is the right answer — restores exactly
+    # the previous behaviour rather than a slower variant of it.
     PreWarm__BatchBake: "true"
     PreWarm__BetweenTypes: "00:00:00"

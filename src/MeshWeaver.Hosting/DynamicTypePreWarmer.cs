@@ -336,22 +336,7 @@ public static class DynamicTypePreWarmer
                 {
                     // The full nodes (not just their definitions): the batch driver feeds the
                     // compiler the enumerated MeshNode directly — no re-fetch, no activation.
-                    var nodes = change.Items
-                        .Where(n => !string.IsNullOrEmpty(n.Path)
-                            && n.State == MeshNodeState.Active
-                            && n.Content is NodeTypeDefinition d
-                            // Only DYNAMIC types have source to compile. Static/framework
-                            // NodeTypes ship their assembly with the process — nothing to warm.
-                            && HasCompilableSource(d))
-                        .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
-                        .ToDictionary(
-                            g => g.Key,
-                            g => g.First(),
-                            StringComparer.OrdinalIgnoreCase);
-                    var definitions = nodes.ToDictionary(
-                        kvp => kvp.Key,
-                        kvp => (NodeTypeDefinition?)kvp.Value.Content,
-                        StringComparer.OrdinalIgnoreCase);
+                    var (nodes, definitions) = DynamicTypesOf(change.Items);
 
                     // 🚨 ASK THE SHARE WHAT IS ACTUALLY THERE, before deciding what to build.
                     //
@@ -389,6 +374,79 @@ public static class DynamicTypePreWarmer
                 // A second Error line at the source would say the same thing worse and pay twice
                 // for it in Loki.
                 );
+    }
+
+    /// <summary>
+    /// The DYNAMIC NodeTypes of an enumeration snapshot: the active nodes that carry compilable
+    /// source, keyed by path, plus their definitions. Shared by the compiling sweep
+    /// (<see cref="WarmDynamicTypes"/>) and the probe-only pass
+    /// (<see cref="ProbeDynamicTypes"/>) so the two can never disagree about WHAT the mesh's
+    /// dynamic types are — a drift there would make the adopt-only report describe a different
+    /// population than the sweep it replaces.
+    /// </summary>
+    private static (Dictionary<string, MeshNode> Nodes,
+        Dictionary<string, NodeTypeDefinition?> Definitions) DynamicTypesOf(
+        IEnumerable<MeshNode> items)
+    {
+        var nodes = items
+            .Where(n => !string.IsNullOrEmpty(n.Path)
+                && n.State == MeshNodeState.Active
+                && n.Content is NodeTypeDefinition d
+                // Only DYNAMIC types have source to compile. Static/framework
+                // NodeTypes ship their assembly with the process — nothing to warm.
+                && HasCompilableSource(d))
+            .GroupBy(n => n.Path!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => g.First(),
+                StringComparer.OrdinalIgnoreCase);
+        var definitions = nodes.ToDictionary(
+            kvp => kvp.Key,
+            kvp => (NodeTypeDefinition?)kvp.Value.Content,
+            StringComparer.OrdinalIgnoreCase);
+        return (nodes, definitions);
+    }
+
+    /// <summary>
+    /// 🚨 ASKS, NEVER BUILDS — the adopt-only pass (<c>PreWarm:AdoptOnly</c>).
+    ///
+    /// <para>Enumerates the mesh's dynamic NodeTypes and probes the assembly store for each,
+    /// returning the same <see cref="NodeTypeBakeReport"/> the compiling sweep uses to decide what
+    /// to build — but stopping there. No hub is activated, no compiler is driven, nothing is
+    /// written. It is the measurement half of <see cref="WarmDynamicTypes"/> with the building half
+    /// removed, which is exactly what a deployment that adopts CI-baked assemblies needs: after the
+    /// bundle seeding has run, this says which types the adoption actually COVERED and which are
+    /// left to lazy compilation.</para>
+    ///
+    /// <para>Faults propagate for the same reason they do in <see cref="WarmDynamicTypes"/>: an
+    /// enumeration that could not be taken must not be reportable as "nothing pending".</para>
+    /// </summary>
+    public static IObservable<NodeTypeBakeReport> ProbeDynamicTypes(
+        IMessageHub mesh, ILogger? logger = null)
+    {
+        var meshService = mesh.ServiceProvider.GetService<IMeshService>();
+        if (meshService is null)
+        {
+            logger?.LogDebug("DynamicTypePreWarmer: no IMeshService registered — nothing to probe");
+            return Observable.Return(
+                NodeTypeBakeReport.Empty(NodeTypeCompilationHelpers.FrameworkVersion));
+        }
+        var accessService = mesh.ServiceProvider.GetService<AccessService>();
+
+        // System-scoped for the same reason the sweep is: enumerating NodeType definitions across
+        // every partition is infrastructure, not a user-attributable read.
+        return Observable.Using(
+            () => AccessContextScope.AsSystem(accessService),
+            _ => meshService
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:{MeshNode.NodeTypePath}"))
+                .Take(1)
+                .Timeout(EnumerationBudget)
+                .SelectMany(change => NodeTypeBakeStatus.Probe(
+                    DynamicTypesOf(change.Items).Definitions,
+                    ResolveAssemblyStore(mesh),
+                    logger: logger,
+                    liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+                    liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId)));
     }
 
     /// <summary>

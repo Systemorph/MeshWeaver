@@ -92,6 +92,56 @@ public class DynamicTypePreWarmerTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
+    /// The ADOPT-ONLY measurement (<c>PreWarm:AdoptOnly</c>): the probe must see the same dynamic
+    /// types the compiling sweep does and REPORT the ones that are not covered — without building
+    /// anything itself.
+    ///
+    /// <para>This is what makes "adopt, don't compile" safe to default on for a local instance. The
+    /// mode's whole risk is that a type nobody adopted becomes a type that silently never works;
+    /// the answer is that the uncovered set is enumerated and named at every boot, so the gap is
+    /// visible and fixable instead of being discovered by a user opening a page. A type that cannot
+    /// build is the deterministic member of that set — it can never be in the assembly store — so
+    /// it is the one this pins.</para>
+    ///
+    /// <para>The probe reports <see cref="NodeTypeBakeReport"/>, never a
+    /// <c>PreWarmOutcome</c>: there is no compile to have an outcome about. That is the structural
+    /// difference from <see cref="DynamicTypePreWarmer.WarmDynamicTypes"/>, which reports
+    /// <c>CompileError</c> for this same type precisely because it attempts the build.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ProbeDynamicTypes_NamesTheUncoveredTypes_WithoutBuildingThem()
+    {
+        await NodeFactory.CreateNode(new MeshNode("UnbakeableType", Partition)
+        {
+            Name = "Unbakeable Type",
+            NodeType = MeshNode.NodeTypePath,
+            Content = new NodeTypeDefinition
+            {
+                Description = "Cannot compile, so it can never be in the assembly store.",
+                Configuration = "config => this is not valid C# at all (("
+            }
+        }).Should().Within(30.Seconds()).Emit();
+
+        var logger = Mesh.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PreWarmTest");
+
+        var report = await DynamicTypePreWarmer
+            .ProbeDynamicTypes(Mesh, logger)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(60))
+            .ToTask();
+
+        Output.WriteLine($"Probe → {report.Summary}");
+
+        const string unbakeable = $"{Partition}/UnbakeableType";
+        report.Entries.Should().Contain(e => e.TypePath == unbakeable,
+            "the adopt-only probe must enumerate the same dynamic NodeTypes the sweep does — a "
+            + "type missing from the report is a gap that would never be reported to anyone");
+        report.Pending.Should().Contain(e => e.TypePath == unbakeable,
+            "a type with no bytes in the assembly store is exactly what 'uncovered' means, and "
+            + "naming it is the whole contract of adopting instead of compiling");
+    }
+
+    /// <summary>
     /// 🚨 THE STORM GUARD. The warm-up must never activate several cold NodeType hubs at once.
     ///
     /// <para>It shipped with a concurrency knob defaulting to 4, and 4 is measurably harmful: on
