@@ -96,6 +96,123 @@ public class PlatformBakeLaneGuard
             + string.Join(", ", offenders));
     }
 
+    /// <summary>
+    /// 🚨 A <c>PreWarm__*</c> key set in a values file but NOT templated in the configmap is
+    /// SILENTLY DROPPED — the deployment runs as if it were never configured, with no warning from
+    /// helm, kubectl, or the portal.
+    ///
+    /// <para>This is not hypothetical. <c>deploy/aks/values.aks.yaml</c> set
+    /// <c>PreWarm__PrebuiltBundleRoot: "/data/prebuilt-bundles"</c> from the day the CI-published
+    /// bake lane shipped (#1660 WS3), while <c>config.yaml</c> never rendered the key — so every
+    /// chart-deployed portal ran with the consuming half of that lane inert and Roslyn-compiled the
+    /// content CI had already baked for it. The producer worked, the value was right, and the one
+    /// line that would have carried it across did not exist.</para>
+    ///
+    /// <para>The configmap enumerates keys explicitly (it does not iterate <c>.Values.config</c>),
+    /// which is a deliberate choice — it keeps the deployed surface reviewable — but it means
+    /// adding a key to a values file is only ever HALF the change. This guard is the other half,
+    /// asserted rather than remembered.</para>
+    /// </summary>
+    [Fact]
+    public void EveryPreWarmKeyInValues_IsTemplatedInTheConfigMap()
+    {
+        var root = FindRepoRoot();
+        var configMap = File.ReadAllText(
+            Path.Combine(root, "deploy", "helm", "templates", "memex-portal", "config.yaml"));
+
+        // The values files the chart is actually deployed with. A key is "set" when it appears as a
+        // mapping key; comments are excluded so the prose describing a key never counts as using it.
+        var valuesFiles = new[]
+        {
+            Path.Combine(root, "deploy", "helm", "values.yaml"),
+            Path.Combine(root, "deploy", "aks", "values.aks.yaml"),
+            Path.Combine(root, "deploy", "homebrew", "share", "values.local.defaults.yaml"),
+        };
+
+        var missing = valuesFiles
+            .Where(File.Exists)
+            .SelectMany(f => File.ReadAllLines(f)
+                .Select(l => l.Trim())
+                .Where(l => !l.StartsWith('#') && l.StartsWith("PreWarm__", StringComparison.Ordinal))
+                .Select(l => l[..l.IndexOf(':', StringComparison.Ordinal)].Trim())
+                .Select(key => (file: Path.GetFileName(f), key)))
+            .Distinct()
+            // 🚨 Templated means the key is BOUND, not merely mentioned. Matching "<key>:" alone
+            // would be satisfied by the explanatory Helm comment blocks that precede each entry —
+            // they are `{{- /* ... */}}`, which no '#'-stripping can remove, and several of them
+            // open with the very key they describe. A check a comment can satisfy is not a check.
+            // Requiring the value binding as well is a shape prose cannot accidentally have.
+            .Where(x => !IsBoundInConfigMap(configMap, x.key))
+            .ToList();
+
+        Assert.True(missing.Count == 0,
+            "These PreWarm keys are set in a values file but never rendered by "
+            + "deploy/helm/templates/memex-portal/config.yaml, so the deployment silently ignores "
+            + "them: "
+            + string.Join(", ", missing.Select(x => $"{x.key} (set in {x.file})"))
+            + ". Add each one to the configmap template — the values file alone does nothing.");
+    }
+
+    /// <summary>
+    /// 🚨 <c>PreWarm__AdoptOnly</c> only does anything while <c>PreWarm__DynamicTypes</c> is
+    /// <c>true</c> — and the "obvious simplification" of the local values (set
+    /// <c>PreWarm__DynamicTypes: "false"</c>, since we are not pre-baking any more) would silently
+    /// undo the whole point.
+    ///
+    /// <para>The bundle SEEDING and the compiling sweep live on the same hosted service. Disabling
+    /// the service disables adoption with it, so the instance would adopt nothing AND still compile
+    /// every type — just lazily, one hub activation at a time, and with no boot report saying so.
+    /// The local default therefore has to keep the service ON and select adopt-only, which reads
+    /// like a contradiction to anyone who has not traced the boot path. This asserts the pairing so
+    /// it survives the next person who tidies the file.</para>
+    /// </summary>
+    [Fact]
+    public void LocalDefaults_AdoptRatherThanPreBake_AndKeepTheSeedingOn()
+    {
+        var values = File.ReadAllLines(Path.Combine(
+                FindRepoRoot(), "deploy", "homebrew", "share", "values.local.defaults.yaml"))
+            .Select(l => l.Trim())
+            .Where(l => !l.StartsWith('#'))
+            .ToList();
+
+        Assert.Contains(values, l => l.StartsWith("PreWarm__AdoptOnly:", StringComparison.Ordinal)
+                                     && l.Contains("true", StringComparison.Ordinal));
+
+        Assert.True(
+            values.Any(l => l.StartsWith("PreWarm__DynamicTypes:", StringComparison.Ordinal)
+                            && l.Contains("true", StringComparison.Ordinal)),
+            "The local instance selects adopt-only, which requires PreWarm__DynamicTypes to stay "
+            + "\"true\": the prebuilt-bundle seeding runs on the same hosted service as the sweep, "
+            + "so turning the service off would adopt NOTHING and compile everything lazily "
+            + "instead — the opposite of the intent, and silent. Adopt-only is the key that "
+            + "removes the compiling; DynamicTypes is the key that keeps the adoption.");
+
+        Assert.True(
+            values.Any(l => l.StartsWith("PreWarm__PrebuiltBundleRoot:", StringComparison.Ordinal)
+                            && l.Contains('/', StringComparison.Ordinal)),
+            "The local instance must name a bundle root, otherwise adopt-only has no bundles to "
+            + "adopt from and reports every dynamic type as uncovered forever.");
+    }
+
+    /// <summary>
+    /// Whether the configmap actually BINDS <paramref name="key"/> to its values entry, i.e. emits
+    /// <c>&lt;key&gt;: "{{ .Values.config.memex_portal.&lt;key&gt; …}}"</c>. The value binding is the
+    /// discriminator on purpose: every key in that file is preceded by a Helm comment block
+    /// (<c>{{- /* … */}}</c>) that frequently opens with the key name, so a looser "the key appears
+    /// somewhere" test would be satisfied by the prose explaining a key nobody templated — the
+    /// exact failure mode this guard exists to catch. The trailing character must be a space or the
+    /// closing brace so that one key cannot be matched by another that merely starts with it.
+    /// </summary>
+    private static bool IsBoundInConfigMap(string configMap, string key)
+    {
+        var binding = $"{key}: \"{{{{ .Values.config.memex_portal.{key}";
+        var at = configMap.IndexOf(binding, StringComparison.Ordinal);
+        if (at < 0)
+            return false;
+        var next = at + binding.Length;
+        return next < configMap.Length && (configMap[next] == ' ' || configMap[next] == '}');
+    }
+
     /// <summary>The <c>publish-bake</c> job's own YAML block: from its two-space-indented key to
     /// the next job key at the same indentation. The terminator is matched as a bare
     /// <c>  &lt;name&gt;:</c> line rather than "indented and ends with a colon", so a two-space
