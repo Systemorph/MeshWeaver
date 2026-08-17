@@ -123,11 +123,20 @@ jobs:
         env:
           MEMEX_DEPLOY_REPO_TOKEN: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}
         run: |
+          # 🚨 `|| code=000` is not defensive noise. `run:` steps are `bash -e`, so a curl that
+          # fails at the TRANSPORT level (DNS, TLS, connection refused) makes this assignment
+          # non-zero and kills the step right here — before the case block, i.e. before the one
+          # thing this step exists to print. The job would still fail closed, but with a bare
+          # curl error instead of the sentence naming what to provision, which is the whole
+          # point of the probe (Copilot review, #1774). The timeouts are the other half: an
+          # unbounded probe against a slow API hangs until the JOB timeout, turning a 10-second
+          # answer into a 20-minute one.
           code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
             -H "Authorization: Bearer $MEMEX_DEPLOY_REPO_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/$DEPLOY_REPO")
+            "https://api.github.com/repos/$DEPLOY_REPO") || code=000
           case "$code" in
             200)
               echo "secrets.MEMEX_DEPLOY_REPO_TOKEN reads $DEPLOY_REPO (HTTP 200)." ;;
@@ -150,6 +159,18 @@ jobs:
               echo "  GitHub returns 404 rather than 403 for a repository a token may not read, so this"
               echo "  is a SCOPE problem: the PAT's repository access does not include $DEPLOY_REPO, or"
               echo "  it lacks 'Contents: Read-only'. Re-scope it — no other permission is needed."
+              exit 1 ;;
+            000)
+              echo "::error::Could not reach api.github.com to probe $DEPLOY_REPO (no HTTP response)."
+              echo "  Transport failure — DNS, TLS, a refused connection, or the 30 s cap. This says"
+              echo "  NOTHING about the token: it may be perfectly good. Re-run once the network or"
+              echo "  api.github.com is answering. Failing closed anyway, because a gate that cannot"
+              echo "  reach its subject has not checked it."
+              exit 1 ;;
+            5*)
+              echo "::error::api.github.com returned HTTP $code probing $DEPLOY_REPO."
+              echo "  That is GitHub failing, not the token — check https://www.githubstatus.com and"
+              echo "  re-run when the incident clears. Failing closed: indeterminate is not a pass."
               exit 1 ;;
             *)
               echo "::error::Unexpected HTTP $code probing $DEPLOY_REPO with secrets.MEMEX_DEPLOY_REPO_TOKEN."
