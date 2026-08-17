@@ -277,7 +277,7 @@ public static class MeshModuleStaticAssetExtensions
         // First mount wins per request path — two modules carrying the SAME dependency (a shared
         // RCL) is ordinary composition, not a fault, so the second is skipped quietly rather than
         // refused. Shadowing the HOST is the case that must never happen, and that is the
-        // hostContentRoot check below.
+        // hostAssets check below.
         var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var module in modules)
