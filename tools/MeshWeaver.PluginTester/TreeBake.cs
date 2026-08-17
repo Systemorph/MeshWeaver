@@ -4,6 +4,7 @@ using MeshWeaver.Compiler;
 using MeshWeaver.GitSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.NuGet;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.Logging;
@@ -53,6 +54,10 @@ public static class TreeBake
 
         /// <summary>Diagnostics.</summary>
         public ILogger Logger { get; init; } = NullLogger.Instance;
+
+        /// <summary>Factory for the leaf loggers the toolchain's own services want (the NuGet
+        /// resolver). Null keeps them silent.</summary>
+        public ILoggerFactory? LoggerFactory { get; init; }
     }
 
     /// <summary>One NodeType's outcome.</summary>
@@ -119,14 +124,25 @@ public static class TreeBake
         // 🚨 ONE node set across EVERY package. A `shared=@Other/Lib/Source` query crosses package
         // boundaries and the runtime resolves it against the whole mesh; a per-package set would
         // resolve it to nothing and compile a short set that looks like the author's bug (#1218).
+        // 🚨 A file that will not materialise is REPORTED, not fatal — because the RUNTIME skips it
+        // too. `PackageInstaller` logs "No parser for node-repo file X; skipped" and installs the
+        // rest, so a bake that refused here would resolve a SMALLER tree than the mesh and the two
+        // producers would disagree — the equivalence break this change exists to prevent, just in
+        // the opposite direction. (Measured on samples/Graph/Data: the mesh drops 62 of PensionFund's
+        // 72 files and gates 0 NodeTypes there, because those files carry a UTF-8 BOM. This bake
+        // drops exactly the same ones — it just says so.)
+        //
+        // Loud is the point. Every skip is printed and counted, so "the bake shipped less than the
+        // tree holds" is visible in the log instead of being a silent shortfall.
         var skipped = new List<string>();
         var treeNodes = TreeNodeLoader.Load(
             snapshot, packages, (path, reason) => skipped.Add($"{path}: {reason}"));
+        foreach (var skip in skipped)
+            options.Output.WriteLine($"bake: skipped (not a materialisable node) {skip}");
         if (skipped.Count > 0)
-            return new Report(frameworkIdentity, [], [],
-                "the checkout holds node file(s) that could not be materialised, so the source set "
-                + "this bake would compile against is INCOMPLETE — refusing to emit bytes built "
-                + "from a short set: " + string.Join("; ", skipped));
+            options.Output.WriteLine(
+                $"bake: {skipped.Count} file(s) skipped — the runtime's importer skips these too; "
+                + "a NodeType among them is a CONTENT defect, not a bake failure");
 
         var nodeSet = NodeSet.Create(treeNodes.Select(t => t.Node));
         options.Output.WriteLine(
@@ -143,13 +159,24 @@ public static class TreeBake
         var toolchainId = CompiledDependencies.ComputeToolchainId(FrameworkBuildIdentity.ProcessImplMvidOf);
         var references = CompileReferences.Default;
 
+        // 🚨 The NuGet resolver is WIRED, not omitted. `#r "nuget:…"` is a compile input like any
+        // other — samples/Graph/Data/MathDemo/Matrix declares `#r "nuget:MathNet.Numerics, 5.0.0"` —
+        // and a bake without a resolver simply cannot build those types. That showed up as the ONE
+        // divergence across the whole samples tree (23 of 24 NodeTypes agreed; MathDemo/Matrix was
+        // the miss), which is exactly the class of shortfall this issue is about: a bake that
+        // quietly produces less than the runtime would. NuGetAssemblyResolver needs nothing from a
+        // mesh — a logger and an optional cache — so there was never a reason to leave it out.
+        var nugetResolver = new NuGetAssemblyResolver(
+            options.LoggerFactory?.CreateLogger<NuGetAssemblyResolver>()
+            ?? NullLogger<NuGetAssemblyResolver>.Instance);
+
         var workDirectory = Path.Combine(
             Path.GetTempPath(), $"mw-compiler-bake-{Environment.ProcessId}-{Guid.NewGuid():N}");
         try
         {
             return BakeAll(
                 options, treeNodes, nodeSet, packages, snapshot, frameworkIdentity,
-                idOf, toolchainId, references, workDirectory);
+                idOf, toolchainId, references, workDirectory, nugetResolver);
         }
         finally
         {
@@ -175,7 +202,8 @@ public static class TreeBake
         Func<string, string?> idOf,
         string toolchainId,
         IReadOnlyList<Microsoft.CodeAnalysis.MetadataReference> references,
-        string workDirectory)
+        string workDirectory,
+        INuGetAssemblyResolver nugetResolver)
     {
         var results = ImmutableArray.CreateBuilder<TypeResult>();
         var entriesByPackage = new Dictionary<string, List<BundleWriter.AssemblyEntry>>(StringComparer.Ordinal);
@@ -214,7 +242,14 @@ public static class TreeBake
                     definition.Configuration, definition.ContentCollections,
                     references, idOf, toolchainId,
                     Path.Combine(workDirectory, CodeConventions.SanitizeNodeName(candidate.Node.Path)),
-                    resolveNuGet: null, logger: options.Logger);
+                    // The ONE Task bridge in the bake, at a console build step — never on a hub
+                    // scheduler. NuGet restore is genuine network IO with no reactive surface;
+                    // the runtime bridges it through the IoPool for the same reason.
+                    resolveNuGet: (refs, ct) => nugetResolver
+                        .ResolveAsync(refs, targetFramework: null, ct)
+                        .GetAwaiter().GetResult()
+                        .AssemblyPaths,
+                    logger: options.Logger);
 
                 // 🚨 The RAW resolved set, not the post-filter compile set — the mesh-driven bake
                 // writes `NodeTypeDefinition.CompiledSources`, which DiscoverSourceVersionSnapshot

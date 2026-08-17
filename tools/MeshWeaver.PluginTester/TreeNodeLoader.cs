@@ -4,6 +4,7 @@ using MeshWeaver.GitSync;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.PluginCatalog;
 
 namespace MeshWeaver.PluginTester;
@@ -34,9 +35,38 @@ namespace MeshWeaver.PluginTester;
 /// </summary>
 public static class TreeNodeLoader
 {
-    /// <summary>Web defaults = camelCase, the shape authored node files use. Unknown properties
-    /// (including the <c>$type</c> discriminator itself) are skipped by default.</summary>
-    private static readonly JsonSerializerOptions ContentJson = new(JsonSerializerDefaults.Web);
+    /// <summary>
+    /// Web defaults = camelCase, the shape authored node files use; unknown properties (including
+    /// the <c>$type</c> discriminator itself) are skipped by default.
+    ///
+    /// <para>🚨 The three non-default settings are NOT decoration — each one was a silently dropped
+    /// NodeType when it was missing, caught by running this loader over
+    /// <c>samples/Graph/Data</c>:</para>
+    /// <list type="bullet">
+    ///   <item><see cref="EnumMemberJsonStringEnumConverter"/> — the FRAMEWORK'S OWN converter, not
+    ///     a stock <c>JsonStringEnumConverter</c>. Enums persist as strings
+    ///     (<c>"compilationStatus": "Ok"</c>) and web defaults do not convert them, so every
+    ///     NodeType carrying a compile stamp failed to deserialize: 28 of them across ACME,
+    ///     Cornerstone, FutuRe and Northwind.</item>
+    ///   <item><c>ReadCommentHandling</c> / <c>AllowTrailingCommas</c> — copied off the hub's own
+    ///     options for the same reason <c>JsonFileParser</c> copies them: a node file that parses
+    ///     under a hub must parse here, or the bake resolves a smaller tree than the runtime.</item>
+    /// </list>
+    /// </summary>
+    private static readonly JsonSerializerOptions ContentJson = new(JsonSerializerDefaults.Web)
+    {
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+        Converters = { new EnumMemberJsonStringEnumConverter() },
+    };
+
+    /// <summary>Document-parse tolerances matching <see cref="ContentJson"/> — the same copy
+    /// <c>JsonFileParser.Parse</c> makes, and for the same reason.</summary>
+    private static readonly JsonDocumentOptions ContentJsonDocument = new()
+    {
+        CommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
 
     /// <summary>A node the tree produced, together with the package it came from.</summary>
     /// <param name="Node">The materialised node.</param>
@@ -128,10 +158,16 @@ public static class TreeNodeLoader
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(file.Content);
+            document = JsonDocument.Parse(file.Content, ContentJsonDocument);
         }
         catch (JsonException ex)
         {
+            // 🚨 Matches JsonFileParser: a document that will not parse yields NO node, and the
+            // installer logs "No parser for …; skipped". Do NOT "fix" this by stripping a UTF-8 BOM
+            // here — samples/Graph/Data/PensionFund/*.json carry one, the RUNTIME drops every one of
+            // those nodes for exactly this reason, and a bake that quietly compiled content the mesh
+            // never imports would be the equivalence break this whole change exists to prevent (in
+            // the opposite direction). The BOM is a CONTENT defect and belongs in a content fix.
             reason = $"malformed JSON: {ex.Message}";
             return null;
         }
