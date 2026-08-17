@@ -269,11 +269,108 @@ The design rules the extraction preserves:
   contexts are now `validate / Validate node repos`,
   `compile-check / Compile every NodeType (vs core)` and
   `test-repos / Compile + render node repos (MeshWeaver from ACR)`.
+  🔒 A later **`@ref` bump does NOT rename anything** — it changes neither the caller's job id nor
+  the inner job's `name:` — so the contexts stay valid across bumps. Only renaming a job in the
+  reusable workflow would break them, which is why that rename is itself a breaking change to
+  every caller's branch protection.
+- **The caller PINS the workflow ref** — `@<40-char commit sha>`, never `@main`. See below; this
+  is the same rule as the image digest, applied to the CI logic instead of the CI runtime.
 - **Staged cross-repo modules are excluded from publication** (e.g. Store is staged so
   `requires` resolve but is owned and published by MeshWeaver.Plugins) — each source directory
   seals independently, which is also why no cross-repo bake ORDERING is needed: a dependent
   repo's publication never contains its dependency's bundles, so there is nothing to wait for.
   The framework-release dispatch fans out to all satellites concurrently.
+
+### 🔒 The workflow ref is PINNED — and bumping it is a deliberate act
+
+Every satellite calls these workflows at an **immutable commit**, never at `@main`:
+
+```yaml
+  test-repos:
+    needs: [preflight, validate]
+    uses: Systemorph/MeshWeaver/.github/workflows/node-repo-gate.yml@731620dc6be030c964aa2c6a1e87ac11a1e6bfc4
+```
+
+**Why.** The platform *image* is pinned by digest so CI is reproducible and an image regression
+lands on the commit that bumps the pin. The CI *logic* needs that for the same reason and with a
+**wider blast radius**: on `@main`, a single edit to a reusable workflow changes **every
+satellite's gates at once**, no satellite's PR can reproduce yesterday's behaviour, and *"did my
+change break this, or did the shared workflow move under me?"* stops being answerable — that exact
+question cost a full day on MeshWeaver.Education. Pinned, the answer is in `git log` of the
+caller's own `ci.yml`.
+
+**Why a SHA and not a version tag** (`node-repo-workflows-v1` and friends):
+
+- A tag is **mutable**. Moving it changes all satellites simultaneously with **no commit in any
+  satellite** to attribute the change to — the blast radius stays exactly as wide as `@main`, only
+  the trigger moves from "someone edited a workflow" to "someone moved a tag". A SHA is what makes
+  the bump *be* a satellite commit, which is the entire point.
+- It is the digest's analogue: a SHA is to a workflow what a digest is to an image; a tag is
+  `:latest`.
+- It matches what the callers already do — `MW_PLATFORM_REF` is a full 40-char platform SHA with
+  this same rationale beside it. One convention, not two.
+- `node-repo-tag-modules` exists to guarantee a module tag is never *"silently moved under everyone
+  who pinned it"*. A moving `uses:` tag would be precisely that, for CI logic.
+
+GitHub does **not** allow the `uses:` ref to come from an input, an `env`, or any expression — it
+must be a literal — so a `workflow-ref` input is impossible and the SHA lives literally on each
+`uses:` line in each caller.
+
+**A reusable-workflow change does not reach the satellites until each one bumps. That is the
+point, not a bug**: it is what turns a shared-workflow regression from a simultaneous four-repo
+outage into one satellite's PR that goes red and is trivially attributable.
+
+#### How a bump is triggered
+
+The pin is bumped **by the person who changes a reusable workflow**, as the last step of that
+change — the platform PR lands first, then one follow-up PR per satellite. Concretely:
+
+1. Merge the `node-repo-*.yml` change to the platform's `main`; note the merge commit.
+2. In each satellite that calls the changed workflow, replace the SHA on **every**
+   `Systemorph/MeshWeaver/.github/workflows/node-repo-*.yml@…` line — all of them, in **one**
+   commit, so a repo never runs two different revisions of the shared contract.
+3. Open the PR and let the repo's own gate suite run against the new logic. This is where a bad
+   shared workflow surfaces: on the bumping PR, in the repo it affects, attributable to the bump.
+4. Repeat per satellite. They may lag each other; each bump is independently revertable.
+
+Adopting a *new* workflow additionally renames that repo's required contexts (previous bullet); a
+plain bump does not.
+
+#### Staleness is surfaced, not scheduled
+
+A pin nobody bumps is worse than a moving ref: the satellites diverge in silence and the shared
+workflow's fixes never land anywhere. So each caller's **`preflight` job prints the pin's age on
+every run** — in the job someone already opens when a gate goes red:
+
+```
+workflows pinned to 731620dc6…, cut 3 days ago (2026-08-17T09:45:53Z)
+```
+
+Past `STALE_AFTER_DAYS` (30) the step summary adds a **"a bump is due"** callout pointing back
+here. This is the same instinct as the known-debt allow-lists — surface staleness at the point of
+use rather than inventing a place people must remember to check — and it is deliberately *not* a
+scheduled job that opens issues.
+
+Two properties that make the age trustworthy rather than decorative:
+
+- **The SHA is read back out of the caller's own `uses:` lines**, never kept as a second copy that
+  could drift from the pin actually in force. A **partial bump** (one caller moved, the rest left
+  behind) is therefore reported as *"pins disagree"* instead of averaged into one age.
+- **It is a reporter, so it never fails the run** — a red preflight would block every gate on a
+  GitHub API blip. Every miss is announced (`::warning::` plus an explicit *age UNKNOWN*): it can
+  report nothing, but it cannot fake freshness. 🚨 Note `gh` writes its error body to **stdout**,
+  so an emptiness check is not enough to detect an unresolvable SHA — the step validates the
+  timestamp's shape.
+
+#### The one ref that still floats, on purpose
+
+`node-repo-publish-bake`'s **`platform-ref` input still defaults to `main`**. It selects the
+checkout of the canonical `publish-bake-bundles.sh`, whose bundle layout and `_complete` sentinel
+must keep matching the `ShippedPrebuiltBundles` constants in the **portal that consumes** the
+bundles — and the portals self-update from `main`. Pinning that to a satellite's cadence would let
+a satellite publish in a layout the live portals no longer read. It is the publish *script*
+tracking its consumer, not CI logic tracking a moving trunk; pin it (the input exists) only to
+bisect a script regression.
 
 The satellites' OIDC publish is **provisioned** (2026-08-17): the Azure managed identity
 `github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
