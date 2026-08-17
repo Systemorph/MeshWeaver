@@ -23,7 +23,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 ///
 /// <para>So the thing that has to hold is not a service descriptor: it is that listing the DLL puts
 /// it on the <b>in-mesh compile reference set</b>, and that the types in-mesh content actually uses
-/// compile with the module's ENTRY assembly alone — a module's private closure (here the five
+/// compile with the module's ENTRY assembly alone — a module's private closure (here the six
 /// <c>MeshWeaver.DataSetReader.*</c> assemblies) resolves at runtime from the module folder but is
 /// NOT a metadata reference. Both are asserted below, the second by compiling the real shape from
 /// <c>Cornerstone/Pricing</c>'s <c>MicrosoftSampleData</c> node source.</para>
@@ -67,7 +67,15 @@ public class ImportModuleContributionTest
     /// deployment where Import is module-only — and NOT in the dev Monolith, which still carries
     /// Import in its app closure through the Northwind sample. That asymmetry makes a portal
     /// boot-smoke a false green here, so the claim is pinned as a compile instead: the real node
-    /// source shape, against corelib + MeshWeaver.Import.dll and nothing else from the import stack.
+    /// source shape, against the deployment's own reference set.
+    ///
+    /// <para>🚨 The reference set is <see cref="CompileReferences.ComposeWithModules"/> — the
+    /// PRODUCTION composition, not a hand-listed one — <b>minus the module's private closure</b>.
+    /// Subtracting is the entire experiment: this test process resolves Import through an ordinary
+    /// ProjectReference, so its <c>TRUSTED_PLATFORM_ASSEMBLIES</c> carry the DataSetReader family
+    /// too, and composing without the filter would pass no matter what leaked. What is left models
+    /// the deployment exactly — platform TPA plus the module ENTRY assembly, which is all
+    /// <c>ComposeWithModules</c> ever contributes.</para>
     /// </summary>
     [Fact]
     public void InMeshSource_CompilesAgainstTheEntryAssemblyAlone()
@@ -103,17 +111,26 @@ public class ImportModuleContributionTest
             }
             """;
 
-        // corelib + the framework facades the SDK splits System.* across, then the module's entry
-        // assembly — and NOTHING from its private DataSetReader closure.
-        var coreDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
-        var references = new List<MetadataReference>
-        {
-            MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
-            MetadataReference.CreateFromFile(Path.Combine(coreDir, "System.Runtime.dll")),
-            MetadataReference.CreateFromFile(Path.Combine(coreDir, "System.Collections.dll")),
-            MetadataReference.CreateFromFile(Path.Combine(coreDir, "System.ComponentModel.Annotations.dll")),
-            MetadataReference.CreateFromFile(typeof(ExcelImportConfiguration).Assembly.Location),
-        };
+        var entry = typeof(ExcelImportConfiguration).Assembly;
+        var composed = CompileReferences.ComposeWithModules([new InstalledModuleAssembly(entry)]);
+
+        // Everything the module folder carries privately — the closure ComposeWithModules never
+        // adds. Prefix-matched so a new reader assembly joins the subtraction automatically rather
+        // than quietly weakening the experiment.
+        string[] modulePrivatePrefixes = ["MeshWeaver.DataSetReader", "MeshWeaver.DataStructures"];
+        var references = composed
+            .Where(r => !modulePrivatePrefixes.Any(prefix =>
+                Path.GetFileName(r.Display ?? string.Empty)
+                    .StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        // The subtraction has to have BITTEN and the entry assembly has to have SURVIVED, or the
+        // compile below would prove the opposite of what it claims.
+        Assert.True(references.Count < composed.Count,
+            "The private-closure filter matched nothing — this process does not carry the "
+            + "DataSetReader assemblies, so the compile below cannot falsify a leak.");
+        Assert.Contains(references, r => string.Equals(
+            r.Display, entry.Location, StringComparison.OrdinalIgnoreCase));
 
         var compilation = CSharpCompilation.Create(
             "InMeshSampleCompile",
