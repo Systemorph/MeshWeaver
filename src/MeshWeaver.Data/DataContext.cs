@@ -220,12 +220,45 @@ public sealed record DataContext : IDisposable
         }
         DataSourcesById = deduped.ToImmutableDictionary();
 
-        // Build TypeSources first to get collection names
-        TypeSources = DataSourcesById
-            .Values
-            .SelectMany(ds => ds.TypeSources)
-            .ToDictionary(x => x.CollectionName);
-        TypeSourcesByType = DataSourcesById.Values.SelectMany(ds => ds.TypeSources).ToDictionary(ts => ts.TypeDefinition.Type);
+        // Build TypeSources first to get collection names.
+        //
+        // 🚨 NEVER .ToDictionary() here. A duplicate collection name is a real configuration
+        // defect and it FAILS HUB CREATION — but Dictionary.Add's message is the single word
+        // that collided ("An item with the same key has already been added. Key: Approval"),
+        // naming neither the hub whose workspace was being built nor either contributor. Four
+        // separate production/CI reports of Systemorph/MeshWeaver#1684 each had to be
+        // reverse-engineered from exactly that. Say what collided, on which node, and who
+        // contributed it — the failure stays a failure (a DistinctBy would HIDE a real
+        // duplicate), it just becomes a one-line diagnosis.
+        var typeSourcesByCollection = new Dictionary<string, ITypeSource>();
+        var typeSourcesByType = new Dictionary<Type, ITypeSource>();
+        var collectionContributors = new Dictionary<string, IDataSource>();
+        var typeContributors = new Dictionary<Type, IDataSource>();
+        foreach (var dataSource in DataSourcesById.Values)
+        {
+            foreach (var typeSource in dataSource.TypeSources)
+            {
+                var collectionName = typeSource.CollectionName;
+                if (typeSourcesByCollection.TryGetValue(collectionName, out var clashingCollection))
+                    throw DuplicateRegistration(
+                        "collection", collectionName,
+                        collectionContributors[collectionName], clashingCollection,
+                        dataSource, typeSource);
+                typeSourcesByCollection[collectionName] = typeSource;
+                collectionContributors[collectionName] = dataSource;
+
+                var entityType = typeSource.TypeDefinition.Type;
+                if (typeSourcesByType.TryGetValue(entityType, out var clashingType))
+                    throw DuplicateRegistration(
+                        "entity type", entityType.FullName ?? entityType.Name,
+                        typeContributors[entityType], clashingType,
+                        dataSource, typeSource);
+                typeSourcesByType[entityType] = typeSource;
+                typeContributors[entityType] = dataSource;
+            }
+        }
+        TypeSources = typeSourcesByCollection;
+        TypeSourcesByType = typeSourcesByType;
 
         // Register types with TypeRegistry BEFORE creating DataSourcesByCollection
         // This ensures GetCollectionName returns the correct collection name
@@ -236,17 +269,38 @@ public sealed record DataContext : IDisposable
             TypeRegistry.WithType(typeSource.TypeDefinition.Type, typeSource.TypeDefinition.CollectionName);
         }
 
-        DataSourcesByType = DataSourcesById.Values
-            .SelectMany(ds => ds.MappedTypes.Select(t => new KeyValuePair<Type, IDataSource>(t, ds))).ToDictionary();
+        // Same contract for the data-source lookups: a type or a collection claimed by two data
+        // sources is a defect that must NAME both claimants, not just the key.
+        var dataSourcesByType = new Dictionary<Type, IDataSource>();
+        var dataSourcesByCollection = new Dictionary<string, IDataSource>();
+        foreach (var dataSource in DataSourcesById.Values)
+        {
+            foreach (var mappedType in dataSource.MappedTypes)
+            {
+                if (dataSourcesByType.TryGetValue(mappedType, out var owner))
+                    throw DuplicateDataSource(
+                        "entity type", mappedType.FullName ?? mappedType.Name, owner, dataSource);
+                dataSourcesByType[mappedType] = dataSource;
+
+                var collectionName = TypeRegistry.GetCollectionName(mappedType);
+                logger.LogTrace("DataContext: Type {Type} -> CollectionName {CollectionName}",
+                    mappedType.Name, collectionName ?? "NULL");
+                if (collectionName is null)
+                    throw Fail(
+                        $"Data source '{Describe(dataSource)}' maps entity type "
+                        + $"'{mappedType.FullName ?? mappedType.Name}' but the type registry of hub "
+                        + $"'{Hub.Address}' resolves no collection name for it. Register the type on the "
+                        + "data source (WithType<T>(...)) so its collection name is known.");
+                if (dataSourcesByCollection.TryGetValue(collectionName, out var collectionOwner))
+                    throw DuplicateDataSource(
+                        "collection", collectionName, collectionOwner, dataSource);
+                dataSourcesByCollection[collectionName] = dataSource;
+            }
+        }
+        DataSourcesByType = dataSourcesByType;
         logger.LogDebug("DataContext: DataSourcesByType has {Count} entries: {Types}",
             DataSourcesByType.Count, string.Join(", ", DataSourcesByType.Keys.Select(t => t.Name)));
-        DataSourcesByCollection = DataSourcesByType.Select(kvp =>
-        {
-            var collectionName = TypeRegistry.GetCollectionName(kvp.Key);
-            logger.LogTrace("DataContext: Type {Type} -> CollectionName {CollectionName}",
-                kvp.Key.Name, collectionName ?? "NULL");
-            return new KeyValuePair<string, IDataSource>(collectionName!, kvp.Value);
-        }).ToDictionary();
+        DataSourcesByCollection = dataSourcesByCollection;
         logger.LogDebug("DataContext: DataSourcesByCollection has {Count} entries: {Collections}",
             DataSourcesByCollection.Count, string.Join(", ", DataSourcesByCollection.Keys));
 
@@ -259,6 +313,67 @@ public sealed record DataContext : IDisposable
         }
 
         logger.LogDebug("DataContext initialization setup complete for {Address}, waiting for OpenInitializationGate", Hub.Address);
+    }
+
+    /// <summary>
+    /// Identifies a data source in a diagnostic: its id plus the implementation type, which
+    /// together are what a reader needs to find the registration that produced it.
+    /// </summary>
+    private static string Describe(IDataSource dataSource) =>
+        $"{dataSource.Id} ({dataSource.GetType().Name})";
+
+    /// <summary>
+    /// Identifies a type source in a diagnostic by its entity type AND the assembly that type
+    /// comes from — the closest thing the framework can know to "which module contributed this",
+    /// since the contribution itself is an anonymous configuration lambda.
+    /// </summary>
+    private static string Describe(ITypeSource typeSource)
+    {
+        var type = typeSource.TypeDefinition.Type;
+        return $"{type.FullName ?? type.Name} from {type.Assembly.GetName().Name ?? "(unknown assembly)"}";
+    }
+
+    /// <summary>
+    /// The diagnostic for two <see cref="ITypeSource"/>s claiming one key. Names the key, the NODE
+    /// whose hub was being created, and both contributors — see the remarks at the
+    /// <see cref="Initialize"/> call site for why a bare <c>ToDictionary</c> is banned here.
+    /// </summary>
+    private Exception DuplicateRegistration(
+        string keyKind,
+        string key,
+        IDataSource firstDataSource,
+        ITypeSource firstTypeSource,
+        IDataSource secondDataSource,
+        ITypeSource secondTypeSource) =>
+        Fail(
+            $"Duplicate {keyKind} '{key}' while building the workspace of node '{Hub.Address}'. "
+            + $"It is claimed by data source '{Describe(firstDataSource)}' → {Describe(firstTypeSource)} "
+            + $"AND by data source '{Describe(secondDataSource)}' → {Describe(secondTypeSource)}. "
+            + $"A {keyKind} may be registered only once per hub. The usual cause is a hub-configuration "
+            + "lambda that is applied twice and is not idempotent — give its data source a STABLE id so "
+            + "the keep-last-by-id dedupe above collapses the second application (a fresh Guid defeats "
+            + "it), and make sure nothing composes the same configuration chain twice. The other cause "
+            + "is two modules genuinely claiming the same name; rename one.");
+
+    /// <summary>
+    /// The diagnostic for two data sources claiming one key (entity type / collection).
+    /// </summary>
+    private Exception DuplicateDataSource(
+        string keyKind, string key, IDataSource first, IDataSource second) =>
+        Fail(
+            $"Duplicate {keyKind} '{key}' while building the workspace of node '{Hub.Address}'. "
+            + $"Data sources '{Describe(first)}' and '{Describe(second)}' both claim it. "
+            + $"A {keyKind} may be owned by only one data source per hub.");
+
+    /// <summary>
+    /// Logs at Error (so the diagnostic reaches the log pipeline even where the exception is
+    /// swallowed by a hub-creation catch) and returns the exception for the caller to throw.
+    /// </summary>
+    private Exception Fail(string message)
+    {
+        logger.LogError("DataContext initialization failed for {Address}: {Message}",
+            Hub.Address, message);
+        return new InvalidOperationException(message);
     }
 
     /// <summary>

@@ -13,12 +13,15 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// Pins that the default-node-hub configuration chain is IDEMPOTENT — applying it twice to one
 /// hub must be harmless (#1700).
 ///
-/// <para>Twice is not hypothetical: <c>NodeTypeEnrichmentHelpers.WithCompilationErrorOverlay</c>
-/// composes <c>MeshConfiguration.DefaultNodeHubConfiguration</c> INTO the instance's hub
-/// configuration (<c>config =&gt; overlay(baseConfig(config))</c>), on top of whatever default
-/// application the hub creation path already performs — so every package-root node that lands on
-/// the unresolvable-NodeType overlay (e.g. a <c>Store/Plugin</c>-typed root in a gate mesh that
-/// does not mount Store) runs the chain twice.</para>
+/// <para>Twice was not hypothetical: <c>NodeTypeEnrichmentHelpers.WithCompilationErrorOverlay</c>
+/// used to compose <c>MeshConfiguration.DefaultNodeHubConfiguration</c> INTO the instance's hub
+/// configuration (<c>config =&gt; overlay(baseConfig(config))</c>), on top of the application
+/// <c>MeshNodeHubFactory</c> already performs — so every node that landed on the
+/// unresolvable-NodeType overlay ran the chain twice. #1684 removed that second application at its
+/// root: the factory is now the SINGLE owner of the default chain, pinned by
+/// <c>DefaultNodeChainSingleApplicationTest</c>. This test keeps the belt-and-braces half — a chain
+/// that IS applied twice must remain harmless — because the chain is composed by third-party
+/// modules and a non-idempotent one is a live trap regardless of who applies it.</para>
 ///
 /// <para>Before the fix, the Approvals module's per-node registration added a
 /// <c>MeshDataSource</c> whose id was <c>Guid.NewGuid()</c> on EVERY application, defeating
