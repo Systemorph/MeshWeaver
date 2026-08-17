@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Memex.Portal.Shared.SelfUpdate;
 using Xunit;
+using MeshWeaver.Hosting.SelfUpdate;
 
 namespace Memex.Portal.Shared.Test;
 
