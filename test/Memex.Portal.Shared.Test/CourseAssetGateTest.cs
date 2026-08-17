@@ -1,4 +1,4 @@
-using Memex.Portal.Shared.Courses;
+using MeshWeaver.Courses;
 using MeshWeaver.Mesh.Security;
 using Xunit;
 
