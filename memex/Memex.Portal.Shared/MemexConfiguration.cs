@@ -8,7 +8,6 @@ using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.Mcp;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Hosting.Grpc;
@@ -1131,8 +1130,10 @@ public static class MemexConfiguration
         // explicit opt-out (the transport authenticates connections itself — Bearer token in
         // gRPC metadata / trusted loopback port).
 
-        // Map MCP endpoint
-        app.MapMeshMcp();
+        // The MCP endpoint (/mcp) rides MapMeshModuleEndpoints below: the MeshWeaver.Mcp module's
+        // McpEndpointModuleAttribute maps it with the same RequireAuthorization("McpAuth") policy
+        // this line carried. The POLICY itself stays here (AddMcpAuthentication above) — the REST
+        // mirror /api/mesh/* is gated by the same one and is not part of that module.
 
         // REST surface that mirrors MCP — POST /api/mesh/* (1:1 with MCP tools).
         // Same Bearer auth policy as /mcp; multipart upload at /api/mesh/upload.
