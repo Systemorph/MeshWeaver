@@ -21,6 +21,12 @@ name: Node repo publish-bake (reusable)
 #
 # Caller contract (see the SocialMedia/Plugins ci.yml for a worked example):
 #
+#   on:
+#     repository_dispatch:
+#       # BOTH: the platform releasing, and an UPSTREAM of this repo publishing (#1755). The second
+#       # is what wakes a run that exited because its upstreams were not ready yet.
+#       types: [meshweaver-framework-released, meshweaver-upstream-published]
+#
 #   publish-bake:
 #     if: >
 #       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
@@ -33,6 +39,9 @@ name: Node repo publish-bake (reusable)
 #       test-image: ${{ vars.MW_TEST_IMAGE }}
 #       image-digest: ${{ vars.MW_IMAGE_DIGEST }}     # or a workflow env / literal pin
 #       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
+#       upstream-sources: plugins                    # exit unless `plugins` is published for the
+#                                                    # framework identity this bake targets
+#       dependent-repos: ''                          # e.g. Systemorph/MeshWeaver.Reinsurance
 #       stage-repo: Systemorph/MeshWeaver.Plugins
 #       stage-modules: Store
 #     secrets:
@@ -42,6 +51,17 @@ name: Node repo publish-bake (reusable)
 #       azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 #       azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 #       stage-repo-token: ${{ secrets.MESHWEAVER_REPO_TOKEN }}
+#       dependent-dispatch-token: ${{ secrets.DEPENDENT_DISPATCH_TOKEN }}   # iff dependent-repos
+#
+# The real topology, and the order it produces without any central scheduler:
+#
+#   platform ──dispatch──▶ plugins (no upstreams)            builds, publishes
+#                            └──dispatch──▶ education        (was exited) builds, publishes
+#                            │                 └──dispatch──▶ reinsurance
+#                            └──dispatch──▶ socialmedia      (was exited) builds, publishes
+#
+# A repo woken before its upstreams are ready EXITS immediately and is woken again by the
+# publication it was waiting for. Nothing polls; nothing sleeps in a runner.
 #
 # Every externally-provisioned value is an EXPLICIT input/secret — nothing is read from the
 # caller's `vars`/`env` implicitly — so the preflight step below can assert the complete set and
@@ -84,10 +104,36 @@ on:
           (the caller's vars.BAKE_PUBLISH_TARGETS — same value the platform repo carries).
         required: true
         type: string
+      upstream-sources:
+        description: >-
+          The bake-source segments this repo DEPENDS ON, whitespace-separated (e.g. `plugins`
+          for Education / Reinsurance / SocialMedia). Before building, the job asserts each one
+          has a SEALED publication under the framework identity it is about to bake against; if
+          any has not, it EXITS WITHOUT BUILDING (#1755) rather than gating against an upstream
+          that no longer matches the framework. Empty = this repo has no upstreams (the roots:
+          the platform itself, and MeshWeaver.Plugins), and the gate does not apply.
+        required: false
+        type: string
+        default: ''
+      dependent-repos:
+        description: >-
+          Repositories to notify (owner/repo, whitespace-separated) once THIS repo's publication
+          lands — the satellite→satellite edge of the cascade. It is what wakes a downstream repo
+          that exited on `upstream-sources`, so without it that repo never rebuilds for the
+          release. Declaring it REQUIRES the `dependent-dispatch-token` secret; declaring one
+          without the other fails red rather than silently breaking the chain.
+        required: false
+        type: string
+        default: ''
       stage-repo:
         description: >-
           Repository to stage cross-repo modules from (e.g. Systemorph/MeshWeaver.Plugins),
           so the caller's packages' `requires` resolve. Empty = no staging.
+          🚧 Transitional. The directive is that a repo builds only what it OWNS and consumes its
+          upstreams as pre-built released artifacts; `upstream-sources` above is the half of that
+          which exists today (the availability gate). Staging cannot be dropped until a published
+          artifact carries the upstream's NODE DEFINITIONS and not just its compiled assemblies —
+          see Doc/Architecture/ReleaseGates → "Build only what you own".
         required: false
         type: string
         default: ''
@@ -154,6 +200,12 @@ on:
       stage-repo-token:
         description: Token able to read stage-repo (needed only when stage-modules is set).
         required: false
+      dependent-dispatch-token:
+        description: >-
+          Token with repo scope on every repo named by `dependent-repos`, used to fire the
+          `meshweaver-upstream-published` event that wakes them. Required exactly when
+          `dependent-repos` is set.
+        required: false
 
 jobs:
   publish-bake:
@@ -177,6 +229,8 @@ jobs:
           STAGE_TOKEN: ${{ secrets.stage-repo-token }}
           BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
           STAGE_MODULES: ${{ inputs.stage-modules }}
+          DEPENDENT_REPOS: ${{ inputs.dependent-repos }}
+          DEPENDENT_TOKEN: ${{ secrets.dependent-dispatch-token }}
         run: |
           set -euo pipefail
           missing=()
@@ -188,6 +242,14 @@ jobs:
           [ -n "${BAKE_PUBLISH_TARGETS:-}" ]   || missing+=("bake-publish-targets (input, from the caller's repo VARIABLE) — the portals' Azure Files targets, whitespace-separated <account>/<share>[/<base-path>]")
           if [ -n "${STAGE_MODULES:-}" ] && [ -z "${STAGE_TOKEN:-}" ]; then
             missing+=("stage-repo-token (secret) — token able to read the stage repo (stage-modules is set)")
+          fi
+          # 🚨 Declaring dependents is declaring an OBLIGATION: those repos exit on their own
+          # upstream gate and are woken only by the event this job fires. A missing token would
+          # break the chain silently — every downstream repo would sit un-rebuilt for the whole
+          # release with nothing red anywhere. Asserted here, as a DECLARED-INPUT check, never as
+          # an "is the secret set?" probe that decides whether to run.
+          if [ -n "${DEPENDENT_REPOS:-}" ] && [ -z "${DEPENDENT_TOKEN:-}" ]; then
+            missing+=("dependent-dispatch-token (secret) — token with repo scope on ${DEPENDENT_REPOS}; without it this repo's publication cannot wake its dependents and they never rebuild for the release")
           fi
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::The bake publication cannot reach any portal — required credentials are not provisioned. This job fails RED rather than skipping: a grey skip is indistinguishable from a pass and would silently leave every portal re-compiling this repo's content at boot."
@@ -206,16 +268,25 @@ jobs:
           RELEASED_SHA: ${{ github.event.client_payload.sha }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            # The release's own identity tag (main-cd promote, phase A). A dispatch without a
-            # resolvable image is a platform CD contract break — fail loudly, never fall back to
-            # the pinned digest (that would publish the OLD identity and call it a re-bake).
-            if [ -z "${RELEASED_VERSION:-}" ]; then
-              echo "::error::repository_dispatch payload carries no client_payload.version — cannot resolve the released image."
-              exit 1
-            fi
+          if [ "${{ github.event_name }}" = "repository_dispatch" ] && [ -n "${RELEASED_VERSION:-}" ]; then
+            # The release's own identity tag (main-cd promote, phase A). A framework-release
+            # dispatch without a resolvable image is a platform CD contract break — fail loudly
+            # below, never fall back to the pinned digest (that would publish the OLD identity and
+            # call it a re-bake).
             echo "ref=${TEST_IMAGE%%:*}:${RELEASED_VERSION}" >> "$GITHUB_OUTPUT"
             echo "baking against released ${RELEASED_VERSION} (${RELEASED_SHA:-sha unknown})"
+          elif [ "${{ github.event.action }}" = "meshweaver-framework-released" ]; then
+            echo "::error::meshweaver-framework-released payload carries no client_payload.version — cannot resolve the released image."
+            exit 1
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ] && [ -n "${IMAGE_DIGEST:-}" ]; then
+            # 🚨 An UPSTREAM-published wake, not a framework release. The upstream may have been
+            # publishing for the caller's own pinned platform (its own push), in which case there
+            # is no released version to bake against and the pin is exactly right: the identity the
+            # gate just verified its upstreams against came from THIS image. Falling back here is
+            # therefore the same identity, not an older one — the case the framework-release branch
+            # above must never take.
+            echo "ref=${TEST_IMAGE%%:*}@${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "woken by an upstream publication; baking against the pinned digest ${IMAGE_DIGEST}"
           elif [ -n "${IMAGE_DIGEST:-}" ]; then
             # tag@digest: the tag names the image, the digest pins the build (reproducible runs;
             # an image regression lands on the commit that bumps the pin).
@@ -236,6 +307,90 @@ jobs:
         run: >
           echo "${{ secrets.acr-password }}" |
           docker login "${TEST_IMAGE%%/*}" -u "${{ secrets.acr-username }}" --password-stdin
+      # ───────────────────── THE UPSTREAM GATE (#1755) ─────────────────────
+      # A repo's build must not start until every upstream it depends on has a published artifact
+      # for the TARGET framework. Otherwise it compiles and gates against an upstream that no
+      # longer matches the framework it is building for: the publication comes out clean and the
+      # verdict means nothing.
+      #
+      # The identity comes from the IMAGE, because that is the only place it exists — a framework
+      # identity is a property of the shipped binaries, not of a tag or a commit. `mw-plugin-test
+      # --print-framework-identity` resolves it without standing up a mesh (one container start).
+      #
+      # 🚨 EXIT, do not wait. Not a poll, not a bounded re-check, not a sleep in a runner: the job
+      # ends immediately — no runner burned, no partial build, no false green — and is re-triggered
+      # by the EVENT its upstream fires when it publishes (the `Notify dependent repos` step at the
+      # end of this same workflow). That turns the platform's concurrent fan-out into a correct
+      # topological order with no central scheduler: the roots have no upstreams, so they build and
+      # publish; each publication wakes the repos that exited.
+      #
+      # 🚨 It exits RED, and that is deliberate. GitHub renders a skipped job with the same tick as
+      # a passed one, so "upstreams not ready, did not build" must not be a grey skip or a silent
+      # success — the exact trapdoor AGENTS.md forbids. A red here means "this repo has not been
+      # rebuilt for this release yet", which is TRUE and is exactly what an operator needs to see.
+      # The canonical scripts, fetched BEFORE the gate because the gate is what decides whether the
+      # bake runs at all. Same sparse checkout as the publish-side fetch further down, into its own
+      # path: it carries no root index.json, so the tester never treats it as a module (identical
+      # reasoning to `cross-repo-stage/`).
+      - name: Fetch the canonical gate script (platform repo)
+        if: inputs.upstream-sources != ''
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: mw-platform-gate
+          sparse-checkout: .github/scripts
+      # A SECOND login, deliberately: the gate must authenticate before a bake that can run 40
+      # minutes, and the publish side re-logs in afterwards rather than relying on a token minted
+      # before it. Two cheap OIDC exchanges beat one that can expire mid-job.
+      - name: Azure login for the gate (OIDC)
+        if: inputs.upstream-sources != ''
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+      - name: "Resolve the framework identity this bake will target"
+        if: inputs.upstream-sources != ''
+        id: identity
+        run: |
+          set -euo pipefail
+          line=$(docker run --rm --entrypoint /app/mw-plugin-test "${{ steps.image.outputs.ref }}" \
+            --print-framework-identity)
+          identity="${line#*identity=}"
+          identity="${identity%% *}"
+          if [ -z "$identity" ]; then
+            echo "::error::could not resolve a framework identity from the bake image (got: '$line'). Availability CANNOT BE DETERMINED, which is not clearance to build."
+            exit 1
+          fi
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+          echo "this bake targets framework identity $identity"
+      - name: "Gate: every upstream must be published for that identity"
+        if: inputs.upstream-sources != ''
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          UPSTREAMS: ${{ inputs.upstream-sources }}
+        run: |
+          set -uo pipefail
+          # shellcheck disable=SC2086
+          if mw-platform-gate/.github/scripts/check-release-availability.sh \
+               --identity "${{ steps.identity.outputs.identity }}" $UPSTREAMS; then
+            echo "every upstream is published for ${{ steps.identity.outputs.identity }} — building."
+            exit 0
+          fi
+          {
+            echo "### ⛔ Upstreams not ready — did NOT build"
+            echo ""
+            echo "This repo depends on \`$UPSTREAMS\`, and at least one of them has no sealed"
+            echo "publication for framework identity \`${{ steps.identity.outputs.identity }}\`."
+            echo "Building anyway would gate this repo's content against an upstream that does not"
+            echo "match the framework it is being built for."
+            echo ""
+            echo "**Nothing to do.** This run is re-triggered automatically when the missing"
+            echo "upstream publishes (\`meshweaver-upstream-published\`)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=Upstreams not ready — did not build::at least one upstream of this repo has no published artifact for framework identity ${{ steps.identity.outputs.identity }}; exiting without building. The upstream's own publication re-triggers this run."
+          exit 1
       # Same staging the caller's gate does, for the same reason: cross-repo `requires` must
       # resolve for the package roots to bind.
       - name: Stage cross-repo modules
@@ -333,3 +488,48 @@ jobs:
             echo "- identity: \`$(cat "$BAKE_DIR/framework-mvid.txt")\`"
             echo "- source: \`${{ inputs.bake-source }}\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+      # ───────────────────── WAKE THE DEPENDENTS (#1755) ─────────────────────
+      # 🚨 The edge that makes "exit, don't wait" work at all. A downstream repo whose upstream was
+      # not ready EXITED — it is not polling and nothing else will ever start it again. This
+      # publication is the event it is waiting for, so this repo fires it.
+      #
+      # Until this existed only the PLATFORM dispatched, so the very first satellite→satellite
+      # dependency (Education on Plugins) would have deadlocked on its first use: Education exits,
+      # Plugins publishes, and nothing tells Education to try again until the next platform release.
+      #
+      # It runs only after the publish it announces — an event claiming an artifact that is not
+      # sealed would send every dependent into a build against something that is not there. The
+      # payload carries the framework identity so a receiver can gate on the exact generation, and
+      # the platform version when this run was itself woken by one (the receiver needs it to resolve
+      # the released image).
+      - name: Notify dependent repos
+        if: inputs.dependent-repos != ''
+        env:
+          TOKEN: ${{ secrets.dependent-dispatch-token }}
+          REPOS: ${{ inputs.dependent-repos }}
+          SOURCE: ${{ inputs.bake-source }}
+          VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          set -euo pipefail
+          # The token is asserted in preflight (declaring dependents declares the obligation), so
+          # reaching here without one is impossible rather than tolerated.
+          IDENTITY="$(cat "$BAKE_DIR/framework-mvid.txt" | tr -d '[:space:]')"
+          failed=0
+          for repo in $REPOS; do
+            echo "→ $repo"
+            code=$(curl -sS -o /tmp/dispatch-resp -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$repo/dispatches" \
+              -d "{\"event_type\":\"meshweaver-upstream-published\",\"client_payload\":{\"source\":\"$SOURCE\",\"identity\":\"$IDENTITY\",\"version\":\"${VERSION:-}\",\"sha\":\"$GITHUB_SHA\"}}") || code=000
+            case "$code" in
+              2*) echo "woken: $repo";;
+              # 🚨 NOT a warning. A lost dispatch here leaves a repo that already exited with
+              # nothing to wake it — it silently never rebuilds for this release, which is the
+              # terminal-exit failure #1755 names explicitly. The publication itself has already
+              # landed and is idempotent, so failing the job is safe and a re-run re-notifies.
+              *)  echo "::error::could not wake $repo (HTTP $code: $(cat /tmp/dispatch-resp)) — it exited waiting for THIS publication and nothing else will re-trigger it."
+                  failed=1;;
+            esac
+          done
+          echo "### 📣 Dependents woken: $REPOS" >> "$GITHUB_STEP_SUMMARY"
+          exit "$failed"

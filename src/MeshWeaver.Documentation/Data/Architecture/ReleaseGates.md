@@ -161,6 +161,91 @@ a gate that could not run resolves to a hold with its own reason rather than to 
 kills the tick. An install with no gate registered at all logs that fact and rolls — said out loud,
 never inferred from silence.
 
+## The build gate — exit, don't wait
+
+A repo must not build against a released framework until every upstream it depends on has published
+for that framework. Otherwise it compiles and gates its content against an upstream that no longer
+matches: the publication comes out clean and the verdict means nothing.
+
+The gate lives at the receiving end of the cascade, in the reusable `node-repo-publish-bake`
+workflow every node repo calls. A caller declares its upstreams:
+
+```yaml
+with:
+  bake-source: education
+  upstream-sources: plugins          # exit unless `plugins` is published for the target identity
+  dependent-repos: Systemorph/MeshWeaver.Reinsurance
+```
+
+Before staging or baking anything the job resolves the identity it is about to target — from the
+**image**, with `mw-plugin-test --print-framework-identity`, because that is the only place an
+identity exists — and asks the same availability question the deployment gate asks, through the same
+script (`.github/scripts/check-release-availability.sh`).
+
+### Not ready ⇒ EXIT. Not a poll, not a sleep, not a bounded re-check.
+
+The job ends immediately: no runner burned, no partial build, no false green. It is re-triggered by
+the **event** its upstream fires when it publishes. That is what turns the platform's concurrent
+fan-out into a correct topological order with no central scheduler:
+
+```
+platform ──▶ plugins (no upstreams)          builds, publishes
+               ├──▶ education   (had exited) builds, publishes
+               │      └──▶ reinsurance
+               └──▶ socialmedia (had exited) builds, publishes
+```
+
+🚨 **The exit is RED, deliberately.** GitHub renders a skipped job with the same tick as a passed
+one, so "upstreams not ready, did not build" must never be a grey skip or a silent success. A red
+here is also simply *true*: this repo has not been rebuilt for this release yet.
+
+### The edge that makes it work: a satellite wakes its own dependents
+
+Until now only the **platform** dispatched. A downstream repo that exited was waiting for an event
+nobody fired, so the very first satellite→satellite dependency would have deadlocked on first use.
+So `node-repo-publish-bake` now fires `meshweaver-upstream-published` — carrying
+`{source, identity, version, sha}` — to each repo in `dependent-repos`, **after** the publication it
+announces has sealed.
+
+Two rules keep that edge honest:
+
+- **Declaring `dependent-repos` declares an obligation**, so its token is asserted in preflight and
+  a missing one fails RED. Without the token those repos never wake, and nothing anywhere would be
+  red about it.
+- **A failed dispatch fails the job**, unlike the platform's reporter-class notification. A lost
+  wake-up leaves a repo that already exited with nothing to re-trigger it — the terminal-exit
+  failure this design must not have. The publication is already sealed and idempotent, so re-running
+  is safe.
+
+Receivers subscribe to both event types:
+
+```yaml
+on:
+  repository_dispatch:
+    types: [meshweaver-framework-released, meshweaver-upstream-published]
+```
+
+### Build only what you own — the half that is not done
+
+The directive is that a repo builds only its own content and consumes upstreams as **pre-built
+released artifacts** — dissolving the staging machinery (`stage-repo`/`stage-modules`) in every
+satellite. `upstream-sources` above is the half of that which exists: the availability gate is
+precisely the exit condition such a build needs.
+
+The other half is blocked on the artifact's shape, and it is worth stating exactly:
+
+> A published bundle carries **compiled assembly bytes keyed by node path**, plus a manifest
+> (`BundleWriter.Write`). It does **not** carry the upstream's node definitions. But a satellite
+> needs those definitions, not just the bytes: its package roots are typed by an upstream type
+> (`nodeType: Store/Plugin`), and its NodeTypes' `sources` queries reach into upstream packages
+> (`@Edu/…`). Seeding an assembly only stamps a node that already exists — with no upstream nodes in
+> the tree there is nothing to stamp, and the roots do not bind.
+
+So dropping staging requires the published artifact to carry the upstream's node definitions
+alongside its assemblies. Until it does, `stage-repo`/`stage-modules` stay, marked transitional; the
+gate already refuses to build when the upstream artifact is missing, which is the behaviour that
+does not change when the artifact grows.
+
 ## See also
 
 - [CI Content Bake](../CiContentBake) — where the sealed bundles and the framework identity come from

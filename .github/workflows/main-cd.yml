@@ -1106,6 +1106,14 @@ jobs:
   # REPORTER-CLASS like notify-platform-update: a lost dispatch costs one delayed rebake wave
   # (the next release re-notifies) and can never hide a defect — unconfigured stays a loud
   # NOTICE, never a red.
+  #
+  # 🚨 Provisioning note (#1755): a subscriber whose own upstreams are not yet published EXITS
+  # without building and is re-woken by its upstream's `meshweaver-upstream-published` event, so
+  # naming every satellite here is CORRECT but noisy — the dependent repos paint one red per
+  # release before their upstream publishes. Naming only the ROOTS (the repos with no upstreams:
+  # MeshWeaver.Plugins) gets the identical result quietly, because the satellite→satellite edge in
+  # node-repo-publish-bake carries the wave the rest of the way. Either list is safe; the roots-only
+  # list is the tidy one.
   notify-dependents:
     name: "Notify dependent repos"
     needs: [gate, portal-image, promote]
