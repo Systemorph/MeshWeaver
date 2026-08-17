@@ -7,7 +7,7 @@ using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Memex.Portal.Shared.Courses;
+namespace MeshWeaver.Courses;
 
 /// <summary>
 /// Resolves a course asset's short-lived, tokenized <c>download_url</c> through the GitHub

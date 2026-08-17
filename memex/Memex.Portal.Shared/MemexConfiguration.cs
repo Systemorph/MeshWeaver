@@ -1,7 +1,6 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
-using Memex.Portal.Shared.Courses;
 using Memex.Portal.Shared.Email;
 using Memex.Portal.Shared.Instances;
 using Memex.Portal.Shared.SelfUpdate;
@@ -282,10 +281,9 @@ public static class MemexConfiguration
         // server-side sync — the plugin registry pulling the plugins repo — logs on AS THE APP
         // (installation token), never with a user's personal credential.
         services.Configure<GitHubAppOptions>(builder.Configuration.GetSection("GitHub:App"));
-        // Course assets (GET /assets/{Space}/{path…}) — resolves an asset's tokenized
-        // download_url through the GitHub contents API with the App identity above and a
-        // short (30 s) per-file promise cache; the endpoint 302-redirects, never proxies.
-        services.AddSingleton<CourseAssetService>();
+        // (Course assets ride the MeshWeaver.Courses module — its attribute registers the
+        // resolver and contributes GET /assets/{Space}/{path…} through MapMeshModuleEndpoints.
+        // It reads the same GitHub App credentials configured above.)
 
         // Instance sync — bidirectional Space replication to another MeshWeaver instance
         // (per-space registry at {space}/_Sync; offline changes accumulate in the durable
@@ -1192,10 +1190,9 @@ public static class MemexConfiguration
         // {userId}/_Provider/GitHub. See Doc/Architecture/GitHubSync.
         app.MapGitHubConnect();
 
-        // Course assets — GET /assets/{Space}/{path…}: entitlement-gated 302 to GitHub's
-        // tokenized download_url for course media living in the Space's synced repo
-        // ({Space}/_GitSync). Same ordering requirement (needs the resolved user context).
-        app.MapCourseAssets();
+        // (GET /assets/{Space}/{path…} — the entitlement-gated course-asset route — is
+        // contributed by the MeshWeaver.Courses module through app.MapMeshModuleEndpoints()
+        // above, mapped AllowAnonymous because CourseAssetGate is the guard.)
 
         // Instance Sync — OAuth+PKCE "connect to a remote MeshWeaver instance" endpoints
         // (/connect/instance[/callback]). Redirects to the remote's own login and stores the
