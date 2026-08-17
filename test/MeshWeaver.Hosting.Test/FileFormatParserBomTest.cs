@@ -26,7 +26,12 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class FileFormatParserBomTest
 {
-    private const string Bom = "﻿";
+    /// <summary>
+    /// Spelled as an escape, not the literal character: a BOM is invisible in every editor, so a
+    /// formatter or a bad paste could silently empty this constant and leave the tests passing
+    /// while asserting nothing (Copilot review, #1781).
+    /// </summary>
+    private const string Bom = "\uFEFF";
     private static FileFormatParserRegistry Registry() => new(new JsonSerializerOptions());
 
     [Fact]
@@ -58,7 +63,7 @@ public class FileFormatParserBomTest
 
         Assert.NotNull(node);
         // The BOM must be consumed, not carried into the first line — otherwise the front-matter
-        // fence is "﻿---", the block is treated as body text, and Name silently disappears.
+        // fence is "\uFEFF---", the block is treated as body text, and Name silently disappears.
         Assert.Equal("With front matter", node!.Name);
     }
 
