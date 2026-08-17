@@ -911,6 +911,13 @@ public static class MemexConfiguration
                         // MeshWeaver installation may pull. Registration is self-service; granting
                         // is not, and the grants live in the Admin partition out of the owner's reach.
                         .AddInstanceGrantAdminSettingsTab()
+                        // Composition (platform admins only) — WHY this environment carries what it
+                        // carries: the deployment's feature flags (Features:Flags:*, which also
+                        // decide what it pre-installs) and the parameters its installed packages
+                        // declare, with the exact env var to provision for any this environment does
+                        // not supply. Read-only: composition arrives through the values file, and a
+                        // browser edit would be reverted by the next helm upgrade.
+                        .AddCompositionAdminSettingsTab()
                         // Instance Sync lives in the "Synchronizations" NODE-menu item (not a
                         // settings tab) — wired via AddInstanceSyncTypes on the mesh builder.
                         // Code workspace tab — on-disk working-tree editor (checkout/edit/commit/push).

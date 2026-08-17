@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Features;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -265,6 +266,12 @@ public record MeshBuilder
             // blob, …). Resolved by leaf adapters via IoPoolRegistry; dies with
             // the mesh. See Doc/Architecture/ControlledIoPooling.md.
             .AddIoPools()
+            // The deployment's declared features (Features:Flags:*) — the per-environment switch
+            // that also carries what this environment pre-installs. Mesh-scoped for the same
+            // reason the pools are: it holds live state (a BehaviorSubject + a configuration
+            // reload registration) and must die with the mesh. TryAdd so a host or a test can
+            // supply its own reader. See Doc/Architecture/EnvironmentComposition.
+            .AddFeatureFlags()
             );
 
         IReadOnlyCollection<Func<MeshConfiguration, MeshConfiguration>> meshConfig = MeshConfiguration;
