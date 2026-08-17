@@ -42,14 +42,32 @@ public static class ApprovalExtensions
     /// The per-node-hub half of the registration: type + data source + menu entry + the
     /// RequestApproval/Approvals layout areas + the <see cref="ApprovalsEnabled"/> marker.
     /// ONE code path shared by the module attribute and <see cref="AddApprovals"/>.
+    ///
+    /// <para>🚨 Idempotent BY CONSTRUCTION, twice over (#1700). This chain reaches a hub through
+    /// several independent doors — the module attribute's <c>ConfigureDefaultNodeHub</c>, the
+    /// <see cref="AddApprovals"/> builder extension, and the legacy per-lambda
+    /// <c>MeshWeaver.Graph.ApprovalExtensions.AddApprovals()</c> that content configuration
+    /// lambdas call — and a re-applied default-node chain (the error-overlay path) can run it
+    /// twice on ONE hub. (1) The <see cref="ApprovalsEnabled"/> marker short-circuits a second
+    /// application on the same chain. (2) The data source carries a STABLE id (the partition
+    /// name): when two applications land anyway (marker-invisible composition),
+    /// <c>DataContext.Initialize</c>'s documented keep-last-by-id dedupe collapses them. With
+    /// the previous <c>Guid.NewGuid()</c> id, that dedupe could never fire, so a double
+    /// application built two type sources for the <c>Approval</c> collection and hub CREATION
+    /// threw <c>ArgumentException: An item with the same key has already been added. Key:
+    /// Approval</c> — the hub never came up, and every delivery to it parked forever behind its
+    /// init gates (observed as the LinkedIn/Post Tests-area timeout in the SocialMedia gate on
+    /// every post-extraction image).</para>
     /// </summary>
     internal static MessageHubConfiguration ConfigureHub(MessageHubConfiguration configuration)
     {
+        if (configuration.HasApprovals())
+            return configuration;
         return configuration
             .WithType<Approval>(nameof(Approval))
             .Set(new ApprovalsEnabled())
             .AddData(data => data.WithDataSource(_ =>
-                new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace)
+                new MeshDataSource(ApprovalPartition, data.Workspace)
                     .WithType<Approval>(ApprovalPartition, nameof(Approval))))
             .AddNodeMenuItems(ApprovalMenuProvider)
             .AddLayout(layout => layout
