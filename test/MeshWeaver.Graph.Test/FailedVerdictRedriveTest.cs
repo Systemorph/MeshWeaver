@@ -158,8 +158,30 @@ public class FailedVerdictRedriveTest
     [Fact]
     public void AnUndeterminedVerdict_IsReDrivenTheSameWay()
     {
-        var def = NeverCompiledFailure(status: CompilationStatus.Unavailable);
+        var def = NeverCompiledFailure(
+            currentSources: Sources(("P/T/Source/a", 1)), status: CompilationStatus.Unavailable);
         NodeTypeCompilationHelpers.HasStaleFailureVerdict(def, null).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 Never re-drive from a source set nobody established. On a cold activation the sources
+    /// watcher has not written <see cref="NodeTypeDefinition.CurrentSourceVersions"/> yet, and
+    /// "not known yet" is not "no sources": compiling there forms a verdict from evidence the
+    /// mesh does not have (#1216), and the watcher's first write would immediately change the
+    /// token and burn a second attempt for free.
+    /// </summary>
+    [Fact]
+    public void AnUnestablishedSourceSet_Waits_RatherThanReDriving()
+    {
+        var unseeded = NeverCompiledFailure(currentSources: null);
+        NodeTypeCompilationHelpers.HasStaleFailureVerdict(unseeded, null)
+            .Should().BeFalse("the source set is not known yet — this is waiting, not declining");
+
+        // …and the moment the watcher seeds it — even with the EMPTY map, which is a real answer —
+        // the re-drive is due.
+        var seededEmpty = unseeded with { CurrentSourceVersions = ImmutableDictionary<string, long>.Empty };
+        NodeTypeCompilationHelpers.HasStaleFailureVerdict(seededEmpty, null)
+            .Should().BeTrue("an established (even empty) source set is an answer, so the attempt is due");
     }
 
     // ── …and nowhere else ───────────────────────────────────────────────────────────────────
