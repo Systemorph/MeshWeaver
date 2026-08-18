@@ -496,8 +496,9 @@ public class AgentChatClient : IAgentChat
 
     /// <summary>
     /// Appends the DYNAMIC per-round context block to <paramref name="messageText"/> — the current
-    /// application context (node IDENTITY as JSON) plus any attached content (text inlined, binary
-    /// returned) — and returns the binary attachments. This is the single source of truth shared by
+    /// date/time in the viewer's zone (<see cref="CurrentTimeContext"/>), the current application
+    /// context (node IDENTITY as JSON), and any attached content (text inlined, binary returned) —
+    /// and returns the binary attachments. This is the single source of truth shared by
     /// BOTH the non-streaming <see cref="BuildMessageWithContextAsync"/> path and the streaming
     /// <see cref="GetStreamingResponseAsync(IReadOnlyCollection{ChatMessage}, CancellationToken)"/>
     /// path, so the streaming chat ships the same context/attachments the user set (contextPath +
@@ -508,6 +509,16 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     private async Task<ImmutableList<DataContent>> AppendContextAndAttachmentsAsync(StringBuilder messageText)
     {
+        // 🕰️ WHAT DAY IS IT (#1651). Nothing else in the pipeline told the agent, so every model
+        // answered "what day is today" — and every relative expression a scheduling agent computes
+        // off it — from its training priors. It belongs HERE, in the per-round block, and NOT in
+        // the agent's instructions: agents are built once and cached while a thread lives for days,
+        // so an instruction-time date goes stale and is then confidently wrong in exactly the way
+        // this fixes. Rendered in the viewer's own zone (never .ToLocalTime(), which in the UTC
+        // deployment container is a no-op) plus the ISO-8601 `Z` instant for anything the agent
+        // feeds back into a tool. See CurrentTimeContext.
+        messageText.Append(CurrentTimeContext.Describe(DateTimeOffset.UtcNow, ResolveViewerZoneId()));
+
         // Dynamic part: context (changes per navigation)
         if (Context != null)
         {
@@ -620,6 +631,29 @@ public class AgentChatClient : IAgentChat
         }
 
         return binaryAttachments;
+    }
+
+    /// <summary>
+    /// The zone the round's date/time block is rendered in — the SUBMITTER's named IANA zone.
+    ///
+    /// <para>Resolution order mirrors the user-identity block below, and for the same reason: by
+    /// the time a round's prompt is composed the agent runs asynchronously on the agent hub, where
+    /// the ambient <c>AccessContext</c> has usually been reset to null or to an impersonated System
+    /// principal. The DURABLE identity captured at submit time
+    /// (<c>ThreadExecutionContext.UserAccessContext</c>, rebuilt by the round-dispatch watcher from
+    /// the <c>ThreadMessage.SubmitterTimeZoneId</c> rider) is therefore the primary source; the live
+    /// request/circuit context is the fallback for the in-process paths that still have one.</para>
+    ///
+    /// <para>Null when nothing knows the viewer's zone — <see cref="CurrentTimeContext.Describe"/>
+    /// then renders UTC and says so. It must never fall back to the server's zone: the deployment
+    /// container runs UTC, so that "fallback" is both a lie and a no-op.</para>
+    /// </summary>
+    private string? ResolveViewerZoneId()
+    {
+        var fromSubmitter = ExecutionContext?.UserAccessContext?.TimeZoneId;
+        if (!string.IsNullOrWhiteSpace(fromSubmitter))
+            return fromSubmitter;
+        return hub.ServiceProvider.GetService<AccessService>().ViewerZoneId();
     }
 
     private async Task<(string Text, ImmutableList<DataContent> BinaryAttachments)> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages, string? agentName = null)

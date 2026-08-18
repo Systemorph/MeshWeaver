@@ -186,7 +186,10 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         // watcher's Throttle/Subscribe continuation has no live AccessContext (#948).
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var previousContext = access.CircuitContext;
-        access.SetHostIdentity((previousContext ?? TestUsers.Admin) with { Locale = "de" });
+        // 🕰️ …and in a zone, captured on the SAME rider for the same reason: the agent round ships
+        // the current date/time as the anchor for every relative expression, and that anchor is only
+        // the user's day if their named IANA zone survived the hop (#1651).
+        access.SetHostIdentity((previousContext ?? TestUsers.Admin) with { Locale = "de", TimeZoneId = "Europe/Zurich" });
         try
         {
             client.SubmitMessage(threadPath, "hello", modelName: StaleModel, createdBy: TestUser);
@@ -213,6 +216,10 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         userCell.SubmitterLocale.Should().Be("de",
             "the submit boundary must capture the submitter's language onto the message — it is the "
             + "only carrier that survives the watcher's Throttle/Subscribe hop (#948)");
+        userCell.SubmitterTimeZoneId.Should().Be("Europe/Zurich",
+            "the submitter's ZONE rides on the same carrier — without it the round's rebuilt context "
+            + "knows WHO the user is but not WHEN they are, and the agent's date anchor silently "
+            + "degrades to UTC for every viewer (#1651)");
         // The failure must SPEAK — and speak the SUBMITTER's language: it comes from the
         // localization catalog resolved off the round's own AccessContext.Locale, not a hard-coded
         // English literal, and it names the requested model.
