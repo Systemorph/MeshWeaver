@@ -1,4 +1,3 @@
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Blazor.Infrastructure;
@@ -81,22 +80,19 @@ public class BlazorAutocompleteService(
     /// <summary>
     /// Subscribes <paramref name="source"/> with the durable circuit user re-established on the HUB
     /// <see cref="AccessService"/> (the same singleton the mesh query's RLS reads). The identity is
-    /// switched at SUBSCRIBE and held for the whole subscription via <see cref="Observable.Using{TResult,TResource}(System.Func{TResource},System.Func{TResource,System.IObservable{TResult}})"/>, so
-    /// every IIoPool / synced-query hop the query fans out across carries it. Mirrors
+    /// resolved and switched at SUBSCRIBE and held across the whole synchronous Subscribe via
+    /// <see cref="ImpersonationScopeExtensions.RunAs{T}(MeshWeaver.Messaging.AccessService?,System.Func{MeshWeaver.Messaging.AccessContext?},System.Func{System.IObservable{T}})"/>,
+    /// so every IIoPool / synced-query hop the query fans out across captures it. Mirrors
     /// <c>BlazorView.RunUnderCircuitUser</c> for the shared (non-component) autocomplete service.
+    ///
+    /// <para>🚨 <c>RunAs</c>, never <c>Observable.Using</c> (#1790): the latter disposes the scope on
+    /// whichever thread the query terminates, leaving this thread switched to the resolved user and
+    /// writing its previous identity onto a foreign one.</para>
     /// </summary>
     private IObservable<T> RunUnderCircuitUser<T>(IObservable<T> source)
     {
         var hubAccess = portalApplication.Hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Using(
-            () =>
-            {
-                var user = ResolveCircuitUser(hubAccess);
-                return user is not null && hubAccess is not null
-                    ? hubAccess.SwitchAccessContext(user)
-                    : (IDisposable)Disposable.Empty;
-            },
-            _ => source);
+        return hubAccess.RunAs(() => ResolveCircuitUser(hubAccess), () => source);
     }
 
     /// <summary>
