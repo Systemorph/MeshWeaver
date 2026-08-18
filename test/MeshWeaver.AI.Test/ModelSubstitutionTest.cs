@@ -315,6 +315,14 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
     /// unrelated PR (#1703, 2026-08-17): the round lost the race and the read errored inside a
     /// second with <c>No node found at …/_Usage/…</c> — an error, not a timeout, so no amount of
     /// waiting could have saved it. Same defect #1040 fixed in <c>ThreadTokenUsageTest</c>.</para>
+    ///
+    /// <para>🚨 <b>Do not switch this to the node stream</b> (#1812). That issue proposed it, on the
+    /// theory that an all-zero <c>TokenUsage</c> CI once timed out on was a stale CQRS projection.
+    /// Measured, it is not: this query and <c>GetMeshNodeStream(usagePath)</c> resolve within ±13 ms
+    /// of each other, and the point stream is the SLOWER of the two once its cold per-node hub
+    /// activation is counted. The zeros were the node's authoritative value — <c>RecordUsage</c>'s
+    /// phase 1 wrote them — so an authoritative read returned the same zeros. Fixed on the write
+    /// side; pinned by <c>ThreadTokenUsageTest.UsageSatelliteIsNeverObservableWithZeroTokens</c>.</para>
     /// </summary>
     private async Task<TokenUsage> WaitForUsage(string threadPath, string modelKey, Func<TokenUsage, bool> predicate, int timeoutMs)
     {
