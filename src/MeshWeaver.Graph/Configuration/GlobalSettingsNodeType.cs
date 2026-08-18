@@ -1,6 +1,7 @@
 ﻿using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -67,8 +68,47 @@ public static class GlobalSettingsNodeType
             ExcludeFromContext = new HashSet<string> { "search", "create" },
         });
 
+        builder.AddMeshNodes(CreatePolicy());
+
         return builder;
     }
+
+    /// <summary>
+    /// The partition policy for <c>_Setting</c>: readable by everyone, writable by nobody.
+    ///
+    /// <para>🚨 <c>_Setting</c> is a TOP-LEVEL node, so it is its own partition, and a partition
+    /// with no policy is private. The page it hosts is the opposite of private — About and What's
+    /// New are ungated ("visible to every user"), and the header build chip links every signed-in
+    /// user straight here. Without this an ordinary user reaching the page is refused at the
+    /// partition: <i>"Access denied: user 'x' lacks Read permission on '_Setting'"</i>.</para>
+    ///
+    /// <para>This is the SECOND half of #1817 and it was invisible until the first half landed:
+    /// while every link 404'd on the wrong path nobody ever reached the node to be denied by it,
+    /// so fixing the route turned "does not match any registered address pattern" into an
+    /// access denial on a live portal. Same class as #126, where the <c>Skill</c> partition
+    /// shipped without its PublicRead policy and platform skills were invisible after
+    /// deployment.</para>
+    ///
+    /// <para>Read-only is the whole grant: the write verbs stay <c>false</c>, and each tab still
+    /// carries its own <c>RequiredPermission</c>, so opening the shell is not authority over what
+    /// the admin tabs contain. Modelled on <c>LicenseNodeType</c>'s policy, which is world-readable
+    /// for the same reason — you must be able to read the page before you can act on it.</para>
+    /// </summary>
+    private static MeshNode CreatePolicy() =>
+        new("_Policy", SettingsPath)
+        {
+            NodeType = PartitionAccessPolicyNodeType.NodeType,
+            Name = "Access Policy",
+            Content = new PartitionAccessPolicy
+            {
+                PublicRead = true,
+                Create = false,
+                Update = false,
+                Delete = false,
+                Comment = false,
+                Thread = false
+            }
+        };
 
     /// <summary>
     /// Creates a MeshNode definition for the GlobalSettings node type.

@@ -18,6 +18,44 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class AboutSettingsTabTest
 {
+    // Localizer echoes the key, so assertions pin WHICH key the line reads.
+    private static string Echo(string key) => key;
+
+    /// <summary>
+    /// The About page states WHEN this build started serving, in the viewer's own zone.
+    ///
+    /// <para>A version answers "which build" and never "since when". Those are different questions,
+    /// and the second is the one asked whenever somebody needs to know whether a portal actually
+    /// rolled forward — a re-deploy of the same image leaves the version identical, so only a
+    /// timestamp distinguishes it.</para>
+    ///
+    /// <para>🚨 Rendered in the VIEWER's zone, never as bare UTC. The stored value is UTC by
+    /// contract; a viewer in Zurich reading "13:35" for a 13:35 UTC deploy would be an hour wrong
+    /// in summer, and silently so.</para>
+    /// </summary>
+    [Fact]
+    public void StartedAt_is_rendered_in_the_viewers_zone_not_utc()
+    {
+        // 13:35 UTC on a summer date → 15:35 in Zurich (CEST, UTC+2).
+        var utc = new DateTimeOffset(2026, 8, 18, 13, 35, 0, TimeSpan.Zero);
+
+        var markdown = AboutSettingsTab.StartedAtMarkdown(utc, "Europe/Zurich", Echo);
+
+        markdown.Should().NotBeNull();
+        markdown!.Should().Contain("15:35", "Zurich is UTC+2 in August — the viewer's clock, not the server's");
+        markdown.Should().NotContain("13:35", "a bare UTC time is exactly the thing that misleads");
+        markdown.Should().Contain("about.lastDeployed", "the label must come from the localization catalog");
+    }
+
+    /// <summary>
+    /// An unavailable start time renders NOTHING rather than a fabricated one. The fallback for a
+    /// host that refuses process introspection is <c>default</c>, and printing 01/01/0001 — or
+    /// worse, "now" — would read as a fresh deploy on every render.
+    /// </summary>
+    [Fact]
+    public void StartedAt_renders_nothing_when_the_start_time_is_unknown()
+        => AboutSettingsTab.StartedAtMarkdown(default, "Europe/Zurich", Echo).Should().BeNull();
+
     [Fact]
     public void ToRows_maps_manifests_to_display_rows()
     {

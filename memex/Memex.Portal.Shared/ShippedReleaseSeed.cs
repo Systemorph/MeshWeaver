@@ -122,6 +122,50 @@ public static class ShippedReleaseSeed
     public static string? CommitUrl => CommitHash is { } sha ? $"{RepositoryUrl}/commit/{sha}" : null;
 
     /// <summary>
+    /// When THIS build started serving, in UTC — the process start time.
+    ///
+    /// <para>This is the deployment moment as a user experiences it. A version answers "which
+    /// build", never "since when", and those are different questions: after a roll the version may
+    /// be unchanged (a re-deploy of the same image) or have changed minutes ago, and only a
+    /// timestamp separates "this has been live for a week" from "this landed while I was reading".
+    /// It is the question that goes unanswered every time someone asks whether a portal actually
+    /// rolled forward.</para>
+    ///
+    /// <para>Process start rather than a build/compile timestamp on purpose: a pod runs the image
+    /// it was given, and a viewer wants to know when the thing answering them began answering.
+    /// Under Kubernetes a rollout replaces the pod, so process start IS the roll. Read once and
+    /// cached — it cannot change within a process, and re-reading per render would be a syscall
+    /// for a constant.</para>
+    ///
+    /// <para>UTC by contract; every surface renders it in the VIEWER's zone via
+    /// <c>DisplayTimeExtensions</c>, never as a bare UTC string.</para>
+    /// </summary>
+    public static DateTimeOffset StartedAtUtc { get; } = ReadProcessStartUtc();
+
+    private static DateTimeOffset ReadProcessStartUtc()
+    {
+        // WASM has no process to ask, and no deploy of its own to report — the build it runs is the
+        // one the server handed it. Guarded rather than caught: CA1416 is right that this is not a
+        // runtime accident to swallow.
+        if (OperatingSystem.IsBrowser()) return default;
+
+        try
+        {
+            return new DateTimeOffset(
+                System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(),
+                TimeSpan.Zero);
+        }
+        catch
+        {
+            // A host that refuses process introspection must not take the About page with it — the
+            // rest of the build identity is still worth rendering. Falling back to "now" would be a
+            // lie that reads as a fresh deploy on every render, so callers get default and suppress
+            // the line instead (AboutSettingsTab.StartedAtMarkdown).
+            return default;
+        }
+    }
+
+    /// <summary>
     /// THE single robust startup entry point. Runs the existing shipped-release pre-build FIRST (the
     /// critical, owned per-NodeType release path), THEN ensures the Admin platform-version anchor node
     /// exists and records ONE owned platform-startup <c>Activity</c> under it
