@@ -612,6 +612,46 @@ public record NodeTypeDefinition
     public System.Collections.Immutable.ImmutableSortedDictionary<string, string>? CompiledDependencies { get; init; }
 
     /// <summary>
+    /// 🚨 The COMPILE INPUTS the STANDING FAILURE VERDICT was formed from — the one thing a failed
+    /// compile can honestly record, and the field that makes a failure RECOVERABLE (issue #1793).
+    ///
+    /// <para><b>The hole it closes.</b> A failed compile writes no assembly coordinates at all:
+    /// <c>NodeTypeCompilationHelpers.ApplyCompileFailure</c> stamps neither
+    /// <see cref="LatestAssemblyCollection"/> / <see cref="LatestAssemblyPath"/> nor
+    /// <see cref="CompiledFrameworkVersion"/>. For a NodeType that never compiled successfully on
+    /// this deployment those are therefore null forever — and EVERY automatic re-drive keys off
+    /// something that only exists after a first success: the first-build kickoff needs
+    /// <c>CompilationStatus is null</c>, the recovery kickoff needs <c>Compiling</c>, the
+    /// framework-stale kickoff needs the assembly coordinates
+    /// (<c>NodeTypeCompilationHelpers.HasStaleFrameworkBuild</c>), and the release watcher needs a
+    /// human to move <see cref="RequestedReleaseAt"/>. So a redeploy, a framework bump, a module
+    /// update or a fix to the failing code reached none of them — which is why the fix written FOR
+    /// the fifteen types parked on memex-cloud could not reach the nodes it was written for.</para>
+    ///
+    /// <para><b>The shape.</b> An opaque, comparable token over the three inputs a verdict depends
+    /// on — the framework identity, the installed-module fingerprint, and the source snapshot the
+    /// compile consumed (<c>NodeTypeCompilationHelpers.BuildInputsToken</c>). The re-drive kickoff
+    /// fires exactly when the LIVE inputs differ from this stamp, which gives ONE automatic retry
+    /// per distinct set of inputs: a deployed framework, a module update, or an edited source each
+    /// earn a fresh attempt, and a type that is simply broken is retried once and then left alone
+    /// (loudly — see the give-up log in <c>InstallCompileWatcher</c>) instead of storming.</para>
+    ///
+    /// <para><b>Self-limiting by construction.</b> The kickoff stamps this field in the SAME write
+    /// that flips <see cref="CompilationStatus"/> to <see cref="Mesh.Services.CompilationStatus.Pending"/>,
+    /// so the re-drive's own bookkeeping makes its trigger false — a reconcile that fed itself is
+    /// the 257,000-version write-storm shape, and this is what forecloses it.</para>
+    ///
+    /// <para><c>null</c> = no failure verdict has been recorded here (a never-attempted type, a
+    /// successful one — <c>ApplyCompileSuccess</c> CLEARS it — or a node whose Error was baked into
+    /// a file by an export, which is precisely the population that must get its one retry).</para>
+    ///
+    /// <para>🚨 Runtime state: never author it into a node file. <c>ShippedNodeTypeStateTest</c>
+    /// bans it, because an authored token that happens to match the live inputs would suppress the
+    /// very retry this field exists to enable.</para>
+    /// </summary>
+    public string? FailedBuildInputs { get; init; }
+
+    /// <summary>
     /// 🚨 Round-trip buffer for content members this compiled shape does not declare —
     /// schema evolution: a property written by a NEWER build, or one removed since the
     /// JSON was persisted. Without this, System.Text.Json silently DROPS such members on
