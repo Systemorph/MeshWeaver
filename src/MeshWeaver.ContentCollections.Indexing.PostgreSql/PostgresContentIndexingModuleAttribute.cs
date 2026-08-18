@@ -15,11 +15,12 @@ namespace MeshWeaver.ContentCollections.Indexing.PostgreSql;
 ///
 /// <para><b>Activation is decided at RESOLVE time, not install time</b>: a module has no
 /// <c>IConfiguration</c> when its attribute folds in, so the pipeline registers with the
-/// <c>enabledWhen</c> gate — active only when the mesh database connection resolves AND
-/// <c>Embedding:Endpoint</c>/<c>Embedding:ApiKey</c> are configured AND an
-/// <see cref="IEmbeddingProvider"/> is registered. Unconfigured deployments (e.g. the FileSystem
-/// monolith) stay inert: uploads proceed unindexed and content autocomplete settles empty —
-/// never a missing-store error.</para>
+/// <c>enabledWhen</c> gate — active only when the mesh database connection resolves AND an
+/// <see cref="IEmbeddingProvider"/> is registered (which <c>AddEmbeddings</c> does exactly when
+/// <c>Embedding:Endpoint</c>, plus <c>Embedding:ApiKey</c> for the cloud provider, is configured).
+/// Unconfigured deployments (e.g. the FileSystem monolith) stay inert THROUGHOUT: uploads proceed
+/// unindexed, content autocomplete settles empty, and the chunk store/embedder resolve inert
+/// stand-ins so <c>search_chunks</c> answers "indexing is off" — never a missing-store error.</para>
 /// </summary>
 [AttributeUsage(AttributeTargets.Assembly)]
 public sealed class PostgresContentIndexingModuleAttribute : MeshNodeProviderAttribute

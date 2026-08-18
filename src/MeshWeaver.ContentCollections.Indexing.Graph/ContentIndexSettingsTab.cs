@@ -53,10 +53,12 @@ public static class ContentIndexSettingsTab
     {
         IReadOnlyList<SettingsMenuItemDefinition> none = Array.Empty<SettingsMenuItemDefinition>();
 
-        // The tab exists only where the pipeline is wired (embeddings + vector store configured). The
-        // observer is a mesh singleton registered exactly when AddContentIndexingPipeline ran — its
-        // absence means indexing is inert on this server, so don't surface the tab at all.
-        if (host.Hub.ServiceProvider.GetService<ContentIndexingObserver>() is null)
+        // The tab exists only where the pipeline is wired AND configured. Probe the STORE, not
+        // ContentIndexingObserver: the observer's registration deliberately THROWS its actionable
+        // configuration message on an unconfigured deployment (it is the reindex ACTION's entry point),
+        // so probing it would fault this menu provider instead of hiding the tab. GetActiveChunkStore is
+        // null both when the pipeline was never wired and when it is wired but inert.
+        if (host.Hub.ServiceProvider.GetActiveChunkStore() is null)
             return Observable.Return(none);
 
         var tab = new SettingsMenuItemDefinition(
@@ -82,7 +84,12 @@ public static class ContentIndexSettingsTab
 
     internal static UiControl BuildContent(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
-        var observer = host.Hub.ServiceProvider.GetService<ContentIndexingObserver>();
+        // Same probe as GetTab — resolving the observer on an inert deployment throws by design, so the
+        // "is indexing active?" question is asked of the store and the observer is only resolved after
+        // the answer is yes.
+        var observer = host.Hub.ServiceProvider.GetActiveChunkStore() is null
+            ? null
+            : host.Hub.ServiceProvider.GetService<ContentIndexingObserver>();
         var spacePath = node?.Path ?? "";
         var collectionPath = $"{spacePath}/content";
 
@@ -210,6 +217,7 @@ public static class ContentIndexSettingsTab
     /// <summary>Runs the content search for the current query and renders the tool-call line + hit rows.</summary>
     private static IObservable<UiControl?> BuildExploreResults(LayoutAreaHost host, string collectionPath, string? query)
     {
+        // Raw registrations: ContentChunkSearch recognises an inert stand-in and renders ITS reason.
         var store = host.Hub.ServiceProvider.GetService<IChunkedContentVectorStore>();
         var embedder = host.Hub.ServiceProvider.GetService<IChunkEmbedder>();
         return ContentChunkSearch
@@ -272,7 +280,7 @@ public static class ContentIndexSettingsTab
         var collection = parts[0];
         var file = parts[1];
 
-        var store = host.Hub.ServiceProvider.GetService<IChunkedContentVectorStore>();
+        var store = host.Hub.ServiceProvider.GetActiveChunkStore();
         if (store is null)
             return Observable.Return((UiControl?)Controls.Stack.WithWidth("100%"));
 
