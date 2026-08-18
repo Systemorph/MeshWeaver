@@ -81,6 +81,12 @@ public static class SocialExtensions
                 ServiceDescriptor.Scoped<INodeMenuProvider, LinkedInCredentialMenuProvider>());
             services.TryAddEnumerable(
                 ServiceDescriptor.Scoped<INodeMenuProvider, SocialPostMenuProvider>());
+
+            // The TIMED twin of that Publish menu item. Singleton, not scoped: EventSubscriptionRunner
+            // is a hosted service resolving out of the ROOT provider, and a scoped registration there
+            // throws at the moment a slot fires — i.e. in production, hours after any test ran.
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IEventContinuationHandler, ScheduledSocialPublishHandler>());
             return services;
         });
 }

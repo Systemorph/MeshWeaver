@@ -4,6 +4,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -430,9 +431,25 @@ public sealed class EventSubscriptionRunner(
                                 meshService, userId, subscription.TargetPath!, subscription.Role!))
                             .Select(_ => m)
                         : Observable.Return(m)),
-            _ => Observable.Throw<MeshNode>(new InvalidOperationException(
-                $"Unsupported or incomplete event subscription {subscription.Id}")),
+            // Continuations this assembly cannot implement — their effects live ABOVE it in the
+            // reference graph (PublishSocialPost is owned by MeshWeaver.Social, which references
+            // Graph). The owning module registers an IEventContinuationHandler; nothing is silently
+            // skipped, because an unhandled type still falls through to the throw below.
+            _ => ExternalHandler(subscription) is { } handler
+                ? AsSystem(() => handler.Execute(subscription, userId))
+                : Observable.Throw<MeshNode>(new InvalidOperationException(
+                    $"Unsupported or incomplete event subscription {subscription.Id}")),
         };
+
+    /// <summary>
+    /// The registered <see cref="IEventContinuationHandler"/> for this subscription's continuation, or
+    /// null when none is registered. Resolved per firing (never cached): handlers are registered by
+    /// modules, and a cached null taken before a module's registration landed would wedge every later
+    /// subscription of that type for the life of the process.
+    /// </summary>
+    private IEventContinuationHandler? ExternalHandler(EventSubscription subscription) =>
+        hub.ServiceProvider.GetServices<IEventContinuationHandler>()
+            .FirstOrDefault(h => h.ContinuationType == subscription.ContinuationType);
 
     /// <summary>
     /// Migrates legacy <c>Admin/ScheduledAction/{id}</c> nodes into equivalent
