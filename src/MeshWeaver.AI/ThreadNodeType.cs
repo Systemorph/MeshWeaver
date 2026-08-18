@@ -169,11 +169,18 @@ public static class ThreadNodeType
     /// allocates the real response cell id when the watcher claims the
     /// round. Callers that need the response id after dispatch should
     /// subscribe to <see cref="Thread.ActiveMessageId"/>.</para>
+    ///
+    /// <para><paramref name="submitterObjectId"/>/<paramref name="submitterName"/> stamp the
+    /// SUBMITTER rider on the seeded pending message — the authoritative identity the
+    /// dispatch path (<c>ThreadSubmission</c>) prefers over the <c>CreatedBy</c> fallback.
+    /// Callers that act on a user's behalf (delegated sub-threads) MUST pass it so the
+    /// sub-thread's round executes under the delegating user, not the hub identity.</para>
     /// </summary>
     public static (MeshNode Thread, string UserMsgId, string ResponseMsgId) BuildThreadWithMessages(
         string contextPath, string messageText,
         string? createdBy = null, string? agentName = null,
-        string? modelName = null, IReadOnlyList<string>? attachments = null)
+        string? modelName = null, IReadOnlyList<string>? attachments = null,
+        string? submitterObjectId = null, string? submitterName = null)
     {
         var speakingId = GenerateSpeakingId(messageText);
         // Add _Thread partition for top-level threads. Sub-threads (delegations)
@@ -199,7 +206,9 @@ public static class ThreadNodeType
             Attachments = attachments,
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.ExecutedInput,
-            Status = ThreadMessageStatus.Submitted
+            Status = ThreadMessageStatus.Submitted,
+            SubmitterObjectId = submitterObjectId,
+            SubmitterName = submitterName
         };
 
         var threadNode = new MeshNode(speakingId, ns)
