@@ -348,6 +348,207 @@ public class FrameworkBuildIdentityTest
             .Should().Be("s22825f5");
     }
 
+
+    // ---- the identity must be the SAME on every host that resolves it (#1814) -------------------
+
+    [Fact]
+    public void CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost()
+    {
+        // 🚨 THE PIN FOR #1814. The identity is an ADDRESS: the bake publishes bundles under the
+        // identity ITS host resolves and a portal only ever looks under the identity IT resolves. A
+        // canonical assembly that is absent from one host's manifest hashes as AbsentMarker THERE and
+        // as a real surface id on the other, so the two hosts of ONE commit resolve two identities and
+        // every bake lands at an address nobody reads — silently: publication succeeds, the job is
+        // green, and the pods simply compile everything at boot.
+        //
+        // That is exactly what happened. `feat: Excel/CSV import becomes its own module` (82481e024,
+        // merged 2026-08-17 18:46) moved MeshWeaver.Import and its private closure — MeshWeaver.
+        // DataSetReader{,.Csv,.Excel,.Excel.BinaryFormat,.Excel.OpenXmlFormat,.Excel.Utils} and
+        // MeshWeaver.DataStructures, EIGHT canonical names — out of both portals' COMPILE reference
+        // graphs into the modules/<Name>/ runtime lane. The surface manifest is written from
+        // @(ReferencePathWithRefAssemblies), so those eight lines vanished from the image's manifest
+        // while mw-plugin-test kept them. Measured on the shipped images of release 3.0.0-rc4.ci.4276
+        // (both linux/amd64): mw-plugin-test resolved s7293e54297ec28e213bd82f30d59e709 and
+        // memex-portal-ai resolved sa6d587a25d64d11774f22348664bca0c — the value the live pods logged.
+        // The 29 SHARED manifest entries had byte-identical hashes; presence, not drift, was the whole
+        // difference. Two hours of every course cover serving a compilation-fallback card followed.
+        //
+        // CanonicalList_MatchesTheTesterClosure pins one side of that equality. This pins the other,
+        // and it is the check whose absence let a one-line-per-host change take the site down.
+        var root = FindRepositoryRoot();
+        Assert.SkipWhen(root is null,
+            "repository tree not reachable from the test bin — closure pin runs in-repo only");
+
+        var hosts = SurfaceManifestHosts(root!);
+        hosts.Should().HaveCountGreaterThan(1,
+            "the invariant is about hosts AGREEING — a run that found one project (or none) has "
+            + "verified nothing, so a broken discovery must not read as a pass");
+
+        var missingByHost = hosts.ToDictionary(
+            host => Path.GetRelativePath(root!, host),
+            host =>
+            {
+                var closure = ProjectClosure(host);
+                return FrameworkBuildIdentity.ContentSurfaceAssemblies
+                    .Where(name => !closure.Contains(name))
+                    .ToList();
+            },
+            StringComparer.Ordinal);
+
+        missingByHost.Values.SelectMany(m => m).Should().BeEmpty(
+            "every host that ships a surface manifest resolves the framework identity, so each must "
+            + "record EVERY canonical content-surface assembly — a missing one hashes as 'absent' "
+            + "there and forks that host's identity away from the bake's. Missing per host: "
+            + string.Join(" | ", missingByHost
+                .Where(kv => kv.Value.Count > 0)
+                .Select(kv => $"{kv.Key}: {string.Join(", ", kv.Value)}"))
+            + ". Fix by giving the host the compile reference back (Private=\"false\" "
+            + "ExcludeAssets=\"runtime\" keeps the bits out of its app closure — that is how "
+            + "Memex.Portal.Distributed references MeshWeaver.Import) — never by shrinking "
+            + "ContentSurfaceAssemblies, which would under-invalidate and let a portal adopt "
+            + "NodeType assemblies compiled against a framework that has shifted underneath them.");
+    }
+
+    // ---- resolving ANOTHER host's identity from its binaries (the CI address check) --------------
+
+    [Fact]
+    public void ResolveIdentityForDirectory_MatchesTheProcessComputationForTheSameInputs()
+    {
+        // The verb CI runs (`mw-plugin-test framework-identity <app-dir>`) must answer for a FOREIGN
+        // /app exactly what that host answers for itself — otherwise the guard compares its own
+        // arithmetic, not the two hosts.
+        var dir = StageAppDirectory(FrameworkBuildIdentity.ContentSurfaceAssemblies);
+        try
+        {
+            var (identity, problem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(dir);
+            problem.Should().BeNull();
+            identity.Should().NotBeNull().And.MatchRegex("^s[0-9a-f]{32}$");
+
+            // Recomputed independently from the same directory: manifest pairs for everything, the
+            // toolchain closure's members by implementation MVID read off the staged DLLs.
+            var pairs = FrameworkBuildIdentity.ParseSurfaceManifest(
+                File.ReadAllText(Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName)));
+            var closure = FrameworkBuildIdentity.ComputeToolchainClosure(
+                FrameworkBuildIdentity.ToolchainRoots, name => ReferencedInDirectory(dir, name));
+            identity.Should().Be(FrameworkBuildIdentity.ComputeSurfaceIdentity(
+                pairs, name => MvidInDirectory(dir, name), closure));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveIdentityForDirectory_ForksWhenOneCanonicalAssemblyIsUnrecorded()
+    {
+        // #1814 in miniature: same binaries, one manifest missing a canonical name. The two hosts
+        // MUST resolve different identities (that is the mechanism working correctly) and the
+        // absence must be REPORTABLE by name — "the hashes differ" is not an actionable failure.
+        var complete = StageAppDirectory(FrameworkBuildIdentity.ContentSurfaceAssemblies);
+        var reduced = StageAppDirectory(
+            FrameworkBuildIdentity.ContentSurfaceAssemblies.Where(n => n != "MeshWeaver.Import"));
+        try
+        {
+            var (whole, _) = FrameworkBuildIdentity.ResolveIdentityForDirectory(complete);
+            var (partial, _) = FrameworkBuildIdentity.ResolveIdentityForDirectory(reduced);
+            whole.Should().NotBeNull();
+            partial.Should().NotBeNull().And.NotBe(whole,
+                "a host that does not record a canonical assembly is a different surface reality — "
+                + "it must never share the bake's address");
+
+            var pairs = FrameworkBuildIdentity.ParseSurfaceManifest(
+                File.ReadAllText(Path.Combine(reduced, FrameworkBuildIdentity.SurfaceManifestFileName)));
+            FrameworkBuildIdentity.CanonicalAssembliesAbsentFrom(pairs)
+                .Should().Equal("MeshWeaver.Import");
+            FrameworkBuildIdentity.CanonicalAssembliesAbsentFrom(
+                    FrameworkBuildIdentity.ParseSurfaceManifest(
+                        File.ReadAllText(Path.Combine(complete, FrameworkBuildIdentity.SurfaceManifestFileName))))
+                .Should().BeEmpty();
+        }
+        finally
+        {
+            Directory.Delete(complete, recursive: true);
+            Directory.Delete(reduced, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveIdentityForDirectory_RefusesToAnswerWithoutAUsableManifest()
+    {
+        // 🚨 A guard that cannot fail is not a guard. If a manifest-less directory degraded to the
+        // stamp/MVID fallback, two manifest-less hosts of one commit would resolve the SAME value and
+        // the CI comparison would report a match having proven nothing. So: no identity, and a
+        // diagnostic that says which file is missing.
+        var dir = Path.Combine(Path.GetTempPath(), "mw-nomanifest-dir-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var (identity, problem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(dir);
+            identity.Should().BeNull();
+            problem.Should().Contain(FrameworkBuildIdentity.SurfaceManifestFileName);
+
+            File.WriteAllText(
+                Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName), "not-a-pair\n\n");
+            var (stillNone, unusable) = FrameworkBuildIdentity.ResolveIdentityForDirectory(dir);
+            stillNone.Should().BeNull();
+            unusable.Should().NotBeNullOrEmpty();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveIdentityForDirectory_ReportsAMissingDirectory()
+    {
+        var (identity, problem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(
+            Path.Combine(Path.GetTempPath(), "mw-absent-" + Guid.NewGuid().ToString("N")));
+        identity.Should().BeNull();
+        problem.Should().NotBeNullOrEmpty();
+    }
+
+    /// <summary>Stages an /app-shaped directory: this test host's MeshWeaver assemblies (so the
+    /// toolchain closure and its MVIDs resolve for real) plus a surface manifest recording exactly
+    /// <paramref name="recorded"/>.</summary>
+    private static string StageAppDirectory(IEnumerable<string> recorded)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mw-appdir-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        foreach (var dll in Directory.EnumerateFiles(AppContext.BaseDirectory, "MeshWeaver.*.dll"))
+            File.Copy(dll, Path.Combine(dir, Path.GetFileName(dll)), overwrite: true);
+        File.WriteAllText(
+            Path.Combine(dir, FrameworkBuildIdentity.SurfaceManifestFileName),
+            string.Join('\n', recorded.Select(n => $"{n}=surface-of-{n}")));
+        return dir;
+    }
+
+    private static IEnumerable<string> ReferencedInDirectory(string directory, string simpleName)
+    {
+        var candidate = Path.Combine(directory, simpleName + ".dll");
+        if (!File.Exists(candidate))
+            return [];
+        using var stream = File.OpenRead(candidate);
+        using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+        var md = pe.GetMetadataReader();
+        return md.AssemblyReferences
+            .Select(h => md.GetString(md.GetAssemblyReference(h).Name))
+            .Where(n => !string.IsNullOrEmpty(n))
+            .ToList();
+    }
+
+    private static string? MvidInDirectory(string directory, string simpleName)
+    {
+        var candidate = Path.Combine(directory, simpleName + ".dll");
+        if (!File.Exists(candidate))
+            return null;
+        using var stream = File.OpenRead(candidate);
+        using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+        var md = pe.GetMetadataReader();
+        return md.GetGuid(md.GetModuleDefinition().Mvid).ToString("N");
+    }
+
     // ---- helpers -------------------------------------------------------------------------------
 
     private static string? LoadedMvidOf(string simpleName) =>
@@ -383,6 +584,14 @@ public class FrameworkBuildIdentityTest
         return null;
     }
 
+    /// <summary>
+    /// A project's transitive COMPILE closure by simple name, read from the csproj graph.
+    /// <para>Two details are load-bearing rather than tidiness: XML comments are stripped first (a
+    /// commented-out ProjectReference is not a reference — samples/Northwind/MeshWeaver.Northwind.Domain
+    /// carries one), and a reference marked <c>ReferenceOutputAssembly="false"</c> is skipped, because
+    /// it contributes no compile reference and therefore no surface-manifest line. Both would
+    /// otherwise make this walk claim a host records an assembly it does not.</para>
+    /// </summary>
     private static HashSet<string> ProjectClosure(string startProject)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -396,11 +605,40 @@ public class FrameworkBuildIdentityTest
                 continue;
             names.Add(Path.GetFileNameWithoutExtension(project));
             var directory = Path.GetDirectoryName(project)!;
-            foreach (Match m in Regex.Matches(
-                File.ReadAllText(project), "ProjectReference Include=\"([^\"]+)\""))
+            var text = Regex.Replace(File.ReadAllText(project), "<!--.*?-->", string.Empty,
+                RegexOptions.Singleline);
+            foreach (Match element in Regex.Matches(text, "<ProjectReference\\b(?<attrs>[^>]*)>",
+                         RegexOptions.Singleline))
+            {
+                var attrs = element.Groups["attrs"].Value;
+                if (Regex.IsMatch(attrs, "ReferenceOutputAssembly\\s*=\\s*\"false\"",
+                        RegexOptions.IgnoreCase))
+                    continue;
+                var include = Regex.Match(attrs, "Include\\s*=\\s*\"(?<path>[^\"]+)\"");
+                if (!include.Success)
+                    continue;
                 stack.Push(Path.GetFullPath(
-                    Path.Combine(directory, m.Groups[1].Value.Replace('\\', '/'))));
+                    Path.Combine(directory, include.Groups["path"].Value.Replace('\\', '/'))));
+            }
         }
         return names;
     }
+
+    /// <summary>Every project that opts into a surface manifest — i.e. every host that RESOLVES the
+    /// framework build identity and must therefore agree with the others about it.</summary>
+    private static IReadOnlyList<string> SurfaceManifestHosts(string repositoryRoot) =>
+        // 🚨 The exclusions match the path RELATIVE to the root. Filtering the absolute path threw
+        // every file away when the checkout itself lives under .worktrees/<name> — a sibling git
+        // worktree, which is how every session of this repo works — and the test then "passed" over
+        // an empty host set. The HaveCountGreaterThan(1) assertion above is what caught it; keep
+        // both, since a discovery that silently finds nothing is the failure mode here.
+        [.. Directory.EnumerateFiles(repositoryRoot, "*.csproj", SearchOption.AllDirectories)
+            .Where(p => !Path.GetRelativePath(repositoryRoot, p)
+                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Any(segment => segment is ".worktrees" or "bin" or "obj" or "node_modules"))
+            .Where(p => Regex.IsMatch(
+                Regex.Replace(File.ReadAllText(p), "<!--.*?-->", string.Empty, RegexOptions.Singleline),
+                "<MeshWeaverSurfaceManifest>\\s*true\\s*</MeshWeaverSurfaceManifest>",
+                RegexOptions.IgnoreCase))
+            .OrderBy(p => p, StringComparer.Ordinal)];
 }
