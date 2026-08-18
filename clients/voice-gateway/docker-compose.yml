@@ -1,0 +1,20 @@
+# memex-voice-gateway — fill in the four secrets/addresses in .env (see README).
+services:
+  voice-gateway:
+    build: .
+    restart: unless-stopped
+    network_mode: host   # the satellite must reach the TTS server; host networking keeps URLs simple
+    environment:
+      SATELLITE_HOST: "${SATELLITE_HOST}"          # the Satellite1's LAN IP or mDNS name
+      SATELLITE_PSK: "${SATELLITE_PSK:-}"          # the device's ESPHome API encryption key
+      MEMEX_URL: "${MEMEX_URL:-https://memex.meshweaver.cloud}"
+      MEMEX_TOKEN: "${MEMEX_TOKEN}"                # mw_… token (Settings ▸ Security ▸ API Tokens)
+      MEMEX_NAMESPACE: "${MEMEX_NAMESPACE}"        # thread namespace, e.g. your user id
+      MEMEX_AGENT: "${MEMEX_AGENT:-Voice}"
+      GATEWAY_HOST: "${GATEWAY_HOST}"              # THIS machine's LAN IP (satellite fetches TTS here)
+      STT_LANGUAGE: "de"
+    volumes:
+      - piper-voices:/voices
+
+volumes:
+  piper-voices:

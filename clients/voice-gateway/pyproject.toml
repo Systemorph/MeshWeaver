@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memex-voice-gateway"
+version = "0.1.0"
+description = "Standalone voice gateway: an ESPHome voice satellite (e.g. FutureProofHomes Satellite1) wired directly to MeshWeaver agent threads — no Home Assistant required."
+requires-python = ">=3.11"
+dependencies = [
+    "aioesphomeapi>=30.0",
+    "aiohttp>=3.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+memex-voice-gateway = "memex_voice_gateway.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["memex_voice_gateway*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
