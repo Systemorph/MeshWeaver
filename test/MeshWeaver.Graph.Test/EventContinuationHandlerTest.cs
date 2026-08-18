@@ -36,7 +36,9 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
         public int Calls { get; private set; }
         public string? FailWith { get; set; }
 
-        public IObservable<MeshNode> Execute(EventSubscription subscription, string subjectId)
+        // subjectId is unused: a timed publish acts on the subscription's own TargetPath and has no
+        // triggering subject. Named _ so that is explicit rather than an oversight (IDE0060).
+        public IObservable<MeshNode> Execute(EventSubscription subscription, string _)
         {
             Calls++;
             SeenTargetPath = subscription.TargetPath;
@@ -112,7 +114,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
 
     private async Task<EventSubscription> AwaitSettled(string id) =>
         (await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(id))
-            .Select(n => n?.Content as EventSubscription)
+            .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
             .FirstAsync().Timeout(40.Seconds()))!;
 
@@ -156,7 +158,7 @@ public class EventContinuationHandlerMissingTest(ITestOutputHelper output) : Mon
         await runner.StartAsync(default);
 
         var final = (await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
-            .Select(n => n?.Content as EventSubscription)
+            .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
             .Where(s => s is not null and not { Status: EventSubscriptionStatus.Pending })
             .FirstAsync().Timeout(40.Seconds()))!;
 

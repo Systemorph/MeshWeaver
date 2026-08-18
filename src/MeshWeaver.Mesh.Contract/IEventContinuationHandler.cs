@@ -25,9 +25,10 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 public interface IEventContinuationHandler
 {
-    /// <summary>The continuation this handler implements. One handler per type; the runner takes the
-    /// first match, so registering two for the same type is a configuration error, not a fallback
-    /// chain.</summary>
+    /// <summary>The continuation this handler implements. EXACTLY one handler per type: the runner
+    /// refuses to fire a continuation that two handlers claim, rather than taking whichever was
+    /// registered first — that would make behaviour depend on registration order and hide the
+    /// duplicate indefinitely.</summary>
     EventContinuationType ContinuationType { get; }
 
     /// <summary>

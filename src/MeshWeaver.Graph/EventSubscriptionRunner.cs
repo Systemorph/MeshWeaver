@@ -435,21 +435,46 @@ public sealed class EventSubscriptionRunner(
             // reference graph (PublishSocialPost is owned by MeshWeaver.Social, which references
             // Graph). The owning module registers an IEventContinuationHandler; nothing is silently
             // skipped, because an unhandled type still falls through to the throw below.
-            _ => ExternalHandler(subscription) is { } handler
-                ? AsSystem(() => handler.Execute(subscription, userId))
-                : Observable.Throw<MeshNode>(new InvalidOperationException(
-                    $"Unsupported or incomplete event subscription {subscription.Id}")),
+            _ => ExternalContinuation(subscription, userId),
         };
 
     /// <summary>
-    /// The registered <see cref="IEventContinuationHandler"/> for this subscription's continuation, or
-    /// null when none is registered. Resolved per firing (never cached): handlers are registered by
-    /// modules, and a cached null taken before a module's registration landed would wedge every later
-    /// subscription of that type for the life of the process.
+    /// Dispatches to the <see cref="IEventContinuationHandler"/> registered for this continuation.
+    /// Resolved per firing (never cached): handlers are registered by modules, and a cached null taken
+    /// before a module's registration landed would wedge every later subscription of that type for the
+    /// life of the process.
+    ///
+    /// <para>Both failure modes name themselves, because both are configuration mistakes that would
+    /// otherwise present as "the thing just never happened":</para>
+    /// <list type="bullet">
+    ///   <item><b>None registered</b> — the owning module was not composed into this host (a missing
+    ///   <c>AddSocial</c>, say). The generic "unsupported subscription" wording sent readers looking
+    ///   for a bad subscription instead of an absent registration.</item>
+    ///   <item><b>More than one</b> — ambiguous, so it FAILS rather than picking one. Taking the first
+    ///   match would make behaviour depend on registration order, which is nondeterministic across
+    ///   hosts and hides the duplicate indefinitely.</item>
+    /// </list>
     /// </summary>
-    private IEventContinuationHandler? ExternalHandler(EventSubscription subscription) =>
-        hub.ServiceProvider.GetServices<IEventContinuationHandler>()
-            .FirstOrDefault(h => h.ContinuationType == subscription.ContinuationType);
+    private IObservable<MeshNode> ExternalContinuation(EventSubscription subscription, string userId)
+    {
+        var handlers = hub.ServiceProvider.GetServices<IEventContinuationHandler>()
+            .Where(h => h.ContinuationType == subscription.ContinuationType)
+            .ToList();
+
+        if (handlers.Count == 1)
+            return AsSystem(() => handlers[0].Execute(subscription, userId));
+
+        return Observable.Throw<MeshNode>(new InvalidOperationException(handlers.Count == 0
+            ? $"Event subscription {subscription.Id} has continuation "
+              + $"{subscription.ContinuationType}, which no IEventContinuationHandler is registered "
+              + "for. The module that owns it is not composed into this host — nothing will ever fire "
+              + "this subscription until it is."
+            : $"Event subscription {subscription.Id} has continuation "
+              + $"{subscription.ContinuationType}, which {handlers.Count} IEventContinuationHandlers "
+              + $"claim ({string.Join(", ", handlers.Select(h => h.GetType().Name))}). Exactly one must "
+              + "be registered — refusing to pick one, because which arrived first is not a decision "
+              + "this runner can make correctly."));
+    }
 
     /// <summary>
     /// Migrates legacy <c>Admin/ScheduledAction/{id}</c> nodes into equivalent

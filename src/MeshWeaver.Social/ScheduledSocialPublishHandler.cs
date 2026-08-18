@@ -62,7 +62,7 @@ public sealed class ScheduledSocialPublishHandler(
     /// instead of marking it <c>Fired</c>. A silent failure here would reproduce exactly the bug this
     /// class exists to fix, one layer down.</para>
     /// </summary>
-    public IObservable<MeshNode> Execute(EventSubscription subscription, string subjectId)
+    public IObservable<MeshNode> Execute(EventSubscription subscription, string _)
     {
         var postPath = subscription.TargetPath;
         if (string.IsNullOrWhiteSpace(postPath))
