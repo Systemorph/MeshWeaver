@@ -59,6 +59,7 @@ class Config:
 
     # --- wake word (activated on the device if none is) ---
     wake_word: str = "hey_jarvis"           # micro-wake-word model id on the device
+    continue_conversation: bool = True      # after a reply, listen again without a wake word
 
     # --- endpointing (energy VAD) ---
     silence_ms: int = 800
@@ -106,6 +107,7 @@ class Config:
             hold_phrase=_env("HOLD_PHRASE", Config.hold_phrase) or Config.hold_phrase,
             error_phrase=_env("ERROR_PHRASE", Config.error_phrase) or Config.error_phrase,
             wake_word=_env("WAKE_WORD", "hey_jarvis") or "hey_jarvis",
+            continue_conversation=(_env("CONTINUE_CONVERSATION", "true") or "true").lower() != "false",
             silence_ms=int(_env("SILENCE_MS", "800")),
             tts_engine=(_env("TTS_ENGINE", "piper") or "piper").lower(),
             piper_bin=_env("PIPER_BIN", "piper") or "piper",
