@@ -650,7 +650,7 @@ jobs:
           # Wait for the runner's own background apt to finish before `--with-deps` shells out
           # to apt-get. Shared with clients.yml — the WHY (and why "check the lock" does not work)
           # lives in the script, so the two cannot drift apart. #1843 / #1858.
-          .github/scripts/wait-for-apt.sh "$APT_LOCK_WAIT"
+          "$GITHUB_WORKSPACE/.github/scripts/wait-for-apt.sh" "$APT_LOCK_WAIT"
           rc=0
           timeout --signal=TERM --kill-after=30 "$BROWSER_INSTALL_TIMEOUT" \
             npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium || rc=$?
