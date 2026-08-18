@@ -45,6 +45,10 @@ public static class ChunkNavigation
     /// <param name="limit">Max chunk hits returned (1..200).</param>
     public static IObservable<string> SearchChunks(
         IServiceProvider services, string query, string? scopePath, int limit = 20) =>
+        // The RAW registrations, deliberately: ContentChunkSearch itself recognises the inert
+        // stand-ins an unconfigured deployment resolves, and answers with the {count:0, message}
+        // envelope carrying THEIR reason — an actionable line naming what to configure, rather than
+        // the generic "no chunk store" a pre-nulled pair would produce.
         ContentChunkSearch.Search(
                 services.GetService<IChunkedContentVectorStore>(),
                 services.GetService<IChunkEmbedder>(),
@@ -73,9 +77,9 @@ public static class ChunkNavigation
     public static IObservable<string> GetChunk(
         IServiceProvider services, string collectionPath, string filePath, int chunkIndex)
     {
-        var store = services.GetService<IChunkedContentVectorStore>();
+        var store = services.GetActiveChunkStore();
         if (store is null)
-            return Observable.Return(NotAvailableEnvelope());
+            return Observable.Return(NotAvailableEnvelope(services));
 
         if (string.IsNullOrWhiteSpace(collectionPath))
             return Observable.Return(Hint("'collectionPath' is required."));
@@ -119,12 +123,12 @@ public static class ChunkNavigation
                 }));
     }
 
-    private static string NotAvailableEnvelope() =>
+    private static string NotAvailableEnvelope(IServiceProvider services) =>
         new JsonObject
         {
             ["count"] = 0,
             ["results"] = new JsonArray(),
-            ["message"] = "Content chunk indexing is not enabled in this host — no chunk store is configured.",
+            ["message"] = services.ReasonOff(),
         }.ToJsonString();
 
     private static string Hint(string message) =>

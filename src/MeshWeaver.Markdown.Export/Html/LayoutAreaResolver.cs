@@ -1,4 +1,3 @@
-using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
 using HtmlAgilityPack;
@@ -182,19 +181,25 @@ public static class LayoutAreaResolver
         IMessageHub hub,
         DocumentHtmlOptions options,
         AccessContext? caller)
-        // 🚨 Observable.Using, NOT Defer + `using var`. With `using var` the caller scope is
-        // disposed when the FACTORY returns — before anything subscribes to the observable it
-        // built — so the area stream was created under the caller's identity but SUBSCRIBED and
-        // rendered without it. That is the bug shape AccessContextPropagation.md is about: the
-        // owner's read gate is evaluated on the subscription, so a caller denied the embedded
-        // content could have received it in their export (and the notice text would resolve in the
-        // wrong language). Observable.Using ties the scope to the SUBSCRIPTION's lifetime instead.
-        => Observable.Using(
-            () => (caller is not null
-                       ? hub.ServiceProvider.GetService<AccessService>()?.SwitchAccessContext(caller)
-                       : null)
-                  ?? Disposable.Empty,
-            _ =>
+        // 🚨 RunAs, NOT Defer + `using var`, and NOT Observable.Using.
+        //
+        // With `using var` the caller scope would be disposed when the FACTORY returns — before
+        // anything subscribes to the observable it built — so the area stream would be created
+        // under the caller's identity but SUBSCRIBED and rendered without it. That is the bug shape
+        // AccessContextPropagation.md is about: the owner's read gate is evaluated on the
+        // subscription, so a caller denied the embedded content could have received it in their
+        // export (and the notice text would resolve in the wrong language).
+        //
+        // Observable.Using ties the scope to the SUBSCRIPTION's lifetime, which covers the read
+        // gate — but it opens the scope on the SUBSCRIBING thread and disposes it on whichever
+        // thread the render terminates (#1790), latching the caller onto the export thread and
+        // writing its "previous" identity onto a foreign one. RunAs keeps the scope across the
+        // whole synchronous Subscribe — the stream is created AND subscribed inside it, and any
+        // ExecutionContext the render captures there carries the identity onward — and leaves it
+        // on the way out.
+        => hub.ServiceProvider.GetService<AccessService>().RunAs(
+            caller,
+            () =>
             {
                 var reference = new LayoutAreaReference(target.Area) { Id = target.Id ?? string.Empty };
                 var stream = hub.GetWorkspace()

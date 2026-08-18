@@ -47,8 +47,49 @@ public sealed record GateAllowlist(IReadOnlyList<AllowEntry> Entries)
         return new GateAllowlist(entries);
     }
 
-    /// <summary>Loads and parses the allow file at <paramref name="path"/>.</summary>
-    public static GateAllowlist Load(string path) => Parse(File.ReadLines(path));
+    /// <summary>
+    /// Loads and parses the allow file at <paramref name="path"/>. A file that is not there
+    /// throws with <see cref="MissingFileMessage"/> as its message rather than the framework's
+    /// bare "Could not find file" — the caller is a CLI whose job is to turn that into one
+    /// actionable line and an exit code.
+    /// </summary>
+    public static GateAllowlist Load(string path) =>
+        File.Exists(path)
+            ? Parse(File.ReadLines(path))
+            : throw new FileNotFoundException(MissingFileMessage(path), path);
+
+    /// <summary>
+    /// The one-line, actionable account of an <c>--allow</c> path that is not there: the flag that
+    /// named it, the path it resolved to, and how an empty ratchet is actually spelled.
+    ///
+    /// <para>🚨 A MISSING ratchet is a configuration error, not an empty one, and the gate refuses
+    /// to run rather than substituting an empty list. Substituting would be the STRICTER reading —
+    /// with no entries every failure is a new failure, so it could never turn a red run green — but
+    /// it would make the gate's own configuration unverifiable: the run's
+    /// <c>known-debt allowlist: 0 entr(ies)</c> line would then mean either "the ratchet is empty"
+    /// or "the gate never found the ratchet you passed", and nothing in the run could tell those
+    /// apart. That is the shape the node-repo CI policy exists to forbid — a gate that cannot read
+    /// its input must not look like a gate that passed. An empty ratchet has two honest spellings,
+    /// an EMPTY FILE at that path or omitting <c>--allow</c> altogether (which the reusable
+    /// <c>node-repo-gate.yml</c> already does when a repo configures no allow file); a path that
+    /// does not exist is neither.</para>
+    /// </summary>
+    /// <param name="path">The path as it was given on the command line.</param>
+    public static string MissingFileMessage(string path) =>
+        $"mw-plugin-test: --allow named '{path}', which does not exist (resolved to "
+        + $"'{Describe(path)}'). The allow file is the known-debt ratchet; spell an EMPTY ratchet "
+        + "either as an empty file at that path or by omitting --allow entirely — never as a path "
+        + "that is not there, or nothing can tell 'no known debt' from 'the gate never read the "
+        + "ratchet'.";
+
+    /// <summary>
+    /// <paramref name="path"/> resolved against the current directory for a diagnostic, degrading
+    /// to the raw text when it cannot be resolved (an empty or otherwise invalid path) — a message
+    /// about a bad path must never itself throw on that same bad path.
+    /// </summary>
+    /// <param name="path">The path as it was given on the command line.</param>
+    public static string Describe(string path) =>
+        string.IsNullOrWhiteSpace(path) ? path : Path.GetFullPath(path);
 
     private static string StripComment(string line) =>
         line.IndexOf('#') is var i && i >= 0 ? line[..i] : line;

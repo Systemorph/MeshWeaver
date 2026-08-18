@@ -693,7 +693,8 @@ internal static class NodeTypeBatchBake
                             def, result!, typeNode.Version, activityPath: null, releasePath,
                             mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
                         : NodeTypeCompilationHelpers.ApplyCompileFailure(
-                            def, result, error, activityPath: null))
+                            def, result, error, activityPath: null,
+                            mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash))
                     // The batch driver has no Pending→Compiling flip to stamp this at, and the
                     // shared field-set deliberately does not touch it (the activation path owns it
                     // there). Written here so a per-type duration is derivable FROM THE MESH on both

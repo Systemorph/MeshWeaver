@@ -38,6 +38,22 @@ public class AccessService
     private readonly AsyncLocal<AccessContext?> context = new();
 
     /// <summary>
+    /// Marks WHICH <see cref="AccessContextScope"/> most recently wrote <see cref="context"/> on
+    /// the current logical flow. It exists so a scope can tell "I am the value that is installed
+    /// here" from "this is somebody else's thread", and it is an <c>AsyncLocal</c> for exactly the
+    /// same reason <see cref="context"/> is: it must travel with an <c>await</c> continuation and
+    /// must NOT travel to an unrelated thread.
+    ///
+    /// <para>🚨 This is what makes <see cref="AccessContextScope.Dispose"/> thread-affine — see the
+    /// remarks there. Without it, a scope opened on one thread and disposed on another WRITES the
+    /// first thread's "previous" identity into the second thread's context. That is not a lost
+    /// restore, it is an identity INJECTION: the disposing thread is typically a hub action block
+    /// or a transport handshake thread, and it is handed a principal that has nothing to do with
+    /// the message it is processing.</para>
+    /// </summary>
+    private readonly AsyncLocal<object?> scopeMarker = new();
+
+    /// <summary>
     /// Per-circuit user context, scoped via AsyncLocal.
     /// Set by CircuitAccessHandler at the start of each Blazor inbound activity
     /// and cleared in its finally block. This ensures each circuit's events
@@ -312,18 +328,67 @@ public class AccessService
         });
     }
 
+    /// <summary>
+    /// The store/restore pair behind <see cref="SwitchAccessContext"/>,
+    /// <see cref="ImpersonateAsHub"/> and <see cref="ImpersonateAsSystem"/>.
+    ///
+    /// <para>🚨 <b>The restore is THREAD-AFFINE, and that is the whole point.</b> Impersonation is
+    /// an <c>AsyncLocal</c> write: it mutates the CURRENT logical flow and nothing else. The
+    /// idiomatic reactive shape
+    /// <c>Observable.Using(access.ImpersonateAsSystem, _ =&gt; crossHubCall())</c> therefore splits
+    /// the pair across two threads — Rx runs the resource factory on the SUBSCRIBING thread and
+    /// disposes the resource when the inner observable TERMINATES, which for a cross-hub
+    /// request/response is the owning hub's response thread. An unconditional
+    /// <c>SetContext(previous)</c> in <see cref="Dispose"/> then writes the SUBSCRIBER's previous
+    /// identity onto a thread that never had it: a hub action block, a gRPC/SignalR handshake
+    /// thread, an ASP.NET request thread. Restoring an identity somewhere it was never installed
+    /// is an identity injection, not a cleanup.</para>
+    ///
+    /// <para>So the restore runs only where this scope's store is actually ours to undo:</para>
+    /// <list type="bullet">
+    ///   <item><description>the flow still carries our marker — the normal synchronous
+    ///   <c>using</c>, and an <c>await</c> continuation, whose ExecutionContext carries both the
+    ///   context and the marker forward; or</description></item>
+    ///   <item><description>we are back on the thread that opened the scope — which covers the
+    ///   case where a NESTED scope opened inside our block was never disposed (it overwrote the
+    ///   marker), and where <c>CarryAccessContext</c>'s per-callback scope must still clamp the
+    ///   thread back on the way out of a subscriber callback.</description></item>
+    /// </list>
+    ///
+    /// <para>Neither condition holds on a foreign terminating thread, so the write simply does not
+    /// happen there. Note what this does NOT fix: the SUBSCRIBING thread of the reactive shape is
+    /// still left holding the impersonated identity, because nothing disposes the scope on it. Only
+    /// the call site can close that half — see <c>ImpersonationScopeExtensions.RunAsSystem</c>,
+    /// which opens and closes the scope inside one synchronous <c>Subscribe</c>.</para>
+    /// </summary>
     private sealed class AccessContextScope : IDisposable
     {
         private readonly AccessService service;
         private readonly AccessContext? previousAsyncLocal;
+        private readonly object? previousMarker;
+        private readonly int openedOnThreadId;
 
         public AccessContextScope(AccessService service, AccessContext? newContext)
         {
             this.service = service;
             previousAsyncLocal = service.context.Value;
+            previousMarker = service.scopeMarker.Value;
+            openedOnThreadId = Environment.CurrentManagedThreadId;
+            service.scopeMarker.Value = this;
             service.SetContext(newContext);
         }
 
-        public void Dispose() => service.SetContext(previousAsyncLocal);
+        public void Dispose()
+        {
+            // Ours to undo? Either the flow still carries our marker, or we are back on the thread
+            // that opened it (a nested undisposed scope overwrote the marker — restoring is still
+            // correct there, and is what keeps the per-callback clamp honest).
+            if (!ReferenceEquals(service.scopeMarker.Value, this)
+                && openedOnThreadId != Environment.CurrentManagedThreadId)
+                return;
+
+            service.scopeMarker.Value = previousMarker;
+            service.SetContext(previousAsyncLocal);
+        }
     }
 }

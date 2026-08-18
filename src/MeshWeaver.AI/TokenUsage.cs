@@ -129,11 +129,25 @@ public static class TokenUsageNodeType
     /// <c>Where(...).Timeout</c> read), so it can land shortly AFTER the terminal status.
     ///
     /// <para>Two NON-poisoning phases (rounds run serially per thread, so this read-modify-write is
-    /// race-free): (1) create-only EnsureExists via <see cref="IMeshService.CreateNode"/> (a mesh-targeted
+    /// race-free): (1) create-only via <see cref="IMeshService.CreateNode"/> (a mesh-targeted
     /// CreateNodeRequest — never a point GetMeshNodeStream read of an absent node, which would trip the
-    /// MeshNodeStreamCache storm breaker); then (2) accumulate via the OWNER's authoritative
-    /// <c>GetMeshNodeStream(path).Update</c> on the now-existing node, which reads the live current
-    /// value and adds this round's tokens (exact across rounds, unlike a lagged CQRS query read).</para>
+    /// MeshNodeStreamCache storm breaker) of a satellite ALREADY CARRYING this round's counts; then
+    /// (2) — <b>only when that create reported the node already existed</b> — accumulate via the
+    /// OWNER's authoritative <c>GetMeshNodeStream(path).Update</c>, which reads the live current value
+    /// and adds this round's tokens (exact across rounds, unlike a lagged CQRS query read).</para>
+    ///
+    /// <para>🚨 <b>Phase 1 must never write a ZERO-token satellite</b> (#1812). It used to create the
+    /// node with all counters at zero and let phase 2 add the round's tokens on top, which published a
+    /// durable, readable, all-zero satellite in the window between the two writes — measured at ~60 ms
+    /// on an idle box, unbounded under load. Every reader saw it: the GUI's <c>ThreadTokenChip</c>
+    /// rendered <c>↑0 ↓0 · $0</c> for that window, and the token tests observed it as their FIRST
+    /// emission and then had to out-wait it (CI run 32070434174 timed out on exactly that snapshot,
+    /// <c>InputTokens = 0</c>, with the correct value landing after the assertion's budget). Worse, the
+    /// 15 s cap below fails OPEN, so a phase 2 that never lands leaves those zeros as the PERMANENT
+    /// record of a round that did consume tokens. Seeding the create with the round's counts removes
+    /// the intermediate outright: the first round is one atomic write that is correct the instant it is
+    /// visible, and only rounds 2+ pay for a read-modify-write. It costs nothing to do it this way —
+    /// the create already had to carry a content instance.</para>
     /// </summary>
     public static IObservable<System.Reactive.Unit> RecordUsage(
         IMessageHub hub, string threadPath, string? userId,
@@ -176,27 +190,43 @@ public static class TokenUsageNodeType
         //   • the untargeted CreateOrUpdateNodeRequest never reaches HandleCreateOrUpdateNodeRequest (it
         //     lives on the MESH hub — IMeshService.CreateNode targets hub.GetMeshHub().Address), so from
         //     this per-node thread hub the satellite was never created at all.
-        // Phase 1: EnsureExists via meshService.CreateNode of a ZERO-token satellite — CREATE-ONLY, so an
-        //   existing satellite (round 2+) is left untouched (CreateNode throws NodeAlreadyExists → caught
-        //   → continue). meshService.CreateNode posts a CreateNodeRequest TARGETED at the mesh hub and is
-        //   NOT a point-read, so it neither mis-routes nor poisons. It guarantees the node + its owning
-        //   per-node hub exist before the accumulate.
-        // Phase 2: accumulate via the OWNER's authoritative stream.Update — the node now exists, so the
-        //   read-modify-write reads the LIVE current value and adds this round's tokens. Race-free (rounds
-        //   are serial per thread) and EXACT across rounds (the cumulative invariant), unlike a lagged
-        //   CQRS query read which could miss a prior round's write.
+        // Phase 1: CREATE-ONLY via meshService.CreateNode, of a satellite already carrying THIS ROUND'S
+        //   counts — so an existing satellite (round 2+) is left untouched (CreateNode throws
+        //   NodeAlreadyExists → caught → phase 2). meshService.CreateNode posts a CreateNodeRequest
+        //   TARGETED at the mesh hub and is NOT a point-read, so it neither mis-routes nor poisons.
+        //   🚨 The counts go in HERE, not in a follow-up write (#1812): a create seeded with zeros
+        //   publishes a durable all-zero satellite until phase 2 lands, and that intermediate is
+        //   readable by everyone (the GUI chip renders it; the token tests saw it as their first
+        //   emission and timed out out-waiting it). On the first round this branch is now the WHOLE
+        //   write — atomic, correct the instant it is visible, and immune to the fail-open cap below.
+        // Phase 2: reached ONLY when the create said the node already exists. Accumulate via the OWNER's
+        //   authoritative stream.Update — the node demonstrably exists, so the read-modify-write reads
+        //   the LIVE current value and adds this round's tokens. Race-free (rounds are serial per
+        //   thread) and EXACT across rounds (the cumulative invariant), unlike a lagged CQRS query read
+        //   which could miss a prior round's write. Running it on the create's SUCCESS path too would
+        //   double-count, which is precisely why the zero seed existed.
         var freshNode = new MeshNode(key, ns)
         {
             Name = model,
             NodeType = NodeType,
             State = MeshNodeState.Active,
             MainNode = threadPath,
-            Content = new TokenUsage { UserId = userId, ThreadId = threadPath, Model = model },
+            Content = new TokenUsage
+            {
+                UserId = userId,
+                ThreadId = threadPath,
+                Model = model,
+                InputTokens = inTok,
+                OutputTokens = outTok,
+                CacheReadTokens = cacheReadTok,
+                CacheWriteTokens = cacheWriteTok,
+            },
         };
 
         return meshService.CreateNode(freshNode)
+            // TRUE = we created it, so this round's counts are already durable and phase 2 must NOT run.
             .Select(_ => true)
-            // Already exists (every round after the first for this model) → keep going to the accumulate.
+            // Already exists (every round after the first for this model) → FALSE, go accumulate.
             // A DIFFERENT failure (e.g. RLS) must NOT fall through to Phase 2: .Update on a node that was
             // never created would re-open the absent-node point-access this fix exists to avoid. Rethrow
             // so the terminal Catch fails the usage write open without touching the stream.
@@ -205,18 +235,34 @@ public static class TokenUsageNodeType
                 && ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
                     ? Observable.Return(false)
                     : Observable.Throw<bool>(ex))
-            .SelectMany(_ => hub.GetWorkspace().GetMeshNodeStream(usagePath)
-                .Update(node =>
-                {
-                    var cur = node.ContentAs<TokenUsage>(hub.JsonSerializerOptions, logger)
-                              ?? new TokenUsage { UserId = userId, ThreadId = threadPath, Model = model };
-                    return node with { Content = cur.Add(inTok, outTok, cacheReadTok, cacheWriteTok) };
-                }))
-            .Select(_ => System.Reactive.Unit.Default)
+            .SelectMany(alreadyDurable => alreadyDurable
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : hub.GetWorkspace().GetMeshNodeStream(usagePath)
+                    .Update(node =>
+                    {
+                        var cur = node.ContentAs<TokenUsage>(hub.JsonSerializerOptions, logger)
+                                  ?? new TokenUsage { UserId = userId, ThreadId = threadPath, Model = model };
+                        return node with { Content = cur.Add(inTok, outTok, cacheReadTok, cacheWriteTok) };
+                    })
+                    .Select(_ => System.Reactive.Unit.Default))
             // Subscribed as an INDEPENDENT side effect (NOT chained before the terminal status write),
             // so it can never block the round. Still cap + fail open as basic hygiene: a wedged create
             // or accumulate resolves to a no-op rather than leaking a live subscription.
-            .Timeout(TimeSpan.FromSeconds(15), Observable.Return(System.Reactive.Unit.Default))
+            //
+            // 🚨 Fail open LOUDLY. This used to swap in a bare Observable.Return, so a cap that fired
+            // completed the chain SUCCESSFULLY and logged nothing at all — the round's tokens were gone
+            // from accounting with no trace, and "phase 2 landed late" was indistinguishable from
+            // "phase 2 never landed" for anyone reading the satellite afterwards. Defer so the warning
+            // fires only when the cap actually trips, not when the chain is built.
+            .Timeout(TimeSpan.FromSeconds(15), Observable.Defer(() =>
+            {
+                logger?.LogWarning(
+                    "[TokenUsage] RecordUsage TIMED OUT after 15s for {Path} (model {ModelId}) — "
+                    + "in={InputTokens} out={OutputTokens} cacheRead={CacheReadTokens} "
+                    + "cacheWrite={CacheWriteTokens} were NOT recorded",
+                    usagePath, model, inTok, outTok, cacheReadTok, cacheWriteTok);
+                return Observable.Return(System.Reactive.Unit.Default);
+            }))
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "[TokenUsage] RecordUsage failed for {Path}", usagePath);

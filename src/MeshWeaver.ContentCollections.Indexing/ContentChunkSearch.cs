@@ -27,8 +27,10 @@ namespace MeshWeaver.ContentCollections.Indexing;
 ///
 /// <para>Reactive + cold: every method returns an <see cref="IObservable{T}"/> that embeds + reads the
 /// store on subscribe. The store + embedder are passed in (resolved by the caller from DI); when content
-/// indexing is not wired into a host they are null and the engine emits a result whose
-/// <see cref="ContentSearchResult.Message"/> explains why, never throwing.</para>
+/// indexing is OFF — never wired into the host (null) or wired but not configured for this deployment
+/// (an <see cref="IInertContentIndex"/> stand-in) — the engine emits a result whose
+/// <see cref="ContentSearchResult.Message"/> says so, never throwing. A capability that is switched off
+/// must SAY it is switched off: an opaque error here sends the next caller hunting a data bug.</para>
 /// </summary>
 public static class ContentChunkSearch
 {
@@ -70,9 +72,8 @@ public static class ContentChunkSearch
         ContentSearchResult Empty(string message) =>
             new(text, ns, scope, limit, Array.Empty<ChunkHit>(), toolCall, message);
 
-        if (store is null || embedder is null)
-            return Observable.Return(Empty(
-                "Content chunk indexing is not enabled in this host — no chunk store is configured."));
+        if (ContentIndexAvailability.IsOff(store, embedder))
+            return Observable.Return(Empty(ContentIndexAvailability.ReasonOff(store, embedder)));
         if (string.IsNullOrWhiteSpace(text))
             return Observable.Return(Empty("Pass query text (free-text terms) to search content chunks."));
         if (string.IsNullOrWhiteSpace(ns))
@@ -103,9 +104,8 @@ public static class ContentChunkSearch
             new(text, NormalizePath(anchorPath), ContentSearchScope.AncestorsAndSelf, limit,
                 Array.Empty<ChunkHit>(), toolCall, message);
 
-        if (store is null || embedder is null)
-            return Observable.Return(Empty(
-                "Content chunk indexing is not enabled in this host — no chunk store is configured."));
+        if (ContentIndexAvailability.IsOff(store, embedder))
+            return Observable.Return(Empty(ContentIndexAvailability.ReasonOff(store, embedder)));
         if (string.IsNullOrWhiteSpace(text))
             return Observable.Return(Empty("Pass a non-empty 'query' to search content chunks."));
 

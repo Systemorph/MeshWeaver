@@ -9,7 +9,7 @@ namespace MeshWeaver.Mesh;
 /// Contributed by providers registered via config.AddGlobalSettingsMenuItems().
 /// Unlike <see cref="SettingsMenuItemDefinition"/>, these are node-independent (platform-wide).
 /// </summary>
-/// <param name="Id">Tab identifier for URL routing (/_settings/GlobalSettings/{Id})</param>
+/// <param name="Id">Tab identifier for URL routing (/_Setting/GlobalSettings/{Id})</param>
 /// <param name="Label">Display text in the NavMenu sidebar</param>
 /// <param name="ContentBuilder">Delegate that builds the tab's content pane</param>
 /// <param name="Group">Optional group name for NavGroupControl (null = top-level item)</param>

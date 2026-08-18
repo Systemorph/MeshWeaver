@@ -6,6 +6,7 @@ using System.Reactive.Threading.Tasks;
 using System.Security.Claims;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Portal.Authentication;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -160,16 +161,19 @@ public partial class UserProfile : ComponentBase
         if (!string.IsNullOrEmpty(userId))
             Navigation.NavigateTo($"/User/{userId}/Settings");
         else
-            Navigation.NavigateTo("/_settings");
+            Navigation.NavigateTo(GlobalSettingsNodeType.SettingsHref);
     }
 
     // Platform info lives in the ungated global-settings tabs; the user menu is where users find
-    // "About" / "What's New" (a regular user's Settings goes to their own User node, not here). Tab
-    // ids are literals here because those tabs live in the higher Memex.Portal.Shared layer — this
-    // (framework) project can't reference them; the ids ("About"/"WhatsNew") are stable.
-    private void NavigateToWhatsNew() => Navigation.NavigateTo("/_settings/GlobalSettings/WhatsNew");
+    // "About" / "What's New" (a regular user's Settings goes to their own User node, not here). The
+    // tab IDS stay literals — those tabs live in the higher Memex.Portal.Shared layer, which this
+    // (framework) project can't reference, and the ids ("About"/"WhatsNew") are stable. The ROUTE
+    // around them is not a literal: it is derived from the registered node path, because four call
+    // sites once spelled that path as plural lowercase "_settings" and every one of them 404'd
+    // (#1817).
+    private void NavigateToWhatsNew() => Navigation.NavigateTo(GlobalSettingsNodeType.TabHref("WhatsNew"));
 
-    private void NavigateToAbout() => Navigation.NavigateTo("/_settings/GlobalSettings/About");
+    private void NavigateToAbout() => Navigation.NavigateTo(GlobalSettingsNodeType.TabHref("About"));
 
     private void Logout()
     {

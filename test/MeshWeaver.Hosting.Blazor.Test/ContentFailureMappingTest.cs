@@ -1,3 +1,5 @@
+using System;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -70,11 +72,89 @@ public class ContentFailureMappingTest
     }
 
     /// <summary>
+    /// 🚨 A HUB THAT IS RECYCLING IS NOT A BROKEN ONE. <see cref="ErrorType.ShuttingDown"/>'s own
+    /// contract is "retry-worthy, never terminal" — routing mints it deliberately INSTEAD of
+    /// NotFound for a live-but-recycling address. Answering 500 (or 404) for a hub that will be back
+    /// on the next probe is the confident-wrong-answer the tri-state exists to prevent, so it joins
+    /// the retryable arm rather than the alerting fallback.
+    /// </summary>
+    [Fact]
+    public void ARecyclingHub_IsRetryable_NotAFailure()
+    {
+        var result = BlazorHostingExtensions.ContentFailure(
+            Failure(ErrorType.ShuttingDown, "Hub 'PrivateSpace' is shutting down. Rejecting now."),
+            logger: null, path: "PrivateSpace/secret.pdf");
+
+        result.Should().BeOfType<StatusCodeHttpResult>()
+            .Which.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    /// <summary>
+    /// 🚨 THE #1563 / #1748 ARM. A read that gave up because the owning hub never answered reached
+    /// no verdict either — same fact as <see cref="ErrorType.Unavailable"/>, same retryable 503.
+    /// Before the route carried a budget of its own this arrived only after the hub's full 60 s
+    /// <c>RequestTimeout</c> and fell through to the 500 + <c>fail:</c> fallback, which is how a
+    /// transient miss on one image became a filed production incident.
+    /// </summary>
+    [Fact]
+    public void AReadThatTimedOut_IsRetryable_NotAFailure()
+    {
+        var result = BlazorHostingExtensions.ContentFailure(
+            new HubUnreachableException(
+                "Reading content collection config from 'Skill' gave up after 10s",
+                target: "Skill", budget: TimeSpan.FromSeconds(10)),
+            logger: null, path: "Skill/content/og-card.png");
+
+        result.Should().BeOfType<StatusCodeHttpResult>()
+            .Which.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable,
+                "the hub never answered — that is an availability fact, and the same request "
+                + "succeeds once the target is back");
+    }
+
+    /// <summary>
+    /// A plain <see cref="TimeoutException"/> takes the same arm: the classification must key on the
+    /// FACT (a read that reached no verdict), not on this repo's own exception subclass, or a
+    /// timeout arriving from any other layer would quietly rejoin the alerting fallback.
+    /// </summary>
+    [Fact]
+    public void AnyTimeout_TakesTheSameRetryableArm()
+    {
+        var result = BlazorHostingExtensions.ContentFailure(
+            new TimeoutException("No response received in hub mesh/x within 00:01:00"),
+            logger: null, path: "Skill/content/og-card.png");
+
+        result.Should().BeOfType<StatusCodeHttpResult>()
+            .Which.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    /// <summary>
+    /// 🚨 ROUTING SAID THERE IS NO NODE — so answer as a miss, immediately, and with the SAME body a
+    /// refusal produces. This used to fall through to the 500 + Error fallback, which alerted on
+    /// every request for a node that had simply been deleted, AND made the response distinguishable
+    /// from a refusal: 500-vs-404 over a fully predictable URL scheme is an existence oracle in the
+    /// other direction. Both go away by putting absence on the arm that already means absence.
+    /// </summary>
+    [Fact]
+    public void ARoutingNotFound_AnswersAsAMissingFile_NotAsAServerFault()
+    {
+        var result = BlazorHostingExtensions.ContentFailure(
+            Failure(ErrorType.NotFound, "No node found at 'PrivateSpace'."),
+            logger: null, path: "PrivateSpace/secret.pdf");
+
+        var notFound = result.Should().BeOfType<NotFound<string>>().Which;
+        notFound.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        notFound.Value.Should().NotContain("PrivateSpace",
+            "the body stays the constant a refusal uses, so the two are byte-identical");
+    }
+
+    /// <summary>
     /// Fail closed either way: neither refusal arm serves anything, and neither is a 2xx.
     /// </summary>
     [Theory]
     [InlineData(ErrorType.Unauthorized)]
     [InlineData(ErrorType.Unavailable)]
+    [InlineData(ErrorType.ShuttingDown)]
+    [InlineData(ErrorType.NotFound)]
     public void NeitherRefusalArm_EverServes(ErrorType errorType)
     {
         var result = BlazorHostingExtensions.ContentFailure(
@@ -92,14 +172,13 @@ public class ContentFailureMappingTest
     /// 🚨 NO EXCEPTION TEXT IN THE BODY, on the arm that used to carry it. An unclassified failure
     /// still arrives holding the refusing hub's own diagnostic message — and the fallback arm is
     /// where every failure a hub reports WITHOUT classifying lands, including
-    /// <see cref="ErrorType.Unknown"/>, <see cref="ErrorType.NotFound"/> and a
+    /// <see cref="ErrorType.Unknown"/>, <see cref="ErrorType.Exception"/> and a
     /// <see cref="DeliveryFailureException"/> constructed with no <c>Failure</c> at all (the
     /// property patterns simply do not match those). Echoing it published the permission model, the
     /// principal and the node's existence to an anonymous caller over a public route.
     /// </summary>
     [Theory]
     [InlineData(ErrorType.Unknown)]
-    [InlineData(ErrorType.NotFound)]
     [InlineData(ErrorType.Exception)]
     [InlineData(ErrorType.Failed)]
     public void AnUnclassifiedFailure_NeverEchoesTheExceptionText(ErrorType errorType)

@@ -575,6 +575,25 @@ public record ThreadMessage
     public string? SubmitterLocale { get; init; }
 
     /// <summary>
+    /// The submitter's <see cref="AccessContext.TimeZoneId"/> — their preferred display zone as a
+    /// named IANA id (<c>Europe/Zurich</c>, <c>America/New_York</c>, …) — captured alongside
+    /// <see cref="SubmitterObjectId"/> at submit time. Null OR EMPTY when the submitter has no zone
+    /// preference; the value is copied verbatim from <see cref="AccessContext.TimeZoneId"/>, whose
+    /// own contract is null/empty/unresolvable → display in UTC.
+    ///
+    /// <para><b>🕰️ Why the ZONE has to ride on the message too.</b> Exactly the argument that put
+    /// <see cref="SubmitterLocale"/> here (#948), one presentation preference over: the
+    /// round-dispatch watcher rebuilds the round's <see cref="AccessContext"/> from this rider
+    /// because its Throttle/Subscribe continuation has no live identity, and an ambient context it
+    /// might instead observe is the thread hub's owner injection — <c>{ObjectId, Name}</c> only, no
+    /// presentation preferences. Without the rider the round knows WHO the user is and not WHEN
+    /// they are, so the agent's date anchor silently degrades to UTC for every viewer and "today"
+    /// is the wrong day for anyone west of Greenwich after their afternoon (#1651). Never a fixed
+    /// offset — a named zone is what makes DST apply per region.</para>
+    /// </summary>
+    public string? SubmitterTimeZoneId { get; init; }
+
+    /// <summary>
     /// Completed tool calls from this message's execution.
     /// Populated when execution finishes, used for post-execution inspection.
     /// </summary>

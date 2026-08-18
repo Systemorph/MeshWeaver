@@ -921,7 +921,12 @@ public static class PackageInstaller
                 var inFlight = def?.CompilationStatus
                     is CompilationStatus.Pending or CompilationStatus.Compiling;
                 var compiled = state.Compiled || inFlight;
-                var loadable = node.HasLoadableBuild();
+                // …and the SAME options here. HasLoadableBuild used to read the node with a CLR
+                // type test, so on an un-materialized emission it answered "loadable" for the very
+                // in-flight compile `inFlight` (one line up, on the same node) had just reported —
+                // the two halves of this fold disagreeing about one snapshot, which settles the
+                // wait early and recycles the root before its type has a build.
+                var loadable = node.HasLoadableBuild(options);
                 var parked = !inFlight
                     && !ReleaseRequestOutstanding(def)
                     && parkRegistry?.IsParked(declaredType) == true;
@@ -1096,7 +1101,7 @@ public static class PackageInstaller
                 .Where(node => node is not null)
                 .Take(1)
                 .Timeout(RootTypeProbeTimeout)
-                .Select(node => node.HasLoadableBuild())
+                .Select(node => node.HasLoadableBuild(hub.JsonSerializerOptions))
                 .Catch<bool, Exception>(_ => Observable.Return(false))
                 .Do(loadable =>
                 {
@@ -2621,9 +2626,11 @@ public static class PackageInstaller
                 + "run as System because Plugins/_Policy denies it to every ordinary caller."));
 
         var recordPath = $"{InstalledPartition}/{packageId}";
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService.DeleteNode(recordPath))
+        // 🚨 RunAsSystem, never Observable.Using (#1790) — and doubly so for a method that RETURNS
+        // the scoped observable: with Observable.Using the scope is opened on whatever thread the
+        // caller subscribes from and disposed on the delete's terminating thread, so the caller is
+        // left running as System and the terminating thread is handed the caller's identity.
+        return accessService.RunAsSystem(() => meshService.DeleteNode(recordPath))
             .Take(1)
             // DeleteNode faults on a missing node rather than answering false, so a value here IS a
             // removal — the caller's error path reports the absent-record case.

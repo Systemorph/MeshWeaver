@@ -397,6 +397,63 @@ Anything else triggers a recompile. This makes a cold hub start **self-healing**
 | **MeshWeaver redeployed with a breaking change** | The cached DLL bound against the *old* framework surface (ABI-stale) | Rule 3 |
 | Module updated | The cached DLL may bind the replaced module's old ABI | Rule 4 |
 
+### A compile that FAILED is re-driven too — one attempt per set of inputs
+
+`HasUsableBuild` and its framework-stale twin both key on **assembly coordinates**, and a failed
+compile writes none: `ApplyCompileFailure` stamps neither `LatestAssembly{Collection,Path}` nor
+`CompiledFrameworkVersion`. For a NodeType that never compiled successfully *on this deployment*
+those stay null forever, so every automatic path used to skip it — the first-build kickoff needs a
+`null` status, the recovery kickoff needs `Compiling`, the framework-stale kickoff needs the
+coordinates, the release watcher needs a human, and the park registry's source-change auto-retry is
+in-memory (a failure that predates the process is not in it). Only a human pressing **Compile** got
+such a node out; a redeploy, a framework bump, a module update and a fix to the failing code reached
+none of them ([#1793](https://github.com/Systemorph/MeshWeaver/issues/1793); the fix written for
+fifteen types parked on memex-cloud could not reach the nodes it was written for).
+
+So a failure records the one thing it honestly can: **the inputs the verdict was formed from** —
+framework identity, installed-module fingerprint, and the source snapshot the compile consumed —
+folded into `NodeTypeDefinition.FailedBuildInputs`. The owner-side re-drive fires exactly when the
+LIVE inputs differ from that stamp:
+
+| What moved | Effect |
+|---|---|
+| A new framework (a redeploy, possibly carrying the fix) | one fresh attempt |
+| A module update | one fresh attempt |
+| An edited / added / removed source | one fresh attempt |
+| Nothing — same framework, modules and sources | **no attempt**: the identical failure would reproduce |
+| The stamp is `null` (a failure from before this field, or an `Error` baked into a node file) | one fresh attempt — the migration |
+| The source set has not been established yet (`CurrentSourceVersions` unwritten) | **no attempt — it WAITS**: "not known yet" is not "no sources", and a compile driven from a set nobody established forms a verdict from evidence the mesh does not have |
+
+It is bounded three ways, and the first is the one that does the work:
+
+1. **Structural.** The flip to `Pending` writes the live token **in the same update**, so the trigger
+   the re-drive fires on is false the instant it fires. A reconcile that can re-arm its own trigger
+   is the 257,000-version write-storm shape; the stamp forecloses it.
+2. **Loud.** A process-wide ledger (`NodeTypeCompileParkRegistry.RecordFailureRedrive`) logs an
+   **error naming the path** the moment a type is re-driven twice for the *same* inputs — i.e. the
+   moment (1) provably did not hold. Non-convergence is never quiet.
+3. **Terminal.** Past `MaxAutomaticFailureRedrives` the kickoff gives up for the hub's lifetime and
+   says so, naming the type, its error and the remedy. An explicit Compile refunds the budget.
+
+The re-drive is **owner-driven, never caller-driven**. It fires from the type's OWN hub on facts the
+node already holds; no request, and no requester's identity, is an input. The compile runs as System
+and its activity row lands in the owning partition attributed to System — exactly as the first-build,
+recovery and framework-stale kickoffs have always done — and no user's `RequestedReleaseAt` /
+`RequestedReleaseBy` is touched, so nothing is misattributed. An unauthorized caller who merely
+activates the hub therefore gains no lever: the trigger is a property of the persisted record, and
+the three inputs that can move it (framework identity, installed modules, the type's own source
+nodes) are all writable only by principals who already hold that access.
+
+And when the re-drive **declines** — a type settled at `Error`/`Unavailable` whose verdict was formed
+under exactly the live inputs — the hub logs one warning per activation naming the type, its error
+and why nothing will retry it. That state is correct and bounded, and before that line it was also
+completely silent: nothing anywhere named a NodeType that is broken and will not be retried.
+
+> 🚨 `FailedBuildInputs` is **mesh-owned operational state**: exports strip it, imports preserve the
+> live node's value, and `ShippedNodeTypeStateTest` bans it from committed node files. An authored
+> token that happened to match the importing deployment's live inputs would suppress precisely the
+> retry it exists to grant.
+
 ### Framework-version freezing
 
 A compiled NodeType DLL references the MeshWeaver framework assemblies present
