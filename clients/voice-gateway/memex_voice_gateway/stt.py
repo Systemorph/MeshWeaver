@@ -1,8 +1,10 @@
-"""Speech-to-text against the mesh's centralized Whisper container.
+"""Speech-to-text over HTTP — one client for both hosting modes.
 
-The portal exposes `POST /api/speech/transcribe` (Bearer auth, multipart, ≤25 MB) in front of
-the cluster-internal whisper.cpp server — see Doc/Architecture/CentralizedSpeech. We wrap the
-raw satellite PCM in a WAV header and post it; the reply is `{"text": …, "language": …}`.
+The mesh's `POST /api/speech/transcribe` (Bearer auth, in front of the cluster-internal
+whisper.cpp — Doc/Architecture/CentralizedSpeech) and a LOCAL whisper.cpp server's
+`POST /inference` speak the same multipart contract: `file` + `language`
+(+ `response_format=json`, which the mesh accepts and ignores) → `{"text": …}`.
+So the gateway just points STT_URL at whichever one it uses.
 """
 
 from __future__ import annotations
@@ -24,11 +26,10 @@ def wav_from_pcm(pcm: bytes, sample_rate: int = 16000, channels: int = 1) -> byt
 
 async def transcribe(
     session: aiohttp.ClientSession,
-    base_url: str,
-    token: str,
+    url: str,
+    token: str | None,
     pcm: bytes,
     *,
-    path: str = "/api/speech/transcribe",
     language: str = "de",
     sample_rate: int = 16000,
 ) -> str:
@@ -37,11 +38,10 @@ async def transcribe(
     form.add_field("file", wav_from_pcm(pcm, sample_rate), filename="utterance.wav",
                    content_type="audio/wav")
     form.add_field("language", language)
-    async with session.post(
-        f"{base_url}{path}", data=form,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=aiohttp.ClientTimeout(total=60),
-    ) as response:
+    form.add_field("response_format", "json")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    async with session.post(url, data=form, headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=60)) as response:
         response.raise_for_status()
         payload = await response.json(content_type=None)
         return (payload.get("text") or "").strip()
