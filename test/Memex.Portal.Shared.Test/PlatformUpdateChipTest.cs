@@ -55,7 +55,7 @@ public class PlatformUpdateChipTest
     /// <summary>
     ///🚨 The header carries WHEN, never WHICH BUILD. A version string — even shortened — is an
     /// identifier an ordinary reader cannot act on, and it sat in the busiest strip of the portal.
-    /// "Last deployed 18 Aug 15:35" answers the question people actually bring to it ("is this
+    /// "Last deployed 08-18 15:35" answers the question people actually bring to it ("is this
     /// current?"), and anyone who needs the exact build has it on the About page, one click away,
     /// and on the tooltip without even that.
     /// </summary>
@@ -67,7 +67,7 @@ public class PlatformUpdateChipTest
             new PlatformUpdateStatus(PlatformUpdateAvailability.UpToDate, null),
             full, "memex-portal-7d9c-abcde", Deployed, "Europe/Zurich", Echo);
 
-        chip.DisplayText.Should().Be("about.lastDeployed 18 Aug 15:35");
+        chip.DisplayText.Should().Be("about.lastDeployed 08-18 15:35");
         chip.DisplayText.Should().NotContain("3.0.0", "the version left the header on purpose");
         chip.DisplayText.Should().NotContain("8278244", "the sha left with it");
         chip.Tooltip.Should().Contain(full, "the full build id must remain one hover away");
@@ -85,7 +85,7 @@ public class PlatformUpdateChipTest
             new PlatformUpdateStatus(PlatformUpdateAvailability.UpdateAvailable, "3.0.0-rc4.ci.4191"),
             "3.0.0-rc4.ci.4180", "memex-portal-7d9c-abcde", Deployed, "Europe/Zurich", Echo);
 
-        chip.DisplayText.Should().Be("about.lastDeployed 18 Aug 15:35");
+        chip.DisplayText.Should().Be("about.lastDeployed 08-18 15:35");
         chip.DisplayText.Should().NotContain("4191", "the pending version belongs on the tooltip, not the bar");
         chip.IsUpdate.Should().BeTrue("the glyph is what says an update is waiting");
         chip.Tooltip.Should().Contain("3.0.0-rc4.ci.4191");
@@ -107,8 +107,14 @@ public class PlatformUpdateChipTest
 
     /// <summary>
     /// The header also carries WHEN this build started serving — the half a version cannot express.
-    /// Compact by necessity (it shares a top bar with the build id), and in the VIEWER's zone: a
+    /// Compact by necessity (it shares a top bar with two icon buttons), and in the VIEWER's zone: a
     /// bare UTC clock is wrong by an hour for a Zurich reader in summer, silently.
+    ///
+    /// <para>🚨 NUMERIC, never a month NAME. <c>dd MMM</c> under <c>InvariantCulture</c> renders
+    /// "18 Aug" — an English abbreviation hard-coded into a string a German viewer reads, which is
+    /// the i18n rule broken in the one place it is hardest to notice. Numeric needs no catalog and
+    /// no culture, and it matches the <c>yyyy-MM-dd HH:mm</c> the About page already prints, minus
+    /// the year the header has no room for.</para>
     /// </summary>
     [Fact]
     public void ShortStartedAt_is_compact_and_in_the_viewers_zone()
@@ -117,7 +123,24 @@ public class PlatformUpdateChipTest
 
         var text = PlatformUpdateChip.ShortStartedAt(utc, "Europe/Zurich");
 
-        text.Should().Be("18 Aug 15:35", "Zurich is UTC+2 in August, and the bar has no room for a date-time stamp");
+        text.Should().Be("08-18 15:35", "Zurich is UTC+2 in August, and the bar has no room for a full stamp");
+    }
+
+    /// <summary>
+    /// No month NAME in any language: the header must read identically for an English and a German
+    /// viewer, because it is formatted, not translated.
+    /// </summary>
+    [Fact]
+    public void ShortStartedAt_names_no_month_so_it_reads_the_same_in_every_language()
+    {
+        var text = PlatformUpdateChip.ShortStartedAt(
+            new DateTimeOffset(2026, 8, 18, 13, 35, 0, TimeSpan.Zero), "Europe/Zurich")!;
+
+        // Digits, separators and a colon only — a letter here could only be a month name, which is
+        // English text smuggled into a localized UI.
+        text.Should().MatchRegex(@"^\d{2}-\d{2} \d{2}:\d{2}$");
+        text.Any(char.IsLetter).Should().BeFalse(
+            "a month abbreviation would read 'Aug' to a German viewer as much as an English one");
     }
 
     /// <summary>Unknown start time renders nothing rather than an invented or epoch value.</summary>
@@ -130,7 +153,7 @@ public class PlatformUpdateChipTest
     {
         var chip = Describe(new PlatformUpdateStatus(PlatformUpdateAvailability.UpToDate, null));
 
-        chip.DisplayText.Should().Be("about.lastDeployed 18 Aug 15:35");
+        chip.DisplayText.Should().Be("about.lastDeployed 08-18 15:35");
         chip.IsUpdate.Should().BeFalse();
         chip.Action.Should().Be(PlatformUpdateChipAction.OpenAbout,
             "there is no newer build to reload onto, so the chip is a link to the full build identity");
@@ -145,7 +168,7 @@ public class PlatformUpdateChipTest
         // fact regardless, and it is the whole point of the chip.
         var chip = Describe(PlatformUpdateStatus.Unknown);
 
-        chip.DisplayText.Should().Be("about.lastDeployed 18 Aug 15:35");
+        chip.DisplayText.Should().Be("about.lastDeployed 08-18 15:35");
         chip.IsUpdate.Should().BeFalse();
         chip.Tooltip.Should().Contain("3.0.0-rc4.ci.4180",
             "the running build is still a fact — it moved to the tooltip, it did not disappear");

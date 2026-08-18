@@ -64,9 +64,16 @@ public record PlatformUpdateChip(
     /// WHEN this build started serving, compact enough for the header, in the VIEWER's zone.
     ///
     /// <para>The version says WHICH build; this says SINCE WHEN, and a re-deploy of the same image
-    /// changes only the second. Day-and-time without a year because the header is not an audit
-    /// log — it answers "did this roll just now, or has it been up for days?" at a glance, and the
-    /// full stamp is on the About page.</para>
+    /// changes only the second. Month-day-and-time without a year because the header is not an
+    /// audit log — it answers "did this roll just now, or has it been up for days?" at a glance,
+    /// and the full stamp is on the About page.</para>
+    ///
+    /// <para>🚨 The month is NUMERIC, never <c>MMM</c>. A month abbreviation formatted invariantly
+    /// renders "Aug" to a German viewer exactly as it does to an English one — English text
+    /// hard-coded into a localized UI, in the one place it is easiest to miss because it looks like
+    /// formatting rather than copy. Numeric needs no catalog key and no culture at all, and it
+    /// keeps the <c>yyyy-MM-dd HH:mm</c> field order the About page prints, minus the year the
+    /// header has no room for.</para>
     ///
     /// <para>Returns <c>null</c> when the start time is unknown, so the caller renders nothing
     /// rather than an epoch date.</para>
@@ -75,7 +82,7 @@ public record PlatformUpdateChip(
         => startedAtUtc == default
             ? null
             : DisplayTimeExtensions.ToDisplayTime(startedAtUtc, viewerZoneId)
-                .ToString("dd MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+                .ToString("MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Derives the chip from the update verdict and this process's identity.
@@ -92,7 +99,7 @@ public record PlatformUpdateChip(
     ///
     /// <para>🚨 The visible text is the deployment TIME, in every state — never a version. A build
     /// id is an identifier an ordinary reader cannot act on, and the header is the busiest strip in
-    /// the portal; "Last deployed 18 Aug 15:35" answers the question people actually bring to it.
+    /// the portal; "Last deployed 08-18 15:35" answers the question people actually bring to it.
     /// The exact build did not disappear: it is on the tooltip, and in full on the About page. That
     /// holds even with an update pending — the glyph is what says one is waiting, and swapping the
     /// text for a newer unreadable identifier would not tell anyone more.</para>
