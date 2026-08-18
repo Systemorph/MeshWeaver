@@ -236,20 +236,28 @@ internal static class ThreadExecution
             // when the polymorphic $type doesn't resolve it stays a JsonElement, and `as` → null
             // flip-flops Status StartingExecution↔null, defeating DistinctUntilChanged(Status) and
             // re-firing the claim (mitigated by the idempotent CAS, but still wrong).
-            .Select(n => new { Node = n, Status = n.ContentAs<MeshThread>(parentHub.JsonSerializerOptions)?.Status })
-            .DistinctUntilChanged(x => x.Status)
-            .Where(x => x.Status == ThreadExecutionStatus.StartingExecution)
-            .Select(x => x.Node)
+            //
+            // 🚨 …and read it EXACTLY ONCE, carrying the recovered instance forward. This used to
+            // read the content twice — `ContentAs` here to decide whether to ENTER the
+            // StartingExecution branch, then `node.Content is not MeshThread` inside the
+            // subscriber to decide whether to ABORT it — and the two reads do not agree by
+            // construction: `ContentAs` recovers a degraded JsonElement (the whole reason it is
+            // used above), the raw type test does not. A node whose $type failed to resolve
+            // therefore passed the filter and then hit `return` on "thread node has no MeshThread
+            // content" WITHOUT rolling the claim back, parking the thread at StartingExecution
+            // with no cell — the orphaned-claim shape of #539, whose recovery
+            // (InitializeThreadLifecycle) runs ONLY on hub ACTIVATION, while
+            // DistinctUntilChanged(Status) guarantees the live claim is never observed again.
+            // One read cannot disagree with itself, and the Where below already guarantees a
+            // non-null thread, so the self-contradictory abort branch is gone rather than fixed.
+            .Select(n => new { Node = n, Thread = n.ContentAs<MeshThread>(parentHub.JsonSerializerOptions) })
+            .DistinctUntilChanged(x => x.Thread?.Status)
+            .Where(x => x.Thread?.Status == ThreadExecutionStatus.StartingExecution)
             .Subscribe(
-                node =>
+                x =>
                 {
-                    if (node?.Content is not MeshThread thread)
-                    {
-                        logger?.LogWarning(
-                            "[ExecRoundWatcher] thread node has no MeshThread content for {ThreadPath}",
-                            threadPath);
-                        return;
-                    }
+                    var node = x.Node;
+                    var thread = x.Thread!;
 
                     // 🚨 Thread execution ALWAYS runs under the thread owner's
                     // identity. The cache stream's emission scheduler doesn't
