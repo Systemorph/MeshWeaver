@@ -16,20 +16,32 @@ namespace MeshWeaver.Graph;
 /// (60s of a blank page), which is exactly the cost a "is it installed?" question must not
 /// have.</para>
 /// </summary>
-public static class PluginSurfaceProbe
+internal static class PluginSurfaceProbe
 {
+    /// <summary>How long a probe waits for the index to answer before reporting "not here".</summary>
+    private static readonly TimeSpan Budget = TimeSpan.FromMilliseconds(800);
+
     /// <summary>
-    /// Emits once: whether <paramref name="path"/> exists on this mesh. Answers <c>false</c>
-    /// quickly when it does not (the throttle bounds the wait), so an uninstalled package costs a
-    /// page nothing beyond one index query.
+    /// Emits exactly once: <c>true</c> the moment <paramref name="path"/> is seen, else
+    /// <c>false</c> when the budget expires — so an uninstalled package costs a page one index
+    /// query and never more than <see cref="Budget"/>.
+    ///
+    /// <para>🚨 Genuinely time-bounded, which a <c>Throttle</c> is NOT: a debounce only fires
+    /// after a quiet window, so a query stream that keeps emitting faster than the window never
+    /// releases it and the caller waits forever. That distinction did not matter while this ran on
+    /// one page behind a query string; it matters now that every markdown page probes on render.
+    /// The timeout's fallback EMITS <c>false</c> rather than completing empty — an empty completion
+    /// is how a bounded wait still hangs its subscriber (the paywall-chain lesson).</para>
     /// </summary>
-    public static IObservable<bool> Exists(IMeshService? mesh, string path)
+    internal static IObservable<bool> Exists(IMeshService? mesh, string path)
         => mesh is null
             ? Observable.Return(false)
             : mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
-                .Scan(false, (found, change) =>
-                    found || (change.Items?.Any(node => node.Path == path) ?? false))
-                .StartWith(false)
-                .Throttle(TimeSpan.FromMilliseconds(800))
-                .Take(1);
+                .Where(change => change.Items?.Any(node => node.Path == path) ?? false)
+                .Select(_ => true)
+                .Take(1)
+                .Timeout(Budget, Observable.Return(false))
+                // A faulting index query is a "not here" answer, never an exception thrown at a
+                // render path that has nothing to do with the package.
+                .Catch(Observable.Return(false));
 }
