@@ -1,5 +1,4 @@
 using System;
-using MeshWeaver.Approvals;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -23,7 +22,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// that IS applied twice must remain harmless — because the chain is composed by third-party
 /// modules and a non-idempotent one is a live trap regardless of who applies it.</para>
 ///
-/// <para>Before the fix, the Approvals module's per-node registration added a
+/// <para>Before the fix, the (since retired) Approvals module's per-node registration added a
 /// <c>MeshDataSource</c> whose id was <c>Guid.NewGuid()</c> on EVERY application, defeating
 /// <c>DataContext.Initialize</c>'s documented keep-last-by-id dedupe: the second application
 /// produced a second type source for the <c>Approval</c> collection, workspace activation threw
@@ -34,21 +33,13 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class DefaultNodeChainIdempotenceTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    /// <summary>
-    /// The production arrangement: the Approvals module registered on the mesh (every portal
-    /// lists it under <c>Modules:Assemblies</c>; the plugin-gate tester calls the same builder
-    /// extension), so its per-node-hub registration rides the default node chain.
-    /// </summary>
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddApprovals();
-
     [Fact(Timeout = 30_000)]
     public void DefaultNodeChain_AppliedTwice_StillActivatesTheWorkspace()
     {
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var defaultChain = meshConfiguration.DefaultNodeHubConfiguration;
         defaultChain.Should().NotBeNull(
-            "the mesh registers the Approvals module, whose per-node-hub half rides the default node chain");
+            "the platform's own registrations (Graph's node views, AI, documentation, sync) ride the default node chain");
 
         // The overlay's exact composition shape: the default chain applied on top of itself.
         var hub = Mesh.GetHostedHub(

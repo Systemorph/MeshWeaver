@@ -10,8 +10,10 @@ namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// Tests for the Approval and Notification data models (platform-level, MeshWeaver.Mesh.Contract),
-/// the Notification node type, and related infrastructure. The Approvals MODULE surface
-/// (node type registration, extensions) is covered in <see cref="ApprovalModuleTest"/>.
+/// the Notification node type, and related infrastructure. The record and its <c>_Approval</c> →
+/// <c>annotations</c> satellite mapping stay platform-level so approval data keeps deserializing
+/// and routing; the approval UI and its node type ship as the node-native <c>Approvals</c> package
+/// (MeshWeaver.Plugins), whose own suites cover them.
 /// </summary>
 public class ApprovalAndNotificationTest
 {
