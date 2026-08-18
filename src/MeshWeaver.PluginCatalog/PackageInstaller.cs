@@ -2621,9 +2621,11 @@ public static class PackageInstaller
                 + "run as System because Plugins/_Policy denies it to every ordinary caller."));
 
         var recordPath = $"{InstalledPartition}/{packageId}";
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService.DeleteNode(recordPath))
+        // 🚨 RunAsSystem, never Observable.Using (#1790) — and doubly so for a method that RETURNS
+        // the scoped observable: with Observable.Using the scope is opened on whatever thread the
+        // caller subscribes from and disposed on the delete's terminating thread, so the caller is
+        // left running as System and the terminating thread is handed the caller's identity.
+        return accessService.RunAsSystem(() => meshService.DeleteNode(recordPath))
             .Take(1)
             // DeleteNode faults on a missing node rather than answering false, so a value here IS a
             // removal — the caller's error path reports the absent-record case.

@@ -108,9 +108,13 @@ public static class NotificationService
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
         var category = type.ToCategory();
 
-        return Observable.Using(
-            access.ImpersonateAsSystem,
-            _ => ReadSettings(hub, recipient).SelectMany(settings =>
+        // 🚨 RunAsSystem, never Observable.Using (#1790): impersonation is an AsyncLocal
+        // store/restore pair, and Observable.Using splits the two across threads — the caller who
+        // subscribes is left running as System, and the write's terminating thread is handed the
+        // caller's identity. RunAsSystem opens the scope across the cold writes' Subscribe (where
+        // each eager-captures its identity) and closes it on the way out of that same Subscribe.
+        return access.RunAsSystem(
+            () => ReadSettings(hub, recipient).SelectMany(settings =>
             {
                 // The two channels are independent — isolate each with Catch so a transient email
                 // fault can't suppress the bell write (or vice versa).
