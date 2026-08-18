@@ -285,13 +285,21 @@ public static class PrebuiltAssemblySeeder
                                     // ApplyCompileSuccess does. A token left behind would describe a
                                     // verdict this node no longer holds.
                                     FailedBuildInputs = null,
-                                    // The producer compiled exactly the sources it shipped beside
-                                    // these bytes, so the snapshot IS the installed set. Leaving it
-                                    // unset would leave IsDirty comparing an empty snapshot against
-                                    // live CurrentSourceVersions and recompile immediately —
-                                    // adopting the assembly and then throwing it away.
-                                    CompiledSources = def.CurrentSourceVersions?.ToImmutableDictionary()
-                                                      ?? def.CompiledSources,
+                                    // 🚨 The source snapshot is stamped BY THE OWNER, not here
+                                    // (#1834). The producer's own ticks are meaningless on this
+                                    // mesh (the bake writes zeros), so adoption asserts "these
+                                    // bytes correspond to the LIVE source set" — and only the
+                                    // owner knows that set. This write is CROSS-HUB: the lambda
+                                    // diffs against the MIRROR's snapshot, which predates the
+                                    // first-activation write of CurrentSourceVersions that this
+                                    // very subscribe triggers (InstallSourcesWatcher). Reading the
+                                    // field here therefore stamped CompiledSources = null under a
+                                    // non-empty CurrentSourceVersions — IsDirty — and the release
+                                    // request PackageInstaller issues one step later recompiled
+                                    // the type that had just been adopted. Requesting the stamp
+                                    // instead has no ordering to lose: whichever of the two writes
+                                    // lands second carries the owner's authoritative pair.
+                                    RequestedSourceStampAt = DateTimeOffset.UtcNow,
                                     // The producer's dependency record (#1707 slice 2) — validated
                                     // above; stamped so ongoing validity checks judge the adopted
                                     // build like a locally-compiled one. Legacy bundles (null)
