@@ -256,7 +256,7 @@ public class NeverCompiledFailureRedriveTest(ITestOutputHelper output) : Monolit
         // park with it, so clear it here too or the staged state would not be the staged state.
         ParkRegistry.Unpark(typePath);
         var marker = $"FORGED-{Guid.NewGuid():N}";
-        await workspace.GetMeshNodeStream(typePath)
+        var forged = await workspace.GetMeshNodeStream(typePath)
             .Update(curr => curr.Content is NodeTypeDefinition d
                 ? curr with
                 {
@@ -277,14 +277,24 @@ public class NeverCompiledFailureRedriveTest(ITestOutputHelper output) : Monolit
         // 🚧 Barrier: GetMeshNodeStream replays its latest snapshot, so without confirming the
         // forge LANDED a later convergence Match could match the pre-forge state and pass with no
         // re-drive at all — masking a disabled kickoff.
+        //
+        // 🚨 The barrier waits on the VERSION, not on seeing the forged content. The forged record
+        // is what TRIGGERS the re-drive, so it is transient by construction: the kickoff can
+        // recompile and overwrite it — marker gone, FailedBuildInputs filled — before this
+        // subscription observes it, and then the barrier times out on a forge that landed
+        // perfectly. That is a race the test loses more often the FASTER the product is, and it is
+        // load-sensitive on CI: this helper is used by all three tests in this file, which is why
+        // they fail in rotation (#1843 — observed on main and on three unrelated PRs).
+        //
+        // Version is monotonic and cannot be overwritten away, so waiting for it proves the write
+        // landed without requiring anyone to catch a state designed to be replaced.
+        var forgedVersion = forged.Version;
         await workspace.GetMeshNodeStream(typePath)
             .Should().Within(20.Seconds())
-            .Match(n => n.Content is NodeTypeDefinition d
-                && d.CompilationStatus == CompilationStatus.Error
-                && d.CompilationError == marker
-                && string.IsNullOrEmpty(d.LatestAssemblyPath)
-                && d.FailedBuildInputs is null);
-        Output.WriteLine($"Forged the never-compiled Error record on {typePath} (marker {marker}).");
+            .Match(n => n.Version >= forgedVersion);
+        Output.WriteLine(
+            $"Forged the never-compiled Error record on {typePath} (marker {marker}, "
+            + $"version {forgedVersion}).");
     }
 
     /// <summary>

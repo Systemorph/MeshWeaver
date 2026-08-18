@@ -269,6 +269,7 @@
   "approval.dueDateLabel": "Fälligkeitsdatum (optional, JJJJ-MM-TT)",
   "approval.from": "Von",
   "approval.noData": "Keine Freigabedaten.",
+  "approval.noDocument": "Kein Dokument ausgew\u00e4hlt \u2014 \u00f6ffnen Sie diese Ansicht aus einem Dokument heraus oder \u00fcbergeben Sie ?doc=Space/Pfad.",
   "approval.purpose": "Zweck",
   "approval.purposePlaceholder": "Wozu wird diese Freigabe benötigt?",
   "approval.rejectedBy": "Abgelehnt von",
