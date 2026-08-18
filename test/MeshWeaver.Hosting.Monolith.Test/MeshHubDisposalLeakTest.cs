@@ -184,7 +184,7 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
     /// every one of them is reachable from a non-stack root, because that is what being alive
     /// MEANS. So the assertion fired on whichever unrelated hub the breadth-first walk happened to
     /// reach first, which is why it failed on PRs that changed no compiled code at all
-    /// (#1843: a two-file YAML diff), and why the printed chain was a ~25-long walk down the
+    /// (#1841: a two-file YAML diff; tracked in #1843), and why the printed chain was a ~25-long walk down the
     /// process-global TimerQueue linked list — the path to a stranger's hub, not to ours.</para>
     ///
     /// <para>Matching on the address keeps the gate able to FAIL: if hubs are found but none of
@@ -359,10 +359,14 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
 
     /// <summary>
     /// The <c>Address</c> of a <c>MessageHub</c> on the snapshot heap, as
-    /// <c>string.Join("/", Segments)</c> — which is exactly what <c>Address.Path</c> (and hence
-    /// <c>ToString()</c>) produces, so it compares directly against a captured live address.
-    /// Returns null when the shape cannot be read, and NEVER throws: an unreadable stranger must
-    /// not abort a walk that is looking for a different hub.
+    /// <c>string.Join("/", Segments)</c> — exactly what <c>Address.Path</c> produces, so it compares
+    /// directly against a captured live <c>Path</c>. Deliberately NOT <c>ToString()</c>, which
+    /// appends <c>"~host"</c> when a Host is set and therefore does not equal this.
+    ///
+    /// <para>Returns null when the shape cannot be read, and NEVER throws: an unreadable stranger
+    /// must not abort a walk that is looking for a different hub. 🚨 Null must also be returned for
+    /// any address it cannot reproduce EXACTLY — a partially-read address would compare unequal to
+    /// the real one and silently turn this gate into one that always passes.</para>
     /// </summary>
     private static string? TryReadHubAddress(ClrObject hub)
     {
@@ -377,11 +381,16 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
             if (!segments.IsValid || !segments.IsArray) return null;
             var arr = segments.AsArray();
             var parts = new List<string>();
-            for (var i = 0; i < arr.Length && i < 8; i++)
+            // EVERY segment, and no substitutes. A cap here (there was one, at 8) truncates longer
+            // addresses so they can never equal the captured Path, and an unreadable segment
+            // replaced by "" corrupts the join the same way — both make the comparison fail
+            // silently, which reports "no leak" forever. Unreadable => null => Unavailable.
+            for (var i = 0; i < arr.Length; i++)
             {
                 var element = arr.GetObjectValue(i);
                 if (!element.IsValid) return null;
-                parts.Add(element.AsString() ?? "");
+                if (element.AsString() is not { } segment) return null;
+                parts.Add(segment);
             }
             return parts.Count == 0 ? null : string.Join("/", parts);
         }
