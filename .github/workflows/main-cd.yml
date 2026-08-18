@@ -1153,6 +1153,78 @@ jobs:
           echo "BAKE_DIR=$BAKE" >> "$GITHUB_ENV"
           echo "baked identity: $(cat "$BAKE/framework-mvid.txt")"
           ls -l "$BAKE"/*.zip
+      # ─────────── THE ADDRESS CHECK — publish only to an address the portal actually reads ───────────
+      # 🚨 The framework identity is an ADDRESS, and until now NOTHING in this pipeline could observe
+      # that the producer and the consumer disagree about it. The bake publishes under the identity
+      # ITS host (mw-plugin-test) resolves; a portal only ever looks under the identity IT resolves.
+      # When the two differ the bundles are published, intact, to a directory no pod will ever open —
+      # so every publication-side check passes, this job goes green, and the pods compile everything
+      # at boot exactly as if the bake lane did not exist.
+      #
+      # That is not hypothetical. CD run 32063444385 baked release 3.0.0-rc4.ci.4201 (commit 493e1992)
+      # under sda0843abd6db4fc7e37cc3f838079265 while both prod pods asked for
+      # s944d7fd0bbf81f4b40b85a7a74296263 and logged "no CI-published bundles for framework identity".
+      # The first pod of that deploy compiled 269 NodeTypes over 10 m 29 s (+1598 MB working set); the
+      # second adopted from what the FIRST had compiled, not from CI. During that window ~12 instance
+      # hubs latched a compilation-fallback card and served it to anonymous visitors for two hours —
+      # every course cover on memex.meshweaver.cloud. Issue #1814.
+      #
+      # The cause was one host losing eight canonical assemblies from its surface manifest, which no
+      # amount of publication-side checking can see. A one-line comparison of the two VALUES can, and
+      # this is it. It runs BEFORE the publish on purpose: a bake nobody can adopt must fail the
+      # release rather than be filed under an address nobody reads. The release marker is then never
+      # written, so the deployment gate (#1754) holds too — fail-safe in both directions.
+      #
+      # 🚨 --platform linux/amd64 on BOTH pulls, out loud. The identity is per-architecture (the same
+      # four reference assemblies differ between the amd64 and arm64 legs of one multi-arch image), so
+      # a multi-arch image carries two identities and comparing across legs would be meaningless. Every
+      # AKS node is amd64 and the bake above already pins amd64; this pins the portal side to match.
+      # (An arm64 install — memex.localhost — resolves the OTHER identity and compiles locally; that is
+      # the second, independent way to mint an unread address, and publishing a second copy under it to
+      # "cover" it is forbidden: a bake is adoptable only when its producer ran the consumer's binaries.)
+      #
+      # The comparison is done by the bake image's own `framework-identity` verb, which resolves the
+      # identity of ANOTHER directory from that directory's meshweaver-surface.manifest and assemblies
+      # as FILES — nothing is loaded, so one container answers for the other image's /app. It refuses
+      # to answer for a directory with no usable manifest rather than degrading to the fallback
+      # identity: two manifest-less hosts of one commit resolve the SAME fallback, and a comparison
+      # that passes on degraded input would be a check that cannot fail.
+      - name: "Assert the bake's identity is the one the PROMOTED PORTAL IMAGE resolves"
+        env:
+          BAKE_IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+          PORTAL_IMAGE: ${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          BAKED="$(tr -d '[:space:]' < "$BAKE_DIR/framework-mvid.txt")"
+          echo "the bake published under: $BAKED"
+          # The STAGING tag is this run's exact, immutable image — `main`/`latest` are moving
+          # pointers a concurrent CD run can re-aim mid-job, which would compare this bake against
+          # somebody else's build.
+          docker pull --quiet --platform linux/amd64 "$PORTAL_IMAGE"
+          STAGE="$RUNNER_TEMP/portal-image"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cid="$(docker create --platform linux/amd64 "$PORTAL_IMAGE")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          # /app is ~306 MB (it is the app, not the base image), so copying it whole is cheap and
+          # uses nothing but `docker cp` — no tar wildcard flags that differ between tar flavours.
+          docker cp "$cid:/app" "$STAGE"
+          if [ ! -s "$STAGE/app/meshweaver-surface.manifest" ]; then
+            echo "::error::the promoted portal image ships no /app/meshweaver-surface.manifest, so it resolves the stamp/MVID FALLBACK identity and can adopt NO bake at all. That is the #1699 shape (the manifest missing from the publish output). Fix the image — do not publish a bake it cannot read."
+            exit 1
+          fi
+          echo "portal /app: $(ls "$STAGE/app"/MeshWeaver.*.dll | wc -l) MeshWeaver assemblies, $(wc -l < "$STAGE/app/meshweaver-surface.manifest") manifest lines"
+          # `--init` so a crashed tester exits instead of spinning as an unkillable PID 1 (#1741).
+          # The verb prints the portal's identity, compares it with the bake's, and on a mismatch
+          # names the canonical assemblies whose absence caused it — the actual defect in #1814 was
+          # eight of them, not "a hash that differs".
+          docker run --rm --init --platform linux/amd64 -v "$STAGE/app:/portal:ro" \
+            --entrypoint /app/mw-plugin-test "$BAKE_IMAGE" \
+            framework-identity /portal --expect "$BAKED"
+          {
+            echo "### 🔑 Bake address verified"
+            echo "- \`$BAKED\` — resolved by BOTH the bake host and the promoted \`memex-portal-ai\` image (linux/amd64)"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: "Publish bundles to every portal target"
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
