@@ -122,9 +122,29 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
   const s = useSheet();
   const [instances, setInstances] = useState<MeshInstance[]>(loadInstances());
   const [current, setCurrent] = useState(currentInstance().name);
+  // Prefill with a URL that is actually reachable from THIS device: the local monolith only
+  // exists on a dev machine (localhost on a phone is the phone), so native builds prefill the
+  // public portal. The placeholder-looks-filled trap is also why `add` must never be silent.
+  const nativeDefault = defaultPortalUrl().includes("localhost")
+    ? "https://memex.meshweaver.cloud" : defaultPortalUrl();
   const [name, setName] = useState("");
-  const [url, setUrl] = useState(defaultPortalUrl()); // prefill the default portal (the local monolith) — edit + paste a token for a remote one
+  const [url, setUrl] = useState(nativeDefault);
   const [token, setToken] = useState("");
+  const [formError, setFormError] = useState("");
+  // ONBOARDING, not a form: first-run shows a welcome and the preinstalled meshes as the
+  // primary choice; the raw add-a-portal form is advanced and folded away. Signing in is a
+  // per-mesh act (tap a mesh → paste a token), not a wall in front of the app.
+  const firstRun = !instances.some((i) => !i.local && i.token);
+  const [showForm, setShowForm] = useState(false);
+  const [tokenFor, setTokenFor] = useState<string | null>(null);
+  const [rowToken, setRowToken] = useState("");
+  const saveRowToken = (inst: MeshInstance) => {
+    saveInstance({ ...inst, token: rowToken.trim() });
+    setTokenFor(null); setRowToken("");
+    refresh();
+    discover({ ...inst, token: rowToken.trim() });
+    onConnected();
+  };
 
   const refresh = () => {
     setInstances(loadInstances());
@@ -143,7 +163,11 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
   };
   const add = () => {
     const nm = name.trim() || url.trim().replace(/^https?:\/\//, "");
-    if (!url.trim()) return;
+    if (!url.trim()) {
+      setFormError("Enter the portal URL — the gray text is only a placeholder.");
+      return;
+    }
+    setFormError("");
     const inst: MeshInstance = { name: nm, url: url.trim().replace(/\/+$/, ""), token: token.trim(), local: false };
     saveInstance(inst);
     setName(""); setUrl(""); setToken("");
@@ -153,7 +177,11 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
   };
 
   return (
-    <ScreenScroll title="Connect to a mesh" subtitle="Point the app at any MeshWeaver portal by URL + API token — the same idea as the MAUI app's instance manager. Local is the mesh that served this app.">
+    <ScreenScroll
+      title={firstRun ? "Welcome to Memex" : "Connect to a mesh"}
+      subtitle={firstRun
+        ? "Choose a mesh to connect to. You can browse public content right away — to sign in, tap a mesh and paste an API token (portal ▸ Settings ▸ Security ▸ API Tokens)."
+        : "Your meshes. Tap to connect; discovered instances of a connected mesh appear here automatically."}>
       {instances.map((i) => {
         const id = instanceIdentity(i);
         const loud = id.tone === "prod" || id.tone === "client";
@@ -172,14 +200,34 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
                 <Text style={s.instDelText}>Remove</Text>
               </Pressable>
             )}
+            {!i.local && tokenFor !== i.name && (
+              <Pressable onPress={() => { setTokenFor(i.name); setRowToken(i.token); }} style={{ paddingVertical: 6 }}>
+                <Text style={{ color: "#4c8dff", fontSize: 13 }}>{i.token ? "Change token" : "Sign in with a token"}</Text>
+              </Pressable>
+            )}
+            {tokenFor === i.name && (
+              <View style={{ marginTop: 6 }}>
+                <Field label={`API token for ${i.name}`} value={rowToken} onChange={setRowToken} placeholder="mw_…" />
+                <Pressable onPress={() => saveRowToken(i)} style={s.primaryBtn}><Text style={s.primaryBtnText}>Save & connect</Text></Pressable>
+              </View>
+            )}
           </View>
         );
       })}
-      <Text style={[s.sectionLabel, { marginTop: 18 }]}>Add a portal</Text>
-      <Field label="Name" value={name} onChange={setName} placeholder="e.g. Memex" />
-      <Field label="URL" value={url} onChange={setUrl} placeholder="https://memex.meshweaver.cloud" />
-      <Field label="API token (optional)" value={token} onChange={setToken} placeholder="mw_…" />
-      <Pressable onPress={add} style={s.primaryBtn}><Text style={s.primaryBtnText}>Connect</Text></Pressable>
+      {!showForm ? (
+        <Pressable onPress={() => setShowForm(true)} style={{ marginTop: 18, paddingVertical: 8 }}>
+          <Text style={{ color: "#4c8dff" }}>＋ Add a custom portal by URL</Text>
+        </Pressable>
+      ) : (
+        <>
+          <Text style={[s.sectionLabel, { marginTop: 18 }]}>Add a portal</Text>
+          <Field label="Name" value={name} onChange={setName} placeholder="e.g. Memex" />
+          <Field label="URL" value={url} onChange={setUrl} placeholder="https://memex.meshweaver.cloud" />
+          <Field label="API token (optional)" value={token} onChange={setToken} placeholder="mw_…" />
+          {formError ? <Text style={{ color: "#d13438", marginBottom: 8 }}>{formError}</Text> : null}
+          <Pressable onPress={add} style={s.primaryBtn}><Text style={s.primaryBtnText}>Connect</Text></Pressable>
+        </>
+      )}
     </ScreenScroll>
   );
 }
