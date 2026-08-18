@@ -54,6 +54,9 @@ class Config:
     hold_phrase: str = "Ich schaue nach. Einen Moment bitte."
     error_phrase: str = "Entschuldigung, das hat gerade nicht geklappt."
 
+    # --- multiple brains (optional) — see router.py; overrides the single-brain fields ---
+    portals: list = field(default_factory=list)   # PORTALS: JSON list of named targets
+
     # --- wake word (activated on the device if none is) ---
     wake_word: str = "hey_jarvis"           # micro-wake-word model id on the device
 
@@ -74,6 +77,9 @@ class Config:
 
     @staticmethod
     def from_env() -> "Config":
+        import json
+        portals_raw = _env("PORTALS")
+        portals = json.loads(portals_raw) if portals_raw else []
         memex_url = (_env("MEMEX_URL", "https://memex.meshweaver.cloud") or "").rstrip("/")
         memex_token = _env("MEMEX_TOKEN") or ""
         stt_url = _env("STT_URL") or f"{memex_url}/api/speech/transcribe"
@@ -107,9 +113,10 @@ class Config:
             say_voice=_env("SAY_VOICE", "Anna") or "Anna",
             gateway_host=_env("GATEWAY_HOST") or "",
             gateway_port=int(_env("GATEWAY_PORT", "8200")),
+            portals=portals,
         )
         required = [("SATELLITE_HOST", cfg.satellite_host), ("GATEWAY_HOST", cfg.gateway_host)]
-        if cfg.brain == "memex":
+        if not cfg.portals and cfg.brain == "memex":
             required += [("MEMEX_TOKEN", cfg.memex_token), ("MEMEX_NAMESPACE", cfg.namespace)]
         missing = [name for name, value in required if not value]
         if missing:

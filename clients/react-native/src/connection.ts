@@ -73,6 +73,7 @@ const SEED_VERSION = 1;
 export const KNOWN_INSTANCES: MeshInstance[] = [
   { name: "memex.localhost (k8s)", url: "https://memex.localhost:8443", token: "", local: false, icon: "☸", color: "#d29922", kind: "Local · k8s" },
   { name: "memex", url: "https://memex.meshweaver.cloud", token: "", local: false, icon: "☁️", color: "#4c8dff", kind: "Prod" },
+  { name: "systemorph", url: "https://memex.systemorph.com", token: "", local: false, icon: "🏢", color: "#6a4c93", kind: "Prod" },
 ];
 
 /**
