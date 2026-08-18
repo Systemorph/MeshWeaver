@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -30,6 +31,19 @@ public static class OrleansTestMeshExtensions
             {
                 Name = "Kernel",
                 HubConfiguration = x => x
+            })
+            // A GENERIC post NodeType — no CLR content type, so an instance keeps its Dictionary
+            // content as a JsonElement, the shape production social posts have when read by code
+            // that does not own their type. Registered HERE rather than on the silo configurator
+            // because ConfigurePortalMesh is the config the silo host AND the Orleans client host
+            // share: a node cannot be created for a type the CREATING host does not know, and the
+            // client is what the tests call. Inert unless a test creates one.
+            .AddMeshNodes(new MeshNode("Post", "Systemorph")
+            {
+                Name = "Social Media Post",
+                NodeType = "NodeType",
+                Content = new NodeTypeDefinition { Description = "Social media post (test fixture)." },
+                HubConfiguration = config => config.AddMeshDataSource(),
             })
             .AddGraph()
             .AddAI()
