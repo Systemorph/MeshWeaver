@@ -628,7 +628,7 @@ jobs:
         PLAYWRIGHT_VERSION: 1.62.1
         PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
         BROWSER_INSTALL_TIMEOUT: 180
-        APT_LOCK_WAIT: 60
+        APT_LOCK_WAIT: 240
       run: |
         set -euo pipefail
         sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
@@ -647,7 +647,28 @@ jobs:
           # deadlock). Bounded, like everything else here: it can wait, it cannot hang. `|| true`
           # because a timed-out wait is not a reason to skip the attempt — apt may well be free by
           # the time npx reaches it, and the attempt itself is bounded anyway.
-          sudo flock -w "$APT_LOCK_WAIT" /var/lib/apt/lists/lock true 2>/dev/null || true
+          # 🚨 WAIT FOR THE COMPETING PROCESS TO EXIT — not for a lock to be momentarily free.
+          #
+          # The previous shape was `flock -w N <lock> true`, which ACQUIRES the lock and releases
+          # it in the same breath. That reserves nothing: the runner image's background apt
+          # (unattended-upgrades / the daily timer) re-takes it before playwright's own apt-get
+          # gets there, so the wait returns "free" and the install fails anyway. Measured on this
+          # very branch — waiting on all three lock files still failed with
+          #   E: Could not get lock /var/lib/apt/lists/lock. It is held by process 3014 (apt-get)
+          # i.e. the same holder, immediately after our wait said the lock was available.
+          #
+          # apt also locks with fcntl, which does not interoperate with flock, so the earlier
+          # approach could not have worked reliably even without the release race.
+          #
+          # What actually settles it is the holder FINISHING. Bounded, like everything here: it
+          # can wait, it cannot hang.
+          waited=0
+          while [ "$waited" -lt "$APT_LOCK_WAIT" ]; do
+            pgrep -x apt-get >/dev/null 2>&1 || pgrep -f unattended-upgr >/dev/null 2>&1 || break
+            sleep 3
+            waited=$((waited + 3))
+          done
+          [ "$waited" -gt 0 ] && echo "waited ${waited}s for a competing apt to finish" >&2
           rc=0
           timeout --signal=TERM --kill-after=30 "$BROWSER_INSTALL_TIMEOUT" \
             npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium || rc=$?
