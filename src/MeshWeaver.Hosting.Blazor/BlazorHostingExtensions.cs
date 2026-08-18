@@ -549,13 +549,22 @@ public static class BlazorHostingExtensions
     /// model, the principal, AND proof the node exists. Echoing it handed that to the caller
     /// verbatim.</para>
     ///
-    /// <para><b>Why the fallback still needs this after the tri-state.</b> The two typed arms below
-    /// catch the classified refusals, but they are property patterns over
+    /// <para><b>Why the fallback still needs this after the tri-state.</b> The typed arms below
+    /// catch the classified failures, but they are property patterns over
     /// <see cref="DeliveryFailureException.Failure"/> — which is <c>null</c> for the string-only
-    /// constructors, and is <see cref="ErrorType.Unknown"/> / <see cref="ErrorType.NotFound"/> /
-    /// <see cref="ErrorType.Exception"/> for every failure a hub reports without classifying. All of
-    /// those fall through to <c>_</c>, still carrying a hub-authored message and still caller-
-    /// triggerable. So the suppression belongs on the fallback, not only on the refusal arms.</para>
+    /// constructors, and is <see cref="ErrorType.Unknown"/> / <see cref="ErrorType.Exception"/> for
+    /// every failure a hub reports without classifying. Those fall through to <c>_</c>, still
+    /// carrying a hub-authored message and still caller-triggerable. So the suppression belongs on
+    /// the fallback, not only on the refusal arms.</para>
+    ///
+    /// <para>🚨 <b>The fallback is the ALERTING arm, so nothing routine may reach it.</b> It logs at
+    /// <c>Error</c> — a <c>fail:</c> line the incident pipeline opens issues from. Three outcomes
+    /// used to land there that are not incidents at all, and each filed one:
+    /// a read that TIMED OUT (#1563 — the target hub never answered, after a full 60 s), an
+    /// ACTIVATION failure reported as an unclassified delivery failure (#1693), and a routing
+    /// <see cref="ErrorType.NotFound"/> for a node that simply is not there. Each now has its own
+    /// arm with the honest status and log level; the fallback is left for what it is meant for — a
+    /// fault nobody classified, which genuinely wants a human.</para>
     ///
     /// <para><b>Nothing is lost, it MOVES.</b> The detail goes to the server-side log, which is where
     /// diagnostics belong — a response body is not a log sink. Dropping it silently would be the
@@ -577,9 +586,36 @@ public static class BlazorHostingExtensions
             // No verdict reached — a degraded dependency, NOT a statement about this caller's rights.
             // Still fail closed (nothing is served), but 503 so the caller retries instead of caching
             // an absence that was never asserted.
-            case DeliveryFailureException { Failure.ErrorType: ErrorType.Unavailable }:
+            //
+            // 🚨 ShuttingDown lands here too, and that is the point of naming it: the owning hub was
+            // mid-recycle when the delivery arrived. ErrorType.ShuttingDown's own contract is
+            // "retry-worthy, never terminal", so answering 500 (or worse, 404) for a hub that will be
+            // back on the next probe is exactly the confident-wrong-answer this classification exists
+            // to prevent.
+            case DeliveryFailureException
+            {
+                Failure.ErrorType: ErrorType.Unavailable or ErrorType.ShuttingDown
+            }:
                 logger?.LogWarning(ex, "Content read could not be authorized for {Path}", path);
                 return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            // The owning hub never answered inside the route's own read budget (ReadBudget /
+            // HubUnreachableException, issues #1563 + #1748), or any other read that timed out.
+            // Same fact as Unavailable above — no verdict was reached — so the same retryable 503,
+            // and Warning rather than Error: a single transient miss on a route a browser will
+            // simply re-request is not a fail:-level incident, and the message still names the hub
+            // and the budget so a RECURRING one is greppable. Before this the read burned the full
+            // 60 s RequestTimeout and then answered 500.
+            case TimeoutException:
+                logger?.LogWarning(ex, "Content read timed out for {Path}", path);
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            // The owning node/hub is not there — routing said so, immediately and authoritatively.
+            // 404, byte-identical to a refusal and to a miss, so no arm of this switch can be used
+            // as an existence oracle; Debug, because "you asked for something that does not exist"
+            // is a client fact, not a server incident. This used to fall through to the 500 + Error
+            // arm below, which alerted on every request for a deleted node.
+            case DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound }:
+                logger?.LogDebug(ex, "Content read found no node for {Path}", path);
+                return Results.NotFound(ContentNotFound);
             default:
                 logger?.LogError(ex, "Content read failed for {Path}", path);
                 return Results.Problem(ContentError);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -400,20 +401,53 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
         // role on OtherUser/ — RestrictedAccessSiloConfigurator only grants
         // TestUser Admin on TestUser/_Access.
         //
-        // 🚨 Seed a SETTLED CompilationStatus (Error) so the System first-build
-        // kickoff cannot fire. The kickoff in InstallCompileWatcher fires on ANY
-        // grain activation when CompilationStatus is null — under System identity
-        // — and creates exactly one compile activity (the by-design behaviour that
-        // OrleansCompileActivityAccessTest.BackgroundActivation_…
-        // DoesNotLoopRecompiles pins as "exactly one"). That kickoff is
-        // INFRASTRUCTURE, orthogonal to user authorization: it would create an
-        // _Activity row here even though TestUser is denied, making the
-        // access-control invariant un-observable. Seeding a terminal status
-        // (CompilationStatus is non-null → kickoff needs null, recovery needs
-        // Compiling, release-watcher needs RequestedReleaseAt) means the ONLY
-        // path to a compile activity is the release-request — which requires
-        // TestUser's denied write to land. So "no activity row" cleanly proves
-        // the denial, with no race against the orthogonal kickoff.
+        // 🚨 Seed a compile record that is SETTLED **and has nothing due** — so no
+        // System-driven, activation-time kickoff can fire and the ONLY path to a
+        // compile activity is the release-request, which requires TestUser's denied
+        // write to land. That is what makes "no activity row" a clean proof of the
+        // denial rather than a race against orthogonal infrastructure.
+        //
+        // Those kickoffs are INFRASTRUCTURE, orthogonal to user authorization: they
+        // run on the type's OWN hub, under System, from facts the persisted record
+        // already holds — no request and no requester's identity is an input. They
+        // would create an _Activity row here even though TestUser is denied, making
+        // the access-control invariant un-observable. So each one is excluded by the
+        // record itself:
+        //
+        //   first-build      needs CompilationStatus null      → seeded Error
+        //   recovery         needs Compiling                   → seeded Error
+        //   framework-stale  needs assembly coordinates        → none seeded
+        //   release watcher  needs RequestedReleaseAt          → the denied write
+        //   failed-verdict   needs the LIVE compile inputs to differ from
+        //                    FailedBuildInputs (#1793)         → seeded EQUAL, below
+        //
+        // 🚨 A settled status ALONE stopped being sufficient with #1793. A failure
+        // that never compiled successfully used to be unreachable by every automatic
+        // path — which is the bug #1793 fixed — so it is now re-driven once whenever
+        // the framework, the installed modules or the type's sources differ from what
+        // the verdict was formed under. A seeded Error with no FailedBuildInputs is
+        // exactly the "imported from elsewhere, never attempted here" record that
+        // SHOULD be re-driven, so it no longer stages a quiet type.
+        //
+        // The honest replacement is a record that says what a locally-formed failure
+        // says: this verdict was reached HERE, under these very inputs. Then nothing
+        // is due, by the mechanism's own rule rather than by an accident of which
+        // fields the predicates happened to read. Two halves, and both are needed:
+        //   • CurrentSourceVersions = EMPTY — the type has no Source/ children, and
+        //     the sources watcher will write exactly that on activation, so seeding it
+        //     removes the window in which the snapshot is "not established yet" and
+        //     the watcher's first write would move the token.
+        //   • FailedBuildInputs = the token the framework itself computes for that
+        //     state. Derived through NodeTypeCompilationHelpers.BuildInputsToken, never
+        //     re-implemented here: a token two call sites compute differently either
+        //     never converges or never fires, and both failures are silent.
+        var siloServices = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services;
+        var siloHubForToken = siloServices.GetRequiredService<IMessageHub>();
+        var noSources = (IReadOnlyDictionary<string, long>)
+            ImmutableDictionary<string, long>.Empty;
+        var settledInputs = NodeTypeCompilationHelpers.BuildInputsToken(
+            NodeTypeCompilationHelpers.ModulesHashOf(siloHubForToken), noSources);
+
         var typeId = $"NoEdit{Guid.NewGuid():N}";
         var typePath = $"OtherUser/{typeId}";
         var typeNode = MeshNode.FromPath(typePath) with
@@ -425,19 +459,19 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
                 Description = "Negative — user lacks Edit, recompile must fail-closed",
                 Configuration = $"config => config.WithContentType<{typeId}>()",
                 CompilationStatus = CompilationStatus.Error,
-                CompilationError = "seeded terminal state (isolates access-control from the first-build kickoff)"
+                CompilationError = "seeded terminal state (isolates access-control from the compile kickoffs)",
+                CurrentSourceVersions = noSources,
+                FailedBuildInputs = settledInputs
             }
         };
         await SeedAsSystem(typeNode, ct);
+        Output.WriteLine(
+            $"Seeded {typePath} settled at Error with nothing due (inputs '{settledInputs}').");
 
         // As TestUser (no Edit on OtherUser/), attempt the Update.
         var client = GetClient($"no-edit-{Guid.NewGuid():N}", userId: "TestUser");
-        var siloMeshHub = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
-            .GetRequiredService<IMessageHub>();
-        var siloAccess = ((InProcessSiloHandle)Cluster.Silos[0]).SiloHost.Services
-            .GetRequiredService<IMessageHub>()
-            .ServiceProvider
-            .GetRequiredService<AccessService>();
+        var siloMeshHub = siloHubForToken;
+        var siloAccess = siloMeshHub.ServiceProvider.GetRequiredService<AccessService>();
 
         // Run the Update under TestUser's context and capture either an error
         // or a "no activity written" outcome.
@@ -492,8 +526,9 @@ public class OrleansCompileActivityAccessTest(ITestOutputHelper output)
             .Should().NotEmit(within: TimeSpan.FromSeconds(5),
                 because: "TestUser lacks Edit on OtherUser/; the write itself was denied " +
                     $"({updateException?.GetType().Name ?? "no exception"}), so no release-request " +
-                    "lands and — with the first-build kickoff suppressed by the seeded terminal " +
-                    "status — no compile activity row is ever created. Pin against the " +
+                    "lands and — with every System-driven kickoff excluded by a record that is " +
+                    "settled AND has nothing due (see the seeding comment) — no compile activity " +
+                    "row is ever created. Pin against the " +
                     "MessageHubConfiguration.cs:328-342 deletion (PostPipeline no longer stamps " +
                     "hub-self as principal).");
     }

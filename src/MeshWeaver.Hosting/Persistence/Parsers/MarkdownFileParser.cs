@@ -174,10 +174,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         DateTimeOffset lastModified;
         try
         {
-            var fileInfo = new FileInfo(filePath);
-            lastModified = fileInfo.Exists
-                ? new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero)
-                : DateTimeOffset.UtcNow;
+            lastModified = FileTimestamps.ObservedAt(filePath);
         }
         catch
         {

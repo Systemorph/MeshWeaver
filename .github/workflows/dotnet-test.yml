@@ -596,26 +596,78 @@ jobs:
     # input-shaped `if:` — a browser this step failed to install must redden the shard, not
     # silently leave the tests asserting the "no browser here" branch and calling it green.
     #
+    # 🚨 EVERY ATTEMPT IS TIME-BOUNDED, because the retry loop below defends against the
+    # download FAILING and a stalled CDN does not fail — it hangs. Observed on PR #1808
+    # (run 32071216434, shard 0): `npx playwright-core install` sat for the shard's whole
+    # 20-minute `timeout-minutes` budget, was killed with the job, and was still alive at
+    # cleanup ("Terminate orphan process: npm exec playwright-core@1.62.1 install"). Because
+    # the command never returned, `ok` stayed 0, no retry ever ran, and the step's own INFRA
+    # error never printed. The shard executed ZERO tests — no `test-results.log`, no `.trx` —
+    # so `Consolidate test results` failed on missing results and the run reported CANCELLED:
+    # a shape that reads like a test problem and names nothing.
+    #
+    # `timeout` turns the hang into an ordinary non-zero exit, which the retry loop ALREADY
+    # handles correctly, so one bound restores the behaviour the step was written to have.
+    # This is not raising a budget to make something pass — the 20-minute job cap is unchanged;
+    # it gives the unbounded operation INSIDE it a bound, so a stall is reported as the infra
+    # failure it is instead of consuming the whole job silently.
+    #
+    # Worst case, counting EVERY term: 3 attempts × (60 s apt-lock wait + 180 s timeout + up to
+    # 30 s `--kill-after` grace, if the process ignores SIGTERM) + 10 s + 20 s backoff ≈ 14 min —
+    # inside the shard's 20-minute `timeout-minutes`, with ~6 min of headroom for the rest of the
+    # job. A healthy install takes well under a minute. 🚨 Keep this arithmetic honest if you
+    # change ANY of the three bounds — adding the apt wait is exactly why the install timeout came
+    # down from 240 s, so that the sum did not creep up on the job cap:
+    # it is the reason the step cannot itself become the thing that exhausts the job, which is the
+    # exact failure being fixed. (`timeout` exists on the Linux runners; the AGENTS.md warning
+    # about it is specific to the macOS dev host.)
+    #
     # Keep PLAYWRIGHT_VERSION in step with deploy/base-images/portal-ai/Dockerfile.
     - name: "Provision the headless browser (infra, not a test)"
       env:
         PLAYWRIGHT_VERSION: 1.62.1
         PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
+        BROWSER_INSTALL_TIMEOUT: 180
+        APT_LOCK_WAIT: 60
       run: |
         set -euo pipefail
         sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
         sudo chown "$(id -u):$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
         ok=0
         for attempt in 1 2 3; do
-          if npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium; then
+          # 🚨 WAIT FOR APT BEFORE EACH ATTEMPT. `--with-deps` shells out to apt-get, and the
+          # runner image runs its own background apt (unattended-upgrades / the daily timer). When
+          # that holds the lock, playwright exits 100 with
+          #   E: Could not get lock /var/lib/apt/lists/lock. It is held by process N (apt-get)
+          # which is CONTENTION, not a broken download — so retrying immediately just re-races the
+          # same holder. Observed on this very PR (run 32077919296, shard 1): all three attempts
+          # failed that way inside 30 s, because the backoff was shorter than the other apt run.
+          # `flock -w N … true` waits for the holder to finish and releases at once, so playwright
+          # takes the lock itself rather than us holding it across its whole run (which would
+          # deadlock). Bounded, like everything else here: it can wait, it cannot hang. `|| true`
+          # because a timed-out wait is not a reason to skip the attempt — apt may well be free by
+          # the time npx reaches it, and the attempt itself is bounded anyway.
+          sudo flock -w "$APT_LOCK_WAIT" /var/lib/apt/lists/lock true 2>/dev/null || true
+          rc=0
+          timeout --signal=TERM --kill-after=30 "$BROWSER_INSTALL_TIMEOUT" \
+            npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium || rc=$?
+          if [ $rc -eq 0 ]; then
             ok=1; break
           fi
+          # 124 is `timeout`'s own "the command was still running" code — call it out, because a
+          # STALL and a FAILED download want different follow-up (CDN/runner network vs a bad
+          # version pin), and the two are indistinguishable once both read as "attempt failed".
+          if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then
+            echo "::warning::browser install attempt $attempt HUNG (no output for ${BROWSER_INSTALL_TIMEOUT}s) and was killed — treating as a failed attempt" >&2
+          else
+            echo "browser install attempt $attempt failed (exit $rc); retrying" >&2
+          fi
           delay=$((10 * attempt))
-          echo "browser install attempt $attempt failed; retrying in ${delay}s" >&2
+          echo "retrying in ${delay}s" >&2
           sleep $delay
         done
         if [ $ok -eq 0 ]; then
-          echo "::error::could not install the headless browser after 3 attempts — this is an INFRA failure, not a test failure."
+          echo "::error::could not install the headless browser after 3 attempts (each bounded at ${BROWSER_INSTALL_TIMEOUT}s) — this is an INFRA failure, not a test failure."
           exit 1
         fi
         # The binary is named differently per platform (see the Dockerfile); match both so this
@@ -1075,7 +1127,14 @@ jobs:
           fi
           cp -R "$GITHUB_WORKSPACE/plugins-repo/$m" "$STAGE/"
         done
-        cp "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" "$STAGE/" 2>/dev/null || true
+        # The ratchet is REQUIRED, and its absence is reported here rather than left to the tester
+        # (#1741): `--allow` at a path that does not exist is a configuration error, and a `|| true`
+        # that swallowed the failed copy only moved the report one process further away.
+        if [ ! -f "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" ]; then
+          echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet this gate is configured with cannot be read, and a gate that cannot read its input must not look like one that passed. Commit the file (EMPTY = no known debt)."
+          exit 1
+        fi
+        cp "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" "$STAGE/"
         echo "gating: $VITAL_MODULES"
         # plugin-gate.allow is the plugins repo's known-debt ratchet: listed failures are
         # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
