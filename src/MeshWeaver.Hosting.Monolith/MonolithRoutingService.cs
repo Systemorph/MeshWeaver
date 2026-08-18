@@ -72,22 +72,45 @@ internal class MonolithRoutingService(
     {
         var isShuttingDown = Mesh.IsDisposing;
         string errorMessage;
-        if (isShuttingDown)
-            errorMessage = $"Mesh is shutting down, cannot route to {address}";
-        else if (node is null)
-            errorMessage = $"No node found for address {address}";
-        else
-            errorMessage = $"No hub configuration for node '{node.Path}' (NodeType: {node.NodeType ?? "null"}). Ensure the node type is registered via AddGraph() or a custom builder extension.";
-
-        logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
-            delivery.Message.GetType().Name, address, node?.Path, node?.NodeType, delivery.Sender, isShuttingDown);
-
         // 🚨 ShuttingDown, NOT Failed. Consumers with their own recovery machinery — chiefly
         // SynchronizationStream's keep-alive + change-feed resubscribe latch — key on THIS member
         // to ride the reject out instead of tearing down. Classifying a shutdown reject as Failed
         // makes it read as terminal, which is the CI 30003419841 wedge: erroring the sync stream on
         // this NACK killed the resubscribe latch and wedged every read of a mid-recycle NodeType.
-        var errorType = isShuttingDown ? ErrorType.ShuttingDown : ErrorType.NotFound;
+        ErrorType errorType;
+        if (isShuttingDown)
+        {
+            errorMessage = $"Mesh is shutting down, cannot route to {address}";
+            errorType = ErrorType.ShuttingDown;
+        }
+        else if (node is null)
+        {
+            errorMessage = $"No node found for address {address}";
+            errorType = ErrorType.NotFound;
+        }
+        else
+        {
+            // 🚨 THE NODE EXISTS — its HUB could not be built, which is not the same fact and must
+            // not be reported as one. An unregistered/uncompilable NodeType never reaches here (see
+            // CreateHub: it substitutes a NACK-fallback hub, which answers NotFound itself), so the
+            // only way to arrive with a non-null node and a null hub is that hub CONSTRUCTION
+            // failed — the configuration lambda threw and HostedHubsCollection.CreateHub logged the
+            // real exception and returned null — or creation is frozen by an ancestor's disposal.
+            // Both are availability facts about the target and both are retryable: the next access
+            // re-runs resolution and construction from scratch. Reported as NotFound they told the
+            // caller the node does not exist, which is the confident-wrong-answer the Orleans twin
+            // produced as a bare NullReferenceException (issue #1693).
+            errorMessage =
+                $"Hub construction returned no hub for node '{node.Path}' (NodeType: {node.NodeType ?? "null"}). "
+                + "The hub configuration threw — see the 'Failed to create hosted hub' entry logged "
+                + "immediately before this one, which carries the real exception — or hosted-hub creation "
+                + "is frozen because this host (or an ancestor) is disposing.";
+            errorType = ErrorType.Unavailable;
+        }
+
+        logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
+            delivery.Message.GetType().Name, address, node?.Path, node?.NodeType, delivery.Sender, isShuttingDown);
+
         // The answer-once contract — see AnswerPolicy. 🚨 Read the ENVELOPE: this delivery came
         // through MeshBuilder's delivery.Package(...), so its payload is RawJson and the CLR-type
         // test this replaces could never match (#1485). It was also missing the [CanBeIgnored]

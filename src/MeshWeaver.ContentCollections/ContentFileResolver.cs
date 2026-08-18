@@ -164,7 +164,23 @@ public static class ContentFileResolver
             // hub unchanged, so in-mesh callers (the deck export's SlideAssetInliner, a portal hub,
             // a test client) keep their identity byte-for-byte. GetMeshNode/GetMeshNodeOutcome and
             // every node-CRUD path already went this way (2c796d297); this read was the straggler.
-            return hub.NodeOperationIssuingHub().Observe(
+            // 🚨 …and BOUND IT. Without a budget of its own this read's only terminal is the hub's
+            // 60 s RequestTimeout, which is the framework's last-resort ceiling — the number that
+            // has to cover a cold NodeType compile — not a budget an HTTP request ever chose. When
+            // the owning hub is unreachable, still starting, or its reply is dropped in transit
+            // (MeshWeaver#1742), the caller therefore waited a full minute and answered 500 with the
+            // hub's own impatience ("No response received in hub … the target hub was not found"),
+            // which names neither the file nor what to do about it. Issues #1563 and #1693.
+            //
+            // ReadBudget.Default (10 s) is the SAME budget GetMeshNode has always defaulted to, and
+            // it errors with a typed HubUnreachableException — a TimeoutException subclass, so every
+            // transient-failure classifier keeps recognising it — which BlazorHostingExtensions
+            // .ContentFailure maps to a retryable 503 instead of a fail:-level 500. This is a READ:
+            // it is idempotent, it cancels nothing, and abandoning it costs only the answer (which
+            // is why the "never put a client-side ceiling on a mesh operation" rule in
+            // MeshService's remarks — about WRITES that keep running — does not apply here).
+            var issuingHub = hub.NodeOperationIssuingHub();
+            return issuingHub.Observe(
                     new GetDataRequest(new ContentCollectionReference(candidates)),
                     o =>
                     {
@@ -172,6 +188,8 @@ public static class ContentFileResolver
                         return caller is null ? o : o.WithAccessContext(caller);
                     })
                 .Take(1)
+                .FailIfNoFirstEmission(
+                    issuingHub, targetAddress.ToString() ?? string.Empty, "content collection config")
                 .Select(delivery =>
                 {
                     var configs = ReadCollectionConfigs(delivery);
