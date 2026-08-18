@@ -46,6 +46,19 @@ an `Ingress` in its own namespace. So suspending re-points a host with a single 
 - **reversible** — the previous backend is stashed as an annotation, and the redirect is a **302**,
   never a 301. A permanent redirect would be cached by browsers and outlive the reactivation.
 
+### The paywall target must be anonymously readable
+
+`PAYWALL_URL` points at the `Suspended` area on the instance's Deployment node — and the fleet
+space holding those records is admin-only. A suspended customer is **anonymous by construction**
+(they typed their own URL), so without a grant the redirect lands them on a sign-in prompt instead
+of the page explaining what happened. Grant `Anonymous` + `Public` Viewer on that node, or point
+`PAYWALL_URL` at a public page of your own.
+
+Nothing enforces this, and the symptom looks like an auth problem rather than a misconfiguration.
+The page itself is already written for that audience: it renders the instance's name and its
+retention window and nothing operational — no database, no namespace, no vault, no suspension
+reason — which is asserted in the plugin's tests.
+
 ## Deploy it
 
 ```bash
