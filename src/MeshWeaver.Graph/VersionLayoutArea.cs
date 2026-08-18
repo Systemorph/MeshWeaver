@@ -82,14 +82,10 @@ public static class VersionLayoutArea
                 "style=\"color: var(--neutral-foreground-hint); font-size: .8rem;\">Use the built-in version list</a></p>"));
 
     /// <summary>One bounded existence probe over the query index (no per-node hub activation —
-    /// probing a MISSING node's hub would cost the full activation timeout).</summary>
+    /// probing a MISSING node's hub would cost the full activation timeout). Shared with the
+    /// markdown overview's approvals section: ONE implementation of "is that package here?".</summary>
     private static IObservable<bool> HasCollaborationWorkspace(IMeshService mesh) =>
-        mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{CollaborationWorkspacePath}"))
-            .Scan(false, (found, change) =>
-                found || change.Items.Any(n => n.Path == CollaborationWorkspacePath))
-            .StartWith(false)
-            .Throttle(TimeSpan.FromMilliseconds(800))
-            .Take(1);
+        PluginSurfaceProbe.Exists(mesh, CollaborationWorkspacePath);
 
     /// <summary>Data-stream id holding the chosen FROM version for this node's compare picker.</summary>
     internal static string FromStreamId(string hubPath) => $"compareFrom_{hubPath.Replace("/", "_")}";
