@@ -673,13 +673,11 @@ jobs:
           #
           # What actually settles it is the holder FINISHING. Bounded, like everything here: it
           # can wait, it cannot hang.
-          waited=0
-          while [ "$waited" -lt "$APT_LOCK_WAIT" ]; do
-            pgrep -x apt-get >/dev/null 2>&1 || pgrep -f unattended-upgr >/dev/null 2>&1 || break
-            sleep 3
-            waited=$((waited + 3))
-          done
-          [ "$waited" -gt 0 ] && echo "waited ${waited}s for a competing apt to finish" >&2
+          # ONE implementation, called from here and from clients.yml — the two copies of this
+          # wait are what let #1858 fix this file while the identical `flock` no-op stayed in
+          # clients.yml. $GITHUB_WORKSPACE, not a relative path: the clients job runs with a
+          # working-directory where `.github/…` does not exist.
+          "$GITHUB_WORKSPACE/.github/scripts/wait-for-apt.sh" "$APT_LOCK_WAIT"
           rc=0
           timeout --signal=TERM --kill-after=30 "$BROWSER_INSTALL_TIMEOUT" \
             npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium || rc=$?
