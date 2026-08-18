@@ -129,7 +129,7 @@ public static class SeoResolver
         ExtractImage(node) ?? $"/api/og/{node.Path}";
 
     /// <summary>The one media type that tells every consumer "this icon scales losslessly".</summary>
-    private const string SvgMediaType = "image/svg+xml";
+    private const string SvgMediaType = MeshNodeImageHelper.SvgMediaType;
 
     /// <summary>
     /// 🚨 THE PAGE'S OWN ICON — the node's icon, so a node page identifies itself rather than the
@@ -186,8 +186,9 @@ public static class SeoResolver
             ? SvgMediaType
             : null;
 
-    private static string SvgDataUri(string svg) =>
-        "data:" + SvgMediaType + "," + Uri.EscapeDataString(svg);
+    // One encoding rule for the whole product: the head, the tab and the app all carry an inline
+    // <svg> icon the same way (MeshNodeImageHelper.SvgDataUri).
+    private static string SvgDataUri(string svg) => MeshNodeImageHelper.SvgDataUri(svg);
 
     /// <summary>
     /// A string member of the node's content, by camelCase JSON name. Content arrives here in two
