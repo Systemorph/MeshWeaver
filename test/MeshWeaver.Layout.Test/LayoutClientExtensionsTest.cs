@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.Globalization;
 using System.Text.Json;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
@@ -541,5 +542,211 @@ public class LayoutClientExtensionsTest(ITestOutputHelper output) : HubTestBase(
         var result = hub.ConvertSingle<Icon>(icon, null);
 
         result.Should().BeSameAs(icon);
+    }
+
+    // ---- Issues #1657 / #1658: a raw STRING binding value must be read the way the layout layer -----
+    // (and its own documentation) actually writes one. Both defects lived in ConvertString<T>, reached
+    // from ConvertSingle's `string s =>` arm, which BlazorView.DataBind calls with no conversion:
+    //   #1658  Enum.Parse(targetType, s) is case-SENSITIVE → ArgumentException on "center", while
+    //          Stack.md's configuration table documents `"start"` / `"center"` / `"end"` for
+    //          WithHorizontalAlignment. Observed in prod on Area Play/5.
+    //   #1657  int.Parse(s) → FormatException on "8px", while Stack.md documents `"8px"` / `"1rem"` /
+    //          `"16px"` for WithVerticalGap / WithHorizontalGap — which LayoutStackView binds into
+    //          `int?`. Observed in prod on Area Play/4 (10 occurrences in 12 s).
+    // Both threw out to DataBind, which logged `fail` and applied the default, so the documented value
+    // was DROPPED on every render. The conversion must now read them, and stay TOTAL: an unreadable
+    // string degrades to the default rather than faulting the DataBind observable.
+
+    [Fact]
+    public void ConvertSingle_LowerCaseEnumString_ResolvesCaseInsensitively()
+    {
+        var hub = GetHost();
+
+        var result = hub.ConvertSingle<HorizontalAlignment>("center", null);
+
+        result.Should().Be(HorizontalAlignment.Center,
+            "the docs teach the lowercase form; a case-sensitive Enum.Parse rejected it (#1658)");
+    }
+
+    [Fact]
+    public void ConvertSingle_MixedCaseEnumString_ResolvesCaseInsensitively()
+    {
+        var hub = GetHost();
+
+        hub.ConvertSingle<HorizontalAlignment>("sTaRt", null).Should().Be(HorizontalAlignment.Start);
+        hub.ConvertSingle<Orientation>("horizontal", null).Should().Be(Orientation.Horizontal);
+    }
+
+    [Fact]
+    public void ConvertSingle_ExactCaseEnumString_StillResolves()
+    {
+        var hub = GetHost();
+
+        hub.ConvertSingle<HorizontalAlignment>("End", null).Should().Be(HorizontalAlignment.End);
+    }
+
+    [Fact]
+    public void ConvertSingle_LowerCaseEnumString_ToNullableEnum_Resolves()
+    {
+        // The skin properties are object? and the views bind them into nullable enums.
+        var hub = GetHost();
+
+        hub.ConvertSingle<HorizontalAlignment?>("center", null).Should().Be(HorizontalAlignment.Center);
+    }
+
+    [Fact]
+    public void ConvertSingle_UnknownEnumString_ReturnsDefaultInsteadOfThrowing()
+    {
+        var hub = GetHost();
+
+        var result = hub.ConvertSingle("not-an-alignment", null, HorizontalAlignment.Right);
+
+        result.Should().Be(HorizontalAlignment.Right,
+            "a genuinely unknown literal degrades to the default — a throw would fault the DataBind stream");
+    }
+
+    [Fact]
+    public void ConvertSingle_PxString_ToInt_StripsTheUnit()
+    {
+        var hub = GetHost();
+
+        var result = hub.ConvertSingle<int>("8px", null);
+
+        result.Should().Be(8, "\"8px\" is the documented WithHorizontalGap value and threw FormatException (#1657)");
+    }
+
+    [Fact]
+    public void ConvertSingle_PxString_ToNullableInt_StripsTheUnit()
+    {
+        // LayoutStackView's VerticalGap/HorizontalGap are int? — the exact prod binding.
+        var hub = GetHost();
+
+        hub.ConvertSingle<int?>("16px", null).Should().Be(16);
+    }
+
+    [Fact]
+    public void ConvertSingle_NegativePxString_ToInt_KeepsTheSign()
+    {
+        var hub = GetHost();
+
+        hub.ConvertSingle<int>("-4px", null).Should().Be(-4);
+    }
+
+    [Fact]
+    public void ConvertSingle_PercentString_ToInt_StripsTheUnit()
+    {
+        var hub = GetHost();
+
+        hub.ConvertSingle<int>("50%", null).Should().Be(50);
+    }
+
+    [Fact]
+    public void ConvertSingle_RemString_ToDouble_KeepsTheMagnitude()
+    {
+        var hub = GetHost();
+
+        hub.ConvertSingle<double>("1.5rem", null).Should().Be(1.5,
+            "the magnitude is read as authored — no root font size exists on this path, so no unit conversion is invented");
+    }
+
+    [Fact]
+    public void ConvertSingle_FractionalCssLength_ToInt_Truncates()
+    {
+        // Same rule ConvertDoubleToInteger already applies to a bound double: 1.5 in an int slot is 1.
+        var hub = GetHost();
+
+        hub.ConvertSingle<int>("1.5rem", null).Should().Be(1);
+    }
+
+    [Fact]
+    public void ConvertSingle_UpperCaseCssUnit_StripsTheUnit()
+    {
+        // CSS units are case-insensitive.
+        var hub = GetHost();
+
+        hub.ConvertSingle<int>("12PX", null).Should().Be(12);
+    }
+
+    [Fact]
+    public void ConvertSingle_PlainNumberString_ToInt_StillWorks()
+    {
+        // Regression: the unit-stripping must not disturb a plain number.
+        var hub = GetHost();
+
+        hub.ConvertSingle<int>("42", null).Should().Be(42);
+    }
+
+    [Fact]
+    public void ConvertSingle_DecimalString_ParsesInvariant_OnACommaDecimalThread()
+    {
+        // These strings arrive off the wire as JSON or CSS, where "1.5" is always one-and-a-half.
+        // double.Parse(CurrentCulture) on a comma-decimal thread reads it as 15.
+        var hub = GetHost();
+        var previous = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+
+            hub.ConvertSingle<double>("1.5", null).Should().Be(1.5);
+            hub.ConvertSingle<double>("1.5rem", null).Should().Be(1.5);
+            hub.ConvertSingle<int>("8px", null).Should().Be(8);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
+    }
+
+    [Fact]
+    public void ConvertSingle_UnitOnlyKeyword_ReturnsDefaultInsteadOfThrowing()
+    {
+        // "auto"/"none" are legal CSS for a string slot but meaningless in a numeric one.
+        var hub = GetHost();
+
+        hub.ConvertSingle("auto", null, 7).Should().Be(7);
+        hub.ConvertSingle("none", null, 7).Should().Be(7);
+    }
+
+    [Fact]
+    public void ConvertSingle_UnrecognisedSuffix_ReturnsDefault_SoTheToleranceStaysNarrow()
+    {
+        // Only a RECOGNISED CSS unit is stripped: "8 apples" must not quietly become 8.
+        var hub = GetHost();
+
+        hub.ConvertSingle("8 apples", null, 7).Should().Be(7);
+        hub.ConvertSingle("8apples", null, 7).Should().Be(7);
+    }
+
+    [Fact]
+    public void ConvertSingle_UnreadableNumericString_ReturnsDefaultInsteadOfThrowing()
+    {
+        var hub = GetHost();
+
+        hub.ConvertSingle("not-a-number", null, 99).Should().Be(99);
+    }
+
+    [Fact]
+    public void ConvertSingle_UnsupportedTargetType_ReturnsDefaultInsteadOfThrowing()
+    {
+        // Previously an InvalidOperationException ("Cannot convert ... to ...") thrown from inside
+        // DataBind's Select, which faults the observable and kills the binding for the view's lifetime.
+        var hub = GetHost();
+        var fallback = Guid.NewGuid();
+
+        hub.ConvertSingle("whatever", null, fallback).Should().Be(fallback);
+    }
+
+    [Fact]
+    public void ConvertSingle_BooleanAndDateTimeStrings_StillParse()
+    {
+        // Regression: the non-numeric branches keep working, and stop throwing on a bad value.
+        var hub = GetHost();
+
+        hub.ConvertSingle<bool>("true", null).Should().BeTrue();
+        hub.ConvertSingle<bool>("TRUE", null).Should().BeTrue();
+        hub.ConvertSingle("not-a-bool", null, true).Should().BeTrue("an unreadable bool degrades to the default");
+        hub.ConvertSingle<DateTime>("2026-08-16T08:32:47Z", null).ToUniversalTime()
+            .Should().Be(new DateTime(2026, 8, 16, 8, 32, 47, DateTimeKind.Utc));
+        hub.ConvertSingle<char>("x", null).Should().Be('x');
     }
 }
