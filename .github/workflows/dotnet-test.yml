@@ -1075,7 +1075,14 @@ jobs:
           fi
           cp -R "$GITHUB_WORKSPACE/plugins-repo/$m" "$STAGE/"
         done
-        cp "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" "$STAGE/" 2>/dev/null || true
+        # The ratchet is REQUIRED, and its absence is reported here rather than left to the tester
+        # (#1741): `--allow` at a path that does not exist is a configuration error, and a `|| true`
+        # that swallowed the failed copy only moved the report one process further away.
+        if [ ! -f "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" ]; then
+          echo "::error::plugins-repo/plugin-gate.allow is missing — the known-debt ratchet this gate is configured with cannot be read, and a gate that cannot read its input must not look like one that passed. Commit the file (EMPTY = no known debt)."
+          exit 1
+        fi
+        cp "$GITHUB_WORKSPACE/plugins-repo/plugin-gate.allow" "$STAGE/"
         echo "gating: $VITAL_MODULES"
         # plugin-gate.allow is the plugins repo's known-debt ratchet: listed failures are
         # tolerated, NEW failures fail this PR. Same one-way contract the plugins CI uses, so the
