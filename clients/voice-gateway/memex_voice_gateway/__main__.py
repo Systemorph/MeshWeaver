@@ -33,16 +33,27 @@ def make_router(cfg: Config) -> BrainRouter:
     from .config import phrases_for
     from .ollama import SYSTEM_PROMPT
     phrases = phrases_for(cfg.stt_language)
-    system_prompt = SYSTEM_PROMPT + (DIALECT_SUFFIX if cfg.speak_dialect else "")
+    base_prompt = SYSTEM_PROMPT
+    if cfg.system_prompt_file:
+        try:
+            with open(cfg.system_prompt_file) as f:
+                base_prompt = f.read().strip() or SYSTEM_PROMPT
+        except OSError:
+            logging.getLogger(__name__).warning(
+                "SYSTEM_PROMPT_FILE %s not readable — using the built-in prompt",
+                cfg.system_prompt_file)
+    system_prompt = base_prompt + (DIALECT_SUFFIX if cfg.speak_dialect else "")
 
     def ollama(entry: dict) -> OllamaBrain:
         return OllamaBrain(entry.get("url", cfg.ollama_url), entry.get("model", cfg.ollama_model),
-                           idle_minutes=cfg.thread_idle_minutes, system_prompt=system_prompt)
+                           idle_minutes=cfg.thread_idle_minutes, system_prompt=system_prompt,
+                           location=cfg.location)
 
     def memex(entry: dict) -> MemexThreads:
         return MemexThreads(entry["url"].rstrip("/"), entry["token"], entry["namespace"],
                             agent=entry.get("agent", cfg.agent),
-                            thread_idle_minutes=cfg.thread_idle_minutes)
+                            thread_idle_minutes=cfg.thread_idle_minutes,
+                            verify_tls=not entry.get("insecure", False))
 
     if cfg.portals:
         brains = {e["name"]: (ollama(e) if e.get("kind") == "ollama" else memex(e))

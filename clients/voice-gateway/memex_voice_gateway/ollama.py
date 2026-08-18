@@ -60,6 +60,7 @@ class OllamaBrain:
     idle_minutes: float = 5.0
     num_predict: int = 200
     system_prompt: str = SYSTEM_PROMPT
+    location: str | None = None    # anchors 'here'/weather questions to a real place
 
     _history: list[dict] = field(default_factory=list, init=False)
     _last_used: float = field(default=0.0, init=False)
@@ -129,8 +130,9 @@ class OllamaBrain:
         self._last_used = time.monotonic()
         import datetime
         stamped = f"[{datetime.datetime.now().astimezone():%H:%M}] {text}"
+        anchor = now_line() + (f" Location: {self.location}." if self.location else "")
         messages = build_messages(self._history, stamped, system_prompt=self.system_prompt,
-                                  now=now_line())
+                                  now=anchor)
         self._history.append({"role": "user", "content": stamped})
 
         handle = f"ollama-{next(self._ids)}"

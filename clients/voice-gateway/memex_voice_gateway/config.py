@@ -85,6 +85,8 @@ class Config:
     wake_word: str = "hey_jarvis"           # micro-wake-word model id on the device
     continue_conversation: bool = True      # after a reply, listen again without a wake word
     speak_dialect: bool = False             # experiment: model writes Swiss German for the TTS
+    location: str | None = None             # where the speaker is (weather/'here' questions)
+    system_prompt_file: str | None = None   # override the built-in voice prompt with a file
 
     # --- endpointing (energy VAD) ---
     silence_ms: int = 800
@@ -134,6 +136,8 @@ class Config:
             wake_word=_env("WAKE_WORD", "hey_jarvis") or "hey_jarvis",
             continue_conversation=(_env("CONTINUE_CONVERSATION", "true") or "true").lower() != "false",
             speak_dialect=(_env("SPEAK_DIALECT", "false") or "false").lower() == "true",
+            location=_env("LOCATION"),
+            system_prompt_file=_env("SYSTEM_PROMPT_FILE"),
             silence_ms=int(_env("SILENCE_MS", "800")),
             tts_engine=(_env("TTS_ENGINE", "piper") or "piper").lower(),
             piper_bin=_env("PIPER_BIN", "piper") or "piper",
