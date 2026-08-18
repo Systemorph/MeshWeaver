@@ -449,4 +449,99 @@ public class AttachmentContextTest : MonolithMeshTestBase
         assembledPrompt.Should().NotContain("You are **Assistant**",
             "Assistant's instructions should NOT be present when Researcher was selected via @reference");
     }
+
+    // ── #1651: every round must carry the current date/time ─────────────────────────────
+
+    /// <summary>The block's "Today" line as the formatter renders it — line-ending agnostic.</summary>
+    private static string TodayLine(DateTimeOffset instant, string? zoneId) =>
+        CurrentTimeContext.Describe(instant, zoneId)
+            .Replace("\r\n", "\n")
+            .Split('\n')
+            .First(l => l.StartsWith("- **Today", StringComparison.Ordinal));
+
+    /// <summary>
+    /// #1651 — the agent must be TOLD what day it is. Nothing in the round pipeline injected the
+    /// current date, so every model answered "what day is today" — and every relative expression a
+    /// scheduling agent computes off it ("tomorrow", "clear my Friday") — from its training priors:
+    /// on Friday 2026-08-14 the Executive Assistant confidently answered "Mittwoch, der 6. August".
+    ///
+    /// <para>This pins the block onto the PER-ROUND context, beside the application context and
+    /// attachments, and NOT into the agent's cached instructions — those are built once while a
+    /// thread lives for days, so an instruction-time date goes stale and is then wrong in exactly
+    /// the way this fixes. It also pins the ZONE: the rendered date is the VIEWER's, resolved
+    /// through the display seam from their named IANA zone, never <c>.ToLocalTime()</c> (a no-op in
+    /// the UTC deployment container). Asia/Tokyo is UTC+9 with no DST, so a silent UTC fallback
+    /// cannot pass this by accident on a UTC host.</para>
+    /// </summary>
+    [Fact]
+    public async Task PromptAssembly_ShipsTheCurrentDate_InTheViewersZone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (agentChat, factory) = await SetupAgentChatAsync(ct);
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var previousContext = access.CircuitContext;
+        access.SetHostIdentity((previousContext ?? TestUsers.Admin) with { TimeZoneId = "Asia/Tokyo" });
+
+        string? assembledPrompt;
+        var before = DateTimeOffset.UtcNow;
+        DateTimeOffset after;
+        try
+        {
+            await foreach (var _ in agentChat.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, "What day is today?")], ct)) { }
+            after = DateTimeOffset.UtcNow;
+            assembledPrompt = GetLastUserMessageText(factory.AllCapturedMessages);
+        }
+        finally
+        {
+            access.SetHostIdentity(previousContext);
+        }
+
+        assembledPrompt.Should().NotBeNullOrEmpty();
+        assembledPrompt.Should().Contain(CurrentTimeContext.Heading,
+            "every round must carry the current date/time — without it the model answers from priors (#1651)");
+        assembledPrompt.Should().Contain("Asia/Tokyo",
+            "the block names the zone it converted into, so a silent UTC fallback is visible");
+
+        // Compare against the formatter's OWN output rather than re-deriving a date here, so the
+        // prompt and CurrentTimeContextTest cannot drift. Both ends of the round's wall-clock
+        // window are accepted, so a run that straddles midnight in Tokyo still matches one of them.
+        var expected = new[] { TodayLine(before, "Asia/Tokyo"), TodayLine(after, "Asia/Tokyo") };
+        expected.Any(e => assembledPrompt!.Contains(e, StringComparison.Ordinal)).Should().BeTrue(
+            "the date must be the VIEWER's local date (Asia/Tokyo), not UTC's and not the server's — "
+            + $"expected one of [{string.Join(" | ", expected)}]");
+    }
+
+    /// <summary>
+    /// The STREAMING path ships the same block — it folds the round context into its SYSTEM message
+    /// rather than into the user turn, so a regression there would be invisible to the non-streaming
+    /// assertion above (#1651). Asserted on the machine-facing UTC instant, which is zone-independent
+    /// and therefore says nothing about whatever identity a shared-mesh sibling test left behind.
+    /// </summary>
+    [Fact]
+    public async Task Streaming_ShipsTheCurrentDate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (agentChat, factory) = await SetupAgentChatAsync(ct);
+
+        var before = DateTimeOffset.UtcNow;
+        await foreach (var _ in agentChat.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "What day is today?")], ct)) { }
+        var after = DateTimeOffset.UtcNow;
+
+        factory.AllCapturedMessages.Should().NotBeEmpty();
+        var assembled = string.Join("\n", factory.AllCapturedMessages.Select(MessageText));
+
+        assembled.Should().Contain(CurrentTimeContext.Heading,
+            "the STREAMING prompt must carry the current date/time too");
+        // The ISO-8601 `Z` instant is what the agent may feed back into a tool — it must be NOW,
+        // in UTC, with the zone stated. A zone-less or remembered date would fail this.
+        var expected = new[] { before, after }.Select(t => "`" + CurrentTimeContext.Iso(t)[..13]).ToArray();
+        expected.Any(e => assembled.Contains(e, StringComparison.Ordinal)).Should().BeTrue(
+            "the machine-facing instant must be the CURRENT UTC hour — "
+            + $"expected one of [{string.Join(" | ", expected)}]");
+        assembled.Should().Contain("Z`",
+            "machine-facing output stays UTC and SAYS so — a zone-less string re-parses in the server's zone");
+    }
 }

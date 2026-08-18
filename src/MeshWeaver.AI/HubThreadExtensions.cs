@@ -45,7 +45,7 @@ public static class HubThreadExtensions
     /// (<c>AccessService.Context</c>) or the per-circuit fallback (<c>CircuitContext</c>). The
     /// captured <c>(ObjectId, Name)</c> is stamped onto the pending <see cref="ThreadMessage"/>
     /// (<see cref="ThreadMessage.SubmitterObjectId"/> / <see cref="ThreadMessage.SubmitterName"/> /
-    /// <see cref="ThreadMessage.SubmitterLocale"/>)
+    /// <see cref="ThreadMessage.SubmitterLocale"/> / <see cref="ThreadMessage.SubmitterTimeZoneId"/>)
     /// so the round-dispatch watcher can rebuild the identity AFTER every later async boundary
     /// (its own <c>.Subscribe</c> continuation + the AI streaming continuations) has wiped the
     /// AsyncLocal. This is "capture the identity when computing the submit patch" — the data
@@ -55,6 +55,12 @@ public static class HubThreadExtensions
     /// user-facing string a round emits is resolved off the round's context, so a rebuilt context
     /// without the language renders English for a German user (#948). The language is part of the
     /// identity, and this is the one place it is reliably live.</para>
+    ///
+    /// <para>🕰️ …and their <see cref="AccessContext.TimeZoneId"/>, for the same reason one step on:
+    /// the agent round ships the current date/time into its context so relative expressions
+    /// ("tomorrow", "clear my Friday") have an anchor, and that anchor is only the USER's day if
+    /// their zone rides along. A rebuilt context without it degrades every viewer to UTC — silently,
+    /// and wrongly by a whole day for anyone whose evening is UTC's next morning (#1651).</para>
     ///
     /// <para><b>The first REAL USER wins, not the first non-null context.</b> The request-scoped
     /// <c>Context</c> frequently holds a NON-user principal at the submit boundary — a hub-shaped
@@ -69,15 +75,15 @@ public static class HubThreadExtensions
     /// <para>Returns all-null when no real user identity is live at all — the watcher then falls
     /// back to the thread owner derived from the node, NEVER hub-self and never System.</para>
     /// </summary>
-    private static (string? ObjectId, string? Name, string? Locale) CaptureSubmitter(this IMessageHub hub)
+    private static (string? ObjectId, string? Name, string? Locale, string? TimeZoneId) CaptureSubmitter(this IMessageHub hub)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = IsRealUser(accessService?.Context) ? accessService!.Context
             : IsRealUser(accessService?.CircuitContext) ? accessService!.CircuitContext
             : null;
         if (ctx is null)
-            return (null, null, null);
-        return (ctx.ObjectId, string.IsNullOrEmpty(ctx.Name) ? ctx.ObjectId : ctx.Name, ctx.Locale);
+            return (null, null, null, null);
+        return (ctx.ObjectId, string.IsNullOrEmpty(ctx.Name) ? ctx.ObjectId : ctx.Name, ctx.Locale, ctx.TimeZoneId);
 
         // A submitter is a PERSON. Hub addresses (sync/, mesh/, node/, activity/, portal/) and the
         // well-known System identity are infrastructure credentials — never a submitter.
@@ -161,7 +167,7 @@ public static class HubThreadExtensions
         // Capture the submitter's identity NOW — synchronous, live AsyncLocal — and persist it on the
         // pending message (below) so the round-dispatch watcher can rebuild it AFTER the async boundary
         // wipes the AsyncLocal. See ThreadMessage.SubmitterObjectId / AccessContextPropagation.md.
-        var (submitterObjectId, submitterName, submitterLocale) = hub.CaptureSubmitter();
+        var (submitterObjectId, submitterName, submitterLocale, submitterTimeZoneId) = hub.CaptureSubmitter();
 
         // 🎯 The thread's COMPOSER is the single source of truth for the round's sticky
         // selection (agent / model / harness / context). Seed it from the supplied composer
@@ -204,7 +210,8 @@ public static class HubThreadExtensions
                         harness: harness,
                         submitterObjectId: submitterObjectId,
                         submitterName: submitterName,
-                        submitterLocale: submitterLocale))
+                        submitterLocale: submitterLocale,
+                        submitterTimeZoneId: submitterTimeZoneId))
             }
             : baseThread; // empty thread — no round
         threadNode = threadNode with { Content = seededThread };
@@ -335,7 +342,7 @@ public static class HubThreadExtensions
         if (string.IsNullOrWhiteSpace(userText))
             return;
 
-        var (submitterObjectId, submitterName, submitterLocale) = hub.CaptureSubmitter();
+        var (submitterObjectId, submitterName, submitterLocale, submitterTimeZoneId) = hub.CaptureSubmitter();
         var userMessage = ThreadInput.CreateUserMessage(
             userText ?? string.Empty,
             createdBy: createdBy,
@@ -347,7 +354,8 @@ public static class HubThreadExtensions
             harness: harness,
             submitterObjectId: submitterObjectId,
             submitterName: submitterName,
-            submitterLocale: submitterLocale);
+            submitterLocale: submitterLocale,
+            submitterTimeZoneId: submitterTimeZoneId);
         try
         {
             ThreadInput.AppendUserInput(hub.GetWorkspace(), threadPath, userMessage);
@@ -400,7 +408,7 @@ public static class HubThreadExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.HubThreadExtensions");
         var msgId = Guid.NewGuid().ToString("N")[..8];
-        var (submitterObjectId, submitterName, submitterLocale) = hub.CaptureSubmitter();
+        var (submitterObjectId, submitterName, submitterLocale, submitterTimeZoneId) = hub.CaptureSubmitter();
 
         hub.GetWorkspace().GetMeshNodeStream(threadPath).Update(node =>
         {
@@ -425,7 +433,8 @@ public static class HubThreadExtensions
                 harness: c.Harness,
                 submitterObjectId: submitterObjectId,
                 submitterName: submitterName,
-                submitterLocale: submitterLocale);
+                submitterLocale: submitterLocale,
+                submitterTimeZoneId: submitterTimeZoneId);
 
             return node with
             {
