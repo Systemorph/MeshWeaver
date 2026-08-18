@@ -10,7 +10,7 @@ import re
 import aiohttp
 
 from . import stt
-from .config import Config
+from .config import Config, phrases_for
 from .ollama import OllamaBrain
 from .pipeline import VoicePipeline
 from .router import BrainRouter
@@ -23,11 +23,21 @@ SENTENCE_END = re.compile(r"[.!?…][\"')\]]*\s")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
+DIALECT_SUFFIX = (
+    " Antworte auf Schweizerdeutsch (Züritüütsch), schreibe den Dialekt phonetisch aus."
+)
+
+
 def make_router(cfg: Config) -> BrainRouter:
     """One router over all configured brains — PORTALS entries, else the legacy single brain."""
+    from .config import phrases_for
+    from .ollama import SYSTEM_PROMPT
+    phrases = phrases_for(cfg.stt_language)
+    system_prompt = SYSTEM_PROMPT + (DIALECT_SUFFIX if cfg.speak_dialect else "")
+
     def ollama(entry: dict) -> OllamaBrain:
         return OllamaBrain(entry.get("url", cfg.ollama_url), entry.get("model", cfg.ollama_model),
-                           idle_minutes=cfg.thread_idle_minutes)
+                           idle_minutes=cfg.thread_idle_minutes, system_prompt=system_prompt)
 
     def memex(entry: dict) -> MemexThreads:
         return MemexThreads(entry["url"].rstrip("/"), entry["token"], entry["namespace"],
@@ -38,11 +48,11 @@ def make_router(cfg: Config) -> BrainRouter:
         brains = {e["name"]: (ollama(e) if e.get("kind") == "ollama" else memex(e))
                   for e in cfg.portals}
         active = next((e["name"] for e in cfg.portals if e.get("default")), cfg.portals[0]["name"])
-        return BrainRouter(brains, active)
+        return BrainRouter(brains, active, phrases=phrases)
     if cfg.brain == "ollama":
-        return BrainRouter({"lokal": ollama({})}, "lokal")
+        return BrainRouter({"lokal": ollama({})}, "lokal", phrases=phrases)
     return BrainRouter({"memex": memex({"url": cfg.memex_url, "token": cfg.memex_token,
-                                        "namespace": cfg.namespace})}, "memex")
+                                        "namespace": cfg.namespace})}, "memex", phrases=phrases)
 
 
 def make_tts(cfg: Config):
@@ -112,6 +122,8 @@ async def run() -> None:
         command_handler=router.handle_command,
         stream_text=router.stream_text,
         stream_speak=stream_speak,
+        hold_phrase_for=router.describe_hold,
+        answer_to_template=phrases_for(cfg.stt_language)["answer_to"],
     )
     link = SatelliteLink(cfg, pipeline)
 

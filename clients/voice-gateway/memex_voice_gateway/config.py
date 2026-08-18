@@ -24,6 +24,30 @@ def _env(name: str, default: str | None = None) -> str | None:
     return value if value not in ("", None) else default
 
 
+# What the SPEAKER says in its own voice (holding, errors, switch confirmations) — chosen by
+# the configured language; every instruction and prompt in this repo stays English.
+PHRASES: dict[str, dict[str, str]] = {
+    "en": {"hold": "Let me check. One moment please.",
+           "error": "Sorry, that did not work.",
+           "connected": "Connected to {name}.",
+           "unknown": "I don't know {target}. Available: {names}.",
+           "delegated": "Started a {agent} thread on {portal}. You can review it there.",
+           "no_mesh": "No mesh portal is configured for threads."},
+    "de": {"hold": "Ich schaue nach. Einen Moment bitte.",
+           "error": "Entschuldigung, das hat gerade nicht geklappt.",
+           "connected": "Verbunden mit {name}.",
+           "unknown": "Ich kenne {target} nicht. Verfügbar: {names}.",
+           "delegated": "Thread mit {agent} auf {portal} gestartet. Du kannst ihn dort anschauen.",
+           "no_mesh": "Es ist kein Portal für Threads konfiguriert."},
+}
+PHRASES["en"]["answer_to"] = "Answering your question: {question} —"
+PHRASES["de"]["answer_to"] = "Antwort auf deine Frage: {question} —"
+
+
+def phrases_for(language: str) -> dict[str, str]:
+    return PHRASES.get((language or "en").split("-")[0].lower(), PHRASES["en"])
+
+
 @dataclass
 class Config:
     # --- the satellite (ESPHome native API, LAN) ---
@@ -51,8 +75,8 @@ class Config:
     reply_budget_s: float = 10.0            # wait this long for the answer before acking
     announce_budget_s: float = 240.0        # keep polling this long, then announce the answer
     thread_idle_minutes: float = 5.0        # reuse the conversation within this window
-    hold_phrase: str = "Ich schaue nach. Einen Moment bitte."
-    error_phrase: str = "Entschuldigung, das hat gerade nicht geklappt."
+    hold_phrase: str = ""                   # default: PHRASES[stt_language]["hold"]
+    error_phrase: str = ""                  # default: PHRASES[stt_language]["error"]
 
     # --- multiple brains (optional) — see router.py; overrides the single-brain fields ---
     portals: list = field(default_factory=list)   # PORTALS: JSON list of named targets
@@ -60,6 +84,7 @@ class Config:
     # --- wake word (activated on the device if none is) ---
     wake_word: str = "hey_jarvis"           # micro-wake-word model id on the device
     continue_conversation: bool = True      # after a reply, listen again without a wake word
+    speak_dialect: bool = False             # experiment: model writes Swiss German for the TTS
 
     # --- endpointing (energy VAD) ---
     silence_ms: int = 800
@@ -104,10 +129,11 @@ class Config:
             reply_budget_s=float(_env("REPLY_BUDGET_S", "10")),
             announce_budget_s=float(_env("ANNOUNCE_BUDGET_S", "240")),
             thread_idle_minutes=float(_env("THREAD_IDLE_MINUTES", "5")),
-            hold_phrase=_env("HOLD_PHRASE", Config.hold_phrase) or Config.hold_phrase,
-            error_phrase=_env("ERROR_PHRASE", Config.error_phrase) or Config.error_phrase,
+            hold_phrase=_env("HOLD_PHRASE") or phrases_for(_env("STT_LANGUAGE", "de") or "de")["hold"],
+            error_phrase=_env("ERROR_PHRASE") or phrases_for(_env("STT_LANGUAGE", "de") or "de")["error"],
             wake_word=_env("WAKE_WORD", "hey_jarvis") or "hey_jarvis",
             continue_conversation=(_env("CONTINUE_CONVERSATION", "true") or "true").lower() != "false",
+            speak_dialect=(_env("SPEAK_DIALECT", "false") or "false").lower() == "true",
             silence_ms=int(_env("SILENCE_MS", "800")),
             tts_engine=(_env("TTS_ENGINE", "piper") or "piper").lower(),
             piper_bin=_env("PIPER_BIN", "piper") or "piper",

@@ -19,26 +19,28 @@ from dataclasses import dataclass, field
 import aiohttp
 
 SYSTEM_PROMPT = (
-    "Du bist ein Sprachassistent auf einem Lautsprecher. Deine Antworten werden vorgelesen: "
-    "Antworte in höchstens zwei kurzen Sätzen, ohne Markdown, Listen, Code oder Links. "
-    "Antworte in der Sprache der Frage; Schweizerdeutsch kommt als Standarddeutsch an — "
-    "antworte auf Standarddeutsch. Gib direkt die Antwort, keine Erklärung des Vorgehens. "
-    "Jede Nutzernachricht beginnt mit ihrer Uhrzeit in eckigen Klammern — nutze sie, um "
-    "zeitliche Abstände im Gespräch richtig einzuordnen."
+    "You are a voice assistant on a smart speaker. Everything you write is read aloud by "
+    "text-to-speech: answer in at most two short sentences — no markdown, lists, code, or "
+    "links. Reply in the language you were addressed in; Swiss German arrives transcribed "
+    "as Standard German — reply in Standard German. Give the answer directly, not the "
+    "process; ask a follow-up question only when the request is genuinely ambiguous. Each "
+    "user message starts with its wall-clock time in brackets — use it to judge the time "
+    "gaps in the conversation."
 )
 
-_WEEKDAYS = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
-_MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli",
-           "August", "September", "Oktober", "November", "Dezember"]
+_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+           "August", "September", "October", "November", "December"]
 
 
 def now_line(now=None) -> str:
-    """The current wall-clock, spoken-German style — a local model has NO clock of its own,
-    and a voice assistant unmoored from real time answers 'heute' questions wrongly."""
+    """The current wall-clock — a local model has NO clock of its own, and a voice
+    assistant unmoored from real time answers 'today' questions wrongly. Model-facing, so
+    English regardless of the spoken language."""
     import datetime
     now = now or datetime.datetime.now().astimezone()
-    return (f"Aktuelle Zeit: {_WEEKDAYS[now.weekday()]}, {now.day}. "
-            f"{_MONTHS[now.month - 1]} {now.year}, {now:%H:%M} Uhr.")
+    return (f"Current time: {_WEEKDAYS[now.weekday()]}, {now.day} "
+            f"{_MONTHS[now.month - 1]} {now.year}, {now:%H:%M}.")
 
 
 def build_messages(history: list[dict], text: str, system_prompt: str = SYSTEM_PROMPT,
@@ -57,6 +59,7 @@ class OllamaBrain:
     model: str
     idle_minutes: float = 5.0
     num_predict: int = 200
+    system_prompt: str = SYSTEM_PROMPT
 
     _history: list[dict] = field(default_factory=list, init=False)
     _last_used: float = field(default=0.0, init=False)
@@ -126,7 +129,8 @@ class OllamaBrain:
         self._last_used = time.monotonic()
         import datetime
         stamped = f"[{datetime.datetime.now().astimezone():%H:%M}] {text}"
-        messages = build_messages(self._history, stamped, now=now_line())
+        messages = build_messages(self._history, stamped, system_prompt=self.system_prompt,
+                                  now=now_line())
         self._history.append({"role": "user", "content": stamped})
 
         handle = f"ollama-{next(self._ids)}"

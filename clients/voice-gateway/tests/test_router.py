@@ -38,7 +38,7 @@ def test_switch_and_routing_with_stamped_handles():
         handle = await router.ask("frage eins")
         assert handle == "memex::h-memex"
 
-        assert await router.handle_command("wechsle zu lokal") == "Verbunden mit lokal."
+        assert await router.handle_command("wechsle zu lokal") == "Connected to lokal."
         assert router.active == "lokal"
         await router.ask("frage zwei")
         assert local.asked == ["frage zwei"]
@@ -57,3 +57,26 @@ def test_resolve_is_forgiving():
     assert router.resolve("Systemorph") == "systemorph"
     assert router.resolve("system") == "systemorph"
     assert router.resolve("nothing") is None
+
+
+def test_delegation_to_a_standard_agent():
+    async def scenario():
+        class MeshBrain(FakeBrain):
+            def __init__(self):
+                super().__init__("memex")
+                self.delegated = []
+
+            async def delegate(self, text, agent=None):
+                self.delegated.append((agent, text))
+                return "u/_Thread/task-1"
+
+        mesh, local = MeshBrain(), FakeBrain("lokal")
+        router = BrainRouter({"lokal": local, "memex": mesh}, "lokal")
+        reply = await router.handle_command("Frag den Researcher nach dem Wetter von morgen")
+        assert "Researcher" in reply and "memex" in reply
+        assert mesh.delegated == [("Researcher", "dem Wetter von morgen")]
+        assert await router.handle_command("Fragen kostet nichts") is None  # not a delegation
+        assert router.describe_hold("memex::x").startswith("Submitted to memex")
+        assert router.describe_hold("lokal::x") == "Let me check. One moment please."
+
+    asyncio.run(scenario())
