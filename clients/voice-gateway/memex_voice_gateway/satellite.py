@@ -41,6 +41,8 @@ class SatelliteLink:
         self._round_task: asyncio.Task | None = None
         self._follow_up = False
         self._round_serial = 0
+        self._noise_strikes: list[float] = []
+        self._suppress_until = 0.0
         self.on_wake: Callable[[], Awaitable[None]] | None = None  # barge-in hook
 
     async def stop_playback(self) -> None:
@@ -120,13 +122,16 @@ class SatelliteLink:
         self, conversation_id: str, flags: int,
         audio_settings: VoiceAssistantAudioSettings, wake_word_phrase: str | None,
     ) -> int:
-        # A wake while we're speaking is a BARGE-IN: kill the live TTS stream so playback
-        # drains out, and let the new round take over ("Hey Jarvis — stop." or a new question).
-        if self.on_wake is not None:
-            try:
-                await self.on_wake()
-            except Exception:
-                logger.debug("on_wake interrupt failed", exc_info=True)
+        # WAKE-STORM SUPPRESSION: repeated junk rounds mean the wake word is being triggered
+        # by ambient audio (a TV) or our own playback — go deaf for a cooldown instead of
+        # answering the room. Silence from the user must mean silence from the device.
+        import time as _time
+        if _time.monotonic() < self._suppress_until:
+            logger.info("wake ignored (suppressed for %.0fs after a wake storm)",
+                        self._suppress_until - _time.monotonic())
+            return 0
+        # NOTE: playback is deliberately NOT interrupted here — a false wake must not kill a
+        # real answer. The interrupt happens once the round yields actual speech (or "stop").
         # No wake-word phrase = a CONTINUED conversation (start_conversation re-opened the
         # mic). Those rounds calibrate against ambient audio (a TV must not become the
         # conversation partner) and give up early when nobody starts speaking.
@@ -187,6 +192,27 @@ class SatelliteLink:
             send(Event.VOICE_ASSISTANT_ERROR, {"code": "gateway", "message": str(error)[:200]})
             send(Event.VOICE_ASSISTANT_RUN_END, {})
             return
+        # Junk-round accounting: three noise rounds inside a minute = a wake storm; go deaf
+        # for 60s rather than machine-gunning answers at a TV.
+        import time as _time
+        if result.noise:
+            now = _time.monotonic()
+            self._noise_strikes = [t for t in self._noise_strikes if now - t < 60] + [now]
+            if len(self._noise_strikes) >= 3:
+                self._suppress_until = now + 60
+                self._noise_strikes.clear()
+                logger.warning("wake storm detected — suppressing wakes for 60s")
+        elif result.transcript:
+            self._noise_strikes.clear()
+            # REAL speech arrived: NOW interrupt whatever was still playing (barge-in), and
+            # on an explicit "stop" also silence the media player.
+            if self.on_wake is not None:
+                try:
+                    await self.on_wake()
+                except Exception:
+                    logger.debug("barge-in interrupt failed", exc_info=True)
+            if result.interrupt:
+                await self.stop_playback()
         # End the run FIRST, then deliver the reply as an ANNOUNCEMENT with
         # start_conversation: the device plays it and — when playback finishes — opens the
         # mic again by itself, no wake word ("conversation mode"). A silent follow-up ends

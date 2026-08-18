@@ -23,11 +23,34 @@ SpeakFn = Callable[[str], Awaitable[str]]          # text -> served WAV url
 TranscribeFn = Callable[[bytes], Awaitable[str]]   # pcm  -> transcript
 
 
+import re
+
+# Whisper annotates non-speech as *Musik*, [Lachen], (Applaus) … — an utterance that is ONLY
+# such annotation is ambient noise, never a question. Answering it is how a TV becomes a
+# conversation partner through the WAKE path (observed: false wakes every ~10s, each round
+# transcribing its own or the TV's audio).
+_NOISE_ONLY = re.compile(r"^[\s\*\[\(]*[^\w]*[\wäöüéè' -]{0,40}?"
+                         r"(musik|lachen|applaus|geräusch|räusper|husten|"
+                         r"music|laughter|applause|noise|coughs?)"
+                         r"[^\w]*[\s\*\]\)]*$", re.IGNORECASE)
+
+
+def is_noise_transcript(transcript: str) -> bool:
+    stripped = transcript.strip()
+    if not stripped:
+        return True
+    if stripped.startswith(("*", "[", "(")) and stripped.endswith(("*", "]", ")")):
+        return True
+    return _NOISE_ONLY.match(stripped) is not None
+
+
 @dataclass
 class RoundResult:
     transcript: str
     reply: str | None      # None = budget missed, announcement pending
     tts_url: str | None
+    interrupt: bool = False   # a spoken "stop": kill current playback, say nothing
+    noise: bool = False       # ambient/non-speech round: discarded without an answer
 
 
 class VoicePipeline:
@@ -72,15 +95,16 @@ class VoicePipeline:
         except Exception:
             logger.exception("STT failed")
             return RoundResult("", self._error_phrase, await self._try_speak(self._error_phrase))
-        if not transcript:
-            return RoundResult("", None, None)  # silence / non-speech: end quietly
+        if is_noise_transcript(transcript):
+            logger.info("noise round discarded: %r", transcript[:60])
+            return RoundResult(transcript, None, None, noise=True)
 
         # Control commands (e.g. "wechsle zu systemorph") are handled deterministically,
         # before any brain sees the text — the handler's confirmation is spoken directly.
         if self._command_handler is not None:
             confirmation = await self._command_handler(transcript)
             if confirmation == "":
-                return RoundResult(transcript, None, None)   # handled silently ("stop")
+                return RoundResult(transcript, None, None, interrupt=True)  # spoken "stop"
             if confirmation is not None:
                 return RoundResult(transcript, confirmation,
                                    await self._try_speak(confirmation))
