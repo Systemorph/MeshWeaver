@@ -150,6 +150,97 @@ contribution (logged), never a broken catalog. The legacy single-source keys
 is advisory. The wire shapes are produced by `PluginRegistryPayloads` and parsed by
 `RegistryPackageSource`, one place each, so producer and consumer cannot drift.
 
+## The sync licence — what a grant now carries
+
+A `PluginGrant` IS the **sync licence**: the right of a registered instance to REPLICATE a package
+from this registry. Its subject is a `MeshWeaverInstance` and its verb is *sync*, which is
+deliberately not the user-facing entitlement — that grants a person the use of a package on their
+own portal and says nothing about a deployment holding a copy of it.
+
+Each entry carries the terms the right was issued under, so "may this instance pull this package"
+and "under what licence, until when, on whose authority" are ONE record rather than an ACL sitting
+next to a licence that could disagree with it:
+
+| field | meaning |
+|---|---|
+| `ExpiresAt` | end of the term. Null = perpetual — which is why every grant written before licences existed keeps working unchanged. **Per ENTRY**, because one instance routinely holds a perpetual licence for the platform repo alongside a termed one for a paid package. |
+| `IssuedUnderLicense` | SPDX id, resolving to a `License/{SpdxId}` node whose text can be shown. Null stays null — a licence nobody granted is never invented. |
+| `IssuedVia` | an order id, a coupon code, a ticket. The audit trail. |
+| `IssuedAt` | when it was issued. |
+| `IsRevoked` *(on the grant)* | the instance-wide stop. Entries survive it, so a revocation stays reviewable — and liftable. |
+
+`Allows(source, package, now)` is granted **and** within term **and** not revoked. `Matches` ignores
+the term on purpose, so a caller can tell *expired* from *never licensed* — the two need different
+remedies (renew, versus buy).
+
+**`SyncLicenseService` is the one writer.** Issue, revoke, revoke-all, reinstate. Issuing is
+idempotent — re-issuing REPLACES an entry, so renewing a term is the same call as granting it — and
+an issuance with no issuing principal is refused rather than written anonymously. It records an
+authorization; it does not make one: whether the licence may be issued (a global-admin gate, a
+verified payment, a validated coupon) belongs to the caller, exactly as `PackageEntitlement` puts
+its check on the action.
+
+> 🚨 Before this, a grant had exactly two writers — the `DefaultGrants` registration seed and an
+> admin typing into the Instance-grants tab — and no way to express a term at all. That is workable
+> for three instances and not for a catalogue: a consumer needing ONE package had no smaller thing
+> to ask for than a standing credential to a whole repository.
+
+## Short-lived tokens — `POST /api/instances/token`
+
+An instance exchanges its durable `mwi_` key for a short-lived, scoped `mwa_` access token:
+
+```
+POST /api/instances/token
+Authorization: Bearer mwi_…
+{ "scope": ["Plugins/Publish"], "lifetimeSeconds": 900 }
+
+→ { "accessToken": "mwa_…", "tokenType": "Bearer", "expiresIn": 900,
+    "scope": ["Plugins/Publish"] }
+```
+
+Both body fields are optional; an empty body means "a default token for everything I am licensed
+for". The response's `scope` is the EFFECTIVE scope — what was asked for intersected with what is
+licensed — returned explicitly so a consumer sees it got less than it requested rather than
+discovering it one 404 at a time.
+
+Three properties, and each is what makes the token safe to hand out:
+
+- **Identity and scope, never authority.** The live grant is re-read on every request, so revoking a
+  licence takes effect at once instead of surviving until the token expires.
+- **It can only narrow.** A token minted for more than its licence covers grants nothing extra —
+  scope is an additional filter, never an alternative source of permission.
+- **A token cannot mint its successor.** Only the durable key may exchange; otherwise a
+  minutes-long credential becomes perpetual by renewal. The check is on the credential's SHAPE
+  (`mwi_` vs `mwa_`, disjoint by construction), not on a claim the presenter could edit.
+
+The token is **signed, not stored** — minting writes no node, so there is no per-issue write
+amplification and no expiry sweep to maintain. That is only safe *because* authority is re-checked
+on use. It carries the hash of the key it was exchanged from, which is how it routes to its instance
+through the same index the raw key uses, and which makes re-issuing an instance key invalidate every
+outstanding token for free.
+
+`PluginCatalog:TokenSigningKey` is the HMAC key (≥32 bytes), shared across every replica of one
+registry. **Unset means the endpoint reports itself unavailable (503), never that it falls back to a
+weaker key** — and a token presented to a registry that cannot verify a signature is refused, never
+accepted unverified.
+
+## Licence acceptance — enforced, not merely recorded
+
+`LicenseContent.RequiresAcceptance` is enforced on the install path, beside the entitlement check
+and for the same reason: on the ACTION, so the unattended paths (default install, the update
+watcher) are gated identically to a click. A permissive licence asks nothing and gates nothing —
+Apache-2.0 and MIT install exactly as before.
+
+The `LicenseAcceptance` record's **body hash is checked, not merely stored**: an acceptance given
+against earlier terms does not satisfy revised ones, which is the entire reason the record carries a
+hash. Normalization folds line endings and trailing whitespace — what a round-trip through git or an
+editor changes — and nothing else, so consent is never revoked by a difference no reader could see.
+
+A licence the catalog does not hold (including every SPDX *expression*, like `Apache-2.0 OR MIT`,
+which names a choice rather than one node) demands no acceptance: terms the platform cannot display
+cannot meaningfully be consented to. That is a consent decision, never an access one — what a caller
+may install is decided by `PackageEntitlement` and, for an instance, by its sync licence.
+
 ## The consumer — the Store's catalog area, not a Space
 
 On every installation the catalog is a **layout area** (`CatalogLayoutAreas`), rendered as the
