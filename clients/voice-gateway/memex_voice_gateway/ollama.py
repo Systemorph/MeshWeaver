@@ -44,10 +44,15 @@ class OllamaBrain:
     _history: list[dict] = field(default_factory=list, init=False)
     _last_used: float = field(default=0.0, init=False)
     _tasks: dict[str, asyncio.Task] = field(default_factory=dict, init=False)
+    _chunks: dict[str, asyncio.Queue] = field(default_factory=dict, init=False)
     _ids: itertools.count = field(default_factory=itertools.count, init=False)
     _http: aiohttp.ClientSession | None = field(default=None, init=False)
 
-    async def _chat(self, messages: list[dict]) -> str:
+    async def _chat(self, messages: list[dict], handle: str | None = None) -> str:
+        """One completion; when `handle` names a chunk queue, STREAM pieces into it as they
+        arrive — the voice pipeline speaks them sentence-by-sentence while generation runs."""
+        if handle is not None:
+            return await self._chat_streaming(messages, handle)
         if self._http is None:
             self._http = aiohttp.ClientSession()
         # keep_alive holds the model in RAM between questions — without it, Ollama unloads
@@ -70,6 +75,33 @@ class OllamaBrain:
                 data = await response.json()
         return (data.get("message") or {}).get("content", "").strip()
 
+    async def _chat_streaming(self, messages: list[dict], handle: str) -> str:
+        if self._http is None:
+            self._http = aiohttp.ClientSession()
+        payload = {"model": self.model, "messages": messages, "stream": True,
+                   "think": False, "keep_alive": "60m",
+                   "options": {"num_predict": self.num_predict}}
+        queue = self._chunks[handle]
+        pieces: list[str] = []
+        import json as _json
+        try:
+            async with self._http.post(f"{self.base_url}/api/chat", json=payload,
+                                       timeout=aiohttp.ClientTimeout(total=300)) as response:
+                response.raise_for_status()
+                async for line in response.content:
+                    if not line.strip():
+                        continue
+                    data = _json.loads(line)
+                    piece = (data.get("message") or {}).get("content", "")
+                    if piece:
+                        pieces.append(piece)
+                        await queue.put(piece)
+                    if data.get("done"):
+                        break
+        finally:
+            await queue.put(None)
+        return "".join(pieces).strip()
+
     async def ask(self, text: str) -> str:
         """Start generating; returns a handle usable with await_reply (pipeline contract)."""
         if self._history and (time.monotonic() - self._last_used) > self.idle_minutes * 60:
@@ -78,14 +110,29 @@ class OllamaBrain:
         messages = build_messages(self._history, text)
         self._history.append({"role": "user", "content": text})
 
+        handle = f"ollama-{next(self._ids)}"
+        self._chunks[handle] = asyncio.Queue()
+
         async def generate() -> str:
-            reply = await self._chat(messages)
+            reply = await self._chat(messages, handle=handle)
             self._history.append({"role": "assistant", "content": reply})
             return reply
 
-        handle = f"ollama-{next(self._ids)}"
         self._tasks[handle] = asyncio.create_task(generate())
         return handle
+
+    def stream_text(self, handle: str):
+        """Async iterator over the reply's text pieces as they are generated, or None."""
+        queue = self._chunks.get(handle)
+        if queue is None:
+            return None
+
+        async def drain():
+            while (piece := await queue.get()) is not None:
+                yield piece
+            self._chunks.pop(handle, None)
+
+        return drain()
 
     async def await_reply(self, handle: str, budget_s: float) -> str | None:
         task = self._tasks.get(handle)
@@ -96,6 +143,7 @@ class OllamaBrain:
         except asyncio.TimeoutError:
             return None      # generation keeps running; the announce path retries this handle
         self._tasks.pop(handle, None)
+        self._chunks.pop(handle, None)   # nobody streamed this round — drop the piece queue
         return reply
 
     async def close(self) -> None:

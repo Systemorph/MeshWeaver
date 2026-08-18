@@ -44,8 +44,12 @@ class VoicePipeline:
         hold_phrase: str,
         error_phrase: str,
         command_handler: Callable[[str], Awaitable[str | None]] | None = None,
+        stream_text: Callable[[str], object | None] | None = None,
+        stream_speak: Callable[[object], Awaitable[str]] | None = None,
     ) -> None:
         self._command_handler = command_handler
+        self._stream_text = stream_text
+        self._stream_speak = stream_speak
         self._transcribe = transcribe
         self._ask = ask
         self._await_reply = await_reply
@@ -77,11 +81,23 @@ class VoicePipeline:
 
         try:
             thread_path = await self._ask(transcript)
+
+            # Streaming path: a brain that streams text + a streaming TTS session mean the
+            # device starts PLAYING while generation is still running — the URL blocks until
+            # the first spoken sentence lands, then sentences flow as the model writes them.
+            if self._stream_text is not None and self._stream_speak is not None:
+                chunks = self._stream_text(thread_path)
+                if chunks is not None:
+                    url = await self._stream_speak(chunks)
+                    logger.info("round: %r → streaming reply", transcript)
+                    return RoundResult(transcript, None, url)
+
             reply = await self._await_reply(thread_path, self._reply_budget_s)
         except Exception:
             logger.exception("thread submission failed")
             return RoundResult(transcript, self._error_phrase,
                                await self._try_speak(self._error_phrase))
+        logger.info("round: %r → %r", transcript, (reply or "")[:120])
 
         if reply is not None:
             return RoundResult(transcript, reply, await self._try_speak(reply))

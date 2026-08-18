@@ -76,6 +76,12 @@ class BrainRouter:
         name, _, inner = handle.partition("::")
         return await self._brains[name].await_reply(inner, budget_s)
 
+    def stream_text(self, handle: str):
+        """The producing brain's live text stream for this handle, or None (brain doesn't stream)."""
+        name, _, inner = handle.partition("::")
+        stream = getattr(self._brains[name], "stream_text", None)
+        return stream(inner) if stream else None
+
     async def close(self) -> None:
         for brain in self._brains.values():
             await brain.close()
