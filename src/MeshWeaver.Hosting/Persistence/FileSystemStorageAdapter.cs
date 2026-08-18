@@ -157,11 +157,19 @@ public class FileSystemStorageAdapter : IStorageAdapter
             node = node with { MainNode = mainNodePath };
         }
 
-        // Use file system last modified time if not specified
+        // Use file system last modified time if not specified.
+        //
+        // 🚨 ONLY when the file is actually there. FileInfo.LastWriteTimeUtc for a file that
+        // does not exist returns 1601-01-01 (the FILETIME epoch) rather than throwing, so an
+        // unstattable path silently stamps the node with a timestamp that is not a time. That
+        // value then becomes the node's source version, compares EQUAL to itself across every
+        // later edit, and the NodeType it belongs to never recompiles again while reporting
+        // compilationStatus Ok — measured on memex 2026-08-18 (#1836). Now: stamp the real
+        // mtime when there is one, else stamp NOW, which is both honest ("we observed this
+        // node at this moment") and comparable.
         if (node.LastModified == default)
         {
-            var fileInfo = new FileInfo(filePath);
-            node = node with { LastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero) };
+            node = node with { LastModified = FileTimestamps.ObservedAt(filePath) };
         }
 
         // Merge companion index.md content into JSON-sourced nodes that have no content
