@@ -329,6 +329,33 @@ token** — the update runs under the system identity, merging in the new commen
 comment event. Pull-request events are ignored (PR state is read live, so there is no node
 to refresh). See `GitHubWebhookProcessor`.
 
+#### 🚨 A RENAMED repository still matches — and a delivery that matches nothing SHOUTS
+
+Matching a delivery to the Spaces that sync it is a comparison between two strings: the
+`repositoryUrl` stored on each `{space}/_GitSync`, and the repository the payload is for.
+**A GitHub rename breaks that comparison and nothing else.** The old url 301-redirects, so
+git, `gh`, the REST API and every manual sync keep working — while a webhook payload always
+carries the repository's *current* name, which the stored old name can never equal. Casing
+is not the problem (`education` and `Education` are one repo, and always matched);
+`education` versus `MeshWeaver.Education` is.
+
+So when the stored strings match **nothing**, the receiver asks GitHub what each stored url
+resolves to *today* (`GET /repos/{owner}/{repo}` follows the rename redirect and answers with
+the repository's current `full_name`) and matches on that instead. The answer is cached per
+repository for an hour, so this is a fallback and never a per-delivery network call: a
+repository that was never renamed matches on the free string path and costs nothing. A config
+matched this way is then **repointed** to the current url — keeping its scheme and host, so a
+GitHub Enterprise config is never moved to github.com — which makes the repair permanent
+instead of re-derived on every delivery.
+
+And a delivery that still matches nothing is logged at **Warning**, naming both the incoming
+repository and every repository it was compared against. That level is the point: a
+zero-match means *every* Space that syncs that repository has just been skipped, which is a
+stale config, a rename, or a hook on the wrong repository — each of which wants a human. At
+Information it sits beside the routine "matched no sync source that needs updating" line and
+is indistinguishable from a healthy mesh with nothing to do, which is how ten course Spaces
+served four-day-stale content while every delivery reported success.
+
 ---
 
 ## 7. Operator setup (enabling the feature)
