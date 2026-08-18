@@ -117,6 +117,16 @@ class MemexThreads:
         node = json.loads(await self.call("get", {"path": f"@{thread_path}"}))
         return set((node.get("content") or {}).get("messages", []))
 
+    async def delegate(self, text: str, agent: str | None = None) -> str:
+        """Fire-and-forget: launch a NEW thread for a standard agent (Assistant, Researcher,
+        …) and return its path. Deliberately does NOT become the voice conversation thread —
+        the task runs and is evaluated in the portal, not read aloud."""
+        args: dict = {"namespacePath": self.namespace, "message": text}
+        if agent or self.agent:
+            args["agentName"] = agent or self.agent
+        started = json.loads(await self.call("start_thread", args))
+        return started["threadPath"]
+
     async def ask(self, text: str) -> str:
         """Submit an utterance; returns the thread path. Reuses a recent thread for context."""
         fresh = self._thread_path and (time.monotonic() - self._last_used) < self.thread_idle_minutes * 60

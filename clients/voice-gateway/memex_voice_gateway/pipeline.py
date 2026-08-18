@@ -46,10 +46,14 @@ class VoicePipeline:
         command_handler: Callable[[str], Awaitable[str | None]] | None = None,
         stream_text: Callable[[str], object | None] | None = None,
         stream_speak: Callable[[object], Awaitable[str]] | None = None,
+        hold_phrase_for: Callable[[str], str] | None = None,
+        answer_to_template: str | None = None,
     ) -> None:
         self._command_handler = command_handler
         self._stream_text = stream_text
         self._stream_speak = stream_speak
+        self._hold_phrase_for = hold_phrase_for
+        self._answer_to_template = answer_to_template
         self._transcribe = transcribe
         self._ask = ask
         self._await_reply = await_reply
@@ -104,17 +108,24 @@ class VoicePipeline:
         if reply is not None:
             return RoundResult(transcript, reply, await self._try_speak(reply))
 
-        # Budget missed: hold phrase now, real answer as an announcement when it lands.
-        task = asyncio.create_task(self._announce_when_ready(thread_path))
+        # Budget missed: acknowledge the SUBMISSION (naming the portal — answers can be
+        # highly async), and deliver the real answer later, prefixed with which question it
+        # belongs to, so out-of-order arrivals stay attributable.
+        task = asyncio.create_task(self._announce_when_ready(thread_path, transcript))
         self._background.add(task)
         task.add_done_callback(self._background.discard)
-        return RoundResult(transcript, None, await self._try_speak(self._hold_phrase))
+        hold = (self._hold_phrase_for(thread_path) if self._hold_phrase_for
+                else self._hold_phrase)
+        return RoundResult(transcript, None, await self._try_speak(hold))
 
-    async def _announce_when_ready(self, thread_path: str) -> None:
+    async def _announce_when_ready(self, thread_path: str, transcript: str) -> None:
         try:
             reply = await self._await_reply(thread_path, self._announce_budget_s)
             if reply is None:
                 reply = self._error_phrase
+            if self._answer_to_template:
+                question = transcript if len(transcript) <= 60 else transcript[:57] + "…"
+                reply = f"{self._answer_to_template.format(question=question)} {reply}"
             url = await self._speak(reply)
             await self._announce(url, reply)
         except Exception:

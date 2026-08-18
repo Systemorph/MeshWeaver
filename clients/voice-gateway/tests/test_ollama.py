@@ -54,6 +54,6 @@ def test_real_time_anchor_in_messages():
     import datetime
     from memex_voice_gateway.ollama import now_line
     stamp = now_line(datetime.datetime(2026, 8, 18, 21, 30))
-    assert stamp == "Aktuelle Zeit: Dienstag, 18. August 2026, 21:30 Uhr."
+    assert stamp == "Current time: Tuesday, 18 August 2026, 21:30."
     messages = build_messages([], "[21:30] Frage", now=stamp)
     assert stamp in messages[0]["content"] and messages[0]["role"] == "system"
