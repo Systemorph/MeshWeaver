@@ -280,9 +280,9 @@ jobs:
       # already converts a silent hang into a visible, re-runnable infra failure.
       # The apt wait is for the same reason as dotnet-test's: `--with-deps` shells out to apt-get,
       # and the runner's own background apt makes it exit 100 "Could not get lock" — contention,
-      # not a broken download. `flock … true` waits for that holder and releases immediately, so
-      # playwright takes the lock itself. Both bounds are hard: it can wait, it cannot hang.
+      # not a broken download. ONE shared implementation, because two copies of this drift and the
+      # copy that drifts is the one nobody notices until a shard reddens on an unrelated PR (#1843).
       - run: |
-          sudo flock -w 60 /var/lib/apt/lists/lock true 2>/dev/null || true
+          .github/scripts/wait-for-apt.sh
           timeout --signal=TERM --kill-after=30 180 npx playwright install --with-deps chromium
       - run: npm run e2e # expo export --platform web → serve dist/ → drive headless Chromium
