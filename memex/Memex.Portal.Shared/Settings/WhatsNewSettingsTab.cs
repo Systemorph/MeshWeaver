@@ -30,7 +30,10 @@ namespace Memex.Portal.Shared.Settings;
 /// </summary>
 public static class WhatsNewSettingsTab
 {
-    /// <summary>The tab id under <c>/_settings/GlobalSettings</c>.</summary>
+    /// <summary>
+    /// The tab id — the trailing segment of the tab's deep link, built with
+    /// <see cref="GlobalSettingsNodeType.TabHref"/> (<c>/_Setting/GlobalSettings/WhatsNew</c>).
+    /// </summary>
     public const string TabId = "WhatsNew";
 
     /// <summary>The documentation namespace holding per-entry release-note nodes (served under <c>Doc/</c>).</summary>
