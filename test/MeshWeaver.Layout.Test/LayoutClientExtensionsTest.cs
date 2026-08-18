@@ -698,6 +698,18 @@ public class LayoutClientExtensionsTest(ITestOutputHelper output) : HubTestBase(
     }
 
     [Fact]
+    public void ConvertSingle_AbsurdlyLargeCssLength_ReturnsDefault_NeverAWrappedNumber()
+    {
+        // A fractional magnitude is truncated through a double, so the range check has to happen in
+        // double space — where (double)long.MaxValue rounds UP. Without the 2^53 cap the cast wraps and
+        // this returns long.MinValue: a wrong number, silently, instead of the default.
+        var hub = GetHost();
+
+        hub.ConvertSingle("9223372036854775808.5px", null, 7L).Should().Be(7L);
+        hub.ConvertSingle("1e30px", null, 7).Should().Be(7);
+    }
+
+    [Fact]
     public void ConvertSingle_UnitOnlyKeyword_ReturnsDefaultInsteadOfThrowing()
     {
         // "auto"/"none" are legal CSS for a string slot but meaningless in a numeric one.
