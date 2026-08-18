@@ -80,53 +80,53 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
         if (rawToken is null)
             return Observable.Return<AuthenticatedInstance?>(null);
 
-        var signingKey = SigningKey();
-        if (signingKey is null)
+        var keys = hub.ServiceProvider.GetService<SyncTokenSigningKeyService>();
+        if (keys is null)
         {
-            // Configured-off is not "allow": a registry that cannot verify a signature must refuse
+            // No key service is not "allow": a registry that cannot verify a signature must refuse
             // the token, never accept it unverified.
             logger.LogWarning(
-                "A sync access token was presented but {Section}:{Key} is not configured — refusing.",
-                PluginCatalogOptions.SectionName, nameof(PluginCatalogOptions.TokenSigningKey));
+                "A sync access token was presented but no {Service} is registered — refusing.",
+                nameof(SyncTokenSigningKeyService));
             return Observable.Return<AuthenticatedInstance?>(null);
         }
 
-        var claims = SyncAccessToken.Verify(rawToken, DateTimeOffset.UtcNow, signingKey);
-        if (claims is null)
-            return Observable.Return<AuthenticatedInstance?>(null);
-
-        return Resolve(claims.KeyHash)
-            .Select(resolved =>
+        // Existing(), never Resolve(): this caller has not authenticated yet, so minting on their
+        // behalf would let an anonymous request write a node — and would be pointless anyway, since a
+        // token cannot verify against a key minted after it was signed.
+        return keys.Existing()
+            .SelectMany(material =>
             {
-                if (resolved is null)
-                    return null;
-                // The token names an instance AND routes to one. They must be the same instance, or
-                // the token is being replayed against a record it does not describe.
-                if (!string.Equals(resolved.Instance.InstanceId, claims.InstanceId, StringComparison.Ordinal))
-                {
-                    logger.LogWarning(
-                        "Sync access token claims instance {Claimed} but its key resolves to {Actual} — refusing.",
-                        claims.InstanceId, resolved.Instance.InstanceId);
-                    return null;
-                }
-                return resolved with { TokenScope = claims };
+                // Verification tries the current key and then the one the last rotation retired, so a
+                // token minted moments before a rotation still works.
+                var claims = material?.Verify(rawToken, DateTimeOffset.UtcNow);
+                if (claims is null)
+                    return Observable.Return<AuthenticatedInstance?>(null);
+
+                return Resolve(claims.KeyHash)
+                    .Select(resolved =>
+                    {
+                        if (resolved is null)
+                            return null;
+                        // The token names an instance AND routes to one. They must be the same
+                        // instance, or it is being replayed against a record it does not describe.
+                        if (!string.Equals(
+                                resolved.Instance.InstanceId, claims.InstanceId, StringComparison.Ordinal))
+                        {
+                            logger.LogWarning(
+                                "Sync access token claims instance {Claimed} but its key resolves to "
+                                + "{Actual} — refusing.",
+                                claims.InstanceId, resolved.Instance.InstanceId);
+                            return null;
+                        }
+                        return resolved with { TokenScope = claims };
+                    });
             })
             .Catch((Exception ex) =>
             {
-                logger.LogWarning(ex, "Sync access token resolution failed for instance {InstanceId}",
-                    claims.InstanceId);
+                logger.LogWarning(ex, "Sync access token resolution failed");
                 return Observable.Return<AuthenticatedInstance?>(null);
             });
-    }
-
-    /// <summary>The configured HMAC key, or null when it is absent or too short to be usable.</summary>
-    private byte[]? SigningKey()
-    {
-        var configured = hub.ServiceProvider.GetService<PluginCatalogOptions>()?.TokenSigningKey;
-        if (string.IsNullOrWhiteSpace(configured))
-            return null;
-        var bytes = System.Text.Encoding.UTF8.GetBytes(configured);
-        return SyncAccessToken.IsUsableSigningKey(bytes) ? bytes : null;
     }
 
     private IObservable<AuthenticatedInstance?> Resolve(string hash)

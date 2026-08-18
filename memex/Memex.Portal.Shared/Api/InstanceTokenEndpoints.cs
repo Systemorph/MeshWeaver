@@ -1,6 +1,5 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
-using System.Text;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
@@ -26,6 +25,11 @@ namespace Memex.Portal.Shared.Api;
 /// into a perpetual one by renewal, defeating the entire point of the expiry. The check is on the
 /// credential's SHAPE (<c>mwi_</c> vs <c>mwa_</c>, disjoint by construction), not on a claim the
 /// presenter could edit.</para>
+///
+/// <para>The signing key is a MESH NODE (<c>Admin/SyncTokenSigningKey/current</c>), minted on first
+/// use and shared by every replica — there is nothing to configure and nothing for an operator to
+/// copy between environments. Minting happens only AFTER the caller authenticates, so an anonymous
+/// request cannot provoke a node write.</para>
 ///
 /// <para>The token narrows; it never widens. The effective scope is what the caller asked for
 /// intersected with what its sync licence already allows, and the live grant is re-read on every
@@ -67,35 +71,20 @@ public static class InstanceTokenEndpoints
                 statusCode: StatusCodes.Status401Unauthorized));
         }
 
-        var options = rootHub.ServiceProvider.GetService<PluginCatalogOptions>();
-        var signingKey = string.IsNullOrWhiteSpace(options?.TokenSigningKey)
-            ? null
-            : Encoding.UTF8.GetBytes(options!.TokenSigningKey);
-
-        // Unconfigured is reported, never worked around with a weaker key — and it is a 503 rather
-        // than a 401, because the caller's credential is fine and the registry's deployment is not.
-        if (!SyncAccessToken.IsUsableSigningKey(signingKey))
-        {
-            logger?.LogError(
-                "Token exchange requested but {Section}:{Key} is unset or shorter than {Min} bytes — "
-                + "the endpoint cannot mint. Configure it identically on every replica.",
-                PluginCatalogOptions.SectionName, nameof(PluginCatalogOptions.TokenSigningKey),
-                SyncAccessToken.MinimumSigningKeyBytes);
-            return Task.FromResult(Results.Json(
-                new { error = "Token exchange is not configured on this registry." },
-                statusCode: StatusCodes.Status503ServiceUnavailable));
-        }
-
         var authenticator = http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>();
+        var keys = rootHub.ServiceProvider.GetRequiredService<SyncTokenSigningKeyService>();
         var now = DateTimeOffset.UtcNow;
 
+        // 🚨 Authenticate BEFORE touching the signing key. Resolve() mints this registry's key if it
+        // has none, and minting is a node write — so doing it first would let an unauthenticated
+        // caller provoke one. The order is the access control.
         return authenticator.Authenticate(header)
-            .Select(caller =>
+            .SelectMany(caller =>
             {
                 if (caller is null)
-                    return Results.Json(
+                    return Observable.Return(Results.Json(
                         new { error = "A registered instance key is required (Authorization: Bearer mwi_…)." },
-                        statusCode: StatusCodes.Status401Unauthorized);
+                        statusCode: StatusCodes.Status401Unauthorized));
 
                 var effective = EffectiveScope(caller, body?.Scope, now);
 
@@ -103,27 +92,33 @@ public static class InstanceTokenEndpoints
                 // mint a token FOR. Answering 403 with the reason beats handing back a token that
                 // will 404 on every call.
                 if (effective.Count == 0)
-                    return Results.Json(
+                    return Observable.Return(Results.Json(
                         new { error = "This instance holds no current sync licence for the requested scope." },
-                        statusCode: StatusCodes.Status403Forbidden);
+                        statusCode: StatusCodes.Status403Forbidden));
 
                 var lifetime = body?.LifetimeSeconds is > 0
                     ? TimeSpan.FromSeconds(body.LifetimeSeconds.Value)
                     : SyncAccessToken.DefaultLifetime;
 
-                var token = SyncAccessToken.Mint(
-                    caller.Instance.InstanceId, caller.Instance.KeyHash, effective, now, lifetime, signingKey!);
-                var claims = SyncAccessToken.Verify(token, now, signingKey!)!;
+                // The key is a MESH NODE, minted once per registry and shared by every replica — no
+                // configuration, and nothing for an operator to copy between environments.
+                return keys.Resolve().Select(material =>
+                {
+                    var token = SyncAccessToken.Mint(
+                        caller.Instance.InstanceId, caller.Instance.KeyHash, effective, now, lifetime,
+                        material.Current);
+                    var claims = SyncAccessToken.Verify(token, now, material.Current)!;
 
-                logger?.LogInformation(
-                    "Minted a sync access token for {InstanceId}, scope [{Scope}], expiring {Expiry}",
-                    caller.Instance.InstanceId, string.Join(", ", effective), claims.ExpiresAt);
+                    logger?.LogInformation(
+                        "Minted a sync access token for {InstanceId}, scope [{Scope}], expiring {Expiry}",
+                        caller.Instance.InstanceId, string.Join(", ", effective), claims.ExpiresAt);
 
-                return Results.Json(
-                    new SyncTokenPayloads.Response(
-                        token, SyncAccessToken.Scheme,
-                        (int)(claims.ExpiresAt - now).TotalSeconds, effective),
-                    SyncTokenPayloads.Json);
+                    return Results.Json(
+                        new SyncTokenPayloads.Response(
+                            token, SyncAccessToken.Scheme,
+                            (int)(claims.ExpiresAt - now).TotalSeconds, effective),
+                        SyncTokenPayloads.Json);
+                });
             })
             .Catch((Exception ex) =>
             {
