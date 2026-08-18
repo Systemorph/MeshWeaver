@@ -84,6 +84,20 @@ public static class FrameworkBuildIdentity
     /// the closure from the csproj graph and fails naming the drift when the tester's references
     /// change without this list following.
     ///
+    /// <para>🚨 <b>…AND EVERY OTHER MANIFEST HOST MUST RECORD THE SAME SET</b> (#1814). The list is
+    /// derived from the bake host, but the identity is only useful if the CONSUMERS resolve the same
+    /// value — and a canonical assembly a host does not COMPILE against gets no manifest line there
+    /// and hashes as <see cref="AbsentMarker"/>, forking that host's identity while its binaries stay
+    /// byte-identical. Moving <c>MeshWeaver.Import</c> and its private closure — eight names — out of
+    /// the portals' compile graphs into the runtime module lane did exactly that on 2026-08-17: the
+    /// bake published to an address no pod opened, every publication-side check passed, and the first
+    /// pod of each deploy recompiled 269 types while instance hubs latched fault cards.
+    /// <c>FrameworkBuildIdentityTest.CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost</c>
+    /// pins the other side of that equality, and CD compares the two resolved VALUES before
+    /// publishing (<c>mw-plugin-test framework-identity … --expect …</c>, built on
+    /// <see cref="ResolveIdentityForDirectory"/>). Fix a failure by giving the host its compile
+    /// reference back — never by shrinking this list, which would under-invalidate.</para>
+    ///
     /// <para>🚨 <b>MOVING THE BAKE/GATE CLI INTO A NEW PROJECT SILENTLY CHANGES THE FRAMEWORK
     /// IDENTITY.</b> This list is anchored to <c>tools/MeshWeaver.PluginTester</c>'s reference
     /// closure, and the identity is the hash over these assemblies' surface-manifest pairs — an
@@ -102,7 +116,6 @@ public static class FrameworkBuildIdentity
     [
         "MeshWeaver.AI",
         "MeshWeaver.Application.Styles",
-        "MeshWeaver.Approvals",
         "MeshWeaver.Compiler",
         "MeshWeaver.ContentCollections",
         "MeshWeaver.ContentCollections.Indexing",
@@ -259,12 +272,24 @@ public static class FrameworkBuildIdentity
     public static string ComputeSurfaceIdentity(
         IReadOnlyDictionary<string, string> surfaceByName,
         Func<string, string?> implMvidOf)
+        => ComputeSurfaceIdentity(surfaceByName, implMvidOf, FullMvidAssemblies);
+
+    /// <summary>
+    /// <see cref="ComputeSurfaceIdentity(IReadOnlyDictionary{string,string},Func{string,string?})"/>
+    /// with the full-MVID membership supplied explicitly — the form a resolution for a FOREIGN
+    /// host uses, where the toolchain closure has to be computed from THAT host's binaries rather
+    /// than from this process's (see <see cref="ResolveIdentityForDirectory"/>).
+    /// </summary>
+    public static string ComputeSurfaceIdentity(
+        IReadOnlyDictionary<string, string> surfaceByName,
+        Func<string, string?> implMvidOf,
+        IReadOnlyCollection<string> fullMvidAssemblies)
     {
         var text = new StringBuilder();
         foreach (var name in ContentSurfaceAssemblies)
         {
             string id;
-            if (FullMvidAssemblies.Contains(name))
+            if (fullMvidAssemblies.Contains(name))
                 id = implMvidOf(name)
                      ?? (surfaceByName.TryGetValue(name, out var surface) ? surface : AbsentMarker);
             else
@@ -445,6 +470,126 @@ public static class FrameworkBuildIdentity
         if (loaded is not null)
             return loaded.ManifestModule.ModuleVersionId.ToString("N");
         var candidate = Path.Combine(AppContext.BaseDirectory, simpleName + ".dll");
+        if (!File.Exists(candidate))
+            return null;
+        try
+        {
+            using var stream = File.OpenRead(candidate);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            var md = pe.GetMetadataReader();
+            return md.GetGuid(md.GetModuleDefinition().Mvid).ToString("N");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // ── Resolving ANOTHER host's identity, from its binaries alone ─────────────────────────────
+
+    /// <summary>
+    /// 🚨 The identity a host whose application binaries live in <paramref name="appDirectory"/>
+    /// resolves — the SAME computation <see cref="ResolveProcessIdentityWithDiagnostics"/> performs
+    /// for its own base directory, expressed over a DIRECTORY so one process can answer it for
+    /// another's shipped binaries without loading a single assembly.
+    ///
+    /// <para>This exists because the identity is an ADDRESS: a bake publishes its bundles under the
+    /// identity its own host resolves, and a portal only ever looks under the identity IT resolves.
+    /// Nothing in the publication path could previously observe that the two disagree, which is
+    /// exactly how issue #1814 shipped — CD baked under <c>sda0843ab…</c> while both prod pods asked
+    /// for <c>s944d7fd…</c>, the bundles sat intact on the volume under an address nobody read, the
+    /// bake job reported success, and the first pod of every deploy recompiled 269 types
+    /// (10 m 29 s, +1598 MB) as though no bake existed. With this, CI can compare the two VALUES and
+    /// fail red — see the "the identity the bake publishes must be the identity the shipped portal
+    /// resolves" step in <c>main-cd.yml</c>.</para>
+    ///
+    /// <para>🚨 The comparison is only meaningful for the SAME ARCHITECTURE. The manifest records
+    /// reference-assembly hashes of a specific build, and the same four reference assemblies differ
+    /// between the amd64 and arm64 legs of one multi-arch image (see Directory.Build.props), so a
+    /// multi-arch image carries two identities. Callers must extract both directories for one
+    /// platform; the CI guard pins <c>--platform linux/amd64</c> out loud for that reason.</para>
+    ///
+    /// <para><b>Fails loudly rather than degrading.</b> A directory with no usable surface manifest
+    /// yields a null identity plus a diagnostic, never a fallback value: two manifest-less
+    /// directories built from the same commit would resolve the SAME fallback and a guard comparing
+    /// them would report a match having verified nothing.</para>
+    /// </summary>
+    /// <param name="appDirectory">The host's application directory — the one holding
+    /// <see cref="SurfaceManifestFileName"/> beside its assemblies (a container's <c>/app</c>).</param>
+    /// <returns>The resolved surface identity, or null with <c>Problem</c> naming why not.</returns>
+    public static (string? Identity, string? Problem) ResolveIdentityForDirectory(string appDirectory)
+    {
+        if (!Directory.Exists(appDirectory))
+            return (null, $"'{appDirectory}' does not exist or is not a directory");
+
+        var manifestPath = Path.Combine(appDirectory, SurfaceManifestFileName);
+        string manifestText;
+        try
+        {
+            if (!File.Exists(manifestPath))
+                return (null,
+                    $"'{manifestPath}' is missing — this host ships no surface manifest and "
+                    + "therefore resolves the stamp/MVID FALLBACK identity, which no bake may be "
+                    + "published under");
+            manifestText = File.ReadAllText(manifestPath);
+        }
+        catch (Exception ex)
+        {
+            return (null, $"'{manifestPath}' could not be read ({ex.GetType().Name}: {ex.Message})");
+        }
+
+        var pairs = ParseSurfaceManifest(manifestText);
+        if (pairs.Count == 0)
+            return (null, $"'{manifestPath}' holds no usable '<name>=<hash>' pairs");
+
+        var fullMvid = ComputeToolchainClosure(
+            ToolchainRoots, name => ReferencedMeshWeaverAssembliesInDirectory(appDirectory, name));
+        return (
+            ComputeSurfaceIdentity(pairs, name => ImplMvidInDirectory(appDirectory, name), fullMvid),
+            null);
+    }
+
+    /// <summary>
+    /// The canonical assemblies a directory's surface manifest does NOT record — the exact quantity
+    /// that made two hosts of one commit resolve different identities in #1814, since an unrecorded
+    /// canonical assembly hashes as <see cref="AbsentMarker"/>. Reported by name so a failing guard
+    /// says WHICH references a host lost rather than only that two hashes differ.
+    /// </summary>
+    public static ImmutableArray<string> CanonicalAssembliesAbsentFrom(
+        IReadOnlyDictionary<string, string> surfaceByName) =>
+        [.. ContentSurfaceAssemblies.Where(n => !surfaceByName.ContainsKey(n))];
+
+    /// <summary>An assembly's MeshWeaver.* AssemblyRef simple names read from the DLL in
+    /// <paramref name="directory"/> — metadata only, nothing loaded, so it answers for a FOREIGN
+    /// host's binaries. Missing/unreadable resolves empty, exactly as the process-level walk does
+    /// (the name still joins the closure; its MVID then resolves <see cref="AbsentMarker"/>).</summary>
+    private static IEnumerable<string> ReferencedMeshWeaverAssembliesInDirectory(
+        string directory, string simpleName)
+    {
+        var candidate = Path.Combine(directory, simpleName + ".dll");
+        if (!File.Exists(candidate))
+            return [];
+        try
+        {
+            using var stream = File.OpenRead(candidate);
+            using var pe = new System.Reflection.PortableExecutable.PEReader(stream);
+            var md = pe.GetMetadataReader();
+            return md.AssemblyReferences
+                .Select(h => md.GetString(md.GetAssemblyReference(h).Name))
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>An assembly's implementation MVID read from the DLL in
+    /// <paramref name="directory"/> — metadata only, nothing loaded.</summary>
+    private static string? ImplMvidInDirectory(string directory, string simpleName)
+    {
+        var candidate = Path.Combine(directory, simpleName + ".dll");
         if (!File.Exists(candidate))
             return null;
         try
