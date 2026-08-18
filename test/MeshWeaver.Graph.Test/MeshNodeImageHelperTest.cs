@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -238,4 +239,116 @@ public class MeshNodeImageHelperTest
     public void NeitherIconNorFallback_StillYieldsTheNeutralGlyph(string? icon, string? fallback)
         => MeshNodeImageHelper.ResolveRenderable(icon, fallback)
             .Should().Be(new RenderableIcon(IconRenderKind.Image, "/static/NodeTypeIcons/box.svg"));
+
+    /// <summary>
+    /// The browser tab is a <c>&lt;link rel="icon"&gt;</c>, so every icon form has to come out as
+    /// something an <c>href</c> can carry — otherwise the tab silently keeps the site-wide favicon
+    /// and a tab strip full of pages stays unreadable. A URL travels as itself, with the media type
+    /// its extension pins down.
+    /// </summary>
+    [Theory]
+    [InlineData("/static/NodeTypeIcons/document.svg", "image/svg+xml")]
+    [InlineData("/api/content/ACME/Space/content/logo.png", "image/png")]
+    [InlineData("/api/content/ACME/Space/content/logo.PNG", "image/png")]
+    [InlineData("/api/content/ACME/Space/content/cover.jpeg", "image/jpeg")]
+    [InlineData("https://example.com/mark.svg", "image/svg+xml")]
+    [InlineData("data:image/png;base64,abc", "image/png")]
+    [InlineData("/api/content/ACME/Space/content/logo.svg?v=3", "image/svg+xml")]
+    public void IconLinkFor_AUrl_TravelsAsItself_WithItsOwnMediaType(string icon, string expectedType)
+        => MeshNodeImageHelper.IconLinkFor(icon)
+            .Should().Be(new IconLink(icon, expectedType));
+
+    /// <summary>
+    /// A type we cannot pin down is declared as NOTHING rather than guessed at — a browser ranking
+    /// several icons by type must never be told a wrong one.
+    /// </summary>
+    [Theory]
+    [InlineData("/api/content/ACME/Space/content/mark")]
+    [InlineData("/api/content/ACME/Space/content/mark.weird")]
+    // A dotted DIRECTORY is not an extension — reading one as ".Space" would declare a made-up type.
+    [InlineData("/api/content/ACME/My.Space/content/mark")]
+    public void IconLinkFor_AnUnknownExtension_DeclaresNoType(string icon)
+        => MeshNodeImageHelper.IconLinkFor(icon)
+            .Should().Be(new IconLink(icon, null));
+
+    /// <summary>
+    /// Inline <c>&lt;svg&gt;</c> is MARKUP, not a location — every thread carries one
+    /// (<c>ThreadIconGenerator</c>) — so it has to become a data URI. An <c>href</c> pointing at raw
+    /// svg text is exactly the broken-image case <see cref="MeshNodeImageHelper.ResolveRenderable"/>
+    /// exists to prevent.
+    /// </summary>
+    [Fact]
+    public void IconLinkFor_InlineSvg_BecomesADataUri()
+    {
+        const string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\"></svg>";
+
+        var link = MeshNodeImageHelper.IconLinkFor(svg);
+
+        link.Type.Should().Be("image/svg+xml");
+        link.Href.Should().StartWith("data:image/svg+xml,");
+        Uri.UnescapeDataString(link.Href["data:image/svg+xml,".Length..])
+            .Should().Be(svg, "the node's icon travels byte for byte — only its transport changes");
+    }
+
+    /// <summary>
+    /// A text glyph cannot be an <c>href</c> either, so it is drawn INTO an svg. Without this an
+    /// emoji-iconed node fell back to the portal favicon, which is the very sameness this fixes.
+    /// </summary>
+    [Theory]
+    [InlineData("🎯")]
+    [InlineData("➕")]
+    public void IconLinkFor_AGlyph_IsDrawnIntoAnSvgDataUri(string glyph)
+    {
+        var link = MeshNodeImageHelper.IconLinkFor(glyph);
+
+        link.Type.Should().Be("image/svg+xml");
+        var svg = Uri.UnescapeDataString(link.Href["data:image/svg+xml,".Length..]);
+        svg.Should().StartWith("<svg").And.EndWith("</svg>").And.Contain(glyph);
+    }
+
+    /// <summary>Only the first grapheme cluster is drawn: an icon field holding a word would
+    /// otherwise run off the canvas, and a multi-codepoint emoji must stay ONE glyph.</summary>
+    [Theory]
+    [InlineData("R&D", "R")]
+    [InlineData("hello", "h")]
+    [InlineData("👨‍👩‍👧‍👦", "👨‍👩‍👧‍👦")]
+    public void IconLinkFor_AGlyph_DrawsOneClusterAndEscapesIt(string glyph, string expected)
+    {
+        var svg = Uri.UnescapeDataString(
+            MeshNodeImageHelper.IconLinkFor(glyph).Href["data:image/svg+xml,".Length..]);
+
+        // The markup must be well-formed even for a glyph containing XML characters.
+        XDocument.Parse(svg).Root!.Value.Should().Be(expected);
+    }
+
+    /// <summary>
+    /// The tab shows what the app shows: <see cref="MeshNodeImageHelper.ResolveIconLink"/> is
+    /// <see cref="MeshNodeImageHelper.ResolveNodeIcon"/>, so a node with no icon of its own reads as
+    /// its NodeType rather than falling back to the portal favicon.
+    /// </summary>
+    [Fact]
+    public void ResolveIconLink_NoOwnIcon_UsesTheNodeTypeGlyph()
+        => MeshNodeImageHelper.ResolveIconLink(new MeshNode("Page", "ACME") { NodeType = "Markdown" })
+            .Should().Be(new IconLink("/static/NodeTypeIcons/document.svg", "image/svg+xml"));
+
+    /// <summary>A typeless node still resolves — total, so a tab never keeps the PREVIOUS page's
+    /// icon after navigating.</summary>
+    [Fact]
+    public void ResolveIconLink_IsTotal_EvenForATypelessIconlessNode()
+        => MeshNodeImageHelper.ResolveIconLink(new MeshNode("Page", "ACME"))
+            .Should().Be(new IconLink("/static/NodeTypeIcons/box.svg", "image/svg+xml"));
+
+    /// <summary>A <c>content:</c> icon resolves through the ACCESS-CONTROLLED content route (issue
+    /// #587), never <c>/static/storage</c> — the tab must not be a way around a partition's policy.</summary>
+    [Fact]
+    public void ResolveIconLink_AContentIcon_UsesTheAccessControlledRoute()
+    {
+        var node = new MeshNode("Space", "ACME") { NodeType = "Space", Icon = "content:logo.svg" };
+
+        var link = MeshNodeImageHelper.ResolveIconLink(node);
+
+        link.Type.Should().Be("image/svg+xml");
+        link.Href.Should().StartWith("/api/content/").And.EndWith("logo.svg");
+        link.Href.Should().NotContain("/static/storage");
+    }
 }
