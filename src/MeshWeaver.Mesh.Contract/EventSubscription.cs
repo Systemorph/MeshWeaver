@@ -44,7 +44,17 @@ public enum EventContinuationType
     /// <c>GroupMembership</c> node). The group-invite twin of <see cref="GrantSpaceAccess"/>: an email
     /// invite to a <b>group</b> that lands membership — and, transitively, whatever the group is granted —
     /// the moment the invitee's account exists.</summary>
-    AddToGroup = 2
+    AddToGroup = 2,
+    /// <summary>Publish the social post at <see cref="EventSubscription.TargetPath"/> to its network —
+    /// the <see cref="EventTriggerType.Timer"/> twin of the manual "Publish to LinkedIn" node action, so a
+    /// post's scheduled slot actually publishes it instead of only labelling it.
+    ///
+    /// <para>Handled OUT of process-tree: the publishers live in <c>MeshWeaver.Social</c>, which already
+    /// references <c>MeshWeaver.Graph</c> — so the runner cannot call them directly without a reference
+    /// cycle. It resolves an <see cref="IEventContinuationHandler"/> for this type from DI instead
+    /// (<c>SocialExtensions.AddSocial</c> registers the LinkedIn one). With no handler registered the
+    /// subscription fails loudly rather than silently doing nothing.</para></summary>
+    PublishSocialPost = 3
 }
 
 /// <summary>

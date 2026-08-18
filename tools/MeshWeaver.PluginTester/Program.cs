@@ -56,6 +56,8 @@ try
 {
     if (args.Length > 0 && args[0] == "compile")
         return RunCompile(args[1..]);
+    if (args.Length > 0 && args[0] == "framework-identity")
+        return RunFrameworkIdentity(args[1..]);
     return await RunGate(args);
 }
 catch (Exception ex)
@@ -121,6 +123,113 @@ static int RunCompile(string[] args)
         $"compile: {bake.Types.Count(t => t.Success)}/{bake.Types.Length} NodeType(s) compiled, "
         + $"{bake.Bundles.Length} bundle(s), framework={bake.FrameworkIdentity}");
     return bake.ExitCode;
+}
+
+// 🚨 THE `framework-identity` VERB — the ADDRESS CHECK (#1814).
+//
+//     mw-plugin-test framework-identity <app-dir> [--expect <identity>]
+//
+// Prints the framework build identity a host whose binaries live in <app-dir> resolves, reading
+// that directory's meshweaver-surface.manifest and assemblies as FILES — nothing is loaded, so one
+// container can answer the question for another image's /app.
+//
+// The identity is an ADDRESS: a bake publishes its bundles under the identity ITS host resolves and
+// a portal only ever looks under the identity IT resolves. Before this verb nothing in the pipeline
+// could observe that the two disagree — CD run 32063444385 baked release 3.0.0-rc4.ci.4201 under
+// `sda0843abd6db4fc7e37cc3f838079265` while both prod pods asked for
+// `s944d7fd0bbf81f4b40b85a7a74296263`, the bundles sat intact on the shared volume under an address
+// nobody read, the bake job reported SUCCESS, and the first pod of every deploy recompiled 269
+// types (10 m 29 s, +1598 MB working set) as though no bake had ever run. `--expect` turns that
+// into a red step: it compares and, on a mismatch, names the canonical assemblies each side's
+// manifest is missing — the actual defect in #1814 was eight of them, not a hash that "just
+// differs".
+//
+// 🚨 SAME ARCHITECTURE ONLY. Reference-assembly bytes differ between the amd64 and arm64 legs of one
+// multi-arch image, so an image carries two identities; extract both directories for ONE platform
+// (CI pins --platform linux/amd64). That per-arch split is the second, independent way to mint an
+// address nobody reads: memex.localhost is arm64 while the CI bake publishes linux/amd64.
+static int RunFrameworkIdentity(string[] args)
+{
+    string? appDirectory = null;
+    string? expected = null;
+    for (var i = 0; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--expect" when i + 1 < args.Length:
+                expected = args[++i].Trim();
+                break;
+            case "--expect":
+                Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
+                return 2;
+            case "--help" or "-h":
+                Console.WriteLine(
+                    "usage: mw-plugin-test framework-identity <app-dir> [--expect <identity>]");
+                return 0;
+            default:
+                if (args[i].StartsWith('-') || appDirectory is not null)
+                {
+                    Console.Error.WriteLine($"Unknown argument '{args[i]}'. Try --help.");
+                    return 2;
+                }
+                appDirectory = args[i];
+                break;
+        }
+    }
+    if (appDirectory is null)
+    {
+        Console.Error.WriteLine(
+            "framework-identity: <app-dir> is required (the host's application directory — the one "
+            + "holding meshweaver-surface.manifest beside its assemblies; a container's /app).");
+        return 2;
+    }
+
+    var full = Path.GetFullPath(appDirectory);
+    var (identity, problem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(full);
+    if (identity is null)
+    {
+        // 🚨 Never degrade to a fallback identity here. Two manifest-less directories built from the
+        // same commit resolve the SAME fallback, so a comparison over them would report a match
+        // having verified nothing — the "verification step that cannot fail" shape.
+        Console.Error.WriteLine($"framework-identity: cannot resolve an identity for '{full}' — {problem}");
+        return 1;
+    }
+
+    Console.WriteLine(identity);
+    if (expected is null || expected.Length == 0)
+        return 0;
+    if (string.Equals(expected, identity, StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine(
+            $"framework-identity: MATCH — '{full}' resolves {identity}, the identity the bake "
+            + "published under. Its bundles are addressed to this host.");
+        return 0;
+    }
+
+    var pairs = FrameworkBuildIdentity.ParseSurfaceManifest(
+        File.ReadAllText(Path.Combine(full, FrameworkBuildIdentity.SurfaceManifestFileName)));
+    var absent = FrameworkBuildIdentity.CanonicalAssembliesAbsentFrom(pairs);
+    Console.Error.WriteLine(
+        $"framework-identity: MISMATCH — the bake published under '{expected}' but '{full}' "
+        + $"resolves '{identity}'. Bundles published under an identity this host never asks for are "
+        + "INERT: the pods compile everything at boot exactly as if no bake had run, and nothing "
+        + "else in the pipeline reports it (issue #1814).");
+    Console.Error.WriteLine(
+        absent.Length == 0
+            ? "  Both manifests record every canonical content-surface assembly, so the difference is "
+              + "in the recorded HASHES — different binaries (a different architecture, or hosts built "
+              + "from different commits). Check that both were taken with the same --platform and from "
+              + "the same release."
+            : "  This host's surface manifest does not record these canonical content-surface "
+              + $"assemblies, so each hashes as '{FrameworkBuildIdentity.AbsentMarker}' here while the "
+              + "bake host records a real surface hash for it:\n    - "
+              + string.Join("\n    - ", absent)
+              + "\n  A canonical assembly leaves a host's manifest when it leaves that host's COMPILE "
+              + "reference graph (@(ReferencePathWithRefAssemblies)) — e.g. a ProjectReference removed "
+              + "in favour of a runtime module lane. Either give this host the compile reference back "
+              + "(Private=\"false\" keeps the bits out of its app closure) or remove the assembly from "
+              + "FrameworkBuildIdentity.ContentSurfaceAssemblies — never leave the two hosts disagreeing.");
+    return 1;
 }
 
 // The GATE verb (`mw-plugin-test <repo-root>`). A LOCAL FUNCTION rather than bare top-level
