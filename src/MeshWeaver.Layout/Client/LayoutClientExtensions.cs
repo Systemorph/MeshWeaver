@@ -456,7 +456,7 @@ public static class LayoutClientExtensions
         // "1.5rem" yields 1.5 rather than a guessed 24. px is the unit every framework example uses and the
         // one these numeric slots are already denominated in; the other units are accepted so a
         // hand-authored node degrades to a plausible number instead of to nothing.
-        var number = StripCssUnit(s);
+        var number = StripCssUnit(s);   // a span into s — no allocation
 
         // Parse INVARIANT, never CurrentCulture. These strings arrive off the wire as JSON or CSS, where
         // "1.5" always means one-and-a-half; `double.Parse("1.5")` on a comma-decimal thread reads 15.
@@ -479,11 +479,12 @@ public static class LayoutClientExtensions
 
     /// <summary>
     /// Returns <paramref name="s"/> with a trailing CSS unit removed ("8px" → "8", "-4px" → "-4",
-    /// "1.5rem" → "1.5", "50%" → "50"), or unchanged when it carries none.
+    /// "1.5rem" → "1.5", "50%" → "50"), or unchanged when it carries none. Stays a span the whole way —
+    /// the number is handed straight to the span TryParse overloads, so the render path allocates nothing.
     /// </summary>
-    private static string StripCssUnit(string s)
+    private static ReadOnlySpan<char> StripCssUnit(ReadOnlySpan<char> s)
     {
-        var span = s.AsSpan().Trim();
+        var span = s.Trim();
         var digits = span.Length;
         while (digits > 0 && !char.IsAsciiDigit(span[digits - 1]) && span[digits - 1] != '.')
             digits--;
@@ -491,7 +492,7 @@ public static class LayoutClientExtensions
         // keeps the tolerance narrow: "8 apples" and "auto" stay unreadable (→ the default) rather than
         // silently becoming 8 and 0.
         return digits > 0 && digits < span.Length && IsCssUnit(span[digits..])
-            ? span[..digits].ToString()
+            ? span[..digits]
             : s;
     }
 
@@ -499,16 +500,27 @@ public static class LayoutClientExtensions
     /// The CSS length and percentage units a bound layout value may carry. `px` and `%` are what the
     /// framework's controls and docs actually emit; the rest are the CSS spec's remaining length units,
     /// listed so a hand-authored `"1.5rem"` / `"2em"` / `"50vh"` reads the same way. Units are
-    /// case-insensitive in CSS ("8PX" is legal), hence the normalization before the match.
+    /// case-insensitive in CSS ("8PX" is legal), hence the fold before the match — done in a stack
+    /// buffer rather than via ToString(), because this sits on the render path and a per-binding
+    /// allocation there is per-frame GC pressure.
     /// </summary>
-    private static bool IsCssUnit(ReadOnlySpan<char> unit) =>
-        unit.ToString().ToLowerInvariant() switch
+    private static bool IsCssUnit(ReadOnlySpan<char> unit)
+    {
+        // Every unit below is at most four characters; the length cap is also what bounds the buffer.
+        if (unit.Length is 0 or > MaxCssUnitLength)
+            return false;
+        Span<char> lower = stackalloc char[MaxCssUnitLength];
+        unit.ToLowerInvariant(lower);
+        return lower[..unit.Length] switch
         {
             "%" or "px" or "rem" or "em" or "ex" or "ch" or "cap" or "ic" or "lh" or "rlh" => true,
             "vw" or "vh" or "vmin" or "vmax" or "vi" or "vb" => true,
             "cm" or "mm" or "q" or "in" or "pt" or "pc" or "fr" => true,
             _ => false
         };
+    }
+
+    private const int MaxCssUnitLength = 4;
 
     /// <summary>
     /// Reads an integral magnitude, accepting a fractional one by truncating it — the same thing
@@ -516,12 +528,19 @@ public static class LayoutClientExtensions
     /// slot behaves like 1.5 in an `int` slot instead of vanishing. Out of range yields <c>false</c>
     /// (→ the default), never an OverflowException thrown out of a render.
     /// </summary>
-    private static bool TryReadIntegral(string s, long min, long max, out long value)
+    private static bool TryReadIntegral(ReadOnlySpan<char> s, long min, long max, out long value)
     {
         if (!long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
         {
+            // The exact parse failed, so this is a fractional magnitude ("1.5rem"). Range-check it as a
+            // double BEFORE truncating — and cap at 2^53, past which a double no longer represents
+            // integers exactly: `(double)long.MaxValue` rounds UP, so a `d > max` test alone lets a value
+            // one ulp too large through and the cast then wraps to long.MinValue rather than failing.
+            // Nothing that size is a layout length; refusing it is the honest answer.
+            const double exactIntegerLimit = 9007199254740992d; // 2^53
             if (!double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
-                || double.IsNaN(d) || double.IsInfinity(d) || d < min || d > max)
+                || double.IsNaN(d) || double.IsInfinity(d)
+                || Math.Abs(d) > exactIntegerLimit || d < min || d > max)
             {
                 value = 0;
                 return false;
