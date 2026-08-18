@@ -1240,10 +1240,16 @@ public class MessageService : IMessageService
             if (!deferredDeliveries.TryRemove(delivery.Id, out var tracker)) return;
             tracker.TimeoutCts.Dispose();
             var stillClosed = string.Join(",", gates.Keys);
+            // 🚨 Unavailable, not the default Unknown. A hub that has not opened its init gates is
+            // still STARTING — the read reached no verdict and the same request will succeed once
+            // the gate opens, which is precisely ErrorType.Unavailable's contract ("no verdict was
+            // reached … retryable by construction"). Reported as Unknown it was indistinguishable
+            // from a handler defect, so every caller mapped it to a hard error instead of a retry.
             ReportFailure(delivery.WithProperty("Error",
-                $"Hub {Address} deferred {delivery.Message.GetType().Name} (id={delivery.Id}) for >{DeferralTimeout.TotalSeconds:F0}s "
-                + $"without opening init gates [{stillClosed}] — likely a stuck NodeType compile, "
-                + $"missing handler registration on the receiver, or a dependency that never initialised."));
+                    $"Hub {Address} deferred {delivery.Message.GetType().Name} (id={delivery.Id}) for >{DeferralTimeout.TotalSeconds:F0}s "
+                    + $"without opening init gates [{stillClosed}] — likely a stuck NodeType compile, "
+                    + $"missing handler registration on the receiver, or a dependency that never initialised."),
+                ErrorType.Unavailable);
         }, TaskScheduler.Default);
     }
 
