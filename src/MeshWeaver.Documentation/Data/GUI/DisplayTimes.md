@@ -137,6 +137,34 @@ public static string DisplayStamp(DateTimeOffset instant, string? zoneId) =>
 
 ---
 
+# The agent's clock is a viewer of this seam too
+
+An **agent prompt** is not a render path, and it needs the same two clocks for the same reasons.
+Until #1651 nothing told an agent the date at all, so every model answered "what day is today" from
+its training priors — and so did every relative expression a scheduling agent computes off that
+anchor ("tomorrow", "next Tuesday afternoon", "clear my Friday"). A wrong anchor books meetings on
+wrong days while nothing looks broken.
+
+`CurrentTimeContext.Describe(instant, zoneId)` (MeshWeaver.AI) renders the block, and
+`AgentChatClient.AppendContextAndAttachmentsAsync` appends it to the **per-round** context — beside
+the application context and attachments, shared by the streaming and non-streaming paths. Three
+things about it are load-bearing:
+
+- **Per round, never in the instructions.** Agents are built once and cached while a thread lives
+  for days, so a date baked into instruction text is stale after midnight — confidently wrong in
+  exactly the way the fix removes.
+- **Both clocks, labelled.** The user's local date answers "what day is today" for a human; the
+  ISO-8601 `Z` instant is what the agent may hand back to a tool (see *Machine-facing output* above).
+  The block also tells the agent NOT to convert calendar facts.
+- **The zone comes from the identity, and has to RIDE there.** By the time a round's prompt is
+  composed the agent runs on the agent hub, where the ambient `AccessContext` is typically null or
+  an impersonated System principal. So `AccessContext.TimeZoneId` is captured at the submit boundary
+  onto `ThreadMessage.SubmitterTimeZoneId` and rebuilt by the round-dispatch watcher — the same
+  carrier, and the same argument, as `SubmitterLocale` (#948). Without it every viewer silently
+  anchors to UTC.
+
+---
+
 # Why this has its own page
 
 The seam shipped with 7 render sites converted. An audit two weeks later found **15 more still
