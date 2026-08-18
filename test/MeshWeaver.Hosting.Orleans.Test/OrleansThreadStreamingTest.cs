@@ -75,8 +75,10 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     /// "content was never readable" and "the round never dispatched" produce the IDENTICAL
     /// observation — an empty message list — so the 45 s timeout in #1753 could not say which of
     /// the two had happened. <see cref="MeshNodeContentExtensions.ContentAs{T}"/> recovers the
-    /// degraded shape (and logs when it genuinely cannot); <see cref="Shape"/> records what
-    /// arrived, and the control-plane counters say how far the round got.</para>
+    /// degraded shape; when it genuinely cannot, the diagnosis lands in the ASSERTION MESSAGE
+    /// rather than in a log this suite would then have to be reading — <see cref="Shape"/> names
+    /// what did arrive and <see cref="Status"/> reads <c>(unreadable)</c>. The control-plane
+    /// counters say how far the round got.</para>
     /// </summary>
     private sealed record ThreadControlPlane(
         string Shape,
