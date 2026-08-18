@@ -34,8 +34,37 @@ using MeshWeaver.Compiler;
 // Everything BELOW this block is the GATE (`mw-plugin-test <root>`), which legitimately stands up a
 // mesh because rendering a layout area and executing a `Tests` area are runtime behaviours. The two
 // used to be one code path wearing two names, which is how the mesh-driven bake stayed invisible.
-if (args.Length > 0 && args[0] == "compile")
-    return RunCompile(args[1..]);
+//
+// 🚨 NOTHING MAY THROW OUT OF `Main` — an escaping exception does not end this process, it SPINS it
+// (#1741). Every consumer runs this binary as a container's PID 1 (`docker run … --entrypoint
+// /app/mw-plugin-test`). The runtime's unhandled-exception path prints the trace and then calls
+// `abort()`, which `raise()`s SIGABRT at the process — but a PID-namespace init with SIG_DFL for
+// that signal is `SIGNAL_UNKILLABLE`, so the kernel DISCARDS it (kernel/signal.c,
+// `sig_task_ignored`). `raise()` returns, `abort()` falls through to its `ABORT_INSTRUCTION` trap,
+// the runtime's own SIGTRAP handler is still installed and returns to the very instruction that
+// trapped — and the main thread re-traps forever. Measured 2026-08-17: two containers "Up" for 36
+// and 57 minutes at ~100% CPU each, having printed one FileNotFoundException in their first second;
+// the same image run with `--init` (so the tool is PID 2) exits 134 immediately.
+//
+// So every failure below turns into a MESSAGE and an EXIT CODE. This guard is the backstop for the
+// ones nobody anticipated — it prints the whole exception, so nothing is hidden, and returns
+// non-zero so the container dies instead of burning a CI runner until the job timeout fires and
+// reports a "hang" rather than a bad argument. (The consumers ALSO pass `docker run --init` now,
+// which covers the crashes a `catch` cannot reach — a stack overflow, an OOM abort, an unhandled
+// throw on a background thread.)
+try
+{
+    if (args.Length > 0 && args[0] == "compile")
+        return RunCompile(args[1..]);
+    if (args.Length > 0 && args[0] == "framework-identity")
+        return RunFrameworkIdentity(args[1..]);
+    return await RunGate(args);
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"mw-plugin-test: FATAL — {ex}");
+    return 70; // EX_SOFTWARE: distinct from 0 (green), 1 (gate red) and 2 (bad usage).
+}
 
 static int RunCompile(string[] args)
 {
@@ -96,109 +125,244 @@ static int RunCompile(string[] args)
     return bake.ExitCode;
 }
 
-string? root = null;
-var compileTimeout = TimeSpan.FromMinutes(5);
-var renderTimeout = TimeSpan.FromMinutes(2);
-var allowlist = GateAllowlist.Empty;
-var allowApplied = false;
-string? reportPath = null;
-string? bakeOutput = null;
-string? sourceSha = null;
-
-for (var i = 0; i < args.Length; i++)
+// 🚨 THE `framework-identity` VERB — the ADDRESS CHECK (#1814).
+//
+//     mw-plugin-test framework-identity <app-dir> [--expect <identity>]
+//
+// Prints the framework build identity a host whose binaries live in <app-dir> resolves, reading
+// that directory's meshweaver-surface.manifest and assemblies as FILES — nothing is loaded, so one
+// container can answer the question for another image's /app.
+//
+// The identity is an ADDRESS: a bake publishes its bundles under the identity ITS host resolves and
+// a portal only ever looks under the identity IT resolves. Before this verb nothing in the pipeline
+// could observe that the two disagree — CD run 32063444385 baked release 3.0.0-rc4.ci.4201 under
+// `sda0843abd6db4fc7e37cc3f838079265` while both prod pods asked for
+// `s944d7fd0bbf81f4b40b85a7a74296263`, the bundles sat intact on the shared volume under an address
+// nobody read, the bake job reported SUCCESS, and the first pod of every deploy recompiled 269
+// types (10 m 29 s, +1598 MB working set) as though no bake had ever run. `--expect` turns that
+// into a red step: it compares and, on a mismatch, names the canonical assemblies each side's
+// manifest is missing — the actual defect in #1814 was eight of them, not a hash that "just
+// differs".
+//
+// 🚨 SAME ARCHITECTURE ONLY. Reference-assembly bytes differ between the amd64 and arm64 legs of one
+// multi-arch image, so an image carries two identities; extract both directories for ONE platform
+// (CI pins --platform linux/amd64). That per-arch split is the second, independent way to mint an
+// address nobody reads: memex.localhost is arm64 while the CI bake publishes linux/amd64.
+static int RunFrameworkIdentity(string[] args)
 {
-    switch (args[i])
+    string? appDirectory = null;
+    string? expected = null;
+    for (var i = 0; i < args.Length; i++)
     {
-        case "--compile-timeout" when i + 1 < args.Length:
-            compileTimeout = TimeSpan.FromSeconds(
-                double.Parse(args[++i], CultureInfo.InvariantCulture));
-            break;
-        case "--render-timeout" when i + 1 < args.Length:
-            renderTimeout = TimeSpan.FromSeconds(
-                double.Parse(args[++i], CultureInfo.InvariantCulture));
-            break;
-        case "--allow" when i + 1 < args.Length:
-            allowlist = GateAllowlist.Load(args[++i]);
-            allowApplied = true;
-            break;
-        case "--report" when i + 1 < args.Length:
-            reportPath = args[++i];
-            break;
-        case "--bake-output" when i + 1 < args.Length:
-            bakeOutput = args[++i];
-            break;
-        case "--source-sha" when i + 1 < args.Length:
-            sourceSha = args[++i];
-            break;
-        // A value-taking option as the LAST argument would otherwise fall through to the default
-        // case as "Unknown argument" — a misleading message for a missing value.
-        case "--compile-timeout" or "--render-timeout" or "--allow" or "--report"
-            or "--bake-output" or "--source-sha":
-            Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
-            return 2;
-        // Diagnostic: print the framework build identity this process resolves — the exact value
-        // the bake keys bundles to and the seeder gates on (#1660 WS3). One line, `identity=<id>
-        // provenance=<g<sha> | (unstamped)>`, then exit 0. Lets CI steps and operators verify
-        // "would this build's bake be adoptable by that image?" without standing up a mesh, and
-        // is what the surface-identity proof script drives.
-        case "--print-framework-identity":
+        switch (args[i])
         {
-            var provenance = MeshWeaver.Compiler.FrameworkBuildIdentity
-                .StampedIdentityOf(typeof(MeshWeaver.Compiler.FrameworkBuildIdentity).Assembly);
-            Console.WriteLine(
-                $"identity={MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid} "
-                + $"provenance={provenance ?? "(unstamped)"}");
-            return 0;
-        }
-        case "--help" or "-h":
-            Console.WriteLine(
-                "usage: mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
-                + "[--allow <file>] [--report <file>] [--bake-output <dir>] [--source-sha <sha>] "
-                + "[--print-framework-identity]");
-            return 0;
-        default:
-            if (args[i].StartsWith('-') || root is not null)
-            {
-                Console.Error.WriteLine($"Unknown argument '{args[i]}'. Try --help.");
+            case "--expect" when i + 1 < args.Length:
+                expected = args[++i].Trim();
+                break;
+            case "--expect":
+                Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
                 return 2;
-            }
-            root = args[i];
-            break;
+            case "--help" or "-h":
+                Console.WriteLine(
+                    "usage: mw-plugin-test framework-identity <app-dir> [--expect <identity>]");
+                return 0;
+            default:
+                if (args[i].StartsWith('-') || appDirectory is not null)
+                {
+                    Console.Error.WriteLine($"Unknown argument '{args[i]}'. Try --help.");
+                    return 2;
+                }
+                appDirectory = args[i];
+                break;
+        }
     }
+    if (appDirectory is null)
+    {
+        Console.Error.WriteLine(
+            "framework-identity: <app-dir> is required (the host's application directory — the one "
+            + "holding meshweaver-surface.manifest beside its assemblies; a container's /app).");
+        return 2;
+    }
+
+    var full = Path.GetFullPath(appDirectory);
+    var (identity, problem) = FrameworkBuildIdentity.ResolveIdentityForDirectory(full);
+    if (identity is null)
+    {
+        // 🚨 Never degrade to a fallback identity here. Two manifest-less directories built from the
+        // same commit resolve the SAME fallback, so a comparison over them would report a match
+        // having verified nothing — the "verification step that cannot fail" shape.
+        Console.Error.WriteLine($"framework-identity: cannot resolve an identity for '{full}' — {problem}");
+        return 1;
+    }
+
+    Console.WriteLine(identity);
+    if (expected is null || expected.Length == 0)
+        return 0;
+    if (string.Equals(expected, identity, StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine(
+            $"framework-identity: MATCH — '{full}' resolves {identity}, the identity the bake "
+            + "published under. Its bundles are addressed to this host.");
+        return 0;
+    }
+
+    var pairs = FrameworkBuildIdentity.ParseSurfaceManifest(
+        File.ReadAllText(Path.Combine(full, FrameworkBuildIdentity.SurfaceManifestFileName)));
+    var absent = FrameworkBuildIdentity.CanonicalAssembliesAbsentFrom(pairs);
+    Console.Error.WriteLine(
+        $"framework-identity: MISMATCH — the bake published under '{expected}' but '{full}' "
+        + $"resolves '{identity}'. Bundles published under an identity this host never asks for are "
+        + "INERT: the pods compile everything at boot exactly as if no bake had run, and nothing "
+        + "else in the pipeline reports it (issue #1814).");
+    Console.Error.WriteLine(
+        absent.Length == 0
+            ? "  Both manifests record every canonical content-surface assembly, so the difference is "
+              + "in the recorded HASHES — different binaries (a different architecture, or hosts built "
+              + "from different commits). Check that both were taken with the same --platform and from "
+              + "the same release."
+            : "  This host's surface manifest does not record these canonical content-surface "
+              + $"assemblies, so each hashes as '{FrameworkBuildIdentity.AbsentMarker}' here while the "
+              + "bake host records a real surface hash for it:\n    - "
+              + string.Join("\n    - ", absent)
+              + "\n  A canonical assembly leaves a host's manifest when it leaves that host's COMPILE "
+              + "reference graph (@(ReferencePathWithRefAssemblies)) — e.g. a ProjectReference removed "
+              + "in favour of a runtime module lane. Either give this host the compile reference back "
+              + "(Private=\"false\" keeps the bits out of its app closure) or remove the assembly from "
+              + "FrameworkBuildIdentity.ContentSurfaceAssemblies — never leave the two hosts disagreeing.");
+    return 1;
 }
 
-var options = new GateOptions
+// The GATE verb (`mw-plugin-test <repo-root>`). A LOCAL FUNCTION rather than bare top-level
+// statements so the guard above can wrap it: top-level statements are the body of `Main` itself,
+// and anything thrown from them escapes the process (see the #1741 note above).
+static async Task<int> RunGate(string[] args)
 {
-    RepoRoot = root ?? ".",
-    CompileTimeout = compileTimeout,
-    RenderTimeout = renderTimeout,
-    BakeOutputDirectory = bakeOutput,
-    SourceSha = sourceSha,
-};
+    string? root = null;
+    var compileTimeout = TimeSpan.FromMinutes(5);
+    var renderTimeout = TimeSpan.FromMinutes(2);
+    var allowlist = GateAllowlist.Empty;
+    var allowApplied = false;
+    string? reportPath = null;
+    string? bakeOutput = null;
+    string? sourceSha = null;
 
-Console.WriteLine($"mw-plugin-test: gating node repos under '{Path.GetFullPath(options.RepoRoot)}'");
-if (allowApplied)
-    Console.WriteLine($"known-debt allowlist: {allowlist.Entries.Count} entr(ies)");
-var report = await PluginGateRunner.Run(options).FirstAsync().ToTask();
-if (reportPath is not null)
-{
-    // Written for EVERY completed run — red, green, or fatal — and before any allowlist verdict:
-    // the combo verifier folds the raw evidence itself, and a missing report must only ever mean
-    // "the tester never completed", not "the run was red".
-    var fullReportPath = Path.GetFullPath(reportPath);
-    var reportDir = Path.GetDirectoryName(fullReportPath);
-    if (!string.IsNullOrEmpty(reportDir))
-        Directory.CreateDirectory(reportDir);
-    File.WriteAllText(
-        fullReportPath,
-        JsonSerializer.Serialize(report.ToRunReport(), InstanceComboAssembler.Json));
-    Console.WriteLine($"structured report written to '{fullReportPath}'");
+    for (var i = 0; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--compile-timeout" when i + 1 < args.Length:
+                compileTimeout = TimeSpan.FromSeconds(
+                    double.Parse(args[++i], CultureInfo.InvariantCulture));
+                break;
+            case "--render-timeout" when i + 1 < args.Length:
+                renderTimeout = TimeSpan.FromSeconds(
+                    double.Parse(args[++i], CultureInfo.InvariantCulture));
+                break;
+            // A ratchet the gate cannot read is a CONFIGURATION error, and it is refused here —
+            // before a mesh is built — with the flag, the resolved path and the two honest
+            // spellings of "no known debt". See GateAllowlist.MissingFileMessage for why a missing
+            // file is NOT silently read as an empty list even though that is the stricter verdict.
+            case "--allow" when i + 1 < args.Length:
+            {
+                var allowPath = args[++i];
+                if (!File.Exists(allowPath))
+                {
+                    Console.Error.WriteLine(GateAllowlist.MissingFileMessage(allowPath));
+                    return 2;
+                }
+                try
+                {
+                    allowlist = GateAllowlist.Load(allowPath);
+                }
+                catch (FormatException ex)
+                {
+                    Console.Error.WriteLine(
+                        $"mw-plugin-test: --allow file '{GateAllowlist.Describe(allowPath)}' is "
+                        + $"malformed — {ex.Message}");
+                    return 2;
+                }
+                allowApplied = true;
+                break;
+            }
+            case "--report" when i + 1 < args.Length:
+                reportPath = args[++i];
+                break;
+            case "--bake-output" when i + 1 < args.Length:
+                bakeOutput = args[++i];
+                break;
+            case "--source-sha" when i + 1 < args.Length:
+                sourceSha = args[++i];
+                break;
+            // A value-taking option as the LAST argument would otherwise fall through to the default
+            // case as "Unknown argument" — a misleading message for a missing value.
+            case "--compile-timeout" or "--render-timeout" or "--allow" or "--report"
+                or "--bake-output" or "--source-sha":
+                Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
+                return 2;
+            // Diagnostic: print the framework build identity this process resolves — the exact value
+            // the bake keys bundles to and the seeder gates on (#1660 WS3). One line, `identity=<id>
+            // provenance=<g<sha> | (unstamped)>`, then exit 0. Lets CI steps and operators verify
+            // "would this build's bake be adoptable by that image?" without standing up a mesh, and
+            // is what the surface-identity proof script drives.
+            case "--print-framework-identity":
+            {
+                var provenance = MeshWeaver.Compiler.FrameworkBuildIdentity
+                    .StampedIdentityOf(typeof(MeshWeaver.Compiler.FrameworkBuildIdentity).Assembly);
+                Console.WriteLine(
+                    $"identity={MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid} "
+                    + $"provenance={provenance ?? "(unstamped)"}");
+                return 0;
+            }
+            case "--help" or "-h":
+                Console.WriteLine(
+                    "usage: mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
+                    + "[--allow <file>] [--report <file>] [--bake-output <dir>] [--source-sha <sha>] "
+                    + "[--print-framework-identity]");
+                return 0;
+            default:
+                if (args[i].StartsWith('-') || root is not null)
+                {
+                    Console.Error.WriteLine($"Unknown argument '{args[i]}'. Try --help.");
+                    return 2;
+                }
+                root = args[i];
+                break;
+        }
+    }
+
+    var options = new GateOptions
+    {
+        RepoRoot = root ?? ".",
+        CompileTimeout = compileTimeout,
+        RenderTimeout = renderTimeout,
+        BakeOutputDirectory = bakeOutput,
+        SourceSha = sourceSha,
+    };
+
+    Console.WriteLine($"mw-plugin-test: gating node repos under '{Path.GetFullPath(options.RepoRoot)}'");
+    if (allowApplied)
+        Console.WriteLine($"known-debt allowlist: {allowlist.Entries.Count} entr(ies)");
+    var report = await PluginGateRunner.Run(options).FirstAsync().ToTask();
+    if (reportPath is not null)
+    {
+        // Written for EVERY completed run — red, green, or fatal — and before any allowlist verdict:
+        // the combo verifier folds the raw evidence itself, and a missing report must only ever mean
+        // "the tester never completed", not "the run was red".
+        var fullReportPath = Path.GetFullPath(reportPath);
+        var reportDir = Path.GetDirectoryName(fullReportPath);
+        if (!string.IsNullOrEmpty(reportDir))
+            Directory.CreateDirectory(reportDir);
+        File.WriteAllText(
+            fullReportPath,
+            JsonSerializer.Serialize(report.ToRunReport(), InstanceComboAssembler.Json));
+        Console.WriteLine($"structured report written to '{fullReportPath}'");
+    }
+    if (!allowApplied)
+    {
+        report.WriteSummary(Console.Out);
+        return report.ExitCode;
+    }
+    var verdict = GateVerdict.Evaluate(report, allowlist);
+    report.WriteSummary(Console.Out, verdict);
+    return report.FatalError is null && verdict.Success ? 0 : 1;
 }
-if (!allowApplied)
-{
-    report.WriteSummary(Console.Out);
-    return report.ExitCode;
-}
-var verdict = GateVerdict.Evaluate(report, allowlist);
-report.WriteSummary(Console.Out, verdict);
-return report.FatalError is null && verdict.Success ? 0 : 1;

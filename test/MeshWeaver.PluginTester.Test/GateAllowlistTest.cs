@@ -52,6 +52,59 @@ public class GateAllowlistTest
         Assert.Contains("line 1", ex.Message);
     }
 
+    // ── a ratchet that is not there ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A MISSING allow file is a configuration error, not an empty ratchet (#1741). Substituting
+    /// an empty list would be the STRICTER verdict — with no entries every failure is new — so it
+    /// could never turn a red run green; it would instead make the gate's configuration
+    /// unverifiable, since <c>known-debt allowlist: 0 entr(ies)</c> would mean either "the ratchet
+    /// is empty" or "the gate never found the ratchet you passed". An empty ratchet has two honest
+    /// spellings: an empty FILE, or omitting <c>--allow</c>.
+    /// </summary>
+    [Fact]
+    public void Load_ThrowsAnActionableMessage_WhenTheFileIsMissing()
+    {
+        var missing = Path.Combine(
+            Path.GetTempPath(), $"no-such-ratchet-{Guid.NewGuid():N}.allow");
+
+        var ex = Assert.Throws<FileNotFoundException>(() => GateAllowlist.Load(missing));
+
+        // Not the framework's bare "Could not find file": the flag, the resolved path, and how an
+        // empty ratchet is actually spelled.
+        Assert.Contains("--allow", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(missing, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("empty file", ex.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>An EMPTY file is a legitimate ratchet — it is how "no known debt" is recorded,
+    /// and it must load as an empty list rather than as an error.</summary>
+    [Fact]
+    public void Load_ReadsAnEmptyFile_AsAnEmptyRatchet()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"empty-ratchet-{Guid.NewGuid():N}.allow");
+        File.WriteAllText(file, "");
+        try
+        {
+            Assert.Empty(GateAllowlist.Load(file).Entries);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    /// <summary>The diagnostic path resolver must never throw on the very path it is describing —
+    /// an empty <c>--allow</c> value would otherwise blow up inside the error message.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Describe_DegradesToTheRawText_WhenThePathCannotBeResolved(string path)
+    {
+        Assert.Equal(path, GateAllowlist.Describe(path));
+        Assert.Contains("--allow", GateAllowlist.MissingFileMessage(path), StringComparison.Ordinal);
+    }
+
     // ── classification ───────────────────────────────────────────────────────────────────────
 
     private static GateReport Report(params PackageResult[] packages) => new([.. packages]);

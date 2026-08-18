@@ -538,8 +538,188 @@ internal static class NodeTypeCompilationHelpers
                         "Framework-stale kickoff: Update failed for {HubPath}", hubPath));
             });
 
+
+        // 🚨 Failed-verdict re-drive kickoff (issue #1793) — the missing COMPLEMENT of the
+        // framework-stale kickoff above, and the reason a fix could never reach the nodes it was
+        // written for.
+        //
+        // A compile that FAILS writes no assembly coordinates at all: ApplyCompileFailure stamps
+        // neither LatestAssembly{Collection,Path} nor CompiledFrameworkVersion. For a NodeType that
+        // never compiled successfully on this deployment those are null FOREVER — and every
+        // automatic path keys off something that only exists after a first success:
+        //
+        //   firstBuildKickoff              needs CompilationStatus is null   → it is Error
+        //   recoveryKickoff                needs Compiling                   → it is Error
+        //   frameworkStaleKickoff          needs the assembly coordinates    → never written
+        //     (its own filter reads `Ok or Error`, so it INTENDS to cover this — it cannot,
+        //      because HasStaleFrameworkBuild delegates to fields a failure does not stamp)
+        //   InstallReleaseRequestWatcher   needs RequestedReleaseAt > LastReleaseRequestHandledAt
+        //                                                                    → only a human moves it
+        //   the sources watcher's parked auto-retry needs the IN-MEMORY park registry to hold this
+        //     path — a failure that predates this PROCESS is not in it, so a source fix after a
+        //     restart re-drives nothing either
+        //
+        // So only a human pressing Compile (or a Recycle) got such a node out; a redeploy, a
+        // framework bump, a module update and a fix to the failing code all reached none of them.
+        // Measured cost: NodeCompileShaping.AnchorIncludePath was written for 15 types parked on
+        // memex-cloud 2026-08-12 and, five days later, #1786 found near enough the same list still
+        // parked — the fix shipped and could not reach them.
+        //
+        // The trigger is the only thing a failure CAN honestly record: the INPUTS the verdict was
+        // formed from (framework identity + installed modules + source snapshot), stamped as
+        // NodeTypeDefinition.FailedBuildInputs. Live inputs differ from the stamp ⇒ this framework,
+        // these modules or these sources have never had their attempt ⇒ take exactly one.
+        //
+        // 🚨 Bounded three ways, because an unbounded re-drive on a genuinely broken type is a
+        // recompile storm on this hub's single-threaded action block:
+        //   1. STRUCTURAL, and the one that actually does the work — the flip to Pending stamps the
+        //      live token in the SAME Update, so the trigger this kickoff fires on is false the
+        //      instant it fires. A reconcile that feeds its own trigger is the #223 write-storm
+        //      shape; the stamp is what forecloses it.
+        //   2. LOUD — the process-wide ledger (NodeTypeCompileParkRegistry.RecordFailureRedrive)
+        //      logs an ERROR naming the path the moment it is re-driven twice for the SAME inputs,
+        //      i.e. the moment (1) provably did not hold. Non-convergence must never be quiet.
+        //   3. TERMINAL — past MaxAutomaticFailureRedrives the kickoff gives up for this hub's
+        //      lifetime and says so, naming the type and the remedy. An explicit Compile refunds it.
+        //
+        // Level-triggered, NOT Take(1): CurrentSourceVersions is written by the sources watcher
+        // AFTER activation, so the source half of the token is not final on the first emission — a
+        // one-shot would sample the pre-seed state and miss every source fix. Convergence comes
+        // from (1), not from the Rx operator.
+        var redriveGivenUp = false;
+        var failedVerdictKickoffSub = ownStream
+            .Where(node => node?.Content is NodeTypeDefinition def
+                && HasStaleFailureVerdict(def, guards.ModulesHash)
+                && !IsStaticOnlyNodeType(node, def))
+            // Cheap dedupe so an unrelated field edit does not re-enter the body while the flip is
+            // still in flight; correctness is the re-check inside the Update lambda, not this.
+            .DistinctUntilChanged(node =>
+            {
+                var d = (NodeTypeDefinition)node!.Content!;
+                return (d.CompilationStatus, BuildInputsToken(guards.ModulesHash, d.CurrentSourceVersions));
+            })
+            .Subscribe(
+                node =>
+                {
+                    if (redriveGivenUp)
+                        return;
+                    var def = (NodeTypeDefinition)node!.Content!;
+                    var liveInputs = BuildInputsToken(guards.ModulesHash, def.CurrentSourceVersions);
+                    var (forTheseInputs, total) =
+                        parkRegistry?.RecordFailureRedrive(hubPath, liveInputs) ?? (1, 1);
+
+                    if (forTheseInputs > 1)
+                        logger?.LogError(
+                            "Failed-verdict re-drive DID NOT CONVERGE for NodeType {HubPath}: this process has "
+                            + "already re-driven it for EXACTLY these compile inputs ({Inputs}) — attempt "
+                            + "{Attempt}. The flip to Pending stamps those inputs in the same write, so the "
+                            + "trigger cannot legitimately still be true; something is rewriting or dropping "
+                            + "FailedBuildInputs. Treat this as a write cycle, not as a slow compile.",
+                            hubPath, liveInputs, forTheseInputs);
+
+                    if (total > NodeTypeCompileParkRegistry.MaxAutomaticFailureRedrives)
+                    {
+                        redriveGivenUp = true;
+                        logger?.LogError(
+                            "Failed-verdict re-drive GIVING UP on NodeType {HubPath} after {Total} automatic "
+                            + "attempt(s) in this process (limit {Limit}). The type stays at "
+                            + "{Status} serving its recorded error and NOTHING will retry it automatically "
+                            + "until someone requests a build (the Compile button / a fresh release request), "
+                            + "which also refunds this budget. Last error: {Error}",
+                            hubPath, total, NodeTypeCompileParkRegistry.MaxAutomaticFailureRedrives,
+                            def.CompilationStatus, def.CompilationError ?? "(none recorded)");
+                        return;
+                    }
+
+                    logger?.LogInformation(
+                        "Failed-verdict re-drive: NodeType {HubPath} is settled at {Status} with no compiled "
+                        + "assembly, and its verdict was formed under different compile inputs than the live "
+                        + "ones (stamped '{Stamped}', live '{Live}') — flipping CompilationStatus=Pending for "
+                        + "ONE fresh attempt ({Attempt} of {Limit} in this process). Recorded error: {Error}",
+                        hubPath, def.CompilationStatus, def.FailedBuildInputs ?? "(never stamped)",
+                        liveInputs, total, NodeTypeCompileParkRegistry.MaxAutomaticFailureRedrives,
+                        def.CompilationError ?? "(none recorded)");
+
+                    // 🅿️ Un-park FIRST (in-memory + synchronous, so it happens-before the Pending
+                    // emission the compile watcher observes), exactly as the sources watcher's
+                    // parked auto-retry does — otherwise the parked short-circuit would swallow the
+                    // flip and re-settle it to Error. This does not weaken the park: the predicate
+                    // above is false for a type parked in THIS process under THESE inputs, so a
+                    // broken type whose inputs have not moved is never woken.
+                    parkRegistry?.Unpark(hubPath);
+                    var redriveAccess = hub.ServiceProvider.GetService<AccessService>();
+                    using var systemScope = redriveAccess?.ImpersonateAsSystem();
+                    workspace.GetMeshNodeStream().Update(curr =>
+                    {
+                        if (curr?.Content is not NodeTypeDefinition d) return curr!;
+                        // Never clobber an in-flight compile (a concurrent release request or
+                        // enrichment self-heal may already have flipped Pending/Compiling).
+                        if (d.CompilationStatus is CompilationStatus.Pending
+                                                or CompilationStatus.Compiling)
+                            return curr;
+                        // Re-check inside the lambda — a genuine compile may have settled between
+                        // the outer Where and this write.
+                        if (!HasStaleFailureVerdict(d, guards.ModulesHash)) return curr;
+                        return curr with
+                        {
+                            Content = d with
+                            {
+                                // 🚨 The bookkeeping and the flip land TOGETHER. Stamping the live
+                                // inputs here — not only in ApplyCompileFailure — is what makes the
+                                // re-drive unable to schedule another pass even if the compile
+                                // never writes back at all (process death mid-compile, the parked
+                                // re-settle, a poisoned content read).
+                                FailedBuildInputs = BuildInputsToken(
+                                    guards.ModulesHash, d.CurrentSourceVersions),
+                                CompilationStatus = CompilationStatus.Pending
+                            }
+                        };
+                    }).Subscribe(_ => { },
+                        ex => logger?.LogWarning(ex,
+                            "Failed-verdict re-drive: Update failed for {HubPath}", hubPath));
+                },
+                ex => logger?.LogWarning(ex,
+                    "Failed-verdict re-drive: own-stream subscription faulted for {HubPath} — a "
+                    + "never-compiled failure on this type will not be re-driven until the hub recycles",
+                    hubPath));
+
+        // 🚨 …and when the re-drive is deliberately DECLINED, say so ONCE. A type settled at a
+        // failure whose verdict was formed under exactly the live inputs is the give-up state of
+        // the mechanism above: correct, bounded — and, before this line, completely silent. Nothing
+        // anywhere named a NodeType that is broken and will not be retried, which is how thirteen
+        // parked types on memex-cloud went unnoticed between the fix that was written for them and
+        // the issue that rediscovered them. One line per hub lifetime, naming the type, the error
+        // and the remedy.
+        var stuckDiagnosticSub = ownStream
+            .Where(node => node?.Content is NodeTypeDefinition def
+                && def.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable
+                && string.IsNullOrEmpty(def.LatestAssemblyPath)
+                && !IsStaticOnlyNodeType(node, def)
+                // Same establishment gate as the re-drive: before the sources watcher has seeded a
+                // snapshot the re-drive is merely WAITING, not declining, and reporting that as
+                // "stuck" would cry wolf on every cold activation of a broken type.
+                && def.CurrentSourceVersions is not null
+                && !HasStaleFailureVerdict(def, guards.ModulesHash))
+            .Take(1)
+            .Subscribe(
+                node =>
+                {
+                    var def = (NodeTypeDefinition)node!.Content!;
+                    logger?.LogWarning(
+                        "NodeType {HubPath} is STUCK at {Status} with no compiled assembly: its verdict was "
+                        + "formed under the compile inputs that are live now ({Inputs}), so the automatic "
+                        + "re-drive correctly declines and nothing will retry it until the framework, the "
+                        + "installed modules or its sources change — or someone requests a build. Error: {Error}",
+                        hubPath, def.CompilationStatus,
+                        def.FailedBuildInputs ?? "(never stamped)",
+                        def.CompilationError ?? "(none recorded)");
+                },
+                ex => logger?.LogDebug(ex,
+                    "Stuck-type diagnostic: own-stream subscription faulted for {HubPath}", hubPath));
+
         return new CompositeDisposable(
-            watcherSub, firstBuildKickoffSub, recoveryKickoffSub, frameworkStaleKickoffSub);
+            watcherSub, firstBuildKickoffSub, recoveryKickoffSub, frameworkStaleKickoffSub,
+            failedVerdictKickoffSub, stuckDiagnosticSub);
     }
 
     /// <summary>
@@ -666,14 +846,15 @@ internal static class NodeTypeCompilationHelpers
             .Switch()
             .Select(sources =>
             {
-                // Fold the full current set → path → LastModified.UtcTicks. Same
-                // version field CompiledSources is keyed on, so IsDirty compares
-                // like-for-like (empty set → empty snapshot → IsDirty=false when
-                // CompiledSources is also empty).
+                // Fold the full current set → path → NodeTypeDefinition.SourceVersionOf.
+                // Same rule CompiledSources is keyed on, so IsDirty compares like-for-like
+                // (empty set → empty snapshot → IsDirty=false when CompiledSources is also
+                // empty). Keying on the raw timestamp is what let an un-timestamped source
+                // record 1601 on both sides and never read as changed (#1836).
                 var snap = System.Collections.Immutable.ImmutableDictionary<string, long>.Empty;
                 foreach (var n in sources)
                     if (!string.IsNullOrEmpty(n.Path))
-                        snap = snap.SetItem(n.Path!, n.LastModified.UtcTicks);
+                        snap = snap.SetItem(n.Path!, NodeTypeDefinition.SourceVersionOf(n));
                 return (IReadOnlyDictionary<string, long>)snap;
             }),
                 snapshot =>
@@ -912,6 +1093,10 @@ internal static class NodeTypeCompilationHelpers
                     // 🅿️ Deliberate retry → un-park so the explicit rebuild is allowed through
                     // the compile watcher's parked short-circuit (and the attempt budget resets).
                     parkRegistry?.Unpark(hubPath);
+                    // …and refund the AUTOMATIC re-drive budget (#1793): a human asking for a build
+                    // is the strongest signal that a give-up should be reconsidered, so a type that
+                    // exhausted its automatic attempts is eligible again after an explicit Compile.
+                    parkRegistry?.ResetFailureRedrives(hubPath);
                     logger?.LogInformation(
                         "[ReleaseRequestWatcher] {HubPath}: handling RequestedReleaseAt={Req} (force={Force}, lastHandled={Handled})",
                         hubPath, triggerAt,
@@ -1225,6 +1410,99 @@ internal static class NodeTypeCompilationHelpers
             || (guards is not null && !DependenciesValid(def, guards)));
 
     /// <summary>
+    /// The COMPILE INPUTS a verdict is formed from, as one comparable token — the framework
+    /// identity, the installed-module fingerprint, and the source snapshot
+    /// (see <see cref="NodeTypeDefinition.FailedBuildInputs"/>).
+    ///
+    /// <para>Pure and hub-free so the failure stamp
+    /// (<see cref="ApplyCompileFailure"/>) and the re-drive kickoff compute it the SAME way —
+    /// a token that two call sites derived differently would either never converge (a permanent
+    /// re-drive) or never fire (the hole this closes), and both failures are silent.</para>
+    ///
+    /// <para>Readable rather than a bare hash: an operator reading a stuck node's record can see
+    /// WHICH input the standing verdict was formed under. The source set is folded to
+    /// <c>count:sha256[0..16]</c> so the token stays a line rather than a kilobyte of paths.</para>
+    /// </summary>
+    internal static string BuildInputsToken(
+        string? modulesHash, IReadOnlyDictionary<string, long>? sources) =>
+        $"fw={FrameworkVersion};mod={modulesHash ?? "(none)"};src={SourceToken(sources)}";
+
+    /// <summary>The source snapshot folded to a short, order-insensitive token. A <c>null</c>
+    /// snapshot (the sources watcher has not seeded yet) is deliberately DISTINCT from an empty
+    /// one (the mesh answered "this type has no sources"): those are different facts, and
+    /// collapsing them would let an unseeded node read as a source-less one.</summary>
+    private static string SourceToken(IReadOnlyDictionary<string, long>? sources)
+    {
+        if (sources is null)
+            return "(unseeded)";
+        if (sources.Count == 0)
+            return "0";
+        var joined = string.Join(
+            "\n",
+            sources.OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => $"{kv.Key}@{kv.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}"));
+        var digest = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(joined));
+        return $"{sources.Count}:{Convert.ToHexString(digest)[..16].ToLowerInvariant()}";
+    }
+
+    /// <summary>
+    /// 🚨 True when a NodeType is sitting on a FAILURE VERDICT that the LIVE compile inputs have
+    /// moved past — the predicate the failed-verdict re-drive kickoff fires on (issue #1793).
+    ///
+    /// <para><b>Why it cannot be <see cref="HasStaleFrameworkBuild(NodeTypeDefinition, BuildGuards?)"/>.</b>
+    /// That twin needs <see cref="NodeTypeDefinition.LatestAssemblyCollection"/>,
+    /// <see cref="NodeTypeDefinition.LatestAssemblyPath"/> and
+    /// <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/> — all three written ONLY by a
+    /// successful compile. Its own filter already reads
+    /// <c>CompilationStatus is Ok or Error</c>, so it INTENDS to cover a failed type; it cannot,
+    /// because a type that never compiled successfully here has none of the coordinates it
+    /// delegates to. The harder case got the weaker treatment: a type that succeeded once and went
+    /// stale rebuilds automatically, a type that failed the first time never did.</para>
+    ///
+    /// <para>So this predicate is deliberately the COMPLEMENT: it applies exactly where the
+    /// framework-stale twin cannot — a settled failure with NO recorded assembly — and compares the
+    /// stamped verdict inputs against the live ones instead of comparing assembly coordinates.</para>
+    ///
+    /// <para><b>Bounded by construction.</b> The kickoff writes the live token into
+    /// <see cref="NodeTypeDefinition.FailedBuildInputs"/> in the same update that flips to
+    /// <see cref="CompilationStatus.Pending"/>, so this returns false immediately afterwards:
+    /// exactly one automatic attempt per distinct (framework, modules, sources) triple. A
+    /// <c>null</c> stamp — every node that failed before this field existed, and every node whose
+    /// Error was baked into a committed file — differs from any live token, which is precisely the
+    /// one-off recovery those nodes need.</para>
+    ///
+    /// <para><see cref="CompilationStatus.Unavailable"/> is included: it records that a compile
+    /// never reached a verdict at all, so it is even less of a reason to stop trying than an
+    /// Error. (<c>NodeTypeContractHandler.EnsureCompileDispatched</c> already re-drives it on the
+    /// next REQUEST; this adds the activation-time path, under the same bound.)</para>
+    ///
+    /// <para>🚨 <b>Never re-drive from an UNESTABLISHED source set.</b> On a cold activation the
+    /// sources watcher has not written <see cref="NodeTypeDefinition.CurrentSourceVersions"/> yet,
+    /// so the source half of the live token is not "no sources" — it is "not known yet". Firing
+    /// there would (a) drive a compile from a set nobody established, which is the #1216 lesson
+    /// ("a compile driven from a set you did not establish produces verdicts about code from
+    /// evidence you do not have"), and (b) burn a second attempt for free, because the watcher's
+    /// first write changes the token and the type would be re-driven AGAIN one emission later. The
+    /// sources watcher always writes a snapshot for every type this predicate applies to — the
+    /// empty map when the queries match nothing — so this ORDERS the mechanism rather than
+    /// disabling it, and a mesh that cannot answer the source query degrades to no re-drive rather
+    /// than to a wrong verdict.</para>
+    /// </summary>
+    internal static bool HasStaleFailureVerdict(NodeTypeDefinition def, string? modulesHash) =>
+        def.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable
+        // NO usable build was ever recorded — the complement of HasStaleFrameworkBuild, which
+        // owns every case where coordinates DO exist.
+        && string.IsNullOrEmpty(def.LatestAssemblyCollection)
+        && string.IsNullOrEmpty(def.LatestAssemblyPath)
+        // The source set must be ESTABLISHED before it can be compared — see above.
+        && def.CurrentSourceVersions is not null
+        && !string.Equals(
+            def.FailedBuildInputs,
+            BuildInputsToken(modulesHash, def.CurrentSourceVersions),
+            StringComparison.Ordinal);
+
+    /// <summary>
     /// THE terminal stamp of a SUCCESSFUL compile — the exact field set
     /// <see cref="RunCompile"/>'s write-back has always applied, extracted as a pure function so
     /// the initial-bake batch driver (issue #1207, <c>NodeTypeBatchBake</c> in
@@ -1283,7 +1561,12 @@ internal static class NodeTypeCompilationHelpers
             CompiledDependencies = result.CompiledDependencies ?? def.CompiledDependencies,
             // Clear the consumed release-requester so a later System-only recompile doesn't
             // mis-attribute its release to a stale prior user.
-            RequestedReleaseBy = null
+            RequestedReleaseBy = null,
+            // 🚨 The standing FAILURE verdict is gone, so the inputs it was formed from must go
+            // with it (#1793). Leaving the token behind would make a LATER failure look like it
+            // had already had its automatic attempt under these inputs, and the type would sit
+            // broken with nothing due to retry it.
+            FailedBuildInputs = null
         };
 
     /// <summary>
@@ -1331,7 +1614,8 @@ internal static class NodeTypeCompilationHelpers
         NodeTypeDefinition def,
         NodeCompilationResult? result,
         Exception? error,
-        string? activityPath)
+        string? activityPath,
+        string? modulesHash = null)
         => def with
         {
             CompilationStatus = error is SourceDiscoveryUnavailableException or AddressRecyclingException
@@ -1343,6 +1627,14 @@ internal static class NodeTypeCompilationHelpers
                 : null,
             LastCompilationActivityPath = activityPath,
             CompiledSources = null,
+            // 🚨 RECORD WHAT THE VERDICT WAS FORMED FROM (#1793). This is the one durable fact a
+            // failure can leave behind — it writes no assembly coordinates and no framework stamp,
+            // which is exactly why every automatic re-drive used to skip a never-compiled failure
+            // forever. The source half is the snapshot the compile CONSUMED (the result's own set
+            // when it resolved one, else the node's live snapshot), so an edit that lands while a
+            // doomed compile is running still earns its own attempt.
+            FailedBuildInputs = BuildInputsToken(
+                modulesHash, result?.CompiledSources ?? def.CurrentSourceVersions),
             // Clear the consumed release-requester on failure too — the failed request is
             // done; a fresh request must re-stamp it.
             RequestedReleaseBy = null
@@ -1800,7 +2092,8 @@ internal static class NodeTypeCompilationHelpers
                         return curr with
                         {
                             Content = ApplyCompileFailure(
-                                def, outcome.Result, outcome.Error, resolvedActivityPath)
+                                def, outcome.Result, outcome.Error, resolvedActivityPath,
+                                hub.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash)
                         };
                     })
                     .Subscribe(

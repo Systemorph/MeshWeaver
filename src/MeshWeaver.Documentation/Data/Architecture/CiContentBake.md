@@ -210,6 +210,81 @@ Manifest-less CI processes (test hosts) fall back to the commit identity `g<sha>
 (`MeshWeaver.Compiler.dll` — single-file attributable, which is what lets a packer read it without
 loading anything). The commit stamp doubles as provenance everywhere.
 
+### 🚨 …and both hosts must RECORD the same canonical set — the address check (#1814)
+
+The rule above is about the *bytes*. There is a second way for two hosts of one commit to resolve
+different identities, and it has nothing to do with bytes: **a canonical assembly that one host's
+surface manifest does not record at all.** `ComputeSurfaceIdentity` hashes every name in
+`ContentSurfaceAssemblies`, and a name the manifest has no line for contributes the literal
+`absent`. So a host that stops *compiling against* an assembly stops recording it — and forks its
+identity away from every other host — while its binaries are otherwise identical.
+
+That is what took memex.meshweaver.cloud's course covers down for two hours on 2026-08-17. The
+sequence, measured:
+
+* `feat: Excel/CSV import becomes its own module` (`82481e024`, merged 18:46 that evening) moved
+  `MeshWeaver.Import` and its private closure — `MeshWeaver.DataSetReader{,.Csv,.Excel,
+  .Excel.BinaryFormat,.Excel.OpenXmlFormat,.Excel.Utils}` and `MeshWeaver.DataStructures`, **eight
+  canonical names** — out of both portals' compile reference graphs into the `modules/<Name>/`
+  runtime lane. Correct on its own terms: the module lane still contributes `MeshWeaver.Import` to
+  the in-mesh compile reference set.
+* The manifest is written from `@(ReferencePathWithRefAssemblies)` — a host's **compile**
+  references — so those eight lines vanished from the portal's manifest only. `mw-plugin-test`,
+  the bake host, still referenced them.
+* Measured on the shipped images of `3.0.0-rc4.ci.4276`, both `--platform linux/amd64`:
+
+  | image | manifest | resolves |
+  |---|---|---|
+  | `mw-plugin-test` (bakes) | 38 lines | `s7293e54297ec28e213bd82f30d59e709` |
+  | `memex-portal-ai` (runs) | 54 lines | `sa6d587a25d64d11774f22348664bca0c` |
+
+  The **29 shared entries had byte-identical hashes**. Presence, not drift, was the entire
+  difference — and the net line counts (38 vs 54) hide it, because the portal legitimately carries
+  25 Blazor/Orleans/hosting names that are outside the canonical set by design.
+* Consequence: every bake was published, intact, under an address no pod ever opened. Publication
+  succeeded, the CD job was green, `check-release-availability.sh` passed — and each deploy's first
+  pod logged `compiled=269 alreadyBaked=0` and spent 10 m 29 s (+1598 MB working set) recompiling
+  what CI had already compiled. During that window ~12 instance hubs latched a compilation-fallback
+  card and served it to anonymous visitors long after the compile finished.
+
+**Two checks now stand where nothing stood.**
+
+1. **Offline, at PR time.** `CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost`
+   (`FrameworkBuildIdentityTest`) recomputes, from the csproj graph, the compile closure of **every** project
+   that sets `MeshWeaverSurfaceManifest=true` and fails naming any canonical assembly a host does
+   not record. `CanonicalList_MatchesTheTesterClosure` had always pinned one side of that equality;
+   this pins the other, which is the half whose absence let a one-line-per-host change ship.
+2. **On the artifact, at release time.** `main-cd`'s `publish-bake` job resolves the identity of the
+   **promoted `memex-portal-ai` image** and compares it with the identity the bake published under,
+   **before** publishing. The comparison runs the bake image's own `framework-identity` verb:
+
+   ```
+   mw-plugin-test framework-identity <app-dir> [--expect <identity>]
+   ```
+
+   which resolves the identity of *another* host's `/app` from that directory's manifest and
+   assemblies as **files** — nothing is loaded, so one container answers for another image. It
+   refuses to answer for a directory with no usable manifest rather than degrading to the fallback
+   identity: two manifest-less hosts of one commit resolve the same fallback, and a comparison that
+   passes on degraded input is a check that cannot fail. On a mismatch it prints the canonical
+   assemblies the target does not record, because "the hashes differ" is not actionable and the real
+   defect was eight named assemblies.
+
+Both pulls pin `--platform linux/amd64`, out loud: the identity is per-architecture, so comparing
+across legs would be meaningless. That per-arch split is the *second* independent way to mint an
+unread address — `memex.localhost` is arm64 while the CI bake publishes amd64 — and the same guard
+covers it, because it compares the values two concrete hosts resolve.
+
+🚨 **The fix direction is always "give the host the reference back", never "shrink the canonical
+list".** Removing a name would make the two hosts agree by making the identity blind to that
+assembly's surface — an under-invalidation, which is how a portal ends up adopting NodeType
+assemblies compiled against a framework that has since shifted underneath them: a silent
+`TypeLoadException` inside an ALC at activation, the failure mode with no diagnostic and no overlay.
+`Memex.Portal.Distributed` therefore declares the eight as compile-only references
+(`Private="false" ExcludeAssets="runtime" PrivateAssets="all"`): the manifest records them, while
+the bits still ship only via `modules/MeshWeaver.Import/` and nothing downstream inherits the
+declaration.
+
 ## The image: `prebuilt/` beside the app
 
 `Memex.Portal.Distributed.csproj` accepts `-p:PrebuiltBakeDir=<dir>`: the bundle zips are laid into
