@@ -32,11 +32,18 @@ namespace MeshWeaver.Graph.Test;
 ///   <item>the release-request watcher requires <c>RequestedReleaseAt &gt;
 ///     LastReleaseRequestHandledAt</c> — and the export baked the two EQUAL.</item>
 /// </list>
-/// So the node parks on a foreign machine's error forever, and no later fix to the code, the
-/// sources, or the framework can reach it. The committed error text for
+/// So the node parked on a foreign machine's error forever, and no later fix to the code, the
+/// sources, or the framework could reach it. The committed error text for
 /// <c>Northwind/AnalyticsCatalog</c> named <c>OrderViews</c>/<c>SalesViews</c> — identifiers
 /// that occur nowhere in the configuration it shipped alongside; the configuration had long
 /// since been corrected, and the correction could never take effect.</para>
+///
+/// <para><b>#1793 narrowed that, and this guard is why it still matters.</b> A never-compiled
+/// failure now earns ONE automatic re-drive whenever the live compile inputs differ from the ones
+/// its verdict was formed under (<see cref="NodeTypeDefinition.FailedBuildInputs"/>). An authored
+/// file that carries a <c>failedBuildInputs</c> token matching the importing deployment would
+/// SUPPRESS exactly that retry — so the banned set covers it too, and the invariant below is
+/// unchanged: a committed node file carries no compile state at all.</para>
 ///
 /// <para><b>Why the check is fail-closed by NAME.</b> The banned set is derived from
 /// <see cref="NodeTypeDefinition"/> by reflection over the control plane's naming convention
@@ -67,6 +74,7 @@ public class ShippedNodeTypeStateTest
         "LatestRelease",     // LatestReleasePath
         "RequestedRelease",  // Path, At, Force, By
         "CurrentSource",     // CurrentSourceVersions
+        "Failed",            // FailedBuildInputs (#1793) — the standing failure verdict's inputs
     ];
 
     /// <summary>The banned members as they appear in JSON (camelCase), derived from the type.</summary>
@@ -119,6 +127,9 @@ public class ShippedNodeTypeStateTest
         Assert.Contains("latestAssemblyPath", BannedMembers);
         Assert.Contains("lastReleaseRequestHandledAt", BannedMembers);
         Assert.Contains("lastCompilationActivityPath", BannedMembers);
+        // #1793: an authored token matching this deployment's live inputs would suppress the one
+        // automatic retry a never-compiled failure gets — the exact shape this guard exists for.
+        Assert.Contains("failedBuildInputs", BannedMembers);
 
         // Authored members must NOT be swept up — the guard has to leave real content alone.
         Assert.DoesNotContain("configuration", BannedMembers);
