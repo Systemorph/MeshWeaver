@@ -131,17 +131,24 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
 
     private IObservable<AuthenticatedInstance?> Resolve(string hash)
     {
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
         var indexPath = $"{MeshWeaverInstanceNodeType.IndexNamespace}/{InstanceKeys.HashPrefix(hash)}";
 
-        return ReadAsSystem(accessService, indexPath)
+        // 🚨 ONE sealed System scope around the WHOLE resolution, not one Observable.Using per read
+        // (#1790). Rx runs a Using factory on the SUBSCRIBING thread and disposes on termination, so
+        // the old per-read form left the caller latched as System — and the callers here are HTTP
+        // requests on the registry surface (/api/plugins, and now /api/instances/token), which would
+        // then continue with Permission.All. RunAsSystem enters at Subscribe, leaves on the way out
+        // of that same Subscribe, and delivers every notification under the subscriber's own
+        // identity, so the three reads below are System and nothing downstream inherits it.
+        return accessService.RunAsSystem(() => Read(indexPath)
             .SelectMany(indexNode =>
             {
                 var index = Content<MeshWeaverInstanceIndex>(indexNode);
                 if (index is null || !InstanceKeys.HashEquals(hash, index.KeyHash))
                     return Observable.Return<AuthenticatedInstance?>(null);
 
-                return ReadAsSystem(accessService, index.InstancePath)
+                return Read(index.InstancePath)
                     .SelectMany(instanceNode =>
                     {
                         var instance = Content<MeshWeaverInstance>(instanceNode);
@@ -156,21 +163,20 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                             return Observable.Return<AuthenticatedInstance?>(null);
                         }
 
-                        return ReadAsSystem(accessService,
-                                MeshWeaverInstanceNodeType.GrantPath(instance.InstanceId))
+                        return Read(MeshWeaverInstanceNodeType.GrantPath(instance.InstanceId))
                             // No grant node at all is the NORMAL state for a freshly registered
                             // instance — it authenticates, and is entitled to nothing.
                             .Select(grantNode => (AuthenticatedInstance?)new AuthenticatedInstance(
                                 instance,
                                 Content<PluginGrant>(grantNode) ?? new PluginGrant { InstanceId = instance.InstanceId }));
                     });
-            });
+            }));
     }
 
-    private IObservable<MeshNode?> ReadAsSystem(AccessService accessService, string path) =>
-        Observable.Using(
-            () => accessService.ImpersonateAsSystem(),
-            _ => hub.GetMeshNode(path, ReadTimeout));
+    /// <summary>One-shot read by exact path. The System identity comes from the single
+    /// <see cref="ImpersonationScopeExtensions.RunAsSystem{T}"/> scope in <see cref="Resolve"/>, so
+    /// this composes inside it rather than opening a scope of its own.</summary>
+    private IObservable<MeshNode?> Read(string path) => hub.GetMeshNode(path, ReadTimeout);
 
     private T? Content<T>(MeshNode? node) where T : class
     {

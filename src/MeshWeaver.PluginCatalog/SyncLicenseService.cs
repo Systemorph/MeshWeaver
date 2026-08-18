@@ -132,6 +132,14 @@ public sealed class SyncLicenseService(IMessageHub hub, ILogger<SyncLicenseServi
     /// Read → transform → write, under System, for one instance's grant node. The prior read is a
     /// one-shot by EXACT PATH, never a query: a query is eventually consistent and would happily
     /// drop an entry another issuer added moments ago.
+    ///
+    /// <para>🚨 <see cref="ImpersonationScopeExtensions.RunAsSystem{T}"/>, never
+    /// <c>Observable.Using(access.ImpersonateAsSystem, …)</c> (#1790). Rx runs a Using factory on the
+    /// SUBSCRIBING thread and disposes on termination, which leaves the subscriber latched as System
+    /// — here that subscriber is an admin surface or an HTTP request, so the latch would hand it
+    /// <c>Permission.All</c>. RunAsSystem seals both ends and delivers notifications under the
+    /// subscriber's own identity; the WIDEST cold pipeline goes inside the factory, so the whole
+    /// read-transform-write runs as System and nothing downstream inherits it.</para>
     /// </summary>
     private IObservable<PluginGrant> Mutate(
         string instanceId, string actingUserId, Func<PluginGrant, PluginGrant> transform)
@@ -140,9 +148,7 @@ public sealed class SyncLicenseService(IMessageHub hub, ILogger<SyncLicenseServi
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var path = MeshWeaverInstanceNodeType.GrantPath(instanceId);
 
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => hub.GetMeshNode(path, ReadTimeout))
+        return accessService.RunAsSystem(() => hub.GetMeshNode(path, ReadTimeout)
             .Take(1)
             .SelectMany(existing => Observable.Defer(() =>
             {
@@ -162,11 +168,8 @@ public sealed class SyncLicenseService(IMessageHub hub, ILogger<SyncLicenseServi
                     State = MeshNodeState.Active,
                     Content = updated,
                 };
-                return Observable.Using(
-                        () => accessService.ImpersonateAsSystem(),
-                        _ => meshService.CreateOrUpdateNode(node))
-                    .Select(_ => updated);
-            }));
+                return meshService.CreateOrUpdateNode(node).Select(_ => updated);
+            })));
     }
 
     /// <summary>Entries with the given <c>(source, package)</c> pair removed — the same matching

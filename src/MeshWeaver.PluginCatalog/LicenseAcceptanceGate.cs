@@ -74,7 +74,14 @@ public static class LicenseAcceptanceGate
         if (string.IsNullOrWhiteSpace(spdxId))
             return Observable.Return(Unit.Default);
 
-        return ReadLicense(hub, spdxId!, logger)
+        // 🚨 RunAsSystem, never Observable.Using(access.ImpersonateAsSystem, …) (#1790). Rx runs a
+        // Using factory on the SUBSCRIBING thread and disposes on termination, leaving that thread
+        // latched as System — and this gate's subscriber is the INSTALLER, which would then run its
+        // whole pipeline with Permission.All. The widest cold pipeline goes inside the factory, so
+        // the catalog + acceptance reads are System (they must be: an acceptance lives in another
+        // user's partition) while every notification reaches the installer as itself.
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return access.RunAsSystem(() => ReadLicense(hub, spdxId!, logger)
             .SelectMany(license =>
             {
                 // No terms document in the catalog — including every SPDX EXPRESSION
@@ -119,7 +126,7 @@ public static class LicenseAcceptanceGate
 
                         return Observable.Return(Unit.Default);
                     });
-            });
+            }));
     }
 
     /// <summary>
@@ -147,9 +154,11 @@ public static class LicenseAcceptanceGate
             return Observable.Empty<LicenseAcceptance>();
 
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
 
-        return ReadLicense(hub, manifest.License!, logger)
+        // Same seal as Require — the write lands in the accepting user's partition, so it runs as
+        // System, but the caller that subscribed must not be left holding that identity.
+        return accessService.RunAsSystem(() => ReadLicense(hub, manifest.License!, logger)
             .SelectMany(license =>
             {
                 if (license is null)
@@ -173,9 +182,7 @@ public static class LicenseAcceptanceGate
                     Content = acceptance,
                 };
 
-                return Observable.Using(
-                        () => accessService.ImpersonateAsSystem(),
-                        _ => meshService.CreateOrUpdateNode(node))
+                return meshService.CreateOrUpdateNode(node)
                     .Select(_ =>
                     {
                         logger?.LogInformation(
@@ -183,32 +190,31 @@ public static class LicenseAcceptanceGate
                             license.SpdxId, manifest.Id, acceptingUserId);
                         return acceptance;
                     });
-            });
+            }));
     }
 
     private static IObservable<LicenseContent?> ReadLicense(
         IMessageHub hub, string spdxId, ILogger? logger) =>
-        ReadAsSystem<LicenseContent>(hub, WellKnownLicenses.PathFor(spdxId), logger);
+        Read<LicenseContent>(hub, WellKnownLicenses.PathFor(spdxId), logger);
 
     private static IObservable<LicenseAcceptance?> ReadAcceptance(
         IMessageHub hub, string userId, string packageId, ILogger? logger) =>
-        ReadAsSystem<LicenseAcceptance>(hub, LicenseNodeType.AcceptancePath(userId, packageId), logger);
+        Read<LicenseAcceptance>(hub, LicenseNodeType.AcceptancePath(userId, packageId), logger);
 
     /// <summary>
-    /// One-shot read by exact path under System. A read FAILURE faults the sequence rather than
-    /// resolving to null: "the mesh was briefly unreachable" must never read as "no acceptance is
-    /// required", which is the difference between failing closed and failing open.
+    /// One-shot read by exact path. The System identity is supplied by the caller's
+    /// <see cref="ImpersonationScopeExtensions.RunAsSystem{T}"/> scope, so this composes INSIDE that
+    /// scope rather than opening its own — one seal per public entry point, not one per read.
+    ///
+    /// <para>A read FAILURE faults the sequence rather than resolving to null: "the mesh was briefly
+    /// unreachable" must never read as "no acceptance is required", which is the difference between
+    /// failing closed and failing open.</para>
     /// </summary>
-    private static IObservable<T?> ReadAsSystem<T>(IMessageHub hub, string path, ILogger? logger)
-        where T : class
-    {
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-        return Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => hub.GetMeshNode(path, ReadTimeout))
+    private static IObservable<T?> Read<T>(IMessageHub hub, string path, ILogger? logger)
+        where T : class =>
+        hub.GetMeshNode(path, ReadTimeout)
             .Take(1)
             .Select(node => node?.ContentAs<T>(hub.JsonSerializerOptions));
-    }
 
     private static IObservable<Unit> Refuse(
         PackageManifest manifest, string spdxId, string? userId, string reason, ILogger? logger) =>
