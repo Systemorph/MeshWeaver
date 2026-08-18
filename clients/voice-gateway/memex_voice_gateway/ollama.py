@@ -22,15 +22,32 @@ SYSTEM_PROMPT = (
     "Du bist ein Sprachassistent auf einem Lautsprecher. Deine Antworten werden vorgelesen: "
     "Antworte in höchstens zwei kurzen Sätzen, ohne Markdown, Listen, Code oder Links. "
     "Antworte in der Sprache der Frage; Schweizerdeutsch kommt als Standarddeutsch an — "
-    "antworte auf Standarddeutsch. Gib direkt die Antwort, keine Erklärung des Vorgehens."
+    "antworte auf Standarddeutsch. Gib direkt die Antwort, keine Erklärung des Vorgehens. "
+    "Jede Nutzernachricht beginnt mit ihrer Uhrzeit in eckigen Klammern — nutze sie, um "
+    "zeitliche Abstände im Gespräch richtig einzuordnen."
 )
+
+_WEEKDAYS = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+_MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli",
+           "August", "September", "Oktober", "November", "Dezember"]
+
+
+def now_line(now=None) -> str:
+    """The current wall-clock, spoken-German style — a local model has NO clock of its own,
+    and a voice assistant unmoored from real time answers 'heute' questions wrongly."""
+    import datetime
+    now = now or datetime.datetime.now().astimezone()
+    return (f"Aktuelle Zeit: {_WEEKDAYS[now.weekday()]}, {now.day}. "
+            f"{_MONTHS[now.month - 1]} {now.year}, {now:%H:%M} Uhr.")
 
 
 def build_messages(history: list[dict], text: str, system_prompt: str = SYSTEM_PROMPT,
-                   max_turns: int = 8) -> list[dict]:
-    """System prompt + the last `max_turns` exchanges + the new user message."""
+                   max_turns: int = 8, now: str | None = None) -> list[dict]:
+    """System prompt (+ the real-time anchor) + the last `max_turns` exchanges + the new
+    user message. History user entries carry their [HH:MM] stamps from ask()."""
+    system = system_prompt if now is None else f"{system_prompt}\n\n{now}"
     trimmed = history[-2 * max_turns:]
-    return [{"role": "system", "content": system_prompt}, *trimmed,
+    return [{"role": "system", "content": system}, *trimmed,
             {"role": "user", "content": text}]
 
 
@@ -107,8 +124,10 @@ class OllamaBrain:
         if self._history and (time.monotonic() - self._last_used) > self.idle_minutes * 60:
             self._history = []
         self._last_used = time.monotonic()
-        messages = build_messages(self._history, text)
-        self._history.append({"role": "user", "content": text})
+        import datetime
+        stamped = f"[{datetime.datetime.now().astimezone():%H:%M}] {text}"
+        messages = build_messages(self._history, stamped, now=now_line())
+        self._history.append({"role": "user", "content": stamped})
 
         handle = f"ollama-{next(self._ids)}"
         self._chunks[handle] = asyncio.Queue()
