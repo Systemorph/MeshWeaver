@@ -1,0 +1,158 @@
+"""Gateway configuration — one flat dataclass, filled from environment variables.
+
+Three pluggable legs, each independently local or mesh-hosted:
+
+  BRAIN=memex   agent threads over /mcp (needs MEMEX_TOKEN + MEMEX_NAMESPACE)   [default]
+  BRAIN=ollama  a local model via Ollama (OLLAMA_URL / OLLAMA_MODEL)
+
+  STT_URL       full transcription endpoint. Default: {MEMEX_URL}/api/speech/transcribe.
+                Point it at a local whisper.cpp server instead (http://127.0.0.1:8090/inference)
+                — both speak multipart file+language → {"text": …}.
+
+  TTS_ENGINE=piper  the Piper CLI (container default)
+  TTS_ENGINE=say    macOS's built-in `say` (zero setup on a Mac; SAY_VOICE, e.g. "Anna")
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+
+def _env(name: str, default: str | None = None) -> str | None:
+    value = os.environ.get(name, default)
+    return value if value not in ("", None) else default
+
+
+# What the SPEAKER says in its own voice (holding, errors, switch confirmations) — chosen by
+# the configured language; every instruction and prompt in this repo stays English.
+PHRASES: dict[str, dict[str, str]] = {
+    "en": {"hold": "Let me check. One moment please.",
+           "error": "Sorry, that did not work.",
+           "connected": "Connected to {name}.",
+           "unknown": "I don't know {target}. Available: {names}.",
+           "delegated": "Started a {agent} thread on {portal}. You can review it there.",
+           "no_mesh": "No mesh portal is configured for threads."},
+    "de": {"hold": "Ich schaue nach. Einen Moment bitte.",
+           "error": "Entschuldigung, das hat gerade nicht geklappt.",
+           "connected": "Verbunden mit {name}.",
+           "unknown": "Ich kenne {target} nicht. Verfügbar: {names}.",
+           "delegated": "Thread mit {agent} auf {portal} gestartet. Du kannst ihn dort anschauen.",
+           "no_mesh": "Es ist kein Portal für Threads konfiguriert."},
+}
+PHRASES["en"]["answer_to"] = "Answering your question: {question} —"
+PHRASES["de"]["answer_to"] = "Antwort auf deine Frage: {question} —"
+
+
+def phrases_for(language: str) -> dict[str, str]:
+    return PHRASES.get((language or "en").split("-")[0].lower(), PHRASES["en"])
+
+
+@dataclass
+class Config:
+    # --- the satellite (ESPHome native API, LAN) ---
+    satellite_host: str = ""
+    satellite_port: int = 6053
+    satellite_psk: str | None = None        # noise encryption key (preferred)
+    satellite_password: str | None = None   # legacy plaintext API password
+
+    # --- the brain ---
+    brain: str = "memex"                    # "memex" (agent threads) | "ollama" (local model)
+    memex_url: str = "https://memex.meshweaver.cloud"
+    memex_token: str = ""                   # mw_… API token (Settings ▸ Security ▸ API Tokens)
+    namespace: str = ""                     # thread namespace, e.g. your user id
+    agent: str | None = "Voice"             # lean spoken-answer agent; None = platform default
+    ollama_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3.6"
+
+    # --- speech-to-text ---
+    stt_url: str = ""                       # default derived: {memex_url}/api/speech/transcribe
+    stt_token: str | None = None            # bearer for the STT endpoint; None = unauthenticated
+    stt_language: str = "de"                # "de" transcribes Swiss German OUT as Standard German
+    sample_rate: int = 16000                # the satellite streams 16 kHz mono s16le
+
+    # --- conversation pacing ---
+    reply_budget_s: float = 10.0            # wait this long for the answer before acking
+    announce_budget_s: float = 240.0        # keep polling this long, then announce the answer
+    thread_idle_minutes: float = 5.0        # reuse the conversation within this window
+    hold_phrase: str = ""                   # default: PHRASES[stt_language]["hold"]
+    error_phrase: str = ""                  # default: PHRASES[stt_language]["error"]
+
+    # --- multiple brains (optional) — see router.py; overrides the single-brain fields ---
+    portals: list = field(default_factory=list)   # PORTALS: JSON list of named targets
+
+    # --- wake word (activated on the device if none is) ---
+    wake_word: str = "hey_jarvis"           # micro-wake-word model id on the device
+    continue_conversation: bool = True      # after a reply, listen again without a wake word
+    speak_dialect: bool = False             # experiment: model writes Swiss German for the TTS
+    location: str | None = None             # where the speaker is (weather/'here' questions)
+    system_prompt_file: str | None = None   # override the built-in voice prompt with a file
+
+    # --- endpointing (energy VAD) ---
+    silence_ms: int = 800
+    max_utterance_s: float = 15.0
+    min_utterance_s: float = 0.4
+
+    # --- text-to-speech + the URL the satellite fetches audio from ---
+    tts_engine: str = "piper"               # "piper" | "say" (macOS)
+    piper_bin: str = "piper"
+    piper_voice: str = "/voices/de_DE-thorsten-medium.onnx"
+    say_voice: str = "Anna"                 # macOS German voice
+    gateway_host: str = ""                  # LAN IP of THIS gateway, reachable by the satellite
+    gateway_port: int = 8200
+
+    extra: dict = field(default_factory=dict)
+
+    @staticmethod
+    def from_env() -> "Config":
+        import json
+        portals_raw = _env("PORTALS")
+        portals = json.loads(portals_raw) if portals_raw else []
+        memex_url = (_env("MEMEX_URL", "https://memex.meshweaver.cloud") or "").rstrip("/")
+        memex_token = _env("MEMEX_TOKEN") or ""
+        stt_url = _env("STT_URL") or f"{memex_url}/api/speech/transcribe"
+        # The mesh endpoint needs the bearer; a local whisper.cpp server does not.
+        stt_token = _env("STT_TOKEN") or (memex_token if stt_url.startswith(memex_url) else None)
+        cfg = Config(
+            satellite_host=_env("SATELLITE_HOST") or "",
+            satellite_port=int(_env("SATELLITE_PORT", "6053")),
+            satellite_psk=_env("SATELLITE_PSK"),
+            satellite_password=_env("SATELLITE_PASSWORD"),
+            brain=(_env("BRAIN", "memex") or "memex").lower(),
+            memex_url=memex_url,
+            memex_token=memex_token,
+            namespace=_env("MEMEX_NAMESPACE") or "",
+            agent=_env("MEMEX_AGENT", "Voice"),
+            ollama_url=(_env("OLLAMA_URL", "http://127.0.0.1:11434") or "").rstrip("/"),
+            ollama_model=_env("OLLAMA_MODEL", "qwen3.6") or "qwen3.6",
+            stt_url=stt_url,
+            stt_token=stt_token,
+            stt_language=_env("STT_LANGUAGE", "de") or "de",
+            reply_budget_s=float(_env("REPLY_BUDGET_S", "10")),
+            announce_budget_s=float(_env("ANNOUNCE_BUDGET_S", "240")),
+            thread_idle_minutes=float(_env("THREAD_IDLE_MINUTES", "5")),
+            hold_phrase=_env("HOLD_PHRASE") or phrases_for(_env("STT_LANGUAGE", "de") or "de")["hold"],
+            error_phrase=_env("ERROR_PHRASE") or phrases_for(_env("STT_LANGUAGE", "de") or "de")["error"],
+            wake_word=_env("WAKE_WORD", "hey_jarvis") or "hey_jarvis",
+            continue_conversation=(_env("CONTINUE_CONVERSATION", "true") or "true").lower() != "false",
+            speak_dialect=(_env("SPEAK_DIALECT", "false") or "false").lower() == "true",
+            location=_env("LOCATION"),
+            system_prompt_file=_env("SYSTEM_PROMPT_FILE"),
+            silence_ms=int(_env("SILENCE_MS", "800")),
+            tts_engine=(_env("TTS_ENGINE", "piper") or "piper").lower(),
+            piper_bin=_env("PIPER_BIN", "piper") or "piper",
+            piper_voice=_env("PIPER_VOICE", Config.piper_voice) or Config.piper_voice,
+            say_voice=_env("SAY_VOICE", "Anna") or "Anna",
+            gateway_host=_env("GATEWAY_HOST") or "",
+            gateway_port=int(_env("GATEWAY_PORT", "8200")),
+            portals=portals,
+        )
+        required = [("SATELLITE_HOST", cfg.satellite_host), ("GATEWAY_HOST", cfg.gateway_host)]
+        if not cfg.portals and cfg.brain == "memex":
+            required += [("MEMEX_TOKEN", cfg.memex_token), ("MEMEX_NAMESPACE", cfg.namespace)]
+        missing = [name for name, value in required if not value]
+        if missing:
+            raise SystemExit(f"Missing required environment variables: {', '.join(missing)}")
+        if cfg.brain not in ("memex", "ollama"):
+            raise SystemExit(f"BRAIN must be 'memex' or 'ollama', not '{cfg.brain}'")
+        return cfg

@@ -235,15 +235,22 @@ public static class MeshDataSourceExtensions
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
             // 🚨 REACTIVE init, NOT the synchronous overload. SyncBuildupActions run INSIDE
             // MessageHubConfiguration.Build, and SubscribeToOwnDeletion resolves the own-node
-            // stream — which can create another hub. That made hub construction RE-ENTER hub
-            // construction and nest an Autofac ComponentRegistryBuilder.Build inside the
-            // in-progress one; the registry builder is not re-entrant, so the process died with
-            // an access violation (SIGSEGV / exit=139) with no test named. Seen on CI as an
-            // intermittent MeshWeaver.FutuRe.Test crash; the core dump's faulting thread was
-            //   CreateHub → Build → SubscribeToOwnDeletion → GetStream → GetHub → CreateHub
-            //   → Build → Autofac ResolvePipelineBuilder.BuildPipeline
-            // Running it as a BuildupAction defers it to InitializeHubRequest — after Build has
-            // finished — so resolving a stream can never nest a container build.
+            // stream — which creates another hub (SynchronizationStream's ctor always calls
+            // GetHostedHub(…, Always) for its sync sub-hub). So the synchronous overload makes hub
+            // construction RE-ENTER hub construction: a second hub — and a second container build
+            // — inside the first one's Build, before StartMessageProcessing. Running it as a
+            // BuildupAction defers it to InitializeHubRequest, after Build has returned, where the
+            // hub exists, its container is settled, and a disposal racing the construction has one
+            // frame to finish instead of a tree. That is reason enough to keep the reactive form.
+            //
+            // ⚠️ Withdrawn: the claim that this nesting KILLED the process. This comment used to
+            // say "the registry builder is not re-entrant, so the process died with an access
+            // violation (SIGSEGV / exit=139)". That was read off a stack and never tested.
+            // Measured 2026-08-18 on MeshWeaver.FutuRe.Test (59/59, exit=0, 23 s): 1,350 nested
+            // Builds in one GREEN run, every one a sync/{clientId} hub built inside another hub's
+            // Build. Nested construction is the framework's steady state, not a crash signature —
+            // and in every #613 core dump the FAULTING thread is the background GC thread, with no
+            // managed frames at all. See #613 and Doc/Architecture/DebuggingNativeCrashes.
             .WithInitialization(SubscribeToOwnDeletionInit)
             .WithNodeOperationHandlers()
             // Per-node-hub contract for resolving (assembly + HubConfiguration) of the
@@ -1381,6 +1388,14 @@ public static class MeshDataSourceExtensions
                 var sourcesSub = NodeTypeCompilationHelpers
                     .InstallSourcesWatcher(hub, workspace);
                 hub.RegisterForDisposal(sourcesSub);
+                // Adopted-build source stamp (#1834). A prebuilt adoption is written
+                // CROSS-HUB, so it cannot see this hub's CurrentSourceVersions — it asks
+                // (RequestedSourceStampAt) and the owner answers with its own authoritative
+                // snapshot. Without it the adopted build is born IsDirty and the release
+                // request an install issues one step later recompiles what was just adopted.
+                var stampSub = NodeTypeCompilationHelpers
+                    .InstallAdoptedSourceStampWatcher(hub, workspace);
+                hub.RegisterForDisposal(stampSub);
             }
 
             // Compile-state mirror (issue #748, phase 1): every real change of a NodeType

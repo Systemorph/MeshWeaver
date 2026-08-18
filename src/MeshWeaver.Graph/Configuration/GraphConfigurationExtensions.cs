@@ -52,9 +52,11 @@ public static class GraphConfigurationExtensions
                 .AddGroupType()
                 .AddRoleType()
                 .AddGroupMembershipType()
-                // Approval moved to the MeshWeaver.Approvals module (Modules:Assemblies /
-                // builder.AddApprovals()) — the Approval record + _Approval satellite mapping
-                // stay platform-level in MeshWeaver.Mesh.Contract.
+                // Approvals are the node-native `Approvals` package (MeshWeaver.Plugins): the
+                // node type and every view are compiled live from its own Source/, so nothing is
+                // registered here. The Approval RECORD and the _Approval → annotations satellite
+                // mapping stay platform-level in MeshWeaver.Mesh.Contract, which is what keeps
+                // approval data deserializing and routing wherever the package is not installed.
                 .AddNotificationType()
                 .AddNotificationSettingsType()
                 .AddCompletionMemoryType()

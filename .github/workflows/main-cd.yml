@@ -374,10 +374,43 @@ jobs:
       #     Later ticks then cost ~40 s and print nothing — loud once, then quiet, which is the
       #     opposite of a repeating alarm nobody reads. Closing the issue is a deliberate human
       #     act and legitimately grants a fresh budget.
+      - name: "Are there image-relevant changes since the newest published set?"
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -uo pipefail
+          # Paths that PROVABLY enter no published image: the standalone clients (a Python LAN
+          # gateway and the Expo app — neither is COPY'd by any Dockerfile in the set). A merge
+          # touching ONLY these must not cost a ~20-minute five-image build and a fleet roll.
+          # 🚨 FAIL-OPEN: any doubt — no published set, unresolvable base, unreadable compare —
+          # publishes as today. The only way to skip is a POSITIVE finding that every changed
+          # file since the newest PUBLISHED set matches the list. Diffing against the newest
+          # published set (not HEAD^) is what keeps the reconciler stable: a skipped tip differs
+          # from the last set only by irrelevant files, so the reconcile branch skips it too
+          # instead of "healing" it back into a build every tick.
+          IRRELEVANT='^clients/(react-native|voice-gateway)/'
+          relevant=true
+          newest_short=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
+            --orderby time_desc --top 60 --query "[].name" -o tsv 2>/dev/null \
+            | grep -E '^[0-9a-f]{7}$' | head -1 || true)
+          if [ -n "$newest_short" ] && [ "$newest_short" != "$(printf '%s' "$SHA" | cut -c1-7)" ]; then
+            base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha 2>/dev/null || true)
+            if [ -n "$base" ]; then
+              files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" --jq '.files[].filename' 2>/dev/null || true)
+              if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE "$IRRELEVANT"; then
+                relevant=false
+              fi
+            fi
+          fi
+          echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
       - name: "Decide"
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEVANT: ${{ steps.relevance.outputs.relevant }}
           SHORT: ${{ steps.target.outputs.short_sha }}
           REASON: ${{ steps.target.outputs.reason }}
           GREEN: ${{ steps.required.outputs.green }}
@@ -403,6 +436,8 @@ jobs:
           if [ "$REASON" = "push" ]; then
             if [ "$GREEN" != "true" ]; then
               decision false "⛔ \`Consolidate test results\` on $SHORT is \`$CONCL\` — nothing will be built"
+            elif [ "$RELEVANT" = "false" ]; then
+              decision false "⏭️ Only image-irrelevant paths (standalone clients) changed since the newest published set — no image build for \`$SHORT\`"
             # Batching window (see the freshness probe above): a green merge inside the window
             # defers to the reconciler's next tick. Deliberately SILENT beyond the summary — this
             # is intentional cadence, not a fault, and the reconciler self-heals it by design.
@@ -419,6 +454,14 @@ jobs:
           # the overwhelmingly common tick and it ends here, having cost ~40 s and said nothing.
           if [ "$COMPLETE" = "true" ]; then
             decision false "✅ main \`$SHORT\` already has a complete image set — nothing to reconcile"
+            exit 0
+          fi
+
+          # A tip that differs from the newest PUBLISHED set only by image-irrelevant paths is
+          # NOT unhealed state — it is the deliberate skip above, seen from the next tick. Without
+          # this the reconciler would "heal" every skipped clients-only merge back into a build.
+          if [ "$RELEVANT" = "false" ]; then
+            decision false "⏭️ main \`$SHORT\` differs from the newest published set only in image-irrelevant paths — nothing to reconcile"
             exit 0
           fi
 

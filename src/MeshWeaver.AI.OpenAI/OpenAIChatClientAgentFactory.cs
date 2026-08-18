@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
@@ -155,9 +156,10 @@ public class OpenAIChatClientAgentFactory(
             throw new InvalidOperationException(
                 $"ApiKey is missing for model '{modelName}'. Configure a ModelProvider node (Provider 'OpenAI') or set OpenAI:ApiKey in config.");
 
+        var promptCache = OpenRouterPromptCachePolicy.AppliesTo(endpoint);
         logger.LogInformation(
-            "[OpenAI] Creating chat client model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint}",
-            modelName, endpoint ?? "(default api.openai.com)", source, Fingerprint(apiKey));
+            "[OpenAI] Creating chat client model={ModelName} endpoint={Endpoint} source={Source} apiKeyFp={ApiKeyFingerprint} promptCache={PromptCache}",
+            modelName, endpoint ?? "(default api.openai.com)", source, Fingerprint(apiKey), promptCache);
 
         var clientOptions = new OpenAIClientOptions
         {
@@ -167,6 +169,10 @@ public class OpenAIChatClientAgentFactory(
         };
         if (!string.IsNullOrEmpty(endpoint))
             clientOptions.Endpoint = new Uri(endpoint);
+        // OpenRouter: opt into prompt caching (Anthropic/Qwen need explicit breakpoints;
+        // everyone else ignores the field). See OpenRouterPromptCachePolicy.
+        if (promptCache)
+            clientOptions.AddPolicy(new OpenRouterPromptCachePolicy(), PipelinePosition.PerCall);
 
         var client = new OpenAIClient(new ApiKeyCredential(apiKey), clientOptions);
         return client.GetChatClient(modelName).AsIChatClient();
