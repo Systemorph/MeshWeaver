@@ -22,6 +22,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Orleans.Hosting;
 using Orleans.TestingHost;
 using Xunit;
@@ -60,13 +61,60 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     /// </summary>
     private IObservable<T?> GetHubContent<T>(IMessageHub client, string path) where T : class
         => client.GetWorkspace().GetMeshNodeStream(path)
-            .Select(node =>
-            {
-                if (node?.Content is T typed) return typed;
-                if (node?.Content is JsonElement contentJe)
-                    return contentJe.Deserialize<T>(client.JsonSerializerOptions);
-                return null;
-            });
+            .Select(node => node.ContentAs<T>(client.JsonSerializerOptions));
+
+    /// <summary>
+    /// The thread node's CONTROL-PLANE state, projected off its live stream — what every
+    /// assertion in this class actually waits on, in a shape a TIMEOUT can explain.
+    ///
+    /// <para>🚨 <c>node.Content as MeshThread</c> was the trap-door AGENTS.md forbids ("Read
+    /// <c>node.Content</c> in WHATEVER shape it arrives"): content is a typed instance on the
+    /// owning hub but reaches a CLIENT mirror as a <see cref="JsonElement"/> whenever the
+    /// polymorphic <c>$type</c> does not resolve against that hub's registry, and <c>as</c>
+    /// silently yields null. Folded through <c>?? ImmutableList&lt;string&gt;.Empty</c> that made
+    /// "content was never readable" and "the round never dispatched" produce the IDENTICAL
+    /// observation — an empty message list — so the 45 s timeout in #1753 could not say which of
+    /// the two had happened. <see cref="MeshNodeContentExtensions.ContentAs{T}"/> recovers the
+    /// degraded shape (and logs when it genuinely cannot); <see cref="Shape"/> records what
+    /// arrived, and the control-plane counters say how far the round got.</para>
+    /// </summary>
+    private sealed record ThreadControlPlane(
+        string Shape,
+        ThreadExecutionStatus? Status,
+        IReadOnlyList<string> Messages,
+        int Pending,
+        int Ingested,
+        int UserIds)
+    {
+        public static ThreadControlPlane Of(MeshNode? node, JsonSerializerOptions options)
+        {
+            var shape = node is null ? "(no node)" : node.Content?.GetType().Name ?? "(null content)";
+            var thread = node.ContentAs<MeshThread>(options);
+            return thread is null
+                ? new ThreadControlPlane(shape, null, [], 0, 0, 0)
+                : new ThreadControlPlane(shape, thread.Status, thread.Messages,
+                    thread.PendingUserMessages.Count, thread.IngestedMessageIds.Count,
+                    thread.UserMessageIds.Count);
+        }
+
+        // Rendered verbatim into the assertion's "Last of N emission(s) was: …" line, so a
+        // timeout NAMES the stage the round stopped at: content unreadable (Status=(unreadable)),
+        // the submit never landed (pending=0 userIds=0), the claim was never made (status=Idle
+        // pending=1), or the claim was made and the _Exec commit never came back
+        // (status=StartingExecution pending=1 messages=[]) — the orphaned-claim shape #539
+        // recovers only on hub REACTIVATION, never on a live hub.
+        public override string ToString() =>
+            $"content={Shape} status={Status?.ToString() ?? "(unreadable)"} " +
+            $"messages=[{string.Join(",", Messages)}] pending={Pending} " +
+            $"ingested={Ingested} userIds={UserIds}";
+    }
+
+    /// <summary>
+    /// The thread node's <see cref="ThreadControlPlane"/> on every emission of its live stream.
+    /// </summary>
+    private IObservable<ThreadControlPlane> ThreadStates(IMessageHub client, string threadPath)
+        => client.GetWorkspace().GetMeshNodeStream(threadPath)
+            .Select(node => ThreadControlPlane.Of(node, client.JsonSerializerOptions));
 
     /// <summary>
     /// Verifies that response text streams to the message node during execution.
@@ -84,23 +132,16 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
-        // Project the thread's message-id list off the live stream.
-        var messageIds = client.GetWorkspace()
-            .GetMeshNodeStream(threadPath)
-            .Select(node =>
-            {
-                
-                return (node?.Content as MeshThread)?.Messages
-                       ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
-            });
+        // Project the thread's control-plane state off the live stream.
+        var threadStates = ThreadStates(client, threadPath);
 
         // Submit via workspace extension
         client.SubmitMessage(
             threadPath,
             "Tell me something",
             contextPath: ContextPath);
-        var msgIds = await messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
-        var responseMsgId = msgIds[1];
+        var committed = await threadStates.Should().Within(45.Seconds()).Match(s => s.Messages.Count >= 2);
+        var responseMsgId = committed.Messages[1];
         Output.WriteLine($"Response message: {responseMsgId}");
 
         // Wait for the response message to gain text.
@@ -135,8 +176,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         using var _ = workspace.GetMeshNodeStream(threadPath)
             .Subscribe(node =>
             {
-                
-                var thread = node?.Content as MeshThread;
+                var thread = node.ContentAs<MeshThread>(client.JsonSerializerOptions);
                 if (thread != null)
                 {
                     var msg = $"Thread: IsExecuting={thread.IsExecuting}, Status={thread.ExecutionStatus ?? "(null)"}, Messages={thread.Messages.Count}, ActiveMsg={thread.ActiveMessageId ?? "(null)"}";
@@ -145,14 +185,8 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
                 }
             });
 
-        // Project the thread's message-id list off the live stream.
-        var messageIds = workspace.GetMeshNodeStream(threadPath)
-            .Select(node =>
-            {
-                
-                return (node?.Content as MeshThread)?.Messages
-                       ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
-            });
+        // Project the thread's control-plane state off the live stream.
+        var threadStates = ThreadStates(client, threadPath);
 
         // Submit message via workspace extension
         Output.WriteLine("2. Submitting message...");
@@ -163,7 +197,8 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine("3. Message submitted successfully");
 
         // Wait for 2 message IDs
-        var msgIds = await messageIds.Should().Within(45.Seconds()).Match(ids => ids.Count >= 2);
+        var committed = await threadStates.Should().Within(45.Seconds()).Match(s => s.Messages.Count >= 2);
+        var msgIds = committed.Messages;
         Output.WriteLine($"4. Messages appeared: [{string.Join(", ", msgIds)}]");
         var responseMsgId = msgIds[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
@@ -226,15 +261,9 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine("2. Message submitted");
 
         // 3. Wait for 2 messages (user + response)
-        var msgIds = await workspace.GetMeshNodeStream(threadPath)
-            .Select(node =>
-            {
-
-                return (node?.Content as MeshThread)?.Messages
-                       ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty;
-            })
-            .Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
-        var responseMsgId = msgIds[1];
+        var committed = await ThreadStates(client, threadPath)
+            .Should().Within(30.Seconds()).Match(s => s.Messages.Count >= 2);
+        var responseMsgId = committed.Messages[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
         Output.WriteLine($"3. Response message: {responseMsgId}");
 
@@ -243,7 +272,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         var msgWithDelegation = await workspace.GetMeshNodeStream(responsePath)
             .Select(node =>
             {
-                var msg = node?.Content as ThreadMessage;
+                var msg = node.ContentAs<ThreadMessage>(client.JsonSerializerOptions);
                 if (msg != null)
                     Output.WriteLine($"  [STREAM] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
                 return msg;
@@ -276,7 +305,6 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
     public async Task LayoutArea_ReceivesUpdateThreadMessageContent_ViaLayoutStream()
     {
         var client = GetUniqueClient();
-        var workspace = client.GetWorkspace();
 
         // 1. Create thread + submit message
         var createResp = await client.Observe(new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Layout stream test")), o => o.WithTarget(new Address(ContextPath)))
@@ -291,11 +319,9 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : OrleansTestB
         Output.WriteLine("2. Submitted");
 
         // 2. Wait for response message to appear
-        var msgIds = await workspace.GetMeshNodeStream(threadPath)
-            .Select(node => (node?.Content as MeshThread)?.Messages
-                             ?? (IReadOnlyList<string>)System.Collections.Immutable.ImmutableList<string>.Empty)
-            .Should().Within(30.Seconds()).Match(ids => ids.Count >= 2);
-        var responseMsgId = msgIds[1];
+        var committed = await ThreadStates(client, threadPath)
+            .Should().Within(30.Seconds()).Match(s => s.Messages.Count >= 2);
+        var responseMsgId = committed.Messages[1];
         var responsePath = $"{threadPath}/{responseMsgId}";
         Output.WriteLine($"3. Response: {responseMsgId}");
 
@@ -470,7 +496,31 @@ public class StreamingSiloConfigurator : ISiloConfigurator, IHostConfigurator
     public void Configure(ISiloBuilder siloBuilder)
     {
         siloBuilder.ConfigureMeshWeaverServer()
-            .AddMemoryGrainStorageAsDefault();
+            .AddMemoryGrainStorageAsDefault()
+            // 🚨 Surface SILO-side framework logs through ITestOutputHelper, exactly as the
+            // canonical TestSiloConfigurator does. This class was the only Orleans suite
+            // without it, and that is why #1753's failure report carried the test's own three
+            // WriteLines and NOTHING else: every diagnostic the round emits on the way to a
+            // wedge — "[ExecRoundWatcher] thread node has no MeshThread content",
+            // "[SubmissionWatcher] claim Update failed", "[ThreadSubmission] Response cell
+            // creation failed", "[ThreadExec] Init observation faulted … re-establishing" —
+            // is written silo-side and was being discarded. A timeout with no logs is not
+            // evidence that nothing was logged.
+            //
+            // 🚨 Warning+ ONLY, with the Orleans/Microsoft/System runtime chatter at Error.
+            // AddXUnitLogger deliberately sets no filters (levels are appsettings-driven), but
+            // the TestCluster silo host does not read this project's appsettings — unfiltered it
+            // emits ~150 Information lines of Orleans startup per test. That volume is not free:
+            // xunit buffers captured output for EVERY test whether or not it is printed, and this
+            // suite's flakes are load-dependent races that extra logging on the hot path is known
+            // to MASK (see .github/workflows/flake-repro.yml). Warning+ costs nothing in a healthy
+            // run — nothing is emitted — and is exactly the band the wedge diagnostics live in.
+            .ConfigureLogging(logging => logging
+                .AddXUnitLogger()
+                .SetMinimumLevel(LogLevel.Warning)
+                .AddFilter("Orleans", LogLevel.Error)
+                .AddFilter("Microsoft", LogLevel.Error)
+                .AddFilter("System", LogLevel.Error));
     }
 
     public void Configure(IHostBuilder hostBuilder)
