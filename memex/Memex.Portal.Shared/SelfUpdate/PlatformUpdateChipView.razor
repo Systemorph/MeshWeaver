@@ -1,6 +1,8 @@
 @using System.Reactive.Disposables
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
 @using MeshWeaver.Mesh.Services
+@using MeshWeaver.Graph.Configuration
+@using Memex.Portal.Shared.Settings
 @implements IDisposable
 @inject IMessageHub Hub
 @inject AccessService Access
@@ -125,7 +127,7 @@
         if (chip.Action == PlatformUpdateChipAction.Refresh)
             Navigation.Refresh(forceReload: true);
         else
-            Navigation.NavigateTo("/_settings/GlobalSettings/About");
+            Navigation.NavigateTo(GlobalSettingsNodeType.TabHref(AboutSettingsTab.TabId));
     }
 
     public void Dispose()
