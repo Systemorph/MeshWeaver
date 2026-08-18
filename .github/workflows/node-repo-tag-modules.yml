@@ -105,15 +105,20 @@ jobs:
           to enable. Published: $MODULES"
             exit 0
           fi
-          payload=$(jq -nc --arg repo "$GITHUB_REPOSITORY" --arg sha "$GITHUB_SHA" \
+          # 🚨 The WHOLE request body as JSON, posted with --input. `-f`/`--raw-field` send
+          # client_payload as a STRING, and GitHub then delivers it as a string: every downstream
+          # `github.event.client_payload.sha` resolves to empty, with no error anywhere. The
+          # notification would be sent, accepted, and useless — the silent-success shape this
+          # whole change exists to remove.
+          body=$(jq -nc --arg repo "$GITHUB_REPOSITORY" --arg sha "$GITHUB_SHA" \
             --argjson modules "$MODULES" \
-            '{repo: $repo, sha: $sha, modules: $modules}')
+            '{event_type: "meshweaver-modules-published",
+              client_payload: {repo: $repo, sha: $sha, modules: $modules}}')
           failed=0
           for target in ${SUBSCRIBERS//,/ }; do
             target=$(echo "$target" | xargs)
             [ -z "$target" ] && continue
-            if gh api "repos/$target/dispatches" -f event_type=meshweaver-modules-published \
-                 --raw-field client_payload="$payload" >/dev/null 2>&1; then
+            if printf '%s' "$body" | gh api "repos/$target/dispatches" --input - >/dev/null 2>&1; then
               echo "announced to $target"
             else
               # Do NOT fail the job: the tags are already pushed, so failing here would leave a

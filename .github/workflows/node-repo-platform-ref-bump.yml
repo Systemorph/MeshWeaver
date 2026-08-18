@@ -56,7 +56,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Work out the current pin and the target commit
         id: refs
@@ -96,9 +96,10 @@ jobs:
           echo "source=$source"   >> "$GITHUB_OUTPUT"
           echo "pin is $current; target is $target ($source)"
 
-      # Comparing PREFIXES, because the pin is written short (a0a0288d5) and the API returns the
-      # full 40 chars. A naive string compare would report a bump every single day and open an
-      # endless series of no-op PRs.
+      # Comparing PREFIXES. Callers write the pin full-length with a SHORT sha in the adjacent
+      # "# Current:" note, but a caller that pins short must work too — and against a 40-char API
+      # answer a naive compare would report a bump every single day and open an endless series of
+      # no-op PRs. Prefix-comparing to the length actually written handles both.
       - name: Is the pin already current?
         id: check
         run: |
@@ -127,9 +128,22 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # A stable branch name per target commit makes a re-run idempotent: same target, same
-          # branch, same PR updated in place rather than a pile of duplicates.
-          git fetch origin "$branch" 2>/dev/null && git switch "$branch" || git switch -c "$branch"
-          git merge --no-edit origin/main -q || true
+          # branch, same PR updated in place rather than a pile of duplicates. On a re-run the
+          # branch exists on the REMOTE but not locally, so it has to be created tracking it —
+          # `git switch <name>` alone finds nothing in a fresh checkout, and the later push then
+          # fails non-fast-forward.
+          if git fetch origin "$branch" 2>/dev/null; then
+            git switch -c "$branch" --track "origin/$branch"
+            # A conflict here must STOP. Swallowing it (|| true) leaves the tree half-merged and
+            # commits that as if it were a clean bump.
+            if ! git merge --no-edit origin/main -q; then
+              echo "::error::'$branch' conflicts with main — resolve it there; refusing to commit a \
+          half-merged tree."
+              exit 1
+            fi
+          else
+            git switch -c "$branch"
+          fi
 
           # Rewrite ONLY the pin line, and only where it is the env declaration.
           sed -i -E "s|^(\s*${{ inputs.pin-key }}:\s*)[0-9a-f]+|\1${TARGET}|" ${{ inputs.workflow-file }}
