@@ -467,7 +467,12 @@ public static class CatalogLayoutAreas
             .ToObservable()
             .Concat();
 
-        Observable.Using(() => accessService.ImpersonateAsSystem(), _ => install)
+        // 🚨 RunAsSystem, never Observable.Using (#1790). A click action subscribes on the Blazor
+        // circuit's own thread; Observable.Using would leave `system-security` latched there for
+        // everything the circuit does next, and hand the install's terminating thread the clicking
+        // user's identity. RunAsSystem opens the scope across the cold install's Subscribe — where
+        // every write eager-captures its identity — and closes it on the way out of it.
+        accessService.RunAsSystem(() => install)
             .Subscribe(
                 _ => { },
                 // The failing package is already named above; this records that the CLICK did not

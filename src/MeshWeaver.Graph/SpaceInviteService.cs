@@ -121,9 +121,14 @@ public sealed class SpaceInviteService(
         // Both writes land in the Admin partition → system identity, constructed inside the scope.
         // Both are upserts keyed by a deterministic id/slug, so a re-invite overwrites rather than
         // duplicating. The existing InvitationEmailSender emails the Pending invitation.
-        return Observable.Using(accessService.ImpersonateAsSystem, _ => Observable.Defer(() =>
+        // 🚨 RunAsSystem, never Observable.Using (#1790): impersonation is an AsyncLocal
+        // store/restore pair, and Observable.Using splits the two across threads — the caller who
+        // subscribes is left running as System, and the write's terminating thread is handed the
+        // caller's identity. RunAsSystem opens the scope across the cold writes' Subscribe (where
+        // each eager-captures its identity) and closes it on the way out of that same Subscribe.
+        return accessService.RunAsSystem(() =>
                 EventSubscriptionOps.CreateSubscription(meshService, subscription)
-                    .SelectMany(_ => meshService.CreateOrUpdateNode(invitation))))
+                    .SelectMany(_ => meshService.CreateOrUpdateNode(invitation)))
             .Select(_ =>
             {
                 logger?.LogInformation("Invited {Email} to {Space} ({Role}); grant scheduled on sign-up", email, spacePath, role);
