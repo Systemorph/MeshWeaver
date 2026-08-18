@@ -695,6 +695,10 @@ internal static class NodeTypeCompilationHelpers
                 && def.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable
                 && string.IsNullOrEmpty(def.LatestAssemblyPath)
                 && !IsStaticOnlyNodeType(node, def)
+                // Same establishment gate as the re-drive: before the sources watcher has seeded a
+                // snapshot the re-drive is merely WAITING, not declining, and reporting that as
+                // "stuck" would cry wolf on every cold activation of a broken type.
+                && def.CurrentSourceVersions is not null
                 && !HasStaleFailureVerdict(def, guards.ModulesHash))
             .Take(1)
             .Subscribe(
@@ -1471,6 +1475,18 @@ internal static class NodeTypeCompilationHelpers
     /// never reached a verdict at all, so it is even less of a reason to stop trying than an
     /// Error. (<c>NodeTypeContractHandler.EnsureCompileDispatched</c> already re-drives it on the
     /// next REQUEST; this adds the activation-time path, under the same bound.)</para>
+    ///
+    /// <para>🚨 <b>Never re-drive from an UNESTABLISHED source set.</b> On a cold activation the
+    /// sources watcher has not written <see cref="NodeTypeDefinition.CurrentSourceVersions"/> yet,
+    /// so the source half of the live token is not "no sources" — it is "not known yet". Firing
+    /// there would (a) drive a compile from a set nobody established, which is the #1216 lesson
+    /// ("a compile driven from a set you did not establish produces verdicts about code from
+    /// evidence you do not have"), and (b) burn a second attempt for free, because the watcher's
+    /// first write changes the token and the type would be re-driven AGAIN one emission later. The
+    /// sources watcher always writes a snapshot for every type this predicate applies to — the
+    /// empty map when the queries match nothing — so this ORDERS the mechanism rather than
+    /// disabling it, and a mesh that cannot answer the source query degrades to no re-drive rather
+    /// than to a wrong verdict.</para>
     /// </summary>
     internal static bool HasStaleFailureVerdict(NodeTypeDefinition def, string? modulesHash) =>
         def.CompilationStatus is CompilationStatus.Error or CompilationStatus.Unavailable
@@ -1478,6 +1494,8 @@ internal static class NodeTypeCompilationHelpers
         // owns every case where coordinates DO exist.
         && string.IsNullOrEmpty(def.LatestAssemblyCollection)
         && string.IsNullOrEmpty(def.LatestAssemblyPath)
+        // The source set must be ESTABLISHED before it can be compared — see above.
+        && def.CurrentSourceVersions is not null
         && !string.Equals(
             def.FailedBuildInputs,
             BuildInputsToken(modulesHash, def.CurrentSourceVersions),

@@ -422,6 +422,7 @@ LIVE inputs differ from that stamp:
 | An edited / added / removed source | one fresh attempt |
 | Nothing — same framework, modules and sources | **no attempt**: the identical failure would reproduce |
 | The stamp is `null` (a failure from before this field, or an `Error` baked into a node file) | one fresh attempt — the migration |
+| The source set has not been established yet (`CurrentSourceVersions` unwritten) | **no attempt — it WAITS**: "not known yet" is not "no sources", and a compile driven from a set nobody established forms a verdict from evidence the mesh does not have |
 
 It is bounded three ways, and the first is the one that does the work:
 
@@ -433,6 +434,15 @@ It is bounded three ways, and the first is the one that does the work:
    moment (1) provably did not hold. Non-convergence is never quiet.
 3. **Terminal.** Past `MaxAutomaticFailureRedrives` the kickoff gives up for the hub's lifetime and
    says so, naming the type, its error and the remedy. An explicit Compile refunds the budget.
+
+The re-drive is **owner-driven, never caller-driven**. It fires from the type's OWN hub on facts the
+node already holds; no request, and no requester's identity, is an input. The compile runs as System
+and its activity row lands in the owning partition attributed to System — exactly as the first-build,
+recovery and framework-stale kickoffs have always done — and no user's `RequestedReleaseAt` /
+`RequestedReleaseBy` is touched, so nothing is misattributed. An unauthorized caller who merely
+activates the hub therefore gains no lever: the trigger is a property of the persisted record, and
+the three inputs that can move it (framework identity, installed modules, the type's own source
+nodes) are all writable only by principals who already hold that access.
 
 And when the re-drive **declines** — a type settled at `Error`/`Unavailable` whose verdict was formed
 under exactly the live inputs — the hub logs one warning per activation naming the type, its error
