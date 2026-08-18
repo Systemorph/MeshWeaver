@@ -12,12 +12,18 @@ WORKDIR /src
 RUN git clone --depth 1 --branch v1.7.4 https://github.com/ggml-org/whisper.cpp
 WORKDIR /src/whisper.cpp
 # Examples (incl. the HTTP `whisper-server`) build by default; Release for speed.
-RUN cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j --config Release --target whisper-server
+# BUILD_SHARED_LIBS=OFF: the runtime stage copies ONE binary, so it must be self-contained —
+# the default shared build ships libwhisper.so.1 the binary can't find at run time
+# (first real deploy died in CrashLoopBackOff on exactly that; this stage is not CI-verified).
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+    && cmake --build build -j --config Release --target whisper-server
 
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/whisper.cpp/build/bin/whisper-server /usr/local/bin/whisper-server
+# Fail the BUILD, not the first pod, if the binary still needs anything beyond system libs.
+RUN whisper-server --help >/dev/null 2>&1 || { ldd /usr/local/bin/whisper-server; exit 1; }
 
 # Model + language are configurable at run time (the "local model running as container" the portal points at).
 ENV WHISPER_MODEL=/models/model.bin \

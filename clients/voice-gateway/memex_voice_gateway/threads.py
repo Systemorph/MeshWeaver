@@ -63,6 +63,7 @@ class MemexThreads:
     namespace: str
     agent: str | None = None
     thread_idle_minutes: float = 5.0
+    verify_tls: bool = True   # False for a local mesh with a self-signed certificate
 
     _session_id: str | None = field(default=None, init=False)
     _http: aiohttp.ClientSession | None = field(default=None, init=False)
@@ -72,7 +73,8 @@ class MemexThreads:
 
     async def _post(self, payload: dict) -> tuple[dict, str]:
         if self._http is None:
-            self._http = aiohttp.ClientSession()
+            connector = None if self.verify_tls else aiohttp.TCPConnector(ssl=False)
+            self._http = aiohttp.ClientSession(connector=connector)
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
