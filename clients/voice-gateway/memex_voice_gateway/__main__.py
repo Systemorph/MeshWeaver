@@ -12,6 +12,7 @@ from . import stt
 from .config import Config
 from .ollama import OllamaBrain
 from .pipeline import VoicePipeline
+from .router import BrainRouter
 from .satellite import SatelliteLink
 from .threads import MemexThreads
 from .tts import PiperTts, SayTts, TtsFileServer
@@ -19,15 +20,26 @@ from .tts import PiperTts, SayTts, TtsFileServer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
-def make_brain(cfg: Config):
-    """Returns (ask, await_reply, close) for the configured brain."""
+def make_router(cfg: Config) -> BrainRouter:
+    """One router over all configured brains — PORTALS entries, else the legacy single brain."""
+    def ollama(entry: dict) -> OllamaBrain:
+        return OllamaBrain(entry.get("url", cfg.ollama_url), entry.get("model", cfg.ollama_model),
+                           idle_minutes=cfg.thread_idle_minutes)
+
+    def memex(entry: dict) -> MemexThreads:
+        return MemexThreads(entry["url"].rstrip("/"), entry["token"], entry["namespace"],
+                            agent=entry.get("agent", cfg.agent),
+                            thread_idle_minutes=cfg.thread_idle_minutes)
+
+    if cfg.portals:
+        brains = {e["name"]: (ollama(e) if e.get("kind") == "ollama" else memex(e))
+                  for e in cfg.portals}
+        active = next((e["name"] for e in cfg.portals if e.get("default")), cfg.portals[0]["name"])
+        return BrainRouter(brains, active)
     if cfg.brain == "ollama":
-        brain = OllamaBrain(cfg.ollama_url, cfg.ollama_model,
-                            idle_minutes=cfg.thread_idle_minutes)
-        return brain.ask, brain.await_reply, brain.close
-    threads = MemexThreads(cfg.memex_url, cfg.memex_token, cfg.namespace,
-                           agent=cfg.agent, thread_idle_minutes=cfg.thread_idle_minutes)
-    return threads.ask, threads.await_reply, threads.close
+        return BrainRouter({"lokal": ollama({})}, "lokal")
+    return BrainRouter({"memex": memex({"url": cfg.memex_url, "token": cfg.memex_token,
+                                        "namespace": cfg.namespace})}, "memex")
 
 
 def make_tts(cfg: Config):
@@ -39,7 +51,7 @@ def make_tts(cfg: Config):
 async def run() -> None:
     cfg = Config.from_env()
     http = aiohttp.ClientSession()
-    ask, await_reply, close_brain = make_brain(cfg)
+    router = make_router(cfg)
     tts = make_tts(cfg)
     server = TtsFileServer(cfg.gateway_host, cfg.gateway_port)
     await server.start()
@@ -56,21 +68,22 @@ async def run() -> None:
     pipeline = VoicePipeline(
         transcribe=functools.partial(stt.transcribe, http, cfg.stt_url, cfg.stt_token,
                                      language=cfg.stt_language, sample_rate=cfg.sample_rate),
-        ask=ask,
-        await_reply=await_reply,
+        ask=router.ask,
+        await_reply=router.await_reply,
         speak=speak,
         announce=announce,
         reply_budget_s=cfg.reply_budget_s,
         announce_budget_s=cfg.announce_budget_s,
         hold_phrase=cfg.hold_phrase,
         error_phrase=cfg.error_phrase,
+        command_handler=router.handle_command,
     )
     link = SatelliteLink(cfg, pipeline)
     try:
         await link.run_forever()
     finally:
         await server.stop()
-        await close_brain()
+        await router.close()
         await http.close()
 
 

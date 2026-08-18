@@ -43,7 +43,9 @@ class VoicePipeline:
         announce_budget_s: float,
         hold_phrase: str,
         error_phrase: str,
+        command_handler: Callable[[str], Awaitable[str | None]] | None = None,
     ) -> None:
+        self._command_handler = command_handler
         self._transcribe = transcribe
         self._ask = ask
         self._await_reply = await_reply
@@ -64,6 +66,14 @@ class VoicePipeline:
             return RoundResult("", self._error_phrase, await self._try_speak(self._error_phrase))
         if not transcript:
             return RoundResult("", None, None)  # silence / non-speech: end quietly
+
+        # Control commands (e.g. "wechsle zu systemorph") are handled deterministically,
+        # before any brain sees the text — the handler's confirmation is spoken directly.
+        if self._command_handler is not None:
+            confirmation = await self._command_handler(transcript)
+            if confirmation is not None:
+                return RoundResult(transcript, confirmation,
+                                   await self._try_speak(confirmation))
 
         try:
             thread_path = await self._ask(transcript)
