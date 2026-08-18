@@ -143,6 +143,14 @@ public class DelegationSubThreadUsageTest(ITestOutputHelper output) : MonolithMe
         //    the "wait until the sub-thread settles" hop this used to make first — which was itself
         //    unsound, since Thread.IsExecuting is false for the INITIAL Idle state as well as for a
         //    finished round (the same defect fixed in OrleansSubThreadAutoResumeTest).
+        //
+        //    🚨 Do NOT switch this to the node stream (#1812). That issue proposed it, on the theory
+        //    that an all-zero TokenUsage CI once timed out on was a stale CQRS projection. Measured,
+        //    it is not: this query and GetMeshNodeStream(usagePath) resolve within ±13 ms of each
+        //    other, and the point stream is the SLOWER of the two once its cold per-node hub
+        //    activation is counted. The zeros were the node's authoritative value — RecordUsage's
+        //    phase 1 wrote them — so an authoritative read returned the same zeros. Fixed on the
+        //    write side; pinned by ThreadTokenUsageTest.UsageSatelliteIsNeverObservableWithZeroTokens.
         var usagePath = $"{subThreadPath}/{TokenUsageNodeType.SatelliteSegment}/{UsageModelKey}";
         var usage = (await Mesh.GetQuery(
                 $"usage:{subThreadPath}",
