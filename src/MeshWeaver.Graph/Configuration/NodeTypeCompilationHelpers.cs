@@ -666,14 +666,15 @@ internal static class NodeTypeCompilationHelpers
             .Switch()
             .Select(sources =>
             {
-                // Fold the full current set → path → LastModified.UtcTicks. Same
-                // version field CompiledSources is keyed on, so IsDirty compares
-                // like-for-like (empty set → empty snapshot → IsDirty=false when
-                // CompiledSources is also empty).
+                // Fold the full current set → path → NodeTypeDefinition.SourceVersionOf.
+                // Same rule CompiledSources is keyed on, so IsDirty compares like-for-like
+                // (empty set → empty snapshot → IsDirty=false when CompiledSources is also
+                // empty). Keying on the raw timestamp is what let an un-timestamped source
+                // record 1601 on both sides and never read as changed (#1836).
                 var snap = System.Collections.Immutable.ImmutableDictionary<string, long>.Empty;
                 foreach (var n in sources)
                     if (!string.IsNullOrEmpty(n.Path))
-                        snap = snap.SetItem(n.Path!, n.LastModified.UtcTicks);
+                        snap = snap.SetItem(n.Path!, NodeTypeDefinition.SourceVersionOf(n));
                 return (IReadOnlyDictionary<string, long>)snap;
             }),
                 snapshot =>

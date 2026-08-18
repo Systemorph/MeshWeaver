@@ -2,6 +2,7 @@
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
 
@@ -465,6 +466,47 @@ public record NodeTypeDefinition
     /// always sees authoritative content, not the index-lagged query result.</para>
     /// </summary>
     public IReadOnlyDictionary<string, long>? CurrentSourceVersions { get; init; }
+
+    /// <summary>
+    /// <see cref="DateTime"/> ticks for <c>1601-01-01</c> — the FILETIME epoch, and the value
+    /// .NET returns from <c>FileInfo.LastWriteTimeUtc</c> for a file that DOES NOT EXIST
+    /// (it does not throw). A node stamped with it has no real modification time.
+    ///
+    /// <para>🚨 This is not a curiosity: a source stamped 1601 records the SAME version before
+    /// and after an edit, so <see cref="IsDirty"/> compares equal, no recompile is ever
+    /// scheduled, and the type serves its previous assembly forever while every status field
+    /// says <c>Ok</c>. Measured on memex 2026-08-18 (Systemorph/MeshWeaver#1836): an
+    /// <c>Edu/Module</c> change imported, logged "Recompiling", minted a fresh release — and
+    /// ran the old code, because six of its fourteen sources carried this value on BOTH sides
+    /// of the comparison.</para>
+    /// </summary>
+    public const long UnknownSourceVersionTicks = 504911232000000000L;
+
+    /// <summary>
+    /// The per-source version key for the <see cref="CompiledSources"/> /
+    /// <see cref="CurrentSourceVersions"/> snapshots: the node's modification time when it has
+    /// a real one, else its <see cref="MeshNode.Version"/>.
+    ///
+    /// <para>The fallback is the point. <c>Version</c> is the owning hub's monotonic
+    /// persistence counter — bumped by every write — so it CHANGES when the source changes,
+    /// which is the only property the staleness comparison actually needs. Falling back to it
+    /// turns an un-timestamped source from permanently-invisible into ordinarily comparable.</para>
+    ///
+    /// <para>Both snapshots MUST fold through this one function — the compiler's
+    /// (<c>MeshNodeCompilationService.DiscoverSourceVersionSnapshot</c>) and the watcher's
+    /// (<c>NodeTypeCompilationHelpers</c>) — or the two sides key differently and every type
+    /// reads as permanently dirty, which is the same outage with the opposite sign.</para>
+    ///
+    /// <para>Nodes carrying a real timestamp are unaffected. A node stored with the 1601 stamp
+    /// re-keys to its Version, so it differs from the recorded snapshot exactly ONCE,
+    /// recompiles, and both sides then agree — a single self-healing compile per affected
+    /// type, not a recompile storm.</para>
+    /// </summary>
+    /// <param name="node">A source (Code) node of the NodeType.</param>
+    public static long SourceVersionOf(MeshNode node) =>
+        node.LastModified.UtcTicks > UnknownSourceVersionTicks
+            ? node.LastModified.UtcTicks
+            : node.Version;
 
     /// <summary>
     /// <c>true</c> iff <see cref="CurrentSourceVersions"/> differs from
