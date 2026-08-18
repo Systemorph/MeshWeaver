@@ -240,7 +240,7 @@ public class StaleStampRootBindingTest(ITestOutputHelper output) : MonolithMeshT
 
         var type = await Mesh.GetWorkspace().GetMeshNodeStream($"{id}/Front")
             .Where(n => n?.Content is NodeTypeDefinition).FirstAsync().Timeout(StepTimeout).ToTask();
-        type.HasLoadableBuild().Should().BeFalse(
+        type.HasLoadableBuild(Mesh.JsonSerializerOptions).Should().BeFalse(
             "the fixture is only meaningful while the type genuinely cannot produce a loadable "
             + "build — if this flips, the test has stopped covering the deterministic window");
 
@@ -313,7 +313,7 @@ public class StaleStampRootBindingTest(ITestOutputHelper output) : MonolithMeshT
             .Match(n => n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
-                && n.HasLoadableBuild());
+                && n.HasLoadableBuild(Mesh.JsonSerializerOptions));
         Output.WriteLine($"rebuild settled at +{sw.ElapsedMilliseconds}ms");
 
         // …and the ROOT's hub must be bound to that rebuilt configuration. Its `Tests` area only

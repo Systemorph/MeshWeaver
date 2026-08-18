@@ -921,7 +921,12 @@ public static class PackageInstaller
                 var inFlight = def?.CompilationStatus
                     is CompilationStatus.Pending or CompilationStatus.Compiling;
                 var compiled = state.Compiled || inFlight;
-                var loadable = node.HasLoadableBuild();
+                // …and the SAME options here. HasLoadableBuild used to read the node with a CLR
+                // type test, so on an un-materialized emission it answered "loadable" for the very
+                // in-flight compile `inFlight` (one line up, on the same node) had just reported —
+                // the two halves of this fold disagreeing about one snapshot, which settles the
+                // wait early and recycles the root before its type has a build.
+                var loadable = node.HasLoadableBuild(options);
                 var parked = !inFlight
                     && !ReleaseRequestOutstanding(def)
                     && parkRegistry?.IsParked(declaredType) == true;
@@ -1096,7 +1101,7 @@ public static class PackageInstaller
                 .Where(node => node is not null)
                 .Take(1)
                 .Timeout(RootTypeProbeTimeout)
-                .Select(node => node.HasLoadableBuild())
+                .Select(node => node.HasLoadableBuild(hub.JsonSerializerOptions))
                 .Catch<bool, Exception>(_ => Observable.Return(false))
                 .Do(loadable =>
                 {

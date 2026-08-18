@@ -141,12 +141,21 @@ public class InstallReleaseOrderingTest(ITestOutputHelper output) : MonolithMesh
             .Select(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
             .Where(def => def?.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error)
             .FirstAsync().Timeout(StepTimeout).ToTask();
-        frontDef!.CompilationStatus.Should().Be(CompilationStatus.Ok,
-            $"the root's own type must compile or there is no recycle to order around; error: {frontDef.CompilationError}");
-
+        // Print the ORDER before asserting anything about it. An ordering test that fails without
+        // naming the sequence it saw costs a full investigation per sighting (#1811), and the
+        // precondition below is exactly where the reader is left with nothing: it fires BEFORE the
+        // stamps are read, so without this the trx shows a compile error and no ordering evidence
+        // at all — which is how this test's one recorded failure got filed as an ordering race.
         var recycles = _rootRecycles.ToArray();
-        foreach (var r in recycles)
-            Output.WriteLine($"root recycle observed at {r:O}");
+        Output.WriteLine(recycles.Length == 0
+            ? "root recycles observed: NONE"
+            : $"root recycles observed: {string.Join(", ", recycles.Select(r => r.ToString("O")))}");
+
+        frontDef!.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            "the root's own type must compile or there is no recycle to order around — and THIS "
+            + "assertion is about the mesh's compiler, not about ordering: "
+            + $"{ClassifyCompileFailure(frontDef.CompilationError)}");
+
         recycles.Should().NotBeEmpty(
             "the retyped root must be recycled — SettleRetypedRoot is what this ordering is about");
 
@@ -174,6 +183,33 @@ public class InstallReleaseOrderingTest(ITestOutputHelper output) : MonolithMesh
             + "GetMeshNode('<packageRoot>')), so the deferred types' releases must not be issued "
             + "until the installer's own recycle of that root has settled — but no recycle was "
             + $"observed between {front:O} and {widget:O} (#1732)");
+    }
+
+    /// <summary>
+    /// Turns the failed compile's recorded error into a sentence that says WHICH defect this is,
+    /// so the reader does not have to re-derive it from a Roslyn stack.
+    ///
+    /// <para>The precondition above fails for two completely different reasons and they need
+    /// completely different owners. A Roslyn <b>diagnostic</b> means this fixture's C# stopped
+    /// compiling — the test's own problem. An emit-phase <b>fault</b> (Roslyn THREW; the compile
+    /// pipeline stamps its two-leg canary verdict onto the message) means the mesh could not emit
+    /// at all, which is <b>#890</b> — a process-level condition this test merely observed, and
+    /// nothing about install-vs-recycle ordering. The one recorded failure of this test
+    /// (run 32069247537, shard 4, on a docs-only branch) was the second kind and was filed as the
+    /// first, which is the entire cost this line exists to remove.</para>
+    /// </summary>
+    private static string ClassifyCompileFailure(string? compilationError)
+    {
+        if (string.IsNullOrWhiteSpace(compilationError))
+            return "the compile reported no error text at all";
+        // The canary verdict is stamped only on an emit-phase THROW (EmitPipeline's catch around
+        // compilation.Emit), so its presence IS the discriminator — no string-matching on
+        // exception names.
+        return compilationError.Contains("canary=", StringComparison.Ordinal)
+            ? "Roslyn THREW while emitting rather than reporting diagnostics — this is #890 "
+              + "(a process-level emit fault), NOT an ordering race, and this test only observed "
+              + $"it. Verdict + error: {compilationError}"
+            : $"the fixture's own C# failed to compile: {compilationError}";
     }
 
     /// <summary>
