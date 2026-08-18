@@ -1,7 +1,9 @@
 ---
 Name: Approvals ship as a node-native package
-Category: WhatsNew
+Category: Feature
 Description: The approval workflow left the platform build — it is now two NodeTypes the mesh compiles live, installed and removed from the Store like any other package.
+Icon: CheckmarkCircle
+Order: -20260818
 ---
 
 # Approvals are a package now
