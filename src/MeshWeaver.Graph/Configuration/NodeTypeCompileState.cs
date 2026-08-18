@@ -113,6 +113,9 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/>.</summary>
     public string? CompiledFrameworkVersion { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.FailedBuildInputs"/>.</summary>
+    public string? FailedBuildInputs { get; init; }
+
     /// <summary>The state projected from a NodeType definition — pure. Null in, null out.</summary>
     public static NodeTypeCompileState? FromDefinition(NodeTypeDefinition? definition) =>
         definition is null
@@ -138,6 +141,7 @@ public record NodeTypeCompileState
                 CompiledSources = definition.CompiledSources,
                 CurrentSourceVersions = definition.CurrentSourceVersions,
                 CompiledFrameworkVersion = definition.CompiledFrameworkVersion,
+                FailedBuildInputs = definition.FailedBuildInputs,
             };
 
     /// <summary>Whether NO compile machinery has recorded anything yet — a never-compiled,
@@ -151,7 +155,7 @@ public record NodeTypeCompileState
         && LastReleaseRequestHandledAt is null && ReleaseNotes is null
         && LatestAssemblyCollection is null && LatestAssemblyPath is null
         && CompiledSources is null && CurrentSourceVersions is null
-        && CompiledFrameworkVersion is null;
+        && CompiledFrameworkVersion is null && FailedBuildInputs is null;
 }
 
 /// <summary>

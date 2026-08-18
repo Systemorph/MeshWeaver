@@ -280,6 +280,11 @@ public static class PrebuiltAssemblySeeder
                                     LatestAssemblyCollection = location.Collection,
                                     LatestAssemblyPath = location.ContentPath,
                                     CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+                                    // The adopted build retires any standing FAILURE verdict, so
+                                    // the inputs it was formed from go with it (#1793) — exactly as
+                                    // ApplyCompileSuccess does. A token left behind would describe a
+                                    // verdict this node no longer holds.
+                                    FailedBuildInputs = null,
                                     // The producer compiled exactly the sources it shipped beside
                                     // these bytes, so the snapshot IS the installed set. Leaving it
                                     // unset would leave IsDirty comparing an empty snapshot against

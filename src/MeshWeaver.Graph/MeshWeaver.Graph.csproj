@@ -14,6 +14,12 @@
          tracked for retirement separately from the (removed) Approvals grant. -->
     <InternalsVisibleTo Include="MeshWeaver.Hosting" />
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Monolith.Test" />
+    <!-- OrleansCompileActivityAccessTest seeds a NodeType whose compile state is deliberately
+         "settled and nothing due", which means stamping FailedBuildInputs with the token the
+         framework itself computes (NodeTypeCompilationHelpers.BuildInputsToken). Re-deriving that
+         fold in the test is the one thing its own contract forbids — two call sites computing the
+         token differently either never converge or never fire, and both are silent. -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
     <!-- The build-time packer calls DynamicMeshNodeAttributeGenerator directly. A prebuilt
          assembly MUST carry the same generated skeleton the runtime compiles (the
          MeshNodeProviderAttribute subclass + ConfigureHub wrapping the `configuration` lambda),
