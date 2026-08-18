@@ -1,0 +1,175 @@
+name: Node repo platform-ref bump (reusable)
+
+# ♻️ REUSABLE (workflow_call) — keeps a node repo's PLATFORM PIN current on its own.
+#
+# A node repo that builds a compiled module pins WHICH MeshWeaver commit it builds against
+# (`MW_PLATFORM_REF` in its ci.yml). The pin buys reproducibility — a platform regression lands
+# on the commit that moves it, not on whoever pushed next — and the price, as every caller's own
+# comment says, is that it must be "bumped routinely".
+#
+# "Routinely" meant a person remembering, and it lagged. On 2026-08-18 MeshWeaver.SocialMedia's
+# pin sat days behind while a module fix landed on a later platform commit — which meant the
+# fix could be merged, green, and STILL never reach the shipped bundle, because the bundle is
+# built against the pin. This automates the bump so that cannot recur silently.
+#
+# 🚨 It opens a PR; it never pushes to main. That is the point of keeping a pin at all: the bump
+# stays a reviewable commit that the full gate suite runs on, so a platform regression arrives as
+# a red PR instead of as a silently-changed build input. Auto-MERGING would turn the pin back
+# into "always latest", which is exactly what the pin exists to prevent.
+#
+# Caller contract:
+#
+#   name: Bump the platform pin
+#   on:
+#     schedule: [{cron: "23 5 * * *"}]
+#     repository_dispatch: {types: [meshweaver-framework-released]}
+#     workflow_dispatch:
+#   jobs:
+#     bump:
+#       permissions: {contents: write, pull-requests: write}
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-platform-ref-bump.yml@<sha>
+#
+# 🔒 PIN THE REF — same reason as every other node-repo template.
+
+on:
+  workflow_call:
+    inputs:
+      workflow-file:
+        description: The caller's workflow file carrying the pin.
+        type: string
+        default: .github/workflows/ci.yml
+      pin-key:
+        description: The env key holding the platform commit.
+        type: string
+        default: MW_PLATFORM_REF
+      upstream-repo:
+        description: The repo whose default branch the pin tracks.
+        type: string
+        default: Systemorph/MeshWeaver
+
+jobs:
+  bump:
+    name: Bump the platform pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the current pin and the target commit
+        id: refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+
+          current=$(grep -oE '^\s*${{ inputs.pin-key }}:\s*[0-9a-f]+' ${{ inputs.workflow-file }} \
+            | grep -oE '[0-9a-f]+$' || true)
+          if [ -z "$current" ]; then
+            echo "::error::Could not read ${{ inputs.pin-key }} from ${{ inputs.workflow-file }} — the pin's \
+          shape changed and this workflow would silently bump nothing."
+            exit 1
+          fi
+
+          # A release dispatch names the exact commit that was released; a scheduled run asks the
+          # platform where its default branch points. Never "latest tag": the module compiles
+          # against project references in a CHECKOUT, so the meaningful identity is a commit.
+          if [ -n "${PAYLOAD_SHA:-}" ]; then
+            target="$PAYLOAD_SHA"
+            source="release dispatch"
+          else
+            target=$(gh api repos/${{ inputs.upstream-repo }}/commits/main --jq '.sha')
+            source="scheduled poll of ${{ inputs.upstream-repo }}@main"
+          fi
+
+          if [ -z "$target" ] || [ ${#target} -lt 7 ]; then
+            echo "::error::Could not resolve a target platform commit ($source) — refusing to \
+          write a pin I cannot verify."
+            exit 1
+          fi
+
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "target=$target"   >> "$GITHUB_OUTPUT"
+          echo "source=$source"   >> "$GITHUB_OUTPUT"
+          echo "pin is $current; target is $target ($source)"
+
+      # Comparing PREFIXES, because the pin is written short (a0a0288d5) and the API returns the
+      # full 40 chars. A naive string compare would report a bump every single day and open an
+      # endless series of no-op PRs.
+      - name: Is the pin already current?
+        id: check
+        run: |
+          set -euo pipefail
+          current='${{ steps.refs.outputs.current }}'
+          target='${{ steps.refs.outputs.target }}'
+          if [ "${target:0:${#current}}" = "$current" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "pin already points at $target — nothing to do"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open (or update) the bump PR
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT: ${{ steps.refs.outputs.current }}
+          TARGET: ${{ steps.refs.outputs.target }}
+          SOURCE: ${{ steps.refs.outputs.source }}
+        run: |
+          set -euo pipefail
+          branch="chore/platform-ref-${TARGET:0:9}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # A stable branch name per target commit makes a re-run idempotent: same target, same
+          # branch, same PR updated in place rather than a pile of duplicates.
+          git fetch origin "$branch" 2>/dev/null && git switch "$branch" || git switch -c "$branch"
+          git merge --no-edit origin/main -q || true
+
+          # Rewrite ONLY the pin line, and only where it is the env declaration.
+          sed -i -E "s|^(\s*${{ inputs.pin-key }}:\s*)[0-9a-f]+|\1${TARGET}|" ${{ inputs.workflow-file }}
+          # Keep the human-readable "Current:" note beside it honest — a stale comment next to a
+          # fresh pin is how the next reader gets misled about what is being built.
+          today=$(date -u +%Y-%m-%d)
+          sed -i -E "s|^(\s*# Current: )[0-9a-f]+, [0-9]{4}-[0-9]{2}-[0-9]{2}.*|\1${TARGET:0:9}, ${today} (auto-bumped).|" \
+            ${{ inputs.workflow-file }}
+
+          if git diff --quiet; then
+            echo "::notice::pin already at ${TARGET} on this branch — nothing to commit"
+            exit 0
+          fi
+
+          git add ${{ inputs.workflow-file }}
+          git commit -q -m "chore: bump ${{ inputs.pin-key }} to ${TARGET:0:9}
+
+          The compiled module (src/MeshWeaver.Social) builds against a MeshWeaver checkout at this
+          pin. Source: ${SOURCE}. Previous pin: ${CURRENT}.
+
+          Opened automatically so the pin cannot silently lag behind the platform — a lagging pin
+          is a gate reporting on a framework nobody runs, and it means a module fix can be merged
+          and still never reach the shipped bundle."
+          git push -q origin "$branch"
+
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            echo "PR for $branch already open — updated in place"
+          else
+            gh pr create --base main --head "$branch" \
+              --title "chore: bump ${{ inputs.pin-key }} to ${TARGET:0:9}" \
+              --body "$(printf '%s\n' \
+                "Bumps the platform pin the compiled module builds against." \
+                "" \
+                "| | |" \
+                "|---|---|" \
+                "| previous | \`${CURRENT}\` |" \
+                "| new | \`${TARGET}\` |" \
+                "| source | ${SOURCE} |" \
+                "" \
+                "The pin exists so a platform regression lands on the commit that moves it rather than on whoever pushed next — so this is a **PR, not a push**, and the full gate suite runs on it exactly as it would for a hand-written bump." \
+                "" \
+                "If CI is red here, the platform changed under the module: fix it on this branch, do not close and re-bump later. A pin that lags is a gate reporting on a framework nobody runs.")"
+          fi

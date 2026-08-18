@@ -28,7 +28,13 @@ name: Node repo tag-modules (reusable)
 # "Node repos run the same lane" -> "The workflow ref is PINNED".
 
 on:
-  workflow_call: {}
+  workflow_call:
+    secrets:
+      # Optional: a token that may POST /repos/{owner}/{repo}/dispatches on the subscriber repos.
+      # Omitted → the announce step reports itself DORMANT rather than failing, so a repo that has
+      # not been wired up yet still tags normally.
+      dispatch-token:
+        required: false
 
 jobs:
   tag-modules:
@@ -51,3 +57,74 @@ jobs:
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: python3 scripts/tag-modules.py
+
+      # WHAT THIS COMMIT PUBLISHED, derived from the tags that now point at HEAD rather than from
+      # the script's stdout: scripts/tag-modules.py lives in each node repo, so parsing its text
+      # would couple this shared template to a file it does not own and cannot keep in step. The
+      # tags ARE the published record — that is the whole contract a dependent's pin resolves
+      # against — so reading them needs nothing from the caller.
+      - name: Collect the modules this commit published
+        id: published
+        run: |
+          set -euo pipefail
+          modules='[]'
+          for tag in $(git tag --points-at HEAD | grep -E '^[^/]+/v[0-9]+\.[0-9]+\.[0-9]+$' || true); do
+            module="${tag%%/v*}"
+            version="${tag##*/v}"
+            modules=$(jq -c --arg m "$module" --arg v "$version" --arg t "$tag" \
+              '. += [{module: $m, version: $v, tag: $t}]' <<<"$modules")
+          done
+          count=$(jq -r 'length' <<<"$modules")
+          echo "modules=$modules" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "published $count module(s): $modules"
+          { echo "### Published modules"; echo;
+            if [ "$count" = "0" ]; then echo "_none — no module version changed in this commit._";
+            else jq -r '.[] | "- **\(.module)** \(.version)"' <<<"$modules"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 📣 ANNOUNCE IT. Publishing without announcing is why a downstream repo can sit on a stale
+      # module version indefinitely: the version exists, and nothing that depends on it ever
+      # learns. This is the outbound twin of the platform's `meshweaver-framework-released`
+      # dispatch that node repos already RECEIVE.
+      #
+      # 🚨 Dormant without MODULE_SUBSCRIBER_REPOS, and it says so out loud. A notifier that
+      # quietly does nothing is indistinguishable from one that works and has no subscribers —
+      # and this whole mechanism exists because "quietly does nothing" is expensive.
+      - name: Announce the published modules to subscribers
+        if: steps.published.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.dispatch-token }}
+          SUBSCRIBERS: ${{ vars.MODULE_SUBSCRIBER_REPOS }}
+          MODULES: ${{ steps.published.outputs.modules }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUBSCRIBERS:-}" ] || [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::DORMANT — modules published but not announced. Set the repo variable \
+          MODULE_SUBSCRIBER_REPOS (comma-separated owner/repo) and pass a dispatch-token secret \
+          to enable. Published: $MODULES"
+            exit 0
+          fi
+          payload=$(jq -nc --arg repo "$GITHUB_REPOSITORY" --arg sha "$GITHUB_SHA" \
+            --argjson modules "$MODULES" \
+            '{repo: $repo, sha: $sha, modules: $modules}')
+          failed=0
+          for target in ${SUBSCRIBERS//,/ }; do
+            target=$(echo "$target" | xargs)
+            [ -z "$target" ] && continue
+            if gh api "repos/$target/dispatches" -f event_type=meshweaver-modules-published \
+                 --raw-field client_payload="$payload" >/dev/null 2>&1; then
+              echo "announced to $target"
+            else
+              # Do NOT fail the job: the tags are already pushed, so failing here would leave a
+              # published version behind a red run and invite a re-run that re-tags nothing.
+              echo "::warning::could not notify $target — it will not learn about $MODULES"
+              failed=1
+            fi
+          done
+          # `[ ... ] && echo` as the last statement would return 1 under `set -e` when the test is
+          # false — failing the job precisely when everything WORKED. An if, not a chain.
+          if [ "$failed" = "1" ]; then
+            echo "::warning::at least one subscriber was not notified"
+          fi
+          exit 0
