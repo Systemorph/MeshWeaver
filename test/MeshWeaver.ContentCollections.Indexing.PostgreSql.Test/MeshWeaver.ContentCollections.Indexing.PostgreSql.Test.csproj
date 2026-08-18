@@ -8,6 +8,11 @@
     <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing\MeshWeaver.ContentCollections.Indexing.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections.Indexing.PostgreSql\MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
+    <!-- CreateMeshWeaverServiceProvider: the Autofac container the portal runs, which the boot-pack
+         test resolves the pipeline through (a plain ServiceCollection.BuildServiceProvider tolerates a
+         null-returning factory that Autofac refuses, so it cannot prove the inert-when-unconfigured
+         contract). -->
+    <ProjectReference Include="..\..\src\MeshWeaver.ServiceProvider\MeshWeaver.ServiceProvider.csproj" />
   </ItemGroup>
 
 </Project>
