@@ -1381,6 +1381,14 @@ public static class MeshDataSourceExtensions
                 var sourcesSub = NodeTypeCompilationHelpers
                     .InstallSourcesWatcher(hub, workspace);
                 hub.RegisterForDisposal(sourcesSub);
+                // Adopted-build source stamp (#1834). A prebuilt adoption is written
+                // CROSS-HUB, so it cannot see this hub's CurrentSourceVersions — it asks
+                // (RequestedSourceStampAt) and the owner answers with its own authoritative
+                // snapshot. Without it the adopted build is born IsDirty and the release
+                // request an install issues one step later recompiles what was just adopted.
+                var stampSub = NodeTypeCompilationHelpers
+                    .InstallAdoptedSourceStampWatcher(hub, workspace);
+                hub.RegisterForDisposal(stampSub);
             }
 
             // Compile-state mirror (issue #748, phase 1): every real change of a NodeType
