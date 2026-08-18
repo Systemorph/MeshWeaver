@@ -73,8 +73,51 @@ const SEED_VERSION = 1;
 export const KNOWN_INSTANCES: MeshInstance[] = [
   { name: "memex.localhost (k8s)", url: "https://memex.localhost:8443", token: "", local: false, icon: "☸", color: "#d29922", kind: "Local · k8s" },
   { name: "memex", url: "https://memex.meshweaver.cloud", token: "", local: false, icon: "☁️", color: "#4c8dff", kind: "Prod" },
-  { name: "systemorph", url: "https://memex.systemorph.com", token: "", local: false, icon: "🏢", color: "#6a4c93", kind: "Prod" },
 ];
+
+/**
+ * Discover the fleet from a connected mesh: instances are MESH NODES (nodeType
+ * `Hosting/Deployment`, populated in the mesh's Deployments space), so the connect list is
+ * data on the mesh — this app is public and carries no environment inventory of its own.
+ * Best-effort by design: no Hosting plugin, no permission, or offline all yield [].
+ */
+export async function discoverInstances(from: MeshInstance): Promise<MeshInstance[]> {
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (from.token) headers.Authorization = `Bearer ${from.token}`;
+    const search = await fetch(`${from.url}/api/mesh/search`, {
+      method: "POST", headers,
+      body: JSON.stringify({ query: "nodeType:Hosting/Deployment scope:subtree" }),
+    });
+    if (!search.ok) return [];
+    const results: Array<{ path?: string; name?: string }> = ((await search.json()) as any)?.results ?? [];
+    const found: MeshInstance[] = [];
+    for (const r of results.slice(0, 20)) {
+      if (!r.path) continue;
+      const got = await fetch(`${from.url}/api/mesh/get`, {
+        method: "POST", headers, body: JSON.stringify({ path: `@${r.path}` }),
+      });
+      if (!got.ok) continue;
+      const host: string | undefined = ((await got.json()) as any)?.content?.host;
+      if (!host) continue;
+      found.push({ name: r.name ?? host, url: `https://${host}`, token: "", local: false, kind: "Prod" });
+    }
+    return found;
+  } catch {
+    return [];
+  }
+}
+
+/** Merge discovered instances into the saved list — an existing entry (its token, edits) always wins. */
+export function mergeDiscovered(discovered: MeshInstance[]): MeshInstance[] {
+  const existing = read<MeshInstance[]>(INSTANCES_KEY) ?? [];
+  const byName = new Map(existing.map((i) => [i.name, i]));
+  const byUrl = new Set(existing.map((i) => i.url));
+  for (const d of discovered) if (!byName.has(d.name) && !byUrl.has(d.url)) byName.set(d.name, d);
+  const merged = [...byName.values()];
+  write(INSTANCES_KEY, merged);
+  return merged;
+}
 
 /**
  * Idempotently add the known environments to the saved-instances list on first run (versioned, so

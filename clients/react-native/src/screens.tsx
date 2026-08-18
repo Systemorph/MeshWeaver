@@ -3,7 +3,7 @@
 // mesh): Voice (speech), Connect (remote instances), Profile, Settings.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet } from "react-native";
-import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, type MeshInstance } from "./connection";
+import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, discoverInstances, mergeDiscovered, type MeshInstance } from "./connection";
 import { useStyles, useTheme, type Palette } from "./theme";
 
 const useSheet = () => useStyles(makeStyles);
@@ -130,13 +130,25 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
     setInstances(loadInstances());
     setCurrent(currentInstance().name);
   };
-  const select = (n: string) => { setCurrentInstance(n); setCurrent(n); onConnected(); };
+  // The fleet is data ON the mesh (Hosting/Deployment nodes): after pointing at a portal,
+  // quietly pull its deployment directory into the switcher. Best-effort, never blocking.
+  const discover = (inst: MeshInstance) => {
+    discoverInstances(inst).then((d) => { if (d.length) { mergeDiscovered(d); refresh(); } }).catch(() => {});
+  };
+  const select = (n: string) => {
+    setCurrentInstance(n); setCurrent(n);
+    const inst = loadInstances().find((i) => i.name === n);
+    if (inst && !inst.local) discover(inst);
+    onConnected();
+  };
   const add = () => {
     const nm = name.trim() || url.trim().replace(/^https?:\/\//, "");
     if (!url.trim()) return;
-    saveInstance({ name: nm, url: url.trim().replace(/\/+$/, ""), token: token.trim(), local: false });
+    const inst: MeshInstance = { name: nm, url: url.trim().replace(/\/+$/, ""), token: token.trim(), local: false };
+    saveInstance(inst);
     setName(""); setUrl(""); setToken("");
     refresh();
+    discover(inst);
     onConnected();
   };
 
