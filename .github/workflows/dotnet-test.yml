@@ -658,7 +658,8 @@ jobs:
     # `timeout-minutes`, i.e. silently back to a step that can eat the whole job. That is the
     # exact failure this comment block was written to prevent, reintroduced by editing one term.
     # `BROWSER_STEP_BUDGET` is now the single number: every wait and every attempt is clamped to
-    # what is LEFT of it, so no combination of inner bounds can exceed it. Worst case for the
+    # what is LEFT of it — including the shared `wait-for-apt.sh` (#1855), which is called with the
+    # capped budget rather than the raw one — so no combination of inner bounds can exceed it. Worst case for the
     # whole step = the budget + one `--kill-after` grace + the 60 s smoke print ≈ 9.5 min, and a
     # whole GREEN shard takes 6m23s today (run 32175994386, shard 0: 19:40:40 → 19:47:03), so
     # even the worst case leaves the tests their room inside the 20-minute cap. A healthy run of
@@ -698,6 +699,25 @@ jobs:
         set -euo pipefail
         sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
         sudo chown "$(id -u):$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
+        # Let apt wait on the DPKG FRONTEND lock itself, since an external wait closes only part
+        # of the race: the background apt takes and releases its locks once per source, so a wait
+        # can return in a release gap and the apt-get playwright spawns loses the very next
+        # acquisition (run 32165453521, shard 5, twice in a row). `DPkg::Lock::Timeout` reaches
+        # the invocations npx spawns, which no external wait can wrap (#1855).
+        #
+        # 🚨 …but it does NOT cover `/var/lib/apt/lists/lock`, which is the lock this step keeps
+        # failing on. Measured on apt 2.8.3, holder present in both cases:
+        #     lists lock,    with and without the option  →  "Could not get lock", 0s
+        #     frontend lock, without → 0s   ·   with "12" → waited 12s
+        # So #1855's "removing the window entirely" holds for the dpkg frontend lock only. The
+        # lists-lock case is the one the REAP below exists for; do not read this line as covering
+        # it. Kept because the frontend half is real.
+        #
+        # 🚨 120, not 300: the value is a wait apt will actually sit through, so it must be
+        # SMALLER than the per-attempt bound. At 300 an apt blocked on the frontend lock is still
+        # waiting when `timeout` kills the attempt — the diagnostic is lost and a fresh orphan is
+        # created, turning a clean "Could not get lock" into another silent hang.
+        echo 'DPkg::Lock::Timeout "120";' | sudo tee /etc/apt/apt.conf.d/99ci-lock-timeout >/dev/null
 
         deadline=$(( $(date +%s) + BROWSER_STEP_BUDGET ))
         # Seconds left in the step's budget; never negative.
@@ -705,30 +725,14 @@ jobs:
         # min(requested, remaining) — no inner bound can outlive the ceiling.
         capped() { local b; b="$(left)"; [ "$1" -lt "$b" ] && echo "$1" || echo "$b"; }
 
-        # Everything that can hold an apt/dpkg lock, by exact process name.
+        # The apt processes this step can legitimately have started, and so may kill — by exact
+        # process name. `dpkg` and `unattended-upgr` are deliberately ABSENT: we never spawn the
+        # latter, and hard-killing either can leave the package database needing
+        # `dpkg --configure -a`. Those two are waited for (wait-for-apt.sh), never reaped.
         # 🚨 `|| :` is load-bearing: `pgrep` exits 1 when NOTHING matches, and under
-        # `set -euo pipefail` a bare `x="$(apt_busy)"` would then abort the step with no message
-        # at all — an idle runner would look like an infra failure that named nothing.
-        apt_busy() { pgrep -x 'apt-get|apt|dpkg|unattended-upgr' 2>/dev/null | sort -n | tr '\n' ' ' || :; }
-        # The subset this step can legitimately have started, and so may kill. `dpkg` and
-        # `unattended-upgr` are deliberately absent: we never spawn the latter, and hard-killing
-        # either can leave the package database needing `dpkg --configure -a`.
+        # `set -euo pipefail` a bare `before="$(apt_killable)"` would then abort the step with no
+        # message at all — an idle runner would look like an infra failure that named nothing.
         apt_killable() { pgrep -x 'apt-get|apt' 2>/dev/null | sort -n | tr '\n' ' ' || :; }
-
-        # Wait for a competing apt to FINISH — not for a lock to be momentarily free. A
-        # `flock <lock> true` acquires and releases in the same breath and so reserves nothing
-        # (#1858), and apt takes fcntl record locks, which do not interoperate with flock at all.
-        wait_for_apt() {
-          local budget waited=0
-          budget="$(capped "$APT_LOCK_WAIT")"
-          while [ "$waited" -lt "$budget" ] && [ -n "$(apt_busy)" ]; do
-            [ "$waited" -eq 0 ] && echo "apt/dpkg busy on this runner ($(apt_busy)) — waiting up to ${budget}s" >&2
-            sleep 3
-            waited=$(( waited + 3 ))
-          done
-          [ "$waited" -gt 0 ] && echo "waited ${waited}s for a competing apt to finish" >&2
-          return 0
-        }
 
         # 🚨 THE REAP — see the block above. Kills the apt processes THIS attempt started and
         # `timeout`'s own group kill could not touch, through `sudo`, because they are root.
@@ -804,7 +808,11 @@ jobs:
         # ── Phase 2: the system packages `--with-deps` installs. The ONLY apt in this step. ──
         deps_ok=0
         for attempt in 1 2 3; do
-          wait_for_apt
+          # ONE implementation of the wait, shared with clients.yml (#1855) — two copies of it are
+          # what let #1858 fix this file while the identical `flock` no-op stayed in clients.yml.
+          # $GITHUB_WORKSPACE, not a relative path: the clients job runs with a working-directory
+          # where `.github/…` does not exist. Clamped to the step budget like everything else.
+          "$GITHUB_WORKSPACE/.github/scripts/wait-for-apt.sh" "$(capped "$APT_LOCK_WAIT")"
           before="$(apt_killable)"
           rc=0; install_browser --with-deps || rc=$?
           if [ $rc -eq 0 ]; then deps_ok=1; break; fi
