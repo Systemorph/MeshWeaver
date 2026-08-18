@@ -129,21 +129,38 @@ public static class PackageInstaller
 
         var options = hub.JsonSerializerOptions;
         var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        // 🚨 PUBLISH THE PARTITION BEFORE ITS CONTENT (#1758). A content package writes no
+        // partition ROOT of its own (every parsed node lands at `{partition}/{id}` or deeper), so
+        // there is nothing here to race and the shape can go first outright: the package's own
+        // root access satellites, then the manifest-declared shape, then everything else.
+        //
+        // It used to run after every content node. That is an ORDERING defect, not a permission
+        // one: the partition becomes reachable as soon as anything in it lands, readers arrive, and
+        // the permission fold correctly denies because the grants are simply not there yet.
+        var ownAccess = nodes.Where(n => IsPartitionAccessSatellite(n.Path, partition)).ToArray();
+        var content = nodes.Where(n => !IsPartitionAccessSatellite(n.Path, partition)).ToArray();
         return EnsurePartitionsProvisioned(hub, partition, InstalledPartition)
-            .SelectMany(_ => nodes
+            .SelectMany(_ => ownAccess
                 .Select(n => UpsertIfChanged(hub, persistence, n, options))
-                .ToObservable().Merge(batchSize).ToList())
+                .ToObservable().Concat().ToList())
+            .SelectMany(accessWrites => EnsureDeclaredAccess(
+                    hub, manifest, partition, logger, nodes.Select(n => n.Path))
+                .Select(_ => accessWrites))
+            .SelectMany(accessWrites => content
+                .Select(n => UpsertIfChanged(hub, persistence, n, options))
+                .ToObservable().Merge(batchSize).ToList()
+                .Select(contentWrites => (IList<bool>)accessWrites.Concat(contentWrites).ToList()))
             .SelectMany(writes =>
             {
                 var result = new InstallResult(nodes.Length, writes.Count(w => w));
                 logger?.LogInformation(
                     "Installed package {Id} v{Version}: {Written} written, {Unchanged} unchanged into {Partition} @ {Ref}",
                     manifest.Id, manifest.Version, result.Written, result.Unchanged, partition, installedFromRef);
-                // The declared-access shape lands BEFORE the roots are warmed: warming ACTIVATES
-                // each root hub, whose gating pass seeds the partition's access table — it must see
-                // the shape this package declares, not a partition nobody can read.
-                return EnsureDeclaredAccess(hub, manifest, partition, logger,
-                        nodes.Select(n => n.Path))
+                // The declared access was published as a PHASE before the first content node landed
+                // (see the note above). What stays here is its POST-CONDITION, read once and
+                // reported LOUDLY — an install that reports success while its partition is
+                // unreadable is exactly the failure this ordering exists to make impossible.
+                return VerifyDeclaredAccess(hub, manifest, partition, logger)
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, authorizingUserId: authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
@@ -319,6 +336,94 @@ public static class PackageInstaller
     /// never fight over it.
     /// </summary>
     private const string WellKnownPublicSegment = "Public";
+
+    /// <summary>The well-known folder holding a scope's <c>AccessAssignment</c> grants.</summary>
+    private const string AccessFolder = AccessAssignmentGuard.AccessFolder;
+
+    /// <summary>
+    /// A node the PACKAGE itself ships that decides who may read its PARTITION ROOT — its own
+    /// <c>{partition}/_Policy</c>, or a grant under <c>{partition}/_Access/</c>. Pure.
+    ///
+    /// <para>These land in the same phase as <see cref="EnsureDeclaredAccess"/> and BEFORE it, so
+    /// create-only still means "the package's own shape wins" now that the phase runs before the
+    /// package's content (#1758). Written the other way round, a package declaring itself free
+    /// while SHIPPING a gated policy would be published wide open for the width of the install and
+    /// only closed again when its own policy node landed — trading a denial window for an exposure
+    /// window, which is the one trade this fix must never make.</para>
+    ///
+    /// <para>Deliberately the ROOT's satellites only. A child's shipped grant stays in the normal
+    /// satellite stage: it can only ever land after the child it anchors on, and until that child
+    /// exists there is nothing to expose.</para>
+    /// </summary>
+    internal static bool IsPartitionAccessSatellite(string path, string? partition) =>
+        !string.IsNullOrWhiteSpace(partition)
+        && (string.Equals(path, $"{partition}/{PartitionPolicyId}", StringComparison.Ordinal)
+            || path.StartsWith($"{partition}/{AccessFolder}/", StringComparison.Ordinal));
+
+    /// <summary>
+    /// The one node whose presence PROVES <see cref="EnsureDeclaredAccess"/> did its job for this
+    /// manifest — the fully-public shape's <c>{partition}/_Policy</c>, or the scoped shape's root
+    /// <c>Public</c> grant. <c>null</c> when the manifest declares nothing to publish (a commercial
+    /// package installs gated on purpose, so there is no marker and nothing to verify). Pure.
+    /// </summary>
+    internal static string? DeclaredAccessMarker(PackageManifest manifest, string? partition)
+    {
+        if (string.IsNullOrWhiteSpace(partition))
+            return null;
+        if (!manifest.PreInstalled && manifest.IsCommercial())
+            return null;
+        return !manifest.PreInstalled && DeclaredPublicSegments(manifest).Count > 0
+            ? $"{partition}/{AccessFolder}/{WellKnownUsers.Public}_Access"
+            : $"{partition}/{PartitionPolicyId}";
+    }
+
+    /// <summary>
+    /// Re-reads the marker <see cref="EnsureDeclaredAccess"/> was supposed to leave behind and
+    /// reports its ABSENCE as an error — the POST-CONDITION of the declared-access phase (#1758).
+    ///
+    /// <para>Deliberately a READ, never a second write pass: the scoped shape derives its child
+    /// walk from a subtree query it also writes into, and a step that re-derives from nodes it has
+    /// itself just written is how a reconcile comes to feed itself (#223, the 257,000-version
+    /// <c>_Policy</c> storm). One call site writes; this one only looks, and it cannot schedule
+    /// another pass because it never writes anything.</para>
+    ///
+    /// <para>Never fatal — the content is committed by the time this runs, and failing the install
+    /// would trade an unreadable partition for no partition at all. LOUD is the point: before this,
+    /// "published nothing" and "published correctly" were the same silent success. The poll is the
+    /// same bounded shape as the install's other visibility barriers (the marker is written through
+    /// the per-node hub, whose persist is debounced), and its expiry is the diagnosis, not a sleep.
+    /// </para>
+    /// </summary>
+    private static IObservable<Unit> VerifyDeclaredAccess(
+        IMessageHub hub, PackageManifest manifest, string? partition, ILogger? logger)
+    {
+        var marker = DeclaredAccessMarker(manifest, partition);
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (marker is null || persistence is null)
+            return Observable.Return(Unit.Default);
+
+        return Observable
+            .Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .SelectMany(_ => persistence.Exists(marker))
+            .Where(exists => exists)
+            .FirstAsync()
+            .Timeout(DeclaredAccessVerifyBudget)
+            .Select(_ => Unit.Default)
+            .Catch((Exception exception) =>
+            {
+                logger?.LogError(exception,
+                    "[PackageInstaller] {Id} finished installing into {Partition} but its declared "
+                    + "access never converged — {Marker} is absent, so the partition is unreadable "
+                    + "to everyone the manifest declares may read it.",
+                    manifest.Id, partition, marker);
+                return Observable.Return(Unit.Default);
+            });
+    }
+
+    /// <summary>Bound on the declared-access post-condition poll. Its expiry is a DIAGNOSIS (the
+    /// error above), never a retry and never a delay anything waits on in the healthy case — the
+    /// marker is normally already there on the first probe.</summary>
+    private static readonly TimeSpan DeclaredAccessVerifyBudget = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Establishes the access a package's MANIFEST declares — the ONE access-establishment step of
@@ -633,16 +738,22 @@ public static class PackageInstaller
             var gated = GatedChildRoots(
                 children.Concat(installedPaths ?? []), partition, declared);
 
-            var shape = new List<MeshNode>
-            {
-                ViewerAssignment(partition, WellKnownUsers.Public, denied: false),
-                ViewerAssignment(partition, WellKnownUsers.Anonymous, denied: false),
-            };
+            // 🚨 DENIES FIRST, ROOT GRANTS LAST — the same rule EnsurePartitionPublicRead states
+            // for its heal sweep, and for the same reason: the root grant is what OPENS the
+            // partition and grants inherit strictly downward, so between the grant and a child's
+            // deny that child is publicly readable. Ordered this way an interrupted publication
+            // leaves the partition CLOSED, which is the safe half to fail on. It matters more now
+            // that this whole step runs BEFORE the package's content (#1758): the denies are
+            // established before the segments they gate even exist, so a gated child is born gated
+            // instead of being reachable until its deny catches up.
+            var shape = new List<MeshNode>();
             foreach (var child in gated)
             {
                 shape.Add(ViewerAssignment(child, WellKnownUsers.Public, denied: true));
                 shape.Add(ViewerAssignment(child, WellKnownUsers.Anonymous, denied: true));
             }
+            shape.Add(ViewerAssignment(partition, WellKnownUsers.Public, denied: false));
+            shape.Add(ViewerAssignment(partition, WellKnownUsers.Anonymous, denied: false));
 
             // Create-only, sequential; a failed write propagates (Upsert throws on !Success).
             return shape
@@ -2011,7 +2122,17 @@ public static class PackageInstaller
                 var stage2Root = stage2.Where(n => Order(n) == 2).ToArray();
                 var bulkInstances = stage2.Where(n => Order(n) == 3 && IsBulk(n)).ToArray();
                 var requestInstances = stage2.Where(n => Order(n) == 3 && !IsBulk(n)).ToArray();
-                var satellites = stage2.Where(n => Order(n) == 4).ToArray();
+                // The package's OWN root access satellites are HOISTED out of the satellite stage
+                // and written in the publication phase below, immediately before
+                // EnsureDeclaredAccess — so create-only still means "the package's shipped shape
+                // wins" now that the phase runs ahead of the content (#1758).
+                var partitionPath = manifest.TargetPartition ?? manifest.Id;
+                var hoistedAccess = stage2
+                    .Where(n => Order(n) == 4 && IsPartitionAccessSatellite(n.Path, partitionPath))
+                    .ToArray();
+                var satellites = stage2
+                    .Where(n => Order(n) == 4 && !IsPartitionAccessSatellite(n.Path, partitionPath))
+                    .ToArray();
                 // Only types updated through the debounced per-node path still need the Exists
                 // barrier; a bulk-written type is committed when its batch responds. (These paths
                 // already exist, so the barrier passes on its first probe — no 100 ms tail.)
@@ -2026,7 +2147,39 @@ public static class PackageInstaller
                             : Array.Empty<MeshNode>(),
                         current))
                     .SelectMany(rootWrites => Visible(root is null ? [] : [root.Path])
-                        .SelectMany(_ => BulkSave(bulkSources))
+                        // 🚨 THE PUBLICATION IS A PHASE, AND IT IS THIS ONE (#1758). It lands the
+                        // instant the root exists and BEFORE a single content node does, so
+                        // "installed" can never be observable before "readable".
+                        //
+                        // It used to run at the very END of the install — after every content node,
+                        // every type, the retype reconcile and the persisted poll. But a package
+                        // becomes REACHABLE the moment its root lands in stage 0 above: the path
+                        // resolves, readers arrive, and the paywall landing ({plugin}/Subscribe)
+                        // correctly DENIES because the grants that make a cover public are simply
+                        // not there yet. Measured on a fresh mesh: bursts of denials 12–17 s before
+                        // the partition's access shape was written (Store 17 s, Edu 12 s,
+                        // AgenticOffice 12 s) and ZERO denials after it. The permission fold was
+                        // innocent throughout — this is pure sequencing.
+                        //
+                        // Placed AFTER the root's own write and its visibility barrier, never
+                        // before: an access satellite is the partition's first CHILD create, and a
+                        // child create on a partition whose root is not yet persistence-visible
+                        // triggers the implicit partition bootstrap, whose generic Space root races
+                        // ours (see the stage-0 note above). Root, then access, then everything
+                        // else — which collapses the window from the whole content install to the
+                        // two or three access writes themselves.
+                        //
+                        // The paths this install is ABOUT to write are handed to EnsureDeclaredAccess,
+                        // so a scoped package's per-child DENIES are established BEFORE the children
+                        // they gate exist. That is strictly narrower than the old placement, where
+                        // every child sat ungated for the whole install; nothing here widens access.
+                        .SelectMany(_ => WriteAll(hoistedAccess, current))
+                        .SelectMany(accessWrites => EnsureDeclaredAccess(
+                                hub, manifest, partitionPath, logger, nodes.Select(n => n.Path))
+                            .Select(_ => accessWrites))
+                        .SelectMany(accessWrites => BulkSave(bulkSources)
+                            .Select(sourceWrites => (IList<(string Path, bool Wrote)>)accessWrites
+                                .Concat(sourceWrites).ToList()))
                         .SelectMany(sourceWrites => BulkSave(bulkTypes)
                             .SelectMany(typeBulkWrites => WriteAll(requestStage1, current)
                                 .Select(typeReqWrites => (IList<(string Path, bool Wrote)>)sourceWrites
@@ -2126,10 +2279,13 @@ public static class PackageInstaller
                     ? SeedPrebuiltAssemblies(hub, nodeTypePaths, logger)
                     : Observable.Return(0);
 
-                // Same order as the content path: publish the partition BEFORE warming its roots
-                // (activation's gating pass must see the declared shape).
-                return EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
-                        logger, nodes.Select(n => n.Path))
+                // The declared access was published as a PHASE before the first content node
+                // landed (see the note at that call site, #1758) — there is deliberately no second
+                // write pass here, so nothing can re-derive a shape from nodes it has itself just
+                // written. What stays is the phase's POST-CONDITION, read once and reported LOUDLY:
+                // an install that reports success while its partition is unreadable is the failure
+                // this whole ordering exists to make impossible, and it must never be silent.
+                return VerifyDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id, logger)
                     .SelectMany(_ => WriteInstalledRecord(
                         hub, manifest, installedFromRef, nodes.Length, moduleManifest, authorizingUserId))
                     // Adoption first (it can settle a release without compiling at all), then the
@@ -2296,7 +2452,16 @@ public static class PackageInstaller
                         }))
                     .ToObservable().Concat().Sum();
 
+        // 🚨 The declared access is re-asserted BEFORE the delta's writes, not after them (#1758).
+        // An UPDATE re-asserts it at all so a package that only just flipped its declaration (or
+        // whose policy was lost) converges on the next sync rather than waiting for a full
+        // re-install; running it FIRST means the re-asserted shape is in place before the nodes it
+        // governs land. A delta presupposes a prior install, so the partition root already exists
+        // and there is no bootstrap race to order around. Create-only, so this is free on the
+        // common path.
         return EnsurePartitionsProvisioned(hub, manifest.TargetPartition ?? manifest.Id, InstalledPartition)
+            .SelectMany(_ => EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
+                logger, nodes.Select(n => n.Path)))
             .SelectMany(_ => WriteAll(head))
             .SelectMany(headWrites => TypesVisible()
                 .SelectMany(_ => WriteAll(tail))
@@ -2333,13 +2498,12 @@ public static class PackageInstaller
                 var releases = releaseTargets.Length > 0
                     ? SeedThenRequestReleases(hub, releaseTargets, logger)
                     : Observable.Return(System.Reactive.Unit.Default);
-                // An UPDATE re-asserts the declared access too: a package that only just flipped
-                // its declaration (or whose policy was lost) must converge on the next sync rather
-                // than wait for a full re-install. Create-only, so an existing shape is untouched
-                // and this is free on the common path.
+                // The declared access was re-asserted BEFORE the writes (see the note at that call
+                // site, #1758). What stays here is its POST-CONDITION — a read, never a second
+                // write pass, so nothing can re-derive a shape from nodes it just wrote.
                 return releases
-                    .SelectMany(_ => EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
-                        logger, nodes.Select(n => n.Path)))
+                    .SelectMany(_ => VerifyDeclaredAccess(
+                        hub, manifest, manifest.TargetPartition ?? manifest.Id, logger))
                     .SelectMany(_ => WriteInstalledRecord(hub, manifest, installedFromRef,
                         newManifest.Files.Count, newManifest, authorizingUserId))
                     .SelectMany(_ => WarmInstalledRoots(hub, nodes, logger))
