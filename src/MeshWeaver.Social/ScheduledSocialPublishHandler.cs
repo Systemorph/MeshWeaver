@@ -29,11 +29,22 @@ namespace MeshWeaver.Social;
 /// credential from the post's own <c>authorPath</c> and writes <c>status</c>/<c>publishedUrn</c>/
 /// <c>publishedAt</c> back, so a timed publish and a hand-clicked one leave identical state.</para>
 ///
-/// <para><b>Identity.</b> The runner has no ambient <c>AccessContext</c> and wraps this in
-/// <c>ImpersonateAsSystem</c>, so the publish service's two access gates pass by construction. That is
-/// the intended reading, not a bypass: the credential is selected by the POST's own author profile,
-/// never by the caller, so a timer can only ever publish as the member whose post it is. Who armed the
-/// timer stays on the subscription's <see cref="EventSubscription.CreatedBy"/>.</para>
+/// <para>🚨 <b>Identity — it publishes as the SCHEDULER, not as system.</b> The runner wraps
+/// continuations in <c>ImpersonateAsSystem</c>, and running the publish that way would make
+/// <see cref="LinkedInPublishService"/>'s two access gates pass unconditionally. That is not a
+/// harmless simplification: the credential is chosen by the post's own <c>authorPath</c>, so anyone
+/// who can EDIT a post could point it at another member's profile and have the timer publish with
+/// that member's LinkedIn credential — an escalation the manual path forbids, because there the
+/// caller needs Read on the credential node. So this switches to
+/// <see cref="EventSubscription.CreatedBy"/> — the identity that scheduled the post — and the exact
+/// same gates then apply to the timed path as to the button. A subscription with no CreatedBy is
+/// REFUSED rather than published as system.</para>
+///
+/// <para>🚨 <b>It re-reads the post before publishing.</b> A timer is armed from a snapshot and fires
+/// later; in between the post can be published by hand, un-scheduled, or emptied. Publishing is
+/// irreversible, so the state is checked again at the point of no return: anything other than a post
+/// still asking to be published aborts. Without this a post published by hand at 07:00 would still be
+/// posted a second time by its 08:00 timer — the precise shape of the 2026-08-18 incident.</para>
 ///
 /// <para>🚨 <b>Task-based leaf, reactive surface.</b> <see cref="LinkedInPublishService"/> is HTTP-edge
 /// code and returns <c>Task</c>; this is hub-reachable background code and must not. The bridge is
@@ -45,6 +56,7 @@ public sealed class ScheduledSocialPublishHandler(
     IMessageHub hub,
     IMeshService meshService,
     IHttpClientFactory httpClientFactory,
+    AccessService accessService,
     ILogger<ScheduledSocialPublishHandler>? logger = null) : IEventContinuationHandler
 {
     private readonly IIoPool _httpPool =
@@ -69,10 +81,24 @@ public sealed class ScheduledSocialPublishHandler(
             return Observable.Throw<MeshNode>(new InvalidOperationException(
                 $"Event subscription {subscription.Id} publishes a social post but names no TargetPath."));
 
+        var scheduler = subscription.CreatedBy;
+        if (string.IsNullOrWhiteSpace(scheduler))
+            return Observable.Throw<MeshNode>(new InvalidOperationException(
+                $"Event subscription {subscription.Id} names no CreatedBy, so there is no identity to "
+                + "publish as. Refusing rather than publishing as system — the credential is chosen by "
+                + "the post's authorPath, and an un-gated timed publish could use a profile the "
+                + "scheduler may not use."));
+
         var service = new LinkedInPublishService(
             hub, meshService, hub.ServiceProvider.GetService<ILogger<LinkedInPublishService>>());
 
-        return _httpPool
+        // RunAs, never Observable.Using: the impersonation must be established on the SUBSCRIBING
+        // thread and torn down on the same logical flow (#1790). Everything inside — the re-read,
+        // the permission gates, the credential read and the write-back — then runs as the scheduler.
+        return accessService.RunAs(
+            new AccessContext { ObjectId = scheduler, Name = scheduler },
+            () => StillPublishable(postPath!)
+            .SelectMany(_ => _httpPool
             .Invoke(ct => service.PublishPostAsync(
                 httpClientFactory.CreateClient(),
                 postPath!,
@@ -94,10 +120,36 @@ public sealed class ScheduledSocialPublishHandler(
                     + (outcome.StatusCode > 0 ? $" (HTTP {outcome.StatusCode})" : string.Empty)
                     + (outcome.HttpAttempted
                         ? string.Empty
-                        : " — a pre-publish gate short-circuited before any LinkedIn call."))))
+                        : " — a pre-publish gate short-circuited before any LinkedIn call."))))))
             .Do(_ => logger?.LogInformation(
                 "Scheduled publish of {Path} succeeded (subscription {Id})", postPath, subscription.Id));
     }
+
+    /// <summary>
+    /// Re-reads the post and completes only if it STILL wants publishing. Emits nothing useful; it
+    /// exists for its refusal.
+    ///
+    /// <para>The armed timer is a snapshot of intent taken minutes or days earlier. By the time it
+    /// fires the post may already be live (someone hit the button), may no longer be Scheduled, or may
+    /// have had its text cleared. <see cref="LinkedInPublishService"/> deliberately does not re-check
+    /// any of that — it serves a caller who just decided to publish — so the check belongs here, on
+    /// the one path where the decision was made in the past.</para>
+    /// </summary>
+    private IObservable<MeshNode> StillPublishable(string postPath) =>
+        hub.GetMeshNode(postPath, TimeSpan.FromSeconds(10))
+            .Take(1)
+            .SelectMany(node =>
+            {
+                if (node is null)
+                    return Observable.Throw<MeshNode>(new InvalidOperationException(
+                        $"Scheduled publish aborted: '{postPath}' no longer exists."));
+                if (!ScheduledPostWatcher.IsSchedulablePost(node))
+                    return Observable.Throw<MeshNode>(new InvalidOperationException(
+                        $"Scheduled publish aborted: '{postPath}' is no longer awaiting publication "
+                        + "(already published, un-scheduled, or removed) — publishing now would put it "
+                        + "on the network a second time."));
+                return Observable.Return(node);
+            });
 
     /// <summary>Stands in for the published post when it cannot be re-read — the runner uses the emitted
     /// node only to log what fired, so identity is all it needs, and inventing it here is what keeps a

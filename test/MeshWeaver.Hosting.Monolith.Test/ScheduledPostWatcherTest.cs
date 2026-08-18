@@ -116,6 +116,63 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         Assert.Equal(postPath, rearmed!.TargetPath);
     }
 
+
+    /// <summary>
+    /// 🚨 A timer armed while the post was Scheduled is CANCELLED once the post stops asking to be
+    /// published. Publish by hand at 07:00 and the 08:00 timer would otherwise still fire — the
+    /// 2026-08-18 incident with the order reversed, and the re-arm guard does not cover it because
+    /// the timer already exists.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task PublishingAPostByHand_CancelsItsArmedTimer()
+    {
+        var postPath = $"TestData/sched_{Guid.NewGuid():N}/post1";
+        await SeedPostAsync(postPath, status: "Scheduled",
+            scheduledAt: DateTimeOffset.UtcNow.AddHours(6).ToString("o"));
+
+        using var watcher = StartWatcher();
+        var armed = await AwaitSubscription(postPath);
+        Assert.Equal(EventSubscriptionStatus.Pending, armed.Status);
+
+        // Someone hits Publish. The post is live; its timer must not still fire.
+        await Mesh.GetWorkspace().GetMeshNodeStream(postPath)
+            .Update(node => node with
+            {
+                Content = new Dictionary<string, object?>
+                {
+                    ["body"] = "Scheduled body",
+                    ["authorPath"] = "TestData/profile",
+                    ["status"] = "Published",
+                    ["publishedUrn"] = "urn:li:share:777",
+                },
+            })
+            .Should().Emit();
+
+        var cancelled = await Timers(postPath)
+            .Where(t => t is not null and not { Status: EventSubscriptionStatus.Pending })
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.Equal(EventSubscriptionStatus.Cancelled, cancelled!.Status);
+    }
+
+    /// <summary>
+    /// The armed timer names WHO it publishes as. Without it the handler refuses rather than
+    /// publishing as system — the credential is chosen by the post's own authorPath, so an un-gated
+    /// timed publish could go out through a profile the scheduler may not use.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ArmedTimer_RecordsTheIdentityThatScheduledThePost()
+    {
+        var postPath = $"TestData/sched_{Guid.NewGuid():N}/post1";
+        await SeedPostAsync(postPath, status: "Scheduled",
+            scheduledAt: DateTimeOffset.UtcNow.AddHours(6).ToString("o"));
+
+        using var watcher = StartWatcher();
+        var armed = await AwaitSubscription(postPath);
+
+        Assert.False(string.IsNullOrWhiteSpace(armed.CreatedBy),
+            "a timer with no CreatedBy is refused at fire time — it would have to publish as system");
+    }
+
     // ---- helpers ----
 
     private ScheduledPostWatcher StartWatcher()

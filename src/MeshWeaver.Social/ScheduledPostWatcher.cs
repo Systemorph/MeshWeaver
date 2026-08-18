@@ -118,7 +118,39 @@ public sealed class ScheduledPostWatcher(
             var slot = SlotOf(post);
             if (slot is null)
                 continue;   // "Scheduled" with no time — the workflow blocks this; a raw write can't be honoured
-            EnsureTimer(post.Path, slot.Value, timers);
+            EnsureTimer(post.Path, slot.Value, post.LastModifiedBy, timers);
+        }
+
+        CancelOrphanedTimers(posts, timers);
+    }
+
+    /// <summary>
+    /// Cancels pending publish timers whose post no longer asks to be published — un-scheduled,
+    /// published by hand, emptied, or deleted.
+    ///
+    /// <para>🚨 <b>Arming is not the only thing that needs a guard.</b> The re-arm guard stops a
+    /// published post from getting a NEW timer, but a timer armed while the post was still Scheduled
+    /// outlives that decision: publish by hand at 07:00 and the 08:00 timer still fires, putting the
+    /// post on the network twice — the 2026-08-18 incident with the order reversed. The handler
+    /// re-checks at fire time too (publishing is irreversible, so it is worth stopping twice), but
+    /// leaving armed timers behind also makes the subscription set lie about what is pending.</para>
+    /// </summary>
+    private void CancelOrphanedTimers(
+        IReadOnlyCollection<MeshNode> posts, IReadOnlyDictionary<string, EventSubscription> timers)
+    {
+        var wanted = posts.Select(p => SubscriptionId(p.Path)).ToHashSet(StringComparer.Ordinal);
+        foreach (var (id, timer) in timers)
+        {
+            if (timer.Status != EventSubscriptionStatus.Pending || wanted.Contains(id))
+                continue;
+            AsSystem(() => EventSubscriptionOps.SetStatus(
+                    hub, EventSubscriptionNodeType.Path(id), EventSubscriptionStatus.Cancelled,
+                    $"The post at '{timer.TargetPath}' is no longer awaiting publication."))
+                .Subscribe(
+                    _ => logger?.LogInformation(
+                        "Cancelled publish timer {Id} — {Path} is no longer scheduled",
+                        id, timer.TargetPath),
+                    ex => logger?.LogWarning(ex, "Could not cancel publish timer {Id}", id));
         }
     }
 
@@ -128,7 +160,8 @@ public sealed class ScheduledPostWatcher(
     /// <c>Fired</c> subscription to <c>Pending</c> on every emission and republish the post on a loop.
     /// </summary>
     private void EnsureTimer(
-        string postPath, DateTimeOffset slot, IReadOnlyDictionary<string, EventSubscription> timers)
+        string postPath, DateTimeOffset slot, string? scheduledBy,
+        IReadOnlyDictionary<string, EventSubscription> timers)
     {
         var id = SubscriptionId(postPath);
         timers.TryGetValue(id, out var current);
@@ -151,7 +184,13 @@ public sealed class ScheduledPostWatcher(
             ContinuationType = EventContinuationType.PublishSocialPost,
             TargetPath = postPath,
             Status = EventSubscriptionStatus.Pending,
-            CreatedBy = current?.CreatedBy,
+            // WHO the publish runs as. The handler refuses to publish without it rather than
+            // falling back to system, because the credential is chosen by the post's authorPath —
+            // an un-gated timed publish could use a profile the scheduler may not use.
+            // lastModifiedBy is the identity that put the post into this state, the closest thing
+            // to "who asked for it" the stored node carries; an existing value is kept so
+            // re-slotting never silently changes WHO it goes out as.
+            CreatedBy = current?.CreatedBy ?? scheduledBy,
             CreatedAt = current?.CreatedAt ?? DateTimeOffset.UtcNow,
         };
         AsSystem(() => EventSubscriptionOps.CreateSubscription(meshService, subscription))
