@@ -647,7 +647,16 @@ jobs:
           # deadlock). Bounded, like everything else here: it can wait, it cannot hang. `|| true`
           # because a timed-out wait is not a reason to skip the attempt — apt may well be free by
           # the time npx reaches it, and the attempt itself is bounded anyway.
-          sudo flock -w "$APT_LOCK_WAIT" /var/lib/apt/lists/lock true 2>/dev/null || true
+          # 🚨 EVERY lock apt takes, not just the lists one. The observed failure is
+          #   E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process N (apt-get)
+          # and `lists/lock` is a DIFFERENT lock — it guards the package-list download, while
+          # dpkg/lock-frontend guards the install itself. Waiting only on lists/lock let the
+          # install race straight into the frontend lock and fail all three attempts, which is
+          # what has been reddening shards on PRs whose diff cannot touch tests at all (#1843).
+          for lk in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock; do
+            [ -e "$lk" ] || continue
+            sudo flock -w "$APT_LOCK_WAIT" "$lk" true 2>/dev/null || true
+          done
           rc=0
           timeout --signal=TERM --kill-after=30 "$BROWSER_INSTALL_TIMEOUT" \
             npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium || rc=$?
