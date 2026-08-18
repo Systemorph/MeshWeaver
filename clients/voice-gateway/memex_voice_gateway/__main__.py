@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import re
 
 import aiohttp
 
@@ -15,7 +16,9 @@ from .pipeline import VoicePipeline
 from .router import BrainRouter
 from .satellite import SatelliteLink
 from .threads import MemexThreads
-from .tts import PiperTts, SayTts, TtsFileServer
+from .tts import PiperTts, SayTts, TtsFileServer, split_wav
+
+SENTENCE_END = re.compile(r"[.!?…][\"')\]]*\s")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -59,6 +62,36 @@ async def run() -> None:
     async def speak(text: str) -> str:
         return server.add(await tts.synthesize(text))
 
+    async def stream_speak(chunks) -> str:
+        """Speak a live text stream: open a chunked-WAV session (the device starts playing
+        the URL immediately), synthesize sentence-by-sentence as pieces arrive, close on end.
+        Both `say` (forced LEI16@22050) and the piper medium voices emit 22.05 kHz."""
+        stream, url = server.open_stream(sample_rate=22050)
+
+        async def feed() -> None:
+            buffer = ""
+
+            async def speak_piece(text: str) -> None:
+                pcm, _ = split_wav(await tts.synthesize(text))
+                await stream.push(pcm)
+
+            try:
+                async for piece in chunks:
+                    buffer += piece
+                    while (match := SENTENCE_END.search(buffer)) is not None:
+                        sentence, buffer = buffer[:match.end()].strip(), buffer[match.end():]
+                        if sentence:
+                            await speak_piece(sentence)
+                if buffer.strip():
+                    await speak_piece(buffer.strip())
+            except Exception:
+                logging.getLogger(__name__).exception("streaming synthesis failed")
+            finally:
+                await stream.close()
+
+        asyncio.create_task(feed())
+        return url
+
     link: SatelliteLink | None = None
 
     async def announce(url: str, text: str) -> None:
@@ -77,6 +110,8 @@ async def run() -> None:
         hold_phrase=cfg.hold_phrase,
         error_phrase=cfg.error_phrase,
         command_handler=router.handle_command,
+        stream_text=router.stream_text,
+        stream_speak=stream_speak,
     )
     link = SatelliteLink(cfg, pipeline)
     try:

@@ -16,7 +16,7 @@ def test_budget_miss_leaves_generation_running_and_second_wait_succeeds():
         brain = OllamaBrain("http://unused", "test-model")
         release = asyncio.Event()
 
-        async def slow_chat(messages):
+        async def slow_chat(messages, handle=None):
             await release.wait()
             return "Die Antwort."
 
@@ -36,7 +36,7 @@ def test_history_resets_after_idle_window():
     async def scenario():
         brain = OllamaBrain("http://unused", "test-model", idle_minutes=0)
 
-        async def chat(messages):
+        async def chat(messages, handle=None):
             return "ok"
 
         brain._chat = chat
