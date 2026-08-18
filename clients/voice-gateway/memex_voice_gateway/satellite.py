@@ -54,6 +54,7 @@ class SatelliteLink:
                     handle_stop=self._handle_stop,
                     handle_audio=self._handle_audio,
                 )
+                await self._ensure_wake_word()
                 backoff = 2.0
                 try:
                     while self.client._connection is not None:  # noqa: SLF001 — liveness probe
@@ -72,6 +73,32 @@ class SatelliteLink:
                 self._media_player_key = entity.key
                 return
 
+    async def _ensure_wake_word(self) -> None:
+        """Activate a wake word if none is active.
+
+        Modern ESPHome voice firmware hands wake-word selection to the API client (HA
+        normally does this), so a factory-fresh device can sit with NO active wake word —
+        it hears nothing and no voice run ever starts. The configuration request is only
+        answered on the connection that holds the voice-assistant subscription, so this
+        must run here, not from a side channel.
+        """
+        try:
+            conf = await self.client.get_voice_assistant_configuration(timeout=10)
+        except Exception:
+            logger.info("device does not answer wake-word configuration (older firmware) — skipping")
+            return
+        available = [w.id for w in conf.available_wake_words]
+        active = list(conf.active_wake_words)
+        logger.info("wake words available=%s active=%s", available, active)
+        if active or not available:
+            return
+        wanted = self.cfg.wake_word
+        chosen = wanted if wanted in available else available[0]
+        if wanted and wanted not in available:
+            logger.warning("WAKE_WORD %r not on the device; using %r", wanted, chosen)
+        await self.client.set_voice_assistant_configuration(active_wake_words=[chosen])
+        logger.info("activated wake word %r", chosen)
+
     # --- voice assistant callbacks ----------------------------------------------------
 
     async def _handle_start(
@@ -89,7 +116,9 @@ class SatelliteLink:
         self._round_task = asyncio.create_task(self._run_round())
         return 0  # 0 = stream microphone audio over the API connection (no UDP)
 
-    async def _handle_audio(self, data: bytes) -> None:
+    async def _handle_audio(self, data: bytes, data2: bytes | None = None) -> None:
+        # Two channels on devices with MULTI_CHANNEL_AUDIO (the XMOS sends processed + raw);
+        # channel 0 (`data`) is the echo-cancelled one — feed only that.
         endpointer = self._endpointer
         if endpointer is not None and endpointer.feed(data):
             self._utterance_done.set()

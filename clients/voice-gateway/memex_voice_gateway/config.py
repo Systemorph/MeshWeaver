@@ -54,6 +54,9 @@ class Config:
     hold_phrase: str = "Ich schaue nach. Einen Moment bitte."
     error_phrase: str = "Entschuldigung, das hat gerade nicht geklappt."
 
+    # --- wake word (activated on the device if none is) ---
+    wake_word: str = "hey_jarvis"           # micro-wake-word model id on the device
+
     # --- endpointing (energy VAD) ---
     silence_ms: int = 800
     max_utterance_s: float = 15.0
@@ -96,6 +99,7 @@ class Config:
             thread_idle_minutes=float(_env("THREAD_IDLE_MINUTES", "5")),
             hold_phrase=_env("HOLD_PHRASE", Config.hold_phrase) or Config.hold_phrase,
             error_phrase=_env("ERROR_PHRASE", Config.error_phrase) or Config.error_phrase,
+            wake_word=_env("WAKE_WORD", "hey_jarvis") or "hey_jarvis",
             silence_ms=int(_env("SILENCE_MS", "800")),
             tts_engine=(_env("TTS_ENGINE", "piper") or "piper").lower(),
             piper_bin=_env("PIPER_BIN", "piper") or "piper",
