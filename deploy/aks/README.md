@@ -27,6 +27,7 @@ markdown only** — no application code changes.
 | Observability | **OpenTelemetry Collector DaemonSet** captures cluster-wide pod logs + portal OTLP → **Azure Files** log archive (`/mnt/otel-logs`); **Grafana + Loki + Promtail + Prometheus** in `monitoring` for search and dashboards |
 | Error ticketing | **`mw-log-watcher`** (optional, `monitoring`) reads red logs from Loki and opens one triaged GitHub issue per distinct fault — off until configured |
 | Identity | **Workload Identity (OIDC)** so pgBackRest reaches Blob **keyless** |
+| Instance lifecycle | **provision → suspend → tear down** driven from the mesh, with a verified `pg_dump` before anything is destroyed and an ingress-level paywall while suspended — see [INSTANCE-LIFECYCLE.md](INSTANCE-LIFECYCLE.md) |
 
 ### Topology
 
