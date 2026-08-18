@@ -114,6 +114,12 @@ async def run() -> None:
         stream_speak=stream_speak,
     )
     link = SatelliteLink(cfg, pipeline)
+
+    async def barge_in() -> None:
+        await server.interrupt_streams()
+        await link.stop_playback()
+
+    link.on_wake = barge_in
     try:
         await link.run_forever()
     finally:

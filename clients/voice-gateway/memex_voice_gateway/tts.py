@@ -120,13 +120,21 @@ class TtsFileServer:
         self.ttl_s = ttl_s
         self._files: dict[str, tuple[float, bytes]] = {}
         self._streams: dict[str, StreamingWav] = {}
+        self._live: set[StreamingWav] = set()
         self._runner: web.AppRunner | None = None
 
     def open_stream(self, sample_rate: int) -> tuple[StreamingWav, str]:
         stream = StreamingWav(sample_rate)
         stream_id = secrets.token_urlsafe(8)
         self._streams[stream_id] = stream
+        self._live.add(stream)
         return stream, f"http://{self.host}:{self.port}/tts-stream/{stream_id}.wav"
+
+    async def interrupt_streams(self) -> None:
+        """Barge-in: close every live stream so its playback drains out within a second."""
+        for stream in list(self._live):
+            await stream.close()
+        self._live.clear()
 
     async def _handle_stream(self, request: web.Request) -> web.StreamResponse:
         stream = self._streams.pop(request.match_info["id"], None)
@@ -136,9 +144,12 @@ class TtsFileServer:
         response.enable_chunked_encoding()
         await response.prepare(request)
         await response.write(streaming_wav_header(stream.sample_rate))
-        while (pcm := await stream.queue.get()) is not None:
-            await response.write(pcm)
-        await response.write_eof()
+        try:
+            while (pcm := await stream.queue.get()) is not None:
+                await response.write(pcm)
+            await response.write_eof()
+        finally:
+            self._live.discard(stream)
         return response
 
     def add(self, wav: bytes) -> str:

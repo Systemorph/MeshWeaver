@@ -27,6 +27,8 @@ class Brain(Protocol):
     async def close(self) -> None: ...
 
 
+_STOP = re.compile(r"^\s*(?:stop|stopp|halt|sei still|ruhe|schweig|genug)[.!]?\s*$", re.IGNORECASE)
+
 _SWITCH = re.compile(
     r"^\s*(?:switch to|connect to|go to|wechsle zu|wechsel zu|verbinde mit|verbinde dich mit|"
     r"gang uf|verbind mit|geh zu)\s+(?P<target>[\wäöüéè .-]+?)[.!?]?\s*$",
@@ -57,7 +59,10 @@ class BrainRouter:
         return None
 
     async def handle_command(self, transcript: str) -> str | None:
-        """Returns the spoken confirmation when the transcript was a switch command."""
+        """Returns the spoken confirmation when the transcript was a command;
+        empty string = handled silently (say nothing)."""
+        if _STOP.match(transcript.strip()):
+            return ""     # barge-in already stopped playback at wake; just end quietly
         spoken = parse_switch_command(transcript)
         if spoken is None:
             return None

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Awaitable, Callable
 
 from aioesphomeapi import APIClient
 from aioesphomeapi.model import VoiceAssistantAudioSettings, VoiceAssistantEventType as Event
@@ -38,6 +39,20 @@ class SatelliteLink:
         self._utterance_done = asyncio.Event()
         self._media_player_key: int | None = None
         self._round_task: asyncio.Task | None = None
+        self._follow_up = False
+        self._round_serial = 0
+        self.on_wake: Callable[[], Awaitable[None]] | None = None  # barge-in hook
+
+    async def stop_playback(self) -> None:
+        """Stop whatever the media player is doing — the device half of a barge-in."""
+        if self._media_player_key is None:
+            return
+        try:
+            from aioesphomeapi.model import MediaPlayerCommand
+            self.client.media_player_command(self._media_player_key,
+                                             command=MediaPlayerCommand.STOP)
+        except Exception:
+            logger.debug("media stop failed", exc_info=True)
 
     # --- lifecycle -------------------------------------------------------------------
 
@@ -105,12 +120,27 @@ class SatelliteLink:
         self, conversation_id: str, flags: int,
         audio_settings: VoiceAssistantAudioSettings, wake_word_phrase: str | None,
     ) -> int:
-        logger.info("wake (%s)", wake_word_phrase or "button")
+        # A wake while we're speaking is a BARGE-IN: kill the live TTS stream so playback
+        # drains out, and let the new round take over ("Hey Jarvis — stop." or a new question).
+        if self.on_wake is not None:
+            try:
+                await self.on_wake()
+            except Exception:
+                logger.debug("on_wake interrupt failed", exc_info=True)
+        # No wake-word phrase = a CONTINUED conversation (start_conversation re-opened the
+        # mic). Those rounds calibrate against ambient audio (a TV must not become the
+        # conversation partner) and give up early when nobody starts speaking.
+        follow_up = not wake_word_phrase
+        logger.info("wake (%s)", wake_word_phrase or "follow-up")
+        self._follow_up = follow_up
+        self._round_serial += 1
         self._endpointer = Endpointer(
             sample_rate=self.cfg.sample_rate,
             silence_ms=self.cfg.silence_ms,
             max_utterance_s=self.cfg.max_utterance_s,
             min_utterance_s=self.cfg.min_utterance_s,
+            calibrate_ms=400 if follow_up else 0,
+            onset_timeout_s=5.0 if follow_up else 0,
         )
         self._utterance_done.clear()
         self._round_task = asyncio.create_task(self._run_round())
@@ -129,6 +159,7 @@ class SatelliteLink:
     # --- the round ---------------------------------------------------------------------
 
     async def _run_round(self) -> None:
+        serial = self._round_serial
         send = self.client.send_voice_assistant_event
         send(Event.VOICE_ASSISTANT_RUN_START, {})
         send(Event.VOICE_ASSISTANT_STT_START, {})
@@ -137,8 +168,15 @@ class SatelliteLink:
                                    timeout=self.cfg.max_utterance_s + 5)
         except asyncio.TimeoutError:
             pass
-        pcm = self._endpointer.audio if self._endpointer else b""
-        self._endpointer = None
+        endpointer, self._endpointer = self._endpointer, None
+        pcm = endpointer.audio if endpointer else b""
+        # A follow-up that never paused (TV, music) or never started (silence) is not
+        # addressed to the assistant: end the conversation quietly instead of answering it.
+        if self._follow_up and endpointer is not None and endpointer.ended_by_cap:
+            logger.info("follow-up discarded (%s) — conversation ends",
+                        "continuous audio" if endpointer.speech_seen else "silence")
+            send(Event.VOICE_ASSISTANT_RUN_END, {})
+            return
 
         try:
             result = await self.pipeline.run(pcm)
@@ -154,10 +192,15 @@ class SatelliteLink:
         # mic again by itself, no wake word ("conversation mode"). A silent follow-up ends
         # the chain via the pipeline's quiet empty-transcript path.
         send(Event.VOICE_ASSISTANT_RUN_END, {})
-        if result.tts_url:
+        # SUPERSEDED replies are dropped, not queued: if another wake started meanwhile,
+        # playing this answer late would drain a stale backlog at the listener (observed
+        # with a TV feeding rounds faster than they played).
+        if result.tts_url and serial == self._round_serial:
             await self.announce(result.tts_url, result.reply or "",
                                 start_conversation=self.cfg.continue_conversation
                                 and bool(result.transcript))
+        elif result.tts_url:
+            logger.info("reply superseded by a newer round — not played")
 
     # --- late answers --------------------------------------------------------------------
 
