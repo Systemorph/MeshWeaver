@@ -46,7 +46,7 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     {
         var rawKey = InstanceKeys.ExtractKey(authorizationHeader);
         if (rawKey is null)
-            return Observable.Return<AuthenticatedInstance?>(null);
+            return AuthenticateToken(authorizationHeader);
 
         var hash = InstanceKeys.Hash(rawKey);
         if (cache.TryGetValue(hash, out var hit) && DateTimeOffset.UtcNow - hit.At < CacheDuration)
@@ -62,6 +62,71 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                     InstanceKeys.HashPrefix(hash));
                 return Observable.Return<AuthenticatedInstance?>(null);
             });
+    }
+
+    /// <summary>
+    /// The short-lived-token half of <see cref="Authenticate"/>. A verified token resolves through
+    /// exactly the same index as the key it was exchanged from — it carries that key's hash — so
+    /// there is one resolution path, and re-issuing an instance key invalidates every outstanding
+    /// token because the instance record then holds a different hash.
+    ///
+    /// <para>🚨 The token contributes IDENTITY and SCOPE, never authority. The live
+    /// <see cref="PluginGrant"/> is still read and still decides, so a revoked or expired sync
+    /// licence takes effect immediately instead of surviving until the token runs out.</para>
+    /// </summary>
+    private IObservable<AuthenticatedInstance?> AuthenticateToken(string? authorizationHeader)
+    {
+        var rawToken = SyncAccessToken.ExtractToken(authorizationHeader);
+        if (rawToken is null)
+            return Observable.Return<AuthenticatedInstance?>(null);
+
+        var signingKey = SigningKey();
+        if (signingKey is null)
+        {
+            // Configured-off is not "allow": a registry that cannot verify a signature must refuse
+            // the token, never accept it unverified.
+            logger.LogWarning(
+                "A sync access token was presented but {Section}:{Key} is not configured — refusing.",
+                PluginCatalogOptions.SectionName, nameof(PluginCatalogOptions.TokenSigningKey));
+            return Observable.Return<AuthenticatedInstance?>(null);
+        }
+
+        var claims = SyncAccessToken.Verify(rawToken, DateTimeOffset.UtcNow, signingKey);
+        if (claims is null)
+            return Observable.Return<AuthenticatedInstance?>(null);
+
+        return Resolve(claims.KeyHash)
+            .Select(resolved =>
+            {
+                if (resolved is null)
+                    return null;
+                // The token names an instance AND routes to one. They must be the same instance, or
+                // the token is being replayed against a record it does not describe.
+                if (!string.Equals(resolved.Instance.InstanceId, claims.InstanceId, StringComparison.Ordinal))
+                {
+                    logger.LogWarning(
+                        "Sync access token claims instance {Claimed} but its key resolves to {Actual} — refusing.",
+                        claims.InstanceId, resolved.Instance.InstanceId);
+                    return null;
+                }
+                return resolved with { TokenScope = claims };
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Sync access token resolution failed for instance {InstanceId}",
+                    claims.InstanceId);
+                return Observable.Return<AuthenticatedInstance?>(null);
+            });
+    }
+
+    /// <summary>The configured HMAC key, or null when it is absent or too short to be usable.</summary>
+    private byte[]? SigningKey()
+    {
+        var configured = hub.ServiceProvider.GetService<PluginCatalogOptions>()?.TokenSigningKey;
+        if (string.IsNullOrWhiteSpace(configured))
+            return null;
+        var bytes = System.Text.Encoding.UTF8.GetBytes(configured);
+        return SyncAccessToken.IsUsableSigningKey(bytes) ? bytes : null;
     }
 
     private IObservable<AuthenticatedInstance?> Resolve(string hash)
@@ -127,7 +192,22 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
 /// grant, which authorizes nothing.</param>
 public sealed record AuthenticatedInstance(MeshWeaverInstance Instance, PluginGrant Grant)
 {
+    /// <summary>
+    /// Present when the caller authenticated with a short-lived token rather than its durable key.
+    /// A token can only NARROW what the grant already allows — never widen it — so this is an
+    /// additional filter, never an alternative source of authority.
+    /// </summary>
+    public SyncAccessTokenClaims? TokenScope { get; init; }
+
     /// <summary>Whether this caller may pull <paramref name="packageId"/> from registry source
-    /// <paramref name="sourceName"/>.</summary>
-    public bool Allows(string sourceName, string packageId) => Grant.Allows(sourceName, packageId);
+    /// <paramref name="sourceName"/> at <paramref name="now"/> — granted, still within the
+    /// licence's term, and within the presented token's scope if one was used.</summary>
+    public bool Allows(string sourceName, string packageId, DateTimeOffset now) =>
+        Grant.Allows(sourceName, packageId, now)
+        && (TokenScope is null || TokenScope.Covers(sourceName, packageId));
+
+    /// <summary>Whether this caller may pull <paramref name="packageId"/> from registry source
+    /// <paramref name="sourceName"/> right now — what a live request means.</summary>
+    public bool Allows(string sourceName, string packageId) =>
+        Allows(sourceName, packageId, DateTimeOffset.UtcNow);
 }

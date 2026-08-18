@@ -63,6 +63,11 @@ public static class PluginCatalogConfigurationExtensions
                 // surface. Mesh-scoped singleton so its short-lived cache dies with the mesh
                 // (Doc/Architecture/NoStaticState) — a revoked grant must not outlive a test either.
                 .AddSingleton<InstanceRegistryAuthenticator>()
+                // Issues and revokes the SYNC LICENCE that authenticator then reads. One writer for
+                // every issuer (the admin tab, a fulfilled order, a redeemed coupon, an automated
+                // provision), so a licence carries its terms — and its attribution — however it was
+                // granted. Mesh-scoped like the authenticator it feeds.
+                .AddSingleton<SyncLicenseService>()
                 // Registration bootstrap keys (mwr_) — minted on the admin surface, validated by
                 // the /api/instances/register endpoint. Mesh-scoped like everything above.
                 .AddSingleton<RegistrationKeyService>()

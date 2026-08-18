@@ -83,7 +83,11 @@ public static class PackageInstaller
         // commercial ones need a global admin. Every install path funnels through this method (and
         // InstallNodeRepoDelta, which carries the same gate), so the machine paths — the unattended
         // default install, the update watcher — are gated identically to a click.
+        // Two gates, in order, both on the ACTION. Entitlement answers "may you" (#830); acceptance
+        // answers "have you agreed to the terms" — different questions, neither substituting for
+        // the other, and a licence that asks nothing costs a single null check.
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, logger)
+            .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, logger))
             .SelectMany(_ => InstallCore(
                 hub, manifest, files, installedFromRef, logger, batchSize, authorizingUserId));
     }
@@ -2199,6 +2203,7 @@ public static class PackageInstaller
 
         var effectiveLogger = logger;
         return PackageEntitlement.Authorize(hub, manifest, authorizingUserId, effectiveLogger)
+            .SelectMany(_ => LicenseAcceptanceGate.Require(hub, manifest, authorizingUserId, effectiveLogger))
             .SelectMany(_ => InstallNodeRepoDeltaCore(
                 hub, manifest, newManifest, changedFiles, removedNodePaths, installedFromRef,
                 effectiveLogger, authorizingUserId));
