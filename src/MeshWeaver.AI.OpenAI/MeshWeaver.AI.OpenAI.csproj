@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
+    <InternalsVisibleTo Include="MeshWeaver.AI.Test" />
   </ItemGroup>
 
   <ItemGroup>
