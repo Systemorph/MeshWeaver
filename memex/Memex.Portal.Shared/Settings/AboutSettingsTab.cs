@@ -10,6 +10,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.Utils;
 using Memex.Portal.Shared.SelfUpdate;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Memex.Portal.Shared.Settings;
 
@@ -35,10 +36,7 @@ namespace Memex.Portal.Shared.Settings;
 /// </summary>
 public static class AboutSettingsTab
 {
-    /// <summary>
-    /// The tab id — the trailing segment of the tab's deep link, built with
-    /// <see cref="GlobalSettingsNodeType.TabHref"/> (<c>/_Setting/GlobalSettings/About</c>).
-    /// </summary>
+    /// <summary>The tab id under <c>/_Setting/GlobalSettings</c> (GlobalSettingsNodeType.TabHref).</summary>
     public const string TabId = "About";
 
     /// <summary>Data id the plugin grid binds to (rows published via <c>host.UpdateData</c>).</summary>
@@ -84,11 +82,44 @@ public static class AboutSettingsTab
             ? $"**{host.Localize("about.buildCommit")}:** [`{Short(sha)}`]({ShippedReleaseSeed.CommitUrl})"
             : $"**{host.Localize("about.buildCommit")}:** _{host.Localize("about.buildCommitMissing")}_";
 
+        // Serving-since sits directly under the build id: together they answer "which build, and
+        // since when" — the pair the header chip deliberately keeps short.
+        var startedLine = StartedAtMarkdown(
+            ShippedReleaseSeed.StartedAtUtc,
+            host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId(),
+            key => host.Localize(key));
+
         return
             $"**{host.Localize("about.version")}:** `{version}`\n\n" +
             $"{commitLine}\n\n" +
+            (startedLine is null ? "" : $"{startedLine}\n\n") +
             $"**{host.Localize("about.repository")}:** [Systemorph/MeshWeaver]({ShippedReleaseSeed.RepositoryUrl})\n\n" +
             $"**{host.Localize("about.runtime")}:** .NET {Environment.Version}";
+    }
+
+    /// <summary>
+    /// The "serving since" line — WHEN this build started answering, in the viewer's own zone.
+    ///
+    /// <para>The version answers "which build" and never "since when". After a roll the version can
+    /// be identical (a re-deploy of the same image) or minutes old, and only a timestamp separates
+    /// "this has been live all week" from "this landed while you were reading" — the question asked
+    /// every time somebody needs to know whether a portal actually rolled forward.</para>
+    ///
+    /// <para>🚨 The stored value is UTC; this renders it in the VIEWER's zone. A bare UTC clock is
+    /// the thing that misleads — 13:35 UTC shown to a Zurich reader is an hour wrong in summer, and
+    /// silently so. Pure and localizer-taking so the conversion is testable without a hub.</para>
+    ///
+    /// <para>Returns <c>null</c> when the start time is unknown (<c>default</c> — a host that
+    /// refuses process introspection, or WASM). Rendering the epoch, or substituting "now", would
+    /// read as a fresh deploy on every render.</para>
+    /// </summary>
+    internal static string? StartedAtMarkdown(
+        DateTimeOffset startedAtUtc, string? viewerZoneId, Func<string, string> localize)
+    {
+        if (startedAtUtc == default) return null;
+
+        var local = DisplayTimeExtensions.ToDisplayTime(startedAtUtc, viewerZoneId);
+        return $"**{localize("about.lastDeployed")}:** {local:yyyy-MM-dd HH:mm} (UTC{local:zzz})";
     }
 
     /// <summary>
