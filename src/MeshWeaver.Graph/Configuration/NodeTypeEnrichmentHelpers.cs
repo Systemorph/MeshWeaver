@@ -1954,9 +1954,14 @@ internal static class NodeTypeEnrichmentHelpers
         {
             UserId = WellKnownUsers.System,
         };
-        return () => Observable.Using(
-                () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                _ => queryCore.Query<MeshNode>(request, options))
+        // 🚨 RunAsSystem, never `Observable.Using(() => access.ImpersonateAsSystem(), …)` (#1790):
+        // that shape opens the AsyncLocal scope on the SUBSCRIBING thread and disposes it when the
+        // query terminates — the owning hub's response thread — leaving the subscriber latched as
+        // system-security. Here the subscriber is an instance hub's watcher, so the latch would sit
+        // on a long-lived hub. RunAsSystem seals both ends inside one Subscribe; the whole cold
+        // pipeline is composed INSIDE the work factory so its emission-time behaviour is unchanged.
+        return () => accessService.RunAsSystem(() => queryCore
+            .Query<MeshNode>(request, options)
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Take(1)
             // Match the path EXACTLY: this answer decides whether an instance recycles, and a
@@ -1964,7 +1969,7 @@ internal static class NodeTypeEnrichmentHelpers
             // not the one it is waiting for. No exact hit is simply "no answer" — the ladder asks
             // again rather than treating absence as news.
             .Select(c => c.Items.FirstOrDefault(
-                n => string.Equals(n.Path, nodeType, StringComparison.OrdinalIgnoreCase)));
+                n => string.Equals(n.Path, nodeType, StringComparison.OrdinalIgnoreCase))));
     }
 
     /// <summary>
