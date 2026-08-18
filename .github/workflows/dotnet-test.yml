@@ -633,6 +633,17 @@ jobs:
         set -euo pipefail
         sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
         sudo chown "$(id -u):$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
+        # 🚨 APT MUST WAIT ON ITS OWN LOCKS — the flock below closes only PART of the race.
+        # The background apt (apt-daily / unattended-upgrades) takes and RELEASES the lists lock
+        # once per source, so flock can succeed in a release gap and the apt-get that playwright
+        # itself spawns still loses the very next acquisition. Observed on run 32165453521
+        # (shard 5, twice in a row): every attempt failed instantly with "Could not get lock
+        # /var/lib/apt/lists/lock. It is held by process N (apt-get)" while the flock had
+        # returned at once — the attempts were 22s apart, not APT_LOCK_WAIT apart.
+        # DPkg::Lock::Timeout makes EVERY apt invocation (including the ones npx spawns, which
+        # no external flock can wrap) wait up to 300s for the lock itself, removing the window
+        # entirely. Bounded, so it cannot hang; the per-attempt timeout still caps the whole run.
+        echo 'DPkg::Lock::Timeout "300";' | sudo tee /etc/apt/apt.conf.d/99ci-lock-timeout >/dev/null
         ok=0
         for attempt in 1 2 3; do
           # 🚨 WAIT FOR APT BEFORE EACH ATTEMPT. `--with-deps` shells out to apt-get, and the
