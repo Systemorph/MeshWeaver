@@ -117,21 +117,6 @@ public sealed class PluginCatalogOptions
     /// operator's chosen extras.</para>
     /// </summary>
     public bool InstallPreInstalledPackages { get; set; } = true;
-
-    /// <summary>
-    /// HMAC key the registry signs short-lived sync access tokens (<c>mwa_…</c>) with, so an
-    /// instance can exchange its durable key for a scoped, minutes-long credential instead of
-    /// presenting the durable one on every call.
-    ///
-    /// <para>🚨 Unset means the exchange endpoint is UNAVAILABLE, not that it falls back to a weaker
-    /// key. A signing secret that can be guessed is worse than no token exchange at all, and a
-    /// per-process random key would silently break the moment a second replica answered the request
-    /// — so the absence is reported rather than papered over. Must be at least
-    /// <see cref="MeshWeaver.Mesh.Security.SyncAccessToken.MinimumSigningKeyBytes"/> bytes; share
-    /// the same value across every replica of one registry.</para>
-    /// </summary>
-    public string TokenSigningKey { get; set; } = "";
-
     /// <summary>This installation's public base URL, recorded on the instance node (advisory).</summary>
     public string HomeUrl { get; set; } = "";
 

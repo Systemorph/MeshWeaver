@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Data;
@@ -29,13 +30,16 @@ namespace MeshWeaver.Auth.Test;
 /// </summary>
 public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string SigningKey = "test-signing-key-that-is-long-enough-32+";
-
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .AddPluginCatalog()
-            .ConfigureServices(services => services.AddSingleton(
-                new PluginCatalogOptions { TokenSigningKey = SigningKey }));
+            .AddPluginCatalog();
+
+    private SyncTokenSigningKeyService Keys() =>
+        Mesh.ServiceProvider.GetRequiredService<SyncTokenSigningKeyService>();
+
+    /// <summary>The registry's signing key, minted from the mesh on first ask — no configuration.</summary>
+    private async Task<byte[]> SigningKey() =>
+        (await Keys().Resolve().Should().Emit()).Current;
 
     private MeshWeaverInstanceService Instances() => new(
         Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
@@ -70,9 +74,9 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
         return (instanceId, registration.RawKey, InstanceKeys.Hash(registration.RawKey));
     }
 
-    private string MintToken(string instanceId, string keyHash, params string[] scope) =>
+    private async Task<string> MintToken(string instanceId, string keyHash, params string[] scope) =>
         SyncAccessToken.Mint(instanceId, keyHash, scope, DateTimeOffset.UtcNow,
-            SyncAccessToken.DefaultLifetime, System.Text.Encoding.UTF8.GetBytes(SigningKey));
+            SyncAccessToken.DefaultLifetime, await SigningKey());
 
     [Fact]
     public async Task AToken_AuthenticatesAndResolvesToItsInstance()
@@ -80,7 +84,7 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
         var (id, _, hash) = await LicensedInstance("tok-a", ("Plugins", "*"));
 
         var caller = await Authenticator()
-            .Authenticate($"Bearer {MintToken(id, hash)}")
+            .Authenticate($"Bearer {await MintToken(id, hash)}")
             .Should().Emit();
 
         caller.Should().NotBeNull();
@@ -97,7 +101,7 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
         var (id, _, hash) = await LicensedInstance("tok-narrow", ("Plugins", "*"));
 
         var caller = await Authenticator()
-            .Authenticate($"Bearer {MintToken(id, hash, "Plugins/Publish")}")
+            .Authenticate($"Bearer {await MintToken(id, hash, "Plugins/Publish")}")
             .Should().Emit();
 
         caller.Should().NotBeNull();
@@ -114,7 +118,7 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
         var (id, _, hash) = await LicensedInstance("tok-widen", ("Plugins", "Publish"));
 
         var caller = await Authenticator()
-            .Authenticate($"Bearer {MintToken(id, hash, "Plugins/*", "Education/DataModeling")}")
+            .Authenticate($"Bearer {await MintToken(id, hash, "Plugins/*", "Education/DataModeling")}")
             .Should().Emit();
 
         caller.Should().NotBeNull();
@@ -128,7 +132,7 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
     {
         // The reason authority is re-read on every request rather than baked into the token.
         var (id, _, hash) = await LicensedInstance("tok-revoke", ("Plugins", "Publish"));
-        var token = MintToken(id, hash, "Plugins/Publish");
+        var token = await MintToken(id, hash, "Plugins/Publish");
 
         var before = await Authenticator().Authenticate($"Bearer {token}").Should().Emit();
         before!.Allows("Plugins", "Publish").Should().BeTrue();
@@ -156,7 +160,7 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
         }).Should().Emit();
 
         var caller = await Authenticator()
-            .Authenticate($"Bearer {MintToken(id, hash, "Plugins/Publish")}")
+            .Authenticate($"Bearer {await MintToken(id, hash, "Plugins/Publish")}")
             .Should().Emit();
 
         caller.Should().NotBeNull();
@@ -170,7 +174,7 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
         var strayHash = InstanceKeys.Hash(InstanceKeys.Generate());
 
         var caller = await Authenticator()
-            .Authenticate($"Bearer {MintToken("tok-unknown", strayHash)}")
+            .Authenticate($"Bearer {await MintToken("tok-unknown", strayHash)}")
             .Should().Emit();
 
         caller.Should().BeNull("the token routes by key hash, and that key was never issued");
@@ -198,5 +202,100 @@ public class SyncTokenAuthenticationTest(ITestOutputHelper output) : MonolithMes
         caller.Should().NotBeNull();
         caller!.TokenScope.Should().BeNull("this caller presented the durable key");
         caller.Allows("Plugins", "Publish").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task TheSigningKeyIsMintedOnceAndSharedByEveryReplica()
+    {
+        // 🚨 THE uniqueness property, and the reason the key is a mesh NODE rather than a lock or a
+        // per-process secret: two replicas asking independently must end up with the SAME key, or a
+        // token minted on one fails on the other. Two separate service instances stand in for two
+        // replicas — they share only the mesh.
+        var replicaA = new SyncTokenSigningKeyService(
+            Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<SyncTokenSigningKeyService>>());
+        var replicaB = new SyncTokenSigningKeyService(
+            Mesh, Mesh.ServiceProvider.GetRequiredService<ILogger<SyncTokenSigningKeyService>>());
+
+        // Both are STARTED before either finishes — a sequential A-then-B would only prove that a
+        // second reader finds an existing node, never that the create COLLISION resolves to one key.
+        var raceA = replicaA.Resolve().FirstAsync().ToTask();
+        var raceB = replicaB.Resolve().FirstAsync().ToTask();
+        var raced = await Task.WhenAll(raceA, raceB);
+        var fromA = raced[0];
+        var fromB = raced[1];
+
+        Convert.ToBase64String(fromB.Current).Should().Be(
+            Convert.ToBase64String(fromA.Current),
+            "the loser of the mint race adopts the winner's key instead of overwriting it");
+
+        // And the practical consequence: a token minted by one verifies on the other.
+        var (id, _, hash) = await LicensedInstance("tok-shared", ("Plugins", "Publish"));
+        var minted = SyncAccessToken.Mint(id, hash, ["Plugins/Publish"], DateTimeOffset.UtcNow,
+            SyncAccessToken.DefaultLifetime, fromA.Current);
+        fromB.Verify(minted, DateTimeOffset.UtcNow).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RotationKeepsTokensInFlightWorking()
+    {
+        // A rotation that simply replaced the key would invalidate every token minted in the minutes
+        // before it — mid-run, for every consumer.
+        var keys = Keys();
+        var before = await keys.Resolve().Should().Emit();
+
+        var (id, _, hash) = await LicensedInstance("tok-rotate", ("Plugins", "Publish"));
+        var mintedBeforeRotation = SyncAccessToken.Mint(
+            id, hash, ["Plugins/Publish"], DateTimeOffset.UtcNow,
+            SyncAccessToken.DefaultLifetime, before.Current);
+
+        var after = await keys.Rotate("test").Should().Emit();
+
+        Convert.ToBase64String(after.Current).Should().NotBe(
+            Convert.ToBase64String(before.Current), "rotation mints fresh material");
+        Convert.ToBase64String(after.Previous!).Should().Be(
+            Convert.ToBase64String(before.Current), "the outgoing key is retained, not discarded");
+        after.Verify(mintedBeforeRotation, DateTimeOffset.UtcNow).Should()
+            .NotBeNull("a token minted just before the rotation must still verify");
+
+        // New tokens are signed with the NEW key, and still verify.
+        var mintedAfter = SyncAccessToken.Mint(
+            id, hash, ["Plugins/Publish"], DateTimeOffset.UtcNow,
+            SyncAccessToken.DefaultLifetime, after.Current);
+        after.Verify(mintedAfter, DateTimeOffset.UtcNow).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task TheAuthenticatorPicksUpARotation()
+    {
+        // The authenticator caches key material briefly; a token signed with the rotated-in key must
+        // authenticate, which is what proves the key is read from the mesh and not from a captured
+        // configuration value.
+        var (id, _, hash) = await LicensedInstance("tok-rot-auth", ("Plugins", "Publish"));
+        var rotated = await Keys().Rotate("test").Should().Emit();
+
+        var token = SyncAccessToken.Mint(id, hash, ["Plugins/Publish"], DateTimeOffset.UtcNow,
+            SyncAccessToken.DefaultLifetime, rotated.Current);
+
+        var caller = await Authenticator().Authenticate($"Bearer {token}").Should().Emit();
+        caller.Should().NotBeNull();
+        caller!.Allows("Plugins", "Publish").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AnUnauthenticatedTokenDoesNotMintAKey()
+    {
+        // Minting is a node write. If the VERIFY path minted, an anonymous caller sending junk could
+        // provoke one — and it would be pointless anyway, since a token cannot verify against a key
+        // created after it was signed.
+        var keys = Keys();
+        (await keys.Existing().Should().Emit()).Should().BeNull("nothing has minted yet");
+
+        var caller = await Authenticator()
+            .Authenticate("Bearer mwa_not-a-real-token.nope")
+            .Should().Emit();
+
+        caller.Should().BeNull();
+        (await keys.Existing().Should().Emit()).Should()
+            .BeNull("verifying a junk token must not have written a signing key");
     }
 }

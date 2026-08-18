@@ -219,10 +219,41 @@ on use. It carries the hash of the key it was exchanged from, which is how it ro
 through the same index the raw key uses, and which makes re-issuing an instance key invalidate every
 outstanding token for free.
 
-`PluginCatalog:TokenSigningKey` is the HMAC key (≥32 bytes), shared across every replica of one
-registry. **Unset means the endpoint reports itself unavailable (503), never that it falls back to a
-weaker key** — and a token presented to a registry that cannot verify a signature is refused, never
-accepted unverified.
+### The signing key is a mesh node, minted once
+
+The HMAC key lives at **`Admin/SyncTokenSigningKey/current`** — one node per registry,
+`enc:`-protected at rest by the same envelope as `PluginRegistryCredential`. Not configuration: a
+signing key has to be IDENTICAL on every replica (a token minted on pod A must verify on pod B) and
+should never pass through a human's hands. Configuration achieves the first only if an operator gets
+it right in every environment, and fails the second by construction. It is minted on first use, so
+there is nothing to provision.
+
+🚨 **Uniqueness is the NODE's, and the RESPONSE cannot be trusted to report it.** Measured
+2026-08-18: under a genuine concurrent create, **both** callers are told `created=1, existing=0` —
+the response's exists-check lags, exactly as `IMeshService.CreateOrUpdateNode`'s remarks warn —
+while **storage keeps the FIRST create and discards the second**. So the store enforces uniqueness
+and the response does not describe it. The rule that follows is absolute: **create, then read back,
+and sign only with what is actually stored.** Signing with locally minted material is precisely how
+two replicas end up on different keys. A lock would not help — it cannot span pods.
+
+Minting happens only AFTER the caller authenticates, so an anonymous request cannot provoke a node
+write; the verify path reads without minting (a token cannot verify against a key created after it
+was signed anyway).
+
+**Rotation keeps the outgoing key.** `RotateAfter` on the node is the due date — data, so it is
+visible and adjustable without a deploy. A rotation writes a fresh key and moves the old one to
+`ProtectedPrevious`, verifiable until `PreviousValidUntil`; verification tries current, then
+previous. The window is exactly one maximum token lifetime, because nothing signed before the
+rotation can still be unexpired after that. Without it, rotating would invalidate every token in
+flight mid-run.
+
+⚠️ **Rotation is not yet automatic.** `Reminder`/`ReminderSchedule` — the platform's durable,
+claim-guarded recurring trigger, which is the right home for this — exists as contract plus unit
+tests with **no runner**: no registered node type and nothing that reads reminder nodes. So the due
+date is recorded and reported, and rotation is invoked explicitly. When the reminder runner lands,
+registering a recurring reminder against this due date is the whole of the remaining work; nothing
+here needs to change. Deliberately NOT filled in with an opportunistic "rotate when someone
+notices it is due" — two replicas rotating at once would each retire the other's key.
 
 ## Licence acceptance — enforced, not merely recorded
 

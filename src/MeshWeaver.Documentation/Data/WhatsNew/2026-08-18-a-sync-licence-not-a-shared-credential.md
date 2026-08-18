@@ -72,10 +72,15 @@ Three properties make it safe to hand out freely:
 - **A token cannot mint its successor.** Only the durable key may exchange, or a minutes-long
   credential would become perpetual by renewal.
 
-It is signed rather than stored, so minting writes no node and there is no expiry sweep to maintain
-— which is only safe *because* authority is re-checked on use. The signing key is configured
-(`PluginCatalog:TokenSigningKey`) and shared across a registry's replicas; unset means the endpoint
-reports itself unavailable rather than falling back to something weaker.
+The token itself is signed rather than stored, so minting writes no node and there is no expiry
+sweep to maintain — which is only safe *because* authority is re-checked on use.
+
+**The signing key is a mesh node**, minted on first use at `Admin/SyncTokenSigningKey/current` and
+`enc:`-protected at rest. Nothing to configure, nothing for an operator to copy between
+environments, and no human ever sees it. Uniqueness across replicas comes from the node: two racing
+to mint collide on one fixed path, storage keeps the first, and — because the create response tells
+*both* callers they won — each reads the stored key back and signs with that. Rotation keeps the
+outgoing key verifiable for one token lifetime, so rotating never invalidates work in flight.
 
 The point of all of it: a consumer that needs one package can now hold a credential for one package,
 for fifteen minutes.
