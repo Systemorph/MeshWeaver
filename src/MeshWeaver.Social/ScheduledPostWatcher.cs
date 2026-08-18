@@ -126,7 +126,9 @@ public sealed class ScheduledPostWatcher(
 
     /// <summary>
     /// Cancels pending publish timers whose post no longer asks to be published — un-scheduled,
-    /// published by hand, emptied, or deleted.
+    /// published by hand, or deleted. (NOT emptied: an empty post is still Scheduled, so it keeps
+    /// its timer and is refused at publish time with `empty-text` — text can still arrive before
+    /// the slot, and cancelling on a momentarily-empty draft would silently unschedule it.)
     ///
     /// <para>🚨 <b>Arming is not the only thing that needs a guard.</b> The re-arm guard stops a
     /// published post from getting a NEW timer, but a timer armed while the post was still Scheduled

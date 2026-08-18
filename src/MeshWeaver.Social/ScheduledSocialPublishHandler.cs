@@ -2,6 +2,7 @@ using System;
 using System.Net.Http;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -82,12 +83,12 @@ public sealed class ScheduledSocialPublishHandler(
                 $"Event subscription {subscription.Id} publishes a social post but names no TargetPath."));
 
         var scheduler = subscription.CreatedBy;
-        if (string.IsNullOrWhiteSpace(scheduler))
+        if (UnusableScheduler(scheduler) is { } refusal)
             return Observable.Throw<MeshNode>(new InvalidOperationException(
-                $"Event subscription {subscription.Id} names no CreatedBy, so there is no identity to "
-                + "publish as. Refusing rather than publishing as system — the credential is chosen by "
-                + "the post's authorPath, and an un-gated timed publish could use a profile the "
-                + "scheduler may not use."));
+                $"Event subscription {subscription.Id} cannot publish: {refusal} The credential is "
+                + "chosen by the post's authorPath, so an un-gated timed publish could go out through "
+                + "a profile whoever scheduled it may not use. Refusing is the only safe answer to "
+                + "\"whose account does this post on?\"."));
 
         var service = new LinkedInPublishService(
             hub, meshService, hub.ServiceProvider.GetService<ILogger<LinkedInPublishService>>());
@@ -96,7 +97,8 @@ public sealed class ScheduledSocialPublishHandler(
         // thread and torn down on the same logical flow (#1790). Everything inside — the re-read,
         // the permission gates, the credential read and the write-back — then runs as the scheduler.
         return accessService.RunAs(
-            new AccessContext { ObjectId = scheduler, Name = scheduler },
+            // Non-null: UnusableScheduler refused a blank one above.
+            new AccessContext { ObjectId = scheduler!, Name = scheduler! },
             () => StillPublishable(postPath!)
             .SelectMany(_ => _httpPool
             .Invoke(ct => service.PublishPostAsync(
@@ -150,6 +152,29 @@ public sealed class ScheduledSocialPublishHandler(
                         + "on the network a second time."));
                 return Observable.Return(node);
             });
+
+    /// <summary>
+    /// Why <paramref name="scheduler"/> may not be published as, or null when it is a real person.
+    ///
+    /// <para>🚨 <b>A present CreatedBy is not enough.</b> The watcher takes it from the post's
+    /// <c>lastModifiedBy</c>, and that is <see cref="WellKnownUsers.System"/> whenever the node was
+    /// last written by the platform itself — a GitSync, an import, a migration. Impersonating THAT
+    /// makes <see cref="LinkedInPublishService"/>'s two gates pass unconditionally again, which is
+    /// the precise bypass this handler exists to close; a blank-check alone would have left it open
+    /// for every system-written post. Hub principals (<c>sync/…</c>, <c>mesh/…</c>, address-shaped
+    /// and never a user id) are refused for the same reason.</para>
+    /// </summary>
+    private static string? UnusableScheduler(string? scheduler)
+    {
+        if (string.IsNullOrWhiteSpace(scheduler))
+            return "it names no CreatedBy, so there is no identity to publish as.";
+        if (string.Equals(scheduler, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase))
+            return $"its CreatedBy is the system identity ('{scheduler}'), which passes every access "
+                   + "gate by construction.";
+        if (scheduler!.Contains('/'))
+            return $"its CreatedBy ('{scheduler}') is a hub address, not a user.";
+        return null;
+    }
 
     /// <summary>Stands in for the published post when it cannot be re-read — the runner uses the emitted
     /// node only to log what fired, so identity is all it needs, and inventing it here is what keeps a
