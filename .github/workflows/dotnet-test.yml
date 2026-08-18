@@ -606,68 +606,229 @@ jobs:
     # so `Consolidate test results` failed on missing results and the run reported CANCELLED:
     # a shape that reads like a test problem and names nothing.
     #
-    # `timeout` turns the hang into an ordinary non-zero exit, which the retry loop ALREADY
-    # handles correctly, so one bound restores the behaviour the step was written to have.
-    # This is not raising a budget to make something pass — the 20-minute job cap is unchanged;
-    # it gives the unbounded operation INSIDE it a bound, so a stall is reported as the infra
-    # failure it is instead of consuming the whole job silently.
+    # 🚨🚨 …AND A TIMED-OUT ATTEMPT MUST REAP THE ROOT `apt-get` IT ORPHANS, or every retry is
+    # blocked by its own predecessor's corpse. This is what made the bound above insufficient
+    # (run 32172921218, shard 2 — the timings are the log's own):
     #
-    # Worst case, counting EVERY term: 3 attempts × (60 s apt-lock wait + 180 s timeout + up to
-    # 30 s `--kill-after` grace, if the process ignores SIGTERM) + 10 s + 20 s backoff ≈ 14 min —
-    # inside the shard's 20-minute `timeout-minutes`, with ~6 min of headroom for the rest of the
-    # job. A healthy install takes well under a minute. 🚨 Keep this arithmetic honest if you
-    # change ANY of the three bounds — adding the apt wait is exactly why the install timeout came
-    # down from 240 s, so that the sum did not creep up on the job cap:
-    # it is the reason the step cannot itself become the thing that exhausts the job, which is the
-    # exact failure being fixed. (`timeout` exists on the Linux runners; the AGENTS.md warning
-    # about it is specific to the macOS dev host.)
+    #   19:09:18  `install --with-deps` shells out to apt-get; `apt-get update` stalls on
+    #             azure.archive.ubuntu.com (`Ign:` × 4 rounds); last output 19:09:56
+    #   19:12:13  attempt 1 hits the 180 s bound and is killed
+    #   19:12:26  attempt 2: E: Could not get lock /var/lib/apt/lists/lock … process 3061 (apt-get)
+    #   19:12:48  attempt 3: E: Could not get lock /var/lib/apt/lists/lock … process 3061 (apt-get)
+    #   19:13:19  ::error:: could not install the headless browser after 3 attempts
+    #
+    # The SAME pid both times: attempts 2 and 3 did not lose a race to the runner image's
+    # background apt, they lost it to OURS, which outlived the kill and held the lock for the
+    # rest of the step. Three attempts against a holder that cannot exit inside the job is not
+    # a retry loop, it is the same failure three times — and no larger `APT_LOCK_WAIT` reaches
+    # it either, because the thing being waited for is already dead upstream of its own lock.
+    #
+    # 🚨 NO PROCESS-GROUP TRICK FIXES THIS — measured, because every plausible one LOOKS like it
+    # does. `timeout` ALREADY kills the group: it `setpgid(0,0)`s itself and on expiry
+    # `kill(0, sig)`s the whole group (that is precisely what `--foreground` switches OFF), so
+    # `setsid` + `kill -- -$pgid` adds nothing it does not already do. And the orphan IS in that
+    # group — a faithful local reproduction (ubuntu:24.04, node 22, playwright-core 1.62.1, a
+    # blackholed apt mirror to stall `apt-get update`) shows `timeout` at pgid 15 and the
+    # surviving `apt-get` at pgid 15. It survives anyway:
+    #
+    #     kill: (15) - Operation not permitted
+    #
+    # The blocker is PRIVILEGE, not topology. Playwright shells out through `sudo`, so its
+    # apt-get runs as ROOT while this step runs as the unprivileged `runner`; `kill(2)` silently
+    # skips the group members the caller may not signal. Anything that signals from this uid —
+    # setsid, a trap, an explicit group kill — hits the same EPERM and leaves the orphan exactly
+    # where it was. The reap therefore goes through `sudo`, which is what `reap_our_apt` does.
+    #
+    # It kills only what THIS attempt started (snapshot the pids before, diff after) and only
+    # `apt`/`apt-get`, never `dpkg` or `unattended-upgr`: killing the runner's own background
+    # upgrade, or a dpkg mid-transaction, would leave the package database half-configured and
+    # break the very install being retried. Those two are WAITED for instead.
+    #
+    # 🚨 THE APT WORK IS ITS OWN PHASE, so a lock fight cannot cost us the browser at all. Under
+    # `install --with-deps` the apt-get runs FIRST and the download second — which is why all
+    # three attempts above died before one byte of Chromium was fetched, and the shard ended up
+    # with no browser for a reason that had nothing to do with the browser. Downloading first,
+    # with no apt anywhere in that path, banks the artefact; phase 2 is then one narrow job
+    # whose failure names itself instead of hiding inside "could not install the browser".
+    #
+    # 🚨 ONE BUDGET FOR THE WHOLE STEP, so the arithmetic cannot rot — it already had. The bounds
+    # used to be sized against a hand-multiplied worst case (`3 × (60 s wait + 180 s attempt +
+    # 30 s kill grace) + 30 s backoff ≈ 14 min`), and #1858 then raised the wait to 240 s, taking
+    # that same sum to `3 × (240 + 180 + 30) + 30 = 23 min` — PAST the shard's 20-minute
+    # `timeout-minutes`, i.e. silently back to a step that can eat the whole job. That is the
+    # exact failure this comment block was written to prevent, reintroduced by editing one term.
+    # `BROWSER_STEP_BUDGET` is now the single number: every wait and every attempt is clamped to
+    # what is LEFT of it — including the shared `wait-for-apt.sh` (#1855), which is called with the
+    # capped budget rather than the raw one — so no combination of inner bounds can exceed it. Worst case for the
+    # whole step = the budget + one `--kill-after` grace + the 60 s smoke print ≈ 9.5 min, and a
+    # whole GREEN shard takes 6m23s today (run 32175994386, shard 0: 19:40:40 → 19:47:03), so
+    # even the worst case leaves the tests their room inside the 20-minute cap. A healthy run of
+    # this step takes ~70 s (same job: 4 s download, 58 s apt).
+    #
+    # NOTE `--with-deps` STAYS, and the reason is measured rather than assumed. On `ubuntu-24.04`
+    # every shared library Chromium links against is already in the image — libnss3, libgbm1,
+    # libatk1.0-0t64, libatk-bridge2.0-0t64, libatspi2.0-0t64, libcups2t64, libdrm2, libcairo2,
+    # libpango-1.0-0, libxkbcommon0, libxcomposite1, libxdamage1, libxrandr2, libasound2t64 …
+    # all report "is already the newest version" — so what the flag actually installs is NINE
+    # FONT packages: fonts-freefont-ttf, fonts-ipafont-gothic, fonts-tlwg-loma-otf, fonts-unifont,
+    # fonts-wqy-zenhei and xfonts-{cyrillic,encodings,scalable,utils}. Dropping it would remove
+    # the apt dependency and this whole failure class, and the browser would still RUN — but
+    # `deploy/base-images/portal-ai/Dockerfile` installs those same faces with the same flag, so
+    # CI would print its PDFs with a font set production does not have and non-Latin text would
+    # render differently here than in the product, silently. That is the precise divergence this
+    # step exists to remove. So: keep the flag, and fix the orphan.
+    #
+    # (`timeout` exists on the Linux runners; the AGENTS.md warning about it is specific to the
+    # macOS dev host.)
     #
     # Keep PLAYWRIGHT_VERSION in step with deploy/base-images/portal-ai/Dockerfile.
     - name: "Provision the headless browser (infra, not a test)"
       env:
         PLAYWRIGHT_VERSION: 1.62.1
         PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
+        # 🚨 The step's ONE ceiling. Every wait and attempt below is clamped to what is left of
+        # it, so the two bounds under it can be tuned without anyone re-deriving a worst case.
+        BROWSER_STEP_BUDGET: 480
         BROWSER_INSTALL_TIMEOUT: 180
-        APT_LOCK_WAIT: 60
+        # 240 → 120. #1858 sized this to outlast a stuck holder, but the holder it was actually
+        # outlasting was OUR OWN orphan (see above) — which is now reaped instead of waited on,
+        # in ~0 s. What is left to wait for is the runner image's background apt, which is what
+        # the wait was written for: a routine unattended-upgrades run is seconds, not minutes.
+        APT_LOCK_WAIT: 120
       run: |
         set -euo pipefail
         sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
         sudo chown "$(id -u):$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
+        # Let apt wait on the DPKG FRONTEND lock itself, since an external wait closes only part
+        # of the race: the background apt takes and releases its locks once per source, so a wait
+        # can return in a release gap and the apt-get playwright spawns loses the very next
+        # acquisition (run 32165453521, shard 5, twice in a row). `DPkg::Lock::Timeout` reaches
+        # the invocations npx spawns, which no external wait can wrap (#1855).
+        #
+        # 🚨 …but it does NOT cover `/var/lib/apt/lists/lock`, which is the lock this step keeps
+        # failing on. Measured on apt 2.8.3, holder present in both cases:
+        #     lists lock,    with and without the option  →  "Could not get lock", 0s
+        #     frontend lock, without → 0s   ·   with "12" → waited 12s
+        # So #1855's "removing the window entirely" holds for the dpkg frontend lock only. The
+        # lists-lock case is the one the REAP below exists for; do not read this line as covering
+        # it. Kept because the frontend half is real.
+        #
+        # 🚨 120, not 300: the value is a wait apt will actually sit through, so it must be
+        # SMALLER than the per-attempt bound. At 300 an apt blocked on the frontend lock is still
+        # waiting when `timeout` kills the attempt — the diagnostic is lost and a fresh orphan is
+        # created, turning a clean "Could not get lock" into another silent hang.
+        echo 'DPkg::Lock::Timeout "120";' | sudo tee /etc/apt/apt.conf.d/99ci-lock-timeout >/dev/null
+
+        deadline=$(( $(date +%s) + BROWSER_STEP_BUDGET ))
+        # Seconds left in the step's budget; never negative.
+        left() { local r; r=$(( deadline - $(date +%s) )); [ "$r" -gt 0 ] && echo "$r" || echo 0; }
+        # min(requested, remaining) — no inner bound can outlive the ceiling.
+        capped() { local b; b="$(left)"; [ "$1" -lt "$b" ] && echo "$1" || echo "$b"; }
+
+        # The apt processes this step can legitimately have started, and so may kill — by exact
+        # process name. `dpkg` and `unattended-upgr` are deliberately ABSENT: we never spawn the
+        # latter, and hard-killing either can leave the package database needing
+        # `dpkg --configure -a`. Those two are waited for (wait-for-apt.sh), never reaped.
+        # 🚨 `|| :` is load-bearing: `pgrep` exits 1 when NOTHING matches, and under
+        # `set -euo pipefail` a bare `before="$(apt_killable)"` would then abort the step with no
+        # message at all — an idle runner would look like an infra failure that named nothing.
+        apt_killable() { pgrep -x 'apt-get|apt' 2>/dev/null | sort -n | tr '\n' ' ' || :; }
+
+        # 🚨 THE REAP — see the block above. Kills the apt processes THIS attempt started and
+        # `timeout`'s own group kill could not touch, through `sudo`, because they are root.
+        reap_our_apt() {
+          local before=" $1 " p ours="" live="" waited=0
+          for p in $(apt_killable); do
+            case "$before" in *" $p "*) ;; *) ours="$ours $p" ;; esac
+          done
+          ours="${ours# }"
+          [ -n "$ours" ] || return 0
+          echo "::warning::the killed browser install orphaned apt (pid $ours) — it holds /var/lib/apt/lists/lock and would fail every retry with 'Could not get lock'. Terminating it." >&2
+          # shellcheck disable=SC2086
+          sudo kill -TERM $ours 2>/dev/null || true
+          while [ "$waited" -lt 15 ]; do
+            live=""
+            for p in $ours; do
+              if sudo kill -0 "$p" 2>/dev/null; then live="$live $p"; fi
+            done
+            if [ -z "$live" ]; then
+              echo "orphaned apt reaped after ${waited}s" >&2
+              return 0
+            fi
+            sleep 1
+            waited=$(( waited + 1 ))
+          done
+          echo "::warning::orphaned apt (pid${live}) ignored SIGTERM for 15s — sending SIGKILL" >&2
+          # shellcheck disable=SC2086
+          sudo kill -KILL $live 2>/dev/null || true
+          sleep 2
+          return 0
+        }
+
+        # `install` is idempotent, so phase 2 re-runs it purely for its apt half: the browser is
+        # already on disk by then and only the dependency install actually does anything.
+        install_browser() {
+          local budget rc=0
+          budget="$(capped "$BROWSER_INSTALL_TIMEOUT")"
+          [ "$budget" -gt 0 ] || return 125    # 125 = the step's budget is spent
+          timeout --signal=TERM --kill-after=30 "$budget" \
+            npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install "$@" --only-shell chromium || rc=$?
+          return $rc
+        }
+
+        # 124 is `timeout`'s own "the command was still running" code (137 if it needed SIGKILL) —
+        # call it out, because a STALL and a FAILED download want different follow-up (CDN/runner
+        # network vs a bad version pin), and the two are indistinguishable once both read as
+        # "attempt failed".
+        classify() {
+          case "$1" in
+            125) echo "::warning::$2 attempt $3 skipped — the step's ${BROWSER_STEP_BUDGET}s budget is spent" >&2 ;;
+            124|137) echo "::warning::$2 attempt $3 HUNG (no completion within the bound) and was killed — treating as a failed attempt" >&2 ;;
+            *) echo "$2 attempt $3 failed (exit $1); retrying" >&2 ;;
+          esac
+        }
+
+        # ── Phase 1: the browser binary, straight from the CDN. No apt in this path at all. ──
         ok=0
         for attempt in 1 2 3; do
-          # 🚨 WAIT FOR APT BEFORE EACH ATTEMPT. `--with-deps` shells out to apt-get, and the
-          # runner image runs its own background apt (unattended-upgrades / the daily timer). When
-          # that holds the lock, playwright exits 100 with
-          #   E: Could not get lock /var/lib/apt/lists/lock. It is held by process N (apt-get)
-          # which is CONTENTION, not a broken download — so retrying immediately just re-races the
-          # same holder. Observed on this very PR (run 32077919296, shard 1): all three attempts
-          # failed that way inside 30 s, because the backoff was shorter than the other apt run.
-          # `flock -w N … true` waits for the holder to finish and releases at once, so playwright
-          # takes the lock itself rather than us holding it across its whole run (which would
-          # deadlock). Bounded, like everything else here: it can wait, it cannot hang. `|| true`
-          # because a timed-out wait is not a reason to skip the attempt — apt may well be free by
-          # the time npx reaches it, and the attempt itself is bounded anyway.
-          sudo flock -w "$APT_LOCK_WAIT" /var/lib/apt/lists/lock true 2>/dev/null || true
-          rc=0
-          timeout --signal=TERM --kill-after=30 "$BROWSER_INSTALL_TIMEOUT" \
-            npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install --with-deps --only-shell chromium || rc=$?
-          if [ $rc -eq 0 ]; then
-            ok=1; break
-          fi
-          # 124 is `timeout`'s own "the command was still running" code — call it out, because a
-          # STALL and a FAILED download want different follow-up (CDN/runner network vs a bad
-          # version pin), and the two are indistinguishable once both read as "attempt failed".
-          if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then
-            echo "::warning::browser install attempt $attempt HUNG (no output for ${BROWSER_INSTALL_TIMEOUT}s) and was killed — treating as a failed attempt" >&2
-          else
-            echo "browser install attempt $attempt failed (exit $rc); retrying" >&2
-          fi
-          delay=$((10 * attempt))
-          echo "retrying in ${delay}s" >&2
-          sleep $delay
+          rc=0; install_browser || rc=$?
+          if [ $rc -eq 0 ]; then ok=1; break; fi
+          classify "$rc" "browser download" "$attempt"
+          [ $rc -ne 125 ] || break
+          delay=$(( 10 * attempt ))
+          [ "$(left)" -gt "$delay" ] || break
+          echo "retrying in ${delay}s ($(left)s of the step budget left)" >&2
+          sleep "$delay"
         done
         if [ $ok -eq 0 ]; then
-          echo "::error::could not install the headless browser after 3 attempts (each bounded at ${BROWSER_INSTALL_TIMEOUT}s) — this is an INFRA failure, not a test failure."
+          echo "::error::could not download the headless browser within ${BROWSER_STEP_BUDGET}s — this is a CDN/INFRA failure, not a test failure."
+          exit 1
+        fi
+
+        # ── Phase 2: the system packages `--with-deps` installs. The ONLY apt in this step. ──
+        deps_ok=0
+        for attempt in 1 2 3; do
+          # ONE implementation of the wait, shared with clients.yml (#1855) — two copies of it are
+          # what let #1858 fix this file while the identical `flock` no-op stayed in clients.yml.
+          # $GITHUB_WORKSPACE, not a relative path: the clients job runs with a working-directory
+          # where `.github/…` does not exist. Clamped to the step budget like everything else.
+          "$GITHUB_WORKSPACE/.github/scripts/wait-for-apt.sh" "$(capped "$APT_LOCK_WAIT")"
+          before="$(apt_killable)"
+          rc=0; install_browser --with-deps || rc=$?
+          if [ $rc -eq 0 ]; then deps_ok=1; break; fi
+          # Only after a KILL can we have orphaned anything; an attempt that returned on its own
+          # (exit 100 "could not get lock") left nothing of ours behind, and reaping then could
+          # only hit a background apt that happened to start inside our window.
+          if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then reap_our_apt "$before"; fi
+          classify "$rc" "browser dependency install" "$attempt"
+          [ $rc -ne 125 ] || break
+          delay=$(( 10 * attempt ))
+          [ "$(left)" -gt "$delay" ] || break
+          echo "retrying in ${delay}s ($(left)s of the step budget left)" >&2
+          sleep "$delay"
+        done
+        if [ $deps_ok -eq 0 ]; then
+          echo "::error::the headless browser downloaded, but the system packages '--with-deps' installs could not be applied within ${BROWSER_STEP_BUDGET}s — this is an APT/INFRA failure, not a test failure."
           exit 1
         fi
         # The binary is named differently per platform (see the Dockerfile); match both so this

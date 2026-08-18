@@ -468,6 +468,39 @@ public record NodeTypeDefinition
     public IReadOnlyDictionary<string, long>? CurrentSourceVersions { get; init; }
 
     /// <summary>
+    /// A REQUEST to the owning per-NodeType hub: "stamp <see cref="CompiledSources"/> from your own
+    /// <see cref="CurrentSourceVersions"/>". Written by
+    /// <see cref="PrebuiltAssemblySeeder.Seed"/> when it adopts a prebuilt assembly; consumed —
+    /// exactly once — on the owner, which clears it in the same write that applies the stamp.
+    ///
+    /// <para>🚨 <b>Why the value cannot be written by the adopter</b> (#1834). A bundle's own
+    /// source-version ticks are meaningless on the consumer (the producer records zeros; the mesh
+    /// keys on ITS nodes' modification times), so adoption asserts "these bytes correspond to the
+    /// live source set". Only the owner knows that set: the seeder writes CROSS-HUB, so its lambda
+    /// diffs against the MIRROR's snapshot, and the mirror predates the first-activation write of
+    /// <c>CurrentSourceVersions</c> that the seeder's own subscribe TRIGGERS
+    /// (<c>NodeTypeCompilationHelpers.InstallSourcesWatcher</c>). Reading the field there stamped
+    /// <c>CompiledSources = null</c> under a non-empty <c>CurrentSourceVersions</c> — i.e.
+    /// <see cref="IsDirty"/> — so the release request that follows an install recompiled the type
+    /// that had just been adopted. A request the owner fulfils has no such race: the owner's copy
+    /// of both fields is authoritative by construction.</para>
+    ///
+    /// <para><b>What it asserts.</b> "The bytes correspond to the source set that is live when the
+    /// owner fulfils this" — the same assertion the adopter used to make, now made where it is
+    /// checkable. A source edit landing inside that (sub-second, install-time) window is therefore
+    /// folded into the adopted build rather than recompiled, exactly as before; an explicit Compile
+    /// remains the escape hatch.</para>
+    ///
+    /// <para><b>One-shot.</b> Every writer that fulfils it clears it in the SAME write
+    /// (<c>InstallAdoptedSourceStampWatcher</c>, the release-request watcher's dispatch, and both
+    /// terminal compile stamps), so it can never re-fire — and in particular can never re-stamp
+    /// <c>CompiledSources</c> over a later compile's own snapshot, which would suppress a needed
+    /// rebuild. Operational, never authored: stripped on export, preserved from the live node on
+    /// import (<see cref="Mesh.NodeTypeOperationalContent"/>).</para>
+    /// </summary>
+    public DateTimeOffset? RequestedSourceStampAt { get; init; }
+
+    /// <summary>
     /// <see cref="DateTime"/> ticks for <c>1601-01-01</c> — the FILETIME epoch, and the value
     /// .NET returns from <c>FileInfo.LastWriteTimeUtc</c> for a file that DOES NOT EXIST
     /// (it does not throw). A node stamped with it has no real modification time.
