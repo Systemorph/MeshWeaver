@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Microsoft.Extensions.DependencyInjection;
 using System.Linq;
@@ -8,6 +9,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
@@ -279,9 +281,12 @@ public static class MarkdownOverviewLayoutArea
         // content) are injected INLINE with the @@(query) operator, never auto-listed (that doubled
         // the children on every page that already referenced them).
 
-        // Approvals section (only if enabled and approvals exist)
-        if (host.Hub.Configuration.HasApprovals())
-            container = container.WithView(Controls.LayoutArea(host.Hub.Address, "Approvals").WithShowProgress(false));
+        // Approvals section — DELEGATED to the Approvals PACKAGE when it is installed. Approvals
+        // are node-native now: nothing is registered onto this hub, so the platform cannot ask a
+        // configuration marker whether they exist. It asks the mesh instead, through the same
+        // bounded index probe the Versions page uses (#737), and the package's own area decides
+        // whether THIS document has anything to show. No package ⇒ no section, no cost.
+        container = container.WithView(ApprovalsSection(host, nodePath));
 
         // Standard inline comments section (if comments enabled)
         if (!hideHeader && host.Hub.Configuration.HasComments())
@@ -291,6 +296,25 @@ public static class MarkdownOverviewLayoutArea
 
         return container;
     }
+
+    /// <summary>The Approvals package's shared desk — the instance that serves every document.</summary>
+    internal const string ApprovalDeskPath = "Approvals/Workspace";
+
+    /// <summary>The desk area listing one document's approvals.</summary>
+    internal const string ApprovalsArea = "Approvals";
+
+    /// <summary>
+    /// The document's approvals, rendered by the Approvals package when that package is on the
+    /// mesh — an empty stack otherwise. The document path rides as the layout-area REFERENCE, which
+    /// is how one desk instance serves every document.
+    /// </summary>
+    private static IObservable<UiControl?> ApprovalsSection(LayoutAreaHost host, string nodePath)
+        => PluginSurfaceProbe
+            .Exists(host.Hub.ServiceProvider.GetService<IMeshService>(), ApprovalDeskPath)
+            .Select(installed => installed
+                ? (UiControl?)Controls.LayoutArea(ApprovalDeskPath, ApprovalsArea, nodePath)
+                    .WithShowProgress(false)
+                : Controls.Stack);
 
     /// <summary>
     /// Returns the actual markdown body control (a <see cref="CollaborativeMarkdownControl"/>
