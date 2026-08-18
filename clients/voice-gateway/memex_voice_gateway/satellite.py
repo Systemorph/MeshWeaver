@@ -144,24 +144,34 @@ class SatelliteLink:
             result = await self.pipeline.run(pcm)
             if result.transcript:
                 send(Event.VOICE_ASSISTANT_STT_END, {"text": result.transcript})
-            if result.tts_url:
-                send(Event.VOICE_ASSISTANT_TTS_START, {"text": result.reply or ""})
-                send(Event.VOICE_ASSISTANT_TTS_END, {"url": result.tts_url})
         except Exception as error:
             logger.exception("voice round failed")
             send(Event.VOICE_ASSISTANT_ERROR, {"code": "gateway", "message": str(error)[:200]})
-        finally:
             send(Event.VOICE_ASSISTANT_RUN_END, {})
+            return
+        # End the run FIRST, then deliver the reply as an ANNOUNCEMENT with
+        # start_conversation: the device plays it and — when playback finishes — opens the
+        # mic again by itself, no wake word ("conversation mode"). A silent follow-up ends
+        # the chain via the pipeline's quiet empty-transcript path.
+        send(Event.VOICE_ASSISTANT_RUN_END, {})
+        if result.tts_url:
+            await self.announce(result.tts_url, result.reply or "",
+                                start_conversation=self.cfg.continue_conversation
+                                and bool(result.transcript))
 
     # --- late answers --------------------------------------------------------------------
 
-    async def announce(self, url: str, text: str) -> None:
-        """Deliver a late answer. Prefers the voice-assistant announcement (waits for
-        playback), falls back to a media-player announcement command."""
+    async def announce(self, url: str, text: str, start_conversation: bool = False) -> None:
+        """Deliver a reply. Prefers the voice-assistant announcement (waits for playback;
+        `start_conversation` re-opens the mic when it ends), falls back to a media-player
+        announcement command."""
         announce_api = getattr(self.client, "send_voice_assistant_announcement_await_response", None)
         if announce_api is not None:
             try:
-                await announce_api(url, 60.0, text)
+                try:
+                    await announce_api(url, 120.0, text, start_conversation=start_conversation)
+                except TypeError:
+                    await announce_api(url, 120.0, text)   # older aioesphomeapi: no kwarg
                 return
             except Exception:
                 logger.debug("announcement API failed; falling back to media player", exc_info=True)
