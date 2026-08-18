@@ -89,7 +89,8 @@ public class OpenRouterPromptCachePolicyTest
             Transport = new HttpClientPipelineTransport(new HttpClient(handler))
         };
         options.AddPolicy(new OpenRouterPromptCachePolicy(), PipelinePosition.PerCall);
-        var client = new OpenAIClient(new ApiKeyCredential("test-key"), options);
+        // Hermetic: the Transport above is a stub handler, so this client can never call out.
+        var client = new OpenAIClient(new ApiKeyCredential("test-key"), options); // local-only-guard:allow
         var chat = client.GetChatClient("anthropic/claude-sonnet-4.5");
 
         var completion = await chat.CompleteChatAsync(new UserChatMessage("hello"));
