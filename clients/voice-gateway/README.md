@@ -38,6 +38,30 @@ the same code starts answering inline — nothing to change.
 
 4. `docker compose up --build -d`, say the wake word, ask something.
 
+## All-local mode (Mac)
+
+Every leg is pluggable, so the gateway also runs **fully local** — no cloud in the loop, and
+(since the Swiss German Whisper model is CC BY-NC) the unambiguously non-commercial setup:
+
+| Leg | Mesh-hosted (default) | Local |
+|---|---|---|
+| STT | `{MEMEX_URL}/api/speech/transcribe` | `STT_URL=http://127.0.0.1:8090/inference` — whisper.cpp with the same Swiss German GGML |
+| Brain | `BRAIN=memex` (agent threads) | `BRAIN=ollama` + `OLLAMA_MODEL=qwen3.6` (or any pulled model) |
+| TTS | Piper (container) | `TTS_ENGINE=say` — macOS built-in voices (`SAY_VOICE=Anna`) |
+
+```bash
+brew install whisper-cpp ollama
+mkdir -p ~/models/whisper && curl -fSL -o ~/models/whisper/ggml-swiss-german-turbo-q5_0.bin \
+  https://github.com/Systemorph/MeshWeaver/releases/download/voice-model-swiss-german/ggml-swiss-german-turbo-q5_0.bin
+pip install -e .
+SATELLITE_HOST=… SATELLITE_PSK=… GATEWAY_HOST=<this Mac's LAN IP> ./run-local.sh
+```
+
+Mix and match freely — e.g. local STT with the memex-thread brain is the best of both while
+the mesh's whisper container isn't deployed. (Apple Intelligence as a brain would need a small
+Swift helper around the Foundation Models framework — it has no HTTP API; Ollama is the
+practical local brain today.)
+
 ## The Voice agent
 
 Point `MEMEX_AGENT` at a **lean** agent (short instructions, `chat` model tier, at most the Mesh

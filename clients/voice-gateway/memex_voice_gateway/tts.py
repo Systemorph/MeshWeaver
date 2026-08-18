@@ -34,6 +34,41 @@ class PiperTts:
         return wav
 
 
+class SayTts:
+    """macOS's built-in `say` — zero-setup local TTS (voice e.g. "Anna" for German).
+
+    Writes a 16-bit 22.05 kHz WAV to a temp file (say has no stdout mode) and returns
+    its bytes; the temp file is removed immediately.
+    """
+
+    def __init__(self, voice: str = "Anna") -> None:
+        self.voice = voice
+
+    @staticmethod
+    def build_args(voice: str, out_path: str) -> list[str]:
+        return ["say", "-v", voice, "-o", out_path, "--data-format=LEI16@22050", "-f", "-"]
+
+    async def synthesize(self, text: str) -> bytes:
+        import os
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *self.build_args(self.voice, path),
+                stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            _, err = await process.communicate(text.encode())
+            if process.returncode != 0:
+                raise RuntimeError(f"say failed ({process.returncode}): {err.decode()[:200]}")
+            with open(path, "rb") as f:
+                return f.read()
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
 class TtsFileServer:
     """Serves synthesized WAVs at /tts/{id}.wav from memory, expiring after `ttl_s`."""
 

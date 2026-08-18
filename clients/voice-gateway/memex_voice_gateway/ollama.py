@@ -1,0 +1,106 @@
+"""A local model as the brain, via Ollama's /api/chat.
+
+Implements the same two-phase surface as MemexThreads (`ask` → handle, `await_reply` with a
+budget), so the pipeline — including the holding-phrase + announce path — is identical for a
+local model and a mesh agent. Generation runs in a background task; a budget miss leaves it
+running and the announce poll picks the answer up when it lands.
+
+Conversation history lives in-process (this brain has no thread node) and resets after the
+same idle window a mesh thread would.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import itertools
+import time
+from dataclasses import dataclass, field
+
+import aiohttp
+
+SYSTEM_PROMPT = (
+    "Du bist ein Sprachassistent auf einem Lautsprecher. Deine Antworten werden vorgelesen: "
+    "Antworte in höchstens zwei kurzen Sätzen, ohne Markdown, Listen, Code oder Links. "
+    "Antworte in der Sprache der Frage; Schweizerdeutsch kommt als Standarddeutsch an — "
+    "antworte auf Standarddeutsch. Gib direkt die Antwort, keine Erklärung des Vorgehens."
+)
+
+
+def build_messages(history: list[dict], text: str, system_prompt: str = SYSTEM_PROMPT,
+                   max_turns: int = 8) -> list[dict]:
+    """System prompt + the last `max_turns` exchanges + the new user message."""
+    trimmed = history[-2 * max_turns:]
+    return [{"role": "system", "content": system_prompt}, *trimmed,
+            {"role": "user", "content": text}]
+
+
+@dataclass
+class OllamaBrain:
+    base_url: str
+    model: str
+    idle_minutes: float = 5.0
+    num_predict: int = 200
+
+    _history: list[dict] = field(default_factory=list, init=False)
+    _last_used: float = field(default=0.0, init=False)
+    _tasks: dict[str, asyncio.Task] = field(default_factory=dict, init=False)
+    _ids: itertools.count = field(default_factory=itertools.count, init=False)
+    _http: aiohttp.ClientSession | None = field(default=None, init=False)
+
+    async def _chat(self, messages: list[dict]) -> str:
+        if self._http is None:
+            self._http = aiohttp.ClientSession()
+        # keep_alive holds the model in RAM between questions — without it, Ollama unloads
+        # after ~5 min idle and the next wake pays the full model load (measured: 15s cold
+        # vs 0.4s warm for qwen3.6 on an M5 Max).
+        payload = {"model": self.model, "messages": messages, "stream": False,
+                   "think": False, "keep_alive": "60m",
+                   "options": {"num_predict": self.num_predict}}
+        async with self._http.post(f"{self.base_url}/api/chat", json=payload,
+                                   timeout=aiohttp.ClientTimeout(total=300)) as response:
+            if response.status == 400:
+                # Older Ollama / non-thinking model rejecting "think" — retry without it.
+                del payload["think"]
+                async with self._http.post(f"{self.base_url}/api/chat", json=payload,
+                                           timeout=aiohttp.ClientTimeout(total=300)) as retry:
+                    retry.raise_for_status()
+                    data = await retry.json()
+            else:
+                response.raise_for_status()
+                data = await response.json()
+        return (data.get("message") or {}).get("content", "").strip()
+
+    async def ask(self, text: str) -> str:
+        """Start generating; returns a handle usable with await_reply (pipeline contract)."""
+        if self._history and (time.monotonic() - self._last_used) > self.idle_minutes * 60:
+            self._history = []
+        self._last_used = time.monotonic()
+        messages = build_messages(self._history, text)
+        self._history.append({"role": "user", "content": text})
+
+        async def generate() -> str:
+            reply = await self._chat(messages)
+            self._history.append({"role": "assistant", "content": reply})
+            return reply
+
+        handle = f"ollama-{next(self._ids)}"
+        self._tasks[handle] = asyncio.create_task(generate())
+        return handle
+
+    async def await_reply(self, handle: str, budget_s: float) -> str | None:
+        task = self._tasks.get(handle)
+        if task is None:
+            return None
+        try:
+            reply = await asyncio.wait_for(asyncio.shield(task), timeout=budget_s)
+        except asyncio.TimeoutError:
+            return None      # generation keeps running; the announce path retries this handle
+        self._tasks.pop(handle, None)
+        return reply
+
+    async def close(self) -> None:
+        for task in self._tasks.values():
+            task.cancel()
+        if self._http is not None:
+            await self._http.close()
+            self._http = None
