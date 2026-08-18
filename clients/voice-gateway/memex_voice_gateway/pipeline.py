@@ -75,6 +75,8 @@ class VoicePipeline:
         # before any brain sees the text — the handler's confirmation is spoken directly.
         if self._command_handler is not None:
             confirmation = await self._command_handler(transcript)
+            if confirmation == "":
+                return RoundResult(transcript, None, None)   # handled silently ("stop")
             if confirmation is not None:
                 return RoundResult(transcript, confirmation,
                                    await self._try_speak(confirmation))

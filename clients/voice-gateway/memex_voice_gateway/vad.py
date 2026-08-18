@@ -36,6 +36,8 @@ class Endpointer:
     min_utterance_s: float = 0.4
     speech_factor: float = 3.0
     floor_init: float = 150.0
+    calibrate_ms: int = 0       # treat the first N ms as ambient (TV, music) — floor, not speech
+    onset_timeout_s: float = 0  # 0 = off; else end early when no speech starts in time
 
     def __post_init__(self) -> None:
         self._buffer = bytearray()
@@ -44,6 +46,8 @@ class Endpointer:
         self._silence_bytes = 0
         self._speech_bytes = 0
         self.done = False
+        self.ended_by_cap = False   # True = closed by max duration, NOT by a silence gap
+        self.speech_seen = False
 
     @property
     def audio(self) -> bytes:
@@ -59,6 +63,11 @@ class Endpointer:
         self._buffer.extend(chunk)
 
         level = rms(chunk)
+        # Ambient calibration window (follow-up rounds): whatever is audible right when the
+        # mic opens — a TV, music — is the FLOOR, not speech; only louder-than-that counts.
+        if len(self._buffer) <= self.calibrate_ms * self._bytes_per_ms():
+            self._noise_floor = max(self._noise_floor, level)
+            return self.done
         # Track the floor down fast, up slowly — a shout must not raise it.
         if level < self._noise_floor:
             self._noise_floor = max(1.0, 0.5 * self._noise_floor + 0.5 * level)
@@ -75,7 +84,11 @@ class Endpointer:
         long_enough = self._speech_bytes >= self.min_utterance_s * self.sample_rate * 2
         silent_long = self._silence_bytes >= self.silence_ms * self._bytes_per_ms()
         too_long = len(self._buffer) >= self.max_utterance_s * self.sample_rate * 2
+        no_onset = (self.onset_timeout_s > 0 and not self._speech_seen
+                    and len(self._buffer) >= self.onset_timeout_s * self.sample_rate * 2)
 
-        if (self._speech_seen and long_enough and silent_long) or too_long:
+        if (self._speech_seen and long_enough and silent_long) or too_long or no_onset:
             self.done = True
+            self.ended_by_cap = too_long or no_onset
+            self.speech_seen = self._speech_seen
         return self.done
