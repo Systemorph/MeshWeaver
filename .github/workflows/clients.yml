@@ -283,6 +283,6 @@ jobs:
       # not a broken download. ONE shared implementation, because two copies of this drift and the
       # copy that drifts is the one nobody notices until a shard reddens on an unrelated PR (#1843).
       - run: |
-          .github/scripts/wait-for-apt.sh
+          "$GITHUB_WORKSPACE/.github/scripts/wait-for-apt.sh"
           timeout --signal=TERM --kill-after=30 180 npx playwright install --with-deps chromium
       - run: npm run e2e # expo export --platform web → serve dist/ → drive headless Chromium
