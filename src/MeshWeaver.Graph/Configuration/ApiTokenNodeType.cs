@@ -104,11 +104,17 @@ public static class ApiTokenNodeType
         // ApiToken node) and the validator would return "Token not found" for
         // every request. The hash-compare further down is the actual
         // authentication step; the System scope only covers this one read.
+        //
+        // 🚨 RunAsSystem, never Observable.Using (#1790). This handler runs ON the ApiToken hub's
+        // action block; Observable.Using would open the System scope on that thread and dispose it
+        // on whichever thread the cross-hub read terminates, leaving the action block holding
+        // `system-security` and the responder holding a foreign "previous". RunAsSystem opens and
+        // closes the scope inside one synchronous Subscribe — the whole composition below sits
+        // INSIDE the work factory, so nothing about the emission-time behaviour changes.
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var hubAddress = hub.Address.ToString();
-        Observable.Using(
-            () => accessService.ImpersonateAsSystem(),
-            _ => hub.GetMeshNode(hubAddress, TimeSpan.FromSeconds(10)))
+        accessService.RunAsSystem(
+            () => hub.GetMeshNode(hubAddress, TimeSpan.FromSeconds(10))
             .SelectMany(node =>
             {
                 if (node == null)
@@ -130,14 +136,13 @@ public static class ApiTokenNodeType
 
                     // Cross-hub one-shot read for the actual token node — GetDataRequest
                     // routes to the owning per-node hub via the mesh. Re-impersonate
-                    // as System for this read too: the AsyncLocal context that the
-                    // outer Observable.Using set may not be alive when the SelectMany
-                    // continuation re-subscribes downstream, and the actual token
-                    // node sits at "{userId}/ApiToken/{hashPrefix}" which RLS gates
-                    // on the owning user's identity.
-                    tokenNodeObs = Observable.Using(
-                        () => accessService.ImpersonateAsSystem(),
-                        _ => hub.GetMeshNode(index.TokenPath, TimeSpan.FromSeconds(10)));
+                    // as System for this read too: the AsyncLocal context the OUTER
+                    // scope set is not alive on the thread this SelectMany continuation
+                    // re-subscribes from, and the actual token node sits at
+                    // "{userId}/ApiToken/{hashPrefix}" which RLS gates on the owning
+                    // user's identity.
+                    tokenNodeObs = accessService.RunAsSystem(
+                        () => hub.GetMeshNode(index.TokenPath, TimeSpan.FromSeconds(10)));
                 }
                 else
                 {
@@ -183,7 +188,7 @@ public static class ApiTokenNodeType
                     hub.Post(response, o => o.ResponseFor(request));
                     return Unit.Default;
                 });
-            })
+            }))
             .Subscribe(
                 _ => { },
                 // A THROWN fault (GetMeshNode timeout, storage error, routing failure) means the
