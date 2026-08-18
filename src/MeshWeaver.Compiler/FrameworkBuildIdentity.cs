@@ -102,7 +102,6 @@ public static class FrameworkBuildIdentity
     [
         "MeshWeaver.AI",
         "MeshWeaver.Application.Styles",
-        "MeshWeaver.Approvals",
         "MeshWeaver.Compiler",
         "MeshWeaver.ContentCollections",
         "MeshWeaver.ContentCollections.Indexing",
