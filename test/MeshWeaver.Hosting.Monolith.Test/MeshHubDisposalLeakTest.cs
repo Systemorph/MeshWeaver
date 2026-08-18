@@ -99,6 +99,21 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
         }
     }
 
+    /// <summary>
+    /// The equality the ClrMD matcher rests on: an address's <c>Path</c> IS its segments joined by
+    /// "/", which is the only thing readable from a heap snapshot.
+    ///
+    /// <para>Runs on every platform — unlike the leak test itself, which needs ClrMD/DAC and skips
+    /// on macOS. If this ever diverges, the matcher stops matching and the leak gate quietly
+    /// degrades into a check that always passes; this fails first and says why.</para>
+    /// </summary>
+    [Fact]
+    public void AddressPath_IsTheJoinedSegments()
+    {
+        var address = Mesh.Address;
+        Assert.Equal(string.Join("/", address.Segments), address.Path);
+    }
+
     [Fact]
     public async Task MeshHub_IsCollected_AfterMeshAndServiceProviderDisposal()
     {
@@ -106,6 +121,14 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
         weak.IsAlive.Should().BeTrue("the mesh hub is held by the live ServiceProvider before disposal");
 
         var hub = Mesh;
+        // The identity of the hub UNDER TEST, captured as a plain string so it retains nothing.
+        // Without it the analysis below cannot tell our hub from any other live hub in the process.
+        //
+        // 🚨 Address.PATH, not ToString(): ToString() appends "~host" when a Host is set, while the
+        // snapshot side can only join the raw Segments. The two would then never be equal, the
+        // matcher would never match, and the gate would report "no leak" for every run — a check
+        // that cannot fail. AddressPath_IsTheJoinedSegments pins that equality.
+        var hubUnderTest = hub.Address.Path;
         hub.Dispose();
         await hub.DisposalCompleted
             .Catch<Unit, Exception>(_ => Observable.Return(Unit.Default))
@@ -131,7 +154,7 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
         // which clears once the process resumes). We do NOT hold a strong ref to the
         // survivor during analysis (that would add our own stack root); ClrMD reads the
         // live process heap directly.
-        var (outcome, report) = AnalyzeMeshHubRoots();
+        var (outcome, report) = AnalyzeMeshHubRoots(hubUnderTest);
         Output.WriteLine("=== MESH HUB SURVIVED DISPOSAL — ClrMD GC-root analysis ===");
         Output.WriteLine(report);
 
@@ -152,10 +175,25 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
 
     /// <summary>
     /// Snapshot-attach ClrMD to THIS process and BFS from non-stack GC roots to the
-    /// first <c>MessageHub</c> on the heap, printing the root kind + the type chain
-    /// from the root down to the hub. The top of the chain is the pin.
+    /// <c>MessageHub</c> whose address is <paramref name="hubUnderTest"/>, printing the root kind +
+    /// the type chain from the root down to it. The top of the chain is the pin.
+    ///
+    /// <para>🚨 <b>It must be THAT hub, not any hub.</b> This walk used to stop at the first object
+    /// whose type ended in <c>.MessageHub</c> and report it as the leak. A test process is full of
+    /// perfectly healthy live hubs — other test classes' meshes, client hubs, per-node hubs — and
+    /// every one of them is reachable from a non-stack root, because that is what being alive
+    /// MEANS. So the assertion fired on whichever unrelated hub the breadth-first walk happened to
+    /// reach first, which is why it failed on PRs that changed no compiled code at all
+    /// (#1843: a two-file YAML diff), and why the printed chain was a ~25-long walk down the
+    /// process-global TimerQueue linked list — the path to a stranger's hub, not to ours.</para>
+    ///
+    /// <para>Matching on the address keeps the gate able to FAIL: if hubs are found but none of
+    /// their addresses can be read, that is <see cref="ClrMdRootAnalysisOutcome.Unavailable"/> —
+    /// inconclusive — never a pass. A guard that cannot look must not report "no leak" (#674), and
+    /// a matcher that can never match would be exactly that.</para>
     /// </summary>
-    private static (ClrMdRootAnalysisOutcome Outcome, string Report) AnalyzeMeshHubRoots()
+    /// <param name="hubUnderTest">The disposed hub's address, e.g. <c>mesh/abc123</c>.</param>
+    private static (ClrMdRootAnalysisOutcome Outcome, string Report) AnalyzeMeshHubRoots(string hubUnderTest)
     {
         var sb = new StringBuilder();
         try
@@ -171,6 +209,8 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
             using var runtime = dt.ClrVersions[0].CreateRuntime();
             var heap = runtime.Heap;
 
+            var hubsSeen = 0;
+            var addressesRead = 0;
             var parent = new Dictionary<ulong, (ulong From, string Edge)>();
             var rootKindOf = new Dictionary<ulong, string>();
             var queue = new Queue<ulong>();
@@ -204,8 +244,19 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
                 // interface and "Func<…IMessageHub…>" generic args (which contain "<").
                 if (name.EndsWith(".MessageHub", StringComparison.Ordinal) && !name.Contains('<'))
                 {
-                    found = addr;
-                    break;
+                    hubsSeen++;
+                    var hubAddress = TryReadHubAddress(obj);
+                    if (hubAddress is not null)
+                    {
+                        addressesRead++;
+                        if (string.Equals(hubAddress, hubUnderTest, StringComparison.Ordinal))
+                        {
+                            found = addr;
+                            break;
+                        }
+                    }
+                    // A DIFFERENT hub — almost certainly a live one, which is reachable by design.
+                    // Walk on rather than stopping: stopping here is what made this a coin flip.
                 }
                 foreach (var child in obj.EnumerateReferences(false, true))
                 {
@@ -279,9 +330,21 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
             else
             {
                 var kinds = rootKindOf.Values.GroupBy(x => x).Select(g => $"{g.Key}×{g.Count()}");
-                sb.AppendLine("[clrmd] no MessageHub reached from non-stack roots within budget.");
+                sb.AppendLine($"[clrmd] hub under test ({hubUnderTest}) NOT reached from non-stack "
+                              + $"roots within budget; {hubsSeen} other MessageHub(s) seen and walked past.");
                 sb.AppendLine("[clrmd] non-stack root kinds seen: " + string.Join(", ", kinds));
             }
+
+            // The matcher must be demonstrably capable of matching. If hubs were on the heap but not
+            // one address could be read, we did not actually test anything — report inconclusive
+            // rather than a green that means nothing (#674).
+            if (found == 0 && hubsSeen > 0 && addressesRead == 0)
+            {
+                sb.AppendLine($"[clrmd] {hubsSeen} MessageHub(s) found but NO address could be read — "
+                              + "the address matcher could not have matched, so this run proves nothing.");
+                return (ClrMdRootAnalysisOutcome.Unavailable, sb.ToString());
+            }
+
             return (found != 0 ? ClrMdRootAnalysisOutcome.Detected : ClrMdRootAnalysisOutcome.NotDetected,
                 sb.ToString());
         }
@@ -291,6 +354,40 @@ public class MeshHubDisposalLeakTest(ITestOutputHelper output) : MonolithMeshTes
             // analysis fault: the probe DID NOT LOOK — that is Unavailable, never NotDetected.
             sb.AppendLine($"[clrmd] analysis failed: {ex.GetType().Name}: {ex.Message}");
             return (ClrMdRootAnalysisOutcome.Unavailable, sb.ToString());
+        }
+    }
+
+    /// <summary>
+    /// The <c>Address</c> of a <c>MessageHub</c> on the snapshot heap, as
+    /// <c>string.Join("/", Segments)</c> — which is exactly what <c>Address.Path</c> (and hence
+    /// <c>ToString()</c>) produces, so it compares directly against a captured live address.
+    /// Returns null when the shape cannot be read, and NEVER throws: an unreadable stranger must
+    /// not abort a walk that is looking for a different hub.
+    /// </summary>
+    private static string? TryReadHubAddress(ClrObject hub)
+    {
+        try
+        {
+            // MessageHub has no address field of its own — it reads through Configuration.
+            var config = hub.ReadObjectField("<Configuration>k__BackingField");
+            if (!config.IsValid) return null;
+            var address = config.ReadObjectField("<Address>k__BackingField");
+            if (!address.IsValid) return null;
+            var segments = address.ReadObjectField("<Segments>k__BackingField");
+            if (!segments.IsValid || !segments.IsArray) return null;
+            var arr = segments.AsArray();
+            var parts = new List<string>();
+            for (var i = 0; i < arr.Length && i < 8; i++)
+            {
+                var element = arr.GetObjectValue(i);
+                if (!element.IsValid) return null;
+                parts.Add(element.AsString() ?? "");
+            }
+            return parts.Count == 0 ? null : string.Join("/", parts);
+        }
+        catch
+        {
+            return null;
         }
     }
 
