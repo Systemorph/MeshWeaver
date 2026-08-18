@@ -87,6 +87,11 @@ public static class SocialExtensions
             // throws at the moment a slot fires — i.e. in production, hours after any test ran.
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IEventContinuationHandler, ScheduledSocialPublishHandler>());
+
+            // …and the half that ARMS it. Without this the handler above is unreachable: nothing else
+            // in the mesh reads a post's scheduledAt, which is precisely how posts sat "Scheduled"
+            // and never went out.
+            services.AddHostedService<ScheduledPostWatcher>();
             return services;
         });
 }
