@@ -157,7 +157,13 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
     private IObservable<EventSubscription?> Timers(string postPath)
     {
         var id = ScheduledPostWatcher.SubscriptionId(postPath);
-        return Mesh.GetWorkspace().GetQuery($"timers-{id}",
+        // 🚨 CONSTANT query id, filtered in code — never $"timers-{id}". A per-call id mints a new
+        // workspace query-registry entry for every post, and those entries outlive the test that
+        // made them: they keep the workspace, and through it the mesh hub, reachable after
+        // disposal. That is precisely what MeshHubDisposalLeakTest catches, and it catches it in
+        // whatever class happens to run next rather than here. Same rule the runner states for its
+        // own pending-subscription query.
+        return Mesh.GetWorkspace().GetQuery("test-publish-timers",
                 $"path:{EventSubscriptionNodeType.Namespace} scope:children "
                 + $"nodeType:{EventSubscriptionNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
             .Select(nodes => nodes
