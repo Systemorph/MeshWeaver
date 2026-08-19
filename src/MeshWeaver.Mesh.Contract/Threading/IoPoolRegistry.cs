@@ -102,30 +102,36 @@ public sealed class IoPoolRegistry : IDisposable
     }
 
     /// <summary>Disposes every created pool and clears the registry; called when the mesh is torn down.</summary>
-    public void Dispose() => DisposeAndJoin();
-
-    /// <summary>
-    /// <see cref="Dispose"/>, but returns the total residual instead of discarding it — the form
-    /// silo shutdown uses, so it can log (and refuse to be silent about) live work that survived
-    /// the join. Idempotent; a second caller gets <c>0</c> and should read <see cref="Disposed"/>.
-    /// </summary>
-    /// <returns>Leaves that did not unwind across all pools; <c>0</c> means a real join, so
-    /// collectible node ALCs may be unloaded and the owning scope released.</returns>
-    public int DisposeAndJoin()
+    public void Dispose()
     {
-        // Idempotent, and only the first caller reports: a second Dispose must not fire a second
-        // (necessarily zero) report and make a real residual look resolved.
-        if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return 0;
+        // Idempotent, and only the first caller reports.
+        if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return;
 
-        // Each pool.Dispose() now DRAINS before it releases (cancel + join), so when this loop ends
-        // no pool thread is running. Sum what survived rather than discarding it — a non-zero total
-        // is the use-after-unload precondition and the caller must see it.
-        var leaked = 0;
-        foreach (var pool in _pools.Values)
-            leaked += pool.DisposeAndJoin();
+        // 🚨 NON-BLOCKING. Each pool.Dispose() cancels its leaves and completes its own Disposed
+        // when the last one unwinds — nothing here waits. A blocking join belongs nowhere near a
+        // Dispose(): `using var pool = …` in an async method runs it on a ThreadPool thread, and
+        // parking one there while the leaves it waits for need pool threads starves into a
+        // deadlock on a small runner. The WAIT lives on Disposed, awaited asynchronously.
+        var pools = _pools.Values.ToArray();
         _pools.Clear();
-        _disposed.OnNext(leaked);
-        _disposed.OnCompleted();
-        return leaked;
+        if (pools.Length == 0)
+        {
+            _disposed.OnNext(0);
+            _disposed.OnCompleted();
+            return;
+        }
+
+        // Zip: one emission once EVERY pool has reported, carrying the total residual. A pool whose
+        // leaf never unwinds never reports, so this never fires — and the caller's bounded wait
+        // surfaces that as the timeout it is, rather than a false all-clear.
+        Observable.Zip(pools.Select(pool => pool.Disposed))
+            .Select(residuals => residuals.Sum())
+            .Take(1)
+            .Subscribe(
+                total => { _disposed.OnNext(total); _disposed.OnCompleted(); },
+                _ => { _disposed.OnNext(0); _disposed.OnCompleted(); });
+
+        foreach (var pool in pools)
+            pool.Dispose();
     }
 }
