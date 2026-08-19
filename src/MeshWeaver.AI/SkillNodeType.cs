@@ -114,12 +114,12 @@ public static class SkillNodeType
         {
             if (string.IsNullOrEmpty(node.Id)) continue;
             if (!string.Equals(node.NodeType, NodeType, StringComparison.OrdinalIgnoreCase)) continue;
-            var def = node.Content switch
-            {
-                SkillDefinition d => d,
-                JsonElement je => TryDeserialise(je, jsonOptions),
-                _ => null,
-            };
+            // 🚨 ContentAs, never a switch over the shapes we expect (#1853). A skill whose
+            // content arrives as the as-written DOM (JsonObject — what a builder or the MCP
+            // create path leaves) matched no arm and was silently skipped by the `continue`
+            // below, so a newly created Skill node was missing from the slash-command list with
+            // nothing logged. Identical defect to ToAgentDisplayInfo's, same package.
+            var def = node.ContentAs<SkillDefinition>(jsonOptions);
             if (def is null) continue;
             byId[node.Id] = new SkillInfo
             {
@@ -133,11 +133,6 @@ public static class SkillNodeType
         return byId.Values.OrderBy(s => s.Id, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static SkillDefinition? TryDeserialise(JsonElement je, JsonSerializerOptions opts)
-    {
-        try { return JsonSerializer.Deserialize<SkillDefinition>(je.GetRawText(), opts); }
-        catch { return null; }
-    }
 }
 
 /// <summary>

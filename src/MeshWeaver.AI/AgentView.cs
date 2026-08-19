@@ -131,21 +131,12 @@ public static class AgentView
             );
     }
 
-    /// <summary>Resolves the typed <see cref="AgentConfiguration"/> from a node's Content,
-    /// tolerating a <see cref="JsonElement"/> when the hub's registry isn't AI-typed.</summary>
+    /// <summary>Resolves the typed <see cref="AgentConfiguration"/> from a node's Content in
+    /// whatever shape it arrives — typed, JsonElement, the as-written DOM, or a same-named type
+    /// from another dynamic assembly. Was a two-arm switch that returned null for the DOM, which
+    /// renders this view as "not an agent" for an agent that is perfectly fine (#1853).</summary>
     private static AgentConfiguration? AsAgentConfiguration(MeshNode? node, JsonSerializerOptions jsonOptions)
-        => node?.Content switch
-        {
-            AgentConfiguration ac => ac,
-            JsonElement je => TryDeserialiseConfig(je, jsonOptions),
-            _ => null,
-        };
-
-    private static AgentConfiguration? TryDeserialiseConfig(JsonElement je, JsonSerializerOptions jsonOptions)
-    {
-        try { return JsonSerializer.Deserialize<AgentConfiguration>(je.GetRawText(), jsonOptions); }
-        catch { return null; }
-    }
+        => node.ContentAs<AgentConfiguration>(jsonOptions);
 
     private static UiControl BuildDetailsLayout(LayoutAreaHost host, MeshNode node, AgentConfiguration agent)
     {
