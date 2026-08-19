@@ -18,6 +18,12 @@ export interface MeshInstance {
   color?: string;
   /** Optional explicit environment kind label (e.g. "Prod", "Local · k8s"). */
   kind?: string;
+  /** OAuth refresh token (browser sign-in); absent for pasted API tokens. */
+  refreshToken?: string;
+  /** OAuth client id this app registered at the portal (dynamic client registration). */
+  clientId?: string;
+  /** Epoch ms when the OAuth access token expires; pasted API tokens have none. */
+  tokenExpiresAt?: number;
 }
 
 /**

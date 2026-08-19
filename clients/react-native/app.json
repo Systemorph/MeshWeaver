@@ -15,7 +15,9 @@
         }
       }
     },
-    "android": { "package": "cloud.meshweaver.mobile" },
+    "android": {
+      "package": "cloud.meshweaver.mobile"
+    },
     "extra": {
       "portalUrl": "http://localhost:5250"
     },
@@ -28,6 +30,7 @@
           "microphonePermission": "Memex records the microphone for speech-to-text (transcribed on the centralized Whisper service, not on this device)."
         }
       ]
-    ]
+    ],
+    "scheme": "memex"
   }
 }
