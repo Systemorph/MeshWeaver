@@ -62,6 +62,35 @@ public static class ModulePackCommand
         return true;
     }
 
+    /// <summary>
+    /// Reads <c>content.includeSource</c> off the package's ROOT node (<c>index.json</c>) — the
+    /// package's own declaration of whether its C# ships.
+    ///
+    /// <para>Read as JSON rather than through <c>PluginContent</c>: that type is defined by the
+    /// Store package in the plugins repo and compiled ON A MESH, so this tool cannot reference it.
+    /// One property by name is the whole coupling.</para>
+    ///
+    /// <para>Absent root, unreadable root, or absent property all mean FALSE. A publishing decision
+    /// with an IP consequence must not be something a malformed file can turn on.</para>
+    /// </summary>
+    private static bool ReadIncludeSourceFromRoot(string contentDirectory)
+    {
+        var root = Path.Combine(contentDirectory, "index.json");
+        if (!File.Exists(root))
+            return false;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllBytes(root));
+            return document.RootElement.TryGetProperty("content", out var content)
+                   && content.TryGetProperty("includeSource", out var flag)
+                   && flag.ValueKind is JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Runs the command; returns the process exit code.</summary>
     public static int Run(string[] args)
     {
@@ -74,6 +103,21 @@ public static class ModulePackCommand
                                               a publish folder, or a curated modules/<Name>/ layout)
                   --module-name <name>        the module's entry-assembly name without extension
                                               (default: the folder name)
+                  --content <dir>             the package's NODE DEFINITION tree (its index.json,
+                                              NodeType nodes, markdown). Shipped verbatim so a
+                                              consumer can use this package as an upstream WITHOUT
+                                              cloning it. Omit for an assemblies-only bundle, which
+                                              can stamp existing nodes but cannot stand in for the
+                                              package.
+                  --include-source [true|false]
+                                              whether the C# SOURCE ships with the tree. DEFAULT
+                                              FALSE, and the package decides: the root index.json's
+                                              `content.includeSource`. This flag overrides it (for a
+                                              tree with no root node). Source is needed only by a
+                                              consumer that COMPILES against this package —
+                                              `shared=@<pkg>/…` pulls these files into ITS
+                                              compilation. A consumer that merely installs and runs
+                                              needs the assemblies, which the bundle already carries.
                   --plugin <id>               the package id the bundle belongs to (default: the
                                               module name) — must match the repo's plugin folder
                   --package-version <v>       REQUIRED — the module package's released SemVer (the
@@ -114,6 +158,9 @@ public static class ModulePackCommand
         var extras = new List<string>();
         var outputDirectory = Environment.CurrentDirectory;
 
+        string? contentDirectory = null;
+        bool? includeSourceOverride = null;
+
         for (var i = 1; i < args.Length; i++)
         {
             switch (args[i])
@@ -138,6 +185,24 @@ public static class ModulePackCommand
                     break;
                 case "--out" when i + 1 < args.Length:
                     outputDirectory = Path.GetFullPath(args[++i]);
+                    break;
+                case "--content" when i + 1 < args.Length:
+                    contentDirectory = Path.GetFullPath(args[++i]);
+                    break;
+                // Bare `--include-source` means true; an explicit `--include-source false` wins.
+                // Only CONSUMED as a value when it parses as a bool, so a following option is not
+                // swallowed.
+                case "--include-source":
+                    if (i + 1 < args.Length && bool.TryParse(args[i + 1], out var explicitInclude))
+                    {
+                        includeSourceOverride = explicitInclude;
+                        i++;
+                    }
+                    else
+                    {
+                        includeSourceOverride = true;
+                    }
+
                     break;
                 default:
                     Console.Error.WriteLine($"error: unrecognised argument '{args[i]}'");
@@ -224,6 +289,48 @@ public static class ModulePackCommand
         var manifest = new PluginManifest(
             plugin, PluginManifest.IdPrefix + plugin, packageVersion, plugin, null, []);
 
+        // The package tree, walked in a stable order so two packs of the same tree produce
+        // byte-identical manifests. obj/bin are a developer's build residue, never package content
+        // — the same exclusions PluginPacker applies.
+        var contentFiles = new List<string>();
+        var includeSource = false;
+        if (contentDirectory is not null)
+        {
+            if (!Directory.Exists(contentDirectory))
+            {
+                Console.Error.WriteLine($"error: content directory not found: {contentDirectory}");
+                return 2;
+            }
+            // 🚨 THE PACKAGE DECIDES, and the default is NOT to ship source. Source is the one
+            // part of a package that a consumer does not need in order to USE it — the compiled
+            // assemblies are right here in the same bundle — and shipping it is therefore a
+            // deliberate act, not a side effect of publishing. Defaulting the other way would have
+            // every package's C# leave the building the first time anyone packed it with a tree.
+            includeSource = includeSourceOverride ?? ReadIncludeSourceFromRoot(contentDirectory);
+
+            contentFiles.AddRange(Directory
+                .EnumerateFiles(contentDirectory, "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(contentDirectory, f)
+                    .Replace(Path.DirectorySeparatorChar, '/'))
+                .Where(r => !r.StartsWith("obj/", StringComparison.Ordinal)
+                            && !r.StartsWith("bin/", StringComparison.Ordinal)
+                            && !r.StartsWith(".worktrees/", StringComparison.Ordinal))
+                // A .cs file IS a Code node in this repo's node-per-file layout, so withholding
+                // source and withholding those nodes are the same operation.
+                .Where(r => includeSource || !r.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(r => r, StringComparer.Ordinal));
+
+            if (contentFiles.Count == 0)
+            {
+                // Silence here would ship a bundle that LOOKS complete and cannot be consumed.
+                Console.Error.WriteLine(
+                    $"error: --content {contentDirectory} contains no files to ship"
+                    + (includeSource ? "" : " (source is excluded — set content.includeSource"
+                                             + " on the package root, or pass --include-source)"));
+                return 2;
+            }
+        }
+
         var manifestJson = JsonSerializer.Serialize(
             new
             {
@@ -233,6 +340,14 @@ public static class ModulePackCommand
                 // the module section's minMeshVersion floor below.
                 frameworkMvid,
                 module = new { assemblyName = moduleName, assemblies = closure, minMeshVersion },
+                // DECLARED, so BundleReader.ReadContent stays manifest-driven — these files are
+                // written into a consumer's working tree, and a glob would recreate anything a
+                // future producer happens to drop in the folder.
+                content = contentFiles.Count > 0 ? contentFiles : null,
+                // DECLARED, never inferred from the file list: a consumer that cannot resolve a
+                // shared=@ include must be able to tell "withheld" (its build cannot succeed) from
+                // "this package has no C#" (nothing is wrong).
+                sourceIncluded = contentFiles.Count > 0 ? includeSource : (bool?)null,
             },
             new JsonSerializerOptions
             {
@@ -249,6 +364,13 @@ public static class ModulePackCommand
             })
             .ToList();
 
+        entries.AddRange(contentFiles.Select(relative =>
+        {
+            var path = Path.Combine(contentDirectory!, relative.Replace('/', Path.DirectorySeparatorChar));
+            return new NuGetPackageWriter.Entry(
+                $"{NuGetPackageWriter.ContentFolder}/{relative}", () => File.OpenRead(path));
+        }));
+
         Directory.CreateDirectory(outputDirectory);
         var bundlePath = Path.Combine(
             outputDirectory, $"{manifest.PackageId}.{packageVersion}.module.nupkg");
@@ -259,7 +381,9 @@ public static class ModulePackCommand
 
         Console.WriteLine(
             $"packed {Path.GetFileName(bundlePath)} — module {moduleName}, "
-            + $"{closure.Count} file(s), floor {minMeshVersion ?? "(none)"}, "
+            + $"{closure.Count} file(s), {contentFiles.Count} node file(s) "
+            + $"({(includeSource ? "with" : "WITHOUT")} source), "
+            + $"floor {minMeshVersion ?? "(none)"}, "
             + $"built-against MVID {frameworkMvid ?? "(unrecorded)"}");
         return 0;
     }

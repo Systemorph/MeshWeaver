@@ -129,7 +129,7 @@ If migration crashed mid-run, you'll see the `Unhandled exception` at the bottom
 | Server | `<pg-server>.postgres.database.azure.com` |
 | Database | `memex` |
 | Auth | Azure AD only (password disabled) |
-| Tenant | `3a01d7ac-3330-444d-942d-975eb491b5d6` |
+| Tenant | your AAD tenant — `az account show --query tenantId -o tsv` |
 | Logs | Loki (via Promtail scraping pod stdout); metrics/traces via OTLP → Prometheus/Grafana |
 
 For test cluster, swap `prod-memex` → `test-memex` and discover the FQDN with the `az postgres flexible-server list` command above.

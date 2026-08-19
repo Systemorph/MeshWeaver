@@ -271,7 +271,7 @@ re-notifies, and nothing downstream certifies anything on it.
 Provisioning state (2026-08-17): the two halves of this cascade are in different states.
 
 - **The satellites' publish credentials ARE provisioned.** The Azure managed identity
-  `github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
+  `github-actions-bake` (in the cluster's resource group) holds *Storage File Data Privileged Contributor* on the
   portals' storage account, carries **8 federated credentials — the four satellite repos
   (`MeshWeaver.Plugins`, `MeshWeaver.Education`, `MeshWeaver.Reinsurance`, `MeshWeaver.SocialMedia`)
   × two subject formats** (below) — and the `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
@@ -316,15 +316,15 @@ REPO_ID=$(gh api repos/Systemorph/$REPO --jq .id)
 ORG_ID=$(gh api orgs/Systemorph --jq .id)
 ISSUER=https://token.actions.githubusercontent.com
 # BOTH of the following, never just one:
-az identity federated-credential create -g memex-aks-rg --identity-name github-actions-bake \
+az identity federated-credential create -g <aks-resource-group> --identity-name github-actions-bake \
   --name "gh-$SHORT-main-classic" --issuer "$ISSUER" \
   --subject "repo:Systemorph/$REPO:ref:refs/heads/main" --audience api://AzureADTokenExchange
-az identity federated-credential create -g memex-aks-rg --identity-name github-actions-bake \
+az identity federated-credential create -g <aks-resource-group> --identity-name github-actions-bake \
   --name "gh-meshweaver-$SHORT-main" --issuer "$ISSUER" \
   --subject "repo:Systemorph@$ORG_ID/$REPO@$REPO_ID:ref:refs/heads/main" --audience api://AzureADTokenExchange
 
 # What is registered today (expect 2 rows per repo, 8 in total):
-az identity federated-credential list --identity-name github-actions-bake -g memex-aks-rg \
+az identity federated-credential list --identity-name github-actions-bake -g <aks-resource-group> \
   --query "[].{name:name,subject:subject}" -o tsv
 ```
 

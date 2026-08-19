@@ -23,12 +23,11 @@ name: Chart Drift
 #
 #   1. [DONE 2026-08-17] AKS command access for the CI identity. This item was written from an
 #      ASSUMPTION — that the AZURE_* OIDC identity had ACR rights only — and the assumption was
-#      wrong. The app registration behind secrets.AZURE_CLIENT_ID is `github-actions-deploy`
-#      (appId fb51b7e9-6554-4857-80d7-23608d8347fc) and it ALREADY holds "Azure Kubernetes Service
-#      Cluster Admin Role" scoped to the cluster, which includes
+#      wrong. The app registration behind secrets.AZURE_CLIENT_ID ALREADY holds "Azure Kubernetes
+#      Service Cluster Admin Role" scoped to the cluster, which includes
 #      `Microsoft.ContainerService/managedClusters/runCommand/action`. No role assignment needed.
-#      Re-check with:  az role assignment list --scope $(az aks show -g "$AKS_RESOURCE_GROUP" \
-#                        -n "$AKS_CLUSTER" --query id -o tsv) -o table
+#      Re-check with:  az role assignment list --scope $(az aks show -g <rg> -n <cluster> \
+#                        --query id -o tsv) -o table
 #
 #   2. [DONE 2026-08-17] A SECRET-FREE per-env values file, committed. check-chart-drift.sh refuses
 #      to render with chart defaults — comparing against a chart nobody deployed produces confident
@@ -59,6 +58,14 @@ name: Chart Drift
 # matches the chart. Drift found by a run that DOES complete is reported the same way: red, with
 # each divergence classified CLUSTER-ONLY / CHART-ONLY / DIFFERS.
 #
+# 🔒 WHICH ENVIRONMENTS EXIST IS NOT PUBLIC. This workflow used to carry the namespace list and the
+# cluster/resource-group names inline — deployment identities, in a public repo, describing an
+# estate the overlays were deliberately moved OUT of this repo to protect (item 3 above says as
+# much: "do NOT move the overlays into this public repo — that would publish the deployment
+# inventory"; the matrix published the inventory anyway). They now live beside the deployments they
+# name, in `deployments/aks/envs.json` in $DEPLOY_REPO, and `discover` reads the matrix from there.
+# Adding or retiring an environment is a one-line change THERE and needs no change here.
+#
 # ⚠️ EXPECT THE FIRST COMPLETING RUN TO BE VERY RED, legitimately. A local run of
 # check-chart-drift.sh against ns memex on 2026-08-17 compared 149 fields and found 121
 # divergences — the accumulated backlog of `kubectl patch`-applied config the chart has never heard
@@ -78,8 +85,9 @@ permissions:
   id-token: write
 
 env:
-  AKS_RESOURCE_GROUP: memex-aks-rg
-  AKS_CLUSTER: memexaks-cluster
+  # The cluster, the resource group and the environment list all come from
+  # $DEPLOY_REPO's deployments/aks/envs.json — see the header. Only the repo name is
+  # here, and a repository name is not a deployment identity.
   DEPLOY_REPO: Systemorph/Memex
 
 jobs:
@@ -98,7 +106,7 @@ jobs:
           missing=()
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID        OIDC app registration for azure/login")
           [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID        the Systemorph AAD tenant")
-          [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID  the subscription holding $AKS_CLUSTER")
+          [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID  the subscription holding the AKS cluster")
           [ -n "$MEMEX_DEPLOY_REPO_TOKEN" ] || missing+=("secrets.MEMEX_DEPLOY_REPO_TOKEN  read-only PAT for $DEPLOY_REPO, where the per-env values.<env>.public.yaml overlays live (see this file's header — they must be committed there first, secret-free)")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::chart-drift cannot run — provision the following, then re-run:"
@@ -178,17 +186,82 @@ jobs:
               exit 1 ;;
           esac
 
-  drift:
-    name: ${{ matrix.env.ns }}
+  discover:
+    name: Read the environment list
     needs: [preflight]
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.envs.outputs.matrix }}
+      aks_cluster: ${{ steps.envs.outputs.aks_cluster }}
+      aks_resource_group: ${{ steps.envs.outputs.aks_resource_group }}
+    steps:
+      - name: Check out the deployment repo
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.DEPLOY_REPO }}
+          token: ${{ secrets.MEMEX_DEPLOY_REPO_TOKEN }}
+          path: deploy-repo
+      # No `if:`, no `continue-on-error:` — same rule as preflight, and for a sharper reason. An
+      # empty or unreadable manifest yields an empty matrix, and an empty matrix SKIPS every drift
+      # job while the workflow reports success. That is the exact "checked nothing, looks green"
+      # failure this file's header exists to prevent, so a manifest that does not parse into at
+      # least one environment is a hard failure here.
+      - name: Build the matrix from deployments/aks/envs.json
+        id: envs
+        run: |
+          MANIFEST=deploy-repo/deployments/aks/envs.json
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::error::deployments/aks/envs.json is missing in $DEPLOY_REPO."
+            echo "  It lists the environments this check covers and the cluster they run on:"
+            echo '      {"cluster":{"resourceGroup":"...","name":"..."},'
+            echo '       "environments":[{"ns":"...","release":"..."}]}'
+            echo "  Without it this workflow does not know what exists, and a run that checked"
+            echo "  nothing must never report no drift."
+            exit 1
+          fi
+          python3 - "$MANIFEST" <<'EOF'
+          import json, os, sys
+          try:
+              m = json.load(open(sys.argv[1]))
+          except Exception as e:
+              print(f"::error::envs.json is not valid JSON: {e}")
+              sys.exit(1)
+          envs = m.get("environments") or []
+          cluster = m.get("cluster") or {}
+          name, rg = cluster.get("name"), cluster.get("resourceGroup")
+          bad = []
+          if not envs:
+              bad.append("environments[] is missing or empty")
+          for i, e in enumerate(envs):
+              if not isinstance(e, dict) or not e.get("ns") or not e.get("release"):
+                  bad.append(f"environments[{i}] needs both 'ns' and 'release'")
+          if not name:
+              bad.append("cluster.name is missing")
+          if not rg:
+              bad.append("cluster.resourceGroup is missing")
+          if bad:
+              print("::error::envs.json is unusable:")
+              for b in bad:
+                  print(f"  \u2022 {b}")
+              sys.exit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("matrix=" + json.dumps(envs) + "\n")
+              out.write("aks_cluster=" + name + "\n")
+              out.write("aks_resource_group=" + rg + "\n")
+          print(f"{len(envs)} environment(s): " + ", ".join(e["ns"] for e in envs))
+          EOF
+
+  drift:
+    name: ${{ matrix.env.ns }}
+    needs: [preflight, discover]
+    runs-on: ubuntu-latest
+    env:
+      AKS_CLUSTER: ${{ needs.discover.outputs.aks_cluster }}
+      AKS_RESOURCE_GROUP: ${{ needs.discover.outputs.aks_resource_group }}
     strategy:
       fail-fast: false
       matrix:
-        env:
-          - { ns: memex,       release: memex }
-          - { ns: memex-cloud, release: memexcloud }
-          - { ns: atioz,       release: atioz }
+        env: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
       - name: Check out the per-env overlays
