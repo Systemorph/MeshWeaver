@@ -9,6 +9,14 @@ namespace MeshWeaver.Mesh.Security;
 /// simply be self-service access to every private source. Only a platform admin
 /// (<c>hub.IsGlobalAdmin()</c>) writes these.</para>
 ///
+/// <para>🚨 This IS the sync licence. Its entries carry the terms the right was issued under —
+/// <see cref="PluginGrantEntry.IssuedUnderLicense"/>, <see cref="PluginGrantEntry.ExpiresAt"/>,
+/// <see cref="PluginGrantEntry.IssuedVia"/> — so "may this instance replicate this package" and
+/// "under what licence, until when, on whose authority" are ONE record rather than an ACL beside a
+/// licence that could disagree with it. The subject is a <see cref="MeshWeaverInstance"/> and the
+/// right is SYNC; it is deliberately NOT the user-facing entitlement, which grants a person the use
+/// of a package on their own portal and says nothing about a deployment holding a copy.</para>
+///
 /// <para>An instance with no grant node, or an empty <see cref="Entries"/> list, gets <b>nothing</b>.
 /// Registering is identity, not entitlement. The one qualification: a registry operator may opt
 /// specific sources into every new registration via <c>PluginCatalog:DefaultGrants</c> (e.g. the
@@ -32,12 +40,38 @@ public record PluginGrant
     public DateTimeOffset UpdatedAt { get; init; }
 
     /// <summary>
+    /// Kill switch for the whole grant. A revoked grant authorizes nothing while its entries — and
+    /// the licence terms recorded on them — stay intact, so revoking never destroys the record of
+    /// what was licensed and why. Revoking a SINGLE package is done by letting that entry expire or
+    /// removing it; this is the instance-wide stop.
+    ///
+    /// <para>Distinct from <c>MeshWeaverInstance.IsDisabled</c>, which stops the instance
+    /// authenticating at all. An instance may legitimately remain live while its sync licence is
+    /// revoked.</para>
+    /// </summary>
+    public bool IsRevoked { get; init; }
+
+    /// <summary>
     /// Whether this grant permits <paramref name="packageId"/> from registry source
-    /// <paramref name="sourceName"/>. Both an exact package grant and a whole-source grant
-    /// (<see cref="PluginGrantEntry.AllPackages"/>) satisfy the check.
+    /// <paramref name="sourceName"/> at <paramref name="now"/>. Both an exact package grant and a
+    /// whole-source grant (<see cref="PluginGrantEntry.AllPackages"/>) satisfy the match, and the
+    /// matching entry must still be within its term.
+    ///
+    /// <para>🚨 <paramref name="now"/> is an ARGUMENT, never read from the ambient clock inside the
+    /// predicate. This is the authorization decision of the registry surface: it has to be
+    /// reproducible in a test at a chosen instant, and an expiry that can only be exercised by
+    /// waiting is an expiry nobody pins. The convenience overload supplies <c>UtcNow</c> for the
+    /// call sites that legitimately mean "right now".</para>
+    /// </summary>
+    public bool Allows(string sourceName, string packageId, DateTimeOffset now) =>
+        !IsRevoked && Entries.Any(e => e.Matches(sourceName, packageId) && e.IsValidAt(now));
+
+    /// <summary>
+    /// <see cref="Allows(string,string,DateTimeOffset)"/> evaluated at the current instant — what a
+    /// live request means. Prefer the explicit-instant overload in tests.
     /// </summary>
     public bool Allows(string sourceName, string packageId) =>
-        Entries.Any(e => e.Matches(sourceName, packageId));
+        Allows(sourceName, packageId, DateTimeOffset.UtcNow);
 }
 
 /// <summary>
@@ -60,8 +94,43 @@ public record PluginGrantEntry
     /// matched with ordinal case sensitivity, exactly as the catalog compares them.</summary>
     public string PackageId { get; init; } = AllPackages;
 
+    /// <summary>
+    /// End of this entry's term. Null = perpetual (revocation remains available). A licence that
+    /// ends is the normal commercial case, and it is recorded PER ENTRY because an instance
+    /// routinely holds several licences with different terms — a perpetual grant on the platform
+    /// repo alongside a one-year licence for a paid package.
+    /// </summary>
+    public DateTimeOffset? ExpiresAt { get; init; }
+
+    /// <summary>
+    /// SPDX id of the licence this sync right was issued under (<c>Apache-2.0</c>, or a commercial
+    /// id in the <c>License/</c> catalog). Null = unspecified, and it must STAY null rather than
+    /// defaulting: recording terms nobody granted is worse than recording none. Resolves to a
+    /// <c>LicenseContent</c> node, which is what lets the terms actually be shown.
+    /// </summary>
+    public string? IssuedUnderLicense { get; init; }
+
+    /// <summary>
+    /// How this entry came to exist, in the issuer's words — an order id, a coupon code, a support
+    /// ticket, <c>DefaultGrants</c> for the registration seed. Free text and advisory: it is the
+    /// audit trail for a right that is otherwise indistinguishable from any other.
+    /// </summary>
+    public string? IssuedVia { get; init; }
+
+    /// <summary>When the entry was issued. Default (<c>MinValue</c>) on entries written before
+    /// licence terms existed, which is why <see cref="IsValidAt"/> never reads it.</summary>
+    public DateTimeOffset IssuedAt { get; init; }
+
+    /// <summary>
+    /// Whether the entry is within its term at <paramref name="now"/>. An entry with no
+    /// <see cref="ExpiresAt"/> is always within term — which is what makes every grant written
+    /// before this field existed keep working unchanged.
+    /// </summary>
+    public bool IsValidAt(DateTimeOffset now) => ExpiresAt is null || now < ExpiresAt;
+
     /// <summary>Whether this entry authorizes <paramref name="packageId"/> from
-    /// <paramref name="sourceName"/>.</summary>
+    /// <paramref name="sourceName"/>. Match only — the term is checked by
+    /// <see cref="IsValidAt"/>, so a caller can tell "not licensed" from "licence expired".</summary>
     public bool Matches(string sourceName, string packageId) =>
         string.Equals(Source, sourceName, StringComparison.OrdinalIgnoreCase)
         && (PackageId == AllPackages || string.Equals(PackageId, packageId, StringComparison.Ordinal));
