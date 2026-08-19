@@ -54,6 +54,14 @@ public static class GitHubSyncConfiguration
         services.AddSingleton<GitHubSyncService>();
         services.AddSingleton<PullRequestService>();
         services.AddSingleton<IssueService>();
+        // Canonical repository identity (rename-tolerant webhook matching), TTL-cached. Built
+        // explicitly so the clock is an argument rather than a DI accident — see #1856.
+        services.AddSingleton(sp => new GitHubRepoIdentityResolver(
+            sp.GetRequiredService<IGitHubRepoClient>(),
+            sp.GetRequiredService<GitHubCredentialService>(),
+            sp.GetService<GitHubAppTokenService>(),
+            sp.GetService<TimeProvider>(),
+            sp.GetService<ILogger<GitHubRepoIdentityResolver>>()));
         services.AddSingleton<GitHubWebhookProcessor>();
         // Surfaces the per-space GitHub sync sources on the partition administration page
         // (PartitionSyncAdminLayoutArea resolves all IPartitionSyncSourceProvider from DI).

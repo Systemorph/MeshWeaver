@@ -827,9 +827,25 @@ jobs:
           echo "retrying in ${delay}s ($(left)s of the step budget left)" >&2
           sleep "$delay"
         done
+        # 🚨 A FAILED DEPENDENCY INSTALL IS NOT A FAILED STEP. `--with-deps` is a MEANS to a
+        # capability — "this runner can launch Chromium and print a PDF" — and that capability is
+        # PROVEN directly forty lines below, by launching it and printing one. Exiting here fails
+        # on the proxy while the evidence sits further down, and on GitHub's ubuntu-24.04 image the
+        # libraries are usually already present, so the proxy is wrong in the common case.
+        #
+        # This was not a theoretical trade-off: apt contention on the hosted runners failed this
+        # step six times in one morning across `main` and three PRs, and because `Consolidate test
+        # results` is the repo's ONE required check, every one of those blocked every merge. The
+        # browser downloaded fine each time.
+        #
+        # If the libraries really are missing, the smoke print below fails and the step still
+        # fails — carrying this warning as its context. Strictly no loss of safety: the gate moves
+        # from "did apt run?" to "does the browser work?", which is the question the tests ask.
         if [ $deps_ok -eq 0 ]; then
-          echo "::error::the headless browser downloaded, but the system packages '--with-deps' installs could not be applied within ${BROWSER_STEP_BUDGET}s — this is an APT/INFRA failure, not a test failure."
-          exit 1
+          echo "::warning::the system packages '--with-deps' installs could not be applied within ${BROWSER_STEP_BUDGET}s (APT/INFRA). Continuing: the smoke print below decides, because it measures the capability directly."
+          deps_note="the '--with-deps' install did NOT complete on this runner, so a missing system library is the likely cause. "
+        else
+          deps_note=""
         fi
         # The binary is named differently per platform (see the Dockerfile); match both so this
         # keeps working if the runner architecture ever changes.
@@ -865,7 +881,7 @@ jobs:
           --no-pdf-header-footer --user-data-dir=/tmp/mw-smoke-profile \
           --print-to-pdf=/tmp/mw-smoke.pdf file:///tmp/mw-smoke.html 2>/tmp/mw-smoke.err || true
         if [ ! -s /tmp/mw-smoke.pdf ]; then
-          echo "::error::the headless browser installed but cannot print a PDF on this runner — this is an INFRA failure, not a test failure."
+          echo "::error::the headless browser cannot print a PDF on this runner — ${deps_note}this is an INFRA failure, not a test failure."
           cat /tmp/mw-smoke.err >&2 || true
           exit 1
         fi
