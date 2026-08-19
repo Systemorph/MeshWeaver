@@ -2033,9 +2033,30 @@ internal static class ThreadExecution
                 var roundCompletion = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
                 var aiPool = parentHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Ai)
                     ?? IoPool.Unbounded;
-                // poolCt (the pool's cancellation) is intentionally unused — the round's
-                // own executionCts.Token (below) is authoritative and is cancelled on hub
-                // disposal, so cancellation flows through it regardless of the pool token.
+                // 🚨 poolCt MUST be observed — it is linked into the round's token below.
+                //
+                // This used to say the pool token was "intentionally unused" because
+                // executionCts "is cancelled on hub disposal, so cancellation flows through it
+                // regardless of the pool token". That premise is false: IoPool.Drain() is NOT hub
+                // disposal. Drain is the join every teardown orchestrator (MonolithMeshTestBase,
+                // MeshTeardownExtensions, HubTestBase) performs BEFORE disposing the service scope
+                // and unloading collectible node ALCs, and it works by cancelling the pool token
+                // and then re-acquiring every gate permit. A round that never reads poolCt holds
+                // its permit, so the join cannot complete: Drain sits out its full 30 s
+                // DrainTimeout and then reports the permit as a leaked leaf, and teardown proceeds
+                // over a thread still executing that ALC's code — the use-after-unload SIGSEGV
+                // precondition Drain exists to rule out. Without the link the round unwound only
+                // on hub disposal or the 30-MINUTE MaxStreamingDuration ceiling.
+                //
+                // Observed in CI as DelegationSubThreadUsageTest failing in TEARDOWN with
+                // "1 pooled I/O leaf(s) still running" after a 32 009 ms dispose — 30 s of
+                // DrainTimeout plus overhead — with no assertion in the test body having failed.
+                // Pinned by AiPoolDrainJoinsRoundTest, which parks a round inside the model call
+                // and asserts DrainAll() returns 0.
+                //
+                // During normal operation this changes nothing: _poolCts is cancelled only by
+                // Drain()/Dispose(), both terminal teardown operations after which the pool is not
+                // reused. So the link is inert until teardown, and at teardown it is the point.
                 return aiPool.Invoke(async poolCt =>
                 {
                     // Re-seed user AccessContext at the task-launch boundary. Inside this lambda we
@@ -2062,7 +2083,7 @@ internal static class ThreadExecution
                         parentHub.ServiceProvider.GetService<AiStreamingLimits>()?.MaxStreamingDuration
                         ?? MaxStreamingDuration;
                     var streamingTimeoutCts =
-                        CancellationTokenSource.CreateLinkedTokenSource(executionCts.Token);
+                        CancellationTokenSource.CreateLinkedTokenSource(executionCts.Token, poolCt);
                     streamingTimeoutCts.CancelAfter(maxStreamingDuration);
                     var ct = streamingTimeoutCts.Token;
                     // responseText / capturedResponseText / segment.ResponseText were
