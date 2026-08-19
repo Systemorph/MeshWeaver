@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, StatusBar, LogBox } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SafeAreaView, StatusBar, LogBox, Platform } from "react-native";
 import {
   RegistryProvider,
   ScopeProvider,
@@ -103,6 +103,20 @@ function AppInner() {
     setClientScreen(null);
     setNav(t);
   };
+
+  // 📱 On a phone the app IS the onboarding until a mesh acks: the bundled sample
+  // ("MeshWeaver on React Native", Ada Lovelace, a stubbed Save) is a web/e2e artifact and
+  // must never greet a person — it reads as a broken login form. Web keeps the sample: the
+  // Playwright e2e drives it from a static export with no mesh to ack.
+  const wasLive = useRef(false);
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    if (!liveConnected && clientScreen == null) setClientScreen("instances");
+    // Close the onboarding exactly ONCE, on the not-connected → connected transition —
+    // a connected user opening the switcher on purpose must not have it snap shut.
+    if (liveConnected && !wasLive.current) setClientScreen((c) => (c === "instances" ? null : c));
+    wasLive.current = liveConnected;
+  }, [liveConnected, clientScreen]);
   const reconnect = () => {
     setClientScreen(null);
     setNav(HOME);
