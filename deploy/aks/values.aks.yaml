@@ -73,6 +73,19 @@ config:
     MEMEX_JDBCCONNECTIONSTRING: "jdbc:postgresql://memex-postgres-service:5432/memex"
     MEMEX_DATABASENAME: "memex"
     ASPNETCORE_HTTP_PORTS: "8080"
+    # ---- Webhook inbox targets ---------------------------------------------
+    # 🚨 The generic inbox (POST /api/hooks/{target}) is FAIL-CLOSED: a target that is not
+    # listed here answers 404 — byte-identical to a target that does not exist. So an
+    # unlisted target does not look misconfigured, it looks like a wrong URL, which is how
+    # the platform-build notification went unnoticed: CD posted, memex 404'd, and the whole
+    # self-update chain simply never received a release event.
+    #
+    # Hosting/PlatformBuilds is the platform-build fact CD's notify-platform-update posts
+    # after every promoted build; the Hosting package's PlatformBuildInboxWatcher verifies
+    # its HMAC (Hosting:PlatformWebhookSecret) and drives the roll. The package must be
+    # provisioned for anything to read the inbox — an allowlisted target with no watcher
+    # stores deliveries nobody consumes.
+    WebhookInbox__Targets__0: "Hosting/PlatformBuilds"
     # ---- Instance branding (per-env) ----------------------------------------
     # Large Safari bookmark / Start-Page / Add-to-Dock tile (apple-touch-icon, 180×180 PNG).
     # This ships the PROJECT's own mark (Systemorph builds MeshWeaver — the chart's
