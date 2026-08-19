@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -213,6 +214,11 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
             $"initial compile settled at {lastSucceeded:HH:mm:ss.fff} — contexts: {LiveContexts()}, "
             + $"managed baseline = {managedBaseline / (1024 * 1024)} MB, live hubs = {hubBaseline.Count}");
 
+        // One entry per recompile: the surviving bytes THAT recompile added, not the running total.
+        // The assertion is on their MEDIAN — see PerRecompileBytes.
+        var marginals = new List<long>(Recompiles);
+        var previousBytes = managedBaseline;
+
         for (var i = 1; i <= Recompiles; i++)
         {
             // Drive the rebuild the way the framework does: change the source so the output really
@@ -242,9 +248,14 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
             lastSucceeded = settled.LastCompileSucceededAt;
 
             FullyCollect();
+            var afterThis = AfterCollectionBytes();
+            var marginal = afterThis - previousBytes;
+            marginals.Add(marginal);
+            previousBytes = afterThis;
             Output.WriteLine(
                 $"after recompile {generation}: live contexts = {LiveContexts()}, "
-                + $"managed = {AfterCollectionBytes() / (1024 * 1024)} MB");
+                + $"managed = {afterThis / (1024 * 1024)} MB (this recompile added "
+                + $"{marginal / 1024} KB)");
         }
 
         var activities = await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
@@ -346,10 +357,32 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
         // per-compile activity NODE hubs named there. Tighten this bound when that is fixed — a
         // bound nothing can currently pass is a red test, not a guard. Bytes also move with
         // unrelated allocation, which is exactly why the hub delta below is the primary assertion.
-        var perRecompile = managedGrowth / Recompiles;
+        //
+        // 🚨 THE MEDIAN OF THE PER-RECOMPILE MARGINALS, not the mean of the total (#1843). Same
+        // bound, same unit, same detection power for the leak this guards — a recompile that fails
+        // to hand its memory back does so EVERY time, so every marginal rises and the median rises
+        // with them. What the median rejects is the other thing that lands in a whole-process heap
+        // delta: a single unrelated allocation somewhere else in the process during one of the
+        // windows. Dividing the TOTAL by Recompiles smears such an event across all of them, which
+        // is exactly how this assertion reported a leak it had not seen. The failing CI run
+        // (32255416557) printed its own windows — the heap went 40 → 47 → 61 → 63 MB, so +7, +14,
+        // +2 — and the mean over them came to 8,393,426, missing the bound by 4,818 bytes (0.06%).
+        // The middle window is ~7 MB: comfortably under, and the honest description of what a
+        // recompile costs on that machine. One window in three was doing the failing, and a test
+        // whose verdict turns on that is measuring the runner, not the framework.
+        //
+        // Both halves of that claim are proven rather than argued, by injecting each shape into this
+        // loop: retaining 12 MB on EVERY recompile lifts all three windows (14.9 / 14.8 / 15.8 MB)
+        // and the median fails at 15,318,896 — so the median is no weaker a leak detector; retaining
+        // 20 MB in ONE window gives 2.4 / 22.8 / 2.7 MB, where the mean (10,335,946) fails and the
+        // median (2,881,376) correctly does not.
+        var perRecompile = PerRecompileBytes(marginals);
+        Output.WriteLine(
+            $"PER-RECOMPILE marginals (KB): {string.Join(", ", marginals.Select(m => m / 1024))} — "
+            + $"median {perRecompile} bytes, mean {managedGrowth / Recompiles} bytes");
         perRecompile.Should().BeLessThan(8 * 1024 * 1024,
             $"a recompile of a trivial type must return its memory; {perRecompile / (1024 * 1024)} MB "
-            + $"retained per recompile ({managedGrowth / (1024 * 1024)} MB over {Recompiles}) means "
+            + $"retained per recompile at the median of {string.Join(", ", marginals)} means "
             + "compile state survives the context that owned it");
 
         // 🚨 AND THE HUBS. The byte bound alone is a coarse instrument — it moves with unrelated
@@ -461,11 +494,80 @@ public class NodeTypeRecompileAlcLeakTest(ITestOutputHelper output) : MonolithMe
     }
 
     /// <summary>
-    /// Managed bytes with a full collection forced FIRST — the opposite choice from
-    /// <c>MemoryDelta</c>, which must never collect because it runs in production. Here the question
-    /// is what SURVIVES collection, so paying for the collection is the point.
+    /// Bytes that SURVIVED a full blocking collection, taken from the GC's own post-collection
+    /// accounting — the opposite choice from <c>MemoryDelta</c>, which must never collect because it
+    /// runs in production. Here the question is what survives, so paying for the collection is the
+    /// point.
+    ///
+    /// <para>🚨 NOT <c>GC.GetTotalMemory(forceFullCollection: true)</c>, which is what this called
+    /// until #1843 and which is NOT the surviving heap. It is documented as the number of bytes
+    /// "currently thought to be allocated" — an approximation that, under the regions GC, prices
+    /// every in-use region rather than the live objects inside it. Measured in this very test,
+    /// immediately after three aggressive blocking COMPACTING collections and with the GC reporting
+    /// 79 KB of fragmentation: <c>GetTotalMemory(true)</c> read <b>79,940 KB</b> while the
+    /// generations summed to <b>40,537 KB</b> — a 1.96x overstatement that a second, non-collecting
+    /// read reproduced to within 0.5%, so it is accounting, not uncollected garbage.</para>
+    ///
+    /// <para><b>And the overstatement lands on the DELTA, which is what is asserted:</b> the same run
+    /// produced 17 MB of "growth" over three recompiles where the live heap had grown 9.2 MB. The
+    /// bias is not a constant to divide out — it is a function of region layout, heap count and
+    /// allocation history, so it moves with the machine and with whatever else ran in the process
+    /// first. That is precisely how this assertion came to fail independently of the diff (#1843): on
+    /// the CI runner a retained population IDENTICAL to a local run's (+14 hubs, 3 retained
+    /// activities, 1 live load context) priced out at 8,393,426 bytes per recompile against an
+    /// 8,388,608 bound — 0.06% over — while the same code and the same population priced at 5–6 MB
+    /// locally. The metric drifted; the retention it exists to measure did not.</para>
+    ///
+    /// <para><see cref="GCMemoryInfo.HeapSizeBytes"/> for the last <see cref="GCKind.FullBlocking"/>
+    /// collection is the GC's own answer to "what was live when I finished" — the sum of each
+    /// generation's <c>SizeAfterBytes</c>. It is exact accounting rather than an approximation, and
+    /// it does not move with region slack. Measured over 8 macOS-arm64 and 6 linux-arm64 runs of
+    /// this test, it reports <b>2.94–3.35 MB per recompile</b> — a 14% band across two operating
+    /// systems, where the metric it replaced spanned 3.1 MB (linux) to 6.3 MB (macOS) for the SAME
+    /// retained population. The bound is deliberately left at 8 MB: this change is about making the
+    /// measurement mean what it says, not about ratcheting, and the two must not ride in together or
+    /// a later failure cannot be attributed to either.</para>
+    ///
+    /// <para>The collection is taken here rather than left to the caller: the reading describes the
+    /// most recent full blocking GC, so a caller that forgot would silently be handed some earlier
+    /// collection's heap — a wrong number that looks exactly like a right one.</para>
     /// </summary>
-    private static long AfterCollectionBytes() => GC.GetTotalMemory(forceFullCollection: true);
+    private static long AfterCollectionBytes()
+    {
+        FullyCollect();
+        var info = GC.GetGCMemoryInfo(GCKind.FullBlocking);
+        // Index 0 means no full blocking GC is on record, and HeapSizeBytes would then be 0 — which
+        // would read as "nothing is retained" and pass every byte assertion below. Refuse instead:
+        // a metric that fails silently to zero is worse than no metric.
+        if (info.Index == 0)
+            throw new InvalidOperationException(
+                "no full blocking collection is on record, so HeapSizeBytes describes nothing and "
+                + "every byte assertion in this test would pass vacuously");
+        return info.HeapSizeBytes;
+    }
+
+    /// <summary>
+    /// The bytes ONE recompile retains: the median of the per-recompile marginals.
+    ///
+    /// <para>The median rather than the mean because the two differ exactly where this test kept
+    /// failing (#1843). A genuine leak is paid on every rebuild, so it lifts every marginal and the
+    /// median with them — the median is no weaker a detector, which the deliberate-leak proof in the
+    /// PR demonstrates. An unrelated allocation elsewhere in the process lifts ONE window, and a mean
+    /// spreads that across all of them as though each recompile had paid a third of it.</para>
+    ///
+    /// <para>With an even count there is no single middle sample; take the LOWER of the two middles
+    /// rather than averaging them, so the result stays a value the loop actually measured. Averaging
+    /// would reintroduce, in miniature, the smearing this exists to remove.</para>
+    /// </summary>
+    private static long PerRecompileBytes(IReadOnlyList<long> marginals)
+    {
+        if (marginals.Count == 0)
+            throw new InvalidOperationException(
+                "no recompile marginals were recorded — the loop above did not run, so there is "
+                + "nothing to assert and a zero here would pass vacuously");
+        var sorted = marginals.Order().ToList();
+        return sorted[(sorted.Count - 1) / 2];
+    }
 
     /// <summary>
     /// 🚨 THE SAME LOOP, BUT WITH A LIVE INSTANCE HUB — which is the shape production actually runs.
