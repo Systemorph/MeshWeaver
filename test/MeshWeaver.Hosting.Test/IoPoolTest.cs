@@ -30,6 +30,183 @@ public class IoPoolTest
     // JOINS it. This test pins that guarantee DETERMINISTICALLY (no flaky ~50% CI repro): a subscribe
     // that is in-flight holds a slot, and Drain() BLOCKS until it releases — i.e. the scope can never
     // be torn down while a BeginLifetimeScope is running.
+    /// <summary>
+    /// 🚨 <c>Dispose()</c> must not RETURN OVER live work — but it must also not BLOCK.
+    ///
+    /// <para>It used to set <c>_disposed</c> and only then call <c>Drain()</c>, whose guard
+    /// (<c>if (_disposed) return 0</c>) returned immediately on exactly that flag — so it joined
+    /// NOTHING, and its promise ("when it returns, no pool thread is running, so the caller may
+    /// safely unload the node ALCs") was unbacked on the path that unloads every ALC.</para>
+    ///
+    /// <para>The obvious repair — call Drain() first — is the wrong one, and CI proved it:
+    /// <c>using var pool = new IoPool(8)</c> in an async test runs Dispose on a ThreadPool thread,
+    /// so a 30 s synchronous join parks a pool thread while the very leaves it waits for need pool
+    /// threads to observe cancellation and release their permits. On a 4-vCPU runner that starves
+    /// into a deadlock (OrderedRouteDispatcherTest, hung for its full budget); an 18-core dev box
+    /// hides it entirely. So Dispose CANCELS and returns, and the waiting lives on
+    /// <see cref="IoPool.Disposed"/>.</para>
+    /// </summary>
+    [Fact]
+    public async Task Dispose_cancels_without_blocking_and_reports_through_Disposed()
+    {
+        var pool = new IoPool(2);
+        using var entered = new ManualResetEventSlim(false);
+        var observedCancellation = false;
+
+        pool.InvokeBlocking(ct =>
+        {
+            entered.Set();
+            // Honours the token — so the pool's cancel is what ends it.
+            ct.WaitHandle.WaitOne(Timeout10);
+            observedCancellation = ct.IsCancellationRequested;
+            return 0;
+        }).Subscribe(_ => { }, _ => { });
+
+        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        pool.CurrentInFlight.Should().Be(1);
+
+        // Dispose must return PROMPTLY even with a leaf in flight — the whole point.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        pool.Dispose();
+        sw.Stop();
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
+            "Dispose must not block on the leaf — blocking here is the starvation deadlock that "
+            + "hung OrderedRouteDispatcherTest for its full 30 s budget on CI");
+
+        // …and Disposed fires only once the leaf has actually unwound.
+        var residual = await pool.Disposed.Timeout(Timeout10).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        residual.Should().Be(0, "the leaf observed the cancel and unwound — the join is real");
+        observedCancellation.Should().BeTrue("Dispose must CANCEL in-flight work, not merely stop accepting new work");
+        pool.CurrentInFlight.Should().Be(0);
+    }
+
+    /// <summary>
+    /// <see cref="IoPool.Disposed"/> must not fire while a leaf is still running — a subscriber
+    /// that proceeds on it would unload ALCs over live code — and must replay to a late subscriber,
+    /// since the silo participant may attach after disposal already finished.
+    /// </summary>
+    [Fact]
+    public async Task Disposed_waits_for_the_last_leaf_and_replays_to_a_late_subscriber()
+    {
+        var pool = new IoPool(2);
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+
+        pool.InvokeBlocking(_ => { entered.Set(); release.Wait(Timeout10); return 0; })
+            .Subscribe(_ => { }, _ => { });
+        entered.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+
+        using var fired = new ManualResetEventSlim(false);
+        pool.Disposed.Subscribe(_ => fired.Set());
+
+        pool.Dispose();
+        fired.Wait(300, TestContext.Current.CancellationToken).Should().BeFalse(
+            "Disposed must not fire while the leaf is still running");
+
+        release.Set();
+        await pool.Disposed.Timeout(Timeout10).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        fired.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+
+        var late = -1;
+        pool.Disposed.Subscribe(n => late = n);
+        late.Should().Be(0, "AsyncSubject replays the terminal report to a late subscriber");
+    }
+
+    /// <summary>
+    /// The registry aggregate — what <c>IoPoolSiloTeardown</c> awaits. It must report only once
+    /// EVERY pool has finished, so the silo never releases over live work in a pool nobody looked at.
+    /// </summary>
+    [Fact]
+    public async Task Registry_Disposed_reports_only_after_every_pool_has_finished()
+    {
+        var registry = new IoPoolRegistry();
+        var a = registry.Get("pool-a");
+        var b = registry.Get("pool-b");
+        using var enteredA = new ManualResetEventSlim(false);
+        using var enteredB = new ManualResetEventSlim(false);
+        using var releaseA = new ManualResetEventSlim(false);
+        using var releaseB = new ManualResetEventSlim(false);
+
+        a.InvokeBlocking(_ => { enteredA.Set(); releaseA.Wait(Timeout10); return 0; }).Subscribe(_ => { }, _ => { });
+        b.InvokeBlocking(_ => { enteredB.Set(); releaseB.Wait(Timeout10); return 0; }).Subscribe(_ => { }, _ => { });
+        enteredA.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        enteredB.Wait(Timeout5, TestContext.Current.CancellationToken).Should().BeTrue();
+        registry.TotalInFlight.Should().Be(2);
+
+        using var fired = new ManualResetEventSlim(false);
+        registry.Disposed.Subscribe(_ => fired.Set());
+        registry.Dispose();
+
+        releaseA.Set();
+        fired.Wait(300, TestContext.Current.CancellationToken).Should().BeFalse(
+            "one pool finishing is not every pool finishing");
+
+        releaseB.Set();
+        var total = await registry.Disposed.Timeout(Timeout10).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        total.Should().Be(0, "both pools joined — the silo may release");
+    }
+
+    /// <summary>
+    /// 🚨 A pool obtained AFTER disposal began must be REFUSED, not created live.
+    ///
+    /// <para><c>Dispose()</c> snapshots <c>_pools</c> and clears it. Without a guard, a racing
+    /// <c>Get(...)</c> re-populates the dictionary with a brand-new, fully live pool that nobody
+    /// will ever cancel or join — work issued on it runs unsupervised straight through the ALC
+    /// unload, which is the exact hole this teardown path exists to close. (Copilot review, #1887.)</para>
+    /// </summary>
+    [Fact]
+    public async Task A_pool_requested_after_disposal_is_refused_not_created_live()
+    {
+        var registry = new IoPoolRegistry();
+        registry.Get("before");          // one real pool, so disposal has something to do
+        registry.Dispose();
+        await registry.Disposed.Timeout(Timeout10).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+
+        // A name never seen before disposal — the case that used to mint a live pool.
+        var late = registry.Get("after-disposal");
+        var ran = false;
+        var act = async () => await late.Invoke(_ => { ran = true; return Task.FromResult(1); })
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        ran.Should().BeFalse("work must not run on a pool handed out after teardown began");
+        registry.TotalInFlight.Should().Be(0,
+            "a refused pool is not tracked — nothing can be in flight on it");
+    }
+
+    /// <summary>
+    /// 🚨 A leaf issued AFTER disposal must be CANCELLED, never <see cref="ObjectDisposedException"/>.
+    ///
+    /// <para>This is what makes disposing the pool during SILO shutdown safe. The mesh is torn down
+    /// afterwards (<c>MeshTeardownHostedService</c> runs in <c>StoppedAsync</c>), and hub disposal
+    /// keeps pushing final writes at the pool. Disposal releases <c>_poolCts</c> and <c>_gate</c>,
+    /// so the natural path would throw ObjectDisposedException out of a reactive chain during
+    /// teardown — the "catastrophic teardown" class. Cancellation is also the honest answer: a
+    /// DRAINED pool already cancels everything issued after it, and disposal is that same terminal
+    /// state plus the release, so callers must see the same thing either way.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_leaf_issued_after_disposal_is_cancelled_not_ObjectDisposed()
+    {
+        var pool = new IoPool(2);
+        pool.Dispose();
+
+        var ran = false;
+        var act = async () => await pool.Invoke(_ => { ran = true; return Task.FromResult(1); })
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        (await act.Should().ThrowAsync<OperationCanceledException>())
+            .Which.Should().NotBeOfType<ObjectDisposedException>();
+        ran.Should().BeFalse("the work must not run on a disposed pool");
+
+        var blocking = async () => await pool.InvokeBlocking(_ => 1)
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await blocking.Should().ThrowAsync<OperationCanceledException>();
+
+        var through = async () => await pool.SubscribeThroughPool(Observable.Return(1))
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+        await through.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     [Fact]
     public async Task SubscribeThroughPool_holds_a_slot_and_Drain_joins_the_in_flight_subscribe()
     {
