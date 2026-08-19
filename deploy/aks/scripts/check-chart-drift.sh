@@ -15,8 +15,8 @@
 #   2. a `wget` probe in the chart was CONTRADICTED BY THE IMAGE (curl present, wget absent) —
 #      had it ever been applied, every pod termination would have hung the full 1800 s grace;
 #   3. the GitHub App identity was hand-applied with `kubectl set env` and was NEVER IN THE
-#      CHART — so atioz never got it, and `grep -c 'GitHub__App__'` on main was 0;
-#   4. atioz's PluginCatalog__* were inline `env:` on the Deployment, NOT in memex-portal-config
+#      CHART — so one namespace never got it, and `grep -c 'GitHub__App__'` on main was 0;
+#   4. that namespace's PluginCatalog__* were inline `env:` on the Deployment, NOT in memex-portal-config
 #      — a `helm upgrade` does not reproduce them, it DELETES them.
 #
 # They are one defect: nothing verifies that what we run is what we described. This script is
@@ -34,7 +34,7 @@
 #   PodDisruptionBudget / ScaledObject   existence and shape
 #
 # 🚨 THE AVAILABILITY SHAPE was added 2026-08-14, because the check as first written would have
-# MISSED the incident it was created in response to. On that day memex-cloud served every request
+# MISSED the incident it was created in response to. On that day production served every request
 # from ONE pod, and all three of the reasons were outside what this script looked at:
 #
 #   * spec.replicas               live 1; the chart hard-coded 1 too, so even a comparison agreed —
@@ -70,8 +70,8 @@
 # is the bug this script exists to prevent.
 #
 # PRIVATE CLUSTER. <aks-cluster> takes no direct kubectl. Use the aks-invoke transport:
-#   ./check-chart-drift.sh -n memex -r memex --via aks-invoke \
-#       -g <aks-resource-group> --aks <aks-cluster> -f ../values.aks.yaml -f ../envs/memex/values.yaml
+#   ./check-chart-drift.sh -n <namespace> -r <release> --via aks-invoke \
+#       -g <aks-resource-group> --aks <aks-cluster> -f ../values.aks.yaml -f <env>/values.<env>.yaml
 # The transport is an EXPLICIT flag with no silent fallback: a kubectl that cannot reach the
 # cluster fails RED rather than quietly comparing against nothing.
 #
@@ -119,8 +119,8 @@ ok()      { echo "$1";          summary "- ✅ $1"; }
 # input is a failure, never a skip.
 # ---------------------------------------------------------------------------
 missing=()
-[ -n "$NS" ]      || missing+=("-n <namespace>            the k8s namespace the release runs in (e.g. memex, atioz)")
-[ -n "$RELEASE" ] || missing+=("-r <release>              the helm release name (e.g. memex, exampledb)")
+[ -n "$NS" ]      || missing+=("-n <namespace>            the k8s namespace the release runs in")
+[ -n "$RELEASE" ] || missing+=("-r <release>              the helm release name (e.g. exampledb)")
 [ ${#VALUES[@]} -gt 0 ] || missing+=("-f <values.yaml>          at least one env values file — rendering with chart defaults compares against a chart nobody deployed. These live in the PRIVATE Systemorph/Memex repo.")
 command -v helm    >/dev/null 2>&1 || missing+=("helm                      not on PATH — brew install helm")
 if ! command -v python3 >/dev/null 2>&1; then

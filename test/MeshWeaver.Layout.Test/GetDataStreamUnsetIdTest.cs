@@ -168,8 +168,20 @@ public class GetDataStreamUnsetIdTest(ITestOutputHelper output) : HubTestBase(ou
                 () => Interlocked.Increment(ref completionsOnNeverSetId));
 
         // Positive control: the IDENTICAL idiom against an id that WAS written.
-        using var writtenGuard = host.GetDataStream<string>(WrittenId)
-            .Take(1)
+        //
+        // 🚨 Replay(1) + Connect so this can be AWAITED ON ITS OWN EMISSION below. Reading the
+        // counter after merely waiting for the CONTROL write is a race: ControlId and WrittenId are
+        // DIFFERENT streams, and one stream's delivery orders nothing about another's. The window
+        // below closing says the data plane is live — it does NOT say this subscription has been
+        // served yet. That race turned main red on 4bb6f1fca (run 32239357043): the control read 0
+        // and reported "positive control … but found 0", i.e. the guard that exists to prove the
+        // test is not vacuous was itself the flake.
+        //
+        // Replay(1) also closes the gap between Connect() and the counter's Subscribe: an emission
+        // arriving in between is buffered and still delivered, so the count cannot be lost.
+        var writtenOnce = host.GetDataStream<string>(WrittenId).Take(1).Replay(1);
+        using var writtenConnection = writtenOnce.Connect();
+        using var writtenGuard = writtenOnce
             .Subscribe(_ => Interlocked.Increment(ref guardedRunsOnWrittenId));
 
         // Close the window on an observed event, not a clock.
@@ -177,6 +189,10 @@ public class GetDataStreamUnsetIdTest(ITestOutputHelper output) : HubTestBase(ou
         using var connection = landed.Connect();
         host.UpdateData(ControlId, ControlLate);
         await landed.Should().Within(10.Seconds()).Emit();
+
+        // …and then on the positive control's OWN emission, which is the only thing that licenses
+        // reading its counter. Still clock-free — it waits for the event, not for a duration.
+        await writtenOnce.Should().Within(10.Seconds()).Emit();
 
         Volatile.Read(ref guardedRunsOnWrittenId).Should().Be(1,
             "the same .Take(1) idiom on a WRITTEN id fires exactly once — this is the positive control "

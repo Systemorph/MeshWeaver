@@ -141,7 +141,11 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 Provider = source.ProviderName,
                 ApiKey = apiKey,
                 Endpoint = endpoint,
-                Label = source.ProviderName,
+                // The HUMAN-READABLE label the source declares (falling back to ProviderName when it
+                // declares none) — never the wire name. The picker renders the provider node's Name as
+                // its group title, so ProviderName here published "AzureFoundry" as a user-facing
+                // heading while the source had declared "Azure Foundry" all along.
+                Label = source.EffectiveLabel,
                 // 🚨 DETERMINISTIC seed timestamp — NEVER DateTimeOffset.UtcNow. The static-repo
                 // importer fingerprints this node's CONTENT (Versioned=false → contentHash). A
                 // per-enumeration UtcNow changed the content — and thus the fingerprint — on EVERY
@@ -153,10 +157,13 @@ public class BuiltInLanguageModelProvider : IStaticNodeProvider
                 CreatedAt = default,
                 Models = models
             };
+            // 🚨 The node ID stays ProviderName — it is the wire identity every
+            // ModelDefinition.ProviderRef points at (Provider/{ProviderName}); only the DISPLAY
+            // name carries the readable label.
             emitted.Add(new MeshNode(source.ProviderName, ModelProviderNodeType.RootNamespace)
             {
                 NodeType = ModelProviderNodeType.NodeType,
-                Name = source.ProviderName,
+                Name = source.EffectiveLabel,
                 Category = "Providers",
                 // Brand logo when the provider name resolves to a known maker; the
                 // generic key SVG otherwise. Fall back to the self-contained SVG URL
