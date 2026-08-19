@@ -13,5 +13,5 @@ namespace Memex.Database.Migration;
 /// </summary>
 public static class DbVersion
 {
-    public const int Latest = 53;
+    public const int Latest = 54;
 }
