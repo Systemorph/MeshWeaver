@@ -457,8 +457,25 @@ jobs:
             # Batching window (see the freshness probe above): a green merge inside the window
             # defers to the reconciler's next tick. Deliberately SILENT beyond the summary — this
             # is intentional cadence, not a fault, and the reconciler self-heals it by design.
+            elif [ "$COMPLETE" != "true" ] && [ -n "${BATCH_WINDOW:-}" ] \
+                 && [ "${FRESH_AGE_MIN:-999999}" -lt "$BATCH_WINDOW" ]; then
+              # 🚨 Batching NEVER applies to a HEAD that has no image set of its own.
+              #
+              # Coalescing several rapid merges onto one build is only safe while main is already
+              # DELIVERABLE — then the window defers an UPDATE. When HEAD has no complete set the
+              # same decision defers the ONLY image, and main sits undeliverable behind a window
+              # measured against some OTHER commit's build.
+              #
+              # Its promise ("the reconciler publishes main's tip within the hour") did not hold
+              # either, and the way it failed is worth keeping: the scheduled reconcile had already
+              # run 3 min earlier and correctly answered "waiting for CI"; the run that fired once
+              # CI went green entered via workflow_run and so took the PUSH path — and batched. No
+              # further reconcile was due for an hour. Observed 2026-08-19 on 17a7f16, whose
+              # decision log reads `Newest published set: <none>` and `🕐 Batched … 44 min old` in
+              # consecutive lines.
+              decision true "✅ Required check green and \`$SHORT\` has NO image set — publishing now rather than batching (a window may defer an update, never the only image)"
             elif [ -n "${BATCH_WINDOW:-}" ] && [ "${FRESH_AGE_MIN:-999999}" -lt "$BATCH_WINDOW" ]; then
-              decision false "🕐 Batched: newest published set is ${FRESH_AGE_MIN} min old (< ${BATCH_WINDOW} min window) — the reconciler publishes main's tip within the hour; run this workflow manually to ship now"
+              decision false "🕐 Batched: newest published set is ${FRESH_AGE_MIN} min old (< ${BATCH_WINDOW} min window) — main's tip already has a complete image set, so this defers an UPDATE; the reconciler publishes within the hour, or run this workflow manually to ship now"
             else
               decision true "✅ Required check green — publishing the full image set for \`$SHORT\`"
             fi

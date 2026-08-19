@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
@@ -79,18 +80,26 @@ public sealed class IoPoolSiloTeardown(
         // First ⇒ started first, STOPPED LAST (Orleans stops in descending stage order).
         observer.Subscribe(nameof(IoPoolSiloTeardown), ServiceLifecycleStage.First, this);
 
+    // 🚨 The ONE DI resolution in this type, and it happens at the FIRST silo stage — the earliest
+    // moment the container is provably alive. OnStop must never resolve: see the type remarks for
+    // the aborted-startup path that disposes the container without ever running an ordered
+    // shutdown. Not `async` either — there is nothing to await; the capture is synchronous.
     Task ILifecycleObserver.OnStart(CancellationToken cancellationToken)
     {
-        // 🚨 The ONE DI resolution in this type, and it happens at the FIRST silo stage — the
-        // earliest moment the container is provably alive. OnStop must never resolve: see the
-        // type remarks for the aborted-startup path that disposes the container without ever
-        // running an ordered shutdown.
         _registry = services.GetService<IoPoolRegistry>();
         _captured = true;
         return Task.CompletedTask;
     }
 
-    async Task ILifecycleObserver.OnStop(CancellationToken cancellationToken)
+    // 🚨 NOT `async`, and nothing here awaits. AGENTS.md: everything is IObservable<T> end-to-end —
+    // compose and Subscribe, never await. The single Task exists only because ILifecycleObserver
+    // demands one, and it is produced by ONE .ToTask() at the boundary — the sanctioned shape for a
+    // framework surface whose body stays reactive.
+    //
+    // Orleans awaits the returned Task, which is what holds the silo back until the pools report.
+    // That is the whole guarantee, and it costs no thread: nothing is parked here, the completion
+    // arrives on whichever thread the last leaf unwinds on.
+    Task ILifecycleObserver.OnStop(CancellationToken cancellationToken)
     {
         if (!_captured)
         {
@@ -102,36 +111,39 @@ public sealed class IoPoolSiloTeardown(
                 + "captured — pooled I/O has NOT been drained and the silo is releasing over "
                 + "whatever is still in flight. Do not resolve it here: on an aborted startup the "
                 + "container is already disposed (#1898).");
-            return;
+            return Task.CompletedTask;
         }
 
+        // Read the capture — never a resolve. The container may already be disposed by now.
         var registry = _registry;
         if (registry is null)
             // Nothing registered pooled I/O in this container (a silo without the mesh services),
             // so there is genuinely nothing to drain. Distinct from the case above: this one is a
             // real no-op, not an unrun teardown.
-            return;
+            return Task.CompletedTask;
 
         logger.LogInformation(
             "IoPoolSiloTeardown: draining pooled I/O before the silo releases (in-flight={InFlight})",
             registry.TotalInFlight);
 
-        // Dispose CANCELS every leaf (a live change-feed leaf never completes on its own, so a
-        // wait-WITHOUT-cancel would burn the budget and then release over live work) and returns
-        // immediately. The WAIT is the observable — awaited, never blocked on: parking a thread
-        // here while the leaves need threads to unwind is the starvation deadlock that made
-        // OrderedRouteDispatcherTest hang for its full budget on a 4-vCPU runner.
+        // Dispose CANCELS every leaf and RETURNS — a live change-feed leaf never completes on its
+        // own, so a wait-without-cancel would burn the budget and then release over live work.
+        // It does not join; Disposed is what completes once the last leaf has unwound.
         registry.Dispose();
 
-        var leaked = await registry.Disposed
+        return registry.Disposed
             .Timeout(JoinBudget)
-            // Timeout means a leaf never unwound. Report it as a residual rather than throwing:
+            // A timeout means a leaf never unwound. Report it as a residual rather than faulting:
             // shutdown must continue, and the log below is the only attribution a later SIGSEGV gets.
             .Catch<int, Exception>(_ => Observable.Return(-1))
+            .Do(Report)
+            .Select(_ => Unit.Default)
             .FirstAsync()
-            .ToTask()
-            .ConfigureAwait(false);
+            .ToTask();
+    }
 
+    private void Report(int leaked)
+    {
         if (leaked < 0)
             logger.LogError(
                 "IoPoolSiloTeardown: pooled I/O did not finish within {Budget} — the silo is "
@@ -155,8 +167,14 @@ public sealed class IoPoolSiloTeardown(
 public static class IoPoolSiloTeardownExtensions
 {
     /// <summary>
-    /// Registers <see cref="IoPoolSiloTeardown"/> as a silo lifecycle participant, so pooled I/O
-    /// is cancelled and joined before the silo releases. Idempotent.
+    /// Registers <see cref="IoPoolSiloTeardown"/> as a silo lifecycle participant, so pooled I/O is
+    /// cancelled and JOINED — bounded — before the silo releases.
+    ///
+    /// <para>"Joined" is the behaviour callers must plan for: <c>OnStop</c> returns a Task that
+    /// completes only once every pool has reported, so Orleans genuinely holds shutdown until then.
+    /// It is not fire-and-forget. The join costs no thread (the body is a reactive composition, not
+    /// an await), and it is bounded by <c>JoinBudget</c>: on timeout the residual is logged as an
+    /// error and shutdown proceeds rather than hanging. (Copilot review, #1903.)</para>
     /// </summary>
     /// <param name="services">The service collection to add the participant to.</param>
     /// <returns>The same service collection for further chaining.</returns>
