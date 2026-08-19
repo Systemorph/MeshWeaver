@@ -551,12 +551,39 @@ public static class MemexConfiguration
                 name => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, name),
                 (module, reason) => Console.Error.WriteLine(
                     $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"));
-            if (effectiveModules.Count > 0)
+            // 🚨 A LISTED-BUT-ABSENT module must never crash boot. `InstallAssemblies` does
+            // `Assembly.LoadFrom`, which throws FileNotFoundException, so one stale line in
+            // `Modules:Assemblies` takes the whole portal down before anything is serving —
+            // observed on 3.0.0-rc5, whose image no longer ships the fourteen extracted modules
+            // while appsettings still listed them: every boot died on
+            // `Could not load file or assembly '/app/MeshWeaver.AI.OpenAI.dll'`.
+            //
+            // The sidecar half already skips a missing DLL loudly (LandedModuleDllExists above);
+            // the appsettings BASELINE did not, and a baseline entry is exactly the one a platform
+            // change can invalidate without touching the deployment. So the same rule applies to
+            // both: skip, say so on stderr, and boot. A module that is genuinely required makes
+            // itself known as a missing FEATURE, which is diagnosable — a portal that will not
+            // start is not.
+            var resolvedModules = effectiveModules
                 // ResolveModulePath probes the modules/<name>/ publish layout first (#1644),
                 // then falls back to the classic BaseDirectory-relative location.
-                builder.InstallAssemblies(effectiveModules
-                    .Select(entry => MeshBuilder.ResolveModulePath(entry, moduleRoot))
-                    .ToArray());
+                .Select(entry => (Entry: entry, Path: MeshBuilder.ResolveModulePath(entry, moduleRoot)))
+                .Where(candidate =>
+                {
+                    if (File.Exists(candidate.Path))
+                        return true;
+                    Console.Error.WriteLine(
+                        $"[ModuleActivation] SKIPPED module '{candidate.Entry}': no assembly at "
+                        + $"'{candidate.Path}'. It is listed in Modules:Assemblies but this image "
+                        + "does not ship it — delist it, or install it as a module. Booting without "
+                        + "it; whatever it provided is absent.");
+                    return false;
+                })
+                .Select(candidate => candidate.Path)
+                .ToArray();
+
+            if (resolvedModules.Length > 0)
+                builder.InstallAssemblies(resolvedModules);
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
             // consume the pending flag so the step-10 signal reads current. Best-effort: on a
             // read-only app filesystem the flag simply stays set (cosmetic), and boot proceeds.
