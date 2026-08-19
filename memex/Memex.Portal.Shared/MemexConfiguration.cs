@@ -318,10 +318,9 @@ public static class MemexConfiguration
         // Social publishing (LinkedIn connect/publish/page-sync + node-menu providers) rides the
         // MeshWeaver.Social MODULE (Modules:Assemblies): SocialMeshModuleAttribute registers the
         // DI services + menu providers, SocialModuleAttribute contributes the endpoints via
-        // app.MapMeshModuleEndpoints() below. Only the ApiCredential NodeType registration
-        // (AddApiCredentialType) and the LinkedIn SIGN-IN scheme (AddLinkedInAuthentication)
-        // stay compiled here — existing credential nodes must deserialize and auth schemes
-        // configure before the host builds, module or no module.
+        // app.MapMeshModuleEndpoints() below, and the module now registers its own ApiCredential
+        // NodeType. Only the LinkedIn SIGN-IN scheme (AddLinkedInAuthentication) stays compiled
+        // here, because auth schemes configure before the host builds — module or no module.
 
         // Configure authentication
         var authSection = builder.Configuration.GetSection(PortalAuthOptions.SectionName);
@@ -692,11 +691,6 @@ public static class MemexConfiguration
                 // Register the instance-sync content type ({space}/_Sync/{sourceId} config
                 // nodes) on the mesh + per-node hubs so they (de)serialize.
                 .AddInstanceSyncTypes()
-                // Register the ApiCredential satellite NodeType (+ PlatformCredential content type)
-                // so the LinkedIn/X connect callbacks can create {profile}/_ApiCredentials/{platform}
-                // credential nodes. Without this the create throws "NodeType 'ApiCredential' is not
-                // registered" — the OAuth callback's persist step fails and sign-in reports failure.
-                .AddApiCredentialType()
                 // Register the OAuthCode NodeType + AuthorizationCode content type so the
                 // MCP OAuth server (OAuthCodeStore) can persist pending authorization codes
                 // as Admin/OAuthCode/{hashPrefix} mesh nodes — the replica-safe store every
