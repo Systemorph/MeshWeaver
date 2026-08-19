@@ -64,10 +64,18 @@
          never roll forward again. Keep a pre-release label on the core until 3.0.0 ships clean.
 
          It also has to RESOLVE by the time anything pins content-sync to it: data-sync pulls
-         content from the tag v$(PlatformVersion). v3.0.0-rc3 shipped 2026-08-16; v3.0.0-rc4 is
-         the line NOW BUILDING and its tag is created only when rc4 is released — never tag it
-         early, the v*.*.* tag IS the trigger for the NuGet + image publish. -->
-    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc4</PlatformVersion>
+         content from the tag v$(PlatformVersion). v3.0.0-rc3 shipped 2026-08-16; v3.0.0-rc5 is
+         the line NOW BUILDING and its tag is created only when rc5 is released — never tag it
+         early, the v*.*.* tag IS the trigger for the NuGet + image publish.
+
+         🚨 rc4 was never tagged, and the gap is deliberate rather than a slip: the line built
+         under that label all through the module extraction (#1882), so a v3.0.0-rc4 tag would
+         have published the fourteen driver packages to NuGet on its way out the door — exactly
+         the set being retired. rc5 is the first release cut AFTER they leave, so the packages
+         it publishes are the ones the platform still builds. Do not "fill in" rc4 later: the
+         version never shipped, and minting a tag for it now would publish that superseded
+         content set for real. -->
+    <PlatformVersion Condition="'$(PlatformVersion)' == ''">3.0.0-rc5</PlatformVersion>
   </PropertyGroup>
   <!-- Multi-arch container publish race fix (main-cd / release-images / edge-images pass
        -p:ContainerRuntimeIdentifiers="linux-x64;linux-arm64"). The SDK's _PublishMultiArchContainers
