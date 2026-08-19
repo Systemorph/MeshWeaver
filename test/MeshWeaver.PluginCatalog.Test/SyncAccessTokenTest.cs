@@ -207,4 +207,38 @@ public class SyncAccessTokenTest
         Assert.NotNull(SyncAccessToken.Verify(token, Now, random));
         Assert.Null(SyncAccessToken.Verify(token, Now, RandomNumberGenerator.GetBytes(64)));
     }
+
+    [Fact]
+    public void AnOversizedBasicPayloadIsRejectedWithoutDecoding()
+    {
+        // The reject path runs on UNAUTHENTICATED, attacker-controlled input, so it must not throw
+        // and must not allocate an unbounded buffer — a throwing parse lets anyone make the registry
+        // raise and unwind an exception per request. Same discipline as InstanceKeys.
+        var oversized = "Basic " + new string('A', 4096);
+        Assert.Null(SyncAccessToken.ExtractToken(oversized));
+    }
+
+    [Theory]
+    [InlineData("Basic ")]
+    [InlineData("Basic !!!!")]
+    [InlineData("Basic ====")]
+    [InlineData("Basic bm9jb2xvbg==")]
+    public void AMalformedBasicPayloadIsNullRatherThanAThrow(string header)
+        => Assert.Null(SyncAccessToken.ExtractToken(header));
+
+    [Fact]
+    public void ABasicPayloadWithNoTokenInThePasswordHalfIsRejected()
+    {
+        var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:not-a-token"));
+        Assert.Null(SyncAccessToken.ExtractToken(header));
+    }
+
+    [Fact]
+    public void NonUtf8BasicBytesDoNotThrow()
+    {
+        // Replacement fallback turns invalid bytes into U+FFFD, which then simply fails the prefix
+        // check — rather than throwing on the decode.
+        var header = "Basic " + Convert.ToBase64String([0xFF, 0xFE, (byte)':', 0xFF]);
+        Assert.Null(SyncAccessToken.ExtractToken(header));
+    }
 }

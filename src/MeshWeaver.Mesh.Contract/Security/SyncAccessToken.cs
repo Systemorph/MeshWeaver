@@ -184,20 +184,44 @@ public static class SyncAccessToken
             return candidate.StartsWith(KeyPrefix, StringComparison.Ordinal) ? candidate : null;
         }
 
-        const string basic = "Basic";
-        if (!trimmed.StartsWith(basic + " ", StringComparison.OrdinalIgnoreCase))
+        if (!trimmed.StartsWith(InstanceKeys.BasicScheme + " ", StringComparison.OrdinalIgnoreCase))
             return null;
-        try
-        {
-            var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(trimmed[(basic.Length + 1)..].Trim()));
-            var colon = decoded.IndexOf(':');
-            var candidate = (colon < 0 ? decoded : decoded[(colon + 1)..]).Trim();
-            return candidate.StartsWith(KeyPrefix, StringComparison.Ordinal) ? candidate : null;
-        }
-        catch (FormatException)
-        {
+        return ExtractFromBasic(trimmed[(InstanceKeys.BasicScheme.Length + 1)..].Trim());
+    }
+
+    /// <summary>Largest Basic payload considered; see <see cref="ExtractFromBasic"/>.</summary>
+    private const int MaxBasicPayloadChars = 1024;
+
+    /// <summary>Decode buffer for <see cref="MaxBasicPayloadChars"/> (base64 is 4 chars per 3 bytes).</summary>
+    private const int MaxBasicPayloadBytes = MaxBasicPayloadChars / 4 * 3;
+
+    /// <summary>
+    /// The password half of a Basic credential, when it is an access token.
+    ///
+    /// <para>🚨 No exception on the reject path, and a bounded decode buffer — the same discipline as
+    /// <see cref="InstanceKeys.ExtractKey"/>, and for the same reason: this runs on an
+    /// UNAUTHENTICATED request with attacker-controlled input, so a throwing parse would let anyone
+    /// make the registry raise and unwind an exception per request. A real token is a username plus
+    /// a signed payload, so anything near the bound is already not one.</para>
+    /// </summary>
+    private static string? ExtractFromBasic(string encoded)
+    {
+        if (encoded.Length is 0 or > MaxBasicPayloadChars)
             return null;
-        }
+
+        Span<byte> buffer = stackalloc byte[MaxBasicPayloadBytes];
+        if (!Convert.TryFromBase64String(encoded, buffer, out var written))
+            return null;
+
+        // UTF8.GetString uses replacement fallback, so invalid bytes become U+FFFD rather than
+        // throwing — and a token containing U+FFFD simply fails the prefix check below.
+        var decoded = Encoding.UTF8.GetString(buffer[..written]);
+        var separator = decoded.IndexOf(':');
+        if (separator < 0)
+            return null;
+
+        var candidate = decoded[(separator + 1)..].Trim();
+        return candidate.StartsWith(KeyPrefix, StringComparison.Ordinal) ? candidate : null;
     }
 
     /// <summary>Whether a signing key is long enough to be used.</summary>

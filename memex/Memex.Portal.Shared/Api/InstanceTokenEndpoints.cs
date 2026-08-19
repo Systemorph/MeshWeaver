@@ -137,7 +137,7 @@ public static class InstanceTokenEndpoints
     /// that has already ended — the grant would refuse it on use anyway, and handing out a token
     /// that cannot work is a worse answer than saying so.</para>
     /// </summary>
-    private static IReadOnlyCollection<string> EffectiveScope(
+    internal static IReadOnlyCollection<string> EffectiveScope(
         AuthenticatedInstance caller, IReadOnlyCollection<string>? requested, DateTimeOffset now)
     {
         if (caller.Grant.IsRevoked)
@@ -150,16 +150,38 @@ public static class InstanceTokenEndpoints
         if (requested is not { Count: > 0 })
             return [.. licensed.Select(e => e.ToString()).Distinct(StringComparer.Ordinal)];
 
-        // Keep only requests the licence actually covers. Dropping rather than refusing: a token can
-        // only narrow, so an over-broad request is a stale caller, not an attack.
-        return
-        [
-            .. requested
-                .Select(PluginGrantEntry.TryParse)
-                .Where(e => e is not null)
-                .Where(e => licensed.Any(l => l.Matches(e!.Source, e.PackageId)))
-                .Select(e => e!.ToString())
-                .Distinct(StringComparer.Ordinal)
-        ];
+        // Keep only what the licence actually covers, INTERSECTING rather than filtering. Dropping
+        // what is not covered rather than refusing it: a token can only narrow, so an over-broad
+        // request is a stale caller, not an attack.
+        //
+        // 🚨 A whole-source request must EXPAND to the licensed packages in that source, not be
+        // matched against them. `Plugins/*` is the natural way to say "everything I am licensed for
+        // here", and a naive `licensed.Any(l => l.Matches(source, "*"))` answers false for an
+        // instance licensed per-package — so the effective scope came out EMPTY and the exchange
+        // returned 403 to a caller asking a perfectly reasonable question (Copilot, #1844).
+        var effective = new List<string>();
+        foreach (var entry in requested.Select(PluginGrantEntry.TryParse).Where(e => e is not null))
+        {
+            if (entry!.PackageId == PluginGrantEntry.AllPackages)
+            {
+                // Everything licensed in that source — which may itself be a whole-source licence
+                // (kept as `Source/*`) or a set of per-package ones (kept individually).
+                effective.AddRange(licensed
+                    .Where(l => string.Equals(l.Source, entry.Source, StringComparison.OrdinalIgnoreCase))
+                    .Select(l => l.ToString()));
+                continue;
+            }
+
+            // Emit the LICENCE's source casing, not the request's — the response describes what was
+            // granted rather than echoing what was typed, and the two must not disagree with the
+            // wildcard branch above. The PACKAGE stays the requested one: taking the licence's would
+            // turn an exact request under a whole-source licence back into `Source/*`, widening the
+            // very scope the caller asked to narrow.
+            var match = licensed.FirstOrDefault(l => l.Matches(entry.Source, entry.PackageId));
+            if (match is not null)
+                effective.Add($"{match.Source}/{entry.PackageId}");
+        }
+
+        return [.. effective.Distinct(StringComparer.Ordinal)];
     }
 }
