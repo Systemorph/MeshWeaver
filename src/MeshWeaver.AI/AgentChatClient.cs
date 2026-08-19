@@ -42,6 +42,12 @@ public class AgentChatClient : IAgentChat
     private ImmutableList<AgentDisplayInfo> loadedAgents = ImmutableList<AgentDisplayInfo>.Empty;
     private string? lastLoadedContextPath;
     private string? lastLoadedNodeTypePath;
+    // The ROUND's authoritative user identity (submitter rider / thread CreatedBy), passed
+    // by ThreadExecution into Initialize. On headless hubs (delegated sub-threads, server
+    // watchers) the ambient AccessService context is the hub/system principal, so without
+    // this the agent catalog query loses the {user}/Agent alternation and the user's own
+    // agents come back "not found". Preserved across the SetContext-triggered re-Initialize.
+    private string? roundUserHome;
     private string currentThreadId = Guid.NewGuid().AsString();
     private string? currentAgentName;
     // The user's explicit picker selection, kept as the FULL node PATH
@@ -1560,9 +1566,20 @@ public class AgentChatClient : IAgentChat
     /// emits — synchronously when warm-cached, asynchronously on first cold
     /// load. Callers that need an explicit ready-gate should subscribe to
     /// <see cref="WhenInitialized"/>.
+    /// <para><paramref name="userObjectId"/> is the ROUND's authoritative user identity
+    /// (the submitter rider resolved by <c>ThreadSubmission</c>). It anchors the agent
+    /// catalog's <c>{user}/Agent</c> alternation on headless hubs where the ambient
+    /// <c>AccessService</c> context is the hub/system principal — without it a delegated
+    /// sub-thread loads only the global registry and the delegating user's own agents
+    /// resolve as "not found". Hub/system principals are ignored.</para>
     /// </summary>
-    public AgentChatClient Initialize(string? contextPath, string? modelName = null, string? nodeTypePath = null)
+    public AgentChatClient Initialize(string? contextPath, string? modelName = null, string? nodeTypePath = null,
+        string? userObjectId = null)
     {
+        // Remember the round identity across re-inits (SetContext re-calls Initialize
+        // without it); an explicit REAL user always wins over the ambient context.
+        if (AgentPickerProjection.IsRealUserPrincipal(userObjectId))
+            roundUserHome = userObjectId;
         // Normalize at entry so satellite paths (e.g. "ACME/Project/_Thread/<slug>") collapse to
         // their main-node path before any downstream query/cache key uses them.
         contextPath = NormalizeContextPath(contextPath);
@@ -1606,8 +1623,9 @@ public class AgentChatClient : IAgentChat
         // namespace:{userHome} alternation in AgentPickerProjection.BuildAgentQuery. Skips system/hub
         // principals (they own no user namespace). Safe even for guests: it's a namespace MEMBERSHIP
         // filter value, never a point-read, so a no-match is a silent no-op (unlike the model-selection
-        // point-read that would storm a guest partition).
-        var userHome = ResolveAgentUserHome(hub);
+        // point-read that would storm a guest partition). The round identity (submitter rider) is
+        // authoritative when supplied — the ambient context is only the interactive-circuit fallback.
+        var userHome = roundUserHome ?? ResolveAgentUserHome(hub);
         agentsSubscription?.Dispose();
         modelsSubscription?.Dispose();
         selectionSubscription?.Dispose();
@@ -2235,9 +2253,7 @@ public class AgentChatClient : IAgentChat
         var accessSvc = hub.ServiceProvider.GetService<MeshWeaver.Messaging.AccessService>();
         if (accessSvc is null) return null;
         foreach (var candidate in new[] { accessSvc.Context?.ObjectId, accessSvc.CircuitContext?.ObjectId })
-            if (!string.IsNullOrEmpty(candidate)
-                && candidate != MeshWeaver.Mesh.Security.WellKnownUsers.System
-                && !MeshWeaver.Messaging.AccessService.LooksLikeHubPrincipal(candidate))
+            if (AgentPickerProjection.IsRealUserPrincipal(candidate))
                 return candidate;
         return null;
     }

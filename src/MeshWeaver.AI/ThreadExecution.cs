@@ -1444,7 +1444,12 @@ internal static class ThreadExecution
             // ActiveMessageId so the UI unsticks instead of perpetually
             // "executing". 60s is generous; the workspace-cached synced
             // query should emit Initial within seconds even on cold start.
-            chatClient.Initialize(request.ContextPath, request.ModelName);
+            // Pass the round's authoritative user identity (submitter rider → CreatedBy
+            // fallback, resolved by ThreadSubmission) so the agent catalog includes the
+            // {user}/Agent alternation even on headless hubs (delegated sub-threads),
+            // where the ambient AccessService context is the hub/system principal.
+            chatClient.Initialize(request.ContextPath, request.ModelName,
+                userObjectId: userAccessContext?.ObjectId);
             return chatClient.WhenInitialized
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(60))

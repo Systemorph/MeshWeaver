@@ -240,12 +240,22 @@ public static class AgentPickerProjection
     {
         if (accessService is null) return null;
         foreach (var candidate in new[] { accessService.CircuitContext?.ObjectId, accessService.Context?.ObjectId })
-            if (!string.IsNullOrEmpty(candidate)
-                && candidate != MeshWeaver.Mesh.Security.WellKnownUsers.System
-                && !MeshWeaver.Messaging.AccessService.LooksLikeHubPrincipal(candidate))
+            if (IsRealUserPrincipal(candidate))
                 return candidate;
         return null;
     }
+
+    /// <summary>
+    /// True when <paramref name="candidate"/> is a REAL user principal that owns a home
+    /// partition — non-empty and neither the <c>system-security</c> identity nor a hub-shaped
+    /// principal (<c>sync/</c>, <c>mesh/</c>, …). The single guard behind
+    /// <see cref="ResolveUserHome"/> and the explicit round-identity plumbing in
+    /// <c>AgentChatClient.Initialize</c>.
+    /// </summary>
+    public static bool IsRealUserPrincipal(string? candidate)
+        => !string.IsNullOrEmpty(candidate)
+           && candidate != MeshWeaver.Mesh.Security.WellKnownUsers.System
+           && !MeshWeaver.Messaging.AccessService.LooksLikeHubPrincipal(candidate);
 
     /// <summary>The partition (top-level path segment) a context path belongs to — the "space" whose
     /// <c>/Agent</c> + <c>/Model</c> namespaces the registry surfaces. <c>AgenticPension/Foo/_Thread/x</c>

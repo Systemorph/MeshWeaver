@@ -583,11 +583,20 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             // Build the full sub-thread node + ids ONCE. GenerateSpeakingId appends
             // a random suffix, so calling BuildThreadWithMessages twice produces
             // DIFFERENT paths. Single source of truth.
+            // Stamp the SUBMITTER rider, not just CreatedBy: the rider is the authoritative
+            // identity ThreadSubmission dispatches the round under, and what the sub-thread's
+            // agent catalog uses to surface the delegating user's OWN {user}/Agent agents.
+            // Without it the sub-thread executed under the hub identity, loaded only the
+            // global /Agent registry, and a legitimately delegated user-partition agent
+            // ({user}/Agent/post-writer) came back "not found among the available agents"
+            // (memex-cloud incident, 2026-08-17).
             var (preSubThreadNode, userMsgId, responseMsgId) =
                 MeshWeaver.AI.ThreadNodeType.BuildThreadWithMessages(
                     parentMsgPath, task,
                     createdBy: execCtx.UserAccessContext?.ObjectId,
-                    agentName: targetId);
+                    agentName: targetId,
+                    submitterObjectId: execCtx.UserAccessContext?.ObjectId,
+                    submitterName: execCtx.UserAccessContext?.Name);
             var subThreadNode = preSubThreadNode with { MainNode = mainEntityPath };
             var subThreadPath = subThreadNode.Path!;
             var callId = Guid.NewGuid().ToString("N")[..8];
