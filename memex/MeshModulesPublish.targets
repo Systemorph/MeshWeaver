@@ -65,10 +65,12 @@
          see src/MeshWeaver.Social/README.md), Hosting.Grpc
          (UseMeshWeaverGrpcWebWhenInstalled is middleware-order-coupled, cannot ride the endpoint hook). -->
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
 
     <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2). -->
+    <!-- Social: flipped once the portal stopped compiling against it for the ApiCredential
+         type (the module registers that itself now). Its closure ships here. -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />

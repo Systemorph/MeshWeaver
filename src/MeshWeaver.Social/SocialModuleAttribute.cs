@@ -66,7 +66,13 @@ public static class SocialExtensions
     /// the endpoints answer with a configuration problem.
     /// </summary>
     public static MeshBuilder AddSocial(this MeshBuilder builder)
-        => builder.ConfigureServices(services =>
+        => builder
+            // The credential type this module reads and writes. Registered by the module rather
+            // than the host: without it the connect callbacks fail with "NodeType 'ApiCredential'
+            // is not registered", and with it host-side the portal had to compile against this
+            // module for a single type.
+            .AddApiCredentialType()
+            .ConfigureServices(services =>
         {
             // Options pipeline, never services.Configure(section): there is no IConfiguration
             // instance at install time (Doc/Architecture/Modules). The bare-instance bridge keeps
