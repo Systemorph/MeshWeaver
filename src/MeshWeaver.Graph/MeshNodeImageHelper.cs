@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using DomainIcon = MeshWeaver.Domain.Icon;
@@ -30,6 +31,18 @@ public enum IconRenderKind
 /// <param name="Kind">The element the value has to be rendered with.</param>
 /// <param name="Value">The icon value — a URL, inline svg markup, or a text glyph, per <paramref name="Kind"/>.</param>
 public readonly record struct RenderableIcon(IconRenderKind Kind, string Value);
+
+/// <summary>
+/// An icon ready to hang off a <c>&lt;link rel="icon"&gt;</c>: a value an <c>href</c> can carry,
+/// plus the media type to declare with it.
+/// </summary>
+/// <param name="Href">A URL the portal already serves (a shipped glyph, an access-controlled
+/// content file), or an inline <c>data:</c> URI for an icon whose value is MARKUP rather than a
+/// location (raw <c>&lt;svg&gt;</c>, a text glyph).</param>
+/// <param name="Type">The media type to declare, or null when the value alone does not pin one
+/// down — declaring the WRONG type is worse than declaring none, because a browser ranking several
+/// icons by type would then rank this one on a lie.</param>
+public readonly record struct IconLink(string Href, string? Type);
 
 /// <summary>
 /// Helper for resolving and classifying a mesh node's icon for rendering. Resolves
@@ -274,6 +287,108 @@ public static class MeshNodeImageHelper
         var insertAt = idx + "<svg".Length;
         return svg.Insert(insertAt,
             $" style=\"width: {pixels}px; height: {pixels}px; display: block;\"");
+    }
+
+    /// <summary>The one media type that tells a browser "this icon scales losslessly".</summary>
+    public const string SvgMediaType = "image/svg+xml";
+
+    /// <summary>
+    /// 🚨 THE NODE'S ICON, READY FOR THE BROWSER TAB — a node page identifies itself in the tab
+    /// strip rather than wearing the same portal favicon as every other page.
+    ///
+    /// <para>Resolution is <see cref="ResolveNodeIcon"/>, i.e. EXACTLY what the app already renders
+    /// for the node in the tree, the menus and its cards (own icon → the shipped glyph of that name
+    /// → the NodeType default → a neutral box). Nothing is synthesised beyond putting a value an
+    /// <c>href</c> cannot carry into a form it can: an inline <c>&lt;svg&gt;</c> identicon and a text
+    /// glyph travel as <c>data:</c> URIs because they are MARKUP, not locations — the same mechanism
+    /// the per-instance favicon uses. So the tab and the app can never disagree about what a node
+    /// looks like.</para>
+    ///
+    /// <para>Total, like <see cref="ResolveNodeIcon"/>: every node resolves to something, so a tab
+    /// never silently keeps the previous page's icon.</para>
+    /// </summary>
+    /// <param name="node">The node whose page is being shown.</param>
+    public static IconLink ResolveIconLink(MeshNode node) =>
+        IconLinkFor(ResolveNodeIcon(node));
+
+    /// <summary>
+    /// The <c>&lt;link rel="icon"&gt;</c> form of one icon value, classified the same way the
+    /// rendered icon is (<see cref="ResolveRenderable"/>) so the two cannot drift apart.
+    /// </summary>
+    /// <param name="icon">The icon value — any of the four forms (URL, inline svg, glyph, Fluent name).</param>
+    /// <param name="fallback">The icon to fall back to when <paramref name="icon"/> cannot be
+    /// rendered; the neutral box glyph when omitted.</param>
+    public static IconLink IconLinkFor(string? icon, string? fallback = null)
+    {
+        var renderable = ResolveRenderable(icon, fallback);
+        return renderable.Kind switch
+        {
+            IconRenderKind.InlineSvg => new IconLink(SvgDataUri(renderable.Value), SvgMediaType),
+            IconRenderKind.Glyph => new IconLink(SvgDataUri(GlyphSvg(renderable.Value)), SvgMediaType),
+            _ => new IconLink(renderable.Value, MediaTypeOfUrl(renderable.Value)),
+        };
+    }
+
+    /// <summary>Inline <c>&lt;svg&gt;</c> markup as a <c>data:</c> URI — percent-encoded rather than
+    /// base64 so the markup stays readable in view-source and the URI stays short.</summary>
+    public static string SvgDataUri(string svg) =>
+        "data:" + SvgMediaType + "," + Uri.EscapeDataString(svg);
+
+    /// <summary>
+    /// A text glyph (an emoji) wrapped in an SVG that draws it, because no <c>href</c> can carry a
+    /// character. Only the FIRST grapheme cluster is drawn — a multi-codepoint emoji is one cluster,
+    /// while an icon field holding a whole word would otherwise overflow the canvas.
+    /// </summary>
+    private static string GlyphSvg(string glyph)
+    {
+        var cluster = glyph.Length == 0
+            ? glyph
+            : glyph[..StringInfo.GetNextTextElementLength(glyph)];
+        return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\">"
+               + "<text x=\"16\" y=\"17\" text-anchor=\"middle\" dominant-baseline=\"central\" "
+               + "font-size=\"28\">" + XmlEscape(cluster) + "</text></svg>";
+    }
+
+    /// <summary>Escapes the five XML markup characters so a glyph like <c>R&amp;D</c> still yields
+    /// well-formed SVG.</summary>
+    private static string XmlEscape(string text) => text
+        .Replace("&", "&amp;", StringComparison.Ordinal)
+        .Replace("<", "&lt;", StringComparison.Ordinal)
+        .Replace(">", "&gt;", StringComparison.Ordinal)
+        .Replace("\"", "&quot;", StringComparison.Ordinal)
+        .Replace("'", "&apos;", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The media type an icon URL pins down by itself, or null when it does not. A content-route URL
+    /// carries the file's extension, so this covers the authored cases; anything unrecognised is
+    /// declared as nothing rather than guessed at.
+    /// </summary>
+    private static string? MediaTypeOfUrl(string url)
+    {
+        if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            var mime = url["data:".Length..];
+            var end = mime.IndexOfAny([';', ',']);
+            mime = end < 0 ? mime : mime[..end];
+            return mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? mime : null;
+        }
+
+        // A query string is legitimate on a content URL, so match the extension before it — and only
+        // within the last SEGMENT, or a dotted directory ("ACME/My.Space/content/logo") would read as
+        // an extension and get a made-up media type.
+        var path = url.Split('?')[0];
+        var file = path[(path.LastIndexOf('/') + 1)..];
+        var dot = file.LastIndexOf('.');
+        return dot < 0 ? null : file[(dot + 1)..].ToLowerInvariant() switch
+        {
+            "svg" => SvgMediaType,
+            "png" => "image/png",
+            "ico" => "image/x-icon",
+            "jpg" or "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            _ => null,
+        };
     }
 
     /// <summary>

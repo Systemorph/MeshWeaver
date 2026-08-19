@@ -52,9 +52,11 @@ public static class GraphConfigurationExtensions
                 .AddGroupType()
                 .AddRoleType()
                 .AddGroupMembershipType()
-                // Approval moved to the MeshWeaver.Approvals module (Modules:Assemblies /
-                // builder.AddApprovals()) — the Approval record + _Approval satellite mapping
-                // stay platform-level in MeshWeaver.Mesh.Contract.
+                // Approvals are the node-native `Approvals` package (MeshWeaver.Plugins): the
+                // node type and every view are compiled live from its own Source/, so nothing is
+                // registered here. The Approval RECORD and the _Approval → annotations satellite
+                // mapping stay platform-level in MeshWeaver.Mesh.Contract, which is what keeps
+                // approval data deserializing and routing wherever the package is not installed.
                 .AddNotificationType()
                 .AddNotificationSettingsType()
                 .AddCompletionMemoryType()
@@ -293,6 +295,11 @@ public static class GraphConfigurationExtensions
                     // user-visible notification. Instance maps only — no static state. See
                     // NodeTypeCompileParkRegistry + InstallCompileWatcher's parked short-circuit.
                     services.AddSingleton<NodeTypeCompileParkRegistry>();
+                    // Mesh-scoped spacing for the compilation-overlay self-heal. A self-heal
+                    // disposes the very hub that holds its watcher, so without memory that
+                    // outlives the recycle a pair whose re-enrichment keeps faulting would
+                    // re-arm at the first rung for ever. See OverlayHealBudget + issue #1814.
+                    services.AddSingleton<OverlayHealBudget>();
                     // 🅿️ Deleting a NodeType clears its parked compile failure — the registry is
                     // keyed by PATH and outlives the node, so without this a delete+recreate at
                     // the same path started parked and never compiled (only a restart healed).

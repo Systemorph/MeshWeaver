@@ -110,6 +110,9 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceVersions"/>.</summary>
     public IReadOnlyDictionary<string, long>? CurrentSourceVersions { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.RequestedSourceStampAt"/>.</summary>
+    public DateTimeOffset? RequestedSourceStampAt { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CompiledFrameworkVersion"/>.</summary>
     public string? CompiledFrameworkVersion { get; init; }
 
@@ -140,6 +143,7 @@ public record NodeTypeCompileState
                 LatestAssemblyPath = definition.LatestAssemblyPath,
                 CompiledSources = definition.CompiledSources,
                 CurrentSourceVersions = definition.CurrentSourceVersions,
+                RequestedSourceStampAt = definition.RequestedSourceStampAt,
                 CompiledFrameworkVersion = definition.CompiledFrameworkVersion,
                 FailedBuildInputs = definition.FailedBuildInputs,
             };
@@ -155,6 +159,7 @@ public record NodeTypeCompileState
         && LastReleaseRequestHandledAt is null && ReleaseNotes is null
         && LatestAssemblyCollection is null && LatestAssemblyPath is null
         && CompiledSources is null && CurrentSourceVersions is null
+        && RequestedSourceStampAt is null
         && CompiledFrameworkVersion is null && FailedBuildInputs is null;
 }
 
