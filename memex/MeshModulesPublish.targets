@@ -71,21 +71,7 @@
     <!-- Social: flipped once the portal stopped compiling against it for the ApiCredential
          type (the module registers that itself now). Its closure ships here. -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Markdown.Export/MeshWeaver.Markdown.Export.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Observability/MeshWeaver.Observability.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.ContentCollections.Indexing.PostgreSql/MeshWeaver.ContentCollections.Indexing.PostgreSql.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Notifications.Channels/MeshWeaver.Notifications.Channels.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.OpenAI/MeshWeaver.AI.OpenAI.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.AzureFoundry/MeshWeaver.AI.AzureFoundry.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Teams/MeshWeaver.Teams.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.SelfUpdate.Aks/MeshWeaver.SelfUpdate.Aks.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.AI.WebSearch/MeshWeaver.AI.WebSearch.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Courses/MeshWeaver.Courses.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Mail.MicrosoftGraph/MeshWeaver.Mail.MicrosoftGraph.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Mcp/MeshWeaver.Mcp.csproj" />
     <!-- Import + its PRIVATE closure: the SIX MeshWeaver.DataSetReader* projects (the base, Csv,
          Excel, Excel.BinaryFormat, Excel.OpenXmlFormat, Excel.Utils) and MeshWeaver.DataStructures
          beneath them — nothing outside their own test project references any of them.
