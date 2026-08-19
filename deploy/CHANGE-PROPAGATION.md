@@ -41,7 +41,7 @@ starved job that never ran a step poisons that conclusion and would silently sto
 `staging-<sha>-<run_id>` tag; a `promote` job applies the real tags once every leg has succeeded,
 ending with `memex-portal-ai:<version>` — the one tag the in-pod self-updater acts on. So a leg
 that dies can no longer leave a portal increment the bake gate never certified (#1026). And a CD
-failure is no longer terminal: a 3-hourly schedule (plus `gh workflow run main-cd.yml --ref main`)
+failure is no longer terminal: an hourly schedule (plus `gh workflow run main-cd.yml --ref main`)
 asks whether main's HEAD has the complete set in ACR and publishes only if it does not, bounded at
 3 attempts per commit with every attempt written to the `ci-failure` issue. It heals **HEAD**, never
 the commit that failed — the version tag comes from the building run's number, so re-publishing

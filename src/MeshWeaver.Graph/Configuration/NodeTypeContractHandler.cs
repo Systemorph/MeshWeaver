@@ -72,7 +72,7 @@ internal static class NodeTypeContractHandler
         var workspace = hub.GetWorkspace();
         EnsureCompileDispatched(hub, workspace)
             .SelectMany(_ => workspace.GetMeshNodeStream()
-                .AwaitCompilationSettled()
+                .AwaitCompilationSettled(hub.JsonSerializerOptions)
                 .Take(1))
             .Timeout(SettleBudget)
             .SelectMany(node =>

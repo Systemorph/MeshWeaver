@@ -1,3 +1,4 @@
+using System;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Layout;
@@ -58,15 +59,13 @@ internal static class UiContributionProjection
                 contribution.Icon,
                 required,
                 contribution.Order,
-                // A declared Href wins (catalog-style links) — but ONLY a portal-internal one:
-                // Href is mesh DATA reaching NavigationManager, so schemes (javascript:, https:)
-                // and protocol-relative hosts are an XSS/phishing surface the closed vocabulary
-                // must not open. Anything non-internal falls back to the derived area URL —
-                // narrowing, never widening (#1645). Otherwise the entry opens its area on the
-                // anchoring node, like every built-in node-menu item.
-                Href: contribution.Href is { Length: > 0 } href && IsPortalInternalHref(href)
-                    ? href
-                    : MeshNodeLayoutAreas.BuildUrl(menuPath, area),
+                // A declared Href wins (catalog-style links), resolved through ResolveHref:
+                // the {node} token is substituted with the anchoring node and the result must be
+                // portal-INTERNAL, else the entry falls back to the derived area URL — narrowing,
+                // never widening (#1645). Otherwise the entry opens its area on the anchoring
+                // node, like every built-in node-menu item.
+                Href: ResolveHref(contribution.Href, menuPath)
+                      ?? MeshNodeLayoutAreas.BuildUrl(menuPath, area),
                 Tooltip: contribution.Tooltip)
                 { LabelKey = contribution.LabelKey, TooltipKey = contribution.TooltipKey });
         }
@@ -110,6 +109,37 @@ internal static class UiContributionProjection
                 { LabelKey = contribution.LabelKey, GroupKey = contribution.GroupKey });
         }
         return items;
+    }
+
+    /// <summary>
+    /// The one token a contributed <c>Href</c> may carry: the path of the node whose menu is being
+    /// rendered, substituted URL-escaped.
+    ///
+    /// <para><b>Why it exists.</b> Without it a data-contributed entry can only open an area on the
+    /// anchoring node itself — so a plugin that serves a node-anchored surface from its OWN
+    /// workspace (<c>/Plugin/Workspace/Area?doc={node}</c> — the shape Collaboration and Approvals
+    /// use, and the only shape available to a node-native package, which cannot register an area
+    /// onto another type's hub) had no way to name the current node. That gap is what kept such
+    /// features compiled into the platform.</para>
+    /// </summary>
+    internal const string NodeToken = "{node}";
+
+    /// <summary>
+    /// Resolves a declared Href: substitutes <see cref="NodeToken"/>, then applies the
+    /// portal-internal gate to the RESULT (never to the template — the check has to see what will
+    /// actually be navigated to). Returns null when there is no usable declared href, which is the
+    /// caller's signal to derive the area URL instead.
+    /// </summary>
+    internal static string? ResolveHref(string? href, string menuPath)
+    {
+        if (href is not { Length: > 0 })
+            return null;
+        // The token is replaced by a MESH PATH, escaped — so it can never introduce a scheme or a
+        // protocol-relative host, and the gate below still judges the final string.
+        var resolved = href.Contains(NodeToken, StringComparison.Ordinal)
+            ? href.Replace(NodeToken, Uri.EscapeDataString(menuPath ?? ""), StringComparison.Ordinal)
+            : href;
+        return IsPortalInternalHref(resolved) ? resolved : null;
     }
 
     /// <summary>

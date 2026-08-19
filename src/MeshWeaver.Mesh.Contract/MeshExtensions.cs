@@ -1742,7 +1742,9 @@ public static class MeshExtensions
                             // carries no grants AT ALL — the framework repairing its own failed
                             // bookkeeping, not an authorization decision.
                             return RepairOwnerlessPartitionGrant(
-                                hub, partition, t.root.Node, systemOwned: t.sync is not null,
+                                hub, partition, t.root.Node,
+                                systemOwned: AccessAssignmentGuard.IsSystemOwned(
+                                    t.sync, hub.JsonSerializerOptions),
                                 persistence, meshService, accessService, logger);
 
                         var healRoot = rootUsable
@@ -1757,7 +1759,11 @@ public static class MeshExtensions
                         // The self-heal still does its job for a user's own partition, which is
                         // what it exists for; it just no longer fires on a SYSTEM-OWNED one, where
                         // the caller is a deployer and never the owner.
-                        var systemOwned = t.sync is not null;
+                        // ONE definition (AccessAssignmentGuard.IsSystemOwned): a BIJECTIVE
+                        // sync is not system-owned — there the mesh nodes are the working
+                        // copy, so its creator keeps the ordinary ownership of the space.
+                        var systemOwned = AccessAssignmentGuard.IsSystemOwned(
+                            t.sync, hub.JsonSerializerOptions);
                         var mintGrant = isRealCreator && !grantExists && !systemOwned;
                         if (isRealCreator && !grantExists && systemOwned)
                             logger.LogInformation(
@@ -3281,8 +3287,9 @@ public static class MeshExtensions
     }
 
     /// <summary>
-    /// Emits the rejection reason when the node is a privileged grant on a SYSTEM-OWNED (GitSynced)
-    /// partition, else <c>null</c>. See <see cref="AccessAssignmentGuard.IsForbiddenOnSystemOwned"/>
+    /// Emits the rejection reason when the node is a privileged grant on a SYSTEM-OWNED partition
+    /// — a ONE-WAY GitSync; a bijective one is the working copy and grants are legal there — else
+    /// <c>null</c>. See <see cref="AccessAssignmentGuard.IsForbiddenOnSystemOwned"/>
     /// for why that shape is refused.
     ///
     /// <para><b>The storage read is paid for only by the shape that can fail.</b> The pure checks
@@ -3317,7 +3324,9 @@ public static class MeshExtensions
         var partition = AccessAssignmentGuard.PartitionOf(scope);
         return ReadNodeAuthoritative(hub, persistence, $"{partition}/_GitSync")
             .Select(sync => AccessAssignmentGuard.IsForbiddenOnSystemOwned(
-                node, assignment, systemOwned: sync is not null, out var reason)
+                node, assignment,
+                systemOwned: AccessAssignmentGuard.IsSystemOwned(sync, hub.JsonSerializerOptions),
+                out var reason)
                 ? reason
                 : null);
     }

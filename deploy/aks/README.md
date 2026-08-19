@@ -27,6 +27,7 @@ markdown only** — no application code changes.
 | Observability | **OpenTelemetry Collector DaemonSet** captures cluster-wide pod logs + portal OTLP → **Azure Files** log archive (`/mnt/otel-logs`); **Grafana + Loki + Promtail + Prometheus** in `monitoring` for search and dashboards |
 | Error ticketing | **`mw-log-watcher`** (optional, `monitoring`) reads red logs from Loki and opens one triaged GitHub issue per distinct fault — off until configured |
 | Identity | **Workload Identity (OIDC)** so pgBackRest reaches Blob **keyless** |
+| Instance lifecycle | **provision → suspend → tear down** driven from the mesh, with a verified `pg_dump` before anything is destroyed and an ingress-level paywall while suspended — see [INSTANCE-LIFECYCLE.md](INSTANCE-LIFECYCLE.md) |
 
 ### Topology
 
@@ -168,7 +169,7 @@ az deployment sub show --name memex-aks-infra \
 | `vpnClientRootCertData` | `""` | base64 root public cert (can add later) |
 | `deployBackupStorage` | `false` | self-managed pgBackRest blob; **off** because we use the managed private Flexible Server instead |
 | `deployPortalIdentity` | `true` | portal Workload Identity (UAMI + one federated credential per `portalNamespaces` entry) for the in-pod self-updater's **ACR polling**. Output `portalIdentityClientId` → `selfUpdate.azureClientId`. |
-| `portalNamespaces` | `["memex","prod","memex-cloud"]` | namespaces that run the portal; one federated credential each (subject `system:serviceaccount:<ns>:memex-portal-sa`). Add a namespace here for a new env. |
+| `portalNamespaces` | *(required — no default)* | namespaces that run the portal; one federated credential each (subject `system:serviceaccount:<ns>:memex-portal-sa`). Set it in `main.parameters.json`. Deliberately has no default: a default of `[]` would create zero credentials and still report success, leaving every portal pod unable to reach ACR with nothing to read. |
 | `grantSharedAcrPull` | `false` | author the portal UAMI's AcrPull on the **shared** cross-RG ACR in-bicep (needs UAA on `meshweaver-shared`); default = grant out-of-band like the kubelet. A per-deployment ACR is granted in-bicep regardless. |
 | `sharedAcrResourceGroup` | `meshweaver-shared` | RG of the shared ACR; used only when `grantSharedAcrPull=true`. |
 | `deployContentFileShares` | `true` | Azure Files account + named shares for **static** PV binding (dynamic provisioning needs no shares) |
@@ -527,10 +528,16 @@ Deploy steps, verification table, and how to turn it off: **[DEPLOY-RUNBOOK.md �
 Design and configuration reference:
 **[LogWatchTriage.md](../../src/MeshWeaver.Documentation/Data/Architecture/LogWatchTriage.md)**.
 
-A provisioned Grafana alert rule (`dashboards/memex-red-log-alerts.yaml`) covers the human-facing
-half — it shows red-log volume in Grafana but deliberately does **not** open tickets. Ticketing hangs
-off the watcher's cursor instead, because an alert notification that fires while its receiver is down
-is simply lost: acceptable for a nudge, not for "every distinct error gets a ticket".
+A provisioned Grafana alert rule covers the human-facing half — it shows red-log volume in Grafana
+but deliberately does **not** open tickets. Ticketing hangs off the watcher's cursor instead, because
+an alert notification that fires while its receiver is down is simply lost: acceptable for a nudge,
+not for "every distinct error gets a ticket".
+
+> The rule and the Grafana dashboards used to live here as `deploy/aks/dashboards/`. They are bound
+> to one Grafana's datasource UIDs and to specific namespaces — elsewhere they render empty panels
+> rather than failing — so they moved to the deployment repo alongside the environments they
+> describe. `scripts/import-dashboards.sh` is the generic importer and stays here; point it at
+> whatever dashboard JSON you have.
 
 ### Apply it
 
@@ -711,8 +718,9 @@ replicas** (the `portal-ha-patch.yaml` already sets 3).
 | **LinkedIn** | `ClientId`, `ClientSecret` | `https://portal.example.com/signin-linkedin` |
 
 - Setting `Authentication__Microsoft__TenantId` to a **real tenant GUID** (not
-  `common`) makes that AAD the **home** directory. This subscription's tenant is
-  `3a01d7ac-3330-444d-942d-975eb491b5d6` (Systemorph) and is pre-filled.
+  `common`) makes that AAD the **home** directory. `values.aks.yaml` ships the
+  `CHANGE_ME_aad_tenant_id` placeholder — fill it from
+  `az account show --query tenantId -o tsv`.
 - Any provider with a `ClientId` set is offered on the login page; the presence
   of external providers flips the portal into multi-provider mode and dev login
   is off in the Distributed image.

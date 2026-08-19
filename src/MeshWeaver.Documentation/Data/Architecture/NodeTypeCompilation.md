@@ -296,6 +296,66 @@ keeps running however long it needs (see the stage bounds above).
 
 ---
 
+## A fault card must not outlive its cause — the overlay RE-EVALUATES
+
+The overlay is a **degraded binding with a lifetime**, never a verdict. Enrichment binds a
+per-instance hub's configuration exactly once — the re-enrichment short-circuit
+(`node.HubConfiguration != null`) is what makes activation cheap — so a card applied during a
+bad ten seconds is served for the grain's whole lifetime unless something *revokes* it. That
+revocation is `ArmOverlaySelfHeal`, and its correctness rests on one rule:
+
+> 🚨 **The heal signal must not share a failure mode with the fault.** Both original heal routes
+> — the version-advance and the grace re-read — subscribe
+> `meshHub.GetWorkspace().GetMeshNodeStream(nodeType)`: *the same stream whose silence made the
+> enrichment slow path time out*. When that stream stops emitting, the fault and its cure vanish
+> together and the card is permanent.
+
+That is not hypothetical. On **2026-08-17** (issue #1814) a deploy left the first pod compiling
+269 types; page requests inside that window latched the card onto ~12 plugin roots
+(`Training`, `Video`, `RolePlay`, `Edu`, `Chess`, `Collaboration`, …). `Store/Plugin` then
+compiled **successfully on both pods** — and **1 h 24 m later** an anonymous browser still got
+the card, while neither pod had logged a single overlay or "did not settle" event in the
+preceding 30–40 minutes. Nothing was retrying. Recycling the twelve roots by hand was the only
+remedy, and the card's own copy ("the page recovers automatically … this instance recycles
+itself") was straightforwardly false.
+
+So the watcher has a third route that owes the stream nothing:
+
+- **`AuthoritativeTypeRead`** — a one-shot `path:{nodeType}` query through `IMeshQueryCore`, as
+  System. It reads the mesh's **query providers (storage)**, not a cached stream, so a mirror
+  that can never learn it is stale cannot suppress it.
+- **A widening ladder, not a poll** — `45 s → 90 s → 3 min → 6 min`, then **10 min for ever**
+  (`ReEvaluationLadder` / `ReEvaluationCeiling`). One read per rung, each capped by
+  `ReEvaluationReadTimeout` and serialised with `Concat`, so a slow read can never overlap the
+  next rung. At the 2026-08-17 blast radius that steady state is ~72 single-node reads an hour
+  across the whole mesh. **The ladder never stops** — a re-evaluation budget that ran out would
+  re-create precisely the defect it exists to remove.
+- **A faulted or empty read is not a verdict** — it is logged and the ladder asks again. Giving
+  up quietly is how the card latched in the first place.
+- **Loud on non-convergence** — a re-read that still finds no usable build logs the type's
+  status/assembly/framework; past the last rung it does so at `Warning`, next to the existing
+  admin notification at `StuckReportDelay`.
+
+### …and the recycle it orders is SPACED, because it destroys its own watcher
+
+The heal disposes the instance hub — taking the watcher with it. The replacement hub arms a
+**fresh** watcher whose ladder starts at the first rung, so a pair whose *re-enrichment* keeps
+faulting (a type that reports a usable build the instance still cannot bind — #1814's
+deterministic cross-hub `Conflict`) would recycle every 45 s for ever. No state inside the
+watcher can bound that, because the bound has to outlive the thing being bounded.
+
+`OverlayHealBudget` (mesh-scoped singleton, registered in `AddGraph`) is that memory, keyed by
+*(instance, NodeType)*. The **first** heal is never delayed; each further heal inside a 30-minute
+window waits out a widening spacing (45 s → 90 s → 3 min → 6 min → 10 min). It **defers** a
+recycle, never cancels one, and a pair that heals once and stays healthy is forgotten.
+
+Pinned by `OverlaySelfHealWatcherTest` (silent stream → heals unaided; still-broken type → keeps
+its card on single-digit reads per hour; faulted/empty read → ladder continues; non-converging
+loop → bounded recycles, with the un-budgeted control in the same test) and
+`OverlayHealBudgetTest`.
+
+---
+
 ## Cancelling a compile
 
 Compilation is an Activity, so it cancels through the **Activity Control Plane**
@@ -396,6 +456,63 @@ Anything else triggers a recompile. This makes a cold hub start **self-healing**
 | Cleaned-up cache / lost store bytes | The record still points at them | Activation store probe (`BytesMissing`) |
 | **MeshWeaver redeployed with a breaking change** | The cached DLL bound against the *old* framework surface (ABI-stale) | Rule 3 |
 | Module updated | The cached DLL may bind the replaced module's old ABI | Rule 4 |
+
+### A compile that FAILED is re-driven too — one attempt per set of inputs
+
+`HasUsableBuild` and its framework-stale twin both key on **assembly coordinates**, and a failed
+compile writes none: `ApplyCompileFailure` stamps neither `LatestAssembly{Collection,Path}` nor
+`CompiledFrameworkVersion`. For a NodeType that never compiled successfully *on this deployment*
+those stay null forever, so every automatic path used to skip it — the first-build kickoff needs a
+`null` status, the recovery kickoff needs `Compiling`, the framework-stale kickoff needs the
+coordinates, the release watcher needs a human, and the park registry's source-change auto-retry is
+in-memory (a failure that predates the process is not in it). Only a human pressing **Compile** got
+such a node out; a redeploy, a framework bump, a module update and a fix to the failing code reached
+none of them ([#1793](https://github.com/Systemorph/MeshWeaver/issues/1793); the fix written for
+fifteen types parked on memex-cloud could not reach the nodes it was written for).
+
+So a failure records the one thing it honestly can: **the inputs the verdict was formed from** —
+framework identity, installed-module fingerprint, and the source snapshot the compile consumed —
+folded into `NodeTypeDefinition.FailedBuildInputs`. The owner-side re-drive fires exactly when the
+LIVE inputs differ from that stamp:
+
+| What moved | Effect |
+|---|---|
+| A new framework (a redeploy, possibly carrying the fix) | one fresh attempt |
+| A module update | one fresh attempt |
+| An edited / added / removed source | one fresh attempt |
+| Nothing — same framework, modules and sources | **no attempt**: the identical failure would reproduce |
+| The stamp is `null` (a failure from before this field, or an `Error` baked into a node file) | one fresh attempt — the migration |
+| The source set has not been established yet (`CurrentSourceVersions` unwritten) | **no attempt — it WAITS**: "not known yet" is not "no sources", and a compile driven from a set nobody established forms a verdict from evidence the mesh does not have |
+
+It is bounded three ways, and the first is the one that does the work:
+
+1. **Structural.** The flip to `Pending` writes the live token **in the same update**, so the trigger
+   the re-drive fires on is false the instant it fires. A reconcile that can re-arm its own trigger
+   is the 257,000-version write-storm shape; the stamp forecloses it.
+2. **Loud.** A process-wide ledger (`NodeTypeCompileParkRegistry.RecordFailureRedrive`) logs an
+   **error naming the path** the moment a type is re-driven twice for the *same* inputs — i.e. the
+   moment (1) provably did not hold. Non-convergence is never quiet.
+3. **Terminal.** Past `MaxAutomaticFailureRedrives` the kickoff gives up for the hub's lifetime and
+   says so, naming the type, its error and the remedy. An explicit Compile refunds the budget.
+
+The re-drive is **owner-driven, never caller-driven**. It fires from the type's OWN hub on facts the
+node already holds; no request, and no requester's identity, is an input. The compile runs as System
+and its activity row lands in the owning partition attributed to System — exactly as the first-build,
+recovery and framework-stale kickoffs have always done — and no user's `RequestedReleaseAt` /
+`RequestedReleaseBy` is touched, so nothing is misattributed. An unauthorized caller who merely
+activates the hub therefore gains no lever: the trigger is a property of the persisted record, and
+the three inputs that can move it (framework identity, installed modules, the type's own source
+nodes) are all writable only by principals who already hold that access.
+
+And when the re-drive **declines** — a type settled at `Error`/`Unavailable` whose verdict was formed
+under exactly the live inputs — the hub logs one warning per activation naming the type, its error
+and why nothing will retry it. That state is correct and bounded, and before that line it was also
+completely silent: nothing anywhere named a NodeType that is broken and will not be retried.
+
+> 🚨 `FailedBuildInputs` is **mesh-owned operational state**: exports strip it, imports preserve the
+> live node's value, and `ShippedNodeTypeStateTest` bans it from committed node files. An authored
+> token that happened to match the importing deployment's live inputs would suppress precisely the
+> retry it exists to grant.
 
 ### Framework-version freezing
 

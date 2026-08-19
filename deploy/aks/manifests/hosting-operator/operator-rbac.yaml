@@ -1,0 +1,54 @@
+# What an operator JOB may do in the cluster. This is the widest grant in the deployment, and it
+# is deliberately attached to a ServiceAccount that only ever backs a short-lived Job — never a
+# long-running pod, and never the portal.
+#
+# Scope notes:
+#  * namespaces: create + delete is what provisioning and teardown ARE.
+#  * apps/deployments: scale (quiesce/reactivate) and read rollout status.
+#  * ingresses: the suspension redirect and its undo.
+#  * secrets/configmaps/pvc/services: what a Helm release of the portal chart owns.
+#  * NO access to `nodes`, `clusterroles`, or the monitoring namespace — a lifecycle run has no
+#    business there, and the day someone needs it is the day to review this file, not to widen it
+#    pre-emptively.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hosting-operator
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps", "services", "persistentvolumeclaims", "serviceaccounts"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["secrets-store.csi.x-k8s.io"]
+    resources: ["secretproviderclasses"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hosting-operator
+subjects:
+  - kind: ServiceAccount
+    name: hosting-operator
+    namespace: memex-ops
+roleRef:
+  kind: ClusterRole
+  name: hosting-operator
+  apiGroup: rbac.authorization.k8s.io

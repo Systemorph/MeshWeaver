@@ -78,11 +78,27 @@ on:
     workflows: ["MeshWeaver Build and Test"]
     types: [completed]
   # Reconcile cadence. Off the hour on purpose (the top of the hour is GitHub's most contended
-  # scheduling slot). 3 h sits comfortably inside the installs' 6 h self-update poll, so a healed
-  # image is picked up on the very next poll. A healthy tick is ONE ~40 s job — ~5 min of runner
-  # time a day — because `gate` stops the moment ACR says the set is complete.
+  # scheduling slot).
+  #
+  # 🚨 THIS CADENCE IS THE PUBLISH-LATENCY BOUND, not the batch window. A merge that batching
+  # declines leaves main's HEAD without an image set, which is precisely the state the reconciler
+  # exists to close — so it ships on the NEXT tick whatever the window is set to. At the former
+  # 3 h that made the worst case ~3 h from merge to published image, which the maintainer rejected
+  # on 2026-08-17 ("3 hour window is not acceptable"). Hourly bounds it at ~1 h + the ~20 min
+  # build (~30 min expected), and makes the batch window safe: coalescing no longer buys the tail.
+  #
+  # A healthy tick is ONE ~40 s job — `gate` stops the moment ACR says the set is complete — so
+  # 24 ticks/day costs ~15 min of runner time a day, up from ~5 min. Runner time is NOT what caps
+  # this, though; the 3-attempts-per-commit budget already bounds the failing case.
+  #
+  # 🚨 WHY NOT FASTER: since #1773 an install rolls per PUBLICATION event, and nothing paces the
+  # rolls — `UpdatePolicyKind` picks a channel (Continuous/Stable/None), not a cadence, and the
+  # `SelfUpdate__PollInterval: 1.00:00:00` that deliberately held AKS to ONE roll/day (2026-08-10)
+  # binds to an option that no longer exists. So publication frequency is now portal-RESTART
+  # frequency, one-for-one. Hourly is the fastest tick that is defensible until a roll floor lands
+  # (#1778); tighten it once an install can decline to roll, not before.
   schedule:
-    - cron: "23 */3 * * *"
+    - cron: "23 * * * *"
   workflow_dispatch:
 
 # id-token: write is required for OIDC federated login to Azure (no stored client secret).
@@ -277,7 +293,7 @@ jobs:
       # what separates "nothing is wrong" from "main's HEAD cannot ship AND has no images", and the
       # second one has to be said out loud: if Build-and-Test never ran on HEAD (a CI incident, a
       # stalled queue — AGENTS.md's trap #1), the check reads `missing`, nothing can publish that
-      # commit, and without this the reconciler would go quiet about it every 3 h forever.
+      # commit, and without this the reconciler would go quiet about it on every tick forever.
       - name: Ensure Azure CLI
         if: steps.target.outputs.reason == 'reconcile' || vars.CD_BATCH_WINDOW_MINUTES != ''
         run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
@@ -290,9 +306,18 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       # ── BATCHING (push path only, opt-in via repo var CD_BATCH_WINDOW_MINUTES) ─────────────
       # Maintainer 2026-08-16: "batch updates are ok." A merge landing while the NEWEST published
-      # version tag is younger than the window does not publish; the 3-hourly reconciler then
+      # version tag is younger than the window does not publish; the hourly reconciler then
       # publishes main's tip on its next tick (its registry-first probe sees the missing set and
       # heals it — that machinery predates batching and re-checks the required check itself).
+      #
+      # 🚨 So the WINDOW controls coalescing, and the RECONCILE CADENCE controls the tail — they
+      # are not the same knob, and raising the window does not delay a merge by the window. Both
+      # were 3 h until 2026-08-17, which is why a merge could sit unpublished that long; the
+      # maintainer rejected that ("3 hour window is not acceptable"). Now: window **60 min** (the
+      # repo var `CD_BATCH_WINDOW_MINUTES` — this comment does not set it, so treat the variable as
+      # the authority and this line as its intent), ticks **hourly** (`23 * * * *`). A lone fix
+      # landing more than an hour after the last publish ships at once; a batched one waits at
+      # most one tick.
       # `workflow_dispatch` bypasses the window by construction (it enters via the reconcile
       # branch), so an urgent fix ships immediately with one manual run.
       # 🚨 FAILS OPEN: if the registry cannot be read, the age reports 999999 and the merge
@@ -335,21 +360,57 @@ jobs:
       # ── The decision, and (reconcile only) the ATTEMPT BUDGET ──────────────────────────────
       # A reconciler that cannot succeed must not grind forever. Persistent failure here means
       # main's HEAD genuinely does not build an image — a human has to act — and re-attempting
-      # every 3 h would burn ~75 min of runner time a tick and drip identical comments onto an
+      # on every tick would burn ~75 min of runner time a tick and drip identical comments onto an
       # issue nobody would keep reading. So the budget is 3 attempts PER COMMIT, and the ledger
       # is the `ci-failure` issue itself: the surface a human already watches, no new state store.
       #
       #   * The slot is consumed when an attempt STARTS, not when it fails — a run that dies
       #     without reporting must not buy an infinite supply of retries.
       #   * A new HEAD resets the budget naturally (the marker carries the SHA).
+      #   * 🚨 This budget is also what makes the hourly cadence affordable: a broken HEAD
+      #     costs 3 attempts PER COMMIT, not per tick, so a 6× faster reconcile multiplies only
+      #     the ~40 s healthy probe — never the ~75 min failing one.
       #   * On exhaustion it stops attempting, says so ONCE, and labels the issue `cd-unhealed`.
       #     Later ticks then cost ~40 s and print nothing — loud once, then quiet, which is the
       #     opposite of a repeating alarm nobody reads. Closing the issue is a deliberate human
       #     act and legitimately grants a fresh budget.
+      - name: "Are there image-relevant changes since the newest published set?"
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -uo pipefail
+          # Paths that PROVABLY enter no published image: the standalone clients (a Python LAN
+          # gateway and the Expo app — neither is COPY'd by any Dockerfile in the set). A merge
+          # touching ONLY these must not cost a ~20-minute five-image build and a fleet roll.
+          # 🚨 FAIL-OPEN: any doubt — no published set, unresolvable base, unreadable compare —
+          # publishes as today. The only way to skip is a POSITIVE finding that every changed
+          # file since the newest PUBLISHED set matches the list. Diffing against the newest
+          # published set (not HEAD^) is what keeps the reconciler stable: a skipped tip differs
+          # from the last set only by irrelevant files, so the reconcile branch skips it too
+          # instead of "healing" it back into a build every tick.
+          IRRELEVANT='^clients/(react-native|voice-gateway)/'
+          relevant=true
+          newest_short=$(az acr repository show-tags -n meshweaver --repository memex-portal-ai \
+            --orderby time_desc --top 60 --query "[].name" -o tsv 2>/dev/null \
+            | grep -E '^[0-9a-f]{7}$' | head -1 || true)
+          if [ -n "$newest_short" ] && [ "$newest_short" != "$(printf '%s' "$SHA" | cut -c1-7)" ]; then
+            base=$(gh api "repos/$GITHUB_REPOSITORY/commits/$newest_short" --jq .sha 2>/dev/null || true)
+            if [ -n "$base" ]; then
+              files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$SHA" --jq '.files[].filename' 2>/dev/null || true)
+              if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE "$IRRELEVANT"; then
+                relevant=false
+              fi
+            fi
+          fi
+          echo "Newest published set: ${newest_short:-<none>}; image-relevant changes since: $relevant"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
       - name: "Decide"
         id: decide
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEVANT: ${{ steps.relevance.outputs.relevant }}
           SHORT: ${{ steps.target.outputs.short_sha }}
           REASON: ${{ steps.target.outputs.reason }}
           GREEN: ${{ steps.required.outputs.green }}
@@ -375,11 +436,13 @@ jobs:
           if [ "$REASON" = "push" ]; then
             if [ "$GREEN" != "true" ]; then
               decision false "⛔ \`Consolidate test results\` on $SHORT is \`$CONCL\` — nothing will be built"
+            elif [ "$RELEVANT" = "false" ]; then
+              decision false "⏭️ Only image-irrelevant paths (standalone clients) changed since the newest published set — no image build for \`$SHORT\`"
             # Batching window (see the freshness probe above): a green merge inside the window
             # defers to the reconciler's next tick. Deliberately SILENT beyond the summary — this
             # is intentional cadence, not a fault, and the reconciler self-heals it by design.
             elif [ -n "${BATCH_WINDOW:-}" ] && [ "${FRESH_AGE_MIN:-999999}" -lt "$BATCH_WINDOW" ]; then
-              decision false "🕐 Batched: newest published set is ${FRESH_AGE_MIN} min old (< ${BATCH_WINDOW} min window) — the 3-hourly reconciler will publish main's tip; run this workflow manually to ship now"
+              decision false "🕐 Batched: newest published set is ${FRESH_AGE_MIN} min old (< ${BATCH_WINDOW} min window) — the reconciler publishes main's tip within the hour; run this workflow manually to ship now"
             else
               decision true "✅ Required check green — publishing the full image set for \`$SHORT\`"
             fi
@@ -391,6 +454,14 @@ jobs:
           # the overwhelmingly common tick and it ends here, having cost ~40 s and said nothing.
           if [ "$COMPLETE" = "true" ]; then
             decision false "✅ main \`$SHORT\` already has a complete image set — nothing to reconcile"
+            exit 0
+          fi
+
+          # A tip that differs from the newest PUBLISHED set only by image-irrelevant paths is
+          # NOT unhealed state — it is the deliberate skip above, seen from the next tick. Without
+          # this the reconciler would "heal" every skipped clients-only merge back into a build.
+          if [ "$RELEVANT" = "false" ]; then
+            decision false "⏭️ main \`$SHORT\` differs from the newest published set only in image-irrelevant paths — nothing to reconcile"
             exit 0
           fi
 
@@ -482,7 +553,7 @@ jobs:
               gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$(printf '%s\n\n%s\n\n%s' \
                 "<!-- cd-heal-stopped:$SHORT -->" \
                 "🛑 **Automatic healing STOPPED for \`$SHORT\`** after $MAX_ATTEMPTS attempts." \
-                "main's HEAD still has no complete image set, so **no install will ever roll forward** until a human acts: fix whatever fails in the image jobs of the linked runs and merge, or close this issue to grant the reconciler a fresh budget. The 3-hourly reconcile will not attempt \`$SHORT\` again.")"
+                "main's HEAD still has no complete image set, so **no install will ever roll forward** until a human acts: fix whatever fails in the image jobs of the linked runs and merge, or close this issue to grant the reconciler a fresh budget. The reconciler will not attempt \`$SHORT\` again.")"
             fi
             decision false "🛑 heal budget exhausted for \`$SHORT\` ($MAX_ATTEMPTS attempts) — not retrying"
             exit 0
@@ -836,7 +907,7 @@ jobs:
   #   * a failure IN C is a single PUT that either happened or did not — there is no half-armed
   #     state to unwind.
   #   * whatever the failure, `verify-images` below still fails and `alert-on-failure` still
-  #     files the issue, and the 3-hourly reconciler re-drives HEAD.
+  #     files the issue, and the hourly reconciler re-drives HEAD.
   # Deliberately NOT here: a cleanup pass that untags staging. It would buy nothing — accumulating
   # tags per .NET repo per run go DOWN, 6 → 5 (staging index + its two RID variants + version +
   # sha, versus today's version/sha indexes plus four RID-suffixed variants) — and it would add a
@@ -908,7 +979,7 @@ jobs:
           # 🚨 In phase B ON PURPOSE, so a GHCR outage BLOCKS the release rather than silently
           # leaving the plugins repo's `latest` stale. It is a real coupling and it is the lesser
           # evil: check-image-set.sh only sees ACR, so a GHCR miss after phase C would never be
-          # reconciled and nothing would ever notice. Here it fails CD, alerts, and the 3-hourly
+          # reconciled and nothing would ever notice. Here it fails CD, alerts, and the hourly
           # reconciler re-drives HEAD until it lands or the budget escalates.
           NS=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
           docker buildx imagetools create \
@@ -1125,6 +1196,78 @@ jobs:
           echo "BAKE_DIR=$BAKE" >> "$GITHUB_ENV"
           echo "baked identity: $(cat "$BAKE/framework-mvid.txt")"
           ls -l "$BAKE"/*.zip
+      # ─────────── THE ADDRESS CHECK — publish only to an address the portal actually reads ───────────
+      # 🚨 The framework identity is an ADDRESS, and until now NOTHING in this pipeline could observe
+      # that the producer and the consumer disagree about it. The bake publishes under the identity
+      # ITS host (mw-plugin-test) resolves; a portal only ever looks under the identity IT resolves.
+      # When the two differ the bundles are published, intact, to a directory no pod will ever open —
+      # so every publication-side check passes, this job goes green, and the pods compile everything
+      # at boot exactly as if the bake lane did not exist.
+      #
+      # That is not hypothetical. CD run 32063444385 baked release 3.0.0-rc4.ci.4201 (commit 493e1992)
+      # under sda0843abd6db4fc7e37cc3f838079265 while both prod pods asked for
+      # s944d7fd0bbf81f4b40b85a7a74296263 and logged "no CI-published bundles for framework identity".
+      # The first pod of that deploy compiled 269 NodeTypes over 10 m 29 s (+1598 MB working set); the
+      # second adopted from what the FIRST had compiled, not from CI. During that window ~12 instance
+      # hubs latched a compilation-fallback card and served it to anonymous visitors for two hours —
+      # every course cover on memex.meshweaver.cloud. Issue #1814.
+      #
+      # The cause was one host losing eight canonical assemblies from its surface manifest, which no
+      # amount of publication-side checking can see. A one-line comparison of the two VALUES can, and
+      # this is it. It runs BEFORE the publish on purpose: a bake nobody can adopt must fail the
+      # release rather than be filed under an address nobody reads. The release marker is then never
+      # written, so the deployment gate (#1754) holds too — fail-safe in both directions.
+      #
+      # 🚨 --platform linux/amd64 on BOTH pulls, out loud. The identity is per-architecture (the same
+      # four reference assemblies differ between the amd64 and arm64 legs of one multi-arch image), so
+      # a multi-arch image carries two identities and comparing across legs would be meaningless. Every
+      # AKS node is amd64 and the bake above already pins amd64; this pins the portal side to match.
+      # (An arm64 install — memex.localhost — resolves the OTHER identity and compiles locally; that is
+      # the second, independent way to mint an unread address, and publishing a second copy under it to
+      # "cover" it is forbidden: a bake is adoptable only when its producer ran the consumer's binaries.)
+      #
+      # The comparison is done by the bake image's own `framework-identity` verb, which resolves the
+      # identity of ANOTHER directory from that directory's meshweaver-surface.manifest and assemblies
+      # as FILES — nothing is loaded, so one container answers for the other image's /app. It refuses
+      # to answer for a directory with no usable manifest rather than degrading to the fallback
+      # identity: two manifest-less hosts of one commit resolve the SAME fallback, and a comparison
+      # that passes on degraded input would be a check that cannot fail.
+      - name: "Assert the bake's identity is the one the PROMOTED PORTAL IMAGE resolves"
+        env:
+          BAKE_IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+          PORTAL_IMAGE: ${{ env.ACR }}/memex-portal-ai:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          BAKED="$(tr -d '[:space:]' < "$BAKE_DIR/framework-mvid.txt")"
+          echo "the bake published under: $BAKED"
+          # The STAGING tag is this run's exact, immutable image — `main`/`latest` are moving
+          # pointers a concurrent CD run can re-aim mid-job, which would compare this bake against
+          # somebody else's build.
+          docker pull --quiet --platform linux/amd64 "$PORTAL_IMAGE"
+          STAGE="$RUNNER_TEMP/portal-image"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cid="$(docker create --platform linux/amd64 "$PORTAL_IMAGE")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          # /app is ~306 MB (it is the app, not the base image), so copying it whole is cheap and
+          # uses nothing but `docker cp` — no tar wildcard flags that differ between tar flavours.
+          docker cp "$cid:/app" "$STAGE"
+          if [ ! -s "$STAGE/app/meshweaver-surface.manifest" ]; then
+            echo "::error::the promoted portal image ships no /app/meshweaver-surface.manifest, so it resolves the stamp/MVID FALLBACK identity and can adopt NO bake at all. That is the #1699 shape (the manifest missing from the publish output). Fix the image — do not publish a bake it cannot read."
+            exit 1
+          fi
+          echo "portal /app: $(ls "$STAGE/app"/MeshWeaver.*.dll | wc -l) MeshWeaver assemblies, $(wc -l < "$STAGE/app/meshweaver-surface.manifest") manifest lines"
+          # `--init` so a crashed tester exits instead of spinning as an unkillable PID 1 (#1741).
+          # The verb prints the portal's identity, compares it with the bake's, and on a mismatch
+          # names the canonical assemblies whose absence caused it — the actual defect in #1814 was
+          # eight of them, not "a hash that differs".
+          docker run --rm --init --platform linux/amd64 -v "$STAGE/app:/portal:ro" \
+            --entrypoint /app/mw-plugin-test "$BAKE_IMAGE" \
+            framework-identity /portal --expect "$BAKED"
+          {
+            echo "### 🔑 Bake address verified"
+            echo "- \`$BAKED\` — resolved by BOTH the bake host and the promoted \`memex-portal-ai\` image (linux/amd64)"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: "Publish bundles to every portal target"
         env:
           BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
@@ -1369,7 +1512,7 @@ jobs:
             --color B60205 --force || echo "::warning::could not ensure the ci-failure label (continuing to file the alert)"
           body="CD failed on main: [run ${GITHUB_RUN_ID}](${RUN_URL}) for commit \`${HEAD_SHA}\` (entered via \`${REASON:-unknown}\`).
 
-          No complete image set was published - publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set. Triage the failed job in the linked run. The 3-hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
+          No complete image set was published - publication is all-or-nothing, so every self-updating install stays on the PREVIOUS image until a CD run promotes the full set. Triage the failed job in the linked run. The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. Close this issue once CD is green."
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label ci-failure --state open \
             --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then

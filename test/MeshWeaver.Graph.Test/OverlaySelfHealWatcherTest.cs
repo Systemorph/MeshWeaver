@@ -1,4 +1,6 @@
 using System;
+using System.Reactive.Concurrency;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Microsoft.Reactive.Testing;
 using MeshWeaver.Graph.Configuration;
@@ -262,5 +264,254 @@ public class OverlaySelfHealWatcherTest
         watcher.Dispose();
         typeStream.OnNext(TypeNode(version: 7, usable: true));
         AssertNoDispose(hub);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Issue #1814 defect B — the LATCHING fault card.
+    //
+    // Every test above drives the watcher by pushing onto typeStream, which quietly assumes the
+    // thing that failed on memex on 2026-08-17: that the stream emits at all. It did not. Both
+    // heal routes above read meshHub.GetWorkspace().GetMeshNodeStream(nodeType) — the same stream
+    // whose silence made the enrichment slow path time out in the first place — so the heal signal
+    // and the fault shared a single point of failure, and the grace route's re-subscribe replays
+    // the workspace's cached snapshot rather than re-reading anything. Result: twelve plugin roots
+    // served the fault card for 1 h 24 m AFTER Store/Plugin had compiled successfully on both
+    // pods, with no overlay and no "did not settle" event logged in the preceding 30–40 minutes.
+    // Nothing was retrying; the card was cached on the instance hub and served. Recycling by hand
+    // was the only remedy, twelve times.
+    //
+    // The invariant these pin: an instance serving the overlay for a type whose build subsequently
+    // settles to Ok stops serving it WITHOUT external intervention, within a bounded time — and a
+    // type that is still broken keeps its card.
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// 🚨 THE 2026-08-17 memex OUTAGE, as a unit. The type stream is PERMANENTLY SILENT after the
+    /// at-overlay emission (a cross-process write this reader's mirror is never told about), while
+    /// the authoritative record has since settled to a usable build. Neither the version-advance
+    /// route nor the grace route can ever see it — they are both fed by that stream. The instance
+    /// must still stop serving the card, on its own, inside the first ladder rung.
+    /// </summary>
+    [Fact]
+    public void SilentTypeStream_ReEvaluatesFromStorage_AndHealsWithoutIntervention()
+    {
+        var hub = BuildInstanceHub(out _);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        var reads = 0;
+        // What the store holds: Store/Plugin, compiled, Ok, assembly published, framework matching
+        // — the exact node read off prod at 22:19 while every cover was still showing the card.
+        var authoritative = TypeNode(version: 3259, usable: true);
+
+        using var watcher = NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+            typeStream, hub, NodeTypePath, typeVersionAtOverlay: null, logger: null, scheduler,
+            guards: null,
+            reRead: () =>
+            {
+                reads++;
+                return Observable.Return<MeshNode?>(authoritative);
+            });
+
+        // The at-overlay state, and then silence for ever — nothing else is ever pushed.
+        typeStream.OnNext(TypeNode(version: 3259, usable: false));
+
+        // Before the first rung the card stands: re-evaluation is bounded, not a per-render probe.
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(44).Ticks);
+        reads.Should().Be(0, "the ladder must not read before its first rung");
+        AssertNoDispose(hub);
+
+        // First rung: the instance recycles ITSELF off the card — no operator, no recycle by hand,
+        // no emission on the type stream. This is the assertion the 2026-08-17 code cannot satisfy.
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(2).Ticks);
+        AssertDisposedExactlyOnce(hub);
+        reads.Should().Be(1, "one read per rung — never a poll");
+
+        // Take(1) still holds: the hub is going away, so exactly one recycle is posted.
+        scheduler.AdvanceBy(TimeSpan.FromHours(1).Ticks);
+        AssertDisposedExactlyOnce(hub);
+    }
+
+    /// <summary>
+    /// The other half of the invariant: a type that is GENUINELY broken keeps its card. The ladder
+    /// must not paper over a parked type — and it must stay a ladder: over a full hour of a silent
+    /// stream and a never-usable record it costs single-digit reads, not a poll.
+    /// </summary>
+    [Fact]
+    public void StillBrokenType_KeepsItsCard_AndTheLadderStaysBounded()
+    {
+        var hub = BuildInstanceHub(out _);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        var reads = 0;
+
+        using var watcher = NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+            typeStream, hub, NodeTypePath, typeVersionAtOverlay: null, logger: null, scheduler,
+            guards: null,
+            reRead: () =>
+            {
+                reads++;
+                // Still no usable build — the source is broken and the type is parked.
+                return Observable.Return<MeshNode?>(TypeNode(version: 3259, usable: false));
+            });
+
+        scheduler.AdvanceBy(TimeSpan.FromHours(1).Ticks);
+
+        AssertNoDispose(hub);
+        reads.Should().BeGreaterThan(3, "the ladder keeps looking — giving up is how the card latched");
+        reads.Should().BeLessThan(12,
+            "45s/90s/3m/6m then 10m: an hour of a broken type costs single-digit reads, "
+            + "never a retry storm on a mesh that is already struggling");
+
+        // …and the moment the record does become usable, the very next rung heals it.
+        var beforeHeal = reads;
+        scheduler.AdvanceBy(TimeSpan.FromMinutes(11).Ticks);
+        reads.Should().BeGreaterThan(beforeHeal);
+        AssertNoDispose(hub);
+    }
+
+    /// <summary>
+    /// A read that cannot be answered is not a verdict. The ladder logs it and asks again at the
+    /// next rung — the opposite of the swallow-and-stop that made the card permanent.
+    /// </summary>
+    [Fact]
+    public void FaultedReRead_DoesNotEndTheLadder()
+    {
+        var hub = BuildInstanceHub(out _);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        var reads = 0;
+
+        using var watcher = NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+            typeStream, hub, NodeTypePath, typeVersionAtOverlay: null, logger: null, scheduler,
+            guards: null,
+            reRead: () => ++reads == 1
+                // First rung: the mesh hub is busy and the read faults.
+                ? Observable.Throw<MeshNode?>(new TimeoutException("query did not answer"))
+                // Second rung: it answers, and the answer is a usable build.
+                : Observable.Return<MeshNode?>(TypeNode(version: 3259, usable: true)));
+
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(46).Ticks);
+        reads.Should().Be(1);
+        // A faulted read must not be read as "still broken" — nor as "healed".
+        AssertNoDispose(hub);
+
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(91).Ticks);
+        reads.Should().Be(2);
+        AssertDisposedExactlyOnce(hub);
+    }
+
+    /// <summary>
+    /// An EMPTY authoritative read — no node at that path — is not a heal signal either.
+    /// </summary>
+    [Fact]
+    public void EmptyReRead_IsNotAHealSignal()
+    {
+        var hub = BuildInstanceHub(out _);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+
+        using var watcher = NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+            typeStream, hub, NodeTypePath, typeVersionAtOverlay: null, logger: null, scheduler,
+            guards: null,
+            reRead: Observable.Empty<MeshNode?>);
+
+        scheduler.AdvanceBy(TimeSpan.FromMinutes(30).Ticks);
+        AssertNoDispose(hub);
+    }
+
+    /// <summary>
+    /// 🚨 The recycle destroys the watcher that ordered it, so the anti-loop bound cannot live in
+    /// the watcher. <see cref="OverlayHealBudget"/> is the memory that survives: a pair that has
+    /// already recycled itself several times has its next recycle DEFERRED — never cancelled — so a
+    /// non-converging instance costs one activation per widening step instead of one per rung.
+    /// </summary>
+    [Fact]
+    public void RepeatedlyStuckInstance_HasItsNextRecycleDeferred_NeverCancelled()
+    {
+        var hub = BuildInstanceHub(out _);
+        var typeStream = new Subject<MeshNode>();
+        var scheduler = new TestScheduler();
+        var budget = new OverlayHealBudget();
+
+        // This instance has already self-healed three times against this type inside the window —
+        // i.e. it recycled, re-enriched, and landed right back on the card. Spacing after three
+        // heals is three minutes.
+        budget.RecordHeal(InstancePath, NodeTypePath, scheduler.Now);
+        budget.RecordHeal(InstancePath, NodeTypePath, scheduler.Now);
+        budget.RecordHeal(InstancePath, NodeTypePath, scheduler.Now);
+
+        using var watcher = NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+            typeStream, hub, NodeTypePath, typeVersionAtOverlay: null, logger: null, scheduler,
+            guards: null,
+            reRead: () => Observable.Return<MeshNode?>(TypeNode(version: 3259, usable: true)),
+            budget: budget);
+
+        // The ladder's first rung finds a usable build at 45s — but the budget holds the recycle.
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(46).Ticks);
+        AssertNoDispose(hub);
+
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(133).Ticks);
+        // Still inside the 3-minute spacing that three prior heals earned.
+        AssertNoDispose(hub);
+
+        // DEFERRED, never dropped: the recycle lands the instant the spacing elapses.
+        scheduler.AdvanceBy(TimeSpan.FromSeconds(2).Ticks);
+        AssertDisposedExactlyOnce(hub);
+        budget.HealsSoFar(InstancePath, NodeTypePath, scheduler.Now).Should().Be(4);
+    }
+
+    /// <summary>
+    /// The property that matters operationally: an instance whose re-enrichment keeps faulting
+    /// (recycle → re-overlay → recycle) must not spin. Drives the real loop — every posted
+    /// DisposeRequest tears the watcher down and a fresh one is armed, exactly as a hub recycle
+    /// does — and counts the recycles over a virtual hour.
+    /// </summary>
+    [Fact]
+    public void NonConvergingInstance_RecyclesAreSpaced_NotOncePerLadderRung()
+    {
+        WithBudget(new OverlayHealBudget()).Should().BeLessThan(12,
+            "a pair that never converges backs off to one recycle per ten minutes");
+        WithBudget(null).Should().BeGreaterThan(40,
+            "the control: with no cross-recycle memory every fresh watcher restarts at the first "
+            + "rung, which is the storm the budget exists to prevent");
+
+        static int WithBudget(OverlayHealBudget? budget)
+        {
+            var scheduler = new TestScheduler();
+            var recycles = 0;
+            IDisposable? current = null;
+            var hub = Substitute.For<IMessageHub>();
+            hub.Address.Returns(new Address(InstancePath));
+
+            IDisposable Arm() => NodeTypeEnrichmentHelpers.ArmOverlaySelfHeal(
+                // Silent for ever, and the record always reports a usable build the instance
+                // nevertheless cannot bind — the 2026-08-17 shape.
+                new Subject<MeshNode>(), hub, NodeTypePath,
+                typeVersionAtOverlay: null, logger: null, scheduler, guards: null,
+                reRead: () => Observable.Return<MeshNode?>(TypeNode(version: 3259, usable: true)),
+                budget: budget);
+
+            hub.Configure()
+                .Post(Arg.Any<DisposeRequest>(),
+                    Arg.Do<Func<PostOptions, PostOptions>>(_ =>
+                    {
+                        recycles++;
+                        var dying = current;
+                        // The recycle: this hub (and its watcher) goes away, the next access
+                        // re-enriches, faults again, and arms a FRESH watcher. Deferred by one
+                        // virtual tick so the watcher is not disposed from inside its own OnNext.
+                        scheduler.Schedule(TimeSpan.Zero, () =>
+                        {
+                            dying?.Dispose();
+                            current = Arm();
+                        });
+                    }))
+                .Returns((IMessageDelivery<DisposeRequest>?)null);
+
+            current = Arm();
+            scheduler.AdvanceBy(TimeSpan.FromHours(1).Ticks);
+            current?.Dispose();
+            return recycles;
+        }
     }
 }
