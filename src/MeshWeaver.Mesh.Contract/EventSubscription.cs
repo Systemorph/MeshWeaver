@@ -54,7 +54,15 @@ public enum EventContinuationType
     /// cycle. It resolves an <see cref="IEventContinuationHandler"/> for this type from DI instead
     /// (<c>SocialExtensions.AddSocial</c> registers the LinkedIn one). With no handler registered the
     /// subscription fails loudly rather than silently doing nothing.</para></summary>
-    PublishSocialPost = 3
+    PublishSocialPost = 3,
+    /// <summary>Reconcile the mesh's social posts against what the network actually shows — match
+    /// each published post to its live counterpart and update the record (its network id, the
+    /// moment it went out, its engagement). Handled out of process-tree like
+    /// <see cref="PublishSocialPost"/>, via a registered <see cref="IEventContinuationHandler"/>.
+    ///
+    /// <para>Unlike publishing, this is READ-ONLY against the network and idempotent, which is what
+    /// makes it safe to pair with <see cref="EventSubscription.RepeatEvery"/> as a nightly job.</para></summary>
+    SyncSocialHistory = 4
 }
 
 /// <summary>
