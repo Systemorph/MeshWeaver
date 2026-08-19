@@ -278,6 +278,33 @@ public static class PackageInstaller
     private static readonly TimeSpan WarmTimeout = TimeSpan.FromSeconds(90);
 
     /// <summary>
+    /// How long a warmed root is given to become READABLE — i.e. for the activation-triggered
+    /// gating pass to write its cover grant — before the installer gives up waiting and says so.
+    ///
+    /// <para>🚨 This exists because <b>warmed is not gated</b>. Warming completes as soon as the
+    /// root NODE can be read; the gating pass that seeds the cover grants runs as a CONSEQUENCE of
+    /// that activation, asynchronously. So without this wait the installer reports a clean install
+    /// while the partition is still dark, and the first viewer to open <c>{package}/Subscribe</c>
+    /// is denied — measured at 12–17 s, and the whole reason MeshWeaver.Education's disposable-mesh
+    /// e2e fails non-deterministically with <c>Access denied: user 'e2e-admin' lacks Read
+    /// permission on '{course}'</c> followed by a 180 s coupon timeout.</para>
+    ///
+    /// <para>Shorter than <see cref="WarmTimeout"/> on purpose: the hub is already up by the time
+    /// this starts, so the only thing outstanding is one access-table write.</para>
+    /// </summary>
+    private static readonly TimeSpan GatingSettleTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The cover grant a gating node type writes at its partition root — the ONE observable proof
+    /// that the partition has become readable rather than merely present.
+    ///
+    /// <para>Declared here as a well-known PATH rather than by asking the type, because core cannot
+    /// introspect a plugin-side configuration lambda. A partition whose type does not gate simply
+    /// never writes it, which this treats as "nothing to wait for", never as a failure.</para>
+    /// </summary>
+    internal static string CoverGrantPath(string partition) => $"{partition}/_Access/Public_Access";
+
+    /// <summary>
     /// ACTIVATES each partition root this install just wrote, by opening its node stream once.
     ///
     /// <para>🚨 Without this a fresh install lands <b>DARK</b>. An install runs entirely as SYSTEM and
@@ -309,6 +336,37 @@ public static class PackageInstaller
     /// <para>Hooks are best-effort: the content is already committed by the time they run, so a
     /// failing hook is logged and never fails the install.</para>
     /// </summary>
+    /// <summary>
+    /// Waits for <paramref name="root"/>'s cover grant to exist, so an install that has returned
+    /// really is readable.
+    ///
+    /// <para>Bounded by <see cref="GatingSettleTimeout"/> and never fatal: a partition whose node
+    /// type does not gate never writes the grant, and that is a normal, common shape (a course
+    /// copied into a viewer's home, a plain data partition). The timeout is therefore the
+    /// "nothing to wait for" answer as well as the "gating did not settle" answer — which is why
+    /// it LOGS the distinction it can observe instead of pretending to know which it was.</para>
+    /// </summary>
+    private static IObservable<Unit> WaitForGating(
+        IWorkspace workspace, string root, ILogger? logger) =>
+        workspace.GetMeshNodeStream(CoverGrantPath(root))
+            .Where(node => node is not null)
+            .Take(1)
+            .Select(_ => Unit.Default)
+            .Do(_ => logger?.LogInformation(
+                "[PackageInstaller] root {Root} is gated and readable — its cover grant landed",
+                root))
+            .Timeout(GatingSettleTimeout)
+            .Catch<Unit, Exception>(_ =>
+            {
+                logger?.LogInformation(
+                    "[PackageInstaller] root {Root} has no cover grant after {Seconds}s. Either its "
+                    + "node type does not gate (normal — a course copy or a plain partition), or the "
+                    + "gating pass has not settled and the partition will DENY viewers until it "
+                    + "does. The install itself is complete either way.",
+                    root, GatingSettleTimeout.TotalSeconds);
+                return Observable.Return(Unit.Default);
+            });
+
     public static IObservable<Unit> RunInstallHooks(IMessageHub hub, string partition, ILogger? logger)
     {
         var hooks = hub.ServiceProvider.GetServices<IPartitionInstallHook>().ToArray();
@@ -1241,6 +1299,11 @@ public static class PackageInstaller
                                 .Where(node => node is not null)
                                 .Take(1)
                                 .Timeout(WarmTimeout)
+                                // 🚨 Warming the hub is only half of "installed". The gating pass
+                                // that makes the partition READABLE runs off this activation, so
+                                // returning here reports a clean install over a partition whose
+                                // cover still denies every viewer. Wait for the grant itself.
+                                .SelectMany(_ => WaitForGating(workspace, root, logger))
                                 .Select(_ => true)
                             : Observable.Return(false)))
                 .Where(warmed => warmed)
