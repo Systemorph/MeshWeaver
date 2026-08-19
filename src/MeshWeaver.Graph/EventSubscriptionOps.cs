@@ -30,6 +30,32 @@ public static class EventSubscriptionOps
             Content = subscription,
         });
 
+    /// <summary>
+    /// Advances a REPEATING timer to its next slot, leaving it <c>Pending</c>. The counterpart of
+    /// <see cref="SetStatus"/> for a subscription that has no terminal state.
+    ///
+    /// <para>Writing the next slot is what makes a repeater survive a restart honestly: the pending-set
+    /// reconcile re-schedules from the STORED <c>FireAt</c>, so a fire that did not record its next
+    /// occurrence would be replayed on the next boot — a nightly job re-running on every pod restart.</para>
+    /// </summary>
+    public static IObservable<MeshNode> RearmTimer(
+        IMessageHub hub, string subscriptionPath, DateTimeOffset nextFireAt)
+        => hub.GetWorkspace().GetMeshNodeStream(subscriptionPath).Update(node =>
+        {
+            if (node.Content is not EventSubscription s)
+                return node;
+            return node with
+            {
+                Content = s with
+                {
+                    FireAt = nextFireAt,
+                    Status = EventSubscriptionStatus.Pending,
+                    FiredAt = DateTimeOffset.UtcNow,
+                    LastError = null,
+                }
+            };
+        });
+
     /// <summary>Grants <paramref name="userId"/> the <paramref name="role"/> on <paramref name="spacePath"/>
     /// by creating the <c>{space}/_Access/{user}_Access</c> assignment (create-or-update = idempotent).</summary>
     public static IObservable<MeshNode> Grant(IMeshService meshService, string userId, string spacePath, string role)

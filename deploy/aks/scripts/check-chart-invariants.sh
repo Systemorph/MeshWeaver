@@ -10,7 +10,7 @@
 # on every pull request.
 #
 # check-chart-drift.sh answers "does the CLUSTER run what the chart describes?" It needs cluster
-# credentials and the private per-env values, so it cannot be a PR gate. But the memex-cloud 503 of
+# credentials and the private per-env values, so it cannot be a PR gate. But the production 503 of
 # 2026-08-14 did not need a cluster to detect: the CHART ITSELF described an impossibility, in git,
 # for a month, and no build ever looked.
 #
@@ -81,7 +81,7 @@ fi
 # ---------------------------------------------------------------------------
 COMBOS=(
   "self-host (neutral chart defaults)|deploy/helm/values.yaml"
-  "AKS overlay (memex / memex-cloud / atioz shared layer)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml"
+  "AKS overlay (the layer every AKS install shares)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml"
   "memex-local (Colima k3s)|deploy/helm/values.yaml:deploy/homebrew/share/values.local.defaults.yaml"
 )
 
