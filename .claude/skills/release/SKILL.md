@@ -9,6 +9,19 @@ allowed-tools:
   - Edit
 ---
 
+> The cluster name, resource group and namespace list are deployment identities and live in
+> the PRIVATE `Systemorph/Memex` repo — `deployments/aks/envs.json` (cluster + environments)
+> and `docs/deployments.md`. Export them once per session rather than hard-coding them here:
+>
+> ```bash
+> eval "$(gh api repos/Systemorph/Memex/contents/deployments/aks/envs.json --jq '.content' | base64 -d \
+>   | jq -r '"AKS_RG=\(.cluster.resourceGroup) AKS_CLUSTER=\(.cluster.name) NAMESPACES=\"\([.environments[].ns]|join(" "))\""')"
+> ```
+>
+> Verified to set all three (`memex-aks-rg` / `memexaks-cluster` / the three namespaces) on
+> 2026-08-19. Reading it from the source of truth also means a new environment shows up here
+> automatically instead of this file going quietly stale.
+
 # /release — ship MeshWeaver (continuous + official channels)
 
 The release pipeline is **tag-driven and already built**. This skill is the runbook for using it
@@ -80,7 +93,7 @@ Confirm a roll-out:
 # ACR has the new tag:
 az acr repository show-tags -n meshweaver --repository memex-portal-ai -o tsv | tail
 # Each portal serves + runs the new image (private cluster → az aks command invoke):
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
   "kubectl -n <ns> get deploy memex-portal-deployment -o jsonpath='{.spec.template.spec.containers[0].image}'"
 # NuGet (official only):
 #   https://www.nuget.org/profiles/<owner> — the new clean version is listed.
