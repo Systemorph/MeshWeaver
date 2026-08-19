@@ -64,7 +64,14 @@ public sealed class ScheduledPostWatcher(
     /// <para>Deliberately NOT capped with <c>limit:</c>: a truncated candidate set drops posts that
     /// were legitimately scheduled, and it drops them invisibly.</para>
     /// </summary>
-    private const string Query = "nodeType:*Post select:path,id,namespace,name,nodeType,content";
+    /// 🚨 <c>lastModifiedBy</c> is in the projection because the watcher READS it — it becomes the
+    /// subscription's <c>CreatedBy</c>, i.e. the identity the publish runs as. A projection that
+    /// omits it does not fail: the field is simply null, every timer is armed with no identity, and
+    /// the handler then refuses every single publish with "names no CreatedBy" — hours later, at the
+    /// slot, on a post that looked perfectly scheduled. Adding a field to this select without adding
+    /// it here is the same bug waiting to happen.
+    private const string Query =
+        "nodeType:*Post select:path,id,namespace,name,nodeType,content,lastModifiedBy";
 
     /// <summary>The timers already armed. Read as a QUERY rather than one node-stream read per post:
     /// a stream opened on a path that does not exist yet ERRORS (<c>No node found</c>), so the
@@ -74,7 +81,7 @@ public sealed class ScheduledPostWatcher(
 
     private static readonly string SubscriptionQuery =
         $"path:{EventSubscriptionNodeType.Namespace} scope:children "
-        + $"nodeType:{EventSubscriptionNodeType.NodeType} select:path,id,namespace,name,nodeType,content";
+        + $"nodeType:{EventSubscriptionNodeType.NodeType} select:path,id,namespace,name,nodeType,content,lastModifiedBy";
 
     private IDisposable? querySub;
 
