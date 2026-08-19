@@ -121,8 +121,13 @@ public class PortalOverlayLayeringTest
         }
         Assert.True(at >= 0, "no '.fluent-toast-provider' rule in standard-page-layout.css");
 
+        // Locate the rule body defensively: a malformed/reformatted stylesheet must fail with a
+        // readable assertion, not an ArgumentOutOfRangeException from the slice below.
         var open = css.IndexOf('{', at);
+        Assert.True(open > 0, "the '.fluent-toast-provider' rule has no opening brace");
         var close = css.IndexOf('}', open);
+        Assert.True(close > open, "the '.fluent-toast-provider' rule has no closing brace");
+
         var body = css[open..close];
 
         Assert.Matches(@"z-index\s*:\s*\d+\s*!important", body);
