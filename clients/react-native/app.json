@@ -31,6 +31,7 @@
         }
       ]
     ],
-    "scheme": "memex"
+    "scheme": "memex",
+    "icon": "./assets/icon.png"
   }
 }
