@@ -5,8 +5,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\memex\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Teams\MeshWeaver.Teams.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Mail.MicrosoftGraph\MeshWeaver.Mail.MicrosoftGraph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
   </ItemGroup>
   <ItemGroup>
