@@ -468,6 +468,23 @@ public sealed class EventSubscriptionRunner(
                                 meshService, userId, subscription.TargetPath!, subscription.Role!))
                             .Select(_ => m)
                         : Observable.Return(m)),
+            // The general scheduled job: run a Code node. Handled HERE rather than through the
+            // extension point because it needs nothing this assembly lacks — ExecuteScriptRequest is
+            // a contract type and the reply is observed reactively, so no module has to own it.
+            //
+            // 🚨 Observe, not Post. Post is fire-and-forget: the runner would mark the subscription
+            // Fired the instant the message left, whether the script ran, threw or was never
+            // delivered — and a nightly job that silently stopped running is exactly the failure
+            // this whole mechanism exists to make visible. Observing the reply ties the
+            // subscription's Fired/Failed to what the script actually did.
+            EventContinuationType.RunScript when subscription is { TargetPath.Length: > 0 } =>
+                AsSystem(() => hub.Observe<ExecuteScriptResponse>(
+                        new ExecuteScriptRequest(),
+                        o => o.WithTarget(new Address(subscription.TargetPath!)))
+                    .Take(1)
+                    .Timeout(TimeSpan.FromMinutes(30))
+                    .Select(_ => new MeshNode(subscription.TargetPath!))),
+
             // Continuations this assembly cannot implement — their effects live ABOVE it in the
             // reference graph (PublishSocialPost is owned by MeshWeaver.Social, which references
             // Graph). The owning module registers an IEventContinuationHandler; nothing is silently

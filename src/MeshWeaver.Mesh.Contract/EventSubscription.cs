@@ -55,14 +55,23 @@ public enum EventContinuationType
     /// (<c>SocialExtensions.AddSocial</c> registers the LinkedIn one). With no handler registered the
     /// subscription fails loudly rather than silently doing nothing.</para></summary>
     PublishSocialPost = 3,
-    /// <summary>Reconcile the mesh's social posts against what the network actually shows — match
-    /// each published post to its live counterpart and update the record (its network id, the
-    /// moment it went out, its engagement). Handled out of process-tree like
-    /// <see cref="PublishSocialPost"/>, via a registered <see cref="IEventContinuationHandler"/>.
+    /// <summary>
+    /// Run the Code node at <see cref="EventSubscription.TargetPath"/> — the general "scheduled job"
+    /// continuation. Paired with <see cref="EventSubscription.RepeatEvery"/> it is a cron entry whose
+    /// body lives in the MESH: a recurring ingest, a nightly reconcile, a periodic refresh.
     ///
-    /// <para>Unlike publishing, this is READ-ONLY against the network and idempotent, which is what
-    /// makes it safe to pair with <see cref="EventSubscription.RepeatEvery"/> as a nightly job.</para></summary>
-    SyncSocialHistory = 4
+    /// <para>🚨 <b>Why a script rather than another continuation type.</b> Every job that ships as a
+    /// continuation costs an enum value, a handler, a platform release and a redeploy to change one
+    /// line. A Code node is authored, edited and re-run in the mesh, and its output lands in an
+    /// Activity where a person can read what happened. So the SCRIPT is the imperative part and
+    /// everything driving it stays reactive — the runner posts the request and observes the reply.</para>
+    ///
+    /// <para>🚨 Repeat only what is safe to repeat. The runner cannot tell "run it again tomorrow"
+    /// from "run it again because the pod restarted", so a script armed with
+    /// <see cref="EventSubscription.RepeatEvery"/> must be idempotent. Read-and-reconcile jobs are;
+    /// anything that posts, sends or charges is not.</para>
+    /// </summary>
+    RunScript = 4
 }
 
 /// <summary>
