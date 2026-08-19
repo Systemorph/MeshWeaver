@@ -18,6 +18,20 @@ public sealed class IoPoolRegistry : IDisposable
 {
     private readonly ConcurrentDictionary<string, IoPool> _pools = new(StringComparer.Ordinal);
     private readonly IoPoolOptions _options;
+    private int _disposing;
+    private readonly System.Reactive.Subjects.AsyncSubject<int> _disposed = new();
+
+    /// <summary>
+    /// Emits the TOTAL number of leaves that did not unwind across every pool, once all of them
+    /// have been drained AND released, then completes. <c>0</c> is the contract: no pool thread is
+    /// running any more, so collectible node ALCs may be unloaded and the owning scope released.
+    ///
+    /// <para>🚨 This is what a silo must await before releasing — not <see cref="Dispose"/>'s
+    /// return, and not <c>IMessageHub.DisposalCompleted</c> (which covers only action blocks and
+    /// message round-trips, never the offloaded ThreadPool I/O). AsyncSubject, so a late
+    /// subscriber still receives the report.</para>
+    /// </summary>
+    public IObservable<int> Disposed => _disposed.AsObservable();
 
     /// <summary>
     /// Creates the registry with the given per-resource-class concurrency options.
@@ -88,10 +102,30 @@ public sealed class IoPoolRegistry : IDisposable
     }
 
     /// <summary>Disposes every created pool and clears the registry; called when the mesh is torn down.</summary>
-    public void Dispose()
+    public void Dispose() => DisposeAndJoin();
+
+    /// <summary>
+    /// <see cref="Dispose"/>, but returns the total residual instead of discarding it — the form
+    /// silo shutdown uses, so it can log (and refuse to be silent about) live work that survived
+    /// the join. Idempotent; a second caller gets <c>0</c> and should read <see cref="Disposed"/>.
+    /// </summary>
+    /// <returns>Leaves that did not unwind across all pools; <c>0</c> means a real join, so
+    /// collectible node ALCs may be unloaded and the owning scope released.</returns>
+    public int DisposeAndJoin()
     {
+        // Idempotent, and only the first caller reports: a second Dispose must not fire a second
+        // (necessarily zero) report and make a real residual look resolved.
+        if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return 0;
+
+        // Each pool.Dispose() now DRAINS before it releases (cancel + join), so when this loop ends
+        // no pool thread is running. Sum what survived rather than discarding it — a non-zero total
+        // is the use-after-unload precondition and the caller must see it.
+        var leaked = 0;
         foreach (var pool in _pools.Values)
-            pool.Dispose();
+            leaked += pool.DisposeAndJoin();
         _pools.Clear();
+        _disposed.OnNext(leaked);
+        _disposed.OnCompleted();
+        return leaked;
     }
 }

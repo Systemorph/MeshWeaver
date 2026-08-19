@@ -36,6 +36,25 @@ public sealed class IoPool : IIoPool, IDisposable
     // reported a survivor that had already unwound. (Copilot review, #1334.)
     private int _blockingInFlight;
     private volatile bool _disposed;
+    // Idempotence for Dispose. A plain `if (_disposed) return` cannot serve: _disposed is now set
+    // AFTER the join (so Drain's own guard does not short-circuit it), which leaves a window where
+    // two callers would both drain and both dispose the gate.
+    private int _disposing;
+    // Fires the residual leaf count once the join AND the resource release have happened, then
+    // completes. AsyncSubject so a subscriber attaching after disposal still gets the report —
+    // the same contract MeshTeardownSignal uses.
+    private readonly System.Reactive.Subjects.AsyncSubject<int> _disposedSubject = new();
+
+    /// <summary>
+    /// Emits the number of leaves that did NOT unwind (see <see cref="Drain"/>) once this pool has
+    /// been drained AND its gate/cancellation released, then completes. <c>0</c> means no pool
+    /// thread is running any more, so the caller may unload collectible node ALCs.
+    ///
+    /// <para>Await this — never <see cref="Dispose"/>'s return — before releasing anything the
+    /// pooled work could still be executing. <see cref="IoPoolRegistry.Disposed"/> aggregates it
+    /// across every pool, which is what silo shutdown waits on.</para>
+    /// </summary>
+    public IObservable<int> Disposed => _disposedSubject.AsObservable();
 
     // Teardown safety net for the drain join: cancellation makes in-flight leaves release in ms,
     // so this is effectively never hit — it only bounds a hang if a leaf ignores its token.
@@ -60,6 +79,24 @@ public sealed class IoPool : IIoPool, IDisposable
             new LimitedConcurrencyLevelTaskScheduler(maxConcurrency));
     }
 
+
+    // 🚨 AFTER DISPOSAL, A LEAF IS CANCELLED — NOT AN ObjectDisposedException.
+    //
+    // Disposal releases _poolCts and _gate, so the natural code path below would throw
+    // ObjectDisposedException from `_poolCts.Token` / `_gate.WaitAsync`. That matters because the
+    // pool is now disposed DURING SILO SHUTDOWN (IoPoolSiloTeardown), while the mesh is still
+    // being torn down afterwards: hub disposal keeps pushing final writes at the pool, and an
+    // ObjectDisposedException surfacing out of a reactive chain there is the "catastrophic
+    // teardown" class this codebase already fights.
+    //
+    // Cancellation is also the HONEST answer. A drained pool already cancels every leaf issued
+    // after Drain(); disposal is that same terminal state plus the resource release, so callers
+    // should see the same thing either way. "The pool is gone, this work will not run" is a
+    // cancellation, never a caller bug.
+    private static IObservable<T> Cancelled<T>() =>
+        Observable.Throw<T>(new OperationCanceledException(
+            "The I/O pool has been disposed (mesh or silo teardown) — this leaf will not run."));
+
     /// <summary>Number of operations currently executing through this pool.</summary>
     public int CurrentInFlight => Volatile.Read(ref _inFlight);
 
@@ -70,6 +107,9 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="io">The cancellable async work to run once the gate grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, runs the work and emits its single result.</returns>
     public IObservable<T> Invoke<T>(Func<CancellationToken, Task<T>> io)
+        => _disposed ? Cancelled<T>() : InvokeCore(io);
+
+    private IObservable<T> InvokeCore<T>(Func<CancellationToken, Task<T>> io)
         // SubscribeOn moves the whole subscribe — including the gate wait and the
         // synchronous prologue of `io` — onto a ThreadPool thread, so the work
         // never runs on the calling hub/grain scheduler. (FromAsync's own
@@ -106,6 +146,9 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="source">The cancellable async sequence to enumerate once the gate grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, enumerates the source and emits each element.</returns>
     public IObservable<T> InvokeStream<T>(Func<CancellationToken, IAsyncEnumerable<T>> source)
+        => _disposed ? Cancelled<T>() : InvokeStreamCore(source);
+
+    private IObservable<T> InvokeStreamCore<T>(Func<CancellationToken, IAsyncEnumerable<T>> source)
         => Observable.Create<T>(async (observer, subscriberCt) =>
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(subscriberCt, _poolCts.Token);
@@ -133,6 +176,9 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="work">The cancellable blocking work to run once the scheduler grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, runs the work and emits its single result; unsubscribing cancels it.</returns>
     public IObservable<T> InvokeBlocking<T>(Func<CancellationToken, T> work)
+        => _disposed ? Cancelled<T>() : InvokeBlockingCore(work);
+
+    private IObservable<T> InvokeBlockingCore<T>(Func<CancellationToken, T> work)
         => Observable.Create<T>(observer =>
         {
             // Linked to the pool token so Drain()/Dispose() cancels blocking work too.
@@ -188,6 +234,9 @@ public sealed class IoPool : IIoPool, IDisposable
 
     /// <inheritdoc />
     public IObservable<T> SubscribeThroughPool<T>(IObservable<T> source) =>
+        _disposed ? Cancelled<T>() : SubscribeThroughPoolCore(source);
+
+    private IObservable<T> SubscribeThroughPoolCore<T>(IObservable<T> source) =>
         Observable.Create<T>(observer =>
         {
             // The long-lived subscription the setup leaf produces; disposed on unsubscribe OR pool drain.
@@ -314,27 +363,50 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <summary>
     /// Drains in-flight work (see <see cref="Drain"/>) then disposes the gate and cancellation
     /// source. Synchronous by design: when it returns, no pool thread is running, so the caller may
-    /// safely unload the node ALCs whose types that work referenced. Called when the mesh is torn down.
+    /// safely unload the node ALCs whose types that work referenced. Called when the mesh is torn
+    /// down, and — deterministically, before anything is released — from silo shutdown.
+    ///
+    /// <para>The join is bounded by <see cref="Drain"/>'s budget, so a leaf that ignores its token
+    /// cannot hang shutdown; it is reported through <see cref="Disposed"/> instead.</para>
     /// </summary>
     public void Dispose()
     {
-        if (_disposed) return;
-        // 🚨 Dispose() joins NOTHING today: it sets _disposed and only THEN calls Drain(), whose
-        // idempotence guard returns early on exactly that flag — so the promise in this method's
-        // summary ("when it returns, no pool thread is running, so the caller may safely unload the
-        // node ALCs whose types that work referenced") is unbacked on the disposal path, which is the
-        // path that unloads every ALC.
+        // 🚨 ORDER IS THE WHOLE POINT. This used to set _disposed and only THEN call Drain(), whose
+        // idempotence guard (`if (_disposed) return 0`) returned early on exactly that flag — so
+        // Dispose JOINED NOTHING, and this method's promise ("when it returns, no pool thread is
+        // running, so the caller may safely unload the node ALCs whose types that work referenced")
+        // was unbacked on the disposal path, which is the path that unloads every ALC. Draining
+        // first is what makes the summary true.
         //
-        // Deliberately NOT fixed here. Swapping the two lines makes Dispose actually cancel and join,
-        // which CHANGES TEARDOWN SEMANTICS repo-wide, and the first CI run that carried it saw
-        // OrderedRouteDispatcherTest hang for its full 30s budget (it passes locally in 1s, so the
-        // attribution is unproven either way). That belongs in its own PR where a hang can only have
-        // one cause. Tracked with the evidence in #1338's review thread.
+        // The guard cannot stay a `_disposed` read for the same reason, so idempotence moves to its
+        // own CAS: the first caller drains and releases, any concurrent caller returns immediately
+        // (and can await Disposed if it needs the report).
+        DisposeAndJoin();
+    }
+
+    /// <summary>
+    /// <see cref="Dispose"/>, but returns what survived the join instead of discarding it — the
+    /// form <see cref="IoPoolRegistry"/> needs so it can aggregate across pools without blocking
+    /// on <see cref="Disposed"/>. Idempotent; a second caller gets <c>0</c> and must read
+    /// <see cref="Disposed"/> for the real report.
+    /// </summary>
+    /// <returns>Leaves that did not unwind within the drain budget; <c>0</c> means a real join.</returns>
+    public int DisposeAndJoin()
+    {
+        if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return 0;
+
+        var residual = Drain();
         _disposed = true;
-        Drain();
         _poolCts.Dispose();
         _gate.Dispose();
         _blockingIdle.Dispose();
+
+        // Report AFTER the release, so a subscriber that proceeds on this signal cannot observe a
+        // half-torn-down pool. Non-zero means live work survived the join and the caller must NOT
+        // unload ALCs silently over it.
+        _disposedSubject.OnNext(residual);
+        _disposedSubject.OnCompleted();
+        return residual;
     }
 
     /// <summary>
