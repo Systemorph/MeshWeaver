@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using System.Linq;
 
 namespace Memex.Database.Migration.Migrations;
 
@@ -72,11 +73,11 @@ public static class OrleansClusteringSetup
         //
         // Gate each artefact on ITS OWN evidence, and on the evidence the CONSUMER uses.
         var hasStorageTable = await TableExistsAsync(conn, "orleansstorage");
-        var missingKeys = await MissingQueryKeysAsync(conn, PersistenceQueryKeys);
+        var missingKeys = await MissingQueryKeysAsync(conn, GrainStorageQueryKeys);
 
         if (hasStorageTable && missingKeys.Count == 0)
             logger.LogInformation("[OrleansClustering] Persistence table and all {Count} query keys present — nothing to do.",
-                PersistenceQueryKeys.Length);
+                GrainStorageQueryKeys.Length);
 
         if (!hasStorageTable)
         {
@@ -103,13 +104,13 @@ public static class OrleansClusteringSetup
             // then propagates and fails the migration loudly, which is the correct outcome.
             logger.LogInformation(
                 "[OrleansClustering] Persistence query keys missing ({Missing}) — writing all {Count}.",
-                string.Join(", ", missingKeys), PersistenceQueryKeys.Length);
+                string.Join(", ", missingKeys), GrainStorageQueryKeys.Length);
             await using (var tx = await conn.BeginTransactionAsync())
             {
                 await using (var del = new NpgsqlCommand(
                     "DELETE FROM OrleansQuery WHERE QueryKey = ANY(@keys)", conn, tx))
                 {
-                    del.Parameters.AddWithValue("keys", PersistenceQueryKeys);
+                    del.Parameters.AddWithValue("keys", GrainStorageQueryKeys);
                     await del.ExecuteNonQueryAsync();
                 }
                 await using (var cmd = new NpgsqlCommand(PersistenceQueriesScript, conn, tx))
@@ -123,22 +124,39 @@ public static class OrleansClusteringSetup
         // the table. A transaction that rolled back leaves the database unchanged, which is the
         // safe outcome but NOT a provisioned one, and a migration that reported success there would
         // hand the silo a database it cannot start against. Fail loudly instead.
-        var stillMissing = await MissingQueryKeysAsync(conn, PersistenceQueryKeys);
-        if (stillMissing.Count > 0)
-            throw new InvalidOperationException(
-                $"Orleans persistence query keys are still missing after provisioning: "
-                + $"{string.Join(", ", stillMissing)}. A silo configured with an AdoNet PubSubStore "
-                + "cannot start without them (AdoNetGrainStorage.Init resolves them with .Single()).");
+        //
+        // MERGE NOTE (#1804 × #1798-on-main): both landed a fix for the same outage from opposite
+        // ends and they are complements, not alternatives. This branch made the persistence phase
+        // gate on the KEYS and REPAIR a partial state — without which a half-created database
+        // reports "already present, nothing to do" forever. main added a postcondition covering
+        // MEMBERSHIP as well as grain storage — which the repair does not touch and which #1798
+        // could equally lose. Keeping only one would silently drop the other half of the fix, so
+        // the repair stays above and the broader assertion runs here.
+        await VerifyProvisionedAsync(conn, logger);
     }
 
     /// <summary>
-    /// The four <c>OrleansQuery</c> keys <c>AdoNetGrainStorage</c> resolves with <c>.Single()</c> at
-    /// silo start. These — not the table — are what a silo configured with an AdoNet
-    /// <c>PubSubStore</c> fails to start without.
+    /// The <c>OrleansQuery</c> keys the MEMBERSHIP provider resolves at silo start.
     /// </summary>
-    private static readonly string[] PersistenceQueryKeys =
+    private static readonly string[] MembershipQueryKeys =
     [
-        "WriteToStorageKey", "ReadFromStorageKey", "ClearStorageKey", "DeleteStorageKey"
+        "UpdateIAmAlivetimeKey",
+        "InsertMembershipVersionKey",
+        "InsertMembershipKey",
+        "UpdateMembershipKey",
+        "MembershipReadRowKey",
+        "MembershipReadAllKey",
+        "DeleteMembershipTableEntriesKey",
+        "GatewaysQueryKey",
+        "CleanupDefunctSiloEntriesKey",
+    ];
+
+    private static readonly string[] GrainStorageQueryKeys =
+    [
+        "WriteToStorageKey",
+        "ReadFromStorageKey",
+        "ClearStorageKey",
+        "DeleteStorageKey",
     ];
 
     /// <summary>
@@ -159,6 +177,63 @@ public static class OrleansClusteringSetup
             while (await reader.ReadAsync())
                 present.Add(reader.GetString(0));
         return required.Where(k => !present.Contains(k)).ToArray();
+    }
+
+    /// <summary>
+    /// POSTCONDITION: read back the <c>OrleansQuery</c> rows the silo's providers will load and
+    /// fail RED if any is missing. This is what turns the step's success line from a claim into a
+    /// measurement.
+    ///
+    /// <para>🚨 Both phases above gate on a MARKER TABLE (<c>orleansquery</c> /
+    /// <c>orleansstorage</c>) because their scripts use plain <c>CREATE</c> and cannot be re-run.
+    /// That gate answers "did something create this table?", never "is the table's CONTENT
+    /// complete" — so a script that died part-way leaves the marker present and every later run
+    /// reports "already present — nothing to do", forever, for a database that is missing rows the
+    /// silo requires. A gate that can pass on the wrong evidence is worse than no gate (AGENTS.md
+    /// → "a verification step that cannot fail is not a verification step"), and the failure it
+    /// would hide is precisely #1798's: a silo crash-looping on <c>Sequence contains no
+    /// elements</c>.</para>
+    ///
+    /// <para>Throwing here fails the migration container, which is the correct blast radius: the
+    /// portal's own <c>OrleansProvisioningGate</c> would otherwise refuse to start anyway, and a
+    /// red migration names the problem one step earlier and closer to the fix.</para>
+    /// </summary>
+    private static async Task VerifyProvisionedAsync(NpgsqlConnection conn, ILogger logger)
+    {
+        var required = MembershipQueryKeys.Concat(GrainStorageQueryKeys).ToArray();
+
+        await using var cmd = new NpgsqlCommand(
+            "SELECT querykey FROM orleansquery WHERE querykey = ANY(@keys)", conn);
+        cmd.Parameters.AddWithValue("keys", required);
+
+        var present = new HashSet<string>(StringComparer.Ordinal);
+        await using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+                present.Add(reader.GetString(0));
+        }
+
+        var missing = required.Where(k => !present.Contains(k)).ToArray();
+        if (missing.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"[OrleansClustering] Provisioning is INCOMPLETE: OrleansQuery is missing "
+                + $"{missing.Length} of {required.Length} required query keys "
+                + $"({string.Join(", ", missing)}). The marker tables exist, so the creation "
+                + "scripts were skipped as 'already present' — a previous run must have died "
+                + "part-way. The Orleans scripts use plain CREATE and cannot be re-run over a "
+                + "partial state: drop the affected Orleans tables in the 'orleans' database and "
+                + "re-run this migration. Refusing to report a successful migration for a "
+                + "database the silo cannot start against.");
+        }
+
+        // The signal the portal's gate asserts — specific to what this step provisioned, and
+        // COUNTED. "Database migration completed. Version: N" says nothing about Orleans; this
+        // line is what makes the difference observable.
+        logger.LogInformation(
+            "[OrleansClustering] provisioned OK: {Membership} membership + {Storage} grain-storage "
+            + "query keys present in OrleansQuery ({Total} total).",
+            MembershipQueryKeys.Length, GrainStorageQueryKeys.Length, required.Length);
     }
 
     /// <summary>
