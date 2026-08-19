@@ -597,6 +597,7 @@
   "ui.mdInvitesInSpace": "*Einladungen sind innerhalb eines Space verfügbar.*",
   "ui.mdNodeToUpdateMissing": "**Fehler:** Zu aktualisierender MeshNode nicht gefunden.",
   "ui.mdRecyclingHub": "**Hub wird recycelt…** Weiterleitung folgt gleich.",
+  "ui.mdStaleBuildAvailable": "**F\u00fcr diesen Typ liegt ein neuerer Build vor.** Diese Seite f\u00fchrt noch den zuvor kompilierten aus.",
   "ui.mdRecycleConfirm": "**Neustart dieses Hubs?** Der Hub des Knotens wird beendet und beim n\u00e4chsten Aufruf neu aufgebaut \u2014 dabei \u00fcbernimmt er den zuletzt kompilierten Build. Es wird nichts gel\u00f6scht und kein Inhalt ge\u00e4ndert.",
   "ui.mdFillFieldsGeneratePlan": "*Felder ausfüllen und auf **Plan erzeugen** klicken.*",
   "ui.accessDeniedPlain": "Zugriff verweigert.",
