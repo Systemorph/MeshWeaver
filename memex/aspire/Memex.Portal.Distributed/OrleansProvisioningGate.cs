@@ -155,6 +155,21 @@ public sealed class OrleansProvisioningGate(
             // verdict. Same lesson as DbVersionGate / issue #1183: honour the IHostedService
             // cancellation contract instead of misreporting an ordinary shutdown as a critical
             // failure to provision.
+            //
+            // …but SAY so on the way out (#1897). Rethrowing SILENTLY left the framework's
+            // `Hosting failed to start` — Error, with no frame above the Npgsql cancel that knows
+            // why — as the only record, and that reads exactly like a real provisioning failure:
+            // the incident was filed at "medium confidence — equally plausible a race at shutdown
+            // (expected) or a real timeout (a defect)". This gate is the only thing in the process
+            // that can tell those apart. A check that did not run must not look like one that
+            // passed; it must not look like one that FAILED either.
+            logger.LogWarning(
+                "Orleans provisioning check did NOT run: host startup was cancelled before the "
+                + "query completed — shutdown raced startup (a rollout replacing this pod while it "
+                + "was still starting). This is not a provisioning verdict: the orleans database "
+                + "was neither confirmed nor faulted. Propagating the cancellation per the "
+                + "IHostedService contract, so the 'Hosting failed to start' that follows is the "
+                + "aborted startup and not a fault.");
             throw;
         }
         catch (Exception ex)
