@@ -39,13 +39,38 @@ public record MeshBuilder
     /// the classic BaseDirectory-relative location (the double-shipped transition state, and
     /// every module that still rides the app closure).
     /// </summary>
-    public static string ResolveModulePath(string entry)
+    public static string ResolveModulePath(string entry) => ResolveModulePath(entry, null);
+
+    /// <summary>
+    /// As <see cref="ResolveModulePath(string)"/>, but probing a LANDED module root first.
+    ///
+    /// <para>🚨 <b>Two <c>modules/</c> trees exist and both are legitimate</b>, which is why this
+    /// takes a root rather than moving the one it had. The image publishes baseline packs into its
+    /// own <c>modules/</c> beside the app; a module the registry LANDS at runtime is written to the
+    /// deployment's writable, pod-SHARED root instead (see <c>ModuleRoot</c>) — because
+    /// <c>AppContext.BaseDirectory</c> is read-only in the container and, even where it is not, a
+    /// per-pod copy would be invisible to every other replica.</para>
+    ///
+    /// <para>Order is landed → image → app closure, and it matters: a landed module is the one an
+    /// operator just published, so it must win over a stale baseline copy of the same name. When
+    /// <paramref name="moduleRoot"/> is null or already the app directory this is byte-for-byte
+    /// <see cref="ResolveModulePath(string)"/> — the unconfigured deployment is untouched.</para>
+    /// </summary>
+    public static string ResolveModulePath(string entry, string? moduleRoot)
     {
         if (Path.IsPathRooted(entry))
             return entry;
         var baseDirectory = AppContext.BaseDirectory;
-        var moduleFolderPath = Path.Combine(
-            baseDirectory, "modules", Path.GetFileNameWithoutExtension(entry), entry);
+        var name = Path.GetFileNameWithoutExtension(entry);
+
+        if (!string.IsNullOrWhiteSpace(moduleRoot))
+        {
+            var landed = Path.Combine(moduleRoot, "modules", name, entry);
+            if (File.Exists(landed))
+                return landed;
+        }
+
+        var moduleFolderPath = Path.Combine(baseDirectory, "modules", name, entry);
         return File.Exists(moduleFolderPath)
             ? moduleFolderPath
             : Path.Combine(baseDirectory, entry);

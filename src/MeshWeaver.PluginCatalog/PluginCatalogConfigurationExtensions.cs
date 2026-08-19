@@ -4,6 +4,8 @@ using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -119,7 +121,12 @@ public static class PluginCatalogConfigurationExtensions
                 // assemblies + activation record; restart-as-activation. Inert until called:
                 // Slice C's PackageInstaller binary branch is its caller. Mesh-scoped so its
                 // bounded IO pool dies with the mesh.
-                .AddSingleton<ModuleLandingService>())
+                // 🚨 Constructed with the resolved MODULE ROOT, never the default: the default is
+                // AppContext.BaseDirectory, which is READ-ONLY in the container, so a landing there
+                // fails with a denied-path error the publisher sees as HTTP 409. See ModuleRoot.
+                .AddSingleton(sp => new ModuleLandingService(
+                    sp.GetService<ILogger<ModuleLandingService>>(),
+                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))))
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();

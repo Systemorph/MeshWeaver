@@ -167,6 +167,13 @@ public static class OrleansServerRegistryExtensions
         // Deterministic streaming-readiness signal (silo lifecycle → Active) that the routing
         // service orders its Orleans stream subscriptions on — see OrleansStreamingReadiness.
         services.AddOrleansStreamingReadiness();
+        // 🚨 Cancel + JOIN the pooled I/O before the silo releases. The silo is itself a hosted
+        // service, so it stops BEFORE MeshTeardownHostedService (which drains in StoppedAsync) —
+        // every grain has already deactivated and unloaded its collectible ALC by then. A pooled
+        // leaf still executing that ALC's code when it unloads is the use-after-unload SIGSEGV
+        // at process exit (#613). Subscribed at stage First ⇒ stops LAST, so grains keep their
+        // full chance to flush before the terminal drain. See IoPoolSiloTeardown.
+        services.AddIoPoolSiloTeardown();
         // The root mesh hub's cross-silo REPLY stream (core#694 layer 2) — see
         // RootMeshHubReplyStreamService for the full story.
         services.AddRootMeshHubReplyStream();

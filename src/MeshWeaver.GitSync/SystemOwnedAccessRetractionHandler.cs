@@ -10,8 +10,14 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.GitSync;
 
 /// <summary>
-/// 🚨 THE MOMENT A PARTITION GAINS A <c>_GitSync</c> IT BECOMES SYSTEM-OWNED — so every privileged
-/// account grant on it is retracted, right there.
+/// 🚨 THE MOMENT A PARTITION GAINS A <b>ONE-WAY</b> <c>_GitSync</c> IT BECOMES SYSTEM-OWNED — so
+/// every privileged account grant on it is retracted, right there.
+///
+/// <para><b>A bijective sync is exempt</b>, and that is not a loophole: with <c>twoWay: true</c> a
+/// node edited on the server is preserved and committed back, so the mesh copy is the working copy
+/// and the people editing it must be able to write. Retracting there would leave a space that
+/// advertises two-way editing which only the importer may perform. One definition governs both
+/// this sweep and the write boundary: <c>AccessAssignmentGuard.IsSystemOwned</c>.</para>
 ///
 /// <para><b>The window this closes.</b> <c>AccessAssignmentGuard.IsForbiddenOnSystemOwned</c> makes
 /// it impossible to WRITE such a grant onto a space that is already system-owned, and
@@ -65,6 +71,20 @@ public sealed class SystemOwnedAccessRetractionHandler(
         var partition = AccessAssignmentGuard.PartitionOf(createdNode.Namespace ?? "");
         if (string.IsNullOrEmpty(partition))
             return Observable.Return(Unit.Default);
+
+        // 🚨 A BIJECTIVE sync does not make the space system-owned — there the mesh nodes ARE the
+        // working copy, server-side edits are preserved and committed back, and the people making
+        // them need write access. Sweeping their grants away the moment the sync is wired would
+        // make two-way editing unusable by everyone except the importer, which is the opposite of
+        // what wiring it asked for. Read the direction off the node whose creation triggered this,
+        // so the decision costs no extra probe and cannot disagree with the write boundary.
+        if (AccessAssignmentGuard.IsTwoWay(createdNode, hub.JsonSerializerOptions))
+        {
+            logger?.LogInformation(
+                "[SystemOwned] '{Partition}' syncs BIJECTIVELY — its mesh nodes are the working "
+                + "copy, so write grants stand and nothing is retracted.", partition);
+            return Observable.Return(Unit.Default);
+        }
 
         var accessFolder = $"{partition}/_Access";
 
