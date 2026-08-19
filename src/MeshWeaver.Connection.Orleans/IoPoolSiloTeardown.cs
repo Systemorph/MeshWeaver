@@ -112,8 +112,14 @@ public sealed class IoPoolSiloTeardown(
 public static class IoPoolSiloTeardownExtensions
 {
     /// <summary>
-    /// Registers <see cref="IoPoolSiloTeardown"/> as a silo lifecycle participant, so pooled I/O
-    /// is cancelled and reported before the silo releases. Idempotent.
+    /// Registers <see cref="IoPoolSiloTeardown"/> as a silo lifecycle participant, so pooled I/O is
+    /// cancelled and JOINED — bounded — before the silo releases.
+    ///
+    /// <para>"Joined" is the behaviour callers must plan for: <c>OnStop</c> returns a Task that
+    /// completes only once every pool has reported, so Orleans genuinely holds shutdown until then.
+    /// It is not fire-and-forget. The join costs no thread (the body is a reactive composition, not
+    /// an await), and it is bounded by <c>JoinBudget</c>: on timeout the residual is logged as an
+    /// error and shutdown proceeds rather than hanging. (Copilot review, #1903.)</para>
     /// </summary>
     /// <param name="services">The service collection to add the participant to.</param>
     /// <returns>The same service collection for further chaining.</returns>
