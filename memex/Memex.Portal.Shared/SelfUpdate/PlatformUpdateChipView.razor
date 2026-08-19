@@ -1,7 +1,7 @@
 @using System.Reactive.Disposables
 @using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
-@using MeshWeaver.Mesh.Services
 @using MeshWeaver.Graph.Configuration
+@using MeshWeaver.Mesh.Services
 @using Memex.Portal.Shared.Settings
 @implements IDisposable
 @inject IMessageHub Hub
@@ -17,23 +17,22 @@
 *@
 
 <style>
-    .platform-build-chip .platform-build-chip__version {
+    .platform-build-chip .platform-build-chip__deployed {
         font-size: 11px;
-        font-family: var(--monospace-font-family, monospace);
         opacity: 0.75;
         margin-inline-start: 4px;
         white-space: nowrap;
     }
 
-    .platform-build-chip--update .platform-build-chip__version {
+    .platform-build-chip--update .platform-build-chip__deployed {
         opacity: 1;
         font-weight: 600;
     }
 
-    /* Narrow viewports keep the glyph — the part that says "act on me" — and drop the version text,
-       which is still on the tooltip and on the About page. */
+    /* Narrow viewports keep the glyph — the part that says "act on me" — and drop the text, which
+       is still on the tooltip and on the About page. */
     @@media (max-width: 720px) {
-        .platform-build-chip .platform-build-chip__version {
+        .platform-build-chip .platform-build-chip__deployed {
             display: none;
         }
     }
@@ -43,13 +42,18 @@
               class="@(chip.IsUpdate ? "platform-build-chip platform-build-chip--update" : "platform-build-chip")"
               Title="@chip.Tooltip" aria-label="@chip.Tooltip"
               OnClick="@Activate">
-    @* 🚨 The glyph is UNCONDITIONAL, and that is load-bearing rather than decorative: the narrow
-       viewport rule below hides the version text, so a state with no glyph would render an empty
-       button — invisible, still clickable, and with nothing to hover for the tooltip. Keeping every
-       state glyphed means "the chip always shows something" holds by construction instead of by
-       two rules agreeing with each other. *@
+    @* 🚨 The glyph is UNCONDITIONAL, and that is load-bearing rather than decorative: the text is
+       dropped on a narrow viewport AND absent whenever the deployment time is unknown, so a state
+       with no glyph would render an empty button — invisible, still clickable, and with nothing to
+       hover for the tooltip. Keeping every state glyphed means "the chip always shows something"
+       holds by construction instead of by several rules agreeing with each other. *@
     <FluentIcon Value="@Glyph" Color="@GlyphColor" />
-    <span class="platform-build-chip__version">@chip.DisplayVersion</span>
+    @* WHEN, not WHICH BUILD — "Last deployed 08-18 15:35". Suppressed entirely when the deployment
+       time is unknown, rather than shown as an epoch date; the glyph alone is a valid chip. *@
+    @if (chip.DisplayText is { } text)
+    {
+        <span class="platform-build-chip__deployed">@text</span>
+    }
 </FluentButton>
 
 @code {
@@ -115,7 +119,9 @@
 
     // Lambda, not a method group: Localize is overloaded (key, and key + format args).
     private void Describe() =>
-        chip = PlatformUpdateChip.Describe(status, RunningVersion, InstanceName, key => Access.Localize(key));
+        chip = PlatformUpdateChip.Describe(
+            status, RunningVersion, InstanceName,
+            ShippedReleaseSeed.StartedAtUtc, Access.ViewerZoneId(), key => Access.Localize(key));
 
     /// <summary>
     /// Refresh means a HARD reload: this browser holds a Blazor circuit and static assets from
