@@ -1434,15 +1434,18 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$ LANGUAGE plpgsql;
 
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_notify') THEN
-                    CREATE TRIGGER mesh_node_notify
-                        AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
-                END IF;
-            END;
-            $$;
+            -- 🚨 Per-TABLE, never a global pg_trigger name probe. Trigger names are unique per
+            -- TABLE, not per database, so `IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname =
+            -- 'mesh_node_notify')` is satisfied by ANY schema already holding one — after which
+            -- every later partition schema silently skips its own. That is the identical defect
+            -- V44 repaired for this trigger's sibling (mesh_node_copy_to_history) in
+            -- GetVersionedPartitionDdl; it was fixed for one trigger and left for this one.
+            -- DROP-then-CREATE is also what the other ~20 triggers in this file already do, and it
+            -- doubles as the re-apply path when the function body changes.
+            DROP TRIGGER IF EXISTS mesh_node_notify ON mesh_nodes;
+            CREATE TRIGGER mesh_node_notify
+                AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
+                FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
 
             -- Mirror access objects (User / Group / Role / VUser / ApiToken)
             -- into the global "auth" schema so consumers (UserIdentityCache,
@@ -1494,15 +1497,15 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$ LANGUAGE plpgsql;
 
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_copy_to_history') THEN
-                    CREATE TRIGGER mesh_node_copy_to_history
-                        AFTER INSERT OR UPDATE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION trg_mesh_node_to_history();
-                END IF;
-            END;
-            $$;
+            -- Same per-TABLE rule as mesh_node_notify above. FOUND BY THE CLASS-LEVEL TEST, not by
+            -- the eye: V44 repaired this trigger's global guard in GetVersionedPartitionDdl and in
+            -- the deployed partition schemas, but THIS site kept creating it under the database-wide
+            -- name probe — so the fix for one trigger in one script left the same trigger broken in
+            -- another. That is precisely why the test forbids the SHAPE rather than the instance.
+            DROP TRIGGER IF EXISTS mesh_node_copy_to_history ON mesh_nodes;
+            CREATE TRIGGER mesh_node_copy_to_history
+                AFTER INSERT OR UPDATE ON mesh_nodes
+                FOR EACH ROW EXECUTE FUNCTION trg_mesh_node_to_history();
             """;
     }
 
@@ -2297,15 +2300,18 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$ LANGUAGE plpgsql;
 
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_notify') THEN
-                    CREATE TRIGGER mesh_node_notify
-                        AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
-                END IF;
-            END;
-            $$;
+            -- 🚨 Per-TABLE, never a global pg_trigger name probe. Trigger names are unique per
+            -- TABLE, not per database, so `IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname =
+            -- 'mesh_node_notify')` is satisfied by ANY schema already holding one — after which
+            -- every later partition schema silently skips its own. That is the identical defect
+            -- V44 repaired for this trigger's sibling (mesh_node_copy_to_history) in
+            -- GetVersionedPartitionDdl; it was fixed for one trigger and left for this one.
+            -- DROP-then-CREATE is also what the other ~20 triggers in this file already do, and it
+            -- doubles as the re-apply path when the function body changes.
+            DROP TRIGGER IF EXISTS mesh_node_notify ON mesh_nodes;
+            CREATE TRIGGER mesh_node_notify
+                AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
+                FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
 
             -- Mirror access objects (User / Group / Role / VUser / ApiToken)
             -- into the global "auth" schema so consumers (UserIdentityCache,
@@ -2401,7 +2407,9 @@ public static class PostgreSqlSchemaInitializer
     /// <summary>
     /// Returns SQL for unversioned partitions: core tables only, no history table or triggers.
     /// </summary>
-    private static string GetUnversionedSchemaScript(PostgreSqlStorageOptions options)
+    // internal (not private) so MeshNodeNotifyTriggerScriptTests can assert this script alongside
+    // the other two — all three carried the same globally-scoped trigger guard (V54).
+    internal static string GetUnversionedSchemaScript(PostgreSqlStorageOptions options)
     {
         var dim = options.VectorDimensions;
         var schemaName = options.Schema ?? "public";
@@ -2488,15 +2496,18 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$ LANGUAGE plpgsql;
 
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_notify') THEN
-                    CREATE TRIGGER mesh_node_notify
-                        AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
-                END IF;
-            END;
-            $$;
+            -- 🚨 Per-TABLE, never a global pg_trigger name probe. Trigger names are unique per
+            -- TABLE, not per database, so `IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname =
+            -- 'mesh_node_notify')` is satisfied by ANY schema already holding one — after which
+            -- every later partition schema silently skips its own. That is the identical defect
+            -- V44 repaired for this trigger's sibling (mesh_node_copy_to_history) in
+            -- GetVersionedPartitionDdl; it was fixed for one trigger and left for this one.
+            -- DROP-then-CREATE is also what the other ~20 triggers in this file already do, and it
+            -- doubles as the re-apply path when the function body changes.
+            DROP TRIGGER IF EXISTS mesh_node_notify ON mesh_nodes;
+            CREATE TRIGGER mesh_node_notify
+                AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
+                FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
 
             -- Mirror access objects (User / Group / Role / VUser / ApiToken)
             -- into the global "auth" schema so consumers (UserIdentityCache,

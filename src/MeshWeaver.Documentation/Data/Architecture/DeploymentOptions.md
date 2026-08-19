@@ -22,8 +22,8 @@ How to change what runs at **portal.example.com**, from "instant, no redeploy" t
 |---|---|---|
 | Cluster | `<aks-cluster>` / rg `<aks-resource-group>` (Sweden Central) | — |
 | API server | **private** (`…privatelink…azmk8s.io`) | `kubectl`/`helm` from outside the VNet **cannot reach it** — use `az aks command invoke` or an in-VNet runner/VPN |
-| Key Vault CSI | `azureKeyvaultSecretsProvider` add-on **enabled** (identity clientId `6c9dcc8d-…`) | secrets can come from Key Vault, keyless |
-| Key Vault | `Systemorph` (`https://systemorph.vault.azure.net`) | holds `AzureFoundry-ApiKey` (set) |
+| Key Vault CSI | `azureKeyvaultSecretsProvider` add-on **enabled** — its identity clientId comes from `az aks show … --query addonProfiles.azureKeyvaultSecretsProvider.identity.clientId` | secrets can come from Key Vault, keyless |
+| Key Vault | `<key-vault>` | holds `AzureFoundry-ApiKey` |
 | Images | Live pods pull from **ACR `meshweaver.azurecr.io`**. The chart's *default* is `ghcr.io/systemorph/memex-portal-ai:latest`, which the AKS deploy script repoints to ACR | Two CI channels build them, plus a manual path — see below |
 | portal-ai base | bakes `@anthropic-ai/claude-code` + `@github/copilot` CLIs | the `claude` CLI is present in the running pod |
 | AI model picker | fed by `ModelProvider` / `LanguageModel` **mesh nodes** | see [Setting Up Model Providers](/Doc/AI/ModelProviderSetup) |
@@ -42,7 +42,7 @@ The model picker reads `ModelProvider` + `LanguageModel` mesh nodes. Create/patc
 `BuiltInLanguageModelProvider` materialises a **default** catalog at `Provider/{provider}` + nested model children from config (`{Section}:Models` / `:Endpoint`) — imported into the top-level `Provider` partition on boot and served from the DB. The tier→model map now lives on the model NODES (`"tier": "coding"` — see [Model Tiers](/Doc/AI/ModelTiers)); the `ModelTier:Heavy/Standard/Light/Utility` keys below are the deprecated shim, still read so an existing deployment keeps its mapping. The AKS overlay (`deploy/aks/values.aks.yaml`) sets:
 
 ```text
-AzureFoundry__Endpoint = https://s-meshweaver.services.ai.azure.com/models
+AzureFoundry__Endpoint = https://<foundry-account>.services.ai.azure.com/models
 AzureFoundry__Models__0/1/2 = DeepSeek-V4-Pro, DeepSeek-V3-0324, DeepSeek-V4-Flash
 ModelTier__Heavy/Standard/Light/Utility = V4-Pro / V3-0324 / V4-Flash / V4-Flash
 ClaudeCode__ConfigDirRoot = /mnt/users
@@ -54,11 +54,11 @@ The chart templates these in `deploy/helm/templates/memex-portal/config.yaml` (+
 
 ## Option C — Secrets via Key Vault + CSI (keyless, no committed keys)
 
-The real `AzureFoundry` key lives in the `Systemorph` Key Vault, mounted by the CSI add-on and synced into a K8s Secret the portal reads via `envFrom`.
+The real `AzureFoundry` key lives in Key Vault, mounted by the CSI add-on and synced into a K8s Secret the portal reads via `envFrom`.
 
-1. Secret is stored: `az keyvault secret set --vault-name Systemorph --name AzureFoundry-ApiKey --value <key>` (done).
-2. Grant the add-on identity read access (once): `az role assignment create --assignee 6c9dcc8d-d5b3-4545-afa1-209b33e8a1ba --role "Key Vault Secrets User" --scope <Systemorph KV resourceId>` (or an access policy with secret get/list).
-3. Apply `deploy/aks/manifests/secretproviderclass.yaml` (the `SecretProviderClass`).
+1. Store the secret: `az keyvault secret set --vault-name <key-vault> --name AzureFoundry-ApiKey --value <key>`.
+2. Grant the add-on identity read access (once): `az role assignment create --assignee <csi-addon-identity-clientId> --role "Key Vault Secrets User" --scope <key-vault resourceId>` (or an access policy with secret get/list).
+3. Apply the environment's `SecretProviderClass` — template at [`deploy/aks/envs/example/secretproviderclass.yaml`](https://github.com/Systemorph/MeshWeaver/blob/main/deploy/aks/envs/example/secretproviderclass.yaml); the real one is per-environment and git-ignored.
 4. Patch the portal Deployment to mount it + read the synced secret:
 
 ```yaml
@@ -103,14 +103,16 @@ Anything in `.cs` (e.g. the Claude Code PTY fix, the static-catalog behaviour) o
 2. **Roll the cluster to it.** Because the API server is private, run server-side via `az aks command invoke`:
 
 ```bash
-# config/manifest changes (works against the CURRENT image):
+# config/manifest changes (works against the CURRENT image). The SecretProviderClass is
+# per-environment and NOT in this repo — take it from the environment's own folder (template:
+# deploy/aks/envs/example/secretproviderclass.yaml):
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
-  --command "kubectl apply -f secretproviderclass.yaml && kubectl rollout restart deploy/memex-portal-deployment -n memex" \
-  --file deploy/aks/manifests/secretproviderclass.yaml
+  --command "kubectl apply -f secretproviderclass.yaml && kubectl rollout restart deploy/memex-portal-deployment -n <ns>" \
+  --file <env-dir>/secretproviderclass.yaml
 
 # helm upgrade (uploads the chart + values to the in-cluster run pod, which has helm):
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
-  --command "helm upgrade memex ./helm -f ./helm/values.yaml -f values.aks.yaml -n memex" \
+  --command "helm upgrade <release> ./helm -f ./helm/values.yaml -f values.aks.yaml -n <ns>" \
   --file deploy/helm --file deploy/aks/values.aks.yaml
 ```
 
