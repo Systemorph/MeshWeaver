@@ -52,14 +52,27 @@ public sealed class GitHubWebhookProcessor
 {
     private readonly IMessageHub hub;
     private readonly IMeshService meshService;
+    private readonly GitHubRepoIdentityResolver? identities;
     private readonly ILogger? logger;
 
     /// <summary>Initializes a new instance of the <see cref="GitHubWebhookProcessor"/> class.</summary>
+    /// <param name="hub">The hub this processor issues its reads and writes from.</param>
+    /// <param name="meshService">Mesh query surface for the sync-config fan-out.</param>
+    /// <param name="identities">
+    /// Canonical repository identity, for matching a config that stores a repository's OLD name
+    /// after a rename (#1856). Null degrades to stored-string matching alone — which is exactly what
+    /// the zero-match warning then says.
+    /// </param>
+    /// <param name="logger">Optional logger.</param>
     public GitHubWebhookProcessor(
-        IMessageHub hub, IMeshService meshService, ILogger<GitHubWebhookProcessor>? logger = null)
+        IMessageHub hub,
+        IMeshService meshService,
+        GitHubRepoIdentityResolver? identities = null,
+        ILogger<GitHubWebhookProcessor>? logger = null)
     {
         this.hub = hub;
         this.meshService = meshService;
+        this.identities = identities;
         this.logger = logger;
     }
 
@@ -102,6 +115,13 @@ public sealed class GitHubWebhookProcessor
             return Observable.Return(0);
         if (!TryGetRepoUrl(payload, out var repoUrl))
             return Observable.Return(0);
+        if (GitHubRepoIdentityResolver.Parse(repoUrl) is not { } target)
+        {
+            logger?.LogWarning(
+                "GitHub webhook ({Event}) carried a repository url that cannot be parsed to owner/repo: '{Repo}'.",
+                eventType, repoUrl);
+            return Observable.Return(0);
+        }
 
         var issue = MapIssue(issueEl);
         // A comment event carries only the NEW comment (not the full list) and no token to fetch
@@ -111,13 +131,12 @@ public sealed class GitHubWebhookProcessor
                 ? MapComment(cEl)
                 : null;
 
-        return MatchingSpaces(repoUrl).SelectMany(spaces =>
+        return MatchingSpaces(target, eventType).SelectMany(spaces =>
         {
+            // A zero match is reported by ConfigsTargeting — at Warning, naming BOTH sides. Nothing
+            // to add here; a second line would only split the diagnosis across two records.
             if (spaces.Count == 0)
-            {
-                logger?.LogInformation("GitHub webhook for {Repo} matched no synced Space.", repoUrl);
                 return Observable.Return(0);
-            }
             logger?.LogInformation("GitHub webhook ({Event}) → refreshing issue #{Number} in {Count} Space(s).",
                 eventType, issue.Number, spaces.Count);
             return spaces
@@ -220,19 +239,23 @@ public sealed class GitHubWebhookProcessor
     /// The <c>lastSyncCommitSha</c> check below is what keeps that cheap — it makes a re-run of an
     /// already-imported commit (a flake re-run, a manual re-dispatch) trigger nothing at all.</para>
     /// </summary>
-    private IObservable<int> TriggerSyncForGreenBuild(string repoUrl, string branch, string headSha)
-        => MatchingBuildTargets(repoUrl, branch, headSha).Select(targets =>
+    private IObservable<int> TriggerSyncForGreenBuild(RepoIdentity repo, string branch, string headSha)
+        => MatchingBuildTargets(repo, branch, headSha).Select(targets =>
         {
             if (targets.Count == 0)
             {
+                // "No source NEEDS updating" (already at this commit, wrong branch, export-only) is a
+                // NORMAL outcome and stays at Information. "No source TARGETS this repository at all"
+                // is a different animal and is reported at Warning by ConfigsTargeting — the two must
+                // not read alike, which is exactly how #1856 hid for four days.
                 logger?.LogInformation(
                     "Green build of {Repo}@{Branch} ({Sha}) matched no sync source that needs updating.",
-                    repoUrl, branch, headSha);
+                    repo, branch, headSha);
                 return 0;
             }
             logger?.LogInformation(
                 "Green build of {Repo}@{Branch} ({Sha}) → updating {Count} sync source(s) to latest.",
-                repoUrl, branch, headSha, targets.Count);
+                repo, branch, headSha, targets.Count);
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
             foreach (var t in targets)
                 Observable.Using(
@@ -258,25 +281,28 @@ public sealed class GitHubWebhookProcessor
     internal static bool ConfigMatchesBuild(GitHubSyncConfig? cfg, string branch, string headSha)
         => SkipReason(cfg, branch, headSha) is null;
 
-    /// <summary>The distinct sync sources whose config targets <paramref name="repoUrl"/> AND
+    /// <summary>The distinct sync sources whose config targets <paramref name="repo"/> AND
     /// matches the green build's branch, minus those already at <paramref name="headSha"/>.</summary>
     private IObservable<IReadOnlyList<PushTarget>> MatchingBuildTargets(
-        string repoUrl, string branch, string headSha)
-    {
-        var target = ParseSafe(repoUrl);
-        return QueryConfigNodesAsSystem()
-            .Select(c =>
+        RepoIdentity repo, string branch, string headSha)
+        => ConfigsTargeting(repo, $"green build of {branch}")
+            .Select(match =>
             {
                 // 🚨 Classify EVERY candidate and say what happened to it. A fan-out that reports
                 // only its winners cannot be audited: "updated 34" and "updated 34 of 43" look
                 // identical in the log, which is how #1326 stayed invisible for days. One line per
                 // skipped config, naming the reason, is what makes a future omission findable.
+                //
+                // 🚨 …and the candidates that never REACHED this classification are the other half.
+                // A config that targets a different repository is dropped one level up, silently and
+                // correctly — but when that silence swallows EVERY config, this line used to read
+                // "43 sync config(s) in the mesh, 0 selected, 0 skipped": a healthy-looking count,
+                // no skips, and no clue that nothing was ever even a candidate. Hence {Targeting}
+                // here, and the Warning ConfigsTargeting raises (#1856).
                 var picked = new List<PushTarget>();
                 var skipped = new List<string>();
-                foreach (var node in c.Items)
+                foreach (var node in match.Configs)
                 {
-                    if (!RepoMatches(node, target))
-                        continue;   // a different repo entirely — not this build's business
                     var cfg = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
                     if (SkipReason(cfg, branch, headSha) is { } reason)
                     {
@@ -297,13 +323,12 @@ public sealed class GitHubWebhookProcessor
 
                 logger?.LogInformation(
                     "Green build of {Repo}@{Branch} ({Sha}): {Candidates} sync config(s) in the mesh, "
-                    + "{Selected} selected, {Skipped} skipped{SkipDetail}.",
-                    repoUrl, branch, headSha, c.Items.Count, targets.Count, skipped.Count,
-                    skipped.Count == 0 ? string.Empty : " — " + string.Join("; ", skipped));
+                    + "{Targeting} targeting this repository, {Selected} selected, {Skipped} skipped{SkipDetail}.",
+                    repo, branch, headSha, match.Candidates, match.Configs.Count, targets.Count,
+                    skipped.Count, skipped.Count == 0 ? string.Empty : " — " + string.Join("; ", skipped));
 
                 return targets;
             });
-    }
 
     /// <summary>
     /// Why a config that DOES target this repo is not being updated, or <c>null</c> when it is.
@@ -449,9 +474,14 @@ public sealed class GitHubWebhookProcessor
             return Observable.Return(0);
         }
 
-        var (owner, repo) = ParseSafe(repoUrl);
-        if (owner.Length == 0 || repo.Length == 0)
+        if (GitHubRepoIdentityResolver.Parse(repoUrl) is not { } target)
+        {
+            logger?.LogWarning(
+                "workflow_run webhook carried a repository url that cannot be parsed to owner/repo: '{Repo}'.",
+                repoUrl);
             return Observable.Return(0);
+        }
+        var (owner, repo) = (target.Owner, target.Repo);
 
         var completion = new BuildCompletion
         {
@@ -497,7 +527,7 @@ public sealed class GitHubWebhookProcessor
                 }
                 // The build record is the CI gate's verdict; the import is what the verdict authorises.
                 // Both hang off this one green-build event so they cannot disagree about what shipped.
-                return TriggerSyncForGreenBuild(repoUrl, completion.Branch, headSha)
+                return TriggerSyncForGreenBuild(target, completion.Branch, headSha)
                     .Select(_ => 1)
                     .Catch((Exception ex) =>
                     {
@@ -510,28 +540,206 @@ public sealed class GitHubWebhookProcessor
             });
     }
 
-    /// <summary>The distinct Space paths whose GitHub sync config targets <paramref name="repoUrl"/>.</summary>
-    private IObservable<IReadOnlyList<string>> MatchingSpaces(string repoUrl)
-    {
-        var target = ParseSafe(repoUrl);
-        return QueryConfigNodesAsSystem()
-            .Select(c => (IReadOnlyList<string>)c.Items
-                .Where(n => RepoMatches(n, target))
+    /// <summary>The distinct Space paths whose GitHub sync config targets <paramref name="repo"/>.</summary>
+    private IObservable<IReadOnlyList<string>> MatchingSpaces(RepoIdentity repo, string context)
+        => ConfigsTargeting(repo, context)
+            .Select(match => (IReadOnlyList<string>)match.Configs
                 .Select(n => n.Path.Split('/', 2)[0])
                 .Where(s => s.Length > 0)
                 .Distinct(StringComparer.Ordinal)
                 .ToList());
+
+    // ── which configs target this repository (rename-tolerant) ───────────────
+
+    /// <summary>
+    /// One delivery's fan-out, CLASSIFIED: how many sync configs exist at all, which of them target
+    /// the incoming repository, and which of those only matched because the repository was RENAMED
+    /// (their stored url still names it by an old name).
+    /// </summary>
+    /// <param name="Candidates">Every sync config in the mesh — the denominator.</param>
+    /// <param name="Configs">The configs that target this repository.</param>
+    /// <param name="Renamed">The subset matched only via canonical identity — a stale stored url.</param>
+    internal sealed record RepoMatch(
+        int Candidates, IReadOnlyList<MeshNode> Configs, IReadOnlyList<MeshNode> Renamed);
+
+    /// <summary>
+    /// Every sync config that targets <paramref name="incoming"/> — the ONE matching seam every
+    /// webhook path funnels through, so the rename tolerance and the zero-match report cannot drift
+    /// apart between the issue fan-out and the green-build fan-out.
+    ///
+    /// <para><b>Stored strings first.</b> A stored <c>owner/repo</c> that already equals the incoming
+    /// one is a match, for free, with no network call — which is every repository that was never
+    /// renamed, i.e. essentially all of them. Only when NOTHING matched does the canonical lookup
+    /// run, and it is cached per repository (<see cref="GitHubRepoIdentityResolver.Ttl"/>), so even a
+    /// hook whose repository this mesh does not sync at all costs one lookup an hour rather than one
+    /// per delivery.</para>
+    ///
+    /// <para>🚨 <b>A stored url that stops matching is INVISIBLE without this.</b> GitHub redirects a
+    /// renamed repository's old url, so git, the REST API and every manual sync keep working —
+    /// nothing errors, nothing 404s. Only equality breaks, and only in this one comparison
+    /// (#1856).</para>
+    /// </summary>
+    /// <param name="incoming">The repository the delivery is FOR (payload → always the current name).</param>
+    /// <param name="context">Human copy for the log line: the event, or "green build of main".</param>
+    /// <returns>The classified match. Never faults — a resolution failure degrades to "no match".</returns>
+    private IObservable<RepoMatch> ConfigsTargeting(RepoIdentity incoming, string context)
+        => QueryConfigNodesAsSystem().SelectMany(c =>
+        {
+            var stored = c.Items
+                .Select(node => (
+                    Node: node,
+                    Url: node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)?.RepositoryUrl))
+                .Select(x => (x.Node, x.Url, Id: GitHubRepoIdentityResolver.Parse(x.Url)))
+                .ToList();
+
+            var direct = stored.Where(x => incoming.Matches(x.Id)).Select(x => x.Node).ToList();
+            if (direct.Count > 0)
+                return Observable.Return(new RepoMatch(stored.Count, direct, []));
+
+            // Nothing matched by stored string. Either this repository is genuinely foreign, or one
+            // of the stored urls is an OLD NAME of it. Ask GitHub what each stored url resolves to
+            // today — grouped, so a repository configured by ten Spaces costs ONE lookup.
+            var groups = stored
+                .Where(x => x.Id is not null && x.Url is { Length: > 0 })
+                .GroupBy(x => x.Id!.ToString(), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (identities is null || groups.Count == 0)
+                return Observable.Return(Report(
+                    new RepoMatch(stored.Count, [], []),
+                    incoming, context, groups.Select(g => (g.Key, (RepoIdentity?)null)).ToList()));
+
+            return groups
+                .Select(g => identities
+                    .Resolve(g.First().Url!, g.First().Node.CreatedBy)
+                    .Select(canonical => (Group: g, Canonical: canonical)))
+                .Merge(4)
+                .ToList()
+                .Select(resolved =>
+                {
+                    var renamed = resolved
+                        .Where(r => incoming.Matches(r.Canonical))
+                        .SelectMany(r => r.Group.Select(x => x.Node))
+                        .ToList();
+                    if (renamed.Count > 0)
+                        RepointToCanonical(resolved
+                            .Where(r => incoming.Matches(r.Canonical))
+                            .SelectMany(r => r.Group.Select(x => (x.Node, x.Url!)))
+                            .ToList(), incoming);
+                    return Report(
+                        new RepoMatch(stored.Count, renamed, renamed),
+                        incoming, context,
+                        resolved.Select(r => (r.Group.Key, r.Canonical)).ToList());
+                });
+        });
+
+    /// <summary>
+    /// 🚨 <b>A delivery that matches NOTHING is the loudest thing this processor can say.</b> It
+    /// means every Space that syncs the repository has just been skipped, silently, and will stay
+    /// skipped on every future delivery until someone notices — which is precisely what took four
+    /// days in #1856. Warning, naming BOTH sides: the repository the payload is for, and every
+    /// repository the mesh compared it against (with what each resolves to today, when known).
+    ///
+    /// <para>Information is the wrong level for it: an unmatched delivery is not a routine outcome
+    /// of a healthy mesh, it is a hook pointing at a repository nothing syncs — a stale config, a
+    /// rename, or a hook installed on the wrong repository. Each of the three wants a human.</para>
+    /// </summary>
+    private RepoMatch Report(
+        RepoMatch match, RepoIdentity incoming, string context,
+        IReadOnlyList<(string Stored, RepoIdentity? Canonical)> compared)
+    {
+        if (match.Configs.Count > 0)
+        {
+            if (match.Renamed.Count > 0)
+                logger?.LogWarning(
+                    "GitHub webhook ({Context}) for {Repo} matched {Count} sync config(s) only by "
+                    + "CANONICAL identity — the repository was RENAMED and their stored url still "
+                    + "names it {Stored}. Repointing them: {Configs}.",
+                    context, incoming, match.Renamed.Count,
+                    string.Join(", ", compared
+                        .Where(x => incoming.Matches(x.Canonical))
+                        .Select(x => x.Stored)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)),
+                    string.Join(", ", match.Renamed.Select(n => n.Path)));
+            return match;
+        }
+
+        const int cap = 25;
+        var listed = compared
+            .Select(x => x.Canonical is null || string.Equals(x.Stored, x.Canonical.ToString(), StringComparison.OrdinalIgnoreCase)
+                ? x.Stored
+                : $"{x.Stored} → {x.Canonical}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var shown = listed.Count <= cap
+            ? string.Join(", ", listed)
+            : string.Join(", ", listed.Take(cap)) + $", (+{listed.Count - cap} more)";
+
+        logger?.LogWarning(
+            "GitHub webhook ({Context}) for {Repo} matched NONE of the {Candidates} sync config(s) in "
+            + "the mesh — nothing will sync for this delivery. Compared against: {Compared}. If this "
+            + "repository was RENAMED, the stored url is stale: GitHub redirects the old name so "
+            + "every other operation keeps working, while the payload always carries the CURRENT "
+            + "name and can never string-match the old one. Otherwise the hook is installed on a "
+            + "repository this mesh does not sync.",
+            context, incoming, match.Candidates, shown.Length == 0 ? "(no config carries a parseable url)" : shown);
+        return match;
     }
 
-    private bool RepoMatches(MeshNode node, (string Owner, string Repo) target)
+    /// <summary>
+    /// Records the repository's CURRENT url on a config that only matched by canonical identity, so
+    /// the drift is repaired instead of merely tolerated: the next delivery matches on the free path,
+    /// the Space's GitHub settings stop showing a name the repository no longer has, and the
+    /// resolver is not asked again.
+    ///
+    /// <para>Fire-and-forget under the SYSTEM identity (a webhook request is anonymous — its
+    /// authorization is the verified HMAC), and never allowed to fail the delivery: a failed repair
+    /// leaves the canonical matching doing its job, whereas a non-2xx would make GitHub redeliver.
+    /// The write touches ONLY <c>RepositoryUrl</c>, so the RFC 7396 merge patch cannot clobber a
+    /// concurrent <c>LastSyncCommitSha</c> from the import this same delivery is about to trigger.</para>
+    /// </summary>
+    private void RepointToCanonical(
+        IReadOnlyList<(MeshNode Node, string Url)> configs, RepoIdentity canonical)
     {
-        var cfg = node.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger);
-        if (cfg?.RepositoryUrl is not { Length: > 0 } url) return false;
-        var (owner, repo) = ParseSafe(url);
-        return owner.Length > 0
-            && string.Equals(owner, target.Owner, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(repo, target.Repo, StringComparison.OrdinalIgnoreCase);
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var workspace = hub.GetWorkspace();
+        foreach (var (node, url) in configs)
+        {
+            var repointed = RepointUrl(url, canonical);
+            if (string.Equals(repointed, url, StringComparison.Ordinal))
+                continue;
+            // 🚨 RunAsSystem, never Observable.Using (#1790): the Using shape opens the AsyncLocal
+            // scope on the SUBSCRIBING thread and disposes it wherever the work terminates, leaving
+            // the subscriber running as System.
+            accessService
+                .RunAsSystem(() => workspace.GetMeshNodeStream(node.Path).Update(current =>
+                {
+                    var cfg = current.ContentAs<GitHubSyncConfig>(hub.JsonSerializerOptions, logger)
+                              ?? new GitHubSyncConfig();
+                    return current with { Content = cfg with { RepositoryUrl = repointed } };
+                }))
+                .Subscribe(
+                    _ => logger?.LogInformation(
+                        "Repointed {Config} from '{Old}' to '{New}' — the repository was renamed.",
+                        node.Path, url, repointed),
+                    exception => logger?.LogWarning(exception,
+                        "Could not repoint {Config} to '{New}'; canonical matching still covers it.",
+                        node.Path, repointed));
+        }
     }
+
+    /// <summary>
+    /// The stored url with its owner/repo replaced by <paramref name="canonical"/>, KEEPING the
+    /// original scheme and host — a GitHub Enterprise config must not be silently repointed at
+    /// github.com. Falls back to the canonical github.com url when the stored value is not an
+    /// absolute uri (the <c>owner/repo</c> shorthand <c>ParseRepoUrl</c> also accepts).
+    /// </summary>
+    /// <param name="storedUrl">The url currently on the config.</param>
+    /// <param name="canonical">The repository's current identity.</param>
+    /// <returns>The url to store.</returns>
+    internal static string RepointUrl(string storedUrl, RepoIdentity canonical)
+        => Uri.TryCreate(storedUrl.Trim(), UriKind.Absolute, out var uri)
+            ? $"{uri.Scheme}://{uri.Authority}/{canonical.Owner}/{canonical.Repo}"
+            : canonical.Url;
 
     /// <summary>Upserts the issue node for one Space, preserving already-synced comments and
     /// merging the webhook's new comment when present. Written under the system identity.</summary>
@@ -571,12 +779,6 @@ public sealed class GitHubWebhookProcessor
             .Take(1)
             .Select(c => c.Items.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)))
             .Select(n => n.ContentAs<GitHubIssue>(hub.JsonSerializerOptions, logger));
-
-    private static (string Owner, string Repo) ParseSafe(string url)
-    {
-        try { return OctokitGitHubRepoClient.ParseRepoUrl(url); }
-        catch { return ("", ""); }
-    }
 
     private static bool TryGetRepoUrl(JsonElement payload, out string url)
     {

@@ -46,7 +46,7 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     {
         var rawKey = InstanceKeys.ExtractKey(authorizationHeader);
         if (rawKey is null)
-            return Observable.Return<AuthenticatedInstance?>(null);
+            return AuthenticateToken(authorizationHeader);
 
         var hash = InstanceKeys.Hash(rawKey);
         if (cache.TryGetValue(hash, out var hit) && DateTimeOffset.UtcNow - hit.At < CacheDuration)
@@ -64,19 +64,91 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
             });
     }
 
+    /// <summary>
+    /// The short-lived-token half of <see cref="Authenticate"/>. A verified token resolves through
+    /// exactly the same index as the key it was exchanged from — it carries that key's hash — so
+    /// there is one resolution path, and re-issuing an instance key invalidates every outstanding
+    /// token because the instance record then holds a different hash.
+    ///
+    /// <para>🚨 The token contributes IDENTITY and SCOPE, never authority. The live
+    /// <see cref="PluginGrant"/> is still read and still decides, so a revoked or expired sync
+    /// licence takes effect immediately instead of surviving until the token runs out.</para>
+    /// </summary>
+    private IObservable<AuthenticatedInstance?> AuthenticateToken(string? authorizationHeader)
+    {
+        var rawToken = SyncAccessToken.ExtractToken(authorizationHeader);
+        if (rawToken is null)
+            return Observable.Return<AuthenticatedInstance?>(null);
+
+        var keys = hub.ServiceProvider.GetService<SyncTokenSigningKeyService>();
+        if (keys is null)
+        {
+            // No key service is not "allow": a registry that cannot verify a signature must refuse
+            // the token, never accept it unverified.
+            logger.LogWarning(
+                "A sync access token was presented but no {Service} is registered — refusing.",
+                nameof(SyncTokenSigningKeyService));
+            return Observable.Return<AuthenticatedInstance?>(null);
+        }
+
+        // Existing(), never Resolve(): this caller has not authenticated yet, so minting on their
+        // behalf would let an anonymous request write a node — and would be pointless anyway, since a
+        // token cannot verify against a key minted after it was signed.
+        return keys.Existing()
+            .SelectMany(material =>
+            {
+                // Verification tries the current key and then the one the last rotation retired, so a
+                // token minted moments before a rotation still works.
+                var claims = material?.Verify(rawToken, DateTimeOffset.UtcNow);
+                if (claims is null)
+                    return Observable.Return<AuthenticatedInstance?>(null);
+
+                return Resolve(claims.KeyHash)
+                    .Select(resolved =>
+                    {
+                        if (resolved is null)
+                            return null;
+                        // The token names an instance AND routes to one. They must be the same
+                        // instance, or it is being replayed against a record it does not describe.
+                        if (!string.Equals(
+                                resolved.Instance.InstanceId, claims.InstanceId, StringComparison.Ordinal))
+                        {
+                            logger.LogWarning(
+                                "Sync access token claims instance {Claimed} but its key resolves to "
+                                + "{Actual} — refusing.",
+                                claims.InstanceId, resolved.Instance.InstanceId);
+                            return null;
+                        }
+                        return resolved with { TokenScope = claims };
+                    });
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex, "Sync access token resolution failed");
+                return Observable.Return<AuthenticatedInstance?>(null);
+            });
+    }
+
     private IObservable<AuthenticatedInstance?> Resolve(string hash)
     {
-        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
         var indexPath = $"{MeshWeaverInstanceNodeType.IndexNamespace}/{InstanceKeys.HashPrefix(hash)}";
 
-        return ReadAsSystem(accessService, indexPath)
+        // 🚨 ONE sealed System scope around the WHOLE resolution, not one Observable.Using per read
+        // (#1790). Rx runs a Using factory on the SUBSCRIBING thread and disposes on termination, so
+        // the old per-read form left the caller latched as System — and the callers here are HTTP
+        // requests on the registry surface (/api/plugins, and now /api/instances/token), which would
+        // then continue with Permission.All. RunAsSystem enters at Subscribe, leaves on the way out
+        // of that same Subscribe, and delivers every notification under the subscriber's own
+        // identity, so the three reads below are System and nothing downstream inherits it.
+        return accessService.RunAsSystem(() => Read(indexPath)
             .SelectMany(indexNode =>
             {
                 var index = Content<MeshWeaverInstanceIndex>(indexNode);
                 if (index is null || !InstanceKeys.HashEquals(hash, index.KeyHash))
                     return Observable.Return<AuthenticatedInstance?>(null);
 
-                return ReadAsSystem(accessService, index.InstancePath)
+                return Read(index.InstancePath)
                     .SelectMany(instanceNode =>
                     {
                         var instance = Content<MeshWeaverInstance>(instanceNode);
@@ -91,21 +163,20 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
                             return Observable.Return<AuthenticatedInstance?>(null);
                         }
 
-                        return ReadAsSystem(accessService,
-                                MeshWeaverInstanceNodeType.GrantPath(instance.InstanceId))
+                        return Read(MeshWeaverInstanceNodeType.GrantPath(instance.InstanceId))
                             // No grant node at all is the NORMAL state for a freshly registered
                             // instance — it authenticates, and is entitled to nothing.
                             .Select(grantNode => (AuthenticatedInstance?)new AuthenticatedInstance(
                                 instance,
                                 Content<PluginGrant>(grantNode) ?? new PluginGrant { InstanceId = instance.InstanceId }));
                     });
-            });
+            }));
     }
 
-    private IObservable<MeshNode?> ReadAsSystem(AccessService accessService, string path) =>
-        Observable.Using(
-            () => accessService.ImpersonateAsSystem(),
-            _ => hub.GetMeshNode(path, ReadTimeout));
+    /// <summary>One-shot read by exact path. The System identity comes from the single
+    /// <see cref="ImpersonationScopeExtensions.RunAsSystem{T}"/> scope in <see cref="Resolve"/>, so
+    /// this composes inside it rather than opening a scope of its own.</summary>
+    private IObservable<MeshNode?> Read(string path) => hub.GetMeshNode(path, ReadTimeout);
 
     private T? Content<T>(MeshNode? node) where T : class
     {
@@ -127,7 +198,22 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
 /// grant, which authorizes nothing.</param>
 public sealed record AuthenticatedInstance(MeshWeaverInstance Instance, PluginGrant Grant)
 {
+    /// <summary>
+    /// Present when the caller authenticated with a short-lived token rather than its durable key.
+    /// A token can only NARROW what the grant already allows — never widen it — so this is an
+    /// additional filter, never an alternative source of authority.
+    /// </summary>
+    public SyncAccessTokenClaims? TokenScope { get; init; }
+
     /// <summary>Whether this caller may pull <paramref name="packageId"/> from registry source
-    /// <paramref name="sourceName"/>.</summary>
-    public bool Allows(string sourceName, string packageId) => Grant.Allows(sourceName, packageId);
+    /// <paramref name="sourceName"/> at <paramref name="now"/> — granted, still within the
+    /// licence's term, and within the presented token's scope if one was used.</summary>
+    public bool Allows(string sourceName, string packageId, DateTimeOffset now) =>
+        Grant.Allows(sourceName, packageId, now)
+        && (TokenScope is null || TokenScope.Covers(sourceName, packageId));
+
+    /// <summary>Whether this caller may pull <paramref name="packageId"/> from registry source
+    /// <paramref name="sourceName"/> right now — what a live request means.</summary>
+    public bool Allows(string sourceName, string packageId) =>
+        Allows(sourceName, packageId, DateTimeOffset.UtcNow);
 }
