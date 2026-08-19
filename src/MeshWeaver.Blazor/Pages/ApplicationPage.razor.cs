@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -63,6 +64,15 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     public string? Path { get; set; } = "";
 
     private string? PageTitle { get; set; } = "";
+
+    /// <summary>
+    /// The node's own icon, published to the browser tab through <c>&lt;link rel="icon"&gt;</c> —
+    /// so a tab strip full of pages is readable, instead of the same portal favicon repeated.
+    /// Resolved next to <see cref="PageTitle"/> from the SAME navigation context, and therefore
+    /// swapped on every in-circuit navigation; null while no node is resolved (loading, Not Found,
+    /// an area page with no node), which leaves the site-wide favicon in place.
+    /// </summary>
+    private IconLink? TabIcon { get; set; }
 
     /// <summary>Catches any route parameters not explicitly declared; passed through to the layout area as additional options.</summary>
     [Parameter(CaptureUnmatchedValues = true)]
@@ -238,6 +248,7 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         if (context is null)
         {
             PageTitle = IsLoading ? "Loading..." : "Page Not Found";
+            TabIcon = null;
             PreRenderedHtml = null;
             return;
         }
@@ -277,6 +288,10 @@ public partial class ApplicationPage : ComponentBase, IDisposable
         PageTitle = context.Node?.Name
             ?? context.Address.Segments.LastOrDefault()
             ?? context.Address.Type;
+
+        // …and the node's own icon for the tab, resolved exactly as the app resolves it everywhere
+        // else (MeshNodeImageHelper.ResolveIconLink → ResolveNodeIcon), so tab and app agree.
+        TabIcon = context.Node is { } node ? MeshNodeImageHelper.ResolveIconLink(node) : null;
     }
 
     /// <summary>

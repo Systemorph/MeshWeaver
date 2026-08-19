@@ -66,7 +66,13 @@ public static class SocialExtensions
     /// the endpoints answer with a configuration problem.
     /// </summary>
     public static MeshBuilder AddSocial(this MeshBuilder builder)
-        => builder.ConfigureServices(services =>
+        => builder
+            // The credential type this module reads and writes. Registered by the module rather
+            // than the host: without it the connect callbacks fail with "NodeType 'ApiCredential'
+            // is not registered", and with it host-side the portal had to compile against this
+            // module for a single type.
+            .AddApiCredentialType()
+            .ConfigureServices(services =>
         {
             // Options pipeline, never services.Configure(section): there is no IConfiguration
             // instance at install time (Doc/Architecture/Modules). The bare-instance bridge keeps
@@ -81,6 +87,17 @@ public static class SocialExtensions
                 ServiceDescriptor.Scoped<INodeMenuProvider, LinkedInCredentialMenuProvider>());
             services.TryAddEnumerable(
                 ServiceDescriptor.Scoped<INodeMenuProvider, SocialPostMenuProvider>());
+
+            // The TIMED twin of that Publish menu item. Singleton, not scoped: EventSubscriptionRunner
+            // is a hosted service resolving out of the ROOT provider, and a scoped registration there
+            // throws at the moment a slot fires — i.e. in production, hours after any test ran.
+            services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IEventContinuationHandler, ScheduledSocialPublishHandler>());
+
+            // …and the half that ARMS it. Without this the handler above is unreachable: nothing else
+            // in the mesh reads a post's scheduledAt, which is precisely how posts sat "Scheduled"
+            // and never went out.
+            services.AddHostedService<ScheduledPostWatcher>();
             return services;
         });
 }

@@ -1,0 +1,87 @@
+# ImpersonationScopeSites.allow — the identity-latch ratchet (#1790).
+#
+# Each line is a file that still opens an impersonation scope inside `Observable.Using`:
+#
+#     Observable.Using(() => access.ImpersonateAsSystem(), _ => work)
+#
+# Impersonation is an AsyncLocal store/restore pair. Rx runs the resource factory on the
+# SUBSCRIBING thread and disposes the resource when the inner observable TERMINATES — for a
+# cross-hub call, the owning hub's response thread. The subscriber is therefore left running as
+# the impersonated identity: an ASP.NET request that continues with Permission.All, a script run
+# that resolves areas its user may not read, a hub action block holding system-security.
+#
+# The second half of that leak — the caller's "previous" identity being written onto the
+# terminating thread — is closed inside AccessService itself (the scope's restore is thread-affine
+# now), so it does NOT need a per-site fix. What is left at each line below is the subscribing-
+# thread latch, and only the call site can close that.
+#
+# TO FIX A SITE:  access.RunAsSystem(() => work)  /  RunAsHub(hub, () => work)  /
+#                 RunAs(identity, () => work)     — ImpersonationScopeExtensions.
+#                 Put the WIDEST cold pipeline inside the work factory; the emission-time
+#                 behaviour is then unchanged and only the boundary is sealed.
+#                 Where the capture is genuinely synchronous, a plain `using` around the call AND
+#                 its Subscribe is equally correct (see ActivityLogLogger).
+#
+# 🚨 THIS LIST MAY ONLY SHRINK. Fixing a site means LOWERING or DELETING its line. A new file or a
+# raised count fails ImpersonationScopeSiteRatchetGuard — adding a line is not a fix.
+#
+# Scope: src/, memex/, tools/ (production code). test/ and samples/ are out of scope: a latch there
+# costs test isolation, not a user's permissions.
+#
+# format: <path>	<count>
+
+memex/Memex.Client/Prefs/PreferencesService.cs	2
+memex/Memex.Client/Services/DeviceOnboarding.cs	1
+memex/Memex.Portal.Shared/Api/SeoEndpoints.cs	1
+memex/Memex.Portal.Shared/Authentication/ApiTokenService.cs	1
+memex/Memex.Portal.Shared/Authentication/BootstrapController.cs	1
+memex/Memex.Portal.Shared/Authentication/DevAuthController.cs	2
+memex/Memex.Portal.Shared/Authentication/InvitationService.cs	2
+memex/Memex.Portal.Shared/Authentication/MeshWeaverInstanceService.cs	3
+memex/Memex.Portal.Shared/Authentication/OnboardingMiddleware.cs	1
+memex/Memex.Portal.Shared/Authentication/UserOnboardingService.cs	3
+memex/Memex.Portal.Shared/Email/InvitationEmailSender.cs	2
+memex/Memex.Portal.Shared/Email/OutboundEmailSender.cs	1
+memex/Memex.Portal.Shared/Models/ModelProviderService.cs	1
+memex/Memex.Portal.Shared/Pages/Onboarding.razor	1
+memex/Memex.Portal.Shared/Settings/InboxSettingsTab.cs	1
+src/MeshWeaver.AI.OpenAI/OpenAICompatibleModelSync.cs	1
+src/MeshWeaver.AI/ChatClientCredentialResolver.cs	2
+src/MeshWeaver.Blazor.Portal/Chat/ThreadChatView.razor.cs	1
+src/MeshWeaver.GitSync/GitHubSyncService.cs	2
+src/MeshWeaver.GitSync/GitHubWebhookProcessor.cs	4
+src/MeshWeaver.Graph/Configuration/CellSurfaceAssemblyProvider.cs	2
+src/MeshWeaver.Graph/Configuration/MeshNodeCompilationService.cs	2
+src/MeshWeaver.Graph/Configuration/NodeTypeCompilationActivity.cs	2
+src/MeshWeaver.Graph/Configuration/NodeTypeCompilationHelpers.cs	3
+src/MeshWeaver.Graph/Configuration/NodeTypeCompileState.cs	1
+src/MeshWeaver.Graph/Configuration/NodeTypeContractHandler.cs	1
+src/MeshWeaver.Graph/Configuration/NodeTypeEnrichmentHelpers.cs	1
+src/MeshWeaver.Graph/Configuration/PartitionDropPostDeletionHandler.cs	1
+src/MeshWeaver.Graph/Configuration/SpaceNodeType.cs	1
+src/MeshWeaver.Graph/Configuration/WebhookEventNodeType.cs	1
+src/MeshWeaver.Graph/DeckSlidesCache.cs	1
+src/MeshWeaver.Graph/MeshDataSource.cs	1
+src/MeshWeaver.Graph/MeshNodeExtensions.cs	6
+src/MeshWeaver.Graph/NodeTypeReleaseExtensions.cs	1
+src/MeshWeaver.Graph/StaticRepoImporter.cs	1
+src/MeshWeaver.Hosting.Monolith.TestBase/MonolithMeshTestBase.cs	1
+src/MeshWeaver.Hosting/MeshNodeStreamCache.cs	1
+src/MeshWeaver.Hosting/NodeUpdatePipeline.cs	1
+src/MeshWeaver.InstanceSync/InstanceSyncCoordinator.cs	1
+src/MeshWeaver.InstanceSync/InstanceSyncService.cs	1
+src/MeshWeaver.InstanceSync/InstanceSyncWorker.cs	1
+src/MeshWeaver.Kernel.Hub/ActivityLogLogger.cs	1
+src/MeshWeaver.Mail.MicrosoftGraph/EmailInboundProcessor.cs	2
+src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	1
+src/MeshWeaver.Observability/LogIncidentControlPlane.cs	1
+src/MeshWeaver.Observability/LogIncidentIngestService.cs	1
+src/MeshWeaver.PluginCatalog/InstanceAutoRegistrationService.cs	6
+src/MeshWeaver.PluginCatalog/InstanceComboReader.cs	1
+src/MeshWeaver.PluginCatalog/ModuleDiscoveryService.cs	4
+src/MeshWeaver.PluginCatalog/PackageInstaller.cs	10
+src/MeshWeaver.PluginCatalog/PackageUpdateReconciler.cs	2
+src/MeshWeaver.PluginCatalog/PluginUpdateWatcher.cs	1
+src/MeshWeaver.PluginCatalog/RegistrationKeyService.cs	1
+src/MeshWeaver.Teams/TeamsInboundProcessor.cs	1
+tools/MeshWeaver.PluginTester/PluginGateRunner.cs	1

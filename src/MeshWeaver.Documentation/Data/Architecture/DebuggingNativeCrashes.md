@@ -212,6 +212,11 @@ Two traps make this look impossible when it is not:
 - **A backtrace address is a RETURN address.** The frame you want is the target of the `call`
   immediately *before* it, not the function the address lands in. Disassembling the few bytes ahead of
   the return address is what names the real callee.
+- 🚨 **The spectacular stack belongs to a DIFFERENT thread.** When the faulting thread prints
+  nothing, `clrstack -all` still prints everyone else — and in this workload that is two ~130/~196
+  frame application stacks. Reading one of those as "the crash" is the single most expensive mistake
+  available here: it names a culprit that was merely *running*. Identify the faulting thread FIRST
+  (below), and only then read a stack.
 
 The recipe, end to end (each step is seconds). **This is the elfutils spelling of the same four
 facts the macOS-native section above extracts with plain Python** — `eu-readelf` and `eu-addr2line`
@@ -241,6 +246,34 @@ Run the block in a **linux/amd64** container whose runtime patch matches `_runti
 artifact (the shard already records it) — then `libcoreclr.so` is byte-identical and the build-id
 lookup succeeds. The `.debug` carries a symbol table but no DWARF lines, so you get function names,
 not line numbers; that is enough to name the phase.
+
+#### Which thread faulted, and its native backtrace — no lldb, no container
+
+Two plain-Python steps over the ELF core answer both, on macOS, in seconds. They are what turns
+"something segfaulted in the GC" into "the background GC thread segfaulted, and no application frame
+is on it".
+
+1. **Which thread.** Find the faulting `ucontext` (below), read its pre-signal `RSP`, then match that
+   against each thread's `NT_PRSTATUS` `rsp`: the signal frame sits just ABOVE the crashing thread's
+   recorded stack pointer, because `createdump` sampled that thread while it was still inside the
+   handler. Cross-check against `threads` in `dotnet-dump` — the OS ids line up, and
+   `createdump`'s own *"Crashing thread NNNN"* line in the shard log is the same number in hex.
+2. **Its backtrace.** Walk that thread's stack upward from the pre-signal `RSP` and keep every 8-byte
+   value that lands inside `libcoreclr`'s mapping; resolve each against the build-id `.debug`
+   (`nm -C --defined-only -S`). Saved return addresses come out in order, and runtime threads have
+   short, unmistakable stacks:
+
+   ```
+   CorUnix::CPalThread::ThreadEntry
+    → CreateSuspendableThread::$_0::__invoke
+      → WKS::gc_heap::bgc_thread_stub → WKS::gc_heap::bgc_thread_function+0xdc
+        → WKS::gc_heap::gc1+0xf6 → WKS::gc_heap::background_sweep+0xa61   ← FAULT
+   ```
+
+   That is a **dedicated background GC thread**, and it settles culprit-vs-victim for the whole class:
+   no managed frame is on it, so no application code can be *executing* the fault. Scan reads
+   whatever is on the stack, so expect a few data pointers among the return addresses — the ordered
+   chain of function symbols is the signal.
 
 ### Recovering the FAULTING registers (PRSTATUS is not them)
 
@@ -541,6 +574,45 @@ Three further things that recurrence established:
   contents are their dead objects — that is the *workload* that grows gen2 free lists, not the
   cause.)
 
+### 2026-08-18: sighting #8 — the faulting thread is the BGC thread, and the two re-entrant hub constructions are bystanders
+
+`dotnet-4411.dmp` (`MeshWeaver.FutuRe.Test`, exit=139, runtime `10.0.11`, libcoreclr build-id
+`989b56df…`) is the same fault a **fourth** time on the same runtime, at the **first** of the three
+known RVAs:
+
+```
+si_signo=11  si_code=1 (SEGV_MAPERR)  si_addr=0x0   TRAPNO=14  ERR=0x4  CR2=0x0
+RIP = libcoreclr + 0x5cb171 = WKS::gc_heap::background_sweep() + 0xa61
+bytes@RIP: 49 8b 07  mov rax,[r15] / 48 83 e0 f8  and rax,~7 / 8b 08  mov ecx,[rax]   ← RAX = 0
+cursor R15 = 0x7f00266428e0 — a 24-byte block on a genuine object boundary (a walk from R8 reaches
+it after 4 well-formed objects), header word exactly 0, next valid header 24 bytes later
+```
+
+**What is new is not the fault — it is which thread took it.** This dump was pulled because
+`clrstack -all` shows two threads ~130 and ~196 frames deep in **re-entrant hub construction**
+(`CreateHub → Build → … → CreateHub → Build`), one via `KernelContainer.StartActivityControlPlane`
+and one via `DataExtensions.<GetDefaultConfiguration>` → `GetWorkspace()`, both bottoming out in
+`SynchronizationStream..ctor → GetHostedHub(…, Always)`. It reads like a cause. It is not:
+
+| thread | what it is | frames |
+|---|---|---|
+| `0x114C` | **the crashing thread** — `bgc_thread_stub → bgc_thread_function → gc1 → background_sweep` | **0 managed** |
+| `0x114E` | threadpool worker, `MessageService.DrainOne` → … → nested `Build` | 195 managed, 2 × `Build` |
+| `0x1146` | threadpool worker, `MeshQuery` emission → … → nested `Build` | 131 managed, 2 × `Build` |
+
+The crashing thread is the **dedicated background GC thread**: no managed frames, no application
+code, nothing that could be constructing anything. The re-entrant constructions are concurrent
+mutators — the workload, exactly like the 11 collectible ALCs in the 2026-08-17 sighting. And they
+are not even rare: a green local run of the same project logs **1,350** of them (see the re-entrancy
+bullet under *Reading the result honestly*).
+
+Two facts from the same dump that keep the "our code corrupted the heap" branch closed: the process
+maps **19 native modules and all 19 are the runtime's or the OS's** (`libcoreclr`, `libclrjit`,
+`libSystem.Native`, OpenSSL, ICU, libc/libstdc++ …) — no third-party native code — and of the **129
+managed assemblies** it loads, none comes from a project that sets `AllowUnsafeBlocks`: the only one
+in the repo is `memex/Memex.Client`, which this process never loads. So `unsafe` is not merely absent
+from the sources on the stack — it could not have compiled into anything in the process.
+
 ## Reading the result honestly
 
 The trap in this class of bug is confirmation: the stack shows *a* plausible culprit and it is
@@ -554,12 +626,20 @@ tempting to fix that and declare victory. Discipline:
   showed it crashing during hub *construction*.
 - A method's **name** is not evidence of the phase. `SubscribeToOwnDeletion` is a
   `.WithInitialization(...)` hook: it names what the subscription later watches for, not when it runs.
-- **A frame appearing TWICE in one stack is re-entrancy, and re-entrancy is the finding.** That is
-  what the 2026-08-03 crash turned out to be — `CreateHub → Build → … → CreateHub → Build` nested an
-  Autofac `ComponentRegistryBuilder.Build` inside the in-progress one, and that builder is not
-  re-entrant. Scan the stack for repeats before theorising about anything else (fixed in #774: the
-  own-node subscription moved from the synchronous `WithInitialization` overload, which runs *inside*
-  `Build`, to the observable one, which runs on `InitializeHubRequest` after `Build` returns).
+- **A frame appearing TWICE in one stack is re-entrancy — a finding only if it is on the FAULTING
+  thread and is not the workload's steady state.** `CreateHub → Build → … → CreateHub → Build` is
+  eye-catching and it is *normal here*: `SynchronizationStream`'s constructor always calls
+  `GetHostedHub(…, Always)`, and `DataExtensions` registers `h.GetWorkspace()` as a **synchronous**
+  buildup action, so every data-enabled hub builds a `sync/{clientId}` sub-hub inside its own
+  `Build`. Measured 2026-08-18 on `MeshWeaver.FutuRe.Test`: **1,350 nested Builds in one green,
+  exit=0, 23 s run** (`[ThreadStatic]` depth counter in `MessageHubConfiguration.Build`). A pattern
+  that fires 1,350 times per green run cannot discriminate a ~4 % crash, so *finding* it in a dump
+  proves nothing on its own — and the 2026-08-03 note that "the registry builder is not re-entrant,
+  so the process died" is withdrawn for the same reason (nested container builds are what those
+  1,350 are). #774 moved the own-node subscription off the synchronous overload anyway, which is
+  right on its own merits: work that resolves streams belongs after `Build` returns.
+  So the rule is: repeats are worth scanning for, but qualify them —
+  **(a)** is this the faulting thread? **(b)** does it also happen when nothing crashes?
 - If a hypothesis survives, write down what would disprove it, then go and check that.
 
 ## Why the dump may have no precursor in the logs

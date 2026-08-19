@@ -93,7 +93,7 @@ public static class ModelPricing
             ["claude-haiku-4-5-20251001"] = new(1m, 5m, Usd),
             ["claude-fable-5"] = new(10m, 50m, Usd),
 
-            // The models actually deployed on Azure AI Foundry (s-meshweaver, swedencentral) —
+            // The models actually deployed on our Azure AI Foundry resource (swedencentral) —
             // the cost overview must bill at AZURE serverless rates, not the providers' direct
             // API rates. USD per 1M tokens (standard / non-cached). ⚠️ VERIFY against the Azure
             // AI Foundry rate card for the resource — region/contract rates can differ, and the

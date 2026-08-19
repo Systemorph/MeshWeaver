@@ -397,12 +397,20 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         // the user resolves as ANONYMOUS → RLS returns empty → blank "portal is down" for every
         // authenticated user (chronic token-forwarding failure, prod 2026-06-18). Run it as System
         // (Permission.All — NOT ImpersonateAsHub, whose hub address has no Read on the token node).
-        // Observable.Using holds the impersonation across the cold Observe's Subscribe.
+        //
+        // 🚨 RunAsSystem, never Observable.Using (#1790). The impersonation is DELIBERATE and stays
+        // — what must not stay is the AsyncLocal write. Observable.Using opens the scope on the
+        // SUBSCRIBING thread, which here is the ASP.NET REQUEST thread (InvokeAsync subscribes this
+        // through .ToTask()), and disposes it when the ApiToken hub answers — a different thread.
+        // The request thread was therefore left holding `system-security` for the rest of the
+        // pipeline: the `existing.Email == userContext.Email` reuse branch just below reads that
+        // latched context, so a token whose record carries no email matched the System context's
+        // null email and the whole request ran with Permission.All. RunAsSystem keeps the scope
+        // across the cold Observe's Subscribe (where the post is stamped) and leaves it on the way
+        // out of that same Subscribe.
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Using<ValidateTokenResponse?, IDisposable>(
-                () => accessService?.ImpersonateAsSystem()
-                      ?? System.Reactive.Disposables.Disposable.Empty,
-                _ => hub.Observe(
+        return accessService.RunAsSystem(
+                () => hub.Observe(
                         new ValidateTokenRequest(rawToken),
                         o => o.WithTarget(tokenAddress))
                     .Select(d => (ValidateTokenResponse?)d.Message))

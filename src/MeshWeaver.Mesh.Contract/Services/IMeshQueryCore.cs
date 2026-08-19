@@ -14,6 +14,11 @@ using System.Text.Json;
 // SyncedQueryInitialGateTest decorates the REAL IMeshQueryCore with a
 // subscription-delaying wrapper to pin the pre-Initial emission gate.
 [assembly: InternalsVisibleTo("MeshWeaver.Query.Test")]
+// OverlayReEvaluationReadTest substitutes the core to pin that the compilation-overlay
+// re-evaluation reads STORAGE rather than a cached stream (issue #1814) — a wiring only a
+// test over the real seam can prove, since every shape test passes against a read that never
+// matches anything.
+[assembly: InternalsVisibleTo("MeshWeaver.Graph.Test")]
 // Castle.DynamicProxy (used by NSubstitute) generates proxies in this assembly;
 // without InternalsVisibleTo it can't implement the internal IMeshQueryCore.
 [assembly: InternalsVisibleTo("DynamicProxyGenAssembly2")]

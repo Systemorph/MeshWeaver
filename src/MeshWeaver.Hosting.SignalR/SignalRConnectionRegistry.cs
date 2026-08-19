@@ -120,12 +120,16 @@ public sealed class SignalRConnectionRegistry : IDisposable
         }
 
         var tokenAddress = new Address("ApiToken", ValidateTokenRequest.HashToken(rawToken)[..12]);
-        return Observable.Using(
+        return accessService.RunAsSystem(
+                // 🚨 RunAsSystem, never Observable.Using (#1790): the impersonation is an AsyncLocal
+                // scope, and Observable.Using opens it on the SUBSCRIBING thread while disposing it
+                // on whichever thread the inner observable terminates. RunAsSystem opens and closes
+                // it inside one synchronous Subscribe, so the handshake thread is not left holding
+                // `system-security` and the responding thread is handed no foreign "previous".
                 // Token validation is the auth bootstrap — it runs BEFORE any identity exists, so it
                 // must run as System (Permission.All) or the never-null guard fail-closes the post.
-                () => accessService.ImpersonateAsSystem(),
                 // 🚨 Issued on the transport's PORTAL hub, never on the root mesh hub — see TransportHub.
-                _ => TransportHub.Observe(new ValidateTokenRequest(rawToken), o => o.WithTarget(tokenAddress))
+                () => TransportHub.Observe(new ValidateTokenRequest(rawToken), o => o.WithTarget(tokenAddress))
                         .Select(d => d.Message as ValidateTokenResponse))
             .Take(1)
             // Completed-empty = the request produced NO verdict at all (unroutable ApiToken hub) —

@@ -381,6 +381,22 @@ builder.Services.AddHostedService<Memex.Portal.Distributed.DbVersionGate>();
 builder.Services.AddHealthChecks()
     .AddCheck<Memex.Portal.Distributed.DbVersionHealthCheck>("db_version");
 
+// The same shape, one dependency further out: DbVersionGate proves the MESH database is
+// migrated; this proves the ORLEANS database is provisioned. They are different databases,
+// provisioned by different phases, and #1798 is what happens when only the first is checked —
+// the portal held a valid ConnectionStrings:orleans (so the existing throw above was satisfied)
+// while the MIGRATION's secret lacked it, so OrleansClusteringSetup logged "skipping" and created
+// nothing. AdoNetGrainStorage.Init then died on `Sequence contains no elements`, which names no
+// table, key, or container. Registered ONLY when this silo actually uses AdoNet, and asking for
+// exactly the keys `useAdoNetClustering` causes it to configure, so the gate can never demand
+// more than the deployment uses.
+if (useAdoNetClustering)
+    builder.Services.AddHostedService(sp => new Memex.Portal.Distributed.OrleansProvisioningGate(
+        orleansConnectionString!,
+        requiresGrainStorage: configurePubSubStore is not null,
+        sp.GetRequiredService<IHostApplicationLifetime>(),
+        sp.GetRequiredService<ILogger<Memex.Portal.Distributed.OrleansProvisioningGate>>()));
+
 // Front-load dynamic NodeType compiles at startup so a fresh pod (every image roll /
 // self-update spins one up) doesn't make the first visitor of each type wait out a cold
 // Roslyn compile. The sweep is sequential, in dependency order, and RESUMES from the shared

@@ -1,7 +1,7 @@
 ---
 Name: The Continuous Delivery Contract
 Category: Architecture
-Description: What main-cd.yml guarantees about a published image set — all-or-nothing publication via unselectable staging tags, a promote job whose ordering makes rollback unnecessary, and a 3-hourly reconciler that heals main's HEAD. Plus the standing rule: verify the IMAGE, never the green tick.
+Description: What main-cd.yml guarantees about a published image set — all-or-nothing publication via unselectable staging tags, a promote job whose ordering makes rollback unnecessary, and an hourly reconciler that heals main's HEAD. Plus the standing rule: verify the IMAGE, never the green tick.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4"/><path d="M12 11v10"/><path d="M8.5 15.5l3.5 1.6 3.5-1.6"/></svg>
 ---
 
@@ -89,7 +89,7 @@ and the hole closed only incidentally, when some later PR merged — which publi
 commit, so the failed commit's set is never completed, only superseded. The state did not heal, it
 was papered over.
 
-A 3-hourly `schedule` (plus `workflow_dispatch`) now enters the same job graph through `gate`. It is
+An hourly `schedule` (plus `workflow_dispatch`) now enters the same job graph through `gate`. It is
 a **reconciler, not a retry**: it asks *"does main's current HEAD have a complete image set in
 ACR?"* — observed state, answered by the same script `verify-images` uses — and drives a publish only
 when the answer is no. It wraps no failing operation and suppresses no failure signal.
@@ -158,9 +158,19 @@ az aks command invoke -g <aks-resource-group> -n <aks-cluster> --command \
   "kubectl get deploy -A -o custom-columns=NS:.metadata.namespace,IMAGE:.spec.template.spec.containers[0].image --no-headers | grep memex-portal-ai"
 ```
 
-Installs then self-update on their 6 h poll (`SelfUpdateOptions.PollInterval`) — comfortably longer
-than the reconciler's 3 h cadence, so a healed image is picked up on the very next poll — or
-immediately after a `kubectl rollout restart`, since the poll fires on startup via `StartWith(-1L)`.
+Installs then pick the image up **on the publication event, not on a timer** (#1773): each install
+checks once at startup — catching anything published while it was down — and then once per build
+completion it observes, across the whole `Admin/_Build` collection rather than one configured repo.
+`SelfUpdateOptions.RetryInterval` (6 h) is only the backstop after a failed check, never the normal
+path, and a `kubectl rollout restart` still forces an immediate check via the startup pass.
+
+Together with the reconciler's hourly cadence, that bounds merge → running image at roughly
+1 h of reconcile wait plus the ~20 min build — the reconcile tick, **not** the batch window, is
+what sets that tail.
+
+🚨 The same change makes **publication frequency equal to portal-restart frequency**: nothing paces
+the rolls, so each published set restarts every install that selects it. That is the reason the tick
+is hourly and not faster, and it is tracked as #1778 rather than papered over with a slower CD.
 
 ## Changing the pipeline
 
@@ -261,7 +271,7 @@ re-notifies, and nothing downstream certifies anything on it.
 Provisioning state (2026-08-17): the two halves of this cascade are in different states.
 
 - **The satellites' publish credentials ARE provisioned.** The Azure managed identity
-  `github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
+  `github-actions-bake` (in the cluster's resource group) holds *Storage File Data Privileged Contributor* on the
   portals' storage account, carries **8 federated credentials — the four satellite repos
   (`MeshWeaver.Plugins`, `MeshWeaver.Education`, `MeshWeaver.Reinsurance`, `MeshWeaver.SocialMedia`)
   × two subject formats** (below) — and the `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
@@ -306,15 +316,15 @@ REPO_ID=$(gh api repos/Systemorph/$REPO --jq .id)
 ORG_ID=$(gh api orgs/Systemorph --jq .id)
 ISSUER=https://token.actions.githubusercontent.com
 # BOTH of the following, never just one:
-az identity federated-credential create -g memex-aks-rg --identity-name github-actions-bake \
+az identity federated-credential create -g <aks-resource-group> --identity-name github-actions-bake \
   --name "gh-$SHORT-main-classic" --issuer "$ISSUER" \
   --subject "repo:Systemorph/$REPO:ref:refs/heads/main" --audience api://AzureADTokenExchange
-az identity federated-credential create -g memex-aks-rg --identity-name github-actions-bake \
+az identity federated-credential create -g <aks-resource-group> --identity-name github-actions-bake \
   --name "gh-meshweaver-$SHORT-main" --issuer "$ISSUER" \
   --subject "repo:Systemorph@$ORG_ID/$REPO@$REPO_ID:ref:refs/heads/main" --audience api://AzureADTokenExchange
 
 # What is registered today (expect 2 rows per repo, 8 in total):
-az identity federated-credential list --identity-name github-actions-bake -g memex-aks-rg \
+az identity federated-credential list --identity-name github-actions-bake -g <aks-resource-group> \
   --query "[].{name:name,subject:subject}" -o tsv
 ```
 

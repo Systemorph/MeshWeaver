@@ -272,5 +272,25 @@ jobs:
         working-directory: clients/grpc-web
         run: npm ci --no-audit --no-fund && npm run gen
       - run: npm ci --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
+      # Bounded for the same reason as dotnet-test.yml's provisioning step: a stalled CDN does
+      # not fail the download, it HANGS it, and an unbounded hang here burns the whole job's
+      # budget and reports as a timeout that names nothing. A red Clients workflow blocks image
+      # publication, so a stall that reads as "the clients broke" is expensive to misdiagnose.
+      # No retry loop here (unlike dotnet-test) — this step has none today, and a bound alone
+      # already converts a silent hang into a visible, re-runnable infra failure.
+      # The apt wait is for the same reason as dotnet-test's: `--with-deps` shells out to apt-get,
+      # and the runner's own background apt makes it exit 100 "Could not get lock" — contention,
+      # not a broken download. Same shared script, so this copy cannot drift from that one again.
+      # Both bounds are hard: it can wait, it cannot hang.
+      #
+      # 🚨 The install bound is 420s, not 180s, because 180 was BELOW what this step actually
+      # costs. Unlike dotnet-test's, this install is the FULL chromium (the e2e drives a real
+      # browser, not `--only-shell`) plus its apt dependencies, and two independent runs measured
+      # ~185s: main's own run 32180959535 and 32170659820 both died at exactly `exit code 124`
+      # — `timeout` killing a healthy install a few seconds short. A bound that the normal path
+      # exceeds is not a hang detector, it is a flake generator, and it reports as the very
+      # "infra failure" wording that trains people to re-run rather than look.
+      - run: |
+          "$GITHUB_WORKSPACE/.github/scripts/wait-for-apt.sh" 180
+          timeout --signal=TERM --kill-after=30 420 npx playwright install --with-deps chromium
       - run: npm run e2e # expo export --platform web → serve dist/ → drive headless Chromium

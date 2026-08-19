@@ -14,6 +14,18 @@
 <FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
 
 <PageTitle>@PageTitle</PageTitle>
+@if (TabIcon is { } tabIcon)
+{
+    @* The NODE's own icon in the browser tab. Declared here — inside HeadOutlet, which App.razor
+       places AFTER its site-wide favicon — so it outranks that one: an icon later in the head wins
+       over an earlier one of equal rank, which is the same ordering SeoHead relies on for the
+       crawler-facing head. Unlike SeoHead this runs in the CIRCUIT, so it also covers the pages a
+       crawler never sees (every authenticated page) and re-emits on each in-circuit navigation
+       instead of only on the initial HTTP response. *@
+    <HeadContent>
+        <link rel="icon" href="@tabIcon.Href" type="@tabIcon.Type" />
+    </HeadContent>
+}
 <CascadingValue Value="@Mode" Name="ThemeMode">
     @*
         Rule enforced here: every branch renders a descriptive text label.

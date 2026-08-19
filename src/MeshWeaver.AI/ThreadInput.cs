@@ -38,6 +38,10 @@ public static class ThreadInput
     /// alongside <paramref name="submitterObjectId"/> so the rebuilt round context can render
     /// user-facing text in the submitter's language. See
     /// <see cref="ThreadMessage.SubmitterLocale"/>.</param>
+    /// <param name="submitterTimeZoneId">The submitter's <see cref="AccessContext.TimeZoneId"/> — a
+    /// named IANA zone — captured alongside <paramref name="submitterObjectId"/> so the rebuilt
+    /// round context can anchor the agent's "today" in the user's own day rather than UTC's. See
+    /// <see cref="ThreadMessage.SubmitterTimeZoneId"/>.</param>
     public static ThreadMessage CreateUserMessage(
         string text,
         string? createdBy = null,
@@ -49,7 +53,8 @@ public static class ThreadInput
         string? harness = null,
         string? submitterObjectId = null,
         string? submitterName = null,
-        string? submitterLocale = null) =>
+        string? submitterLocale = null,
+        string? submitterTimeZoneId = null) =>
         new()
         {
             Role = "user",
@@ -64,6 +69,7 @@ public static class ThreadInput
             SubmitterObjectId = submitterObjectId,
             SubmitterName = submitterName,
             SubmitterLocale = submitterLocale,
+            SubmitterTimeZoneId = submitterTimeZoneId,
             Timestamp = DateTime.UtcNow,
             Type = ThreadMessageType.ExecutedInput,
             // User cells don't have a streaming lifecycle — Submitted on creation.

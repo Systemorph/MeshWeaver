@@ -64,6 +64,51 @@ public sealed class NodeTypeCompileParkRegistry
     public void RecordAttempt(string nodeTypePath) =>
         _attempts.AddOrUpdate(nodeTypePath, 1, (_, n) => n + 1);
 
+    // 🚨 #1793 — the AUTOMATIC failure re-drive ledger. Two counters, because the two failure
+    // shapes they bound are different questions:
+    //
+    //   _redrivesByInputs — how often THIS process re-drove a type for EXACTLY the same compile
+    //     inputs. The kickoff stamps the live inputs in the same write that flips Pending, so this
+    //     can only exceed 1 if something is rewriting that stamp — i.e. the re-drive is feeding
+    //     itself. That is the 257,000-version write-storm shape (#223), and it must be LOUD rather
+    //     than merely bounded: the second occurrence logs an ERROR naming the path.
+    //   _redriveTotals — how many automatic re-drives this process has issued for the type at all,
+    //     across every input change. The give-up bound: past it the type is left alone, loudly,
+    //     for a human to Compile.
+    private readonly ConcurrentDictionary<(string Path, string Inputs), int> _redrivesByInputs = new();
+    private readonly ConcurrentDictionary<string, int> _redriveTotals = new();
+
+    /// <summary>
+    /// How many automatic failure re-drives one NodeType may receive from a single process before
+    /// the framework stops trying and says so. A SAFETY VALVE, not the primary bound — the primary
+    /// bound is structural (one re-drive per distinct set of compile inputs, enforced by the stamp
+    /// the re-drive writes). This exists so that a stamp which somehow fails to stick converges on
+    /// a loud stop instead of a spin.
+    /// </summary>
+    public const int MaxAutomaticFailureRedrives = 5;
+
+    /// <summary>
+    /// Record an automatic failure re-drive of <paramref name="nodeTypePath"/> for the compile
+    /// inputs <paramref name="inputs"/> (<c>NodeTypeCompilationHelpers.BuildInputsToken</c>).
+    /// </summary>
+    /// <returns>
+    /// <c>ForTheseInputs</c> — how many times this process has now re-driven the type for exactly
+    /// these inputs; anything above 1 means the re-drive did not converge. <c>Total</c> — how many
+    /// automatic re-drives this process has issued for the type in total, compared against
+    /// <see cref="MaxAutomaticFailureRedrives"/>.
+    /// </returns>
+    public (int ForTheseInputs, int Total) RecordFailureRedrive(string nodeTypePath, string inputs)
+    {
+        var forTheseInputs = _redrivesByInputs.AddOrUpdate((nodeTypePath, inputs), 1, (_, n) => n + 1);
+        var total = _redriveTotals.AddOrUpdate(nodeTypePath, 1, (_, n) => n + 1);
+        return (forTheseInputs, total);
+    }
+
+    /// <summary>How many automatic failure re-drives this process has issued for the NodeType —
+    /// the observable proof that the recovery path is bounded.</summary>
+    public int GetFailureRedriveCount(string nodeTypePath) =>
+        _redriveTotals.GetValueOrDefault(nodeTypePath);
+
     /// <summary>
     /// Total real compile kick-offs for the NodeType since the last un-park. A parked
     /// (broken) type holds at its small attempt count rather than climbing on every
@@ -116,6 +161,19 @@ public sealed class NodeTypeCompileParkRegistry
     {
         _parked.TryRemove(nodeTypePath, out _);
         _failureCounts.TryRemove(nodeTypePath, out _);
+        // The automatic re-drive CONVERGED, so its budget is spent and returned: a type that
+        // breaks again later gets a fresh set of attempts rather than inheriting a used-up one.
+        ClearFailureRedrives(nodeTypePath);
+    }
+
+    /// <summary>Forget the automatic-re-drive ledger for one NodeType (a converged or deliberately
+    /// retried type starts clean).</summary>
+    private void ClearFailureRedrives(string nodeTypePath)
+    {
+        _redriveTotals.TryRemove(nodeTypePath, out _);
+        foreach (var key in _redrivesByInputs.Keys)
+            if (string.Equals(key.Path, nodeTypePath, StringComparison.Ordinal))
+                _redrivesByInputs.TryRemove(key, out _);
     }
 
     /// <summary>
@@ -129,6 +187,14 @@ public sealed class NodeTypeCompileParkRegistry
             _attempts.TryRemove(nodeTypePath, out _);
         _failureCounts.TryRemove(nodeTypePath, out _);
     }
+
+    /// <summary>
+    /// A DELIBERATE retry (the Compile button / a fresh release request) also returns the automatic
+    /// re-drive budget: a human asking for a build is the strongest possible signal that the
+    /// give-up should be reconsidered. Separate from <see cref="Unpark"/> so the automatic path
+    /// (which un-parks too) cannot refund its own budget.
+    /// </summary>
+    public void ResetFailureRedrives(string nodeTypePath) => ClearFailureRedrives(nodeTypePath);
 
     /// <summary>
     /// A compile reached a terminal FAILED state. Bound every failure path: a

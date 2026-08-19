@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "MeshWeaver",
+    "name": "Memex",
     "slug": "meshweaver-mobile",
     "version": "0.1.0",
     "orientation": "portrait",
@@ -25,7 +25,7 @@
       [
         "expo-av",
         {
-          "microphonePermission": "MeshWeaver records the microphone for speech-to-text (transcribed on the centralized Whisper service, not on this device)."
+          "microphonePermission": "Memex records the microphone for speech-to-text (transcribed on the centralized Whisper service, not on this device)."
         }
       ]
     ]

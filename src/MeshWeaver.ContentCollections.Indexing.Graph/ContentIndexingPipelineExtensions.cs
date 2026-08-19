@@ -56,8 +56,22 @@ public static class ContentIndexingPipelineExtensions
                     sp.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem),
                     sp.GetService<ILogger<TextExtractor>>()));
 
-            services.AddSingleton(storeFactory);
-            services.AddSingleton(embedderFactory);
+            // The store + embedder honour the SAME resolve-time gate as the observer below. They used to
+            // be registered unconditionally, which made the gate a half-measure: every consumer that
+            // resolves IChunkedContentVectorStore (search_chunks, the Document blocks view, the settings
+            // tab's explorer) ran the CONCRETE factory on an unconfigured deployment and got that
+            // factory's missing-dependency exception — memex's `search_chunks` failing with
+            // "The requested service 'IEmbeddingProvider' has not been registered" (#1642) instead of
+            // the documented {count:0, message} envelope. Inert stand-ins keep resolution total, and
+            // ContentIndexAvailability maps them back to the null every consumer already branches on.
+            services.AddSingleton<IChunkedContentVectorStore>(sp =>
+                enabledWhen is null || enabledWhen(sp)
+                    ? storeFactory(sp)
+                    : new InertChunkedContentVectorStore(InactiveReason));
+            services.AddSingleton<IChunkEmbedder>(sp =>
+                enabledWhen is null || enabledWhen(sp)
+                    ? embedderFactory(sp)
+                    : new InertChunkEmbedder(InactiveReason));
             if (summarizerFactory is not null)
                 services.AddSingleton(summarizerFactory);
             if (imageDescriberFactory is not null)
@@ -96,10 +110,7 @@ public static class ContentIndexingPipelineExtensions
                         sp.GetRequiredService<IMessageHub>(),
                         sp.GetRequiredService<ContentIndexingService>(),
                         sp.GetService<ILogger<ContentIndexingObserver>>())
-                    : throw new InvalidOperationException(
-                        "Content indexing is not active on this deployment: the pipeline's activation " +
-                        "condition is false (typically no mesh database connection string or no " +
-                        "Embedding:Endpoint/Embedding:ApiKey configuration). Configure both to index content."));
+                    : throw new InvalidOperationException(InactiveReason));
             services.AddSingleton<IContentUploadObserver>(sp =>
                 enabledWhen is null || enabledWhen(sp)
                     ? sp.GetRequiredService<ContentIndexingObserver>()
@@ -110,6 +121,17 @@ public static class ContentIndexingPipelineExtensions
 
         return builder;
     }
+
+    /// <summary>
+    /// Why the pipeline is inert on an unconfigured deployment — one sentence, naming what to configure.
+    /// It is the message of the reindex entry point's refusal AND the <c>Reason</c> the inert store /
+    /// embedder carry into the <c>search_chunks</c> "indexing is off" envelope, so an operator reads the
+    /// same actionable line wherever the capability is missing.
+    /// </summary>
+    public const string InactiveReason =
+        "Content indexing is not active on this deployment: the pipeline's activation condition is " +
+        "false (typically no mesh database connection string, or no embedding provider — " +
+        "Embedding:Endpoint plus Embedding:ApiKey for the cloud provider). Configure both to index content.";
 
     /// <summary>
     /// The disabled-pipeline stand-in on the upload seam: uploads proceed, nothing indexes.

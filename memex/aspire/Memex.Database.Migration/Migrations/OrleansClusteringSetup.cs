@@ -33,11 +33,52 @@ namespace Memex.Database.Migration.Migrations;
 /// </summary>
 public static class OrleansClusteringSetup
 {
+    /// <summary>
+    /// The nine membership query keys the clustering script inserts, and the four grain-storage
+    /// keys the persistence script inserts. These are the rows the silo's providers read back —
+    /// each grain-storage key with a <c>.Single()</c> — so they ARE the contract this step
+    /// delivers. Mirrored by <c>OrleansProvisioningGate</c> in the portal, which asserts the same
+    /// set at startup; the two lists must move together when the Orleans package version does.
+    /// </summary>
+    private static readonly string[] MembershipQueryKeys =
+    [
+        "UpdateIAmAlivetimeKey",
+        "InsertMembershipVersionKey",
+        "InsertMembershipKey",
+        "UpdateMembershipKey",
+        "MembershipReadRowKey",
+        "MembershipReadAllKey",
+        "DeleteMembershipTableEntriesKey",
+        "GatewaysQueryKey",
+        "CleanupDefunctSiloEntriesKey",
+    ];
+
+    private static readonly string[] GrainStorageQueryKeys =
+    [
+        "WriteToStorageKey",
+        "ReadFromStorageKey",
+        "ClearStorageKey",
+        "DeleteStorageKey",
+    ];
+
     public static async Task RunAsync(string orleansConnectionString, ILogger logger)
     {
         if (string.IsNullOrWhiteSpace(orleansConnectionString))
         {
-            logger.LogInformation("[OrleansClustering] No 'orleans' connection string — skipping (non-AdoNet clustering).");
+            // 🚨 WARNING, not Information, and the CONSEQUENCE is named. This step cannot see the
+            // portal's `Features:Orleans:Clustering` flag, so it genuinely cannot tell a
+            // legitimate skip (Azure-Tables / Localhost clustering) from the failure mode that
+            // rolled prod back (#1798): ConnectionStrings__orleans present on the PORTAL and
+            // absent from the MIGRATION's secret. What it CAN do is stop reporting the ambiguous
+            // case as routine. The red gate lives where the intent is unambiguous — the portal's
+            // OrleansProvisioningGate refuses to start when AdoNet is configured and these rows
+            // are missing. Producer reports; consumer asserts.
+            logger.LogWarning(
+                "[OrleansClustering] No 'orleans' connection string — SKIPPED, nothing provisioned. "
+                + "This is expected ONLY for non-AdoNet clustering (Azure Tables / Localhost). If "
+                + "this deployment's portal runs Features:Orleans:Clustering=AdoNet it will refuse "
+                + "to start: provision ConnectionStrings__orleans on the MIGRATION as well as the "
+                + "portal and re-run this container.");
             return;
         }
 
@@ -68,6 +109,65 @@ public static class OrleansClusteringSetup
             await cmd.ExecuteNonQueryAsync();
             logger.LogInformation("[OrleansClustering] Orleans persistence tables created.");
         }
+
+        await VerifyProvisionedAsync(conn, logger);
+    }
+
+    /// <summary>
+    /// POSTCONDITION: read back the <c>OrleansQuery</c> rows the silo's providers will load and
+    /// fail RED if any is missing. This is what turns the step's success line from a claim into a
+    /// measurement.
+    ///
+    /// <para>🚨 Both phases above gate on a MARKER TABLE (<c>orleansquery</c> /
+    /// <c>orleansstorage</c>) because their scripts use plain <c>CREATE</c> and cannot be re-run.
+    /// That gate answers "did something create this table?", never "is the table's CONTENT
+    /// complete" — so a script that died part-way leaves the marker present and every later run
+    /// reports "already present — nothing to do", forever, for a database that is missing rows the
+    /// silo requires. A gate that can pass on the wrong evidence is worse than no gate (AGENTS.md
+    /// → "a verification step that cannot fail is not a verification step"), and the failure it
+    /// would hide is precisely #1798's: a silo crash-looping on <c>Sequence contains no
+    /// elements</c>.</para>
+    ///
+    /// <para>Throwing here fails the migration container, which is the correct blast radius: the
+    /// portal's own <c>OrleansProvisioningGate</c> would otherwise refuse to start anyway, and a
+    /// red migration names the problem one step earlier and closer to the fix.</para>
+    /// </summary>
+    private static async Task VerifyProvisionedAsync(NpgsqlConnection conn, ILogger logger)
+    {
+        var required = MembershipQueryKeys.Concat(GrainStorageQueryKeys).ToArray();
+
+        await using var cmd = new NpgsqlCommand(
+            "SELECT querykey FROM orleansquery WHERE querykey = ANY(@keys)", conn);
+        cmd.Parameters.AddWithValue("keys", required);
+
+        var present = new HashSet<string>(StringComparer.Ordinal);
+        await using (var reader = await cmd.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+                present.Add(reader.GetString(0));
+        }
+
+        var missing = required.Where(k => !present.Contains(k)).ToArray();
+        if (missing.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"[OrleansClustering] Provisioning is INCOMPLETE: OrleansQuery is missing "
+                + $"{missing.Length} of {required.Length} required query keys "
+                + $"({string.Join(", ", missing)}). The marker tables exist, so the creation "
+                + "scripts were skipped as 'already present' — a previous run must have died "
+                + "part-way. The Orleans scripts use plain CREATE and cannot be re-run over a "
+                + "partial state: drop the affected Orleans tables in the 'orleans' database and "
+                + "re-run this migration. Refusing to report a successful migration for a "
+                + "database the silo cannot start against.");
+        }
+
+        // The signal the portal's gate asserts — specific to what this step provisioned, and
+        // COUNTED. "Database migration completed. Version: N" says nothing about Orleans; this
+        // line is what makes the difference observable.
+        logger.LogInformation(
+            "[OrleansClustering] provisioned OK: {Membership} membership + {Storage} grain-storage "
+            + "query keys present in OrleansQuery ({Total} total).",
+            MembershipQueryKeys.Length, GrainStorageQueryKeys.Length, required.Length);
     }
 
     /// <summary>

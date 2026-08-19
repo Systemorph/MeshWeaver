@@ -35,7 +35,10 @@ namespace Memex.Portal.Shared.Settings;
 /// </summary>
 public static class AboutSettingsTab
 {
-    /// <summary>The tab id under <c>/_settings/GlobalSettings</c>.</summary>
+    /// <summary>
+    /// The tab id — the trailing segment of the tab's deep link, built with
+    /// <see cref="GlobalSettingsNodeType.TabHref"/> (<c>/_Setting/GlobalSettings/About</c>).
+    /// </summary>
     public const string TabId = "About";
 
     /// <summary>Data id the plugin grid binds to (rows published via <c>host.UpdateData</c>).</summary>

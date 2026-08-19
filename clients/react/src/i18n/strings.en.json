@@ -269,6 +269,7 @@
   "approval.dueDateLabel": "Due Date (optional, YYYY-MM-DD)",
   "approval.from": "From",
   "approval.noData": "No approval data.",
+  "approval.noDocument": "No document selected \u2014 open this desk from a document, or pass ?doc=Space/Path.",
   "approval.purpose": "Purpose",
   "approval.purposePlaceholder": "Why is this approval needed?",
   "approval.rejectedBy": "Rejected by",
