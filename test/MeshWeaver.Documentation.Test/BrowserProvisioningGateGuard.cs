@@ -43,9 +43,11 @@ public class BrowserProvisioningGateGuard
     [Fact]
     public void EveryBrowserProvisioner_BanksTheDownloadBeforeApt()
     {
+        // Every workflow here has at least one install invocation — that is what
+        // ProvisioningWorkflows() selects on — so the only question left is whether ALL of them
+        // carry the flag, i.e. whether the download was ever banked on its own.
         var offenders = ProvisioningWorkflows()
-            .Where(w => !w.lines.Any(IsInstallInvocation)
-                        || w.lines.Where(IsInstallInvocation).All(UsesWithDeps))
+            .Where(w => w.lines.Where(IsInstallInvocation).All(UsesWithDeps))
             .Select(w => w.file)
             .ToList();
 
