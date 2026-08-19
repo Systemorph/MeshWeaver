@@ -89,6 +89,55 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
         Assert.Contains("missing-w_member_social-reconnect", final.LastError ?? string.Empty);
     }
 
+    /// <summary>
+    /// A REPEATING timer fires more than once and never reaches a terminal state: after each fire it
+    /// records its next slot and stays Pending.
+    ///
+    /// <para>Both halves matter. Firing twice is the feature. Recording the next slot is what makes
+    /// it survive a restart honestly — the pending-set reconcile re-schedules from the STORED FireAt,
+    /// so a fire that did not advance it would replay on the next boot, and a nightly job would run
+    /// again on every pod restart.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task RepeatingTimer_FiresAgain_AndRecordsItsNextSlot()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.Timer,
+            FireAt = DateTimeOffset.UtcNow.AddSeconds(-1),
+            RepeatEvery = TimeSpan.FromSeconds(2),
+            ContinuationType = EventContinuationType.PublishSocialPost,
+            TargetPath = PostPath,
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+
+        var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
+            Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
+        runners.Add(runner);
+        await runner.StartAsync(default);
+
+        // Fires repeatedly — a one-shot would stop at 1.
+        var seen = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(_ => handler.Calls)
+            .Where(calls => calls >= 2)
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.True(seen >= 2, $"a repeating timer must fire again — fired {seen}×");
+
+        // …and it is still armed, with its slot moved into the future.
+        var current = (await Mesh.GetWorkspace()
+            .GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(n => n?.ContentAs<EventSubscription>(Mesh.JsonSerializerOptions))
+            .Where(x => x?.FireAt > DateTimeOffset.UtcNow)
+            .FirstAsync().Timeout(20.Seconds()))!;
+        Assert.Equal(EventSubscriptionStatus.Pending, current.Status);
+        Assert.True(current.FireAt > DateTimeOffset.UtcNow,
+            "a repeater records its NEXT slot, or a restart replays the old one");
+    }
+
     private async Task<EventSubscription> ArmDueTimer()
     {
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
