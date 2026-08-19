@@ -90,6 +90,17 @@ public sealed class DbVersionGate(
             // problem. Honor the IHostedService cancellation contract and let the host
             // finish tearing down; logging this Critical + StopApplication would
             // misreport an ordinary shutdown as "DB version check failed unexpectedly".
+            //
+            // Say which of the two it was, for the same reason OrleansProvisioningGate does
+            // (#1897): a silent rethrow leaves the framework's `Hosting failed to start` as the
+            // only record, and that is indistinguishable from a gate that genuinely failed.
+            logger.LogWarning(
+                "DB version check did NOT run: host startup was cancelled before the query "
+                + "completed — shutdown raced startup (a rollout replacing this pod while it was "
+                + "still starting). This is not a migration verdict: the schema was neither "
+                + "confirmed nor faulted. Propagating the cancellation per the IHostedService "
+                + "contract, so the 'Hosting failed to start' that follows is the aborted startup "
+                + "and not a fault.");
             throw;
         }
         catch (Exception ex)
