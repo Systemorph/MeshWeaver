@@ -16,10 +16,17 @@ namespace MeshWeaver.Plugin.Packaging;
 /// bundle lane. Consumers: <c>PluginBundleClient</c> (HTTP) and the boot-time shipped-bundle
 /// seeder — all of them go through <see cref="BundleReader.Read(byte[])"/>.</para>
 ///
-/// <para>A bundle is deliberately NOT a nupkg: it carries no content, no nuspec, no dependency
-/// graph — only compiled bytes and the identity they are pinned to. The framework MVID in the
-/// manifest is what <c>PrebuiltAssemblySeeder.DeclineReason</c> gates adoption on, so writing it is
-/// mandatory: a bundle without it is dead weight every consumer refuses (correctly).</para>
+/// <para>A bundle is deliberately NOT a nupkg: no nuspec, no dependency graph — compiled bytes, the
+/// identity they are pinned to, and (optionally) the package's own NODE DEFINITIONS. The framework
+/// MVID in the manifest is what <c>PrebuiltAssemblySeeder.DeclineReason</c> gates adoption on, so
+/// writing it is mandatory: a bundle without it is dead weight every consumer refuses (correctly).</para>
+///
+/// <para>🚨 The node definitions are what make a bundle a REPLACEMENT for a source checkout rather
+/// than a speed-up on top of one. Until it carried them, a dependent repo could get an upstream's
+/// bytes but not the nodes those bytes stamp, so it still cloned the upstream and recompiled it —
+/// the rebuild that <c>Doc/Architecture/ReleaseGates</c> forbids, and the one that produces an ALC
+/// per recompile. Carrying them is optional at the format level (a NodeType-only bundle stays
+/// valid) and required for a bundle meant to be CONSUMED as an upstream.</para>
 /// </summary>
 public static class BundleWriter
 {
@@ -50,6 +57,25 @@ public static class BundleWriter
         IReadOnlyDictionary<string, string>? Dependencies = null);
 
     /// <summary>
+    /// One NODE-DEFINITION file destined for the bundle — the package's own tree (its
+    /// <c>index.json</c>, its NodeType nodes, its <c>Source/*.cs</c>, its markdown), shipped
+    /// verbatim under <see cref="NuGetPackageWriter.ContentFolder"/>.
+    ///
+    /// <para>🚨 Why a bundle of assemblies carries source-shaped files at all. A consumer of an
+    /// upstream needs the upstream's DEFINITIONS, not only its bytes: the consumer's package roots
+    /// are typed by an upstream type (<c>nodeType: Store/Plugin</c>) and its NodeTypes' `sources`
+    /// queries reach into upstream packages (<c>shared=@Edu/…</c>). Seeding an assembly only
+    /// STAMPS a node that already exists — with no upstream nodes in the tree there is nothing to
+    /// stamp and the roots do not bind. So a bundle that carries assemblies alone cannot replace a
+    /// source checkout, which is why every dependent still rebuilt its upstreams from source.</para>
+    /// </summary>
+    /// <param name="RelativePath">Path within the package tree, forward-slashed
+    /// (<c>index.json</c>, <c>Slide/Source/SlideContent.cs</c>) — the layout a consumer recreates.</param>
+    /// <param name="Open">Opens the file's bytes. A factory, for the same streaming reason as
+    /// <see cref="AssemblyEntry.OpenAssembly"/>.</param>
+    public sealed record ContentEntry(string RelativePath, Func<Stream> Open);
+
+    /// <summary>
     /// Writes the bundle into <paramref name="destination"/> (left open, mirroring
     /// <see cref="NuGetPackageWriter.Write"/> — a caller may rewind and serve it).
     /// </summary>
@@ -69,7 +95,8 @@ public static class BundleWriter
         string? version,
         string frameworkMvid,
         IReadOnlyList<AssemblyEntry> assemblies,
-        string? sourceSha = null)
+        string? sourceSha = null,
+        IReadOnlyList<ContentEntry>? content = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(frameworkMvid);
         ArgumentNullException.ThrowIfNull(assemblies);
@@ -95,6 +122,11 @@ public static class BundleWriter
                     dependencies = a.Dependencies,
                 })
                 .ToList(),
+            // DECLARED, never left to be discovered by enumerating the folder — the same rule the
+            // assemblies follow (see BundleReader.Read). A reader that globbed the archive could
+            // not tell a package file from a stray entry a future producer adds, and would silently
+            // recreate it into the consumer's tree.
+            content = content?.Select(c => c.RelativePath).ToList(),
         };
 
         WriteText(archive, NuGetPackageWriter.ManifestEntry, JsonSerializer.Serialize(manifest, Json));
@@ -110,6 +142,14 @@ public static class BundleWriter
             using (var source = entry.OpenPdb())
             using (var target = archive.CreateEntry(NuGetPackageWriter.EntryPathFor(entry.NodePath, ".pdb")).Open())
                 source.CopyTo(target);
+        }
+
+        foreach (var file in content ?? [])
+        {
+            using var source = file.Open();
+            using var target = archive
+                .CreateEntry($"{NuGetPackageWriter.ContentFolder}/{file.RelativePath}").Open();
+            source.CopyTo(target);
         }
     }
 
