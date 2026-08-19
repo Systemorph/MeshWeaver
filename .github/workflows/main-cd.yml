@@ -1329,6 +1329,16 @@ jobs:
   # MeshWeaver.Plugins) gets the identical result quietly, because the satellite→satellite edge in
   # node-repo-publish-bake carries the wave the rest of the way. Either list is safe; the roots-only
   # list is the tidy one.
+  # 🚧 TRANSITIONAL — ADDRESSED notification, where the design calls for a BROADCAST.
+  # A publisher must not know its dependents: a release is announced once, to everyone, and whoever
+  # depends on it reacts. `BAKE_SUBSCRIBER_REPOS` is a hand-maintained SECOND COPY of a graph memex
+  # already holds (every package root's `requires`, which PackageGraph.Levels already orders), and a
+  # missing entry fails silently — the omitted repo just never rebuilds for the release, with
+  # nothing red anywhere. Kept because the broadcast does not exist yet; the App credential below
+  # at least makes it work rather than sit dormant.
+  # 🚨 DO NOT extend this list to more repos. Naming another dependent is not progress toward the
+  # target shape, it is one more copy of the graph to keep honest. See
+  # Doc/Architecture/ReleaseGates → "A publisher NEVER knows its dependents".
   notify-dependents:
     name: "Notify dependent repos"
     needs: [gate, portal-image, promote]
