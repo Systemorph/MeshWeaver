@@ -102,9 +102,26 @@ public record EventSubscription
     public string? MatchValue { get; init; }
 
     // Timer trigger
-    /// <summary>[Timer] Fire once at (or after) this instant. A time already in the past fires on the
-    /// next startup reconcile (at-least-once, restart-safe). (Repeating/interval timers are a follow-up.)</summary>
+    /// <summary>[Timer] Fire at (or after) this instant. A time already in the past fires on the
+    /// next startup reconcile (at-least-once, restart-safe). With <see cref="RepeatEvery"/> set this
+    /// is the NEXT occurrence and the runner advances it on each fire.</summary>
     public DateTimeOffset? FireAt { get; init; }
+
+    /// <summary>
+    /// [Timer] Re-arm this long after each fire, instead of ending at <c>Fired</c> — the recurring
+    /// job (a nightly ingest, a periodic refresh). Null = the one-shot this type started as.
+    ///
+    /// <para><b>The subscription stays Pending forever by design.</b> A one-shot's terminal
+    /// <c>Fired</c> is what gates re-entry; a repeater has no terminal state, so the runner advances
+    /// <see cref="FireAt"/> by this interval and leaves it Pending. That advance is a WRITE, which is
+    /// also the durability: a repeater that fires and never records its next slot would re-fire from
+    /// the old one on the next reboot.</para>
+    ///
+    /// <para>🚨 Only for continuations that are safe to repeat. Anything irreversible — publishing to
+    /// a network, sending mail, charging a card — must stay one-shot, because "run it again tomorrow"
+    /// and "run it again because the pod restarted" are indistinguishable from in here.</para>
+    /// </summary>
+    public TimeSpan? RepeatEvery { get; init; }
 
     // NodeStatus trigger
     /// <summary>[NodeStatus] The node to watch — fire when its <see cref="StatusField"/> reaches a resting
