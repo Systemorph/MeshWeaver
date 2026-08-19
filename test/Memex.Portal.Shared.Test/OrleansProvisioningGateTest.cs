@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Distributed;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -35,6 +37,24 @@ public class OrleansProvisioningGateTest
 
     private static OrleansProvisioningGate Gate(RecordingLifetime lifetime, bool grainStorage = true)
         => new(Unreachable, grainStorage, lifetime, NullLogger<OrleansProvisioningGate>.Instance);
+
+    private sealed record Entry(LogLevel Level, string Message);
+
+    /// <summary>Captures what the gate said, which for the aborted-startup path is the ONLY
+    /// record that distinguishes it from a genuine provisioning failure.</summary>
+    private sealed class CapturingLogger : ILogger<OrleansProvisioningGate>
+    {
+        public List<Entry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add(new Entry(logLevel, formatter(state, exception)));
+    }
 
     /// <summary>
     /// The gate's reason to exist: a silo that cannot VERIFY its clustering store must not join a
@@ -73,6 +93,43 @@ public class OrleansProvisioningGateTest
         lifetime.StopRequested.Should().BeFalse(
             "an aborted startup is not a provisioning failure — the gate must not StopApplication "
             + "for a host that is already tearing down");
+    }
+
+    /// <summary>
+    /// 🚨 …and it must SAY which of the two it was (#1897). The rethrow above is correct and stays,
+    /// but it used to be SILENT — so the only record of the event was the framework's
+    /// <c>Hosting failed to start</c> (Error, with no frame above the Npgsql cancel that knows
+    /// why), which reads exactly like a gate that genuinely failed. The incident was filed at
+    /// "medium confidence — equally plausible a race at shutdown (expected) or a real timeout (a
+    /// defect)"; this gate is the only thing in the process that can tell those apart.
+    ///
+    /// <para>A check that did not run must not look like one that PASSED — and it must not look
+    /// like one that FAILED either. So: a warning naming the cancellation, and still no
+    /// LogCritical, still no <c>StopApplication</c>.</para>
+    /// </summary>
+    [Fact]
+    public async Task AStartupAbortedByShutdown_SaysTheCheckDidNotRun_RatherThanLookingLikeAFailure()
+    {
+        var lifetime = new RecordingLifetime();
+        var logger = new CapturingLogger();
+        var gate = new OrleansProvisioningGate(
+            Unreachable, requiresGrainStorage: true, lifetime, logger);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => gate.StartAsync(cts.Token));
+
+        logger.Entries.Should().Contain(
+            e => e.Level == LogLevel.Warning
+                 && e.Message.Contains("did NOT run", StringComparison.Ordinal)
+                 && e.Message.Contains("shutdown raced startup", StringComparison.Ordinal),
+            "the gate is the only place that knows the cancellation came from shutdown, so the "
+            + "attribution has to be written here or it does not exist anywhere");
+        logger.Entries.Should().NotContain(
+            e => e.Level == LogLevel.Critical,
+            "an aborted startup is not a provisioning verdict — nothing was confirmed and nothing faulted");
+        lifetime.StopRequested.Should().BeFalse(
+            "saying what happened must not turn into refusing a startup that was already ending");
     }
 
     /// <summary>
