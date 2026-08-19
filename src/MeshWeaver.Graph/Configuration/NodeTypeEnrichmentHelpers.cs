@@ -1,6 +1,7 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
@@ -1546,6 +1547,13 @@ internal static class NodeTypeEnrichmentHelpers
         var baseConfig = bound.HubConfiguration;
         Func<MessageHubConfiguration, MessageHubConfiguration> withWatcher = config =>
             (baseConfig is null ? config : baseConfig(config))
+                // 🚨 AddLayout APPENDS (LayoutExtensions.AddLayout) — it cannot replace the
+                // instance's own views the way WithCompilationErrorOverlay replaces the whole
+                // HubConfiguration. That is deliberate: an instance on a superseded assembly is
+                // FULLY FUNCTIONAL, so the newer build is an adornment above its content, never a
+                // page that takes its content away. Writes the sidecar area $Banner; see
+                // StaleBuildBanner for why a wrapper is impossible here.
+                .AddLayout(layout => layout.WithRenderer(_ => true, StaleBuildBanner.Render))
                 .WithInitialization(instanceHub =>
                 {
                     // Fire-and-forget, exactly as the overlay watcher: a watcher that cannot be
@@ -1553,6 +1561,12 @@ internal static class NodeTypeEnrichmentHelpers
                     // world ("a manual recycle picks up the new build"), never a dead instance.
                     try
                     {
+                        // The offer the banner renders. Created BEFORE the watcher and hung on the
+                        // hub so StaleBuildBanner.Render can find it on the first area render;
+                        // seeded null so an instance on the current build shows nothing at all.
+                        // Set() owns its disposal ("Disposed with the hub" — IMessageHub.Set), so
+                        // no separate RegisterForDisposal for the subject.
+                        instanceHub.Set(new BehaviorSubject<StaleBuildOffer?>(null));
                         instanceHub.RegisterForDisposal(ArmStaleAssemblySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub, nodeType, boundAssemblyPath, logger,
@@ -1615,11 +1629,18 @@ internal static class NodeTypeEnrichmentHelpers
                 {
                     var published = x.Def?.LatestAssemblyPath;
                     logger?.LogInformation(
-                        "Stale-assembly self-heal: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — recycling instance '{InstancePath}' so it rebinds",
+                        "Stale-build offer: NodeType '{NodeType}' published a new build ('{Published}' supersedes '{Bound}') — offering instance '{InstancePath}' a recycle",
                         nodeType, published, boundAssemblyPath, instanceHub.Address);
-                    // The RecycleLayoutArea idiom: the hub disposes itself, the grain deactivates,
-                    // and the next access re-enriches against the newly published assembly.
-                    instanceHub.Post(new DisposeRequest(), o => o.WithTarget(instanceHub.Address));
+                    // 🚨 OFFER, never an automatic restart. This used to post a self-DisposeRequest
+                    // here, so every live instance of the type recycled on every publish —
+                    // publication frequency became restart frequency, and a user mid-edit lost
+                    // their hub without asking. Publishing the offer instead puts a banner above
+                    // the instance's (still working) content and lets the user choose. Stated
+                    // consequence: an instance whose viewer never clicks keeps serving the OLDER
+                    // assembly indefinitely — safe, since that build worked, but "published" no
+                    // longer implies "every instance is running it".
+                    instanceHub.Get<BehaviorSubject<StaleBuildOffer?>>()
+                        ?.OnNext(new StaleBuildOffer(nodeType, published, boundAssemblyPath));
                 },
                 ex => logger?.LogWarning(ex,
                     "Stale-assembly self-heal watcher for NodeType '{NodeType}' (instance '{InstancePath}') faulted — falling back to manual Recycle",

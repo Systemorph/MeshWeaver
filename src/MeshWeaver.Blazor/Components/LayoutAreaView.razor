@@ -9,6 +9,26 @@
     {
         <CompileProgressIndicator />
     }
+    @* "A newer build of this type is available — recycle to pick it up." An ADORNMENT: it sits
+       ABOVE the area's real content and never replaces it, because an instance running a
+       superseded assembly is fully functional (contrast the compilation-error overlay, which
+       replaces the page precisely because there is nothing good left to show). Absent slot ⇒
+       nothing rendered at all — no spacer, no spinner — which is every page whose hub is already
+       on the current build. Its own ErrorBoundary: a broken adornment must never be able to take
+       down the content it is decorating. *@
+    @if (staleBuildBanner is not null)
+    {
+        <ErrorBoundary>
+            <ChildContent>
+                <div class="meshweaver-stale-build-banner" style="margin:0 0 0.75rem 0">
+                    <DispatchView ViewModel="@staleBuildBanner"
+                                  Area="@LayoutAreaSlots.StaleBuildBanner"
+                                  Stream="@AreaStream" />
+                </div>
+            </ChildContent>
+            <ErrorContent></ErrorContent>
+        </ErrorBoundary>
+    }
     @* Guard: Blazor's parameter pipeline transiently feeds a null ViewModel (navigation / stream
        tear-down — see SetParametersAsync). The render path must mirror that guard, else NamedArea
        (which reads ViewModel.SpinnerType) NREs and tears down the whole circuit. A re-render arrives
