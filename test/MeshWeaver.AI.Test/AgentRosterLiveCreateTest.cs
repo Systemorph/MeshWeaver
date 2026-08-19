@@ -1,6 +1,5 @@
 using System.Linq;
 using System.Reactive.Linq;
-using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,11 +33,8 @@ namespace MeshWeaver.AI.Test;
 /// resolves to a single <c>namespace IN (…)</c> filter. Pinning the live behaviour of that
 /// particular shape is the point.</para>
 /// </summary>
-public class AgentRosterLiveCreateTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+public class AgentRosterLiveCreateTest(ITestOutputHelper output) : AITestBase(output)
 {
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
-        base.ConfigureMesh(builder).AddAI();
-
     private const string UserPath = "rbuergi";
 
     private static MeshNode VoiceAgent() =>
