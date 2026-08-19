@@ -1433,6 +1433,18 @@ internal static class NodeTypeEnrichmentHelpers
     /// <c>MeshNodeHubFactory</c> still composes
     /// <c>DefaultNodeHubConfiguration</c> underneath, so the instance keeps
     /// serving the generic areas until it heals.</para>
+    ///
+    /// <para>🚨 <b>The watcher must not be fed ONLY by the stream the fault came from</b>
+    /// (issue #1814 defect B). Both original heal routes read
+    /// <c>meshHub.GetWorkspace().GetMeshNodeStream(nodeType)</c> — the same stream whose
+    /// silence made the slow path time out — so when that stream stops emitting, the fault card is
+    /// permanent: on memex, 2026-08-17, twelve plugin roots served it for 1 h 24 m after
+    /// <c>Store/Plugin</c> had compiled successfully on both pods, with no overlay or "did not
+    /// settle" event logged in the preceding 30–40 minutes and no operator remedy short of
+    /// recycling each root by hand. So the wrap also hands the watcher an INDEPENDENT
+    /// <see cref="AuthoritativeTypeRead"/> and the mesh's <see cref="OverlayHealBudget"/>: the card
+    /// is re-evaluated on a widening ladder against storage, and the recycle it triggers is spaced
+    /// across hub lifetimes so a non-converging pair cannot spin.</para>
     /// </summary>
     internal static MeshNode WithOverlaySelfHeal(
         MeshNode overlaid,
@@ -1454,7 +1466,11 @@ internal static class NodeTypeEnrichmentHelpers
                         instanceHub.RegisterForDisposal(ArmOverlaySelfHeal(
                             meshHub.GetWorkspace().GetMeshNodeStream(nodeType),
                             instanceHub, nodeType, typeVersionAtOverlay, logger,
-                            guards: NodeTypeCompilationHelpers.GuardsOf(meshHub)));
+                            guards: NodeTypeCompilationHelpers.GuardsOf(meshHub),
+                            // The escape hatch out of a permanently silent type stream — see
+                            // ArmOverlaySelfHeal's re-evaluation route (issue #1814 defect B).
+                            reRead: AuthoritativeTypeRead(meshHub, nodeType),
+                            budget: meshHub.ServiceProvider.GetService<OverlayHealBudget>()));
                     }
                     catch (Exception ex)
                     {
@@ -1626,10 +1642,33 @@ internal static class NodeTypeEnrichmentHelpers
     ///     pods (memex, 2026-07-27). Re-reading after a delay heals it while keeping the
     ///     anti-hot-loop property — never instant, so an instance that still cannot build
     ///     recycles at most once per grace window.</item>
+    ///   <item><b>Re-evaluation</b> (<see cref="ReEvaluationLadder"/>) — nothing arrives on
+    ///     <paramref name="typeStream"/> AT ALL, so neither of the two routes above can ever be
+    ///     evaluated against fresh state. This is the 2026-08-17 memex outage (issue #1814,
+    ///     defect B): every course cover served a fault card for 1 h 24 m AFTER
+    ///     <c>Store/Plugin</c> had compiled successfully on both pods, with no overlay and no
+    ///     "did not settle" event logged in the preceding 30–40 minutes — nothing was retrying,
+    ///     the card was simply cached on the instance hub and served. The mechanism is that both
+    ///     routes above are PUSH-driven off the same stream whose silence produced the fault, so
+    ///     the heal signal and the fault shared a single point of failure; the grace route's
+    ///     re-subscribe replays the workspace's cached snapshot rather than re-reading anything.
+    ///     <paramref name="reRead"/> breaks that: an AUTHORITATIVE one-shot read of the NodeType
+    ///     node, on a widening ladder, that owes nothing to the stream.</item>
     /// </list>
     /// Unsettled states and non-<see cref="NodeTypeDefinition"/> content are ignored. Errors are
     /// logged, never rethrown — the watcher is best-effort by design.
     /// </summary>
+    /// <param name="reRead">
+    /// An AUTHORITATIVE one-shot read of the NodeType node — see
+    /// <see cref="AuthoritativeTypeRead"/>, which resolves it from the mesh's query providers
+    /// (storage) rather than from any cached stream. Null disables re-evaluation and restores the
+    /// push-only behaviour, which is what a hub with no query core can offer.
+    /// </param>
+    /// <param name="budget">
+    /// Spacing across hub lifetimes — see <see cref="OverlayHealBudget"/>. A self-heal disposes the
+    /// hub that holds this watcher, so a pair whose re-enrichment faults again would otherwise
+    /// re-arm at the first rung forever. Null applies no spacing.
+    /// </param>
     internal static IDisposable ArmOverlaySelfHeal(
         IObservable<MeshNode> typeStream,
         IMessageHub instanceHub,
@@ -1637,13 +1676,25 @@ internal static class NodeTypeEnrichmentHelpers
         long? typeVersionAtOverlay,
         ILogger? logger,
         IScheduler? scheduler = null,
-        NodeTypeCompilationHelpers.BuildGuards? guards = null)
+        NodeTypeCompilationHelpers.BuildGuards? guards = null,
+        Func<IObservable<MeshNode?>>? reRead = null,
+        OverlayHealBudget? budget = null)
     {
+        var clock = scheduler ?? Scheduler.Default;
+        var instancePath = instanceHub.Address.ToString();
+
         // ContentAs, never `is NodeTypeDefinition` — the #1669 blindness on un-materialized JSON
-        // emissions; see ArmStaleAssemblySelfHeal's predicate note.
-        var usable = typeStream.Where(t =>
-            t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger) is { } d
-            && NodeTypeCompilationHelpers.HasUsableBuild(t, d, guards));
+        // emissions; see ArmStaleAssemblySelfHeal's predicate note. Deserialize ONCE per node and
+        // carry the definition with the verdict: a second ContentAs would also duplicate its
+        // degraded-content warning logs.
+        (NodeTypeDefinition? Def, bool Usable) Evaluate(MeshNode? t)
+        {
+            var def = t?.ContentAs<NodeTypeDefinition>(instanceHub.JsonSerializerOptions, logger);
+            return (def, def is not null
+                && NodeTypeCompilationHelpers.HasUsableBuild(t!, def, guards));
+        }
+
+        var usable = typeStream.Where(t => Evaluate(t).Usable);
 
         // FAST path — the version advanced past the overlay: a genuinely NEW build landed, heal now.
         var advanced = usable.Where(t =>
@@ -1661,20 +1712,82 @@ internal static class NodeTypeEnrichmentHelpers
         // what keeps the original anti-hot-loop guarantee — an instance that overlays again because
         // it STILL cannot build recycles at most once per grace period instead of spinning.
         var graced = Observable
-            .Timer(SelfHealGrace, scheduler ?? Scheduler.Default)
+            .Timer(SelfHealGrace, clock)
             .SelectMany(_ => usable.Take(1));
+
+        // RE-EVALUATION path — THE fix for issue #1814 defect B. Both routes above are fed by
+        // typeStream, so a stream that goes permanently silent (a cross-process write the reader's
+        // mirror is never told about; nothing to notify a workspace snapshot that it is stale)
+        // leaves the fault card cached on the instance hub with nothing anywhere retrying. A fault
+        // card must not outlive its cause, and it must not depend for its clearing on the very
+        // signal path whose failure produced it — so this route RE-READS the NodeType from the
+        // mesh's query providers, on its own clock, owing the stream nothing.
+        //
+        // Bounded by construction, because the naive shape (re-probe per render) amplifies load
+        // exactly when the mesh is already struggling: ONE read per rung of a widening ladder
+        // (ReEvaluationLadder, then ReEvaluationCeiling for ever), each capped by
+        // ReEvaluationReadTimeout, serialised with Concat so a slow read can never overlap the
+        // next rung. A faulted read is logged and skipped, never terminal — giving up is how the
+        // card latched in the first place.
+        var reEvaluated = reRead is null
+            ? Observable.Empty<MeshNode>()
+            : Observable
+                .Generate(
+                    initialState: 0,
+                    condition: _ => true,
+                    iterate: attempt => attempt + 1,
+                    resultSelector: attempt => attempt,
+                    timeSelector: ReEvaluationDelay,
+                    scheduler: clock)
+                .Select(attempt => Observable
+                    .Defer(() => reRead().Take(1).Timeout(ReEvaluationReadTimeout, clock))
+                    .DefaultIfEmpty(null)
+                    .Catch<MeshNode?, Exception>(ex =>
+                    {
+                        // A read that could not be answered is not a verdict — the ladder simply
+                        // asks again at the next rung.
+                        logger?.LogWarning(ex,
+                            "Overlay self-heal: re-read #{Attempt} of NodeType '{NodeType}' for stuck instance '{InstancePath}' faulted ({ExceptionType}) — retrying at the next rung",
+                            attempt + 1, nodeType, instancePath, ex.GetType().Name);
+                        return Observable.Return<MeshNode?>(null);
+                    })
+                    .Select(t => (Node: t, Verdict: Evaluate(t)))
+                    .Do(x => ReportReEvaluation(attempt, x.Node, x.Verdict)))
+                .Concat()
+                .Where(x => x.Verdict.Usable)
+                .Select(x => x.Node!);
 
         var healed = 0;
         var heal = advanced
             .Merge(graced)
+            .Merge(reEvaluated)
+            .Take(1)
+            // Spacing, not suppression: the heal signal is DEFERRED to the budget's earliest
+            // instant, never dropped. A first heal is un-delayed; a pair that keeps re-overlaying
+            // after its own recycle backs off instead of spinning at the first rung.
+            .SelectMany(t =>
+            {
+                var now = clock.Now;
+                var earliest = budget?.EarliestHeal(instancePath, nodeType, now) ?? now;
+                if (earliest <= now)
+                    return Observable.Return(t);
+                // NON-CONVERGENCE, SAID OUT LOUD. Reaching here means this instance has already
+                // recycled itself off this type's overlay and is stuck on it again.
+                logger?.LogWarning(
+                    "Overlay self-heal: instance '{InstancePath}' is stuck on NodeType '{NodeType}' AGAIN after {Heals} self-heal(s) — the type reports a usable build but the instance cannot bind it. Deferring the next recycle by {Delay:0}s.",
+                    instancePath, nodeType, budget?.HealsSoFar(instancePath, nodeType, now) ?? 0,
+                    (earliest - now).TotalSeconds);
+                return Observable.Timer(earliest - now, clock).Select(_ => t);
+            })
             .Take(1)
             .Subscribe(
                 t =>
                 {
                     Interlocked.Exchange(ref healed, 1);
+                    var heals = budget?.RecordHeal(instancePath, nodeType, clock.Now) ?? 1;
                     logger?.LogInformation(
-                        "Overlay self-heal: NodeType '{NodeType}' reached a usable build (version {Version}, at-overlay {VersionAtOverlay}) — recycling stuck instance '{InstancePath}'",
-                        nodeType, t.Version, typeVersionAtOverlay, instanceHub.Address);
+                        "Overlay self-heal: NodeType '{NodeType}' reached a usable build (version {Version}, at-overlay {VersionAtOverlay}, self-heal #{Heals}) — recycling stuck instance '{InstancePath}'",
+                        nodeType, t.Version, typeVersionAtOverlay, heals, instanceHub.Address);
                     // The RecycleLayoutArea idiom: the hub disposes itself, the
                     // grain deactivates, and the next access re-enriches from
                     // scratch against the now-usable NodeType.
@@ -1684,6 +1797,29 @@ internal static class NodeTypeEnrichmentHelpers
                     "Overlay self-heal watcher for NodeType '{NodeType}' (instance '{InstancePath}') faulted — falling back to manual Recycle",
                     nodeType, instanceHub.Address));
 
+        void ReportReEvaluation(
+            int attempt, MeshNode? typeNode, (NodeTypeDefinition? Def, bool Usable) verdict)
+        {
+            if (verdict.Usable)
+                return;
+            var status = typeNode is null
+                ? "(no node at that path)"
+                : verdict.Def is { } d
+                    ? $"status {d.CompilationStatus?.ToString() ?? "(none)"}, assembly {d.LatestAssemblyPath ?? "(none)"}, framework {d.CompiledFrameworkVersion ?? "(none)"}"
+                    : "(content is not a NodeTypeDefinition)";
+            // Inside the ladder this is the expected "still building" case; once the ladder has
+            // reached its ceiling the fault is no longer transient and has to be visible at
+            // production log levels.
+            if (attempt + 1 >= ReEvaluationLadder.Length)
+                logger?.LogWarning(
+                    "Overlay self-heal: re-read #{Attempt} of NodeType '{NodeType}' STILL reports no usable build — instance '{InstancePath}' is still serving the fallback card [{Status}]",
+                    attempt + 1, nodeType, instancePath, status);
+            else
+                logger?.LogInformation(
+                    "Overlay self-heal: re-read #{Attempt} of NodeType '{NodeType}' reports no usable build yet — instance '{InstancePath}' keeps the fallback card [{Status}]",
+                    attempt + 1, nodeType, instancePath, status);
+        }
+
         // AND IF IT DOES NOT HEAL, SAY SO. The 2026-07-27 outage was invisible from the inside:
         // no log line carried the overlay text, no notification was raised, and the first signal
         // was a user reporting a dead page. A page that is still serving the fallback well past
@@ -1691,7 +1827,7 @@ internal static class NodeTypeEnrichmentHelpers
         // naming the type and the instance. Best-effort and self-contained: reporting can never
         // throw back onto the enrichment path.
         var report = Observable
-            .Timer(StuckReportDelay, scheduler ?? Scheduler.Default)
+            .Timer(StuckReportDelay, clock)
             .Subscribe(
                 _ =>
                 {
@@ -1755,6 +1891,86 @@ internal static class NodeTypeEnrichmentHelpers
     /// instance cannot spin, short enough that a deploy heals itself well inside a support call.
     /// </summary>
     private static readonly TimeSpan SelfHealGrace = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// The widening ladder on which a stuck instance RE-READS its NodeType from the authoritative
+    /// store — the bound on issue #1814's re-evaluation route. The first rung matches
+    /// <see cref="SelfHealGrace"/>, so a deploy window that clears heals in the same time it
+    /// always did; the rungs then widen so a fault that does not clear costs a shrinking number of
+    /// reads per hour rather than a constant poll.
+    ///
+    /// <para>🚨 It is a LADDER, not a retry budget: past the last rung the interval holds at
+    /// <see cref="ReEvaluationCeiling"/> for as long as the instance lives. Stopping would restore
+    /// exactly the defect — a card that outlives its cause because something decided to stop
+    /// looking — and one read per instance per ten minutes is not a poll worth capping. At the
+    /// 2026-08-17 blast radius (12 latched instances) the steady state is 72 single-node reads an
+    /// hour, against the 1 h 24 m of served fault cards it replaces.</para>
+    /// </summary>
+    private static readonly TimeSpan[] ReEvaluationLadder =
+    [
+        TimeSpan.FromSeconds(45),
+        TimeSpan.FromSeconds(90),
+        TimeSpan.FromMinutes(3),
+        TimeSpan.FromMinutes(6),
+    ];
+
+    /// <summary>The interval the re-evaluation ladder holds at once its rungs are exhausted.</summary>
+    private static readonly TimeSpan ReEvaluationCeiling = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Upper bound on ONE authoritative re-read. A read that does not answer is not a verdict — the
+    /// ladder asks again at the next rung — but it must never pin the ladder, which is what an
+    /// unbounded read on a wedged mesh hub would do.
+    /// </summary>
+    private static readonly TimeSpan ReEvaluationReadTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>Delay before re-evaluation attempt <paramref name="attempt"/> (0-based).</summary>
+    private static TimeSpan ReEvaluationDelay(int attempt) =>
+        attempt < ReEvaluationLadder.Length ? ReEvaluationLadder[attempt] : ReEvaluationCeiling;
+
+    /// <summary>
+    /// An AUTHORITATIVE one-shot read of the NodeType node at <paramref name="nodeType"/>, or null
+    /// when this host registers no query core (a unit-test hub) — in which case the overlay watcher
+    /// keeps its push-only behaviour rather than pretending to re-evaluate.
+    ///
+    /// <para>🚨 The point is that it does NOT go through
+    /// <c>meshHub.GetWorkspace().GetMeshNodeStream(nodeType)</c>. That stream is the one the
+    /// enrichment slow path already read, and re-subscribing to it replays the workspace's cached
+    /// snapshot — which, when the writer is another process and nothing tells this one its mirror
+    /// is stale, is exactly the value that produced the fault card. Going to the query providers
+    /// (storage) is what makes the re-evaluation independent of the failure it is recovering
+    /// from. Runs as System, like every other infrastructure read on this path (the enrichment
+    /// existence probe uses the same request shape).</para>
+    /// </summary>
+    internal static Func<IObservable<MeshNode?>>? AuthoritativeTypeRead(
+        IMessageHub meshHub, string nodeType)
+    {
+        var queryCore = meshHub.ServiceProvider.GetService<IMeshQueryCore>();
+        if (queryCore is null)
+            return null;
+        var accessService = meshHub.ServiceProvider.GetService<AccessService>();
+        var options = meshHub.JsonSerializerOptions;
+        var request = MeshQueryRequest.FromQuery($"path:{nodeType}") with
+        {
+            UserId = WellKnownUsers.System,
+        };
+        // 🚨 RunAsSystem, never `Observable.Using(() => access.ImpersonateAsSystem(), …)` (#1790):
+        // that shape opens the AsyncLocal scope on the SUBSCRIBING thread and disposes it when the
+        // query terminates — the owning hub's response thread — leaving the subscriber latched as
+        // system-security. Here the subscriber is an instance hub's watcher, so the latch would sit
+        // on a long-lived hub. RunAsSystem seals both ends inside one Subscribe; the whole cold
+        // pipeline is composed INSIDE the work factory so its emission-time behaviour is unchanged.
+        return () => accessService.RunAsSystem(() => queryCore
+            .Query<MeshNode>(request, options)
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Take(1)
+            // Match the path EXACTLY: this answer decides whether an instance recycles, and a
+            // ranked/fuzzy hit for a neighbouring node would recycle it against a build that is
+            // not the one it is waiting for. No exact hit is simply "no answer" — the ladder asks
+            // again rather than treating absence as news.
+            .Select(c => c.Items.FirstOrDefault(
+                n => string.Equals(n.Path, nodeType, StringComparison.OrdinalIgnoreCase))));
+    }
 
     /// <summary>
     /// How long a NodeType must stop publishing before <see cref="ArmStaleAssemblySelfHeal"/> acts.
@@ -1941,11 +2157,16 @@ internal static class NodeTypeEnrichmentHelpers
     /// </summary>
     private const string NoCodeChangeNeeded =
         "**No code change is needed for this.** ";
+    // 🚨 The promise in this paragraph is a CLAIM the platform has to keep. It did not, for
+    // 1 h 24 m of every course cover on memex (2026-08-17, issue #1814 defect B): the self-heal
+    // watched a push stream that had gone permanently silent, so nothing re-checked and the card
+    // outlived its cause until twelve roots were recycled by hand. ArmOverlaySelfHeal's
+    // re-evaluation ladder is what makes the sentence true — don't weaken either without the other.
     private const string UnsettledBuildGuidance =
         "This usually happens while a mesh restart or a bulk recompile is still in progress. "
-        + "The page recovers automatically: once the type's build settles, this instance recycles "
-        + "itself and shows the real page on the next load. If it stays stuck, use the **Recycle** "
-        + "menu to refresh it manually.";
+        + "The page recovers automatically: this instance re-checks the type's build (within a "
+        + "minute at first, then less often) and recycles itself onto the real page as soon as the "
+        + "build settles. If you don't want to wait, use the **Recycle** menu to refresh it now.";
 
     // Overlay copy for a REGISTRATION LOOKUP that never answered (the probe timeout).
     // Nothing about the type's source was read, so a "correct the code" page is a
@@ -1984,8 +2205,9 @@ internal static class NodeTypeEnrichmentHelpers
         + "This is a platform fault — not a **compilation** error in the source.";
     private const string EnrichmentFaultedGuidance =
         "Preparing this type for the instance failed before its build was consulted; the summary "
-        + "above names the fault, and the full stack is in the platform log. Use the **Recycle** "
-        + "menu to retry — the page also recovers on its own once the type resolves again.";
+        + "above names the fault, and the full stack is in the platform log. The page recovers on "
+        + "its own: this instance keeps re-checking the type and recycles itself once it resolves. "
+        + "Use the **Recycle** menu to retry immediately.";
 
     private const string FrameworkStaleIntro =
         "This item's type was built by a previous MeshWeaver version, so the **compilation** output "

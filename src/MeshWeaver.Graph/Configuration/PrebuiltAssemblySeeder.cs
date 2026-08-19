@@ -75,6 +75,104 @@ public static class PrebuiltAssemblySeeder
     public static string? LiveFrameworkIdentityWarning => NodeTypeCompilationHelpers.FrameworkVersionWarning;
 
     /// <summary>
+    /// Whether adopting this bundle entry would CHANGE ANYTHING — i.e. whether the NodeType's own
+    /// record already names exactly the build the seed would stamp, with the bytes still behind it.
+    ///
+    /// <para>🚨 The counterpart to <see cref="DeclineReason(string?)"/>, and the reason both are
+    /// public: <c>DeclineReason</c> answers "must we NOT adopt", this answers "need we adopt at
+    /// all". Without it every boot re-adopts every bundle entry it holds — and adoption is not
+    /// cheap bookkeeping: <see cref="Seed"/> opens the type's own mesh-node stream (which ACTIVATES
+    /// its per-node hub), re-uploads the assembly bytes to the shared store, and writes the node.
+    /// Measured on memex-cloud 2026-08-17, that was 43 hub activations, 43 uploads and 43 writes —
+    /// <b>13.5 s of a 101 s boot</b> — establishing that nothing had changed since the previous pod
+    /// did exactly the same thing. Framework identity is an API-SURFACE hash, deliberately stable
+    /// across internal-only merges, so the overwhelmingly common roll finds its own bytes already
+    /// on the share.</para>
+    ///
+    /// <para><b>Pure, and level-triggered on the store.</b> The caller resolves
+    /// <paramref name="storeHasBytes"/> by probing the store at the record's
+    /// <see cref="NodeTypeDefinition.LastCompiledVersion"/> and passes the answer in, so this
+    /// function does no I/O. That split is the same one <see cref="NodeTypeBakeStatus.Classify"/>
+    /// makes, for the same reason: a record can claim a build whose bytes were cleared, remounted
+    /// or restored away from under it (<see cref="BakeState.BytesMissing"/>), and a skip decided on
+    /// the record alone would leave that type permanently unbuilt. Record AND bytes ⇒ skip;
+    /// anything else ⇒ seed.</para>
+    ///
+    /// <para><b>"Already built" is NOT re-decided here.</b> It delegates to
+    /// <see cref="NodeTypeBakeStatus.Classify"/> — the one definition of that in the framework, and
+    /// the very function the pre-warmer's store probe applies to this same type moments later. A
+    /// second, hand-rolled notion of "current" beside it would be a rule that can drift from the
+    /// one that actually decides whether anything gets compiled, and the two disagreeing is how a
+    /// type gets skipped by the seeder AND skipped by the bake. So the contract is exactly: <b>skip
+    /// precisely what the bake would call <see cref="BakeState.Baked"/></b>.</para>
+    ///
+    /// <para>🚨 Note in particular what this does NOT compare: the NodeType MeshNode's CURRENT
+    /// version. <see cref="Seed"/> uploads and stamps the version it read BEFORE its own write, and
+    /// that write bumps the node — so after any adoption <c>LastCompiledVersion</c> is permanently
+    /// one behind <c>node.Version</c>, and a naive equality check is unsatisfiable. That mismatch
+    /// is also why today's unconditional re-adoption uploads the SAME bytes under a NEW store key
+    /// every boot: the assembly cache grows a fresh generation per pod start with nothing ever
+    /// reading the old ones. Whether a build is stale with respect to its SOURCES is
+    /// <c>CompiledSources</c>/<c>CurrentSourceVersions</c>'s question, answered by the compile
+    /// watcher, and it is deliberately not re-asked here.</para>
+    ///
+    /// <para>The one conjunct this adds on top of the bake's own verdict is the bundle's DEPENDENCY
+    /// RECORD (#1707 slice 2): an entry whose record differs from the stamped one would REPLACE
+    /// that stamp, so it is a real change and must not be mistaken for a no-op. A legacy bundle
+    /// carrying no record stamps none, and therefore cannot change one either.</para>
+    /// </summary>
+    /// <param name="definition">The NodeType's persisted definition.</param>
+    /// <param name="storeHasBytes">Whether the assembly store resolved bytes for this type's
+    /// <see cref="NodeTypeDefinition.LastCompiledVersion"/> — the caller's already-resolved probe,
+    /// so this function never does I/O.</param>
+    /// <param name="bundleDependencies">The bundle entry's dependency record, or null for a
+    /// legacy bundle.</param>
+    /// <param name="liveFrameworkMvid">Framework identity to compare against; defaults to the live
+    /// one. Injected so a test can stage a framework roll without rebuilding the framework — the
+    /// same seam <see cref="DeclineReason(string?, string)"/> exposes.</param>
+    /// <param name="liveDependencyIdOf">Live dependency-id resolver, passed through to
+    /// <see cref="NodeTypeBakeStatus.Classify"/>.</param>
+    /// <param name="liveToolchainId">Live toolchain id, passed through to
+    /// <see cref="NodeTypeBakeStatus.Classify"/>.</param>
+    public static bool IsAlreadyAdopted(
+        NodeTypeDefinition definition,
+        bool storeHasBytes,
+        IReadOnlyDictionary<string, string>? bundleDependencies,
+        string? liveFrameworkMvid = null,
+        Func<string, string?>? liveDependencyIdOf = null,
+        string? liveToolchainId = null)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        return StampWouldMatch(definition.CompiledDependencies, bundleDependencies)
+            && NodeTypeBakeStatus.Classify(
+                definition,
+                storeHasBytes,
+                liveFrameworkMvid ?? LiveFrameworkMvid,
+                liveDependencyIdOf,
+                liveToolchainId) is BakeState.Baked;
+    }
+
+    /// <summary>
+    /// Whether re-stamping <paramref name="bundle"/> would leave <paramref name="stamped"/>
+    /// unchanged. A legacy bundle (null) stamps nothing, so it always would.
+    /// </summary>
+    private static bool StampWouldMatch(
+        IReadOnlyDictionary<string, string>? stamped,
+        IReadOnlyDictionary<string, string>? bundle)
+    {
+        if (bundle is null)
+            return true;
+        if (stamped is null || stamped.Count != bundle.Count)
+            return false;
+        foreach (var (key, value) in bundle)
+            if (!stamped.TryGetValue(key, out var current)
+                || !string.Equals(current, value, StringComparison.Ordinal))
+                return false;
+        return true;
+    }
+
+    /// <summary>
     /// Seeds <paramref name="assemblyBytes"/> as the build for <paramref name="nodeTypePath"/>.
     ///
     /// <para>Cold: the write runs on Subscribe. Emits <c>true</c> when the assembly was adopted and
@@ -182,13 +280,26 @@ public static class PrebuiltAssemblySeeder
                                     LatestAssemblyCollection = location.Collection,
                                     LatestAssemblyPath = location.ContentPath,
                                     CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
-                                    // The producer compiled exactly the sources it shipped beside
-                                    // these bytes, so the snapshot IS the installed set. Leaving it
-                                    // unset would leave IsDirty comparing an empty snapshot against
-                                    // live CurrentSourceVersions and recompile immediately —
-                                    // adopting the assembly and then throwing it away.
-                                    CompiledSources = def.CurrentSourceVersions?.ToImmutableDictionary()
-                                                      ?? def.CompiledSources,
+                                    // The adopted build retires any standing FAILURE verdict, so
+                                    // the inputs it was formed from go with it (#1793) — exactly as
+                                    // ApplyCompileSuccess does. A token left behind would describe a
+                                    // verdict this node no longer holds.
+                                    FailedBuildInputs = null,
+                                    // 🚨 The source snapshot is stamped BY THE OWNER, not here
+                                    // (#1834). The producer's own ticks are meaningless on this
+                                    // mesh (the bake writes zeros), so adoption asserts "these
+                                    // bytes correspond to the LIVE source set" — and only the
+                                    // owner knows that set. This write is CROSS-HUB: the lambda
+                                    // diffs against the MIRROR's snapshot, which predates the
+                                    // first-activation write of CurrentSourceVersions that this
+                                    // very subscribe triggers (InstallSourcesWatcher). Reading the
+                                    // field here therefore stamped CompiledSources = null under a
+                                    // non-empty CurrentSourceVersions — IsDirty — and the release
+                                    // request PackageInstaller issues one step later recompiled
+                                    // the type that had just been adopted. Requesting the stamp
+                                    // instead has no ordering to lose: whichever of the two writes
+                                    // lands second carries the owner's authoritative pair.
+                                    RequestedSourceStampAt = DateTimeOffset.UtcNow,
                                     // The producer's dependency record (#1707 slice 2) — validated
                                     // above; stamped so ongoing validity checks judge the adopted
                                     // build like a locally-compiled one. Legacy bundles (null)

@@ -90,6 +90,271 @@ public class ShippedPrebuiltBundlesTest(ITestOutputHelper output) : MonolithMesh
         }
     }
 
+    /// <summary>
+    /// 🚨 THE STEADY-STATE BOOT: a bundle whose types are already adopted must cost NOTHING —
+    /// no assembly read, no store upload, no node write, and above all no per-NodeType hub
+    /// activation — while still reporting the same COVERAGE.
+    ///
+    /// <para>Measured on memex-cloud 2026-08-17 (pod <c>…-dbpx6</c>, 19:22:51→19:23:05): 43
+    /// assemblies re-adopted from 18 bundles, <b>13.5 s of a 101 s boot</b>, at ~300 ms per entry
+    /// — one per-node hub activation + one store upload + one node write each — establishing that
+    /// nothing had changed since the previous pod did exactly the same thing. The framework
+    /// identity is an API-surface hash and is deliberately stable across internal-only merges, so
+    /// this is the COMMON roll, not an edge case.</para>
+    ///
+    /// <para>The three steps are one story on purpose, and step 3 is what makes step 2 an honest
+    /// assertion rather than a race: a skip is the absence of a write, so it can only be proven
+    /// against a stream that demonstrably WOULD have shown one. Clearing the store and watching
+    /// the very next seed re-adopt supplies exactly that positive control — and pins the
+    /// level-triggered property at the same time (a cleared / remounted / stale-restored assembly
+    /// volume must re-seed, never be skipped on the record's word alone; that is the
+    /// <see cref="BakeState.BytesMissing"/> trap).</para>
+    ///
+    /// <para>🚨 <b>"Seed did not run" is asserted on what Seed WRITES — never on
+    /// <see cref="MeshNode.Version"/>.</b> That counter is minted by the owner for EVERY writer,
+    /// and this node has others: its own per-node hub seeds
+    /// <see cref="NodeTypeDefinition.CurrentSourceVersions"/> from the sources watcher on first
+    /// activation, and that write lands on either side of the adoption patch depending on
+    /// scheduling. Keying the skip assertion on the counter therefore failed whenever the
+    /// framework's own write happened to land second — 1 in 31 whole-assembly runs, 0 in 60
+    /// class-only ones, always as <c>Expected value to be 2 … but found 3</c>, with the seeder
+    /// having correctly skipped in every one of them. The record Seed restamps
+    /// (<see cref="NodeTypeDefinition.LastCompileSucceededAt"/>,
+    /// <see cref="NodeTypeDefinition.LastCompiledVersion"/>,
+    /// <see cref="NodeTypeDefinition.LatestAssemblyPath"/>) and the assembly store's own contents
+    /// name the seeder specifically, so they say what the counter cannot.
+    /// <see cref="AConcurrentWriteToTheNodeDoesNotMakeTheNextSeedReAdopt"/> pins that
+    /// deterministically.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task UnchangedBundle_SkipsWithoutRewriting_AndReSeedsWhenTheStoreLosesItsBytes()
+    {
+        var typePath = $"{TestPartition}/SteadyStateThing";
+        await CreateNodeType("SteadyStateThing");
+
+        var dir = CreateBundleDirectory();
+        try
+        {
+            WriteBundle(
+                Path.Combine(dir, "steady.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream([0xAB, 0xCD, 0xEF])));
+
+            // ── 1. First boot: the bundle is adopted, exactly as before. ──────────────────────
+            var first = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            first.Should().Be(1, "a type with no build yet must be adopted");
+
+            var adopted = (await AdoptedNode(typePath))
+                .ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+            var adoptedAt = adopted.LastCompileSucceededAt;
+            // The store snapshot is the race-free half of "did Seed run": Seed uploads BEFORE it
+            // stamps the record, and the upload is a local filesystem write, so it is settled the
+            // moment the seeding observable emits.
+            var storeAfterFirst = StoreContents(typePath);
+
+            // ── 2. Second boot, nothing changed: SKIPPED — but still COVERED. ─────────────────
+            var second = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            second.Should().Be(1,
+                "coverage is unchanged by the skip — deploy/aks/values.aks.yaml makes this count "
+                + "the signal that the CI bake lane works, so it must NOT collapse to 0 on a "
+                + "healthy steady-state boot");
+
+            StoreContents(typePath).Should().Equal(storeAfterFirst,
+                "an already-adopted entry must not be re-uploaded — the store write, the node "
+                + "write and the per-node hub activation they need are the whole cost being "
+                + "removed, and a re-adoption puts the bytes under a NEW (path, version) key");
+
+            var afterSecond = (await CurrentNode(typePath))
+                .ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+            afterSecond.LastCompileSucceededAt.Should().Be(adoptedAt,
+                "a re-adoption would restamp this timestamp; an unchanged one proves Seed "
+                + "never ran");
+            afterSecond.LastCompiledVersion.Should().Be(adopted.LastCompiledVersion,
+                "Seed stamps the node version it read, which has moved on since the first "
+                + "adoption — an unchanged stamp is a second witness that Seed never ran");
+            afterSecond.LatestAssemblyPath.Should().Be(adopted.LatestAssemblyPath,
+                "a re-adoption uploads under a new store key and rewrites this");
+
+            // ── 3. The positive control: the store loses its bytes ⇒ the next seed re-adopts. ──
+            Directory.Delete(AssemblyStoreRoot, recursive: true);
+
+            var third = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            third.Should().Be(1, "the entry is covered again — this time by actually re-adopting it");
+
+            // Wait for the RE-ADOPTION — the record Seed restamps — and not for a version bump:
+            // any writer moves the version, so a wait on one can be satisfied by a write that is
+            // not this seed's, and the assertion after it then reads a node the seed never touched.
+            var afterThird = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+                .Select(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+                .Where(d => d is { LastCompileSucceededAt: not null }
+                    && d.LastCompileSucceededAt != adoptedAt)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+            afterThird!.LastCompileSucceededAt.Should().NotBe(adoptedAt,
+                "the record may never be trusted over the store: a cleared assembly volume "
+                + "leaves every record pristine over bytes that are gone, and a skip decided "
+                + "on the record alone would leave the type permanently unbuilt");
+            StoreContents(typePath).Should().NotBeEmpty(
+                "the re-adoption put the bytes back on the store the delete emptied");
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    /// <summary>
+    /// 🚨 THE CONCURRENT-WRITER PIN. The NodeType node the seeder stamps is NOT written by the
+    /// seeder alone: its own per-node hub seeds
+    /// <see cref="NodeTypeDefinition.CurrentSourceVersions"/> the first time the hub activates —
+    /// and the hub activates BECAUSE the seeder opened its stream, so the two writes are
+    /// concurrent by construction and land in either order.
+    ///
+    /// <para>That is why <see cref="MeshNode.Version"/> can never express "the seeder did not
+    /// run": it is one counter shared by every writer. Here the foreign write is made EXPLICIT
+    /// and awaited — the same field, on the same node, between two seeds — so the property under
+    /// test is pinned with no wall clock and no scheduling luck: an entry that is already on the
+    /// store is skipped no matter what else has touched its node, and the skip is decided on
+    /// <see cref="NodeTypeDefinition.LastCompiledVersion"/> plus the store's bytes
+    /// (<see cref="NodeTypeBakeStatus.Classify"/>).</para>
+    ///
+    /// <para>Non-vacuous by measurement, not by argument: with the retired
+    /// <see cref="MeshNode.Version"/> assertion put back into this test it fails <b>10 out of
+    /// 10</b> runs — <c>Expected value to be 3 … but found 4</c>, the same shape the flake
+    /// produced — while every field the seeder owns is unchanged; with the assertions below it
+    /// passes 10 out of 10. No wall clock is involved in either.</para>
+    ///
+    /// <para>The stand-in write edits <see cref="NodeTypeDefinition.Description"/> rather than
+    /// <c>CurrentSourceVersions</c> itself, deliberately: the watcher owns that field, and two
+    /// writers on ONE field would put a cross-hub merge conflict into the fixture — a second race,
+    /// in a test whose whole point is not to have one. Any foreign write moves the counter, which
+    /// is the entire property at issue.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AConcurrentWriteToTheNodeDoesNotMakeTheNextSeedReAdopt()
+    {
+        var typePath = $"{TestPartition}/ConcurrentlyWrittenThing";
+        await CreateNodeType("ConcurrentlyWrittenThing");
+
+        var dir = CreateBundleDirectory();
+        try
+        {
+            WriteBundle(
+                Path.Combine(dir, "concurrent.zip"),
+                PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                new BundleWriter.AssemblyEntry(typePath, () => new MemoryStream([0x11, 0x22, 0x33])));
+
+            var first = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            first.Should().Be(1, "a type with no build yet must be adopted");
+
+            var afterAdoption = await AdoptedNode(typePath);
+            var adopted = afterAdoption.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+            var storeAfterAdoption = StoreContents(typePath);
+
+            // The foreign write, spelled out: a field the seeder never stamps, written under the
+            // same System identity the framework's own watchers write with.
+            var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+            await Observable.Using(
+                    () => access.ImpersonateAsSystem(),
+                    _ => Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+                        .Update(node => node with
+                        {
+                            Content = node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)! with
+                            {
+                                Description = "bake fixture, touched by someone else",
+                            },
+                        }))
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+
+            // 🚨 The fixture is only meaningful once that write has actually MOVED the counter the
+            // old assertion keyed on — Update emits the writer's optimistic snapshot, which still
+            // carries the pre-write version, so the owner's committed node is what proves it.
+            var bumped = await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+                .Where(n => n is not null && n.Version > afterAdoption.Version)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(TestContext.Current.CancellationToken);
+            bumped!.Version.Should().BeGreaterThan(afterAdoption.Version,
+                "without a moved counter this test cannot distinguish the fix from the bug");
+
+            var second = await ShippedPrebuiltBundles.SeedAll(Mesh, dir, null)
+                .FirstAsync()
+                .ToTask(TestContext.Current.CancellationToken);
+            second.Should().Be(1,
+                "the entry is still covered — the foreign write changed nothing the seeder stamps");
+
+            StoreContents(typePath).Should().Equal(storeAfterAdoption,
+                "a moved node version must not make the seeder re-upload: the skip is keyed on "
+                + "LastCompiledVersion and the store's bytes, never on MeshNode.Version");
+
+            var after = (await CurrentNode(typePath))
+                .ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+            after.LastCompileSucceededAt.Should().Be(adopted.LastCompileSucceededAt,
+                "a re-adoption would restamp this; an unchanged one proves Seed never ran");
+            after.LastCompiledVersion.Should().Be(adopted.LastCompiledVersion,
+                "Seed stamps the node version it read — an unchanged stamp is the second witness");
+        }
+        finally
+        {
+            TryDelete(dir);
+        }
+    }
+
+    /// <summary>
+    /// One NodeType's files on the assembly store, relative and ordered — the race-free half of
+    /// "did Seed run". <see cref="PrebuiltAssemblySeeder.Seed"/> uploads BEFORE it stamps the
+    /// record, and the upload is a local filesystem write, so this is settled the moment the
+    /// seeding observable emits; the NODE, by contrast, is written through the owner and its
+    /// mirror may not have caught up, so a regression could otherwise read as a pass. A
+    /// re-adoption always lands a NEW file, because the store key carries the node version Seed
+    /// read and that version has moved on since the first adoption.
+    ///
+    /// <para>Scoped to the type: <see cref="MonolithMeshTestBase.AssemblyStoreRoot"/> is shared
+    /// by every <c>[Fact]</c> of this class (it is keyed by process + test class), so an
+    /// unscoped listing would also see a sibling test's builds.</para>
+    /// </summary>
+    private string[] StoreContents(string typePath)
+    {
+        // The store files each type under a directory named for its sanitized mesh path, so the
+        // leaf id is enough to scope the listing without duplicating that sanitization here.
+        var leaf = typePath[(typePath.LastIndexOf('/') + 1)..];
+        return Directory.Exists(AssemblyStoreRoot)
+            ? Directory.GetFiles(AssemblyStoreRoot, "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(AssemblyStoreRoot, f))
+                .Where(f => f.Contains(leaf, StringComparison.Ordinal))
+                .OrderBy(f => f, StringComparer.Ordinal)
+                .ToArray()
+            : [];
+    }
+
+    /// <summary>The node once its adoption has landed.</summary>
+    private Task<MeshNode> AdoptedNode(string typePath) =>
+        Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)
+                ?.CompilationStatus == CompilationStatus.Ok)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(TestContext.Current.CancellationToken)!;
+
+    /// <summary>The node as it stands right now.</summary>
+    private Task<MeshNode> CurrentNode(string typePath) =>
+        Mesh.GetWorkspace().GetMeshNodeStream(typePath)
+            .Where(n => n is not null)
+            .Take(1)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(TestContext.Current.CancellationToken)!;
+
     /// <summary>#1707 slice 3: install/push-time consumption is scoped to the CALLER's types —
     /// the mesh-wide enumeration is the boot path's business only.</summary>
     [Fact(Timeout = 120_000)]

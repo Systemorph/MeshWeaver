@@ -187,7 +187,7 @@ The Systemorph space ships three tiers, chosen to be **powerful but inexpensive 
 | **`reasoning`** (legacy `standard`) | `DeepSeek-V3-0324` | proven open-weight workhorse, large deployed quota; balanced general use at low cost. |
 | **`chat` / `utility`** (legacy `light`) | `DeepSeek-V4-Flash` | fast + very cheap open-weight variant, ideal for high-volume classification, extraction, and JSON/structured output. |
 
-All three are deployed on the `s-meshweaver` Azure AI Foundry resource (verify with `az cognitiveservices account deployment list -n s-meshweaver -g rg-meshweaverai`). Put the tier on the model NODE (`"tier": "coding"`) — see [Model Tiers](/Doc/AI/ModelTiers). The `ModelTier:Heavy/Standard/Light/Utility` config keys still work (mapped by rank) but are deprecated.
+All three are deployed on one Azure AI Foundry resource (verify with `az cognitiveservices account deployment list -n <foundry-account> -g <foundry-rg>`). Put the tier on the model NODE (`"tier": "coding"`) — see [Model Tiers](/Doc/AI/ModelTiers). The `ModelTier:Heavy/Standard/Light/Utility` config keys still work (mapped by rank) but are deprecated.
 
 > **Claude (Anthropic) works very well — noticeably stronger on the hardest agentic and coding tasks — but it comes at a price.** It is intentionally **not** wired as a shared org key. Each user connects **Claude Code** (the co-hosted CLI, `Features:Ai:Clis:ClaudeCode`) under their own account in **Settings → Models → Connect**, which stores a per-user `{user}/_Memex/ClaudeCode` provider and injects Claude into their picker on their own subscription. To turn this on for a deployment, see [Enabling per-user Claude Code Connect](#enabling-per-user-claude-code-connect).
 

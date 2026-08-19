@@ -4,8 +4,7 @@
 //   authenticate to ACR and list image tags KEYLESS.
 //
 // Mirrors the pgBackRest workload-identity wiring in storage.bicep, generalised
-// to the portal namespaces that share this one cluster (memex, prod,
-// memex-cloud — see .github/workflows/main-cd.yml). ONE user-assigned managed
+// to every portal namespace that shares one cluster. ONE user-assigned managed
 // identity, federated to
 //   system:serviceaccount:<ns>:memex-portal-sa
 // for EVERY namespace that runs the portal, and granted AcrPull on the registry.
@@ -43,12 +42,10 @@ param identityName string
 @description('OIDC issuer URL of the AKS cluster (from aks.bicep output). Same issuer for every namespace on the cluster.')
 param oidcIssuerUrl string
 
-@description('Kubernetes namespaces that run the portal. One federated credential is created per namespace, each federating the memex-portal-sa service account in that namespace.')
-param namespaces array = [
-  'memex'
-  'prod'
-  'memex-cloud'
-]
+// REQUIRED, deliberately — see the note on main.bicep's portalNamespaces. An empty default would
+// silently create zero federated credentials and still report success.
+@description('Kubernetes namespaces that run the portal. One federated credential is created per namespace, each federating the memex-portal-sa service account in that namespace. Required.')
+param namespaces array
 
 @description('Name of the portal ServiceAccount the federated credentials trust. MUST match the Helm chart (deploy/helm/templates/memex-portal/serviceaccount.yaml). Do not change unless the chart changes.')
 param serviceAccountName string = 'memex-portal-sa'

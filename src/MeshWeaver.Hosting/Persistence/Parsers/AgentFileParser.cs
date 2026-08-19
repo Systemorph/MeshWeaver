@@ -96,9 +96,8 @@ public class AgentFileParser : IFileFormatParser
             ? content.Substring(yamlBlock.Span.End + 1).TrimStart('\r', '\n')
             : content;
 
-        // Get file last modified time
-        var fileInfo = new FileInfo(filePath);
-        var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero);
+        // Get file last modified time — never 1601 for a missing file (see FileTimestamps).
+        var lastModified = FileTimestamps.ObservedAt(filePath);
 
         // Build AgentConfiguration from frontmatter + markdown body. Node-level metadata
         // (name, description, icon, group, order) lives on the MeshNode below — NOT

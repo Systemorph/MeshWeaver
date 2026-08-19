@@ -3,7 +3,6 @@ using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.AI;
-using MeshWeaver.Approvals;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
@@ -78,11 +77,6 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
                 services.AddPartitionedPostgreSqlPersistence(csb.ConnectionString))
             .AddRowLevelSecurity()
             .AddGraph()
-            // The Approval node type rides the MeshWeaver.Approvals module (portals list it
-            // under Modules:Assemblies; fixtures opt in with the same builder call). The
-            // _Approval theory case creates a NodeType=Approval satellite through the guarded
-            // CreateNode path, which refuses unregistered node types.
-            .AddApprovals()
             // AI registers Thread / ThreadMessage NodeTypes (with satellite
             // routing rule + AI type-registry entries that <c>Thread</c>
             // content needs for the polymorphic deserializer). Without
@@ -120,8 +114,10 @@ public class ThreadUrlResolutionTest(PostgreSqlFixture fixture, ITestOutputHelpe
         { "_Access", "AccessAssignment", false },
         // _Comment → annotations table
         { "_Comment", "Comment", false },
-        // _Approval → annotations table (shared with comments)
-        { "_Approval", "Approval", false },
+        // _Approval → annotations table (shared with comments). Typed Comment on purpose: the
+        // case pins SEGMENT routing, and approvals are a node-native package now — the platform
+        // registers no Approval type for the guarded create to accept.
+        { "_Approval", "Comment", false },
         // _Tracking → annotations table (TrackedChange satellite)
         { "_Tracking", "TrackedChange", false },
         // Source / Test → code table. These are PRIMARY content (not

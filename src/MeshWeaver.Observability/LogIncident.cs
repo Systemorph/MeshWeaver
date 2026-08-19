@@ -91,13 +91,13 @@ public record LogIncidentDraft
 public record LogIncident
 {
     /// <summary>
-    /// The node id, and the identity of "the same error happening again": a stable hash over the
-    /// FAULT — its top application frame and exception type — falling back to the log site
-    /// (category + event id) <b>plus the exception type</b> for a burst that names no frame. The
-    /// message never participates. The category participates ONLY in that no-frame fallback: when
-    /// a frame exists it locates the fault precisely, so who caught and printed it is irrelevant —
-    /// that is what stopped one fault from opening two tickets. See
-    /// <see cref="StructuralLogIncidentIdentity"/>.
+    /// The node id, and the identity of "the same error happening again": a stable hash over WHERE
+    /// the fault is (its top application frame, falling back to the log site — category + event id —
+    /// when the burst names no frame), WHAT it is (the exception type) and WHICH one it is (the
+    /// masked exception message, or the masked logged message for a burst with no exception). The
+    /// category participates ONLY in the no-frame fallback: when a frame exists it locates the fault
+    /// precisely, so who caught and printed it is irrelevant — that is what stopped one fault from
+    /// opening two tickets. See <see cref="StructuralLogIncidentIdentity"/>.
     /// </summary>
     [Browsable(false)]
     [Key]
@@ -118,11 +118,24 @@ public record LogIncident
     [Translation("de", "Ausnahme")]
     public string? ExceptionType { get; init; }
 
-    /// <summary>The message with volatile parts (ids, guids, paths, numbers) masked — what the
-    /// fingerprint is computed over, and the most readable one-line summary of the fault.</summary>
+    /// <summary>The message with volatile parts (ids, guids, paths, numbers) masked — the most
+    /// readable one-line summary of the fault.</summary>
     [Description("Message")]
     [Translation("de", "Meldung")]
     public string NormalizedMessage { get; init; } = string.Empty;
+
+    /// <summary>The masked text the fingerprint discriminates on: the exception's own message when
+    /// the burst carried one, else the logged message.</summary>
+    [Description("Detail")]
+    [Translation("de", "Detail")]
+    public string NormalizedDetail { get; init; } = string.Empty;
+
+    /// <summary>How many distinct message shapes this incident covers — <c>1</c> unless the log site
+    /// fanned out past the watcher's per-site budget and was folded onto one incident.</summary>
+    [Description("Variants")]
+    [Translation("de", "Varianten")]
+    [Editable(false)]
+    public int Variants { get; init; } = 1;
 
     /// <summary>The top application stack frame, when the burst carried a stack trace.</summary>
     [Description("Top frame")]

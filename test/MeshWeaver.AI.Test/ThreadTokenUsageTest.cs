@@ -146,6 +146,67 @@ public class ThreadTokenUsageTest : AITestBase
         usage.ThreadId.Should().Be(threadPath);
     }
 
+    // ─── The satellite is never observable with zero tokens (#1812) ───
+
+    /// <summary>
+    /// A round that consumed tokens must NEVER publish a readable all-zero <see cref="TokenUsage"/>
+    /// satellite — not even for a moment. Every emission that carries the node carries the counts.
+    ///
+    /// <para>This is the defect behind #1812, and it was a WRITE-side one.
+    /// <c>TokenUsageNodeType.RecordUsage</c> used to write in two phases whose FIRST phase created
+    /// the satellite with all four counters at zero and whose second added the round's tokens on
+    /// top. That published a durable, readable, all-zero record in the window between them —
+    /// measured at ~60 ms idle on this suite, unbounded under load. It was not a stale index view of
+    /// a value already written; it was the node's real value, so an "authoritative" point read
+    /// returned the same zeros.</para>
+    ///
+    /// <para>Two things went wrong with it, and only the second was ever noticed:
+    /// the GUI's <c>ThreadTokenChip</c> renders that window as <c>↑0 ↓0 · $0</c>; and a reader
+    /// waiting for the counts had to out-wait an intermediate that carried the right model and the
+    /// wrong numbers. CI run 32070434174 lost that wait — it reported
+    /// <c>Last of 1 emission(s) … InputTokens = 0</c> after 10 s, which reads as a lagging reader and
+    /// is really a premature writer. And because the write chain's 15 s cap fails OPEN, a phase 2
+    /// that never lands leaves those zeros as the PERMANENT record of a round that did cost money.
+    /// </para>
+    ///
+    /// <para>The watcher is opened BEFORE the round so it is live across every write the satellite
+    /// receives: the underlying query re-runs on each change with no debounce, so a durable zero
+    /// state cannot slip past it. Pre-fix this failed on the first emission, every run.</para>
+    /// </summary>
+    [Fact]
+    public async Task UsageSatelliteIsNeverObservableWithZeroTokens()
+    {
+        var threadPath = await SeedThread();
+        var client = GetClient();
+
+        var gate = new Lock();
+        var zeroSnapshots = new List<TokenUsage>();
+
+        // Live from before the round — see the summary: this must see every state the node passes
+        // through, not just the one it settles on.
+        var settled = ObserveUsage(threadPath, "usage_model")
+            .Do(u =>
+            {
+                if (u.InputTokens == 0 && u.OutputTokens == 0
+                    && u.CacheReadTokens == 0 && u.CacheWriteTokens == 0)
+                    lock (gate) zeroSnapshots.Add(u);
+            })
+            .Should().Within(TimeSpan.FromSeconds(20))
+            .Match(u => u.InputTokens == InTokens && u.OutputTokens == OutTokens);
+
+        client.SubmitMessage(threadPath, "hello", modelName: "usage-model", createdBy: TestUser);
+
+        await settled;
+
+        List<TokenUsage> observedZeros;
+        lock (gate) observedZeros = [.. zeroSnapshots];
+        observedZeros.Should().BeEmpty(
+            "a round that consumed {0} in / {1} out tokens must never publish a readable all-zero "
+            + "usage satellite — the GUI chip renders that window as $0, and if the follow-up write "
+            + "never lands (RecordUsage's cap fails open) the zeros become the permanent record",
+            InTokens, OutTokens);
+    }
+
     // ─── Cumulative across rounds (pins the round-dispatch reset hole) ───
 
     [Fact]
@@ -388,8 +449,8 @@ public class ThreadTokenUsageTest : AITestBase
             .Match(m => predicate(m!)))!;
 
     /// <summary>
-    /// Watches the per-model <see cref="TokenUsage"/> satellite at
-    /// <c>{threadPath}/_Usage/{modelKey}</c> until it matches <paramref name="predicate"/>.
+    /// The live per-model <see cref="TokenUsage"/> satellite at <c>{threadPath}/_Usage/{modelKey}</c>,
+    /// as every emission the reader can observe (nulls — "not there yet" — filtered out).
     ///
     /// <para>🚨 Through the LIVE CHILDREN QUERY of <c>{threadPath}/_Usage</c> — byte for byte the
     /// primitive <c>ThreadTokenChip</c> binds to in the portal — and never a point
@@ -398,8 +459,11 @@ public class ThreadTokenUsageTest : AITestBase
     /// deliberately NOT chained before the round's terminal status write; a watcher can therefore be
     /// in place before the node exists. A point read of an absent node answers with an authoritative
     /// routing NotFound and TERMINATES the stream with an error — it cannot wait for a node to
-    /// appear. The children query starts from the (possibly empty) collection and re-emits when the
-    /// node lands, which is the only shape that serves this ordering.</para>
+    /// appear, and worse, that NotFound opens MeshNodeStreamCache's storm-breaker window on the very
+    /// path RecordUsage is about to write, which fast-fails the WRITE too. The children query starts
+    /// from the (possibly empty) collection and re-emits when the node lands, which is the only shape
+    /// that serves this ordering. Listing children is exactly the use AGENTS.md sanctions for a
+    /// query.</para>
     ///
     /// <para>That mismatch was #1040's largest blocker: at
     /// <c>DOTNET_PROCESSOR_COUNT=4 -parallel collections</c> three of this class's tests failed
@@ -407,11 +471,21 @@ public class ThreadTokenUsageTest : AITestBase
     /// scheduling merely let the create win the race.
     /// <see cref="UsageWatchedFromBeforeTheRound_ArrivesWhenTheSatelliteIsCreated"/> pins the losing
     /// ordering deterministically.</para>
+    ///
+    /// <para>🚨 <b>Do NOT "fix" a slow usage read by switching this to the node stream</b> (#1812).
+    /// That issue proposed it, on the theory that the all-zero <c>TokenUsage</c> CI once timed out on
+    /// was a stale CQRS projection. Measured, it is not: with both readers racing the same round,
+    /// this query and <c>GetMeshNodeStream(usagePath)</c> resolve within ±13 ms of each other, and
+    /// the point stream is the SLOWER of the two once its cold per-node hub activation is counted.
+    /// The zeros were not a lagged view of a written value — they WERE the node's authoritative
+    /// value, because <c>RecordUsage</c>'s phase 1 wrote them. An authoritative read would have
+    /// returned the same zeros. The defect was on the write side and is fixed there; see
+    /// <see cref="UsageSatelliteIsNeverObservableWithZeroTokens"/>, which pins it.</para>
     /// </summary>
-    private async Task<TokenUsage> WaitForUsage(string threadPath, string modelKey, Func<TokenUsage, bool> predicate, int timeoutMs)
+    private IObservable<TokenUsage> ObserveUsage(string threadPath, string modelKey)
     {
         var usagePath = $"{threadPath}/{TokenUsageNodeType.SatelliteSegment}/{modelKey}";
-        return (await Mesh.GetQuery(
+        return Mesh.GetQuery(
                 $"usage:{threadPath}",
                 $"path:{threadPath}/{TokenUsageNodeType.SatelliteSegment} scope:children "
                 + $"nodeType:{TokenUsageNodeType.NodeType} select:path,id,namespace,name,nodeType,content")
@@ -419,9 +493,16 @@ public class ThreadTokenUsageTest : AITestBase
                 .FirstOrDefault(n => string.Equals(n.Path, usagePath, StringComparison.OrdinalIgnoreCase))
                 .ContentAs<TokenUsage>(Mesh.JsonSerializerOptions))
             .Where(u => u is not null)
-            .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
-            .Match(u => predicate(u!)))!;
+            .Select(u => u!);
     }
+
+    /// <summary>
+    /// Watches <see cref="ObserveUsage"/> until it matches <paramref name="predicate"/>.
+    /// </summary>
+    private Task<TokenUsage> WaitForUsage(string threadPath, string modelKey, Func<TokenUsage, bool> predicate, int timeoutMs)
+        => ObserveUsage(threadPath, modelKey)
+            .Should().Within(TimeSpan.FromMilliseconds(timeoutMs))
+            .Match(predicate);
 
     // ─── Fake usage-reporting chat client ───
 

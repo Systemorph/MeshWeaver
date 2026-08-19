@@ -2269,7 +2269,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     // title (a provider whose models all filtered out drops together with them).
                     var keepGroups = nodes
                         .Where(n => !IsPickerHeaderNode(n) && PickerNodeMatches(n, picker.SearchTerm!, exact: false))
-                        .Select(n => ParentPath(n.Path))
+                        .Select(PickerGroupKey)
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
                     nodes = nodes.Where(n => IsPickerHeaderNode(n)
                         ? keepGroups.Contains(n.Path)
@@ -2342,7 +2342,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private static bool IsPickerHeaderNode(MeshNode node) =>
         string.Equals(node.NodeType, ModelProviderNodeType.NodeType, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Parent path (everything before the last '/') — a nested model's provider path.</summary>
+    /// <summary>Parent path (everything before the last '/').</summary>
     private static string ParentPath(string? path)
     {
         if (string.IsNullOrEmpty(path)) return "";
@@ -2351,13 +2351,30 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Orders selectable nodes under their group title. A title's path is the group key; a nested
-    /// model's key is its parent path (== its provider's path), so each title is immediately
-    /// followed by its own models (title first, then models by Order then Name).
+    /// The group a picker node belongs to: a group title owns its own path; a selectable node
+    /// belongs to its containing namespace.
+    ///
+    /// <para>🚨 This is <see cref="MeshNode.Namespace"/>, NOT <c>ParentPath(node.Path)</c>. A model id
+    /// may itself contain '/' — OpenRouter ids are <c>vendor/model</c> (e.g. <c>z-ai/glm-5.2</c>) — and
+    /// <see cref="MeshNode.Path"/> is DERIVED as <c>{Namespace}/{Id}</c>, so trimming the last segment
+    /// yielded <c>Provider/OpenRouter/z-ai</c> instead of the provider path <c>Provider/OpenRouter</c>.
+    /// Every such model then missed its provider's group, and — because no model's key matched the
+    /// provider's path — <see cref="RemoveEmptyPickerGroups"/> deleted that provider's title outright,
+    /// leaving the models as untitled rows appended to whichever group sorted before them.</para>
     /// </summary>
-    private static List<MeshNode> ArrangePickerGroups(List<MeshNode> nodes) =>
+    private static string PickerGroupKey(MeshNode node) =>
+        IsPickerHeaderNode(node)
+            ? node.Path
+            : (string.IsNullOrEmpty(node.Namespace) ? ParentPath(node.Path) : node.Namespace);
+
+    /// <summary>
+    /// Orders selectable nodes under their group title. Both sides share <see cref="PickerGroupKey"/>
+    /// — a title's own path, a model's containing namespace — so each title is immediately followed
+    /// by its own models (title first, then models by Order then Name).
+    /// </summary>
+    internal static List<MeshNode> ArrangePickerGroups(List<MeshNode> nodes) =>
         nodes
-            .OrderBy(n => IsPickerHeaderNode(n) ? n.Path : ParentPath(n.Path), StringComparer.OrdinalIgnoreCase)
+            .OrderBy(PickerGroupKey, StringComparer.OrdinalIgnoreCase)
             .ThenBy(n => IsPickerHeaderNode(n) ? 0 : 1)
             .ThenBy(n => n.Order ?? 0)
             .ThenBy(n => n.Name ?? n.Id, StringComparer.OrdinalIgnoreCase)
@@ -2365,14 +2382,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     /// <summary>
     /// Drops group-title nodes (a model provider) that have NO selectable item under them — a provider
-    /// present in the catalog but with no models to pick is just an empty header. A model's group key is
-    /// its parent path (== its provider's path), so a title survives only if some model shares its path.
+    /// present in the catalog but with no models to pick is just an empty header. A title survives only
+    /// if some model's <see cref="PickerGroupKey"/> matches its path.
     /// </summary>
-    private static List<MeshNode> RemoveEmptyPickerGroups(List<MeshNode> nodes)
+    internal static List<MeshNode> RemoveEmptyPickerGroups(List<MeshNode> nodes)
     {
         var groupsWithItems = nodes
             .Where(n => !IsPickerHeaderNode(n))
-            .Select(n => ParentPath(n.Path))
+            .Select(PickerGroupKey)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return nodes
             .Where(n => !IsPickerHeaderNode(n) || groupsWithItems.Contains(n.Path))

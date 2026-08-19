@@ -783,7 +783,12 @@ internal static class ThreadSubmissionServer
                 // 🌍 The submitter's LANGUAGE rides on the same rider as their identity. Every
                 // user-facing string this round emits is resolved off AccessContext.Locale, so a
                 // context rebuilt without it renders English for every viewer (#948).
-                Locale = submitter.SubmitterLocale
+                Locale = submitter.SubmitterLocale,
+                // 🕰️ …and their ZONE, for the same reason: the round ships the current date/time
+                // into the agent's context as the anchor for every relative expression, and that
+                // anchor is only the USER's day if their named IANA zone came along. A context
+                // rebuilt without it silently anchors every viewer to UTC (#1651).
+                TimeZoneId = submitter.SubmitterTimeZoneId
             };
         // 🌍 …and when the identity came from an AMBIENT context above, that context is
         // locale-less BY CONSTRUCTION: the thread hub's OWNER-INJECTION (ThreadExecution) stamps
@@ -796,6 +801,13 @@ internal static class ThreadSubmissionServer
                  && string.IsNullOrEmpty(userCtx.Locale)
                  && !string.IsNullOrEmpty(submitter?.SubmitterLocale))
             userCtx = userCtx with { Locale = submitter.SubmitterLocale };
+        // 🕰️ The ZONE is filled in independently of the language — the two preferences are set
+        // separately on the profile, so a user can easily have one and not the other, and folding
+        // them into one condition would drop the zone whenever the locale happened to be present.
+        if (userCtx is not null
+            && string.IsNullOrEmpty(userCtx.TimeZoneId)
+            && !string.IsNullOrEmpty(submitter?.SubmitterTimeZoneId))
+            userCtx = userCtx with { TimeZoneId = submitter.SubmitterTimeZoneId };
 
         var fellBackToCreatedBy = false;
         // Resolution: thread content's CreatedBy → wrapping node's CreatedBy → null.

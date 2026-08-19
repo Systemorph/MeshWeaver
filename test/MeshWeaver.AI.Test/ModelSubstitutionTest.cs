@@ -186,7 +186,10 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         // watcher's Throttle/Subscribe continuation has no live AccessContext (#948).
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var previousContext = access.CircuitContext;
-        access.SetHostIdentity((previousContext ?? TestUsers.Admin) with { Locale = "de" });
+        // 🕰️ …and in a zone, captured on the SAME rider for the same reason: the agent round ships
+        // the current date/time as the anchor for every relative expression, and that anchor is only
+        // the user's day if their named IANA zone survived the hop (#1651).
+        access.SetHostIdentity((previousContext ?? TestUsers.Admin) with { Locale = "de", TimeZoneId = "Europe/Zurich" });
         try
         {
             client.SubmitMessage(threadPath, "hello", modelName: StaleModel, createdBy: TestUser);
@@ -213,6 +216,10 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
         userCell.SubmitterLocale.Should().Be("de",
             "the submit boundary must capture the submitter's language onto the message — it is the "
             + "only carrier that survives the watcher's Throttle/Subscribe hop (#948)");
+        userCell.SubmitterTimeZoneId.Should().Be("Europe/Zurich",
+            "the submitter's ZONE rides on the same carrier — without it the round's rebuilt context "
+            + "knows WHO the user is but not WHEN they are, and the agent's date anchor silently "
+            + "degrades to UTC for every viewer (#1651)");
         // The failure must SPEAK — and speak the SUBMITTER's language: it comes from the
         // localization catalog resolved off the round's own AccessContext.Locale, not a hard-coded
         // English literal, and it names the requested model.
@@ -308,6 +315,14 @@ public class ModelSubstitutionTest(ITestOutputHelper output) : AITestBase(output
     /// unrelated PR (#1703, 2026-08-17): the round lost the race and the read errored inside a
     /// second with <c>No node found at …/_Usage/…</c> — an error, not a timeout, so no amount of
     /// waiting could have saved it. Same defect #1040 fixed in <c>ThreadTokenUsageTest</c>.</para>
+    ///
+    /// <para>🚨 <b>Do not switch this to the node stream</b> (#1812). That issue proposed it, on the
+    /// theory that an all-zero <c>TokenUsage</c> CI once timed out on was a stale CQRS projection.
+    /// Measured, it is not: this query and <c>GetMeshNodeStream(usagePath)</c> resolve within ±13 ms
+    /// of each other, and the point stream is the SLOWER of the two once its cold per-node hub
+    /// activation is counted. The zeros were the node's authoritative value — <c>RecordUsage</c>'s
+    /// phase 1 wrote them — so an authoritative read returned the same zeros. Fixed on the write
+    /// side; pinned by <c>ThreadTokenUsageTest.UsageSatelliteIsNeverObservableWithZeroTokens</c>.</para>
     /// </summary>
     private async Task<TokenUsage> WaitForUsage(string threadPath, string modelKey, Func<TokenUsage, bool> predicate, int timeoutMs)
     {

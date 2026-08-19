@@ -494,7 +494,11 @@ internal class MeshNodeCompilationService(
                 .Where(n => !string.IsNullOrEmpty(n.Path))
                 .Aggregate(
                     ImmutableDictionary<string, long>.Empty,
-                    (acc, n) => acc.SetItem(n.Path, n.LastModified.UtcTicks)));
+                    // One rule for both snapshots — see NodeTypeDefinition.SourceVersionOf.
+                    // A raw .LastModified.UtcTicks here records 1601 for any source with no
+                    // real timestamp, which compares equal across an edit and hides the
+                    // change from IsDirty forever (#1836).
+                    (acc, n) => acc.SetItem(n.Path, NodeTypeDefinition.SourceVersionOf(n))));
 
     /// <summary>
     /// Resolves the source set for a compile run. When the caller hands in a
@@ -1398,6 +1402,13 @@ internal class MeshNodeCompilationService(
                 AssemblyName: $"DynamicNode_{nodeName}",
                 Sources: sourcesArray,
                 SkeletonSource: skeleton,
+                // The skeleton above is generated with codeFile:null, so its `using`s are
+                // file-scoped to a tree that holds no user code. Under the per-file trees the
+                // language service needs for Monaco positions that leaves every source without the
+                // framework imports the emit path gives it by concatenation — the #1802 false FAIL.
+                // Render the same scope as `global using` so both paths agree.
+                GlobalUsingsSource: _attributeGenerator.GenerateGlobalUsingsSource(
+                    strippedSources.Select(s => (string?)s.Code)),
                 References: references,
                 ParseOptions: parseOptions,
                 CompilationOptions: compilationOptions,

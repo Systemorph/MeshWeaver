@@ -101,6 +101,8 @@ public sealed class LogIncidentIngestService(
             Severity = report.Severity,
             ExceptionType = report.ExceptionType,
             NormalizedMessage = report.NormalizedMessage,
+            NormalizedDetail = report.NormalizedDetail,
+            Variants = Math.Max(1, report.Variants),
             TopFrame = report.TopFrame,
             Namespace = report.Namespace,
             Pods = report.Pods,
@@ -189,6 +191,9 @@ public sealed class LogIncidentIngestService(
             Samples = Trim(existing.Samples.AddRange(report.Samples), options.MaxSamples),
             // A recurrence can be MORE severe than the first sighting; never downgrade.
             Severity = report.Severity > existing.Severity ? report.Severity : existing.Severity,
+            // A site fold covers as many shapes as the WIDEST window has shown it to cover — a
+            // quieter window must not make the ticket understate what it is standing in for.
+            Variants = Math.Max(existing.Variants, Math.Max(1, report.Variants)),
         };
 
         return merged with { RequestedStatus = NextRequest(merged, options, lastSeen) };
@@ -293,14 +298,23 @@ public sealed class LogIncidentIngestService(
     /// <summary>
     /// The node's display name — what an admin sees in the incident list and what the fingerprint
     /// is recognisable by. Short by design; the full message lives in the content.
+    ///
+    /// <para>🚨 The detail is part of the name, not just the exception type. Thirteen NodeTypes
+    /// parked at <c>CompileError</c> are thirteen incidents that all carry
+    /// <c>CompilationException</c>, and naming them all
+    /// "MeshNodeCompilationService: CompilationException" would put thirteen indistinguishable rows
+    /// in the incident list — the split would exist and still be unreadable (#1787).</para>
     /// </summary>
     private static string Title(LogIncident incident)
     {
-        var subject = incident.ExceptionType is { Length: > 0 } ex
-            ? ex
-            : incident.NormalizedMessage;
-        if (subject.Length > 80)
-            subject = subject[..80].TrimEnd() + "…";
+        var detail = incident.NormalizedDetail is { Length: > 0 } d ? d : incident.NormalizedMessage;
+        var subject = incident.ExceptionType is { Length: > 0 } ex && !string.Equals(ex, detail, StringComparison.Ordinal)
+            ? $"{ex} — {detail}"
+            : detail;
+        // The detail can be multi-line (a compiler's diagnostic list); a display name cannot.
+        subject = subject.ReplaceLineEndings(" ").Trim();
+        if (subject.Length > 100)
+            subject = subject[..100].TrimEnd() + "…";
         var category = incident.Category.Split('.').LastOrDefault() ?? incident.Category;
         return $"{category}: {subject}";
     }

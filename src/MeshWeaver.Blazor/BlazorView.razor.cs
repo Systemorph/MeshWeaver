@@ -605,23 +605,17 @@ public class BlazorView<TViewModel, TView> : ComponentBase, IAsyncDisposable
     /// Runs <paramref name="source"/> with the durable circuit user (<see cref="ResolveCircuitUser"/>)
     /// re-established on the HUB <see cref="AccessService"/> — the SAME instance <c>Hub.GetQuery</c> /
     /// <c>Hub.GetMeshNodeStream(path).Update()</c> read to attribute reads/writes. The identity is
-    /// resolved and switched at SUBSCRIBE (inside the <c>Observable.Using</c> resource factory) and held
-    /// for the whole subscription, so the synced-query / IIoPool hops the source fans out across all
-    /// carry it. Use to wrap any mesh READ a view subscribes after an Rx hop (picker, skill, completions).
+    /// resolved and switched at SUBSCRIBE (the <c>RunAs</c> resolver overload runs on the subscribing
+    /// thread) and held across the whole synchronous Subscribe, so the synced-query / IIoPool hops the
+    /// source fans out across capture it. Use to wrap any mesh READ a view subscribes after an Rx hop
+    /// (picker, skill, completions).
+    ///
+    /// <para>🚨 <c>RunAs</c>, never <c>Observable.Using</c> (#1790): the latter disposes the scope on
+    /// whichever thread the source terminates, which leaves the circuit's own thread switched to the
+    /// resolved user indefinitely and writes that thread's previous identity onto a foreign one.</para>
     /// </summary>
     protected IObservable<T> RunUnderCircuitUser<T>(IObservable<T> source)
-    {
-        var hubAccess = Hub.ServiceProvider.GetService<AccessService>();
-        return Observable.Using(
-            () =>
-            {
-                var user = ResolveCircuitUser();
-                return user is not null && hubAccess is not null
-                    ? hubAccess.SwitchAccessContext(user)
-                    : (IDisposable)System.Reactive.Disposables.Disposable.Empty;
-            },
-            _ => source);
-    }
+        => Hub.ServiceProvider.GetService<AccessService>().RunAs(ResolveCircuitUser, () => source);
 
     /// <summary>
     /// Writes the mesh node at <paramref name="path"/> under the durable circuit user. Use from deferred

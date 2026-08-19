@@ -1,0 +1,138 @@
+@using System.Reactive.Disposables
+@using Microsoft.FluentUI.AspNetCore.Components.Icons.Regular
+@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Graph.Configuration
+@using Memex.Portal.Shared.Settings
+@implements IDisposable
+@inject IMessageHub Hub
+@inject AccessService Access
+@inject NavigationManager Navigation
+
+@*
+    Which build — and which INSTANCE — is serving this session, and whether a newer one exists.
+    Rendered only for signed-in users; PlatformUpdateIndicator owns that gate and explains it.
+
+    All wording and the click's meaning come from PlatformUpdateChip.Describe, which is where the
+    reasoning (and the tests) live; this file is markup and wiring.
+*@
+
+<style>
+    .platform-build-chip .platform-build-chip__version {
+        font-size: 11px;
+        font-family: var(--monospace-font-family, monospace);
+        opacity: 0.75;
+        margin-inline-start: 4px;
+        white-space: nowrap;
+    }
+
+    .platform-build-chip--update .platform-build-chip__version {
+        opacity: 1;
+        font-weight: 600;
+    }
+
+    /* Narrow viewports keep the glyph — the part that says "act on me" — and drop the version text,
+       which is still on the tooltip and on the About page. */
+    @@media (max-width: 720px) {
+        .platform-build-chip .platform-build-chip__version {
+            display: none;
+        }
+    }
+</style>
+
+<FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
+              class="@(chip.IsUpdate ? "platform-build-chip platform-build-chip--update" : "platform-build-chip")"
+              Title="@chip.Tooltip" aria-label="@chip.Tooltip"
+              OnClick="@Activate">
+    @* 🚨 The glyph is UNCONDITIONAL, and that is load-bearing rather than decorative: the narrow
+       viewport rule below hides the version text, so a state with no glyph would render an empty
+       button — invisible, still clickable, and with nothing to hover for the tooltip. Keeping every
+       state glyphed means "the chip always shows something" holds by construction instead of by
+       two rules agreeing with each other. *@
+    <FluentIcon Value="@Glyph" Color="@GlyphColor" />
+    <span class="platform-build-chip__version">@chip.DisplayVersion</span>
+</FluentButton>
+
+@code {
+    private PlatformUpdateStatus status = PlatformUpdateStatus.Unknown;
+    private PlatformUpdateChip chip = null!;
+
+    // Serial, not composite: each check REPLACES the last, so a session that navigates a hundred
+    // times holds one subscription, not a hundred finished ones.
+    private readonly SerialDisposable check = new();
+
+    /// <summary>The build serving this session — the same value the About page reports.</summary>
+    private static string RunningVersion => ShippedReleaseSeed.InstalledPlatformVersion;
+
+    /// <summary>The serving process; under Kubernetes this is the pod name.</summary>
+    private static string InstanceName => Environment.MachineName;
+
+    private Icon Glyph => status.Availability switch
+    {
+        PlatformUpdateAvailability.UpdateAvailable => new Size20.ArrowCircleUp(),
+        PlatformUpdateAvailability.UpdateHeld => new Size20.PauseCircle(),
+        // Nothing to act on — so the glyph says "here is information", not "do something".
+        _ => new Size20.Info(),
+    };
+
+    private Color GlyphColor => status.Availability switch
+    {
+        PlatformUpdateAvailability.UpdateAvailable => Color.Success,
+        PlatformUpdateAvailability.UpdateHeld => Color.Warning,
+        // FillInverse, matching the settings and theme buttons this sits between: with nothing
+        // pending the chip is chrome, and colouring it would make an idle install look eventful.
+        _ => Color.FillInverse,
+    };
+
+    protected override void OnInitialized()
+    {
+        Describe();
+        Check();
+
+        // Re-check on navigation. The layout — and therefore this component — survives every SPA
+        // navigation, so without this the chip would read "as of when the tab was opened" for the
+        // whole session, and a user with a long-lived tab would never learn an update had landed.
+        // Navigation is the right trigger precisely BECAUSE Observe is one-shot: a live subscription
+        // would hold a System-impersonated read open for the lifetime of the view, which the Observe
+        // docs rule out. Each check is bounded and completes after its single emission.
+        Navigation.LocationChanged += OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) => Check();
+
+    /// <summary>
+    /// One read of the verdict. Observe reads Admin as System and lets only the verdict out, so this
+    /// renders for an ordinary user without widening any grant; every failure mode degrades to
+    /// <see cref="PlatformUpdateStatus.Unknown"/>, which still shows the running build.
+    /// </summary>
+    private void Check() =>
+        check.Disposable = PlatformUpdateStatus.Observe(Hub)
+            .Subscribe(next => InvokeAsync(() =>
+            {
+                status = next;
+                Describe();
+                StateHasChanged();
+            }));
+
+    // Lambda, not a method group: Localize is overloaded (key, and key + format args).
+    private void Describe() =>
+        chip = PlatformUpdateChip.Describe(status, RunningVersion, InstanceName, key => Access.Localize(key));
+
+    /// <summary>
+    /// Refresh means a HARD reload: this browser holds a Blazor circuit and static assets from
+    /// whenever the tab was opened, both pinned to the replica that answered then, so only a full
+    /// reload moves the session onto the instance serving now.
+    /// </summary>
+    private void Activate()
+    {
+        if (chip.Action == PlatformUpdateChipAction.Refresh)
+            Navigation.Refresh(forceReload: true);
+        else
+            Navigation.NavigateTo(GlobalSettingsNodeType.TabHref(AboutSettingsTab.TabId));
+    }
+
+    public void Dispose()
+    {
+        Navigation.LocationChanged -= OnLocationChanged;
+        check.Dispose();
+    }
+}

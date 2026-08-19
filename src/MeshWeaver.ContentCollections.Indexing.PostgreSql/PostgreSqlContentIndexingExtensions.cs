@@ -91,12 +91,18 @@ public static class PostgreSqlContentIndexingExtensions
         => sp.GetService<IConfiguration>()?.GetConnectionString("memex")
            ?? sp.GetService<NpgsqlDataSource>()?.ConnectionString;
 
+    /// <summary>
+    /// The resolve-time activation gate: a mesh database to hold the chunks, and a registered
+    /// <see cref="IEmbeddingProvider"/> to embed them.
+    ///
+    /// <para>The provider's PRESENCE is the configuration signal — <c>TryAddEmbeddingProvider</c>
+    /// registers one exactly when <c>Embedding:Endpoint</c> (plus <c>Embedding:ApiKey</c> for the cloud
+    /// default) is set, and returns null otherwise. Re-testing those two keys here was therefore
+    /// redundant for the cloud provider and WRONG for the local one: an Ollama/OpenAI-compatible
+    /// endpoint legitimately has no API key, so a correctly configured on-host deployment registered a
+    /// provider and then had indexing held inert by a key it does not use.</para>
+    /// </summary>
     private static bool IsConfigured(IServiceProvider sp)
-    {
-        var configuration = sp.GetService<IConfiguration>();
-        return !string.IsNullOrWhiteSpace(MeshConnectionString(sp))
-            && !string.IsNullOrWhiteSpace(configuration?["Embedding:Endpoint"])
-            && !string.IsNullOrWhiteSpace(configuration?["Embedding:ApiKey"])
-            && sp.GetService<IEmbeddingProvider>() is not null;
-    }
+        => !string.IsNullOrWhiteSpace(MeshConnectionString(sp))
+           && sp.GetService<IEmbeddingProvider>() is not null;
 }
