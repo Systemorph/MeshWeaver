@@ -103,14 +103,16 @@ Anything in `.cs` (e.g. the Claude Code PTY fix, the static-catalog behaviour) o
 2. **Roll the cluster to it.** Because the API server is private, run server-side via `az aks command invoke`:
 
 ```bash
-# config/manifest changes (works against the CURRENT image):
+# config/manifest changes (works against the CURRENT image). The SecretProviderClass is
+# per-environment and NOT in this repo — take it from the environment's own folder (template:
+# deploy/aks/envs/example/secretproviderclass.yaml):
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
-  --command "kubectl apply -f secretproviderclass.yaml && kubectl rollout restart deploy/memex-portal-deployment -n memex" \
-  --file deploy/aks/manifests/secretproviderclass.yaml
+  --command "kubectl apply -f secretproviderclass.yaml && kubectl rollout restart deploy/memex-portal-deployment -n <ns>" \
+  --file <env-dir>/secretproviderclass.yaml
 
 # helm upgrade (uploads the chart + values to the in-cluster run pod, which has helm):
 az aks command invoke -g <aks-resource-group> -n <aks-cluster> \
-  --command "helm upgrade memex ./helm -f ./helm/values.yaml -f values.aks.yaml -n memex" \
+  --command "helm upgrade <release> ./helm -f ./helm/values.yaml -f values.aks.yaml -n <ns>" \
   --file deploy/helm --file deploy/aks/values.aks.yaml
 ```
 
