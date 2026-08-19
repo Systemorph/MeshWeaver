@@ -54,7 +54,24 @@ public enum EventContinuationType
     /// cycle. It resolves an <see cref="IEventContinuationHandler"/> for this type from DI instead
     /// (<c>SocialExtensions.AddSocial</c> registers the LinkedIn one). With no handler registered the
     /// subscription fails loudly rather than silently doing nothing.</para></summary>
-    PublishSocialPost = 3
+    PublishSocialPost = 3,
+    /// <summary>
+    /// Run the Code node at <see cref="EventSubscription.TargetPath"/> — the general "scheduled job"
+    /// continuation. Paired with <see cref="EventSubscription.RepeatEvery"/> it is a cron entry whose
+    /// body lives in the MESH: a recurring ingest, a nightly reconcile, a periodic refresh.
+    ///
+    /// <para>🚨 <b>Why a script rather than another continuation type.</b> Every job that ships as a
+    /// continuation costs an enum value, a handler, a platform release and a redeploy to change one
+    /// line. A Code node is authored, edited and re-run in the mesh, and its output lands in an
+    /// Activity where a person can read what happened. So the SCRIPT is the imperative part and
+    /// everything driving it stays reactive — the runner posts the request and observes the reply.</para>
+    ///
+    /// <para>🚨 Repeat only what is safe to repeat. The runner cannot tell "run it again tomorrow"
+    /// from "run it again because the pod restarted", so a script armed with
+    /// <see cref="EventSubscription.RepeatEvery"/> must be idempotent. Read-and-reconcile jobs are;
+    /// anything that posts, sends or charges is not.</para>
+    /// </summary>
+    RunScript = 4
 }
 
 /// <summary>
@@ -102,9 +119,26 @@ public record EventSubscription
     public string? MatchValue { get; init; }
 
     // Timer trigger
-    /// <summary>[Timer] Fire once at (or after) this instant. A time already in the past fires on the
-    /// next startup reconcile (at-least-once, restart-safe). (Repeating/interval timers are a follow-up.)</summary>
+    /// <summary>[Timer] Fire at (or after) this instant. A time already in the past fires on the
+    /// next startup reconcile (at-least-once, restart-safe). With <see cref="RepeatEvery"/> set this
+    /// is the NEXT occurrence and the runner advances it on each fire.</summary>
     public DateTimeOffset? FireAt { get; init; }
+
+    /// <summary>
+    /// [Timer] Re-arm this long after each fire, instead of ending at <c>Fired</c> — the recurring
+    /// job (a nightly ingest, a periodic refresh). Null = the one-shot this type started as.
+    ///
+    /// <para><b>The subscription stays Pending forever by design.</b> A one-shot's terminal
+    /// <c>Fired</c> is what gates re-entry; a repeater has no terminal state, so the runner advances
+    /// <see cref="FireAt"/> by this interval and leaves it Pending. That advance is a WRITE, which is
+    /// also the durability: a repeater that fires and never records its next slot would re-fire from
+    /// the old one on the next reboot.</para>
+    ///
+    /// <para>🚨 Only for continuations that are safe to repeat. Anything irreversible — publishing to
+    /// a network, sending mail, charging a card — must stay one-shot, because "run it again tomorrow"
+    /// and "run it again because the pod restarted" are indistinguishable from in here.</para>
+    /// </summary>
+    public TimeSpan? RepeatEvery { get; init; }
 
     // NodeStatus trigger
     /// <summary>[NodeStatus] The node to watch — fire when its <see cref="StatusField"/> reaches a resting

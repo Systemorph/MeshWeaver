@@ -316,12 +316,29 @@ public sealed class EventSubscriptionRunner(
         if (!executing.TryAdd(subscription.Id, 0))
             return;
         BuildContinuation(subscription, userId)
-            .SelectMany(_ => AsSystem(() => EventSubscriptionOps.SetStatus(
-                hub, EventSubscriptionNodeType.Path(subscription.Id), EventSubscriptionStatus.Fired)))
+            // A REPEATER has no terminal state: instead of Fired it records its next slot and stays
+            // Pending. That write is the durability — a repeater that fired without recording the
+            // next occurrence would re-fire from the stale one on the next reboot, which for a
+            // nightly job means running it again every time a pod restarts.
+            .SelectMany(_ => subscription.RepeatEvery is { } every
+                ? AsSystem(() => EventSubscriptionOps.RearmTimer(
+                    hub, EventSubscriptionNodeType.Path(subscription.Id), NextOccurrence(subscription, every)))
+                : AsSystem(() => EventSubscriptionOps.SetStatus(
+                    hub, EventSubscriptionNodeType.Path(subscription.Id), EventSubscriptionStatus.Fired)))
             .Subscribe(
-                _ => logger?.LogInformation(
-                    "Event subscription {Id} fired: {Continuation} {Role} for {User} on {Target}",
-                    subscription.Id, subscription.ContinuationType, subscription.Role, userId, subscription.TargetPath),
+                // `fired` is named, not `_`: a discard here would shadow the `out _` below and bind
+                // it to this lambda's MeshNode parameter instead.
+                fired =>
+                {
+                    // The reservation is per FIRING, not per subscription: a repeater must be able to
+                    // run again, so release it once this occurrence has recorded its next slot.
+                    if (subscription.RepeatEvery is not null)
+                        executing.TryRemove(subscription.Id, out _);
+                    logger?.LogInformation(
+                        "Event subscription {Id} fired: {Continuation} {Role} for {User} on {Target}",
+                        subscription.Id, subscription.ContinuationType, subscription.Role, userId,
+                        subscription.TargetPath);
+                },
                 ex =>
                 {
                     // Release the reservation so a later pending-set emission can retry a TRANSIENT
@@ -333,6 +350,26 @@ public sealed class EventSubscriptionRunner(
                             hub, EventSubscriptionNodeType.Path(subscription.Id), EventSubscriptionStatus.Failed, ex.Message))
                         .Subscribe(_ => { }, _ => { });
                 });
+    }
+
+    /// <summary>
+    /// The next occurrence of a repeating timer: the first multiple of <paramref name="every"/> after
+    /// its previous slot that is still in the FUTURE.
+    ///
+    /// <para>Catch-up is deliberately not replayed. A nightly job whose install was down for a week
+    /// must run once when it comes back, not seven times in a row — the point of a recurring job is
+    /// the current state, and six re-runs of yesterday's ingest cost real API quota to arrive at the
+    /// same answer.</para>
+    /// </summary>
+    private static DateTimeOffset NextOccurrence(EventSubscription subscription, TimeSpan every)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var next = (subscription.FireAt ?? now) + every;
+        if (every <= TimeSpan.Zero)
+            return now + TimeSpan.FromMinutes(1);   // a nonsense interval must not become a hot loop
+        while (next <= now)
+            next += every;
+        return next;
     }
 
     /// <summary>
@@ -431,6 +468,23 @@ public sealed class EventSubscriptionRunner(
                                 meshService, userId, subscription.TargetPath!, subscription.Role!))
                             .Select(_ => m)
                         : Observable.Return(m)),
+            // The general scheduled job: run a Code node. Handled HERE rather than through the
+            // extension point because it needs nothing this assembly lacks — ExecuteScriptRequest is
+            // a contract type and the reply is observed reactively, so no module has to own it.
+            //
+            // 🚨 Observe, not Post. Post is fire-and-forget: the runner would mark the subscription
+            // Fired the instant the message left, whether the script ran, threw or was never
+            // delivered — and a nightly job that silently stopped running is exactly the failure
+            // this whole mechanism exists to make visible. Observing the reply ties the
+            // subscription's Fired/Failed to what the script actually did.
+            EventContinuationType.RunScript when subscription is { TargetPath.Length: > 0 } =>
+                AsSystem(() => hub.Observe<ExecuteScriptResponse>(
+                        new ExecuteScriptRequest(),
+                        o => o.WithTarget(new Address(subscription.TargetPath!)))
+                    .Take(1)
+                    .Timeout(TimeSpan.FromMinutes(30))
+                    .Select(_ => new MeshNode(subscription.TargetPath!))),
+
             // Continuations this assembly cannot implement — their effects live ABOVE it in the
             // reference graph (PublishSocialPost is owned by MeshWeaver.Social, which references
             // Graph). The owning module registers an IEventContinuationHandler; nothing is silently

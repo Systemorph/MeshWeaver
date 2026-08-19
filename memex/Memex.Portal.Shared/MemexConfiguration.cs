@@ -531,7 +531,12 @@ public static class MemexConfiguration
             // NodeType bake lane's). Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
             // to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
-            var persistedActivation = ModuleActivationSidecar.Read(AppContext.BaseDirectory,
+            // 🚨 The SAME root ModuleLandingService writes (ModuleRoot) — never
+            // AppContext.BaseDirectory directly. They must name one directory: a landed module
+            // read from somewhere else is simply invisible, and on a deployment whose /app is
+            // read-only the writer cannot use AppContext.BaseDirectory at all.
+            var moduleRoot = ModuleRoot.Resolve(configuration);
+            var persistedActivation = ModuleActivationSidecar.Read(moduleRoot,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
                 moduleAssemblies,
@@ -543,14 +548,14 @@ public static class MemexConfiguration
                 // BaseDirectory fallback would let a sidecar entry with a lost modules/ folder
                 // silently bind a same-named app-closure DLL instead of being skipped. Baseline
                 // entries below keep ResolveModulePath (both locations are legitimate for them).
-                name => ModuleActivationBoot.LandedModuleDllExists(AppContext.BaseDirectory, name),
+                name => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, name),
                 (module, reason) => Console.Error.WriteLine(
                     $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"));
             if (effectiveModules.Count > 0)
                 // ResolveModulePath probes the modules/<name>/ publish layout first (#1644),
                 // then falls back to the classic BaseDirectory-relative location.
                 builder.InstallAssemblies(effectiveModules
-                    .Select(MeshBuilder.ResolveModulePath)
+                    .Select(entry => MeshBuilder.ResolveModulePath(entry, moduleRoot))
                     .ToArray());
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
             // consume the pending flag so the step-10 signal reads current. Best-effort: on a
@@ -558,7 +563,7 @@ public static class MemexConfiguration
             if (persistedActivation.PendingRestart)
                 try
                 {
-                    ModuleActivationSidecar.Write(AppContext.BaseDirectory,
+                    ModuleActivationSidecar.Write(moduleRoot,
                         persistedActivation with { PendingRestart = false });
                 }
                 catch (Exception ex)
