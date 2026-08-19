@@ -9,6 +9,19 @@ allowed-tools:
   - Grep
 ---
 
+> The cluster name, resource group and namespace list are deployment identities and live in
+> the PRIVATE `Systemorph/Memex` repo — `deployments/aks/envs.json` (cluster + environments)
+> and `docs/deployments.md`. Export them once per session rather than hard-coding them here:
+>
+> ```bash
+> eval "$(gh api repos/Systemorph/Memex/contents/deployments/aks/envs.json --jq '.content' | base64 -d \
+>   | jq -r '"AKS_RG=\(.cluster.resourceGroup) AKS_CLUSTER=\(.cluster.name) NAMESPACES=\"\([.environments[].ns]|join(" "))\""')"
+> ```
+>
+> Verified to set all three (`memex-aks-rg` / `memexaks-cluster` / the three namespaces) on
+> 2026-08-19. Reading it from the source of truth also means a new environment shows up here
+> automatically instead of this file going quietly stale.
+
 # /new-deployment — stand up a new portal deployment
 
 A deployment is **one namespace** on the shared AKS cluster with its own domain, database and
@@ -27,8 +40,8 @@ Never write a runbook step from memory — read the live cluster:
 
 ```bash
 # What exists, and what each namespace actually runs
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
-  "for ns in memex memex-cloud atioz; do echo -n \"\$ns|\"; \
+az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
+  "for ns in $NAMESPACES; do echo -n \"\$ns|\"; \
    kubectl -n \$ns get deploy memex-portal-deployment -o jsonpath='{.spec.template.spec.containers[0].image}'; \
    echo -n '|'; kubectl -n \$ns get ingress -o jsonpath='{range .items[*]}{range .spec.rules[*]}{.host} {end}{end}'; echo; done" \
   --query logs -o tsv
@@ -118,7 +131,7 @@ kubectl -n <env> logs "$NEW" | grep "DynamicTypePreWarmer: warm-up complete"
 gh api -X PUT repos/Systemorph/Memex/environments/<env>
 jq -n '{ref:"main", environment:"<env>", task:"deploy", auto_merge:false, required_contexts:[],
         production_environment:true, description:"<purpose>",
-        payload:{namespace:"<env>", cluster:"memexaks-cluster", database:"<env>",
+        payload:{namespace:"<env>", cluster:"'"$AKS_CLUSTER"'", database:"<env>",
                  image:"meshweaver.azurecr.io/memex-portal-ai:<tag>"}}' \
   | gh api -X POST repos/Systemorph/Memex/deployments --input -
 # then a status carrying the live URL
