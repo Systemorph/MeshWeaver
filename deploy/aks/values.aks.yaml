@@ -46,8 +46,9 @@ secrets:
     # ---- AI provider keys ---------------------------------------------------
     # Never commit a real key. The chart emits each secret key ONLY when non-empty, so leaving
     # these empty means "don't manage / preserve whatever is set out-of-band". Inject the real
-    # AzureFoundry key (the s-meshweaver key1) at deploy via Key Vault CSI
-    # (manifests/secretproviderclass.yaml) or `--set secrets.memex_portal.AzureFoundry__ApiKey=...`.
+    # AzureFoundry key (your Foundry account's key1) at deploy via Key Vault CSI
+    # (envs/<env>/secretproviderclass.yaml — template in envs/example/) or
+    # `--set secrets.memex_portal.AzureFoundry__ApiKey=...`.
     AzureFoundry__ApiKey: ""
     # Ai__KeyProtection__MasterKey: intentionally UNSET — it is provided out-of-band, and overriding
     # it makes stored enc: provider keys undecryptable. If you DO manage it via the chart, point it
@@ -74,8 +75,11 @@ config:
     ASPNETCORE_HTTP_PORTS: "8080"
     # ---- Instance branding (per-env) ----------------------------------------
     # Large Safari bookmark / Start-Page / Add-to-Dock tile (apple-touch-icon, 180×180 PNG).
-    # This base is the Systemorph-owned memex portal → the Systemorph mark. Other envs override
-    # (e.g. prod → brand/prod-180.png) at deploy; empty leaves Safari's letter-tile fallback.
+    # This ships the PROJECT's own mark (Systemorph builds MeshWeaver — the chart's
+    # default registry is ghcr.io/systemorph too), which is why it is not a
+    # CHANGE_ME: it is a working default, not a placeholder. Override it per
+    # environment at deploy (`brand/<env>-180.png`, an asset your own deployment
+    # supplies); empty leaves Safari's letter-tile fallback.
     Portal__AppleTouchIcon: "_content/Memex.Portal.Shared/brand/systemorph-180.png"
     Deployment__Backend: "Filesystem"
     # /data holds ONLY framework caches now: DataProtection keys
@@ -121,8 +125,8 @@ config:
     # /data assembly cache BY DESIGN — so without a deploy-time bake, dynamic
     # NodeTypes recompile lazily on user requests after the pod is already
     # serving, and a type that no request happens to touch stays "no
-    # definition" until its pages hang (SocialMedia/Post on memex-cloud,
-    # 2026-07-30: every post burned the 60 s SubscribeRequest timeout all
+    # definition" until its pages hang (a production install, 2026-07-30: every
+    # post on one content type burned the 60 s SubscribeRequest timeout all
     # morning). The pre-warm sweep
     # compiles EVERY dynamic NodeType at pod start, and the readiness gate holds
     # /health red until they are built against THIS image — with the deployment's
@@ -130,7 +134,7 @@ config:
     # image keeps serving) instead of surfacing as user-facing errors.
     #
     # ✅ Gate ON. It was enabled 2026-08-02 and reverted the same day: the first
-    # gated roll on memex-cloud stalled with "7 NodeType(s) regressed on this
+    # gated roll stalled with "7 NodeType(s) regressed on this
     # image", and every one was FALSE — no CS#### diagnostic anywhere in the pod
     # log, only cross-silo subscribe timeouts from the sweep,
     #   No response received in hub cache/… within 00:01:00 for request
@@ -278,15 +282,15 @@ config:
     # Anthropic/Claude is intentionally NOT wired here — add it node-based later (a
     # ModelProvider node with the /anthropic endpoint). Key is in secrets.memex_portal
     # below (source from Key Vault via the CSI add-on). Full guide: Doc/AI/ModelProviderSetup.
-    AzureFoundry__Endpoint: "https://s-meshweaver.services.ai.azure.com/models"
+    AzureFoundry__Endpoint: "https://CHANGE_ME_foundry_account.services.ai.azure.com/models"
     AzureFoundry__Models__0: "DeepSeek-V4-Pro"
     AzureFoundry__Models__1: "DeepSeek-V3-0324"
     AzureFoundry__Models__2: "DeepSeek-V4-Flash"
-    # MoonshotAI Kimi — newest general Kimi on the s-meshweaver Foundry account
+    # MoonshotAI Kimi — newest general Kimi on the Foundry account
     # (no K3 in the catalog as of 2026-07; K2.7-Code exists for code-heavy use).
     # Deployment cap 20K TPM = the account's full Kimi-K2.6 quota.
     AzureFoundry__Models__3: "Kimi-K2.6"
-    # 🕰️ DEPRECATED tier → model keys. Open-weight DeepSeek ladder, all deployed on s-meshweaver.
+    # 🕰️ DEPRECATED tier → model keys. Open-weight DeepSeek ladder, all on one Foundry account.
     # Still read (Heavy → coding, Standard → reasoning, Light → chat, Utility → utility) so this
     # environment keeps its mapping, but they now sit BELOW the `tier` label on the model NODES —
     # label the nodes (Doc/AI/ModelTiers) and these can go.
@@ -307,7 +311,7 @@ config:
     # correct; OTEL_EXPORTER_OTLP_PROTOCOL is set explicitly for clarity.
     OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
     OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
-    # ---- Sign-in: Systemorph AAD as HOME tenant + Google + LinkedIn ---------
+    # ---- Sign-in: your AAD as HOME tenant + Google + LinkedIn ---------------
     # The portal's auth pipeline (AuthenticationBuilderExtensions) reads these
     # Authentication:* keys. Any provider with a ClientId set is offered on the
     # login page; "Microsoft" with a real TenantId pins the HOME (primary) AAD.
@@ -318,13 +322,14 @@ config:
     # it explicitly for clarity. Public host = portal.example.com.
     Authentication__Provider: "Custom"
     Authentication__EnableDevLogin: "false"
-    # -- Microsoft / Entra ID (HOME tenant = Systemorph) ----------------------
-    # TenantId MUST be the Systemorph AAD tenant GUID (NOT "common"/"organizations")
-    # so this AAD is the home directory. ClientId = the app registration's
+    # -- Microsoft / Entra ID (HOME tenant) -----------------------------------
+    # TenantId MUST be a real AAD tenant GUID (NOT "common"/"organizations")
+    # so that AAD is the home directory. ClientId = the app registration's
     # Application (client) ID. Add redirect URI https://portal.example.com/signin-microsoft
     # to that app registration. ClientSecret is in secrets.memex_portal above.
-    # Systemorph AAD home tenant (the subscription's own tenant).
-    Authentication__Microsoft__TenantId: "3a01d7ac-3330-444d-942d-975eb491b5d6"
+    # Your AAD home tenant (usually the subscription's own):
+    #   az account show --query tenantId -o tsv
+    Authentication__Microsoft__TenantId: "CHANGE_ME_aad_tenant_id"
     Authentication__Microsoft__ClientId: "CHANGE_ME_aad_application_client_id"
     # -- Google (other accounts) ----------------------------------------------
     # Redirect URI: https://portal.example.com/signin-google
@@ -346,10 +351,10 @@ config:
 #
 # The value is the `portalIdentityClientId` output of infra/main.bicep (modules/portal-identity.bicep
 # provisions the shared portal UAMI + a federated credential per namespace). The SAME client id is
-# used for EVERY portal namespace (memex, prod, memex-cloud) — one shared UAMI, one AcrPull grant.
-# Inject it at `helm upgrade` time rather than committing it: for the `memex` env put the real id in
-# the git-ignored values.deploy.yaml (see scripts/values.deploy.example.yaml) or pass
-# `--set selfUpdate.azureClientId=<portalIdentityClientId>`; for prod / memex-cloud set it in their
+# used for EVERY portal namespace — one shared UAMI, one AcrPull grant.
+# Inject it at `helm upgrade` time rather than committing it: put the real id in the git-ignored
+# values.deploy.yaml (see scripts/values.deploy.example.yaml), pass
+# `--set selfUpdate.azureClientId=<portalIdentityClientId>`, or set it in that environment's
 # git-ignored envs/<env>/values.<env>.yaml. See Doc/Architecture/DeploymentAKS → "Portal self-update".
 selfUpdate:
   azureClientId: ""   # set per-env from the portalIdentityClientId bicep output
@@ -358,8 +363,8 @@ selfUpdate:
 # portal.example.com is the company/control instance — the ONE install that gets the Instances
 # admin tab (Settings ▸ Administration ▸ Instances) and the cluster-scoped read RBAC behind it.
 # clusterRead drives BOTH: the RBAC grant and Instances__Enabled (the menu item's existence).
-# Customer/public envs (prod, memex-cloud) must NOT set this — their overlays inherit the chart
-# default (false), so the tab does not exist there at all.
+# Every other install must NOT set this — their overlays inherit the chart default (false), so the
+# tab does not exist there at all.
 instancesAdmin:
   clusterRead: true
   # In-cluster Grafana (loki-stack, `monitoring` ns) has no public host yet — set this to the
@@ -410,7 +415,7 @@ resources:
 #
 # 🚨 Until 2026-08-14 the chart consumed NEITHER: templates/memex-portal/
 # deployment.yaml hard-coded `replicas: 1`, so this value had sat here inert
-# since 2026-07-13 while memex-cloud served every request from a single pod
+# since 2026-07-13 while a production install served every request from one pod
 # whose loss was a multi-minute 503.
 replicas:
   portal: 2        # fallback when keda.enabled is false; KEDA's minReplicas owns it otherwise
@@ -448,8 +453,8 @@ keda:
 # One Azure Files "drive" per concern, mounted at an explicit path:
 #   data        -> /data            framework caches only (DP keys, asm + nuget cache)
 #   content     -> /mnt/content     the content collection (Storage__BasePath)
-#   attachments -> /mnt/attachments dedicated attachments drive (memex-cloud only —
-#                                   claimName stays empty here; its env patch adds it)
+#   attachments -> /mnt/attachments dedicated attachments drive (opt-in — claimName
+#                                   stays empty here; the env patch adds it where used)
 #   users       -> /mnt/users       co-hosted CLI configs
 persistence:
   data:
@@ -486,17 +491,17 @@ persistence:
 # is strictly sequential. The default budget (5 s × 60 = 5 min) kills the pod
 # mid-bake, on every attempt, forever.
 #
-# ⏱️ DERIVED from the MEASURED per-type cost, 2026-08-10 (production Loki, all
-# three portals on one image): ~2.4 s per NodeType, within 3% across a 10x
-# spread in mesh size — memex-cloud 237-241 types / 567 s, memex 72-81 / 179 s,
-# atioz 22-36 / 68 s.
+# ⏱️ DERIVED from the MEASURED per-type cost, 2026-08-10 (production Loki, three
+# installations on one image): ~2.4 s per NodeType, within 3% across a 10x spread
+# in mesh size — 22-36 types / 68 s at the small end, 237-241 / 567 s at the large
+# end. Per-installation figures live with the deployments they describe.
 #
-#   memex-cloud (largest)  ~240 types x 2.4 s  ~= 570 s  (~10 min)
+#   largest measured       ~240 types x 2.4 s  ~= 570 s  (~10 min)
 #   + plain cold boot      schema provisioning + static import
 #   worst realistic startup                    ~= 870 s  (~15 min)
 #   x2 headroom             10 s x 180          = 1800 s (30 min)
 #
-# Covers ~750 types, 3x memex-cloud's current count, so growth has room.
+# Covers ~750 types, 3x the largest measured mesh, so growth has room.
 #
 # 🚨 Was 10 × 1080 = 3 h until 2026-08-10, sized from a "~90 s per NodeType"
 # estimate measurement showed to be 37x too high. A stuck bake now trips this in
