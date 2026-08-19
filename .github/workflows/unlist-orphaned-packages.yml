@@ -1,0 +1,93 @@
+name: Unlist orphaned NuGet packages
+
+# A module that LEAVES the platform stops being packed — but everything it already published
+# stays on nuget.org, LISTED: it keeps appearing in search and in `dotnet add package`, offered
+# to consumers as current while nothing builds or patches it any more. This is how that set is
+# retired.
+#
+# 🚨 The set is DERIVED, never hand-kept: (published under the MeshWeaver prefix) MINUS (what
+# this tree still packs). So it stays correct on its own as further modules move out — #1882
+# (the fourteen drivers) and #1752 (Cosmos/Snowflake) need no edit here.
+#
+# 🚨 REPORT BY DEFAULT. `apply` must be set explicitly AND `confirm` must read UNLIST. The
+# derivation is a subtraction, so any bug in "what this tree packs" fails toward unlisting live
+# packages — during development one such bug computed "all 90". Report-only is what caught it.
+#
+# `dotnet nuget delete` UNLISTS on nuget.org; it does not erase. Existing pins keep resolving by
+# exact version, and a listing can be restored from the nuget.org UI. That reversibility is what
+# makes this safe to automate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually unlist (unchecked = report only)"
+        type: boolean
+        default: false
+      confirm:
+        description: "Type UNLIST to confirm when apply is checked"
+        type: string
+        default: ""
+      keep:
+        description: "Space-separated package ids to spare even when orphaned"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  unlist:
+    name: Report or unlist orphaned packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.x'
+
+      # The regression checks for the two ways the "what do we pack" half has silently lied,
+      # both of which failed toward unlisting a LIVE package. Gating the run on them means a
+      # broken detector cannot reach the apply step at all.
+      - name: Self-test the detector
+        run: python3 scripts/orphaned-nuget-packages.py --self-test
+
+      - name: Refuse an unconfirmed apply
+        if: inputs.apply && inputs.confirm != 'UNLIST'
+        run: |
+          echo "::error::apply was requested but confirm did not read UNLIST — refusing. Re-run and type UNLIST to confirm."
+          exit 1
+
+      - name: Report the orphaned set
+        run: |
+          set -euo pipefail
+          keep_args=""
+          for id in ${{ inputs.keep }}; do keep_args="$keep_args --keep $id"; done
+          python3 scripts/orphaned-nuget-packages.py --root . $keep_args | tee report.txt
+          {
+            echo "### Orphaned NuGet packages"
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Unlist them
+        if: inputs.apply && inputs.confirm == 'UNLIST'
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NUGET_API_KEY:-}" ]; then
+            echo "::error::secrets.NUGET_PAT is not provisioned — the unlist cannot run. A step that cannot run must fail RED, never pass quietly."
+            exit 1
+          fi
+          keep_args=""
+          for id in ${{ inputs.keep }}; do keep_args="$keep_args --keep $id"; done
+          python3 scripts/orphaned-nuget-packages.py --root . --apply $keep_args \
+            | tee applied.txt
+          {
+            echo "### Unlisted"
+            echo '```'
+            cat applied.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
