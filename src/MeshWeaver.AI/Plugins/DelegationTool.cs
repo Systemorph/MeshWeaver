@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
@@ -202,9 +203,58 @@ public static class DelegationTool
             var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var sb = new StringBuilder();
 
+            // Everything this call HOLDS while it waits: the delegation-event subscription, the
+            // sub-thread result subscription, the sub-thread launch, and the cancellation
+            // registration below. Released by whichever terminal fires first, so a delegation that
+            // is cancelled leaves nothing subscribed to a node stream whose hub is going away.
+            var pending = new CompositeDisposable();
+
+            // Settle ONCE and release what the wait was holding. Every resolution path goes through
+            // here — a bare tcs.TrySet* would resolve the caller and leave the subscriptions live.
+            void Settle(Func<bool> set)
+            {
+                if (set()) pending.Dispose();
+            }
+
+            // 🚨 THE ROUND'S CANCELLATION MUST REACH THIS TASK. Nothing else can end the wait
+            // promptly: the reactive path gates on a Dispatched event and then on the sub-thread
+            // reaching a terminal state (backstopped only by WaitForDelegationResult's 10-MINUTE
+            // timeout), and the legacy chunk-aggregate path has no backstop at all. So a round
+            // parked in delegate_to_agent used to be UNCANCELLABLE — the Stop button did nothing,
+            // and teardown was worse:
+            //
+            // The whole round runs as a leaf on the bounded IoPoolNames.Ai pool and holds one gate
+            // permit for its entire duration. IoPool.Drain() — the join every teardown orchestrator
+            // performs before disposing the service scope and unloading collectible node ALCs —
+            // cancels the pool token and then re-acquires every permit. #1879 made the ROUND observe
+            // that token, but a round parked inside this Task never reaches the code that would
+            // notice: the parked continuation holds the permit, Drain sits out its full 30 s
+            // DrainTimeout, and teardown then proceeds over live code — the use-after-unload SIGSEGV
+            // precondition Drain exists to rule out.
+            //
+            // Observed as DelegationSubThreadUsageTest failing in TEARDOWN with "teardown DIRTY —
+            // 1 pooled I/O leaf(s) still running" after a ~32 s dispose, every assertion in the test
+            // body having passed (#1863; CI run 32271833370). That test waits on the SUB-thread's
+            // usage satellite, which RecordUsage writes as an independent side effect deliberately
+            // NOT chained before the round's terminal write — so it can legitimately finish while
+            // the PARENT round is still parked here.
+            //
+            // Cancelling (rather than resolving an "Error: …" string) is the honest terminal: it is
+            // what ThreadExecution's `catch (OperationCanceledException) when (executionCts ||
+            // poolCt)` classifies as a graceful shutdown/stop, so the round unwinds, releases its
+            // permit, and writes Status=Cancelled instead of a false #147 streaming timeout.
+            // Pinned by DelegationCancellationTest.
+            pending.Add(cancellationToken.Register(() =>
+            {
+                logger?.LogInformation(
+                    "Delegation to {AgentName} cancelled before the sub-thread finished — unwinding the tool call",
+                    agentName);
+                Settle(() => tcs.TrySetCanceled(cancellationToken));
+            }));
+
             if (delegationEvents is not null && workspace is not null)
             {
-                delegationEvents
+                pending.Add(delegationEvents
                     .Where(e => e.Phase == MeshWeaver.AI.Delegation.DelegationLifecycle.Dispatched
                              || e.Phase == MeshWeaver.AI.Delegation.DelegationLifecycle.Failed)
                     .Take(1)
@@ -218,8 +268,8 @@ public static class DelegationTool
                         {
                             logger?.LogWarning(
                                 "Delegation FAILED to start: callId={CallId} — {Error}", evt.CallId, evt.Error);
-                            tcs.TrySetResult(
-                                $"Error: delegation to {agentName} failed to start — {evt.Error}.");
+                            Settle(() => tcs.TrySetResult(
+                                $"Error: delegation to {agentName} failed to start — {evt.Error}."));
                             return;
                         }
                         var subThreadPath = evt.SubThreadPath;
@@ -246,7 +296,7 @@ public static class DelegationTool
                         // 2026-06-26 prod wedge: a stuck sub-thread init resolved as
                         // empty success while the wedged sub-hub stormed path-resolution
                         // until the portal GC-thrashed and liveness wedged).
-                        WaitForDelegationResult(
+                        pending.Add(WaitForDelegationResult(
                                 workspace.GetMeshNodeStream(subThreadPath)
                                     // ContentAs (not `Content as`): a degraded JsonElement
                                     // (unresolved $type) LOGS loud here instead of silently
@@ -264,7 +314,7 @@ public static class DelegationTool
                                     logger?.LogInformation(
                                         "Sub-thread {SubPath} resolved: result len={Len}",
                                         subThreadPath, result.Length);
-                                    tcs.TrySetResult(result);
+                                    Settle(() => tcs.TrySetResult(result));
                                 },
                                 ex =>
                                 {
@@ -274,10 +324,10 @@ public static class DelegationTool
                                     logger?.LogWarning(ex,
                                         "Sub-thread {SubPath} result stream faulted unexpectedly",
                                         subThreadPath);
-                                    tcs.TrySetResult(
-                                        $"Error: delegation to {agentName} failed — {ex.Message}.");
-                                });
-                    });
+                                    Settle(() => tcs.TrySetResult(
+                                        $"Error: delegation to {agentName} failed — {ex.Message}."));
+                                }));
+                    }));
             }
 
             // Pure Subscribe — executeAsync now returns IObservable<string> directly
@@ -294,15 +344,15 @@ public static class DelegationTool
             // for every MoveNextAsync — if that's the grain scheduler, every sub-thread
             // continuation posts back through it and wedges the grain. Hop the Subscribe
             // to ThreadPool so the entire drain runs free of the caller's context.
-            executeAsync(agentName, task, context, cancellationToken)
+            pending.Add(executeAsync(agentName, task, context, cancellationToken)
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 chunk => sb.Append(chunk),
                 ex =>
                 {
                     logger?.LogError(ex, "Delegation to {AgentName} failed", agentName);
-                    if (ex is OperationCanceledException) tcs.TrySetCanceled(cancellationToken);
-                    else tcs.TrySetException(ex);
+                    if (ex is OperationCanceledException) Settle(() => tcs.TrySetCanceled(cancellationToken));
+                    else Settle(() => tcs.TrySetException(ex));
                 },
                 () =>
                 {
@@ -319,13 +369,16 @@ public static class DelegationTool
                     // delegationEvents/workspace) resolves from chunks here.
                     if (delegationEvents is not null && workspace is not null)
                         return;
-                    if (tcs.TrySetResult(sb.ToString()))
+                    var aggregated = sb.ToString();
+                    Settle(() =>
                     {
+                        if (!tcs.TrySetResult(aggregated)) return false;
                         logger?.LogInformation(
                             "Delegation to {AgentName} completed via chunk-aggregate fallback (len={Len})",
-                            agentName, sb.Length);
-                    }
-                });
+                            agentName, aggregated.Length);
+                        return true;
+                    });
+                }));
 
             return tcs.Task;
         }
