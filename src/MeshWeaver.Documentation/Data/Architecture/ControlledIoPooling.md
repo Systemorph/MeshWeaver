@@ -296,6 +296,48 @@ Why this is deadlock-free, point by point: the enumerator runs on a **pool** Thr
 
 ---
 
+## 🚨 A tool call runs INSIDE the leaf — so its `Task` must observe the token
+
+The round in the previous section holds **one gate permit for its whole duration**, and a tool call
+happens *inside* that `await foreach`. So the tool's `Task<string>` is not a detail of the agent
+loop — it is the thing standing between `Drain()` and a real join.
+
+Agent tools are `Task`-returning by contract (`AIFunctionFactory` needs a Task-returning delegate),
+and the usual shape bridges an observable to it with a `TaskCompletionSource`. That bridge is the
+one sanctioned Task boundary here — but **the token that is bound into the tool's
+`CancellationToken` parameter must be able to settle it.** It is the round's token: linked to the
+user's Stop (`executionCts`) *and* to the pool token that `IoPool.Drain()` cancels.
+
+```csharp
+var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+// Everything the wait holds — subscriptions AND the cancellation registration — in one bag,
+// released by whichever terminal fires first.
+var pending = new CompositeDisposable();
+void Settle(Func<bool> set) { if (set()) pending.Dispose(); }
+
+pending.Add(cancellationToken.Register(() => Settle(() => tcs.TrySetCanceled(cancellationToken))));
+pending.Add(source.Subscribe(r => Settle(() => tcs.TrySetResult(r)), …));
+return tcs.Task;
+```
+
+**Why a timeout is not a substitute.** `delegate_to_agent` had a 10-minute backstop on one of its
+two completion paths and none on the other. Ten minutes is 20× the 30 s `DrainTimeout`, so from
+teardown's point of view a backstop that generous is indistinguishable from no exit at all: the
+parked continuation keeps its permit, `Drain()` sits out its budget, reports a leaked leaf, and the
+scope is disposed (and collectible node ALCs unloaded) over live code. The user-visible half of the
+same defect is that **Stop does nothing** — the round is parked in a Task the Stop cannot reach.
+
+Cancel rather than resolve an error string: `ThreadExecution`'s
+`catch (OperationCanceledException) when (executionCts.IsCancellationRequested || poolCt.IsCancellationRequested)`
+classifies that as the graceful shutdown/stop it is, so the round settles `Cancelled` instead of
+writing a false "#147 streaming exceeded the maximum round duration" into the user's response cell.
+
+Pinned by `DelegationCancellationTest` (unit) and `DelegationDrainJoinsParkedToolCallTest`
+(integration — a delegation that never resolves, asserting `DrainAll() == 0`), the sibling of
+`AiPoolDrainJoinsRoundTest` for a round parked on the model call.
+
+---
+
 ## Scope — storage and Postgres are pooled too
 
 Earlier guidance carved storage and Postgres out of the pool and left them on plain `Observable.FromAsync`. **That carve-out is rescinded — there is no exemption.** `FromAsync` is never tolerated (see the absolute rule above), so storage / file-system / Postgres leaves go through `IIoPool` like everything else.
