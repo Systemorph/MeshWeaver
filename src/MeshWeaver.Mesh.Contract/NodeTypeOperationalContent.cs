@@ -65,7 +65,17 @@ public static class NodeTypeOperationalContent
         "latestAssemblyPath",
         "compiledSources",
         "currentSourceVersions",
+        // #1834 — the adopter's REQUEST that the owner stamp compiledSources from its own
+        // currentSourceVersions. Operational for the same reason both of those are, and for one
+        // sharper one: an authored value would ask the owner to re-stamp a compile's source
+        // snapshot from the live set, silently suppressing a needed rebuild.
+        "requestedSourceStampAt",
         "compiledFrameworkVersion",
+        // #1793 — the inputs the standing FAILURE verdict was formed from. Operational for the
+        // same reason compiledFrameworkVersion is, and for one sharper one: an authored token that
+        // happened to match this deployment's live inputs would SUPPRESS the one automatic retry a
+        // never-compiled failure gets. Stripped on export, preserved from the live node on import.
+        "failedBuildInputs",
     };
 
     /// <summary>

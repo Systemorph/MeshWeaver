@@ -372,9 +372,9 @@ A `SynchronizationStream.OnNext` that unconditionally stamps `ImpersonateAsHub(H
 
 ### 🚨 An impersonation scope must not ESCAPE the operation it was opened for
 
-`accessService.RunAsSystem(work)` — **not** a hand-written `Observable.Using(access.ImpersonateAsSystem, _ => work)` — wherever the scoped observable is **returned to a caller**.
+`accessService.RunAsSystem(work)` — **not** a hand-written `Observable.Using(access.ImpersonateAsSystem, _ => work)` — at **every** site, whether the scoped observable is returned to a caller or subscribed on the spot.
 
-The hand-written idiom is correct for the work itself and leaks everywhere after it:
+The hand-written idiom is correct for the work itself and leaks in two directions at once — forwards onto what the subscriber composes, and BACKWARDS onto the thread that subscribed:
 
 ```csharp
 // ❌ the scope escapes: Rx forwards OnNext to the subscriber BEFORE Using disposes its resource,
@@ -392,11 +392,33 @@ Because those primitives also **re-stamp** the captured identity around their ow
 
 **It is an authorization concern, not only an audit one.** `AccessControlPipeline.HandleGetPermission` carries the scar: `SecurityService`'s bootstrap-time system scope leaked past its using-block onto the action-block thread, and trusting the ambient there returned `Permission.All` for **every** caller, anonymous included. That call site defends itself by resolving the identity explicitly; `RunAsSystem` fixes the class at the source so the next one does not have to know Rx's disposal order.
 
+#### …and the other direction: the SUBSCRIBING thread keeps the identity (#1790)
+
+Impersonation is an `AsyncLocal` store/restore pair, so both halves must land on ONE logical flow. `Observable.Using` runs its resource factory on the **subscribing** thread and disposes the resource when the inner observable **terminates** — for a cross-hub request/response, the owning hub's response thread. Nothing ever disposes it on the subscriber, so:
+
+```csharp
+// ❌ opens on THIS thread, closes on the hub's response thread
+Observable.Using(access.ImpersonateAsSystem, _ => hub.Observe(request)).Subscribe(...);
+// …everything after this line on this thread runs as system-security
+```
+
+Measured consequences, all silent:
+
+- **The auth bootstrap.** `UserContextMiddleware.ValidateTokenViaHub` subscribes on the ASP.NET **request** thread. The latch left the request running with `Permission.All`, and `InvokeAsync`'s `existing.Email == userContext.Email` reuse branch then adopted the System context as the caller's own.
+- **A script run.** `ActivityLogLogger`'s first publish is issued from the script's own thread; the latch made the rest of the script System, and a `--render` export resolved embedded areas the submitting user may not read.
+
+`RunAsSystem` / `RunAsHub` / `RunAs` open the scope at Subscribe and close it on the way **out of that same Subscribe**. That still covers the work: everything a cold pipeline does eagerly happens inside `Subscribe` — the factory runs, the primitives eager-capture the identity, the post is stamped, and any scheduled continuation captures the `ExecutionContext` as it stands right then. A captured `ExecutionContext` is an immutable snapshot, so restoring the subscribing flow afterwards cannot un-elevate work already scheduled.
+
+🚨 `ContainIdentity` does **not** close this half — it restores around NOTIFICATIONS, never around the Subscribe that opened the scope. Where the capture is genuinely synchronous, a plain `using` around the call **and its `Subscribe`** is equally correct (`ActivityLogLogger`).
+
+The second half of the leak — the caller's *previous* identity being written onto the terminating thread, which is an identity **injection** into a hub action block, not a cleanup — is closed inside `AccessService` itself: a scope's restore is thread-affine, so a dispose on a flow that never carried its store writes nothing. `ImpersonationScopeSiteRatchetGuard` + `test/ImpersonationScopeSites.allow` keep the inventory of sites still written the old way from growing.
+
 | API | Use it for |
 |---|---|
-| `access.RunAsSystem(work)` | A system read/write whose result a caller composes on. Enters the scope at Subscribe (so the cold work is covered), delivers every notification under the **subscriber's** identity. |
+| `access.RunAsSystem(work)` | A system read/write, returned to a caller or subscribed on the spot. Enters the scope at Subscribe (so the cold work is covered), LEAVES it on the way out of that Subscribe, and delivers every notification under the **subscriber's** identity. |
 | `access.RunAsHub(hub, work)` | The same seal for a hub identity. |
-| `source.ContainIdentity(access)` | Sealing an **already-composed** chain — several system calls where the caller builds on the LAST one's emission. |
+| `access.RunAs(identity, work)` / `access.RunAs(resolver, work)` | The same seal for an explicit identity the caller carries — an export rendering as the requesting user, a Blazor view re-establishing the durable circuit user. The resolver overload reads the identity on the subscribing thread. |
+| `source.ContainIdentity(access)` | Sealing an **already-composed** chain — several system calls where the caller builds on the LAST one's emission. Forward direction only. |
 
 🚨 **It never invents an identity.** What is restored is exactly what was ambient at Subscribe: a real user for a user-driven flow, `system-security` for a genuinely system-initiated one, and **nothing at all** when the subscriber had no identity — so a background worker that never had a user is not fail-closed by adopting it. The only behaviour that changes is the defect: a caller who *had* an identity, silently continuing as System.
 

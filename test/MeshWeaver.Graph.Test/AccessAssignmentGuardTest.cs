@@ -335,4 +335,94 @@ public class AccessAssignmentGuardTest
             Roles = [new RoleAssignment { Role = "" }, new RoleAssignment { Role = "Admin", Denied = true }]
         }).Should().BeFalse();
     }
+
+    // ─────────────── SYSTEM-OWNED means ONE-WAY, not "has a _GitSync" ───────────────
+
+    private static MeshNode SyncConfig(bool? twoWay) => new("_GitSync", "Deployments")
+    {
+        NodeType = "GitHubSyncConfig",
+        Content = twoWay is null
+            ? System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                """{"$type":"GitHubSyncConfig","repositoryUrl":"https://github.com/o/r"}""")
+            : System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                $$"""{"$type":"GitHubSyncConfig","repositoryUrl":"https://github.com/o/r","twoWay":{{(twoWay.Value ? "true" : "false")}}}"""),
+    };
+
+    /// <summary>No sync at all — an ordinary space, owned by whoever created it.</summary>
+    [Fact]
+    public void NoSyncConfig_IsNotSystemOwned()
+        => Assert.False(AccessAssignmentGuard.IsSystemOwned(null, null));
+
+    /// <summary>
+    /// A ONE-WAY sync IS system-owned: the repo overwrites the live node on every sync, so a write
+    /// by anyone but the importer is silently reverted.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]     // absent → the documented default, which is one-way
+    public void OneWaySync_IsSystemOwned(bool? twoWay)
+        => Assert.True(AccessAssignmentGuard.IsSystemOwned(SyncConfig(twoWay), null));
+
+    /// <summary>
+    /// 🚨 A BIJECTIVE sync is NOT system-owned. With twoWay the server copy is preserved and
+    /// committed back, so the mesh nodes are the working copy and the people editing them must be
+    /// able to write. Measured on memex.systemorph.com 2026-08-18: `Deployments` was configured
+    /// twoWay:true and its own skill documented UI editing as first-class, yet granting a second
+    /// person Editor was refused — the only account that could use the feature was the one whose
+    /// grant predated the guard.
+    /// </summary>
+    [Fact]
+    public void BijectiveSync_IsNotSystemOwned()
+        => Assert.False(AccessAssignmentGuard.IsSystemOwned(SyncConfig(true), null));
+
+    /// <summary>
+    /// The whole point, end to end: the same Editor grant that a one-way sync refuses is ALLOWED
+    /// on a bijective one.
+    /// </summary>
+    [Fact]
+    public void EditorGrant_IsRefusedOnOneWay_AndAllowedOnBijective()
+    {
+        var node = GrantOf("Deployments/_Access/sglauser_Access", "sglauser", "Editor");
+
+        Assert.True(AccessAssignmentGuard.IsForbiddenOnSystemOwned(
+            node, Content(node),
+            AccessAssignmentGuard.IsSystemOwned(SyncConfig(false), null), out var reason));
+        Assert.Contains("SYSTEM-OWNED", reason);
+
+        Assert.False(AccessAssignmentGuard.IsForbiddenOnSystemOwned(
+            node, Content(node),
+            AccessAssignmentGuard.IsSystemOwned(SyncConfig(true), null), out _));
+    }
+
+    /// <summary>
+    /// Reading the flag must survive every shape the config arrives in — typed on its owning hub,
+    /// JsonElement from persistence. A shape test that missed would read a bijective config as
+    /// one-way and reinstate the refusal.
+    /// </summary>
+    [Fact]
+    public void TwoWay_IsReadFromAnyContentShape()
+    {
+        var fromJson = SyncConfig(true);
+        Assert.True(AccessAssignmentGuard.IsTwoWay(fromJson, null));
+
+        // The anonymous-object shape a node builder produces, serialized as its concrete type.
+        var typed = new MeshNode("_GitSync", "Deployments")
+        {
+            NodeType = "GitHubSyncConfig",
+            Content = new { twoWay = true, repositoryUrl = "https://github.com/o/r" },
+        };
+        Assert.True(AccessAssignmentGuard.IsTwoWay(typed, null));
+    }
+
+    /// <summary>An unreadable or contentless config keeps the space PROTECTED — fail closed.</summary>
+    [Fact]
+    public void UnreadableConfig_FailsClosed()
+    {
+        Assert.False(AccessAssignmentGuard.IsTwoWay(null, null));
+        var noContent = new MeshNode("_GitSync", "Deployments") { NodeType = "GitHubSyncConfig" };
+        Assert.False(AccessAssignmentGuard.IsTwoWay(noContent, null));
+        Assert.True(AccessAssignmentGuard.IsSystemOwned(noContent, null),
+            "a config we cannot read must leave the space system-owned, never open it up");
+    }
+
 }

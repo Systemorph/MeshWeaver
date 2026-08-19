@@ -75,8 +75,9 @@ public partial class CSharpFileParser : IFileFormatParser
         // node (still CodeConfiguration content, still folded into the parent compile).
         var nodeType = metadata.GetValueOrDefault("NodeType") ?? "Code";
 
-        var fileInfo = new FileInfo(filePath);
-        var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero);
+        // Never adopt 1601 for a file that is not there — see FileTimestamps. These nodes are a
+        // NodeType's COMPILE INPUTS, so a stamp that cannot change is what freezes its assembly.
+        var lastModified = FileTimestamps.ObservedAt(filePath);
 
         var node = new MeshNode(nodeId, ns)
         {

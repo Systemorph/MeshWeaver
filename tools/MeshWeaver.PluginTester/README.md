@@ -48,3 +48,41 @@ empty in production, so that test — not the speed — is the point. See
 The framework build identity resolves from the `meshweaver-surface.manifest` packed beside the
 binaries — equal by construction with the portals' identity (see
 `Doc/Architecture/CiContentBake`), which is what makes the bundles this tool produces adoptable.
+
+## Exit codes — and why nothing may throw out of `Main`
+
+| code | meaning |
+|---|---|
+| `0` | green |
+| `1` | the gate ran and something failed (or an allow entry went stale) |
+| `2` | bad usage / bad configuration — an unknown argument, an option with no value, an `--allow` path that does not exist or does not parse |
+| `70` | an unanticipated failure; the whole exception is printed above it |
+
+🚨 **An exception must never escape `Main` (#1741).** Every consumer runs this binary as a
+container's PID 1 (`docker run … --entrypoint /app/mw-plugin-test`). There, an unhandled exception
+does not end the process — the runtime prints the trace and calls `abort()`, whose SIGABRT the
+kernel **discards** for a PID-namespace init with the default disposition (`SIGNAL_UNKILLABLE`);
+`abort()` falls through to its trap instruction, the runtime's SIGTRAP handler returns to the
+instruction that trapped, and the main thread re-traps forever. Measured 2026-08-17: two containers
+"Up" 36 and 57 minutes at ~100% CPU each, whose entire output was one `FileNotFoundException`
+printed in their first second. On CI that reads as a **hang**, burning the job's whole timeout and
+reporting nothing about the bad argument that caused it.
+
+So every failure becomes a message plus an exit code, `Program.cs` carries a top-level guard for the
+ones nobody anticipated, and the workflows pass **`docker run --init`** — which covers what a
+`catch` cannot reach (a stack overflow, an OOM abort, an unhandled throw on a background thread).
+`StartupFailureProcessTest` pins all of this on the real process, with a bounded wait: an unbounded
+one would reproduce the bug instead of catching it.
+
+## `--allow` — a MISSING ratchet is a configuration error, not an empty one
+
+`--allow <file>` names the known-debt ratchet. A path that does not exist is refused (exit `2`) with
+one actionable line rather than read as an empty list. Substituting an empty list would be the
+*stricter* verdict — with no entries every failure is a new failure, so it could never turn a red run
+green — but it would make the gate's own configuration unverifiable: `known-debt allowlist: 0
+entr(ies)` would then mean either "the ratchet is empty" or "the gate never found the ratchet you
+passed", and nothing in the run could tell those apart. That is the shape the node-repo CI policy
+exists to forbid: *a gate that cannot read its input must not look like a gate that passed.*
+
+An empty ratchet has two honest spellings — an **empty file** at that path, or **omitting `--allow`**
+(which the reusable `node-repo-gate.yml` already does when a repo configures no allow file).

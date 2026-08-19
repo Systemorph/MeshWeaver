@@ -494,7 +494,11 @@ internal class MeshNodeCompilationService(
                 .Where(n => !string.IsNullOrEmpty(n.Path))
                 .Aggregate(
                     ImmutableDictionary<string, long>.Empty,
-                    (acc, n) => acc.SetItem(n.Path, n.LastModified.UtcTicks)));
+                    // One rule for both snapshots — see NodeTypeDefinition.SourceVersionOf.
+                    // A raw .LastModified.UtcTicks here records 1601 for any source with no
+                    // real timestamp, which compares equal across an edit and hides the
+                    // change from IsDirty forever (#1836).
+                    (acc, n) => acc.SetItem(n.Path, NodeTypeDefinition.SourceVersionOf(n))));
 
     /// <summary>
     /// Resolves the source set for a compile run. When the caller hands in a

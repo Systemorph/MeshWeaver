@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Globalization;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -241,6 +242,9 @@ public static class LayoutClientExtensions
     /// <paramref name="conversion"/> when provided, or the hub's JSON serializer and built-in
     /// type coercion otherwise. Handles <see cref="System.Text.Json.JsonElement"/>,
     /// <see cref="System.Text.Json.Nodes.JsonObject"/>, strings, and numeric types.
+    /// A raw string is read tolerantly — enums case-insensitively, numerics with a CSS unit suffix
+    /// stripped and the invariant culture — and an unreadable one yields <paramref name="defaultValue"/>
+    /// rather than throwing out of the render.
     /// </summary>
     /// <typeparam name="T">The target type to produce.</typeparam>
     /// <param name="hub">The hub whose JSON serializer options are used for deserialization.</param>
@@ -269,7 +273,7 @@ public static class LayoutClientExtensions
             JsonNode node => node.Deserialize<T>(hub.JsonSerializerOptions),
             // ReSharper restore ExpressionIsAlwaysNull
             T t => t,
-            string s => ConvertString<T>(s),
+            string s => hub.ConvertString(s, defaultValue),
             _ => ConvertNullableOrNumericValue(value, defaultValue)
         };
     }
@@ -422,25 +426,148 @@ public static class LayoutClientExtensions
         return s != null;
     }
 
-    private static T ConvertString<T>(string s)
+    /// <summary>
+    /// Parses a raw string binding value into <typeparamref name="T"/>. TOTAL by design: every form the
+    /// layout layer legitimately emits (a mis-cased enum literal, a CSS length) converts, and anything
+    /// genuinely unreadable degrades to <paramref name="defaultValue"/> instead of throwing.
+    /// </summary>
+    private static T? ConvertString<T>(this IMessageHub hub, string s, T? defaultValue)
     {
         var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+
+        // Case-INSENSITIVE, mirroring the enum branch of GetDataBoundValue above — this is the same fix,
+        // on the sibling path that was missed. The lowercase form is not a mistake to tolerate, it is the
+        // DOCUMENTED one: Stack.md's configuration table lists `"start"`, `"center"`, `"end"` for
+        // WithHorizontalAlignment/WithVerticalAlignment while the CLR members are PascalCase, so a bare
+        // (case-sensitive) Enum.Parse rejects exactly what the docs tell an author to write — issue #1658,
+        // HorizontalAlignment "center" in Area Play/5.
         if (targetType.IsEnum)
-            return (T)Enum.Parse(targetType, s);
-        return Type.GetTypeCode(targetType) switch
+            return Enum.TryParse(targetType, s, ignoreCase: true, out var parsedEnum)
+                ? (T)parsedEnum!
+                : Unreadable(hub, s, defaultValue);
+
+        // The skin properties carrying sizes are `object?`, and every example in the framework's own docs
+        // fills them with a CSS length — Stack.md lists `"8px"`, `"1rem"`, `"16px"` for WithVerticalGap /
+        // WithHorizontalGap — while the Blazor view binds them into `int?` (LayoutStackView's
+        // VerticalGap/HorizontalGap, px-valued for FluentStack). So a bare int.Parse throws on the
+        // documented call site — issue #1657, "8px" in Area Play/4. Strip the unit and read the magnitude.
+        //
+        // No unit CONVERSION happens: there is no root font size and no containing box on this path, so
+        // "1.5rem" yields 1.5 rather than a guessed 24. px is the unit every framework example uses and the
+        // one these numeric slots are already denominated in; the other units are accepted so a
+        // hand-authored node degrades to a plausible number instead of to nothing.
+        var number = StripCssUnit(s);   // a span into s — no allocation
+
+        // Parse INVARIANT, never CurrentCulture. These strings arrive off the wire as JSON or CSS, where
+        // "1.5" always means one-and-a-half; `double.Parse("1.5")` on a comma-decimal thread reads 15.
+        object? converted = Type.GetTypeCode(targetType) switch
         {
-            TypeCode.Int32 => (T)(object)int.Parse(s),
-            TypeCode.Double => (T)(object)double.Parse(s),
-            TypeCode.Single => (T)(object)float.Parse(s),
-            TypeCode.Boolean => (T)(object)bool.Parse(s),
-            TypeCode.Int64 => (T)(object)long.Parse(s),
-            TypeCode.Int16 => (T)(object)short.Parse(s),
-            TypeCode.Byte => (T)(object)byte.Parse(s),
-            TypeCode.Char => (T)(object)char.Parse(s),
-            TypeCode.DateTime => (T)(object)DateTime.Parse(s),
-            _ => throw new InvalidOperationException($"Cannot convert {s} to {typeof(T)}")
+            TypeCode.Int32 => TryReadIntegral(number, int.MinValue, int.MaxValue, out var i32) ? (object)(int)i32 : null,
+            TypeCode.Int64 => TryReadIntegral(number, long.MinValue, long.MaxValue, out var i64) ? (object)i64 : null,
+            TypeCode.Int16 => TryReadIntegral(number, short.MinValue, short.MaxValue, out var i16) ? (object)(short)i16 : null,
+            TypeCode.Byte => TryReadIntegral(number, byte.MinValue, byte.MaxValue, out var u8) ? (object)(byte)u8 : null,
+            TypeCode.Double => double.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out var dbl) ? dbl : null,
+            TypeCode.Single => float.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out var flt) ? flt : null,
+            TypeCode.Boolean => bool.TryParse(s, out var b) ? b : null,
+            TypeCode.Char => s.Length == 1 ? s[0] : null,
+            TypeCode.DateTime => DateTime.TryParse(s, out var dt) ? dt : null,
+            _ => null
         };
 
+        return converted is null ? Unreadable(hub, s, defaultValue) : (T)converted;
+    }
+
+    /// <summary>
+    /// Returns <paramref name="s"/> with a trailing CSS unit removed ("8px" → "8", "-4px" → "-4",
+    /// "1.5rem" → "1.5", "50%" → "50"), or unchanged when it carries none. Stays a span the whole way —
+    /// the number is handed straight to the span TryParse overloads, so the render path allocates nothing.
+    /// </summary>
+    private static ReadOnlySpan<char> StripCssUnit(ReadOnlySpan<char> s)
+    {
+        var span = s.Trim();
+        var digits = span.Length;
+        while (digits > 0 && !char.IsAsciiDigit(span[digits - 1]) && span[digits - 1] != '.')
+            digits--;
+        // The suffix must be a RECOGNISED unit, and there must be a number in front of it. That is what
+        // keeps the tolerance narrow: "8 apples" and "auto" stay unreadable (→ the default) rather than
+        // silently becoming 8 and 0.
+        return digits > 0 && digits < span.Length && IsCssUnit(span[digits..])
+            ? span[..digits]
+            : s;
+    }
+
+    /// <summary>
+    /// The CSS length and percentage units a bound layout value may carry. `px` and `%` are what the
+    /// framework's controls and docs actually emit; the rest are the CSS spec's remaining length units,
+    /// listed so a hand-authored `"1.5rem"` / `"2em"` / `"50vh"` reads the same way. Units are
+    /// case-insensitive in CSS ("8PX" is legal), hence the fold before the match — done in a stack
+    /// buffer rather than via ToString(), because this sits on the render path and a per-binding
+    /// allocation there is per-frame GC pressure.
+    /// </summary>
+    private static bool IsCssUnit(ReadOnlySpan<char> unit)
+    {
+        // Every unit below is at most four characters; the length cap is also what bounds the buffer.
+        if (unit.Length is 0 or > MaxCssUnitLength)
+            return false;
+        Span<char> lower = stackalloc char[MaxCssUnitLength];
+        unit.ToLowerInvariant(lower);
+        return lower[..unit.Length] switch
+        {
+            "%" or "px" or "rem" or "em" or "ex" or "ch" or "cap" or "ic" or "lh" or "rlh" => true,
+            "vw" or "vh" or "vmin" or "vmax" or "vi" or "vb" => true,
+            "cm" or "mm" or "q" or "in" or "pt" or "pc" or "fr" => true,
+            _ => false
+        };
+    }
+
+    private const int MaxCssUnitLength = 4;
+
+    /// <summary>
+    /// Reads an integral magnitude, accepting a fractional one by truncating it — the same thing
+    /// <see cref="ConvertDoubleToInteger{T}"/> already does for a bound double, so "1.5rem" in an `int`
+    /// slot behaves like 1.5 in an `int` slot instead of vanishing. Out of range yields <c>false</c>
+    /// (→ the default), never an OverflowException thrown out of a render.
+    /// </summary>
+    private static bool TryReadIntegral(ReadOnlySpan<char> s, long min, long max, out long value)
+    {
+        if (!long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+        {
+            // The exact parse failed, so this is a fractional magnitude ("1.5rem"). Range-check it as a
+            // double BEFORE truncating — and cap at 2^53, past which a double no longer represents
+            // integers exactly: `(double)long.MaxValue` rounds UP, so a `d > max` test alone lets a value
+            // one ulp too large through and the cast then wraps to long.MinValue rather than failing.
+            // Nothing that size is a layout length; refusing it is the honest answer.
+            const double exactIntegerLimit = 9007199254740992d; // 2^53
+            if (!double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
+                || double.IsNaN(d) || double.IsInfinity(d)
+                || Math.Abs(d) > exactIntegerLimit || d < min || d > max)
+            {
+                value = 0;
+                return false;
+            }
+            value = (long)Math.Truncate(d);
+        }
+        return value >= min && value <= max;
+    }
+
+    /// <summary>
+    /// Reports a string the conversion could not read and yields <paramref name="defaultValue"/>.
+    /// </summary>
+    /// <remarks>
+    /// Degrading rather than throwing is what the neighbouring <c>ConvertJson</c> and
+    /// <c>GetDataBoundValue</c> already do, and it is what this path needs: <c>ConvertSingle</c> is called
+    /// from <c>DataBind</c>'s <c>Select</c>, so a throw does not just drop one value — it faults the
+    /// observable and kills the binding for the lifetime of the view.
+    /// Logged at Debug, matching <c>GetDataBoundValue</c>: this runs on the render path, where one bad
+    /// literal must not become a per-frame `fail` line (the storm the Icon branch of ConvertSingle was
+    /// fixed for). Nothing is hidden that was previously visible — <c>BlazorView.DataBind</c> caught the
+    /// throw and applied the default anyway, so the outcome is unchanged and only the noise is gone.
+    /// </remarks>
+    private static T? Unreadable<T>(IMessageHub hub, string s, T? defaultValue)
+    {
+        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Layout.ConvertString")
+            .LogDebug("ConvertString<{Type}> could not read '{Value}' — using default", typeof(T).Name, s);
+        return defaultValue;
     }
 
     private static T? ConvertJson<T>(this IMessageHub hub, JsonElement? value, Func<object?, T?, T?>? conversion, T? defaultValue = default(T))
