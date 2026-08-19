@@ -279,32 +279,85 @@ does not change when the artifact grows.
 ### What closing it looks like
 
 The gate (does the upstream exist?) is done. What is missing is the FETCH — a way for a build to
-take the released bytes rather than remake them. Four pieces, in the order they unblock each other:
+take the released bytes rather than remake them.
+
+#### 🚨 A publisher NEVER knows its dependents — a release is a BROADCAST
+
+State this before the mechanics, because the obvious implementation is the wrong one. It is
+tempting to let each repo name the repos it must wake (`dependent-repos`), and that list is exactly
+what must not exist:
+
+> **A repo declares its UPSTREAMS. It never declares its DOWNSTREAMS.** A release is PUBLISHED —
+> announced once, to everyone — and whoever depends on it reacts. Publishing is not addressed.
+
+Why the addressed form is a trap, in the order these bite:
+
+- **A dependents list is edited in the wrong repo.** Adding a satellite means changing its
+  UPSTREAM's configuration — so the person who knows about the new dependency is not the person who
+  owns the file that has to change.
+- **It rots silently, and silence is the failure mode.** A missing entry is a downstream that never
+  rebuilds for a release. Nothing goes red: the release is green, the publisher is green, and the
+  omitted repo simply keeps shipping against the previous framework until something notices at a
+  customer's boot.
+- **It duplicates a graph we already have.** Every package root already declares `requires`, and
+  `PackageGraph.Levels` already derives leaves-first order from those declarations. A YAML list of
+  dependents is a SECOND copy of that graph, maintained by hand, free to disagree with the first.
+
+#### memex is the release bus, and it holds the graph
+
+The registry is the one place that already knows both halves — what has been released, and who
+depends on what:
+
+- **The graph** is `requires` on each package root, which memex holds for every installed package;
+  `PackageGraph.Levels` / `DependencyCheck.For` already answer "who depends on this" and "in what
+  order" from it. Nobody re-declares it in CI.
+- **The publication** is the release landing in the registry — the same
+  `POST /api/plugins/bundles/{plugin}` hop the module lane already uses. Publishing IS the
+  broadcast; there is no separate announcement to keep in step with it.
+- **The subscribers** register themselves. A CI process registers with the registry exactly as an
+  instance does and is issued an `mwi_` key (`InstanceRegistryAuthenticator`); being woken is then a
+  property of being registered and depending on the thing, not of appearing in someone's list.
+
+So the cascade reads: a publisher announces to memex → memex resolves the dependents from the graph
+it already holds → the registered builds for those packages are woken → each checks its own
+upstreams are released and builds. The publisher names nobody.
+
+#### The pieces, in the order they unblock each other
 
 1. **The artifact carries node definitions.** `BundleWriter.Write` gains the upstream's node repo
    beside the assemblies, so a consumer gets both the bytes and the definitions its roots are typed
-   by. This is the blocking one: every other piece is inert without it.
+   by. Blocking: every other piece is inert without it.
 2. **A CLI fetches it.** The inverse of the `module-pack` tool CI already runs
-   (`MeshWeaver.Plugin.Build`): a `module-fetch`-shaped command that pulls a released package from
-   the registry into a local directory, so a satellite's workflow replaces its
-   `stage-repo`/checkout step with one fetch of the thing that was actually released. The mechanism
-   belongs IN THE TECH, not in each repo's YAML — five hand-rolled fetches would drift, and the
-   fetch has to make the same floor/identity checks the seeder makes.
-3. **CI registers as a consumer.** A build is an instance like any other: it registers with the
-   registry and is issued an `mwi_` instance key, which is what the bundle routes already
-   authenticate (`InstanceRegistryAuthenticator`). No new entitlement path — a CI process is simply
-   a registered reader, and what it may read stays governed by its `PluginGrant`.
-4. **The instance is given a blob access token.** Serving every byte through the portal is fine for
-   an install and wrong for a build fleet pulling whole packages; an issued, scoped token lets the
-   registered instance read the assembly blobs directly. ⚠️ This deliberately REVERSES today's
-   stance in `PluginBundleEndpoints` ("the portal serves the bytes rather than handing out storage
-   access"), whose stated objection is that a scoped SAS is a second entitlement path to keep
+   (`MeshWeaver.Plugin.Build`): a command that pulls a released package from the registry into a
+   local directory, so a satellite replaces its `stage-repo`/checkout with one fetch of what was
+   actually released. The mechanism belongs IN THE TECH, not in each repo's YAML — five hand-rolled
+   fetches would drift, and the fetch must make the same floor/identity checks the seeder makes.
+3. **CI registers as a consumer.** No new entitlement path: a build is a registered reader, and what
+   it may read stays governed by its `PluginGrant`. This registration is also what makes it
+   addressable by the broadcast.
+4. **The instance is issued a blob access token.** Serving every byte through the portal is right
+   for an install and wrong for a build fleet pulling whole packages. ⚠️ This deliberately REVERSES
+   today's stance in `PluginBundleEndpoints` ("the portal serves the bytes rather than handing out
+   storage access"), whose objection is that a scoped SAS is a second entitlement path to keep
    honest. That objection is answered by issuing the token AS the entitlement — minted per
-   registered instance, expiring, and revoked with the grant — not by adding a credential beside it.
+   registered instance, expiring, revoked with the grant — not by adding a credential beside it.
 
-Until all four land, a satellite still stages from source, and that staging is the one sanctioned
+Until these land, a satellite still stages from source, and that staging is the one sanctioned
 exception to the rule at the top of this page — marked transitional everywhere it appears so it is
-never mistaken for the intended shape.
+never mistaken for the intended shape. The same applies to the `dependent-repos` input on
+`node-repo-publish-bake` and to CD's `BAKE_SUBSCRIBER_REPOS`: both are ADDRESSED notification, both
+are transitional scaffolding for a broadcast that does not exist yet, and **neither may be extended
+to new repos.** Wiring one more dependent into a list is not progress toward this design; it is one
+more copy of the graph to keep honest.
+
+#### Why this is also the cure for the recompile leak
+
+`NodeTypeRecompileAlcLeakTest` measures live hubs climbing (~+5 per recompile) — accumulation that
+looks like a leak to hunt. The recompiles it counts are the symptom: an instance Roslyn-compiles
+content at boot precisely when no sealed bake is available for its framework, which is the state
+this page's gate exists to prevent. Every path that ends in "somebody rebuilt what should have been
+fetched" ends in another ALC. Fixing the distribution — released artifacts, fetched, never
+rebuilt — removes the recompiles rather than making each one cheaper.
 
 ## See also
 
