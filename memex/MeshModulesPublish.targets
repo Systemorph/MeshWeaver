@@ -300,9 +300,53 @@
     <ItemGroup>
       <_ClosureFile Include="$(_AppDir)modules/%(MeshModuleClosure.Filename)/**/*.*" />
     </ItemGroup>
+
+    <!-- 🚨 SAME IDENTITY MEANS SAME BYTES, not merely the same file NAME.
+         This condition used to be `Exists(app/<name>)` alone, which deletes the module's copy
+         whenever the app happens to ship something called the same thing — even a DIFFERENT
+         VERSION. That is not a duplicate; it is the module's dependency being removed and
+         replaced by one it does not bind to.
+
+         It broke production on 2026-08-19:
+
+             Could not load file or assembly 'Microsoft.Extensions.AI.OpenAI, Version=10.8.0.0'
+
+         The module referenced 10.8.3 directly (central package management governs DIRECT
+         references), while the app root carried 10.6.0 — which reaches the app only
+         TRANSITIVELY, so no PackageVersion lifts it. Prune (a) saw two files named
+         Microsoft.Extensions.AI.OpenAI.dll and deleted the 10.8.3 one, so every agent creation
+         through the OpenAI factory failed at bind time. Anthropic rides the same lane
+         (AzureFoundry's AzureClaude* client), so it fails identically.
+
+         Hashing is the right test rather than reading assembly versions: it is exact, it needs no
+         managed-metadata read (native and resource files go through this prune too), and two
+         copies of one NuGet package version are byte-identical by construction. A file whose
+         bytes differ is KEPT — the module then carries what it actually binds to, which is the
+         entire point of the closure lane. -->
     <ItemGroup>
-      <_ClosureAppDuplicate Include="@(_ClosureFile)" Condition="Exists('$(_AppDir)%(RecursiveDir)%(Filename)%(Extension)')" />
+      <_ClosureAppCandidate Include="@(_ClosureFile)" Condition="Exists('$(_AppDir)%(RecursiveDir)%(Filename)%(Extension)')">
+        <AppCopy>$(_AppDir)%(RecursiveDir)%(Filename)%(Extension)</AppCopy>
+      </_ClosureAppCandidate>
     </ItemGroup>
+    <GetFileHash Files="@(_ClosureAppCandidate)" Algorithm="SHA256" Condition="'@(_ClosureAppCandidate)' != ''">
+      <Output TaskParameter="Items" ItemName="_ClosureAppCandidateHashed" />
+    </GetFileHash>
+    <GetFileHash Files="@(_ClosureAppCandidate->'%(AppCopy)')" Algorithm="SHA256" Condition="'@(_ClosureAppCandidate)' != ''">
+      <Output TaskParameter="Items" ItemName="_AppRootHashed" />
+    </GetFileHash>
+    <PropertyGroup>
+      <_AppRootHashes>;@(_AppRootHashed->'%(Identity)|%(FileHash)');</_AppRootHashes>
+    </PropertyGroup>
+    <ItemGroup>
+      <_ClosureAppDuplicate Include="@(_ClosureAppCandidateHashed)"
+                            Condition="$(_AppRootHashes.Contains(';%(AppCopy)|%(FileHash);'))" />
+      <!-- Kept on purpose, and said out loud: a same-named file the app carries at a DIFFERENT
+           version is exactly the case that used to break at run time, silently, in production. -->
+      <_ClosureVersionDivergent Include="@(_ClosureAppCandidateHashed)"
+                                Condition="!$(_AppRootHashes.Contains(';%(AppCopy)|%(FileHash);'))" />
+    </ItemGroup>
+    <Message Importance="high" Condition="'@(_ClosureVersionDivergent)' != ''"
+             Text="LayoutMeshModuleClosures: KEPT %(_ClosureVersionDivergent.Filename)%(_ClosureVersionDivergent.Extension) in modules/ — the app root ships a same-named file with DIFFERENT bytes, so the module must carry the one it binds to." />
     <Delete Files="@(_ClosureAppDuplicate)" />
 
     <!-- Prune (b): shared-framework-provided assemblies. A standalone class-library publish
