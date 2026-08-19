@@ -1,0 +1,176 @@
+name: node-repo module pack
+
+# The MODULE half of a mixed package, packed and (on trunk) handed to the registry — reusable from
+# any node repo, because every satellite that owns a module drives the same packer the platform
+# does. One matrix entry per module, so a repo that owns twelve of them does not grow twelve jobs.
+#
+# 🚨 The bundle's identity comes from the CONTENT side, never from workflow inputs: the released
+# SemVer from `{package}/manifest.lock` and the landing floor from `{package}/index.json`'s
+# `content.minMeshVersion` — the ONE declaration `NodeRepoPackageSource` reads. The job asserts
+# that `content.module` names the module it is packing, so the two halves of a mixed package
+# cannot drift apart silently.
+
+on:
+  workflow_call:
+    inputs:
+      modules:
+        description: >
+          JSON array of {package, module, project}: the Store package id, the module's entry
+          assembly name, and the csproj to build. e.g.
+          [{"package":"SocialMedia","module":"MeshWeaver.Social","project":"src/MeshWeaver.Social/MeshWeaver.Social.csproj"}]
+        required: true
+        type: string
+      platform-ref:
+        description: The Systemorph/MeshWeaver commit the modules build against (a pin, not a branch).
+        required: true
+        type: string
+      publish:
+        description: Hand the packed bundles to the registry. Trunk only — a PR packs and inspects, never publishes.
+        type: boolean
+        default: false
+      registry-url:
+        description: The registry that will serve these bundles onward.
+        type: string
+        default: https://memex.meshweaver.cloud
+    secrets:
+      publish-token:
+        description: The registry's Plugins:Registry:PublishToken. Required when publish is true.
+        required: false
+
+jobs:
+  pack:
+    name: Module bundle (${{ matrix.entry.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One module's failure must not hide the rest — a sweep wants every verdict in one run.
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJson(inputs.modules) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out Systemorph/MeshWeaver at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: Systemorph/MeshWeaver
+          ref: ${{ inputs.platform-ref }}
+          path: meshweaver
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Read the package version + platform floor from the content half
+        id: identity
+        env:
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+        run: |
+          set -euo pipefail
+          version=$(jq -er '.version' "$PACKAGE/manifest.lock")
+          floor=$(jq -er '.content.minMeshVersion' "$PACKAGE/index.json")
+          declared=$(jq -er '.content.module' "$PACKAGE/index.json")
+          if [ "$declared" != "$MODULE" ]; then
+            echo "::error::$PACKAGE/index.json declares content.module='$declared' but this entry packs '$MODULE' — the two halves of the mixed package drifted"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "floor=$floor" >> "$GITHUB_OUTPUT"
+          echo "packing $MODULE as $PACKAGE@$version, platform floor $floor"
+
+      - name: Build the module (Release, warnings-as-errors)
+        run: >
+          dotnet build "${{ matrix.entry.project }}" -c Release -warnaserror
+          -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
+          -p:Version=${{ steps.identity.outputs.version }}
+
+      - name: Run the module's tests, when it ships any
+        env:
+          PROJECT: ${{ matrix.entry.project }}
+        run: |
+          set -euo pipefail
+          # A module's tests relocate WITH it (the Approvals precedent). Conventional sibling:
+          # src/<Module>.Test. Absent is fine; present and red is not.
+          tests="$(dirname "$PROJECT").Test"
+          if [ -d "$tests" ]; then
+            dotnet test "$tests" -c Release -warnaserror \
+              -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
+          else
+            echo "no test project at $tests — nothing to run"
+          fi
+
+      - name: Build the module-pack tool
+        run: dotnet build meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release
+
+      - name: Pack the module bundle
+        env:
+          PROJECT: ${{ matrix.entry.project }}
+        run: >
+          dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build --
+          module-pack "$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0"
+          --module-name "${{ matrix.entry.module }}"
+          --plugin "${{ matrix.entry.package }}"
+          --package-version "${{ steps.identity.outputs.version }}"
+          --min-mesh-version "${{ steps.identity.outputs.floor }}"
+          --out "$RUNNER_TEMP/bundles"
+
+      # A bundle that PACKED is not yet a bundle that LANDS: assert the closure and the manifest a
+      # consumer's landing gate will read, loudly, instead of trusting the packer's exit code.
+      - name: Inspect the bundle (manifest + assemblies)
+        id: bundle
+        env:
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          FLOOR: ${{ steps.identity.outputs.floor }}
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/bundles/MeshWeaver.Plugin.$PACKAGE.$VERSION.module.nupkg"
+          test -f "$bundle" || { echo "::error::bundle not found: $bundle"; exit 1; }
+          unzip -o -q "$bundle" -d "$RUNNER_TEMP/inspect-$MODULE"
+          test -f "$RUNNER_TEMP/inspect-$MODULE/meshweaver/modules/$MODULE.dll" \
+            || { echo "::error::entry DLL missing from meshweaver/modules/"; exit 1; }
+          manifest="$RUNNER_TEMP/inspect-$MODULE/meshweaver/manifest.json"
+          jq -e --arg m "$MODULE" '.module.assemblyName == $m' "$manifest" > /dev/null \
+            || { echo "::error::manifest module.assemblyName is not $MODULE"; exit 1; }
+          jq -e --arg d "$MODULE.dll" '.module.assemblies | index($d) != null' "$manifest" > /dev/null \
+            || { echo "::error::manifest module.assemblies misses the entry DLL"; exit 1; }
+          jq -e --arg f "$FLOOR" '.module.minMeshVersion == $f' "$manifest" > /dev/null \
+            || { echo "::error::manifest floor differs from content.minMeshVersion"; exit 1; }
+          echo "path=$bundle" >> "$GITHUB_OUTPUT"
+          echo "bundle OK:"; jq . "$manifest"
+
+      - name: Upload the bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-bundle-${{ matrix.entry.module }}
+          path: ${{ runner.temp }}/bundles/*.module.nupkg
+          if-no-files-found: error
+
+      # 🚨 The hand-over. Without it a module that has LEFT the platform repo is packed, versioned,
+      # inspected — and reaches nobody, because a registry serves only bytes it holds. A missing
+      # token here FAILS the job rather than skipping quietly: "published nothing" and "published
+      # fine" must never look the same (the same reason a gate may not skip green).
+      - name: Hand the bundle to the registry
+        if: ${{ inputs.publish }}
+        env:
+          TOKEN: ${{ secrets.publish-token }}
+          REGISTRY: ${{ inputs.registry-url }}
+          PACKAGE: ${{ matrix.entry.package }}
+          MODULE: ${{ matrix.entry.module }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          BUNDLE: ${{ steps.bundle.outputs.path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error::publish was requested but no publish-token secret was provided — the registry would never receive $MODULE, and this job would have reported success"
+            exit 1
+          fi
+          code=$(curl -sS -o "$RUNNER_TEMP/publish-$MODULE.json" -w '%{http_code}' \
+            -X POST "$REGISTRY/api/plugins/bundles/$PACKAGE?version=$VERSION" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@$BUNDLE")
+          echo "registry answered $code:"; cat "$RUNNER_TEMP/publish-$MODULE.json"; echo
+          case "$code" in
+            2*) echo "$MODULE@$VERSION is now served by $REGISTRY" ;;
+            *)  echo "::error::registry refused $MODULE@$VERSION (HTTP $code)"; exit 1 ;;
+          esac

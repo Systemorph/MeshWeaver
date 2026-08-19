@@ -437,7 +437,7 @@ in git looks right. Diff live mounts against the chart after every deploy.
   `fail`s the render if an external `ConnectionStrings__memex` is supplied without a matching
   `__orleans`, so the half-configured case cannot ship silently.
 - **Secrets → Key Vault**: move the PG password, master key, and OAuth secrets into
-  `meshweaverkeyvault` via the CSI Secrets Store add-on (enabled in `infra/modules/aks.bicep`).
+  Key Vault via the CSI Secrets Store add-on (enabled in `infra/modules/aks.bicep`).
 
 ## Why a runbook and not pure `aspire up`
 Aspire's Kubernetes publisher generates the **workload** chart, but it does not provision an AKS

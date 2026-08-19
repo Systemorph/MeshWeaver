@@ -280,9 +280,40 @@ jobs:
       # already converts a silent hang into a visible, re-runnable infra failure.
       # The apt wait is for the same reason as dotnet-test's: `--with-deps` shells out to apt-get,
       # and the runner's own background apt makes it exit 100 "Could not get lock" — contention,
-      # not a broken download. `flock … true` waits for that holder and releases immediately, so
-      # playwright takes the lock itself. Both bounds are hard: it can wait, it cannot hang.
+      # not a broken download. Same shared script, so this copy cannot drift from that one again.
+      # Both bounds are hard: it can wait, it cannot hang.
+      #
+      # 🚨 The install bound is 420s, not 180s, because 180 was BELOW what this step actually
+      # costs. Unlike dotnet-test's, this install is the FULL chromium (the e2e drives a real
+      # browser, not `--only-shell`) plus its apt dependencies, and two independent runs measured
+      # ~185s: main's own run 32180959535 and 32170659820 both died at exactly `exit code 124`
+      # — `timeout` killing a healthy install a few seconds short. A bound that the normal path
+      # exceeds is not a hang detector, it is a flake generator, and it reports as the very
+      # "infra failure" wording that trains people to re-run rather than look.
+      #
+      # 🚨 TWO PHASES, AND ONLY THE FIRST IS FATAL — the same correction #1878 made to
+      # dotnet-test.yml, which landed there and NOT here. That asymmetry is this file's third
+      # drift from its twin (after the `flock` no-op #1858 fixed in one copy, and the wait script
+      # #1855 extracted to end exactly this), and it cost a full morning: on 2026-08-19 the apt
+      # phase stalled on `azure.archive.ubuntu.com` and killed this job while every other Clients
+      # job passed — and because `clients-gate` feeds `Consolidate test results`, the repo's ONE
+      # required check, it blocked every merge behind it.
+      #
+      # Under `install --with-deps` the apt-get runs FIRST and the download second, so an apt
+      # stall means no browser at all. Downloading first banks the artefact; the apt phase then
+      # only adds the font packages, and its failure is a WARNING because `npm run e2e` below
+      # drives a real Chromium and is the direct proof of the capability this step is a proxy for.
+      # Strictly no loss of safety: the gate moves from "did apt run?" to "does the browser
+      # work?", which is the question the e2e asks anyway. If a library really is missing, e2e
+      # fails — carrying this warning as its context.
       - run: |
-          sudo flock -w 60 /var/lib/apt/lists/lock true 2>/dev/null || true
-          timeout --signal=TERM --kill-after=30 180 npx playwright install --with-deps chromium
+          set -euo pipefail
+          # Phase 1 — the browser binary, straight from the CDN. No apt in this path. MUST succeed.
+          timeout --signal=TERM --kill-after=30 420 npx playwright install chromium
+          # Phase 2 — the system packages. `install` is idempotent, so this re-run does only the
+          # apt half. Non-fatal by design (see above).
+          "$GITHUB_WORKSPACE/.github/scripts/wait-for-apt.sh" 180
+          if ! timeout --signal=TERM --kill-after=30 420 npx playwright install --with-deps chromium; then
+            echo "::warning::the '--with-deps' system packages could not be applied (APT/INFRA). Continuing: the e2e run below drives a real browser and measures the capability directly."
+          fi
       - run: npm run e2e # expo export --platform web → serve dist/ → drive headless Chromium

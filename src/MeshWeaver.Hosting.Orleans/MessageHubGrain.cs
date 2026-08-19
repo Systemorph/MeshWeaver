@@ -794,14 +794,41 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // DisposalCompleted above — pooled I/O leaves are mesh-shared, so this grain cannot
         // drain them (DrainAll here would cancel every OTHER grain's work). A pooled leaf
         // started by this grain's hub that still references this ALC when Unload begins is
-        // the use-after-unload class. Silo SHUTDOWN is safe (MeshTeardownHostedService drains
-        // the whole mesh and fires MeshTeardownSignal before the scope dies); a single grain
-        // deactivating on a LIVE silo needs per-ALC in-flight tracking to close fully.
-        if (loadContext != null)
+        // the use-after-unload class. A single grain deactivating on a LIVE silo still needs
+        // per-ALC in-flight tracking to close fully.
+        //
+        // 🚨 SILO SHUTDOWN IS NOT SAFE, and this comment used to claim it was — on the grounds
+        // that "MeshTeardownHostedService drains the whole mesh before the scope dies". It does,
+        // but it runs in StoppedAsync, i.e. AFTER every hosted service's StopAsync — and the silo
+        // IS a hosted service. So on shutdown the order is: silo stops → every grain deactivates
+        // → every one of these Unload() calls runs → only THEN does the mesh drain. Every pooled
+        // leaf still executing this ALC's compiled types was live across that unload. That is the
+        // native use-after-unload SIGSEGV at/near process exit, after every test has passed (#613).
+        //
+        // On shutdown the unload also buys NOTHING: the process is terminating, so the OS reclaims
+        // the mapping regardless. Unloading is only worth doing on a LIVE silo, where reclaiming a
+        // superseded ALC actually returns memory. So skip it here and let the process exit — and
+        // for the live-silo case IoPoolSiloTeardown now cancels + joins the pools before the silo
+        // releases, which is what makes any remaining unload safe.
+        if (loadContext != null && !IsSiloShuttingDown(reason))
             loadContext.Unload();
         loadContext = null;
         await base.OnDeactivateAsync(reason, cancellationToken);
     }
+
+    /// <summary>
+    /// Is this deactivation the silo going away (as opposed to idle collection, a recycle, or an
+    /// application request)? Only then is skipping the ALC unload correct: the process is exiting,
+    /// so the unload reclaims nothing and is purely the use-after-unload window.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="DeactivationReasonCode.ShuttingDown"/> ONLY. Every other reason — idle
+    /// collection, <see cref="DeactivationReasonCode.Migrating"/>, an application request, a
+    /// recycle — happens on a LIVE silo, where unloading the superseded context genuinely returns
+    /// memory and must keep happening.
+    /// </remarks>
+    private static bool IsSiloShuttingDown(DeactivationReason reason)
+        => reason.ReasonCode is DeactivationReasonCode.ShuttingDown;
 
     /// <summary>
     /// Synchronous lookup for built-in MeshNodes via IStaticNodeProvider. For

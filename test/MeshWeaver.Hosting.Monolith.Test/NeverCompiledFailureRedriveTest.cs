@@ -38,6 +38,15 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 ///
 /// <para>The pure half — the verdict-inputs token, the predicate, the ledger — is
 /// <c>FailedVerdictRedriveTest</c> in MeshWeaver.Graph.Test.</para>
+///
+/// <para>🚨 <b>The bounded assertions here are not self-certifying.</b> Every observation runs over
+/// <c>GetMeshNodeStream</c>, a <c>Replay(1)</c> mirror that hands each new subscription the snapshot
+/// it already holds and keeps nothing before it — so an assertion can be satisfied by a REPLAY of
+/// state that predates the thing it is claiming about, and it then passes for the wrong reason
+/// forever. <see cref="RedriveObservation"/> is the vocabulary that closes it (a version watermark,
+/// with the process ledger as the primary bound); <c>RedriveObservationReplayTest</c> is what proves
+/// it, by constructing the replay and pinning BOTH halves — the shape this file used to have
+/// accepting it, and this one refusing it while still accepting the genuine case.</para>
 /// </summary>
 public class NeverCompiledFailureRedriveTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -70,14 +79,17 @@ public class NeverCompiledFailureRedriveTest(ITestOutputHelper output) : Monolit
         var (typePath, baselineSucceededAt) = await CompileBaselineType("RedriveRecovers", GoodSource);
         var workspace = Mesh.GetWorkspace();
 
-        await ForgeNeverCompiledFailure(typePath);
+        var forgeWatermark = await ForgeNeverCompiledFailure(typePath);
 
         // The OWNER-side re-drive must rebuild it: back to Ok, with real assembly coordinates and a
-        // STRICTLY NEWER success timestamp (a replayed old Ok would prove nothing). Before the fix
-        // nothing re-drives this record at all, so this times out.
+        // STRICTLY NEWER success timestamp (a replayed old Ok would prove nothing) at a revision
+        // STRICTLY past the forge, so the mirror's Replay(1) hand-off of the pre-forge snapshot
+        // cannot satisfy it either. Before the fix nothing re-drives this record at all, so this
+        // times out.
         var recovered = await workspace.GetMeshNodeStream(typePath)
             .Should().Within(90.Seconds())
-            .Match(n => n.Content is NodeTypeDefinition d
+            .Match(n => RedriveObservation.IsPastWatermark(n, forgeWatermark)
+                && n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Ok
                 && !string.IsNullOrEmpty(d.LatestAssemblyPath)
                 && d.CompiledFrameworkVersion == NodeTypeCompilationHelpers.FrameworkVersion
@@ -90,7 +102,7 @@ public class NeverCompiledFailureRedriveTest(ITestOutputHelper output) : Monolit
         // failure look like it had already had its attempt), and nothing re-drives a healthy type.
         ((NodeTypeDefinition)recovered.Content!).FailedBuildInputs.Should().BeNull(
             "a success retires the failure verdict, so its inputs must go with it");
-        await AssertNoFurtherCompileIsDriven(typePath, 15.Seconds(),
+        await AssertNoFurtherCompileIsDriven(typePath, recovered.Version, 15.Seconds(),
             "a recovered type must not be re-driven again — the re-drive's own bookkeeping is what "
             + "makes its trigger false, and a trigger that survives its own write is a write cycle");
     }
@@ -124,20 +136,30 @@ public class NeverCompiledFailureRedriveTest(ITestOutputHelper output) : Monolit
 
         // Now stage the pre-fix record (no stamp) so the re-drive DOES fire, and prove it fires
         // exactly once: the attempt fails again, and nothing schedules another.
-        await ForgeNeverCompiledFailure(typePath);
+        var forgeWatermark = await ForgeNeverCompiledFailure(typePath);
 
-        await workspace.GetMeshNodeStream(typePath)
+        // 🚨 ANCHORED on the forge. Without the version clause this Match is satisfied by the
+        // mirror's Replay(1) hand-off of the PRE-forge record — which, for a type that cannot
+        // compile, is byte-identical to the record the re-drive re-settles at (Error, inputs
+        // stamped). The test would then believe it had watched the re-drive fire and re-fail having
+        // observed only state that predates the forge, and every bound below it would be anchored
+        // in the past. The forge nulls FailedBuildInputs, so a record carrying it again at a
+        // revision past the forge can only be the re-drive's own verdict.
+        var reFailed = await workspace.GetMeshNodeStream(typePath)
             .Should().Within(90.Seconds())
-            .Match(n => n.Content is NodeTypeDefinition d
+            .Match(n => RedriveObservation.IsPastWatermark(n, forgeWatermark)
+                && n.Content is NodeTypeDefinition d
                 && d.CompilationStatus == CompilationStatus.Error
                 && !string.IsNullOrEmpty(d.FailedBuildInputs));
         var redrives = ParkRegistry.GetFailureRedriveCount(typePath);
         redrives.Should().Be(1,
             "exactly one automatic attempt per distinct set of compile inputs — the flip to Pending "
             + "stamps those inputs in the same write, so the trigger cannot re-arm itself");
-        Output.WriteLine($"{typePath} re-driven {redrives}× and re-failed — now bounded.");
+        Output.WriteLine(
+            $"{typePath} re-driven {redrives}× and re-failed at v{reFailed.Version} "
+            + $"(forge watermark v{forgeWatermark}) — now bounded.");
 
-        await AssertNoFurtherCompileIsDriven(typePath, 20.Seconds(),
+        await AssertNoFurtherCompileIsDriven(typePath, reFailed.Version, 20.Seconds(),
             "a type whose source cannot compile must back off after its one attempt instead of "
             + "storming Roslyn on the hub's action block");
         ParkRegistry.GetFailureRedriveCount(typePath).Should().Be(1,
@@ -249,12 +271,21 @@ public class NeverCompiledFailureRedriveTest(ITestOutputHelper output) : Monolit
     /// and no record of the inputs the verdict was formed under. Nothing else is touched, and no
     /// instance of the type is ever activated, so only the OWNER-side re-drive can act on it.
     /// </summary>
-    private async Task ForgeNeverCompiledFailure(string typePath)
+    /// <returns>
+    /// The WATERMARK every later observation must be anchored on: the version the forge write was
+    /// based on. Any emission at or below it is the mirror replaying pre-forge state.
+    /// </returns>
+    private async Task<long> ForgeNeverCompiledFailure(string typePath)
     {
         var workspace = Mesh.GetWorkspace();
         // The park is in-memory and per-process; a record that arrived from elsewhere carries no
         // park with it, so clear it here too or the staged state would not be the staged state.
         ParkRegistry.Unpark(typePath);
+        // Read what the mirror is currently replaying, purely as EVIDENCE: it is logged next to the
+        // version Update hands back, and on every run the two are the same number. That equality is
+        // the whole defect in #1850's `>=` bound, measured on the real mesh rather than argued.
+        var beforeForge = await workspace.GetMeshNodeStream(typePath)
+            .Should().Within(30.Seconds()).Emit();
         var marker = $"FORGED-{Guid.NewGuid():N}";
         var forged = await workspace.GetMeshNodeStream(typePath)
             .Update(curr => curr.Content is NodeTypeDefinition d
@@ -286,29 +317,57 @@ public class NeverCompiledFailureRedriveTest(ITestOutputHelper output) : Monolit
         // load-sensitive on CI: this helper is used by all three tests in this file, which is why
         // they fail in rotation (#1843 — observed on main and on three unrelated PRs).
         //
-        // Version is monotonic and cannot be overwritten away, so waiting for it proves the write
-        // landed without requiring anyone to catch a state designed to be replaced.
-        var forgedVersion = forged.Version;
-        await workspace.GetMeshNodeStream(typePath)
+        // 🚨 …and the bound is STRICT (>), which #1850's `>=` was not — the deeper race, and it is
+        // not a race at all but a structural vacuity. `Update` on a foreign path is UpdateRemote,
+        // which emits `update(current)`: the OPTIMISTIC LOCAL snapshot, carrying the PRE-write
+        // Version, because the forge lambda rewrites Content only. `>= forged.Version` is therefore
+        // a bound the mirror is ALREADY sitting on, and Replay(1) satisfies it instantly with the
+        // pre-forge snapshot — the barrier passed whether or not the write landed, and every
+        // observation downstream of it was anchored before the forge. RedriveObservationReplayTest
+        // constructs that replay and pins both halves: `>=` accepting it, `>` refusing it.
+        //
+        // 🚨 WHOSE version is this? The OWNER's, and it is a strict LOWER BOUND, not a receipt.
+        // MeshNode.Version is minted by the owning per-node hub for EVERY writer
+        // (MeshNode.NextVersion = current + 1) — #1833 is a test that flaked on assuming it tracks
+        // the caller's own write. So `> watermark` claims exactly one thing: the owner has
+        // committed at least one revision past the state this write was diffed against, so no
+        // later emission can be that state replayed. It deliberately does NOT claim "my forge
+        // landed" — the write's own completion above establishes that, and that the RE-DRIVE fired
+        // is established by the ledger, never by catching a state designed to be replaced.
+        var watermark = forged.Version;
+        var landed = await workspace.GetMeshNodeStream(typePath)
             .Should().Within(20.Seconds())
-            .Match(n => n.Version >= forgedVersion);
+            .Match(n => RedriveObservation.IsPastWatermark(n, watermark));
         Output.WriteLine(
-            $"Forged the never-compiled Error record on {typePath} (marker {marker}, "
-            + $"version {forgedVersion}).");
+            $"Forged the never-compiled Error record on {typePath} (marker {marker}); "
+            + $"the mirror was replaying v{beforeForge.Version}, Update handed back v{watermark} "
+            + $"(the SAME revision — so the old '>= {watermark}' bound was already satisfied), "
+            + $"owner then moved to v{landed.Version}.");
+        return watermark;
     }
 
     /// <summary>
-    /// The sanctioned bounded NEGATIVE observation for "nothing re-drives this": no transition into
-    /// <see cref="CompilationStatus.Pending"/> or <see cref="CompilationStatus.Compiling"/> within
-    /// the window. Not vacuous — the sibling assertions above prove the same subscription DOES see
-    /// the flip when the re-drive fires.
+    /// The sanctioned bounded NEGATIVE observation for "nothing re-drives this", with TWO
+    /// independent witnesses — see <see cref="RedriveObservation"/> for why one is not enough.
+    ///
+    /// <para><b>Primary: the LEDGER.</b> <c>NodeTypeCompileParkRegistry</c> counts events —
+    /// <c>RecordFailureRedrive</c> per automatic kickoff, <c>RecordAttempt</c> per real Roslyn
+    /// dispatch. Counters cannot be replayed or conflated, and — decisively for a type that cannot
+    /// compile — they can tell a re-drive that ran and re-failed apart from the record it started
+    /// from, which are byte-identical.</para>
+    ///
+    /// <para><b>Corroboration: the stream</b>, anchored at <paramref name="watermark"/> so the
+    /// mirror's <c>Replay(1)</c> hand-off of the snapshot the window OPENED on cannot read as a
+    /// fresh drive. Unanchored, this half was satisfiable by a replay in both directions: tripped
+    /// by a stale <c>Pending</c>, and passed by a whole <c>Pending → Compiling → Error</c> cycle
+    /// that fitted between the claim and <c>NotEmit</c>'s pool-scheduled attach.</para>
     /// </summary>
-    private async Task AssertNoFurtherCompileIsDriven(string typePath, TimeSpan window, string because)
+    private async Task AssertNoFurtherCompileIsDriven(
+        string typePath, long watermark, TimeSpan window, string because)
     {
-        await Mesh.GetWorkspace().GetMeshNodeStream(typePath)
-            .Where(n => n?.Content is NodeTypeDefinition d
-                && d.CompilationStatus is CompilationStatus.Pending or CompilationStatus.Compiling)
-            .Should().NotEmit(window, because);
-        Output.WriteLine($"No further compile was driven for {typePath} within {window.TotalSeconds:F0}s.");
+        var observed = await RedriveObservation
+            .OpenWindow(ParkRegistry, typePath, watermark)
+            .AssertNothingWasDriven(Mesh.GetWorkspace().GetMeshNodeStream(typePath), window, because);
+        Output.WriteLine($"No further compile was driven — {observed}.");
     }
 }

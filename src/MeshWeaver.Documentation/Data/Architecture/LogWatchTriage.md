@@ -347,8 +347,9 @@ to the triage thread that wrote it.
 
 ## What this is not
 
-- **Not an alerting system.** A provisioned Grafana rule
-  (`deploy/aks/dashboards/memex-red-log-alerts.yaml`) covers the "tell a human now" case. Ticketing
+- **Not an alerting system.** A provisioned Grafana rule covers the "tell a human now" case
+  (the rule is bound to a specific Grafana and set of namespaces, so it lives with the
+  deployment it describes, not here). Ticketing
   hangs off the watcher's cursor instead, because an alert notification that fires while its
   receiver is down is simply lost — acceptable for a nudge, not for "every distinct error gets a
   ticket".

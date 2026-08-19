@@ -117,7 +117,6 @@ public sealed class PluginCatalogOptions
     /// operator's chosen extras.</para>
     /// </summary>
     public bool InstallPreInstalledPackages { get; set; } = true;
-
     /// <summary>This installation's public base URL, recorded on the instance node (advisory).</summary>
     public string HomeUrl { get; set; } = "";
 
