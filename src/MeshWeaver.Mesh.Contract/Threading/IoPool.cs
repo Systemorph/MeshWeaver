@@ -40,6 +40,7 @@ public sealed class IoPool : IIoPool, IDisposable
     // AFTER the join (so Drain's own guard does not short-circuit it), which leaves a window where
     // two callers would both drain and both dispose the gate.
     private int _disposing;
+    private int _disposalReported;
     // Fires the residual leaf count once the join AND the resource release have happened, then
     // completes. AsyncSubject so a subscriber attaching after disposal still gets the report —
     // the same contract MeshTeardownSignal uses.
@@ -135,6 +136,7 @@ public sealed class IoPool : IIoPool, IDisposable
             finally
             {
                 Interlocked.Decrement(ref _inFlight);
+                TryFinishDisposal();
                 _gate.Release();
             }
         }).SubscribeOn(TaskPoolScheduler.Default);
@@ -164,6 +166,7 @@ public sealed class IoPool : IIoPool, IDisposable
             finally
             {
                 Interlocked.Decrement(ref _inFlight);
+                TryFinishDisposal();
                 _gate.Release();
             }
         }).SubscribeOn(TaskPoolScheduler.Default);
@@ -205,6 +208,11 @@ public sealed class IoPool : IIoPool, IDisposable
                         Interlocked.Decrement(ref _inFlight);
                         if (Interlocked.Decrement(ref _blockingInFlight) == 0)
                             _blockingIdle.Set();
+                        // AFTER both counters — a blocking leaf holds _blockingInFlight as well as
+                        // _inFlight, so calling this between the two decrements would always see a
+                        // non-zero count, return early, and leave nothing to retry: Disposed would
+                        // never fire for a pool whose last leaf was a blocking one.
+                        TryFinishDisposal();
                     }
                 }, cts.Token)
                 .ContinueWith(t =>
@@ -263,6 +271,7 @@ public sealed class IoPool : IIoPool, IDisposable
                     finally
                     {
                         Interlocked.Decrement(ref _inFlight);
+                TryFinishDisposal();
                         _gate.Release();
                     }
                     return System.Reactive.Unit.Default;
@@ -371,42 +380,49 @@ public sealed class IoPool : IIoPool, IDisposable
     /// </summary>
     public void Dispose()
     {
-        // 🚨 ORDER IS THE WHOLE POINT. This used to set _disposed and only THEN call Drain(), whose
-        // idempotence guard (`if (_disposed) return 0`) returned early on exactly that flag — so
-        // Dispose JOINED NOTHING, and this method's promise ("when it returns, no pool thread is
-        // running, so the caller may safely unload the node ALCs whose types that work referenced")
-        // was unbacked on the disposal path, which is the path that unloads every ALC. Draining
-        // first is what makes the summary true.
+        // 🚨 DISPOSE MUST NOT BLOCK. An earlier attempt made this call Drain() — a synchronous
+        // join with a 30 s budget — which is itself the hazard: `using var pool = new IoPool(8)`
+        // in an async method runs this on a ThreadPool thread, so the join parks a pool thread
+        // while the very leaves it is waiting for need pool threads to observe the cancellation
+        // and release their permits. On a 4-vCPU CI runner that starves into a deadlock, and
+        // OrderedRouteDispatcherTest hung for its full 30 s budget — the exact failure recorded
+        // when this fix was first deferred. An 18-core dev box hides it completely.
         //
-        // The guard cannot stay a `_disposed` read for the same reason, so idempotence moves to its
-        // own CAS: the first caller drains and releases, any concurrent caller returns immediately
-        // (and can await Disposed if it needs the report).
-        DisposeAndJoin();
+        // So: cancel here (leaves unwind promptly), and put the WAITING on `Disposed`, which the
+        // caller awaits ASYNCHRONOUSLY. Resource release happens on the last leaf's way out —
+        // see TryFinishDisposal — because a leaf still running would otherwise touch a disposed
+        // _gate / _poolCts.
+        if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return;
+
+        // Set BEFORE the cancel so a leaf issued in the gap short-circuits to Cancelled<T>()
+        // instead of racing the token.
+        _disposed = true;
+        try { _poolCts.Cancel(); } catch (ObjectDisposedException) { /* already released */ }
+
+        // Covers the common case: nothing in flight, so disposal completes right here.
+        TryFinishDisposal();
     }
 
     /// <summary>
-    /// <see cref="Dispose"/>, but returns what survived the join instead of discarding it — the
-    /// form <see cref="IoPoolRegistry"/> needs so it can aggregate across pools without blocking
-    /// on <see cref="Disposed"/>. Idempotent; a second caller gets <c>0</c> and must read
-    /// <see cref="Disposed"/> for the real report.
+    /// Completes disposal once the last leaf has unwound: releases the gate/CTS and fires
+    /// <see cref="Disposed"/>. Called from <see cref="Dispose"/> (for an already-idle pool) and
+    /// from every leaf's exit path. Idempotent — only the transition to zero reports.
+    ///
+    /// <para>If a leaf never unwinds, <see cref="Disposed"/> simply never fires and the caller's
+    /// bounded wait surfaces that as the timeout it is. That is the honest outcome: the resources
+    /// stay held rather than being pulled out from under a live thread.</para>
     /// </summary>
-    /// <returns>Leaves that did not unwind within the drain budget; <c>0</c> means a real join.</returns>
-    public int DisposeAndJoin()
+    private void TryFinishDisposal()
     {
-        if (Interlocked.CompareExchange(ref _disposing, 1, 0) != 0) return 0;
+        if (Volatile.Read(ref _disposing) == 0) return;
+        if (Volatile.Read(ref _inFlight) != 0 || Volatile.Read(ref _blockingInFlight) != 0) return;
+        if (Interlocked.CompareExchange(ref _disposalReported, 1, 0) != 0) return;
 
-        var residual = Drain();
-        _disposed = true;
         _poolCts.Dispose();
         _gate.Dispose();
         _blockingIdle.Dispose();
-
-        // Report AFTER the release, so a subscriber that proceeds on this signal cannot observe a
-        // half-torn-down pool. Non-zero means live work survived the join and the caller must NOT
-        // unload ALCs silently over it.
-        _disposedSubject.OnNext(residual);
+        _disposedSubject.OnNext(0);
         _disposedSubject.OnCompleted();
-        return residual;
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using MeshWeaver.Mesh.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -61,15 +62,29 @@ public sealed class IoPoolSiloTeardown(
             "IoPoolSiloTeardown: draining pooled I/O before the silo releases (in-flight={InFlight})",
             registry.TotalInFlight);
 
-        // Dispose CANCELS every leaf and JOINS — a live change-feed leaf never completes on its
-        // own, so a wait-without-cancel would burn the budget and then release over live work.
-        // Run it off the lifecycle thread: it is synchronous and bounded, and blocking Orleans's
-        // shutdown path outright is worse than awaiting it.
-        var leaked = await Task.Run(registry.DisposeAndJoin, CancellationToken.None)
-            .WaitAsync(JoinBudget, CancellationToken.None)
+        // Dispose CANCELS every leaf (a live change-feed leaf never completes on its own, so a
+        // wait-WITHOUT-cancel would burn the budget and then release over live work) and returns
+        // immediately. The WAIT is the observable — awaited, never blocked on: parking a thread
+        // here while the leaves need threads to unwind is the starvation deadlock that made
+        // OrderedRouteDispatcherTest hang for its full budget on a 4-vCPU runner.
+        registry.Dispose();
+
+        var leaked = await registry.Disposed
+            .Timeout(JoinBudget)
+            // Timeout means a leaf never unwound. Report it as a residual rather than throwing:
+            // shutdown must continue, and the log below is the only attribution a later SIGSEGV gets.
+            .Catch<int, Exception>(_ => Observable.Return(-1))
+            .FirstAsync()
+            .ToTask()
             .ConfigureAwait(false);
 
-        if (leaked == 0)
+        if (leaked < 0)
+            logger.LogError(
+                "IoPoolSiloTeardown: pooled I/O did not finish within {Budget} — the silo is "
+                + "releasing over live work. A leaf ignored its cancellation token; fix the leaf, "
+                + "do not widen the budget.",
+                JoinBudget);
+        else if (leaked == 0)
             logger.LogInformation("IoPoolSiloTeardown: pooled I/O joined — no pool thread is running");
         else
             // The ONLY attribution a subsequent SIGSEGV will get. Never downgrade this: the silo is
