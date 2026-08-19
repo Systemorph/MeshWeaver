@@ -48,13 +48,5 @@
     </ItemGroup>
 
 
-
-  <ItemGroup>
-    <!-- The export-under-Orleans suite moved out with its module (MeshWeaver.Plugins),
-         but it still boots THIS project's cluster fixture and uses its internal
-         disposal helper. The friendship follows the suite rather than the helper being
-         duplicated, which would drift from the fixture it is meant to tear down. -->
-    <InternalsVisibleTo Include="MeshWeaver.Markdown.Export.Test" />
-  </ItemGroup>
 </Project>
             
