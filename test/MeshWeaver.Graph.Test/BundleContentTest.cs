@@ -200,4 +200,36 @@ public class BundleContentTest
 
         return rewritten.ToArray();
     }
+
+    [Fact]
+    public void SourceInclusionIsDeclared_NotInferredFromTheFileList()
+    {
+        // A consumer that cannot resolve `shared=@pkg/…` must be able to tell WITHHELD from
+        // NEVER-EXISTED: the first means its build cannot succeed and should say so, the second
+        // means nothing is wrong. A file-list inference reports the first for the second.
+        var buffer = new MemoryStream();
+        BundleWriter.Write(
+            buffer, "Edu", "1.4.0", Mvid,
+            [new BundleWriter.AssemblyEntry("Edu/Module", () => new MemoryStream("M"u8.ToArray()))],
+            content: [File("index.json", "{}")],
+            sourceIncluded: false);
+
+        var (manifest, files) = BundleReader.ReadContent(buffer.ToArray());
+
+        Assert.False(manifest!.SourceIncluded);
+        Assert.Equal("index.json", Assert.Single(files).RelativePath);
+    }
+
+    [Fact]
+    public void ALegacyBundleLeavesSourceInclusionUnknown()
+    {
+        // Null, never false: a bundle written before the declaration existed says nothing about
+        // its source, and reading that silence as "withheld" would invent a policy its producer
+        // never expressed.
+        var bundle = WriteBundle(File("index.json", "{}"));
+
+        var (manifest, _) = BundleReader.ReadContent(bundle);
+
+        Assert.Null(manifest!.SourceIncluded);
+    }
 }
