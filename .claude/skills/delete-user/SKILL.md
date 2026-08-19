@@ -7,6 +7,19 @@ allowed-tools:
   - Read
 ---
 
+> The cluster name, resource group and namespace list are deployment identities and live in
+> the PRIVATE `Systemorph/Memex` repo — `deployments/aks/envs.json` (cluster + environments)
+> and `docs/deployments.md`. Export them once per session rather than hard-coding them here:
+>
+> ```bash
+> eval "$(gh api repos/Systemorph/Memex/contents/deployments/aks/envs.json --jq '.content' | base64 -d \
+>   | jq -r '"AKS_RG=\(.cluster.resourceGroup) AKS_CLUSTER=\(.cluster.name) NAMESPACES=\"\([.environments[].ns]|join(" "))\""')"
+> ```
+>
+> Verified to set all three (`memex-aks-rg` / `memexaks-cluster` / the three namespaces) on
+> 2026-08-19. Reading it from the source of truth also means a new environment shows up here
+> automatically instead of this file going quietly stale.
+
 # /delete-user — remove a user + partition from a running MeshWeaver portal
 
 Deleting a user is **not** an MCP/API operation — the framework guards it. This skill does it via the Postgres layer, safely.
@@ -34,7 +47,7 @@ So dropping `<id>` alone can leave `<id>@<domain>` behind. Drop **both**.
 
 ## 3. Reach Postgres
 
-The private AKS cluster: `kubectl` only via `az aks command invoke -g memex-aks-rg -n memexaks-cluster --command "…"`.
+The private AKS cluster: `kubectl` only via `az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command "…"`.
 
 **The DB password is inline in the portal's `ConnectionStrings__memex` env — NOT the `POSTGRES_PASSWORD` secret** (that secret is a *different, unused* value; using it gives `password authentication failed`). Parse the real one out of the portal env and hand it to a `postgres:16` client pod (the invoke shell has **no `sed`/`tr`/`python3`** — use bash parameter expansion only). Pass SQL to the pod **base64-encoded** to dodge four levels of quoting.
 
@@ -72,7 +85,7 @@ DROP SCHEMA "roland.buergi" CASCADE;
 DROP SCHEMA "roland.buergi@gmail.com" CASCADE;   -- if it exists
 
 # 2) clear the in-memory copy so it can't resurrect
-az aks command invoke -g memex-aks-rg -n memexaks-cluster --command \
+az aks command invoke -g "$AKS_RG" -n "$AKS_CLUSTER" --command \
   "kubectl -n memex rollout restart deployment/memex-portal-deployment; kubectl -n memex rollout status deployment/memex-portal-deployment --timeout=300s"
 ```
 

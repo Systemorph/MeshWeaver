@@ -318,10 +318,9 @@ public static class MemexConfiguration
         // Social publishing (LinkedIn connect/publish/page-sync + node-menu providers) rides the
         // MeshWeaver.Social MODULE (Modules:Assemblies): SocialMeshModuleAttribute registers the
         // DI services + menu providers, SocialModuleAttribute contributes the endpoints via
-        // app.MapMeshModuleEndpoints() below. Only the ApiCredential NodeType registration
-        // (AddApiCredentialType) and the LinkedIn SIGN-IN scheme (AddLinkedInAuthentication)
-        // stay compiled here — existing credential nodes must deserialize and auth schemes
-        // configure before the host builds, module or no module.
+        // app.MapMeshModuleEndpoints() below, and the module now registers its own ApiCredential
+        // NodeType. Only the LinkedIn SIGN-IN scheme (AddLinkedInAuthentication) stays compiled
+        // here, because auth schemes configure before the host builds — module or no module.
 
         // Configure authentication
         var authSection = builder.Configuration.GetSection(PortalAuthOptions.SectionName);
@@ -532,7 +531,12 @@ public static class MemexConfiguration
             // NodeType bake lane's). Pre-DI, so diagnostics go to stderr (pod stdout/stderr ship
             // to Loki regardless).
             var moduleAssemblies = configuration.GetSection("Modules:Assemblies").Get<string[]>();
-            var persistedActivation = ModuleActivationSidecar.Read(AppContext.BaseDirectory,
+            // 🚨 The SAME root ModuleLandingService writes (ModuleRoot) — never
+            // AppContext.BaseDirectory directly. They must name one directory: a landed module
+            // read from somewhere else is simply invisible, and on a deployment whose /app is
+            // read-only the writer cannot use AppContext.BaseDirectory at all.
+            var moduleRoot = ModuleRoot.Resolve(configuration);
+            var persistedActivation = ModuleActivationSidecar.Read(moduleRoot,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
                 moduleAssemblies,
@@ -544,14 +548,14 @@ public static class MemexConfiguration
                 // BaseDirectory fallback would let a sidecar entry with a lost modules/ folder
                 // silently bind a same-named app-closure DLL instead of being skipped. Baseline
                 // entries below keep ResolveModulePath (both locations are legitimate for them).
-                name => ModuleActivationBoot.LandedModuleDllExists(AppContext.BaseDirectory, name),
+                name => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, name),
                 (module, reason) => Console.Error.WriteLine(
                     $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"));
             if (effectiveModules.Count > 0)
                 // ResolveModulePath probes the modules/<name>/ publish layout first (#1644),
                 // then falls back to the classic BaseDirectory-relative location.
                 builder.InstallAssemblies(effectiveModules
-                    .Select(MeshBuilder.ResolveModulePath)
+                    .Select(entry => MeshBuilder.ResolveModulePath(entry, moduleRoot))
                     .ToArray());
             // Restart-as-activation: this boot IS the restart the sidecar was waiting for —
             // consume the pending flag so the step-10 signal reads current. Best-effort: on a
@@ -559,7 +563,7 @@ public static class MemexConfiguration
             if (persistedActivation.PendingRestart)
                 try
                 {
-                    ModuleActivationSidecar.Write(AppContext.BaseDirectory,
+                    ModuleActivationSidecar.Write(moduleRoot,
                         persistedActivation with { PendingRestart = false });
                 }
                 catch (Exception ex)
@@ -692,11 +696,6 @@ public static class MemexConfiguration
                 // Register the instance-sync content type ({space}/_Sync/{sourceId} config
                 // nodes) on the mesh + per-node hubs so they (de)serialize.
                 .AddInstanceSyncTypes()
-                // Register the ApiCredential satellite NodeType (+ PlatformCredential content type)
-                // so the LinkedIn/X connect callbacks can create {profile}/_ApiCredentials/{platform}
-                // credential nodes. Without this the create throws "NodeType 'ApiCredential' is not
-                // registered" — the OAuth callback's persist step fails and sign-in reports failure.
-                .AddApiCredentialType()
                 // Register the OAuthCode NodeType + AuthorizationCode content type so the
                 // MCP OAuth server (OAuthCodeStore) can persist pending authorization codes
                 // as Admin/OAuthCode/{hashPrefix} mesh nodes — the replica-safe store every
@@ -1175,6 +1174,12 @@ public static class MemexConfiguration
         // an admin-minted bootstrap key (mwr_) and receives its own instance key (mwi_) once;
         // PluginCatalog:DefaultGrants seeding applies. The bootstrap key in the body IS the auth.
         app.MapInstanceRegistration();
+
+        // Short-lived credential exchange — POST /api/instances/token. A registered instance trades
+        // its durable mwi_ key for a scoped, minutes-long mwa_ token, so a consumer (a build agent,
+        // a disposable mesh) holds nothing long-lived. Only the durable key may mint; a token can
+        // never mint its successor.
+        app.MapInstanceTokenExchange();
 
         // Crawler plumbing — a real /robots.txt + /sitemap.xml (the Blazor catch-all otherwise
         // serves the SPA shell on both). The sitemap lists exactly the anonymous surface: every

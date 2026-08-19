@@ -30,6 +30,18 @@ public static class BundleReader
     /// consumer too — a bundle that quietly arrives with fewer assemblies than the package has types
     /// is indistinguishable from a complete one, and "adopted N" is the only evidence the whole
     /// distribution lane works.</param>
+    /// <param name="SourceIncluded">Whether <paramref name="Content"/> includes the package's C#
+    /// SOURCE. Null on a legacy bundle (unknown). 🚨 This is a DECLARATION, not an inference from
+    /// the file list, because the two answer different questions: a package may legitimately
+    /// contain no C# at all, and a consumer that cannot resolve a <c>shared=@…</c> include needs to
+    /// know whether the source was WITHHELD (its build cannot succeed and should say so) or simply
+    /// never existed (nothing is wrong). Inferring "no .cs files ⇒ source withheld" would report
+    /// the first for the second.</param>
+    /// <param name="Content">The package's own NODE DEFINITION files, relative to
+    /// <see cref="NuGetPackageWriter.ContentFolder"/> — present when the producer shipped the
+    /// package tree alongside its bytes, null for an assemblies-only bundle. A consumer that means
+    /// to USE this package as an upstream needs these: the bytes only stamp nodes that already
+    /// exist, so without the definitions there is nothing to stamp.</param>
     public sealed record Manifest(
         string? Plugin,
         string? Version,
@@ -37,7 +49,9 @@ public static class BundleReader
         IReadOnlyList<AssemblyRef>? Assemblies,
         ModuleRef? Module = null,
         string? Architecture = null,
-        IReadOnlyList<string>? Misses = null);
+        IReadOnlyList<string>? Misses = null,
+        IReadOnlyList<string>? Content = null,
+        bool? SourceIncluded = null);
 
     /// <summary>One assembly and the NodeType it implements.</summary>
     /// <param name="NodePath">Mesh path of the NodeType — the key a consumer re-seeds under.</param>
@@ -64,6 +78,12 @@ public static class BundleReader
     /// <param name="FileName">File name as the manifest declared it.</param>
     /// <param name="Bytes">The file's bytes.</param>
     public sealed record ModuleFile(string FileName, byte[] Bytes);
+
+    /// <summary>One node-definition file recovered from the bundle.</summary>
+    /// <param name="RelativePath">Path within the package tree, exactly as the manifest declared
+    /// it — the layout a consumer recreates on disk.</param>
+    /// <param name="Bytes">The file's bytes, verbatim.</param>
+    public sealed record ContentFile(string RelativePath, byte[] Bytes);
 
     /// <summary>An assembly's bytes, ready to seed.</summary>
     /// <param name="NodePath">Mesh path of the NodeType these bytes implement.</param>
@@ -199,6 +219,85 @@ public static class BundleReader
 
         using var stream = manifestEntry.Open();
         return JsonSerializer.Deserialize<Manifest>(stream, Json);
+    }
+
+    /// <summary>
+    /// Rejects a declared content path that could escape the directory a consumer extracts into.
+    ///
+    /// <para>🚨 This is the one place in the bundle format where PRODUCER-CONTROLLED STRINGS BECOME
+    /// FILE PATHS on a consumer's machine. Everything else a bundle carries is either bytes keyed by
+    /// a node path (used as a dictionary key, never as a path) or a module file name the module
+    /// lane validates. A relative path is joined to an output directory and written, so
+    /// <c>../../…</c>, a rooted path, or a drive-qualified one would place attacker-chosen bytes
+    /// outside it — on a BUILD AGENT, which then compiles what it finds.</para>
+    ///
+    /// <para>Enforced on READ rather than only at the extraction site, because the alternative is
+    /// every consumer re-deriving the same rule and one of them getting it wrong. The writer
+    /// refuses to declare such a path too; this is the half that also holds for a bundle this
+    /// process did not produce.</para>
+    /// </summary>
+    private static bool IsUnsafeContentPath(string relativePath) =>
+        string.IsNullOrWhiteSpace(relativePath)
+        || Path.IsPathRooted(relativePath)
+        || relativePath.Contains('\\')                       // a Windows separator is not our shape
+        || relativePath.Contains(':')                          // drive- or scheme-qualified
+        || relativePath.Split('/').Any(segment => segment is ".." or ".");
+
+    /// <summary>
+    /// Extracts the package's NODE DEFINITIONS — the tree a consumer recreates to use this package
+    /// as an upstream WITHOUT cloning and recompiling it.
+    ///
+    /// <para>🚨 Manifest-driven, like <see cref="Read(byte[])"/>, and for a sharper reason here:
+    /// these files are written to a consumer's working tree. Globbing
+    /// <see cref="NuGetPackageWriter.ContentFolder"/> would recreate whatever a future producer
+    /// happens to put there, so only DECLARED paths are extracted.</para>
+    ///
+    /// <para>🚨 A declared file the archive lacks is FATAL to the whole read — this returns empty
+    /// rather than a partial tree. Unlike a missing assembly (skipped: that one NodeType merely
+    /// compiles as it would have anyway), a half-materialised package is worse than none: its roots
+    /// reference nodes that are not there, so the consumer fails at bind time with a missing-node
+    /// error that names the wrong thing. All or nothing, the same rule
+    /// <see cref="ReadModule(byte[])"/> applies to a module's closure.</para>
+    /// </summary>
+    /// <param name="bundle">The archive bytes.</param>
+    /// <returns>The manifest (null when the archive carries none) and the declared files.</returns>
+    public static (Manifest? Manifest, IReadOnlyList<ContentFile> Files) ReadContent(byte[] bundle)
+    {
+        using var buffer = new MemoryStream(bundle, writable: false);
+        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+
+        var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
+        if (manifestEntry is null)
+            return (null, []);
+
+        Manifest? manifest;
+        using (var stream = manifestEntry.Open())
+            manifest = JsonSerializer.Deserialize<Manifest>(stream, Json);
+
+        if (manifest?.Content is not { Count: > 0 } declared)
+            return (manifest, []);
+
+        var files = new List<ContentFile>();
+        foreach (var relativePath in declared)
+        {
+            // 🚨 THROWS rather than returning empty. An incomplete archive is a benign producer
+            // bug and degrades to "no content"; a path that escapes the extraction directory is
+            // hostile or corrupt, and a caller about to write files must not be able to mistake it
+            // for "this bundle carries none".
+            if (IsUnsafeContentPath(relativePath))
+                throw new InvalidOperationException(
+                    $"bundle declares an unsafe content path '{relativePath}' — a package tree is "
+                    + "extracted relative to an output directory, so a rooted or parent-traversing "
+                    + "path would write outside it");
+
+            var entry = archive.GetEntry($"{NuGetPackageWriter.ContentFolder}/{relativePath}");
+            if (entry is null)
+                // Incomplete tree — all or nothing (see remarks).
+                return (manifest, []);
+            files.Add(new ContentFile(relativePath, ReadAll(entry)));
+        }
+
+        return (manifest, files);
     }
 
     /// <summary>

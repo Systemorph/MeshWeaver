@@ -4,6 +4,8 @@ using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -32,10 +34,13 @@ public static class PluginCatalogConfigurationExtensions
             .AddMeshNodes(CreateCatalogNodeType())
             .AddMeshNodes(CreateInstalledPartitionPolicy())
             .AddMeshNodes(CreateRegistryCredentialNodeType())
+            .AddMeshNodes(CreateSigningKeyNodeType())
             .AddMeshNodes(CreateModuleDiscoveryNodeType())
             .AddMeshNodes(CreateDefaultInstallLedgerNodeType())
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
+            // The registry's token signing key — infrastructure, never pickable content.
+            .AddAutocompleteExcludedTypes(SyncTokenSigningKeys.NodeType)
             // Bookkeeping, never pickable content — same reason as the credential above.
             .AddAutocompleteExcludedTypes(InstanceAutoRegistrationService.LedgerNodeType)
             // The build-completion subscriber. A mesh-scoped SINGLETON, so its subscriptions live
@@ -63,6 +68,14 @@ public static class PluginCatalogConfigurationExtensions
                 // surface. Mesh-scoped singleton so its short-lived cache dies with the mesh
                 // (Doc/Architecture/NoStaticState) — a revoked grant must not outlive a test either.
                 .AddSingleton<InstanceRegistryAuthenticator>()
+                // Issues and revokes the SYNC LICENCE that authenticator then reads. One writer for
+                // every issuer (the admin tab, a fulfilled order, a redeemed coupon, an automated
+                // provision), so a licence carries its terms — and its attribution — however it was
+                // granted. Mesh-scoped like the authenticator it feeds.
+                .AddSingleton<SyncLicenseService>()
+                // Mints (once, per registry) and rotates the key that signs short-lived sync access
+                // tokens. Mesh-scoped so its cache dies with the mesh, like the authenticator.
+                .AddSingleton<SyncTokenSigningKeyService>()
                 // Registration bootstrap keys (mwr_) — minted on the admin surface, validated by
                 // the /api/instances/register endpoint. Mesh-scoped like everything above.
                 .AddSingleton<RegistrationKeyService>()
@@ -108,7 +121,12 @@ public static class PluginCatalogConfigurationExtensions
                 // assemblies + activation record; restart-as-activation. Inert until called:
                 // Slice C's PackageInstaller binary branch is its caller. Mesh-scoped so its
                 // bounded IO pool dies with the mesh.
-                .AddSingleton<ModuleLandingService>())
+                // 🚨 Constructed with the resolved MODULE ROOT, never the default: the default is
+                // AppContext.BaseDirectory, which is READ-ONLY in the container, so a landing there
+                // fails with a denied-path error the publisher sees as HTTP 409. See ModuleRoot.
+                .AddSingleton(sp => new ModuleLandingService(
+                    sp.GetService<ILogger<ModuleLandingService>>(),
+                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))))
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();
@@ -136,6 +154,7 @@ public static class PluginCatalogConfigurationExtensions
             .WithType(typeof(PluginCatalogContent), nameof(PluginCatalogContent))
             .WithType(typeof(PluginManifest), nameof(PluginManifest))
             .WithType(typeof(PluginRegistryCredential), nameof(PluginRegistryCredential))
+            .WithType(typeof(SyncTokenSigningKey), nameof(SyncTokenSigningKey))
             .WithType(typeof(ModuleDiscovery), nameof(ModuleDiscovery))
             .WithType(typeof(DefaultInstallLedger), nameof(DefaultInstallLedger));
 
@@ -165,6 +184,19 @@ public static class PluginCatalogConfigurationExtensions
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         HubConfiguration = config => config
             .AddMeshDataSource(s => s.WithContentType<PluginRegistryCredential>()),
+    };
+
+    // The HMAC key this registry signs short-lived sync access tokens with. Sits beside the registry
+    // credential for the same reasons: an Admin-partition secret whose partition access control is
+    // the gate, enc:-protected at rest, and never content a user creates. ONE node per registry at a
+    // FIXED path — that is what lets two replicas racing to mint it collide and resolve to one key.
+    private static MeshNode CreateSigningKeyNodeType() => new(SyncTokenSigningKeys.NodeType)
+    {
+        Name = "Sync Token Signing Key",
+        IsSatelliteType = false,
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        HubConfiguration = config => config
+            .AddMeshDataSource(s => s.WithContentType<SyncTokenSigningKey>()),
     };
 
     // What a configured plugin repo carries and what this instance did with it (#833). An

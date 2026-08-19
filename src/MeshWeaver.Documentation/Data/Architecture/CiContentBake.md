@@ -602,7 +602,7 @@ tracking its consumer, not CI logic tracking a moving trunk; pin it (the input e
 bisect a script regression.
 
 The satellites' OIDC publish is **provisioned** (2026-08-17): the Azure managed identity
-`github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
+`github-actions-bake` (in the cluster's resource group) holds *Storage File Data Privileged Contributor* on the
 portals' storage account and carries 8 federated credentials — the four satellite repos × the two
 GitHub subject formats (classic and immutable; **register both, always** — see
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)) — with the

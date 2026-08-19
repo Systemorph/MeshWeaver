@@ -70,7 +70,6 @@
          The composition root carries no provider type references. -->
 
     <!-- Social publishing -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
   </ItemGroup>
 
   <ItemGroup>

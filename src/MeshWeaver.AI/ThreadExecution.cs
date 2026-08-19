@@ -2038,9 +2038,30 @@ internal static class ThreadExecution
                 var roundCompletion = new System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit>();
                 var aiPool = parentHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Ai)
                     ?? IoPool.Unbounded;
-                // poolCt (the pool's cancellation) is intentionally unused — the round's
-                // own executionCts.Token (below) is authoritative and is cancelled on hub
-                // disposal, so cancellation flows through it regardless of the pool token.
+                // 🚨 poolCt MUST be observed — it is linked into the round's token below.
+                //
+                // This used to say the pool token was "intentionally unused" because
+                // executionCts "is cancelled on hub disposal, so cancellation flows through it
+                // regardless of the pool token". That premise is false: IoPool.Drain() is NOT hub
+                // disposal. Drain is the join every teardown orchestrator (MonolithMeshTestBase,
+                // MeshTeardownExtensions, HubTestBase) performs BEFORE disposing the service scope
+                // and unloading collectible node ALCs, and it works by cancelling the pool token
+                // and then re-acquiring every gate permit. A round that never reads poolCt holds
+                // its permit, so the join cannot complete: Drain sits out its full 30 s
+                // DrainTimeout and then reports the permit as a leaked leaf, and teardown proceeds
+                // over a thread still executing that ALC's code — the use-after-unload SIGSEGV
+                // precondition Drain exists to rule out. Without the link the round unwound only
+                // on hub disposal or the 30-MINUTE MaxStreamingDuration ceiling.
+                //
+                // Observed in CI as DelegationSubThreadUsageTest failing in TEARDOWN with
+                // "1 pooled I/O leaf(s) still running" after a 32 009 ms dispose — 30 s of
+                // DrainTimeout plus overhead — with no assertion in the test body having failed.
+                // Pinned by AiPoolDrainJoinsRoundTest, which parks a round inside the model call
+                // and asserts DrainAll() returns 0.
+                //
+                // During normal operation this changes nothing: _poolCts is cancelled only by
+                // Drain()/Dispose(), both terminal teardown operations after which the pool is not
+                // reused. So the link is inert until teardown, and at teardown it is the point.
                 return aiPool.Invoke(async poolCt =>
                 {
                     // Re-seed user AccessContext at the task-launch boundary. Inside this lambda we
@@ -2067,7 +2088,7 @@ internal static class ThreadExecution
                         parentHub.ServiceProvider.GetService<AiStreamingLimits>()?.MaxStreamingDuration
                         ?? MaxStreamingDuration;
                     var streamingTimeoutCts =
-                        CancellationTokenSource.CreateLinkedTokenSource(executionCts.Token);
+                        CancellationTokenSource.CreateLinkedTokenSource(executionCts.Token, poolCt);
                     streamingTimeoutCts.CancelAfter(maxStreamingDuration);
                     var ct = streamingTimeoutCts.Token;
                     // responseText / capturedResponseText / segment.ResponseText were
@@ -2522,7 +2543,15 @@ internal static class ThreadExecution
                     // OperationCanceledException (the linked streamingTimeoutCts fired WITHOUT
                     // executionCts) but must NOT masquerade as a user cancel — it falls through to
                     // the generic catch below and terminates as a round ERROR (#147).
-                    catch (OperationCanceledException) when (executionCts.IsCancellationRequested)
+                    // poolCt is the SHUTDOWN cancel: IoPool.Drain() cancelling the pool is teardown,
+                    // semantically the same graceful stop as hub disposal — NOT a streaming hang. It
+                    // must be classified here, because it fires streamingTimeoutCts WITHOUT
+                    // executionCts, which is exactly the shape the generic catch below converts into
+                    // "AI streaming exceeded the maximum round duration of 00:30:00" and terminates
+                    // as Status=Error. Without this clause every round alive at shutdown would write
+                    // that alarming, false timeout to the user's response cell. (Copilot review, #1879.)
+                    catch (OperationCanceledException)
+                        when (executionCts.IsCancellationRequested || poolCt.IsCancellationRequested)
                     {
                         logger.LogInformation("[ThreadExec] CANCELLED: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
                         // ToString must be under logLock — UpdateDelegationStatus
@@ -2618,9 +2647,14 @@ internal static class ThreadExecution
                         // below (response cell → Status=Error, thread → Idle, parent notified)
                         // tells the user WHY the round was aborted instead of a bare "The
                         // operation was canceled." — never a silent swallow, never a fake cancel.
+                        // 🚨 !poolCt: a pool-driven (teardown) cancel also fires streamingTimeoutCts
+                        // without executionCts, so without this guard shutdown would be reported as
+                        // a #147 streaming timeout. The catch above already claims that case; this
+                        // keeps the predicate honest if the clauses are ever reordered.
                         var ex = exRaw is OperationCanceledException
                                  && streamingTimeoutCts.IsCancellationRequested
                                  && !executionCts.IsCancellationRequested
+                                 && !poolCt.IsCancellationRequested
                             ? new TimeoutException(
                                 $"AI streaming exceeded the maximum round duration of " +
                                 $"{maxStreamingDuration} and was aborted (#147). The model endpoint " +
