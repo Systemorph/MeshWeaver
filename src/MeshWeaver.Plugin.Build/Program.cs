@@ -15,11 +15,18 @@ using MeshWeaver.Plugin.Build;
 if (args.Length > 0 && args[0] == ModulePackCommand.Verb)
     return ModulePackCommand.Run(args.Skip(1).ToArray());
 
+// The module-fetch verb: the CONSUMING half. A repo that depends on another fetches its RELEASED
+// package here instead of cloning and recompiling it — the mechanism "build only what you own"
+// needs (Doc/Architecture/ReleaseGates).
+if (args.Length > 0 && args[0] == ModuleFetchCommand.Verb)
+    return ModuleFetchCommand.Run(args.Skip(1).ToArray());
+
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
     Console.WriteLine("""
         usage: meshweaver-plugin-build <pluginDirectory> [options]
                meshweaver-plugin-build module-pack <moduleOutputDir> [options]   (see module-pack --help)
+               meshweaver-plugin-build module-fetch <package> [options]          (see module-fetch --help)
 
           --out <dir>                 where to write generated projects (default: ./obj/plugin-build)
           --framework-version <v>     MeshWeaver package version to compile against, or `latest`
