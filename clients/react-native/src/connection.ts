@@ -18,6 +18,12 @@ export interface MeshInstance {
   color?: string;
   /** Optional explicit environment kind label (e.g. "Prod", "Local · k8s"). */
   kind?: string;
+  /** OAuth refresh token (browser sign-in); absent for pasted API tokens. */
+  refreshToken?: string;
+  /** OAuth client id this app registered at the portal (dynamic client registration). */
+  clientId?: string;
+  /** Epoch ms when the OAuth access token expires; pasted API tokens have none. */
+  tokenExpiresAt?: number;
 }
 
 /**
@@ -74,6 +80,22 @@ export const KNOWN_INSTANCES: MeshInstance[] = [
   { name: "memex.localhost (k8s)", url: "https://memex.localhost:8443", token: "", local: false, icon: "☸", color: "#d29922", kind: "Local · k8s" },
   { name: "memex", url: "https://memex.meshweaver.cloud", token: "", local: false, icon: "☁️", color: "#4c8dff", kind: "Prod" },
 ];
+
+// Live connect status — a tiny observable the Connect screen renders, because a Release
+// build swallows console and a failed connect must be VISIBLE truth on the device, not a
+// silently reopened onboarding.
+type StatusListener = () => void;
+const statusListeners = new Set<StatusListener>();
+let lastConnectStatus = "";
+export function setConnectStatus(status: string): void {
+  lastConnectStatus = status;
+  for (const l of statusListeners) l();
+}
+export function getConnectStatus(): string { return lastConnectStatus; }
+export function onConnectStatus(listener: StatusListener): () => void {
+  statusListeners.add(listener);
+  return () => statusListeners.delete(listener);
+}
 
 /**
  * Discover the fleet from a connected mesh: instances are MESH NODES (nodeType

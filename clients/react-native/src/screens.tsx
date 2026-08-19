@@ -3,7 +3,8 @@
 // mesh): Voice (speech), Connect (remote instances), Profile, Settings.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet } from "react-native";
-import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, discoverInstances, mergeDiscovered, type MeshInstance } from "./connection";
+import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, discoverInstances, mergeDiscovered, getConnectStatus, onConnectStatus, type MeshInstance } from "./connection";
+import { refreshOAuth, signInWithOAuth } from "./oauth";
 import { useStyles, useTheme, type Palette } from "./theme";
 
 const useSheet = () => useStyles(makeStyles);
@@ -135,9 +136,30 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
   // primary choice; the raw add-a-portal form is advanced and folded away. Signing in is a
   // per-mesh act (tap a mesh → paste a token), not a wall in front of the app.
   const firstRun = !instances.some((i) => !i.local && i.token);
+  // The live connect's status, rendered HERE — a Release build has no console, and a
+  // failed connect must be readable where the user is looking.
+  const [connectStatus, setConnectStatus_] = useState(getConnectStatus());
+  useEffect(() => onConnectStatus(() => setConnectStatus_(getConnectStatus())), []);
   const [showForm, setShowForm] = useState(false);
   const [tokenFor, setTokenFor] = useState<string | null>(null);
   const [rowToken, setRowToken] = useState("");
+  const [busyFor, setBusyFor] = useState<string | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
+  // Browser sign-in: the portal's own login (SSO included) via its OAuth server — the
+  // primary path. Pasting an mw_ token stays as the fallback for headless setups.
+  const oauthSignIn = (inst: MeshInstance) => {
+    setBusyFor(inst.name); setRowError(null);
+    signInWithOAuth(inst.url)
+      .then((r) => {
+        saveInstance({ ...inst, token: r.accessToken, refreshToken: r.refreshToken,
+                       clientId: r.clientId, tokenExpiresAt: r.expiresAt });
+        refresh();
+        discover({ ...inst, token: r.accessToken });
+        onConnected();
+      })
+      .catch((e) => setRowError(`${inst.name}: ${e?.message ?? "sign-in failed"}`))
+      .finally(() => setBusyFor(null));
+  };
   const saveRowToken = (inst: MeshInstance) => {
     saveInstance({ ...inst, token: rowToken.trim() });
     setTokenFor(null); setRowToken("");
@@ -158,7 +180,21 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
   const select = (n: string) => {
     setCurrentInstance(n); setCurrent(n);
     const inst = loadInstances().find((i) => i.name === n);
-    if (inst && !inst.local) discover(inst);
+    if (inst && !inst.local) {
+      // An expired OAuth token refreshes silently; a dead refresh token falls back to the
+      // visible "Sign in" affordance rather than failing areas one by one.
+      if (inst.refreshToken && inst.clientId && inst.tokenExpiresAt && inst.tokenExpiresAt < Date.now()) {
+        refreshOAuth(inst.url, inst.clientId, inst.refreshToken).then((r) => {
+          if (r) {
+            saveInstance({ ...inst, token: r.accessToken, refreshToken: r.refreshToken, tokenExpiresAt: r.expiresAt });
+            refresh(); onConnected();
+          } else {
+            setRowError(`${inst.name}: session expired — sign in again.`);
+          }
+        }).catch(() => {});
+      }
+      discover(inst);
+    }
     onConnected();
   };
   const add = () => {
@@ -182,6 +218,11 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
       subtitle={firstRun
         ? "Choose a mesh to connect to. You can browse public content right away — to sign in, tap a mesh and paste an API token (portal ▸ Settings ▸ Security ▸ API Tokens)."
         : "Your meshes. Tap to connect; discovered instances of a connected mesh appear here automatically."}>
+      {connectStatus ? (
+        <Text style={{ color: connectStatus.includes("failed") ? "#d13438" : "#4c8dff", marginBottom: 10 }}>
+          {connectStatus}
+        </Text>
+      ) : null}
       {instances.map((i) => {
         const id = instanceIdentity(i);
         const loud = id.tone === "prod" || id.tone === "client";
@@ -201,9 +242,16 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
               </Pressable>
             )}
             {!i.local && tokenFor !== i.name && (
-              <Pressable onPress={() => { setTokenFor(i.name); setRowToken(i.token); }} style={{ paddingVertical: 6 }}>
-                <Text style={{ color: "#4c8dff", fontSize: 13 }}>{i.token ? "Change token" : "Sign in with a token"}</Text>
-              </Pressable>
+              <View style={{ flexDirection: "row", gap: 16 }}>
+                <Pressable onPress={() => oauthSignIn(i)} style={{ paddingVertical: 6 }} disabled={busyFor === i.name}>
+                  <Text style={{ color: "#4c8dff", fontSize: 13, fontWeight: "600" }}>
+                    {busyFor === i.name ? "Signing in…" : i.token ? "Sign in again" : "Sign in"}
+                  </Text>
+                </Pressable>
+                <Pressable onPress={() => { setTokenFor(i.name); setRowToken(i.token); }} style={{ paddingVertical: 6 }}>
+                  <Text style={{ color: "#4c8dff", fontSize: 13 }}>paste a token</Text>
+                </Pressable>
+              </View>
             )}
             {tokenFor === i.name && (
               <View style={{ marginTop: 6 }}>
@@ -214,6 +262,7 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
           </View>
         );
       })}
+      {rowError ? <Text style={{ color: "#d13438", marginTop: 8 }}>{rowError}</Text> : null}
       {!showForm ? (
         <Pressable onPress={() => setShowForm(true)} style={{ marginTop: 18, paddingVertical: 8 }}>
           <Text style={{ color: "#4c8dff" }}>＋ Add a custom portal by URL</Text>

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { SafeAreaView, StatusBar, LogBox } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SafeAreaView, StatusBar, LogBox, Platform } from "react-native";
 import {
   RegistryProvider,
   ScopeProvider,
@@ -20,7 +20,7 @@ import { buildMeshOps } from "./src/liveOps";
 import { NavContext, CurrentAddressContext, type NavTarget } from "./src/nav";
 import { Shell, HOME } from "./src/Shell";
 import { ensureWebStyles } from "./src/webStyles";
-import { currentInstance, seedDefaultInstances } from "./src/connection";
+import { currentInstance, seedDefaultInstances, setConnectStatus } from "./src/connection";
 import { type ClientDestination } from "./src/screens";
 import { ThemeProvider, useTheme } from "./src/theme";
 import { ChatComposer } from "./src/chat";
@@ -103,9 +103,27 @@ function AppInner() {
     setClientScreen(null);
     setNav(t);
   };
+
+  // 📱 On a phone the app IS the onboarding until a mesh acks: the bundled sample
+  // ("MeshWeaver on React Native", Ada Lovelace, a stubbed Save) is a web/e2e artifact and
+  // must never greet a person — it reads as a broken login form. Web keeps the sample: the
+  // Playwright e2e drives it from a static export with no mesh to ack.
+  const wasLive = useRef(false);
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    if (!liveConnected && clientScreen == null) setClientScreen("instances");
+    // Close the onboarding exactly ONCE, on the not-connected → connected transition —
+    // a connected user opening the switcher on purpose must not have it snap shut.
+    if (liveConnected && !wasLive.current) setClientScreen((c) => (c === "instances" ? null : c));
+    wasLive.current = liveConnected;
+  }, [liveConnected, clientScreen]);
   const reconnect = () => {
-    setClientScreen(null);
+    // On a phone the onboarding stays visible until the mesh ACKS (the transition effect
+    // closes it) — closing eagerly here made a tap read as "connect just closes".
+    if (Platform.OS === "web") setClientScreen(null);
     setNav(HOME);
+    setLiveConnected(false);
+    wasLive.current = false;
     setInstanceTick((t) => t + 1);
   };
 
@@ -114,6 +132,7 @@ function AppInner() {
     if (!inst.url) return;
     let live: Awaited<ReturnType<typeof createLiveSource>> | null = null;
     let cancelled = false;
+    setConnectStatus(`Connecting to ${inst.name}…`);
     createLiveSource({ url: inst.url, token: inst.token, address: nav.address, area: nav.area })
       .then((l) => {
         if (cancelled) {
@@ -123,6 +142,7 @@ function AppInner() {
         live = l;
         setSource(l.source);
         setLiveConnected(true);
+        setConnectStatus("");
         // The SAME gRPC-web connection carries thread submissions (Mesh.startThread / Mesh.submitMessage)
         // AND the nested streams that `@@("area/X")` layout-area embeds open.
         setSubmitter(Mesh.from(l.connection));
@@ -131,7 +151,11 @@ function AppInner() {
         // anchor the interactive markdown + runnable code cells; the kernel activity lives in CHAT's partition.
         setMeshOps(buildMeshOps(l.connection, inst.url, CHAT?.namespacePath ?? "", inst.token));
       })
-      .catch((e) => { console.warn("[live] connect failed:", e?.message ?? String(e)); /* shell stays on the last-good source */ });
+      .catch((e) => {
+        // Release builds swallow console — surface the failure where the user IS (the
+        // onboarding renders this status), instead of a screen that silently reopens.
+        setConnectStatus(`${inst.name}: connect failed — ${e?.message ?? String(e)}`);
+      });
     return () => {
       cancelled = true;
       live?.connection.close();
