@@ -84,6 +84,30 @@ public interface IGitHubRepoClient
         => Observable.Return<IReadOnlyList<string>?>(null);
 
     /// <summary>
+    /// The repository's CANONICAL identity as GitHub reports it right now — the answer to
+    /// "which repository is this url actually pointing at today".
+    ///
+    /// <para>🚨 <b>A GitHub repository can be RENAMED, and every stored url keeps working.</b> The
+    /// old name 301-redirects to the new one, so git, <c>gh</c> and the REST API all carry on as if
+    /// nothing happened — while a stored <c>owner/repo</c> string silently stops matching the name
+    /// the repository now announces itself under (a webhook payload always carries the CURRENT
+    /// name). That is issue #1856: <c>Systemorph/education</c> → <c>Systemorph/MeshWeaver.Education</c>
+    /// left ten Spaces un-synced for four days while every delivery reported success.</para>
+    ///
+    /// <para>Emits <see langword="null"/> when the identity cannot be established — the repository
+    /// is unreachable with the supplied token, gone, or the implementation has no way to ask. Null
+    /// is "unknown", never "no such repository": a caller must fall back to whatever it knew, never
+    /// treat it as a negative answer. The default implementation returns null, so an implementation
+    /// that cannot ask degrades to plain string comparison rather than pretending to have
+    /// resolved.</para>
+    /// </summary>
+    /// <param name="repositoryUrl">The repository url to resolve (any name it has ever had).</param>
+    /// <param name="accessToken">Token to read with; empty = anonymous (public repositories only).</param>
+    /// <returns>The canonical owner/repo, or null when it cannot be established.</returns>
+    IObservable<RepoIdentity?> GetCanonicalRepository(string repositoryUrl, string accessToken)
+        => Observable.Return<RepoIdentity?>(null);
+
+    /// <summary>
     /// Creates <see cref="GitHubCreateBranchRequest.NewBranch"/> from
     /// <see cref="GitHubCreateBranchRequest.BaseRef"/> (resolving the base ref to its
     /// commit SHA first), and emits the new branch + the SHA it points at. Surfaces a
@@ -162,3 +186,34 @@ public interface IGitHubRepoClient
 
 /// <summary>A point-in-time snapshot of a repo subtree — the resolved commit SHA + its files.</summary>
 public record RepoSnapshot(string CommitSha, IReadOnlyList<RepoFile> Files);
+
+/// <summary>
+/// A repository's identity as <c>owner</c> + <c>repo</c> — the pair every stored url and every
+/// webhook payload is reduced to before they are compared.
+/// </summary>
+/// <param name="Owner">The owning user/organisation login.</param>
+/// <param name="Repo">The repository name.</param>
+public sealed record RepoIdentity(string Owner, string Repo)
+{
+    /// <summary>True when both halves are non-empty — an identity that can meaningfully match.</summary>
+    public bool IsComplete => Owner.Length > 0 && Repo.Length > 0;
+
+    /// <summary>
+    /// Whether two identities name the same repository. Case-insensitive because GitHub treats
+    /// owner and repository names case-insensitively (<c>Systemorph/education</c> and
+    /// <c>Systemorph/Education</c> are one repository); an incomplete identity never matches.
+    /// </summary>
+    /// <param name="other">The identity to compare against.</param>
+    /// <returns>True when both are complete and name the same repository.</returns>
+    public bool Matches(RepoIdentity? other)
+        => other is not null && IsComplete && other.IsComplete
+           && string.Equals(Owner, other.Owner, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(Repo, other.Repo, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The canonical <c>owner/repo</c> rendering — log copy and cache key.</summary>
+    /// <returns><c>owner/repo</c>.</returns>
+    public override string ToString() => $"{Owner}/{Repo}";
+
+    /// <summary>The canonical <c>https://github.com/owner/repo</c> url for this identity.</summary>
+    public string Url => $"https://github.com/{Owner}/{Repo}";
+}

@@ -186,7 +186,10 @@ public static class DocumentLayoutAreas
     private static IObservable<UiControl?> BuildBlockPanel(
         LayoutAreaHost host, Document document, string nodePath, int index, string terms)
     {
-        var store = host.Hub.ServiceProvider.GetService<IChunkedContentVectorStore>();
+        // GetActiveChunkStore, never GetService: on a deployment where the pipeline is wired but not
+        // configured the registration resolves an inert stand-in, and this view must read that as
+        // "not enabled" — the same branch as "never wired".
+        var store = host.Hub.ServiceProvider.GetActiveChunkStore();
         if (store is null)
             return Observable.Return((UiControl?)Controls.Markdown(
                 "_Content indexing is not enabled on this server._"));
@@ -282,7 +285,7 @@ public static class DocumentLayoutAreas
         // Load the deep-linked chunk's stored provenance (page + on-page box) so the viewer marks the exact
         // region — precise and independent of whether the chunk text can be re-found by string match. When
         // the store/chunk/position is absent the viewer falls back to the verbatim text highlight (terms).
-        var store = host.Hub.ServiceProvider.GetService<IChunkedContentVectorStore>();
+        var store = host.Hub.ServiceProvider.GetActiveChunkStore();
         var provenance = store is null
             ? Observable.Return<ContentChunk?>(null)
             : store.GetChunk(document.CollectionPath, document.FilePath, index)

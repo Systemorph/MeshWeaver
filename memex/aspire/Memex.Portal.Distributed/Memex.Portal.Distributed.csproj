@@ -45,7 +45,57 @@
          one to the reference set, so `MeshWeaver.Import.dll` in Modules:Assemblies IS the
          declaration. It is listed FIRST there — the reference set is composed from the installed
          modules, so it must precede anything that compiles against it. The bits ship via the
-         modules/<Name>/ closure layout in MeshModulesPublish.targets. -->
+         modules/<Name>/ closure layout in MeshModulesPublish.targets.
+
+         🚨 …BUT THE COMPILE REFERENCE STAYS, WITH Private="false" — REMOVING IT TOOK THE SITE DOWN
+         (#1814). The framework build identity is the hash over the CANONICAL content-surface set
+         (FrameworkBuildIdentity.ContentSurfaceAssemblies), and each member's contribution is read
+         out of meshweaver-surface.manifest, which Directory.Build.props writes from
+         @(ReferencePathWithRefAssemblies) — a host's COMPILE references. So dropping this
+         ProjectReference dropped EIGHT canonical names (MeshWeaver.Import + its private
+         MeshWeaver.DataSetReader* / MeshWeaver.DataStructures closure) out of this image's manifest,
+         where they then hash as "absent" while the bake host (mw-plugin-test, which still references
+         them) hashes a real surface id. Two identities from ONE commit: CD baked release
+         3.0.0-rc4.ci.4201 under sda0843abd6db4fc7e37cc3f838079265 while both prod pods asked for
+         s944d7fd0bbf81f4b40b85a7a74296263. The bundles were published, intact, to an address nobody
+         reads — so every publication-side check passed, the bake job reported success, and the first
+         pod of each deploy Roslyn-compiled 269 types (10 m 29 s, +1598 MB) as if no bake existed.
+         That window is what let ~12 instance hubs latch a compilation-fallback card and serve it to
+         anonymous visitors for two hours.
+
+         Private="false" ExcludeAssets="runtime" PrivateAssets="all" is what keeps BOTH properties
+         true at once: the references restore the manifest entries (and therefore this image's
+         identity), while the bits stay OUT of the app publish root — modules/MeshWeaver.Import/ remains the only place
+         they ship, the closure lane's app-root refusal stays armed, TRUSTED_PLATFORM_ASSEMBLIES
+         still does not contain any of them, and CompileReferences.ComposeWithModules remains the one
+         thing that makes MeshWeaver.Import visible to in-mesh source. Nothing in this project's own
+         code uses any of it: these are SURFACE declarations.
+
+         🚨 ALL EIGHT are declared, not just the entry assembly, and that is measured rather than
+         defensive: Private/ExcludeAssets govern the DIRECT reference only, so declaring Import alone
+         still copied its seven transitive project outputs (and CsvHelper) into the app root —
+         re-shipping exactly what the module lane removed and pruning modules/MeshWeaver.Import/ down
+         to one file. Declaring each of the eight directly suppresses every copy: verified with a
+         from-clean Release build (CIRun=true, non-incremental) — manifest 54 to 62 lines and ZERO
+         new DLLs in bin/. The set is the canonical closure, so it is exactly what
+         FrameworkBuildIdentityTest.CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost
+         checks — delete any one of them and that test goes red naming it, which is the check that
+         did not exist when this broke.
+
+         🚨 PrivateAssets="all" keeps the declaration PRIVATE TO THIS PROJECT, and that is measured
+         too: without it the references flow to everything that references this portal, and
+         test/Memex.Portal.Shared.Test (which does) copied MeshWeaver.Import.dll into its own bin
+         root — where the closure lane's prune then dropped it from modules/MeshWeaver.Import/ as a
+         same-relative-path duplicate. Eight ImportModuleLayoutTest cases went red on exactly that.
+         A surface declaration is this host's business; nothing downstream should inherit it. -->
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader\MeshWeaver.DataSetReader.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Csv\MeshWeaver.DataSetReader.Csv.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Excel\MeshWeaver.DataSetReader.Excel.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Excel.BinaryFormat\MeshWeaver.DataSetReader.Excel.BinaryFormat.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Excel.OpenXmlFormat\MeshWeaver.DataSetReader.Excel.OpenXmlFormat.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Excel.Utils\MeshWeaver.DataSetReader.Excel.Utils.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.DataStructures\MeshWeaver.DataStructures.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- Ship nuget.config into the image so the runtime `#r "nuget:..."` resolver can

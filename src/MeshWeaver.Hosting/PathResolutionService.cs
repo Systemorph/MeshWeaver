@@ -592,20 +592,25 @@ internal class PathResolutionService : IPathResolver, IDisposable
             UserId = WellKnownUsers.System,
         };
 
-        // Observable.Using ensures the ImpersonateAsSystem scope is opened on
-        // Subscribe AND disposed when the inner observable completes — keeping
-        // the AsyncLocal Context = system-security alive for the lifetime of
-        // the query (the PG provider may capture context lazily on its first
-        // emission, well past the chaining call).
+        // RunAsSystem opens the ImpersonateAsSystem scope on Subscribe — so the query is ISSUED
+        // as system-security, and any ExecutionContext the provider captures while subscribing
+        // (an IIoPool hop, a scheduled continuation) carries that identity forward as an
+        // immutable snapshot — and closes it again on the way out of that same Subscribe.
+        //
+        // 🚨 Never Observable.Using here (#1790). This is the hot path of EVERY page load, called
+        // from the caller's own thread; Observable.Using would leave `system-security` latched on
+        // it (the query terminates on a storage/pool thread, which is where it would dispose) and
+        // hand that thread the caller's "previous" identity. A resolver on the render path must
+        // hand back the thread exactly as it found it.
+        //
         // Routing is a SIMPLE PATH LOOKUP — never a synced subscription.
         // We take only the FIRST emission (the Initial snapshot of which path
         // prefixes exist) and dispose. No fan-out, no ongoing watching, no
         // change deltas. If the resolver later needs to track new nodes, the
         // caller re-asks; the cache that wraps this method invalidates on
         // CreateNode/DeleteNode events.
-        return Observable.Using(
-            () => _accessService?.ImpersonateAsSystem() ?? System.Reactive.Disposables.Disposable.Empty,
-            _ => _queryCore.Query<MeshNode>(request, _hub.JsonSerializerOptions))
+        return _accessService.RunAsSystem(
+            () => _queryCore.Query<MeshNode>(request, _hub.JsonSerializerOptions))
             .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Take(1)
             .Select<QueryResultChange<MeshNode>, AddressResolution?>(change =>

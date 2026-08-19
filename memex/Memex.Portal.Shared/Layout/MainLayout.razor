@@ -1,4 +1,5 @@
 @using MeshWeaver.Blazor.Portal.Layout
+@using Memex.Portal.Shared.SelfUpdate
 @using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
 @inherits PortalLayoutBase
 
@@ -52,6 +53,11 @@
 </style>
 
 @{
+    // Which build — and which instance — is serving this session, plus the refresh that moves it
+    // onto a newer one. PortalLayoutBase renders this in the header actions, ahead of the
+    // notification bell.
+    HeaderLinks = @<PlatformUpdateIndicator />;
+
     // No left navigation menu (GitHub-style full-width content)
     DesktopNavMenu = null;
 

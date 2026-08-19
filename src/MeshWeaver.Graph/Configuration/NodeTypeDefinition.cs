@@ -2,6 +2,7 @@
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Mesh.Services.LanguageServer;
 
@@ -467,6 +468,80 @@ public record NodeTypeDefinition
     public IReadOnlyDictionary<string, long>? CurrentSourceVersions { get; init; }
 
     /// <summary>
+    /// A REQUEST to the owning per-NodeType hub: "stamp <see cref="CompiledSources"/> from your own
+    /// <see cref="CurrentSourceVersions"/>". Written by
+    /// <see cref="PrebuiltAssemblySeeder.Seed"/> when it adopts a prebuilt assembly; consumed —
+    /// exactly once — on the owner, which clears it in the same write that applies the stamp.
+    ///
+    /// <para>🚨 <b>Why the value cannot be written by the adopter</b> (#1834). A bundle's own
+    /// source-version ticks are meaningless on the consumer (the producer records zeros; the mesh
+    /// keys on ITS nodes' modification times), so adoption asserts "these bytes correspond to the
+    /// live source set". Only the owner knows that set: the seeder writes CROSS-HUB, so its lambda
+    /// diffs against the MIRROR's snapshot, and the mirror predates the first-activation write of
+    /// <c>CurrentSourceVersions</c> that the seeder's own subscribe TRIGGERS
+    /// (<c>NodeTypeCompilationHelpers.InstallSourcesWatcher</c>). Reading the field there stamped
+    /// <c>CompiledSources = null</c> under a non-empty <c>CurrentSourceVersions</c> — i.e.
+    /// <see cref="IsDirty"/> — so the release request that follows an install recompiled the type
+    /// that had just been adopted. A request the owner fulfils has no such race: the owner's copy
+    /// of both fields is authoritative by construction.</para>
+    ///
+    /// <para><b>What it asserts.</b> "The bytes correspond to the source set that is live when the
+    /// owner fulfils this" — the same assertion the adopter used to make, now made where it is
+    /// checkable. A source edit landing inside that (sub-second, install-time) window is therefore
+    /// folded into the adopted build rather than recompiled, exactly as before; an explicit Compile
+    /// remains the escape hatch.</para>
+    ///
+    /// <para><b>One-shot.</b> Every writer that fulfils it clears it in the SAME write
+    /// (<c>InstallAdoptedSourceStampWatcher</c>, the release-request watcher's dispatch, and both
+    /// terminal compile stamps), so it can never re-fire — and in particular can never re-stamp
+    /// <c>CompiledSources</c> over a later compile's own snapshot, which would suppress a needed
+    /// rebuild. Operational, never authored: stripped on export, preserved from the live node on
+    /// import (<see cref="Mesh.NodeTypeOperationalContent"/>).</para>
+    /// </summary>
+    public DateTimeOffset? RequestedSourceStampAt { get; init; }
+
+    /// <summary>
+    /// <see cref="DateTime"/> ticks for <c>1601-01-01</c> — the FILETIME epoch, and the value
+    /// .NET returns from <c>FileInfo.LastWriteTimeUtc</c> for a file that DOES NOT EXIST
+    /// (it does not throw). A node stamped with it has no real modification time.
+    ///
+    /// <para>🚨 This is not a curiosity: a source stamped 1601 records the SAME version before
+    /// and after an edit, so <see cref="IsDirty"/> compares equal, no recompile is ever
+    /// scheduled, and the type serves its previous assembly forever while every status field
+    /// says <c>Ok</c>. Measured on memex 2026-08-18 (Systemorph/MeshWeaver#1836): an
+    /// <c>Edu/Module</c> change imported, logged "Recompiling", minted a fresh release — and
+    /// ran the old code, because six of its fourteen sources carried this value on BOTH sides
+    /// of the comparison.</para>
+    /// </summary>
+    public const long UnknownSourceVersionTicks = 504911232000000000L;
+
+    /// <summary>
+    /// The per-source version key for the <see cref="CompiledSources"/> /
+    /// <see cref="CurrentSourceVersions"/> snapshots: the node's modification time when it has
+    /// a real one, else its <see cref="MeshNode.Version"/>.
+    ///
+    /// <para>The fallback is the point. <c>Version</c> is the owning hub's monotonic
+    /// persistence counter — bumped by every write — so it CHANGES when the source changes,
+    /// which is the only property the staleness comparison actually needs. Falling back to it
+    /// turns an un-timestamped source from permanently-invisible into ordinarily comparable.</para>
+    ///
+    /// <para>Both snapshots MUST fold through this one function — the compiler's
+    /// (<c>MeshNodeCompilationService.DiscoverSourceVersionSnapshot</c>) and the watcher's
+    /// (<c>NodeTypeCompilationHelpers</c>) — or the two sides key differently and every type
+    /// reads as permanently dirty, which is the same outage with the opposite sign.</para>
+    ///
+    /// <para>Nodes carrying a real timestamp are unaffected. A node stored with the 1601 stamp
+    /// re-keys to its Version, so it differs from the recorded snapshot exactly ONCE,
+    /// recompiles, and both sides then agree — a single self-healing compile per affected
+    /// type, not a recompile storm.</para>
+    /// </summary>
+    /// <param name="node">A source (Code) node of the NodeType.</param>
+    public static long SourceVersionOf(MeshNode node) =>
+        node.LastModified.UtcTicks > UnknownSourceVersionTicks
+            ? node.LastModified.UtcTicks
+            : node.Version;
+
+    /// <summary>
     /// <c>true</c> iff <see cref="CurrentSourceVersions"/> differs from
     /// <see cref="CompiledSources"/> — i.e. an edit / add / remove has landed on a
     /// dependent source since the last successful compile, so the cached assembly
@@ -568,6 +643,46 @@ public record NodeTypeDefinition
     /// feature; the legacy modules-hash rule governs.</para>
     /// </summary>
     public System.Collections.Immutable.ImmutableSortedDictionary<string, string>? CompiledDependencies { get; init; }
+
+    /// <summary>
+    /// 🚨 The COMPILE INPUTS the STANDING FAILURE VERDICT was formed from — the one thing a failed
+    /// compile can honestly record, and the field that makes a failure RECOVERABLE (issue #1793).
+    ///
+    /// <para><b>The hole it closes.</b> A failed compile writes no assembly coordinates at all:
+    /// <c>NodeTypeCompilationHelpers.ApplyCompileFailure</c> stamps neither
+    /// <see cref="LatestAssemblyCollection"/> / <see cref="LatestAssemblyPath"/> nor
+    /// <see cref="CompiledFrameworkVersion"/>. For a NodeType that never compiled successfully on
+    /// this deployment those are therefore null forever — and EVERY automatic re-drive keys off
+    /// something that only exists after a first success: the first-build kickoff needs
+    /// <c>CompilationStatus is null</c>, the recovery kickoff needs <c>Compiling</c>, the
+    /// framework-stale kickoff needs the assembly coordinates
+    /// (<c>NodeTypeCompilationHelpers.HasStaleFrameworkBuild</c>), and the release watcher needs a
+    /// human to move <see cref="RequestedReleaseAt"/>. So a redeploy, a framework bump, a module
+    /// update or a fix to the failing code reached none of them — which is why the fix written FOR
+    /// the fifteen types parked on memex-cloud could not reach the nodes it was written for.</para>
+    ///
+    /// <para><b>The shape.</b> An opaque, comparable token over the three inputs a verdict depends
+    /// on — the framework identity, the installed-module fingerprint, and the source snapshot the
+    /// compile consumed (<c>NodeTypeCompilationHelpers.BuildInputsToken</c>). The re-drive kickoff
+    /// fires exactly when the LIVE inputs differ from this stamp, which gives ONE automatic retry
+    /// per distinct set of inputs: a deployed framework, a module update, or an edited source each
+    /// earn a fresh attempt, and a type that is simply broken is retried once and then left alone
+    /// (loudly — see the give-up log in <c>InstallCompileWatcher</c>) instead of storming.</para>
+    ///
+    /// <para><b>Self-limiting by construction.</b> The kickoff stamps this field in the SAME write
+    /// that flips <see cref="CompilationStatus"/> to <see cref="Mesh.Services.CompilationStatus.Pending"/>,
+    /// so the re-drive's own bookkeeping makes its trigger false — a reconcile that fed itself is
+    /// the 257,000-version write-storm shape, and this is what forecloses it.</para>
+    ///
+    /// <para><c>null</c> = no failure verdict has been recorded here (a never-attempted type, a
+    /// successful one — <c>ApplyCompileSuccess</c> CLEARS it — or a node whose Error was baked into
+    /// a file by an export, which is precisely the population that must get its one retry).</para>
+    ///
+    /// <para>🚨 Runtime state: never author it into a node file. <c>ShippedNodeTypeStateTest</c>
+    /// bans it, because an authored token that happens to match the live inputs would suppress the
+    /// very retry this field exists to enable.</para>
+    /// </summary>
+    public string? FailedBuildInputs { get; init; }
 
     /// <summary>
     /// 🚨 Round-trip buffer for content members this compiled shape does not declare —

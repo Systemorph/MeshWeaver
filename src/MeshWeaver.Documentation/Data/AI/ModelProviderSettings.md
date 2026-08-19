@@ -255,7 +255,7 @@ When the provider fan-out returns nothing (no provider configured), the model pi
 
 ### Org-default provider
 
-An admin may pre-create an org provider node — `Systemorph/Provider/AzureFoundry` with model children sourced from the `s-meshweaver` Foundry resource (endpoint `https://s-meshweaver.services.ai.azure.com/models`, key in Key Vault) — that every user with read access can select. This complements per-user BYO-key and Connect flows; it does not replace the empty-state link. `ModelProvider` is a **creatable** node type (search-hidden), so it can be authored in the UI by anyone with `Permission.Api`, not only through configuration.
+An admin may pre-create an org provider node — `<org>/Provider/AzureFoundry` with model children sourced from your Azure AI Foundry resource (endpoint `https://<foundry-account>.services.ai.azure.com/models`, key in Key Vault) — that every user with read access can select. This complements per-user BYO-key and Connect flows; it does not replace the empty-state link. `ModelProvider` is a **creatable** node type (search-hidden), so it can be authored in the UI by anyone with `Permission.Api`, not only through configuration.
 
 ### Managing a provider's models
 

@@ -210,6 +210,81 @@ Manifest-less CI processes (test hosts) fall back to the commit identity `g<sha>
 (`MeshWeaver.Compiler.dll` — single-file attributable, which is what lets a packer read it without
 loading anything). The commit stamp doubles as provenance everywhere.
 
+### 🚨 …and both hosts must RECORD the same canonical set — the address check (#1814)
+
+The rule above is about the *bytes*. There is a second way for two hosts of one commit to resolve
+different identities, and it has nothing to do with bytes: **a canonical assembly that one host's
+surface manifest does not record at all.** `ComputeSurfaceIdentity` hashes every name in
+`ContentSurfaceAssemblies`, and a name the manifest has no line for contributes the literal
+`absent`. So a host that stops *compiling against* an assembly stops recording it — and forks its
+identity away from every other host — while its binaries are otherwise identical.
+
+That is what took memex.meshweaver.cloud's course covers down for two hours on 2026-08-17. The
+sequence, measured:
+
+* `feat: Excel/CSV import becomes its own module` (`82481e024`, merged 18:46 that evening) moved
+  `MeshWeaver.Import` and its private closure — `MeshWeaver.DataSetReader{,.Csv,.Excel,
+  .Excel.BinaryFormat,.Excel.OpenXmlFormat,.Excel.Utils}` and `MeshWeaver.DataStructures`, **eight
+  canonical names** — out of both portals' compile reference graphs into the `modules/<Name>/`
+  runtime lane. Correct on its own terms: the module lane still contributes `MeshWeaver.Import` to
+  the in-mesh compile reference set.
+* The manifest is written from `@(ReferencePathWithRefAssemblies)` — a host's **compile**
+  references — so those eight lines vanished from the portal's manifest only. `mw-plugin-test`,
+  the bake host, still referenced them.
+* Measured on the shipped images of `3.0.0-rc4.ci.4276`, both `--platform linux/amd64`:
+
+  | image | manifest | resolves |
+  |---|---|---|
+  | `mw-plugin-test` (bakes) | 38 lines | `s7293e54297ec28e213bd82f30d59e709` |
+  | `memex-portal-ai` (runs) | 54 lines | `sa6d587a25d64d11774f22348664bca0c` |
+
+  The **29 shared entries had byte-identical hashes**. Presence, not drift, was the entire
+  difference — and the net line counts (38 vs 54) hide it, because the portal legitimately carries
+  25 Blazor/Orleans/hosting names that are outside the canonical set by design.
+* Consequence: every bake was published, intact, under an address no pod ever opened. Publication
+  succeeded, the CD job was green, `check-release-availability.sh` passed — and each deploy's first
+  pod logged `compiled=269 alreadyBaked=0` and spent 10 m 29 s (+1598 MB working set) recompiling
+  what CI had already compiled. During that window ~12 instance hubs latched a compilation-fallback
+  card and served it to anonymous visitors long after the compile finished.
+
+**Two checks now stand where nothing stood.**
+
+1. **Offline, at PR time.** `CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost`
+   (`FrameworkBuildIdentityTest`) recomputes, from the csproj graph, the compile closure of **every** project
+   that sets `MeshWeaverSurfaceManifest=true` and fails naming any canonical assembly a host does
+   not record. `CanonicalList_MatchesTheTesterClosure` had always pinned one side of that equality;
+   this pins the other, which is the half whose absence let a one-line-per-host change ship.
+2. **On the artifact, at release time.** `main-cd`'s `publish-bake` job resolves the identity of the
+   **promoted `memex-portal-ai` image** and compares it with the identity the bake published under,
+   **before** publishing. The comparison runs the bake image's own `framework-identity` verb:
+
+   ```
+   mw-plugin-test framework-identity <app-dir> [--expect <identity>]
+   ```
+
+   which resolves the identity of *another* host's `/app` from that directory's manifest and
+   assemblies as **files** — nothing is loaded, so one container answers for another image. It
+   refuses to answer for a directory with no usable manifest rather than degrading to the fallback
+   identity: two manifest-less hosts of one commit resolve the same fallback, and a comparison that
+   passes on degraded input is a check that cannot fail. On a mismatch it prints the canonical
+   assemblies the target does not record, because "the hashes differ" is not actionable and the real
+   defect was eight named assemblies.
+
+Both pulls pin `--platform linux/amd64`, out loud: the identity is per-architecture, so comparing
+across legs would be meaningless. That per-arch split is the *second* independent way to mint an
+unread address — `memex.localhost` is arm64 while the CI bake publishes amd64 — and the same guard
+covers it, because it compares the values two concrete hosts resolve.
+
+🚨 **The fix direction is always "give the host the reference back", never "shrink the canonical
+list".** Removing a name would make the two hosts agree by making the identity blind to that
+assembly's surface — an under-invalidation, which is how a portal ends up adopting NodeType
+assemblies compiled against a framework that has since shifted underneath them: a silent
+`TypeLoadException` inside an ALC at activation, the failure mode with no diagnostic and no overlay.
+`Memex.Portal.Distributed` therefore declares the eight as compile-only references
+(`Private="false" ExcludeAssets="runtime" PrivateAssets="all"`): the manifest records them, while
+the bits still ship only via `modules/MeshWeaver.Import/` and nothing downstream inherits the
+declaration.
+
 ## The image: `prebuilt/` beside the app
 
 `Memex.Portal.Distributed.csproj` accepts `-p:PrebuiltBakeDir=<dir>`: the bundle zips are laid into
@@ -223,16 +298,36 @@ behaves exactly as today.
 pipeline, **after** the static repo import settles (the nodes a bundle names must exist) and
 **before** [the sweep](/Doc/Architecture/NodeTypeCompilation) probes the assembly store:
 
-1. every `*.zip` under `prebuilt/` (override: `PreWarm:PrebuiltDirectory`) is read with
-   `BundleReader` — the one codec shared with the registry bundle client;
+1. every `*.zip` under `prebuilt/` (override: `PreWarm:PrebuiltDirectory`) has its **manifest** read
+   with `BundleReader.ReadManifest` — a few KB at a known entry, **no assembly decompressed**;
 2. the bundle's framework MVID is checked **once** against the running process; a mismatch declines
    the whole bundle, loudly;
 3. one enumeration of the mesh's NodeType nodes filters the entries down to types this deployment
    actually holds (an image ships one content set; a mesh serves a subset) — no per-missing-path
-   waits;
-4. each remaining entry is adopted through `PrebuiltAssemblySeeder.Seed`: the bytes land in the
-   assembly store under the node's **current** version, and the record is stamped exactly as a
-   successful compile stamps it.
+   waits. The enumerated **nodes** are kept, not just their paths: they carry the record that
+   answers step 4;
+4. each remaining entry is asked whether adopting it would change anything —
+   `PrebuiltAssemblySeeder.IsAlreadyAdopted`, which defers to the same `NodeTypeBakeStatus.Classify`
+   the sweep's probe uses, plus one store probe at the record's `LastCompiledVersion`. An entry the
+   store already backs is **skipped entirely**;
+5. only the **deviating** entries are extracted (`BundleReader.Read(stream, nodePaths)`) and adopted
+   through `PrebuiltAssemblySeeder.Seed`: the bytes land in the assembly store under the node's
+   version and the record is stamped exactly as a successful compile stamps it.
+
+> 🚨 **Step 4 is not an optimisation detail — adoption is expensive.** `Seed` opens the type's own
+> mesh-node stream, which **activates its per-node hub**, then re-uploads the bytes and writes the
+> node. Before the skip, memex-cloud re-adopted all 43 of its assemblies on every boot — 43
+> activations, 43 uploads, 43 writes, **13.5 s of a 101 s warm-up** — to establish that nothing had
+> changed since the previous pod did the same. The framework identity is an API-surface hash and is
+> stable across internal-only merges, so that is the *common* roll. It also grew the assembly cache
+> by a whole generation per boot: `Seed` stamps the version it read *before* its own write, so each
+> re-adoption uploaded the same bytes under a new key that nothing ever read.
+
+The skip stays **level-triggered on the store**: the record's claim is believed only when a probe
+confirms the bytes are still at that key, so a cleared, remounted or stale-restored assembly volume
+re-seeds exactly as before (`BakeState.BytesMissing`). The reported count is `adopted +
+already-current`, so the coverage signal below does not collapse to zero on a healthy steady-state
+boot.
 
 The sweep's store probe (`NodeTypeBakeStatus`) then classifies each adopted type `Baked` — for fully
 covered shipped content the boot log reads `pending=0` and no Roslyn runs. Everything here is
@@ -507,7 +602,7 @@ tracking its consumer, not CI logic tracking a moving trunk; pin it (the input e
 bisect a script regression.
 
 The satellites' OIDC publish is **provisioned** (2026-08-17): the Azure managed identity
-`github-actions-bake` (RG `memex-aks-rg`) holds *Storage File Data Privileged Contributor* on the
+`github-actions-bake` (in the cluster's resource group) holds *Storage File Data Privileged Contributor* on the
 portals' storage account and carries 8 federated credentials — the four satellite repos × the two
 GitHub subject formats (classic and immutable; **register both, always** — see
 [The Continuous Delivery Contract](/Doc/Architecture/ContinuousDeliveryContract)) — with the

@@ -1,0 +1,8 @@
+# The ops namespace. Nothing serves traffic here — it exists so the operator's Jobs have a home
+# with its own RBAC boundary, separate from every portal namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: memex-ops
+  labels:
+    app.kubernetes.io/managed-by: meshweaver-hosting

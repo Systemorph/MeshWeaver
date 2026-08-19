@@ -1,0 +1,43 @@
+# The token the PORTAL holds. Its entire power is "start an operator job in memex-ops and read what
+# it said" — it cannot create a namespace, drop a database, or read a secret anywhere.
+#
+# 🚨 This is deliberately NOT the portal's own ServiceAccount. A pod projects only its own SA token,
+# so a second identity has to arrive as a mounted Secret — and that indirection is the point: this
+# capability can be removed by deleting one volume mount, without touching the portal's identity or
+# its self-update permissions.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hosting-jobrunner
+  namespace: memex-ops
+---
+# A long-lived token for it. Kubernetes ≥1.24 does not mint these automatically; this is the
+# supported way to ask for one, and it is why the Secret carries the annotation rather than data.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hosting-jobrunner-token
+  namespace: memex-ops
+  annotations:
+    kubernetes.io/service-account.name: hosting-jobrunner
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hosting-jobrunner
+  namespace: memex-ops
+rules:
+  # Create a run, watch it, read what it said, clean it up. Nothing else.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+  # The one-shot handover Secret an export job writes its download URL into: the mesh reads it once
+  # and deletes it, so the URL never reaches a log line or a node. `create` is deliberately absent —
+  # only the job writes one.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "delete"]

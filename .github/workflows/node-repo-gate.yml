@@ -220,7 +220,18 @@ jobs:
               -e DOTNET_DbgMiniDumpType=2
               -e DOTNET_DbgMiniDumpName=/coredumps/%e-%p.dmp)
           fi
-          docker run --rm -v "$REPO_MOUNT:/repo" "${DUMP_ARGS[@]}" \
+          # 🚨 `--init` is not cosmetic: without it the tester is the container's PID 1, and a
+          # PID-namespace init with SIG_DFL for SIGABRT is SIGNAL_UNKILLABLE — the kernel DISCARDS
+          # the signal the .NET runtime raises to end a crashed process. `abort()` then falls
+          # through to its trap instruction, the runtime's SIGTRAP handler returns to the very
+          # instruction that trapped, and the process SPINS at 100% CPU forever instead of exiting
+          # (#1741: two such containers "Up" 36 and 57 minutes each, having printed one exception
+          # in their first second). On CI that reads as a hang and burns the job's whole timeout
+          # rather than reporting the crash. With `--init` the tool runs as PID 2 under tini and a
+          # crash exits 134 immediately. The tester itself no longer lets an exception escape
+          # `Main`, but this covers what a `catch` cannot — a stack overflow, an OOM abort, an
+          # unhandled throw on a background thread.
+          docker run --rm --init -v "$REPO_MOUNT:/repo" "${DUMP_ARGS[@]}" \
             --entrypoint /app/mw-plugin-test "$IMAGE" /repo \
             "${ALLOW_ARGS[@]}"
       - name: Upload core dumps (if the gate crashed)

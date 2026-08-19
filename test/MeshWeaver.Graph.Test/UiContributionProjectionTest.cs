@@ -135,6 +135,44 @@ public class UiContributionProjectionTest
         Assert.Contains("MyArea", derived.Href);
     }
 
+    [Fact]
+    public void NodeToken_InAHref_IsSubstitutedWithTheAnchoringNode_Escaped()
+    {
+        // The shape a node-native package needs: its OWN workspace area, told which node it is
+        // being opened from. Nothing else can express this — an area name alone would resolve on
+        // the anchoring node's hub, where a plugin's area does not exist.
+        var item = Assert.Single(Project(new UiContribution
+        {
+            Area = "RequestApproval",
+            Href = "/Approvals/Workspace/RequestApproval?doc={node}"
+        }));
+        Assert.Equal("/Approvals/Workspace/RequestApproval?doc=Org%2FDoc", item.Href);
+    }
+
+    [Fact]
+    public void NodeToken_IsEscaped_SoAPathCanNeverIntroduceASchemeOrHost()
+    {
+        // The substituted value is a mesh path, escaped — the gate then judges the RESULT, so a
+        // token cannot be used to smuggle a non-internal destination past the check.
+        var item = Assert.Single(UiContributionProjection.ProjectMenu(
+            [Contribution(new UiContribution { Area = "A", Href = "/desk?doc={node}" })],
+            UiContribution.NodeContext, "Org/Doc?x=1&y=2", SomeNode, Permission.Read, false));
+        Assert.Equal("/desk?doc=Org%2FDoc%3Fx%3D1%26y%3D2", item.Href);
+    }
+
+    [Fact]
+    public void NonInternalHref_IsStillDiscarded_AfterSubstitution()
+    {
+        // The gate applies to the RESOLVED string, never to the template.
+        var item = Assert.Single(Project(new UiContribution
+        {
+            Area = "MyArea",
+            Href = "https://evil.example/{node}"
+        }));
+        Assert.Contains("MyArea", item.Href);
+        Assert.DoesNotContain("evil.example", item.Href);
+    }
+
     [Theory]
     [InlineData("javascript:alert(1)")]
     [InlineData("https://evil.example/phish")]

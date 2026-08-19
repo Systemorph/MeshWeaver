@@ -11,6 +11,9 @@ namespace MeshWeaver.Observability;
 /// <param name="NormalizedMessage">The message with ids, paths, numbers and labelled identifiers masked.</param>
 /// <param name="ExceptionType">The exception type name, when the burst carried one.</param>
 /// <param name="TopFrame">The top application stack frame, when the burst carried one.</param>
+/// <param name="NormalizedDetail">The masked text that discriminates WITHIN one fault site: the
+/// exception's own message when the burst carried an exception, else the logged message. Empty
+/// means "not supplied" and the identity falls back to <paramref name="NormalizedMessage"/>.</param>
 public record LogBurst(
     string Category,
     int EventId,
@@ -18,7 +21,8 @@ public record LogBurst(
     string Message,
     string NormalizedMessage,
     string? ExceptionType,
-    string? TopFrame);
+    string? TopFrame,
+    string NormalizedDetail = "");
 
 /// <summary>
 /// Decides what makes two red logs <b>the same incident</b> — the one question this subsystem got

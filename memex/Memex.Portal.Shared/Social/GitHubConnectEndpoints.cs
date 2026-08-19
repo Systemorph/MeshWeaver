@@ -22,7 +22,7 @@ namespace Memex.Portal.Shared.Social;
 /// <summary>
 /// GitHub OAuth2 authorization-code flow for connecting a user's GitHub identity for
 /// <see cref="MeshWeaver.GitSync">GitHub Sync</see>. Mirrors
-/// <see cref="MeshWeaver.Social.LinkedInConnectEndpoints"/> (now contributed by the Social
+/// <c>MeshWeaver.Social.LinkedInConnectEndpoints</c> (contributed by the Social
 /// module) — the deployed surface is just the parts that need browser cookies + a
 /// whitelisted callback URL:
 ///

@@ -42,6 +42,7 @@ internal sealed class MeshNodeLanguageService(
     // Distinct from any user MeshNode path so callers can never address it accidentally.
     // Aliases the toolchain's sentinel — the failure-diagnostics filter keys on the SAME value.
     private const string SkeletonDocumentPath = MeshWeaver.Compiler.CompileDiagnostics.SkeletonDiagnosticsPath;
+    private const string GlobalUsingsDocumentPath = MeshWeaver.Compiler.SpeculativeCompilation.GlobalUsingsDocumentPath;
 
     // Per-NodeType cached workspace, invalidated when source versions change.
     // Concurrent because hub-message handlers may invoke language-service queries
@@ -309,8 +310,10 @@ internal sealed class MeshNodeLanguageService(
 
         var pathToDocId = ImmutableDictionary.CreateBuilder<string, DocumentId>(StringComparer.OrdinalIgnoreCase);
 
-        // Skeleton document — the assembly attribute + generated provider class. Carries the
-        // common framework usings so user code resolves framework types.
+        // Skeleton document — the assembly attribute + generated provider class.
+        // 🚨 It does NOT put the framework usings in scope for user code: its `using`s are
+        // FILE-SCOPED to this document (it is generated with codeFile:null, so it holds no user
+        // code at all). The import scope comes from the global-usings document below (#1802).
         var skeletonDocId = DocumentId.CreateNewId(projectId);
         workspace.AddDocument(DocumentInfo.Create(
             skeletonDocId,
@@ -318,6 +321,17 @@ internal sealed class MeshNodeLanguageService(
             filePath: SkeletonDocumentPath,
             loader: TextLoader.From(TextAndVersion.Create(
                 SourceText.From(inputs.SkeletonSource), VersionStamp.Create()))));
+
+        // The import scope, as `global using` — what the emit path gets by concatenating every
+        // source into the skeleton file. Without it, each per-file Document below sees only its own
+        // usings and the service reports phantom CS0246/CS0308 on source that compiles and ships.
+        var globalUsingsDocId = DocumentId.CreateNewId(projectId);
+        workspace.AddDocument(DocumentInfo.Create(
+            globalUsingsDocId,
+            name: GlobalUsingsDocumentPath,
+            filePath: GlobalUsingsDocumentPath,
+            loader: TextLoader.From(TextAndVersion.Create(
+                SourceText.From(inputs.GlobalUsingsSource), VersionStamp.Create()))));
 
         // One Document per user source, with the MeshNode Path as FilePath so language-service
         // queries from Monaco / MCP tools can address each file independently.
@@ -372,10 +386,12 @@ internal sealed class MeshNodeLanguageService(
         var result = new List<DiagnosticInfo>(diags.Length);
         foreach (var d in diags)
         {
-            // Skip diagnostics that fall inside the skeleton tree — they're artifacts of
-            // the generated code, not actionable for the user editing source files.
+            // Skip diagnostics that fall inside the generated trees (skeleton, global usings) —
+            // they're artifacts of the generated code, not actionable for the user editing source
+            // files. (CS8019 "unnecessary using" on the global-usings document is expected: it
+            // imports for the whole compilation, so any single file uses only part of it.)
             var path = d.Location.SourceTree?.FilePath;
-            if (path == SkeletonDocumentPath) continue;
+            if (path == SkeletonDocumentPath || path == GlobalUsingsDocumentPath) continue;
 
             result.Add(ToDiagnosticInfo(d));
         }
