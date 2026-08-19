@@ -63,6 +63,7 @@ public static class MigrationRegistry
         new V51_DropInvalidPartitionSchemas(),
         new V52_DeleteStaleNodeTypeOrphans(),
         new V53_RetypeBuiltinSlideDeckToPublish(),
+        new V54_FixMeshNodeNotifyTriggerPerSchema(),
     ];
 
     /// <summary>
