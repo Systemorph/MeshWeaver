@@ -708,20 +708,25 @@ public static class AgentPickerProjection
     }
 
     /// <summary>
-    /// Single MeshNode → AgentDisplayInfo projection. Same Content
-    /// switch as the chat view: typed AgentConfiguration first, raw
-    /// JsonElement fallback (when the source hub didn't have
-    /// AddAITypes applied), null otherwise.
+    /// Single MeshNode → AgentDisplayInfo projection.
+    ///
+    /// <para>🚨 Reads the content through <see cref="MeshNodeContentExtensions.ContentAs{T}"/> —
+    /// NOT a <c>switch</c> over the shapes we happen to expect (#1853). This used to match a typed
+    /// <c>AgentConfiguration</c> or a <c>JsonElement</c> and return null for anything else, and a
+    /// null projection does not surface as an error: the agent simply is not in the roster. A node
+    /// written through a builder or the MCP <c>create</c> path carries the AS-WRITTEN DOM
+    /// (<c>JsonObject</c>), which is neither arm, so a freshly created agent was invisible —
+    /// <c>start_thread</c> reported it "not found among the available agents" while listing every
+    /// other agent in the same namespace. It read as a stale cache (only <c>recycle</c> healed it,
+    /// because tearing the hub down forces a re-read from storage, which returns a JsonElement) and
+    /// the cache was innocent throughout. <c>ContentAs</c> is the framework's documented answer: it
+    /// handles typed, JsonElement, JsonNode, and a same-named type from another dynamic
+    /// assembly.</para>
     /// </summary>
     public static AgentDisplayInfo? ToAgentDisplayInfo(
         MeshNode node, JsonSerializerOptions jsonOptions)
     {
-        var config = node.Content switch
-        {
-            AgentConfiguration ac => ac,
-            JsonElement je => TryDeserialise<AgentConfiguration>(je, jsonOptions),
-            _ => null,
-        };
+        var config = node.ContentAs<AgentConfiguration>(jsonOptions);
         if (config == null) return null;
         // Display metadata is sourced from the MeshNode (the single source of truth);
         // only agent-specific bits (CustomIconSvg, the config itself) come from Content.
@@ -739,19 +744,15 @@ public static class AgentPickerProjection
     }
 
     /// <summary>
-    /// Single MeshNode → ModelInfo projection. JsonElement fallback
-    /// covers the same source-hub-typed-registry-mismatch edge case
-    /// as <see cref="ToAgentDisplayInfo"/>.
+    /// Single MeshNode → ModelInfo projection. Reads content through
+    /// <see cref="MeshNodeContentExtensions.ContentAs{T}"/> for exactly the reason
+    /// <see cref="ToAgentDisplayInfo"/> does (#1853) — this carried the identical two-arm switch and
+    /// would drop a model node written as the as-written DOM the same silent way.
     /// </summary>
     public static ModelInfo? ToModelInfo(
         MeshNode node, JsonSerializerOptions jsonOptions)
     {
-        var def = node.Content switch
-        {
-            ModelDefinition md => md,
-            JsonElement je => TryDeserialise<ModelDefinition>(je, jsonOptions),
-            _ => null,
-        };
+        var def = node.ContentAs<ModelDefinition>(jsonOptions);
         // Carry the node PATH onto the ModelInfo (like ToAgentDisplayInfo does for agents) —
         // a model selection must persist the node path onto the composer's ModelName, not the
         // bare model id, so the MeshNode picker resolves it. Without this the /model selection
@@ -768,15 +769,4 @@ public static class AgentPickerProjection
             : null;
     }
 
-    private static T? TryDeserialise<T>(JsonElement je, JsonSerializerOptions jsonOptions) where T : class
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<T>(je.GetRawText(), jsonOptions);
-        }
-        catch
-        {
-            return null;
-        }
-    }
 }
