@@ -146,6 +146,18 @@ public static class BundleWriter
 
         foreach (var file in content ?? [])
         {
+            // Defence at the producing end too: a bundle should never LEAVE here carrying a path a
+            // consumer must refuse. Cheap, and it turns a packaging mistake into an error next to
+            // the code that made it rather than a refusal on someone else's build agent.
+            if (string.IsNullOrWhiteSpace(file.RelativePath)
+                || Path.IsPathRooted(file.RelativePath)
+                || file.RelativePath.Contains('\\')
+                || file.RelativePath.Contains(':')
+                || file.RelativePath.Split('/').Any(segment => segment is ".." or "."))
+                throw new ArgumentException(
+                    $"content path '{file.RelativePath}' is not a safe package-relative path",
+                    nameof(content));
+
             using var source = file.Open();
             using var target = archive
                 .CreateEntry($"{NuGetPackageWriter.ContentFolder}/{file.RelativePath}").Open();

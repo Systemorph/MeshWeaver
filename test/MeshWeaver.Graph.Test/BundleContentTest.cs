@@ -2,6 +2,7 @@
 
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using MeshWeaver.Plugin.Packaging;
 using Xunit;
 
@@ -136,5 +137,67 @@ public class BundleContentTest
         var (_, files) = BundleReader.ReadContent(tampered.ToArray());
 
         Assert.Equal("index.json", Assert.Single(files).RelativePath);
+    }
+
+    [Theory]
+    [InlineData("../escaped.json")]                    // parent traversal
+    [InlineData("Module/../../escaped.json")]          // traversal mid-path
+    [InlineData("/etc/passwd")]                        // rooted
+    [InlineData("C:/Windows/system.ini")]              // drive-qualified
+    [InlineData("Module\\Source\\X.cs")]                 // Windows separator
+    public void AnUnsafeDeclaredPathIsRefused_Loudly(string hostile)
+    {
+        // These bytes are written into a BUILD AGENT's working tree, which then compiles what it
+        // finds — so a producer-declared path that escapes the extraction directory must never be
+        // materialised. It THROWS rather than degrading to "no content": an incomplete archive is a
+        // benign producer bug, this is hostile or corrupt, and a caller about to write files must
+        // not be able to confuse the two.
+        var bundle = WriteBundle(File("index.json", "{}"));
+        var tampered = Retarget(bundle, hostile);
+
+        var error = Assert.Throws<InvalidOperationException>(() => BundleReader.ReadContent(tampered));
+        Assert.Contains(hostile, error.Message);
+    }
+
+    [Fact]
+    public void TheWriterRefusesToProduceOne()
+    {
+        // Defence at the producing end too, so a packaging mistake errors next to the code that
+        // made it rather than on someone else's agent.
+        var buffer = new MemoryStream();
+        Assert.Throws<ArgumentException>(() => BundleWriter.Write(
+            buffer, "Edu", "1.4.0", Mvid,
+            [new BundleWriter.AssemblyEntry("Edu/Module", () => new MemoryStream("M"u8.ToArray()))],
+            content: [File("../escaped.json", "{}")]));
+    }
+
+    /// <summary>
+    /// Rewrites a good bundle's manifest so it DECLARES <paramref name="path"/> — the shape a
+    /// hostile or corrupt producer would emit. The archive itself is left alone: the guard must
+    /// fire on the declaration, before anything is looked up or written.
+    /// </summary>
+    private static byte[] Retarget(byte[] bundle, string path)
+    {
+        var rewritten = new MemoryStream();
+        using (var source = new ZipArchive(new MemoryStream(bundle), ZipArchiveMode.Read))
+        using (var target = new ZipArchive(rewritten, ZipArchiveMode.Create, leaveOpen: true))
+            foreach (var entry in source.Entries)
+            {
+                using var to = target.CreateEntry(entry.FullName).Open();
+                if (entry.FullName != NuGetPackageWriter.ManifestEntry)
+                {
+                    using var from = entry.Open();
+                    from.CopyTo(to);
+                    continue;
+                }
+
+                using var reader = new StreamReader(entry.Open());
+                var json = reader.ReadToEnd()
+                    .Replace("\"index.json\"", JsonSerializer.Serialize(path));
+                using var writer = new StreamWriter(to, Encoding.UTF8);
+                writer.Write(json);
+            }
+
+        return rewritten.ToArray();
     }
 }
