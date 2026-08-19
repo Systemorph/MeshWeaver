@@ -90,9 +90,12 @@ public static class MarkdownOverviewLayoutArea
     public const string NavigationArea = "Navigation";
 
     /// <summary>
-    /// The glyph that marks where the reader stands. Language-neutral by design (nothing to
-    /// translate) and carried IN ADDITION to the accent colour, so the position survives for a
-    /// reader who cannot distinguish the accent.
+    /// The glyph that used to mark where the reader stands. The rail marks position on the LINK now
+    /// (<see cref="NavLinkControl.IsActive"/> — accent bar, background and weight, none of them
+    /// colour-only), because prepending a glyph meant rendering that line as bare text, which took
+    /// it out of the tree: no icon, no indentation, and visibly detached from the group it belongs
+    /// to. Kept as a published constant — consumers pin their own marker against it — and still the
+    /// right glyph for any rail that needs a textual one.
     /// </summary>
     public const string CurrentMarker = "▸";
 
@@ -117,9 +120,8 @@ public static class MarkdownOverviewLayoutArea
     public static IObservable<UiControl?> SuppliedNavigationMenu(LayoutAreaHost host, RenderingContext _)
         => SuppliedNavigation(host)
             .Select(supplied => supplied is { Entries.Count: > 0 }
-                ? (UiControl?)Controls.NavMenu
-                    .WithSkin(s => s.WithWidth(240).WithCollapsible(true))
-                    .WithNavGroup(BuildSuppliedGroup(host, supplied))
+                ? (UiControl?)SuppliedNavigationRail.Render(
+                    SuppliedNavigationRail.Plan(supplied, host.Hub.Address.ToString()))
                 : null);
 
     /// <summary>
@@ -179,11 +181,15 @@ public static class MarkdownOverviewLayoutArea
         LayoutAreaHost host, MeshNode? node, IReadOnlyList<MeshNode> subNodes, UiControl content,
         NodeNavigation? supplied = null)
     {
-        var group = supplied is { Entries.Count: > 0 }
-            ? BuildSuppliedGroup(host, supplied)
-            : BuildChildrenGroup(host, node, subNodes);
-
-        var nav = Controls.NavMenu.WithSkin(s => s.WithWidth(240).WithCollapsible(true)).WithNavGroup(group);
+        // A module that OWNS this page supplied the whole index — rendered by the shared rail, whose
+        // shape is pinned by SuppliedNavigationRail's tests. Nothing supplied → core's default list
+        // of the node's own children, unchanged, so docs and spaces are untouched by this.
+        var nav = supplied is { Entries.Count: > 0 }
+            ? SuppliedNavigationRail.Render(
+                SuppliedNavigationRail.Plan(supplied, host.Hub.Address.ToString()))
+            : Controls.NavMenu
+                .WithSkin(s => s.WithWidth(240).WithCollapsible(true))
+                .WithNavGroup(BuildChildrenGroup(host, node, subNodes));
 
         return Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -209,55 +215,6 @@ public static class MarkdownOverviewLayoutArea
         }
         return group;
     }
-
-    // A module OWNS these pages and knows more about them than core does — a course knows its whole
-    // module list and which lesson the reader is standing in. The heading names what is indexed (the
-    // course), NOT the page being read, and links to it unless that root IS the page being read.
-    private static NavGroupControl BuildSuppliedGroup(LayoutAreaHost host, NodeNavigation supplied)
-    {
-        var currentPath = host.Hub.Address.ToString();
-        var titleIsCurrent = supplied.TitlePath is { } titlePath
-            && string.Equals(titlePath, currentPath, System.StringComparison.Ordinal);
-
-        var group = new NavGroupControl(Marked(supplied.Title, titleIsCurrent))
-            .WithSkin(s => s.WithExpanded(true));
-        if (supplied.TitlePath is { } path && !titleIsCurrent)
-            group = group.WithUrl($"/{path}");
-
-        foreach (var entry in supplied.Entries)
-            group = AppendEntry(host, group, entry);
-        return group;
-    }
-
-    // One supplied entry: a nested collapsible group when it has children (a course's module),
-    // a link otherwise — or, when it is where the reader stands, MARKED TEXT rather than a link.
-    private static NavGroupControl AppendEntry(
-        LayoutAreaHost host, NavGroupControl group, NodeNavigationEntry entry)
-    {
-        if (entry.Children.Count > 0)
-        {
-            var sub = new NavGroupControl(Marked(entry.Label, entry.IsCurrent))
-                .WithSkin(s => s.WithExpanded(true));
-            if (!entry.IsCurrent)
-                sub = sub.WithUrl($"/{entry.Path}");
-            if (entry.Icon is { } icon)
-                sub = sub.WithIcon(icon);
-            foreach (var child in entry.Children)
-                sub = AppendEntry(host, sub, child);
-            return group.WithGroup(sub);
-        }
-
-        return entry.IsCurrent
-            // TEXT, not a link: a link to the page you are on is a dead control that teaches the
-            // reader their position marker is broken. Glyph AND accent — see CurrentMarker.
-            ? group.WithView(Controls.Body(Marked(entry.Label, true))
-                .WithTooltip(host.Localize("nav.youAreHere"))
-                .WithStyle("display:block;padding:4px 12px;font-weight:600;color:var(--accent-fill-rest);"))
-            : group.WithView(new NavLinkControl(entry.Label, entry.Icon, $"/{entry.Path}"));
-    }
-
-    private static string Marked(string label, bool isCurrent)
-        => isCurrent ? $"{CurrentMarker} {label}" : label;
 
     private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit, bool hideHeader)
     {
