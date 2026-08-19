@@ -38,7 +38,11 @@ public sealed record SatelliteTableMapping(string Segment, string Table, params 
         // projected from the version history). Mapped so rows written by older builds stay readable
         // for the deprecation window — see MeshWeaver.Graph.AnnotationExtensions.
         new SatelliteTableMapping("_Tracking", "annotations", "TrackedChange"),
-        new SatelliteTableMapping("_Approval", "annotations", "Approval"),
+        // "Approval" is the RETIRED platform type; "Approvals/Approval" is the node-native
+        // package type that replaced it. Both are listed so a nodeType-filtered query finds
+        // rows written by either — placement itself is resolved from the _Approval SEGMENT,
+        // which is why retiring the platform type moved no data.
+        new SatelliteTableMapping("_Approval", "annotations", "Approval", "Approvals/Approval"),
         new SatelliteTableMapping("_Comment", "annotations", "Comment"),
         new SatelliteTableMapping("_Notification", "notifications", "Notification"),
         new SatelliteTableMapping("Source", "code"),

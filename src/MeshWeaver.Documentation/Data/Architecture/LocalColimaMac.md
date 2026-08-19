@@ -411,6 +411,15 @@ So a "Local" tab is unmistakable next to Test/Prod, the portal supports two opti
 
 These are implemented in `memex/Memex.Portal.Shared/App.razor`: when `Portal:InstanceName` is set it emits an inline-SVG data-URI favicon (a rounded-square badge with the initial) and a small `MutationObserver` that pins the tab title to the instance name. Unset → the standard `favicon.ico` and `Memex Portal` title. Set `Portal__InstanceName: "Local"` in your overlay so your local tab is obvious at a glance.
 
+🚨 **On a node page the NODE's icon wins over the badge, by design.** `ApplicationPage` publishes the
+node's own icon into the head from inside `HeadOutlet`, which App.razor places *after* the badge —
+and a later icon of equal rank outranks an earlier one, the same ordering `SeoHead` relies on. The
+environment stays unmistakable through the **title**, which the `MutationObserver` pins to the
+instance name on every page including node pages; the icon is what tells your open tabs apart. The
+badge still shows on every non-node page (login, search, onboarding, welcome). If an instance ever
+needs the badge to win everywhere, move that `<link rel="icon">` below `<SeoHead />` — precedence
+here is document order, nothing else.
+
 ---
 
 ## 13. Optional (advanced): home-wide access with a real cheap domain

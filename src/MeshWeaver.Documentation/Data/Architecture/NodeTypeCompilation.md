@@ -296,6 +296,66 @@ keeps running however long it needs (see the stage bounds above).
 
 ---
 
+## A fault card must not outlive its cause — the overlay RE-EVALUATES
+
+The overlay is a **degraded binding with a lifetime**, never a verdict. Enrichment binds a
+per-instance hub's configuration exactly once — the re-enrichment short-circuit
+(`node.HubConfiguration != null`) is what makes activation cheap — so a card applied during a
+bad ten seconds is served for the grain's whole lifetime unless something *revokes* it. That
+revocation is `ArmOverlaySelfHeal`, and its correctness rests on one rule:
+
+> 🚨 **The heal signal must not share a failure mode with the fault.** Both original heal routes
+> — the version-advance and the grace re-read — subscribe
+> `meshHub.GetWorkspace().GetMeshNodeStream(nodeType)`: *the same stream whose silence made the
+> enrichment slow path time out*. When that stream stops emitting, the fault and its cure vanish
+> together and the card is permanent.
+
+That is not hypothetical. On **2026-08-17** (issue #1814) a deploy left the first pod compiling
+269 types; page requests inside that window latched the card onto ~12 plugin roots
+(`Training`, `Video`, `RolePlay`, `Edu`, `Chess`, `Collaboration`, …). `Store/Plugin` then
+compiled **successfully on both pods** — and **1 h 24 m later** an anonymous browser still got
+the card, while neither pod had logged a single overlay or "did not settle" event in the
+preceding 30–40 minutes. Nothing was retrying. Recycling the twelve roots by hand was the only
+remedy, and the card's own copy ("the page recovers automatically … this instance recycles
+itself") was straightforwardly false.
+
+So the watcher has a third route that owes the stream nothing:
+
+- **`AuthoritativeTypeRead`** — a one-shot `path:{nodeType}` query through `IMeshQueryCore`, as
+  System. It reads the mesh's **query providers (storage)**, not a cached stream, so a mirror
+  that can never learn it is stale cannot suppress it.
+- **A widening ladder, not a poll** — `45 s → 90 s → 3 min → 6 min`, then **10 min for ever**
+  (`ReEvaluationLadder` / `ReEvaluationCeiling`). One read per rung, each capped by
+  `ReEvaluationReadTimeout` and serialised with `Concat`, so a slow read can never overlap the
+  next rung. At the 2026-08-17 blast radius that steady state is ~72 single-node reads an hour
+  across the whole mesh. **The ladder never stops** — a re-evaluation budget that ran out would
+  re-create precisely the defect it exists to remove.
+- **A faulted or empty read is not a verdict** — it is logged and the ladder asks again. Giving
+  up quietly is how the card latched in the first place.
+- **Loud on non-convergence** — a re-read that still finds no usable build logs the type's
+  status/assembly/framework; past the last rung it does so at `Warning`, next to the existing
+  admin notification at `StuckReportDelay`.
+
+### …and the recycle it orders is SPACED, because it destroys its own watcher
+
+The heal disposes the instance hub — taking the watcher with it. The replacement hub arms a
+**fresh** watcher whose ladder starts at the first rung, so a pair whose *re-enrichment* keeps
+faulting (a type that reports a usable build the instance still cannot bind — #1814's
+deterministic cross-hub `Conflict`) would recycle every 45 s for ever. No state inside the
+watcher can bound that, because the bound has to outlive the thing being bounded.
+
+`OverlayHealBudget` (mesh-scoped singleton, registered in `AddGraph`) is that memory, keyed by
+*(instance, NodeType)*. The **first** heal is never delayed; each further heal inside a 30-minute
+window waits out a widening spacing (45 s → 90 s → 3 min → 6 min → 10 min). It **defers** a
+recycle, never cancels one, and a pair that heals once and stays healthy is forgotten.
+
+Pinned by `OverlaySelfHealWatcherTest` (silent stream → heals unaided; still-broken type → keeps
+its card on single-digit reads per hour; faulted/empty read → ladder continues; non-converging
+loop → bounded recycles, with the un-budgeted control in the same test) and
+`OverlayHealBudgetTest`.
+
+---
+
 ## Cancelling a compile
 
 Compilation is an Activity, so it cancels through the **Activity Control Plane**

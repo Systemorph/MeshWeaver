@@ -34,6 +34,47 @@ public sealed class FakeGitHubRepoClient : IGitHubRepoClient
         int Number, string Url, string Title, string? Body,
         string Head, string Base, PullRequestStatus Status);
 
+    // raw owner/repo (any name the repo has ever had) → the identity GitHub reports for it TODAY.
+    // Empty = "no repository was ever renamed", which is the default and the common case. Concurrent
+    // because Key() reads it on every operation, including from inside the storage lock.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, RepoIdentity> _renames =
+        new(StringComparer.OrdinalIgnoreCase);
+    private int _canonicalLookups;
+
+    /// <summary>
+    /// Simulates a GitHub RENAME: from now on <paramref name="oldRepositoryUrl"/> resolves to
+    /// <paramref name="newRepositoryUrl"/>'s identity, exactly as GitHub's 301-redirected
+    /// <c>GET /repos/{owner}/{repo}</c> does — every other operation on the old url keeps working,
+    /// which is what makes the drift invisible (#1856).
+    /// </summary>
+    /// <param name="oldRepositoryUrl">The name the repository used to have (what a config stores).</param>
+    /// <param name="newRepositoryUrl">The name it has now (what a webhook payload carries).</param>
+    /// <remarks>The alias is total, exactly as on GitHub: <see cref="Key"/> resolves through it, so
+    /// BOTH names address the same stored repository and every other call keeps working on the old
+    /// url. That total redirect is what makes the drift invisible to everything except equality.</remarks>
+    public void Rename(string oldRepositoryUrl, string newRepositoryUrl)
+    {
+        var (owner, repo) = OctokitGitHubRepoClient.ParseRepoUrl(newRepositoryUrl);
+        var (oldOwner, oldRepo) = OctokitGitHubRepoClient.ParseRepoUrl(oldRepositoryUrl);
+        _renames[$"{oldOwner}/{oldRepo}"] = new RepoIdentity(owner, repo);
+    }
+
+    /// <summary>How many canonical-identity lookups have been performed — the assertion that the
+    /// resolver's cache is actually keeping this off the per-delivery path.</summary>
+    public int CanonicalLookups => Volatile.Read(ref _canonicalLookups);
+
+    /// <inheritdoc />
+    public IObservable<RepoIdentity?> GetCanonicalRepository(string repositoryUrl, string accessToken)
+        => Observable.Defer(() =>
+        {
+            Interlocked.Increment(ref _canonicalLookups);
+            var (owner, repo) = OctokitGitHubRepoClient.ParseRepoUrl(repositoryUrl);
+            return Observable.Return<RepoIdentity?>(
+                _renames.TryGetValue($"{owner}/{repo}", out var canonical)
+                    ? canonical
+                    : new RepoIdentity(owner, repo));
+        });
+
     /// <summary>The current full tree of a repo (for test assertions).</summary>
     public IReadOnlyList<RepoFile> Tree(string repositoryUrl)
     {
@@ -358,10 +399,14 @@ public sealed class FakeGitHubRepoClient : IGitHubRepoClient
 
     private string NextSha() => (++_counter).ToString("x").PadLeft(40, '0');
 
-    private static string Key(string url)
+    // 🚨 Resolves THROUGH a registered rename, so an old url and the new one are one repository —
+    // which is exactly GitHub's behaviour and the reason a stale stored url keeps syncing fine.
+    private string Key(string url)
     {
         var (owner, repo) = OctokitGitHubRepoClient.ParseRepoUrl(url);
-        return $"{owner}/{repo}".ToLowerInvariant();
+        return (_renames.TryGetValue($"{owner}/{repo}", out var canonical)
+            ? canonical.ToString()
+            : $"{owner}/{repo}").ToLowerInvariant();
     }
 
     private static string Norm(string? s)

@@ -723,6 +723,139 @@ internal static class NodeTypeCompilationHelpers
     }
 
     /// <summary>
+    /// THE adopted-build source stamp (#1834), as a PURE function: <paramref name="def"/> with
+    /// <see cref="NodeTypeDefinition.CompiledSources"/> set to the owner's live
+    /// <paramref name="snapshot"/> and the request that asked for it consumed.
+    ///
+    /// <para>The post-condition is the whole point and is exact, not approximate: the two
+    /// dictionaries are the SAME content, so <see cref="NodeTypeDefinition.IsDirty"/> is false by
+    /// construction — which is what <c>InstallReleaseRequestWatcher</c>'s "satisfied by the
+    /// existing current build" branch requires, and what makes an adoption stick.</para>
+    ///
+    /// <para>Pure so the invariant is unit-testable with no hub, no mesh and no timing, and shared
+    /// by all three writers that may fulfil the request (the sources watcher's publication, the
+    /// release-request dispatch, and the standalone
+    /// <see cref="InstallAdoptedSourceStampWatcher"/>) — one stamp shape, so two of them can never
+    /// disagree about what "adopted and current" means.</para>
+    /// </summary>
+    /// <param name="def">The owner's own definition.</param>
+    /// <param name="snapshot">The owner's live source snapshot
+    /// (<see cref="NodeTypeDefinition.CurrentSourceVersions"/>, or the value about to be written
+    /// into it in this same update).</param>
+    internal static NodeTypeDefinition ApplyAdoptedSourceStamp(
+        NodeTypeDefinition def,
+        IReadOnlyDictionary<string, long> snapshot)
+        => def with
+        {
+            CompiledSources = snapshot as System.Collections.Immutable.ImmutableDictionary<string, long>
+                              ?? System.Collections.Immutable.ImmutableDictionary
+                                  .CreateRange(snapshot),
+            RequestedSourceStampAt = null,
+        };
+
+    /// <summary>
+    /// Fulfils an adoption's <see cref="NodeTypeDefinition.RequestedSourceStampAt"/> on the OWNER —
+    /// the standalone half of the #1834 fix, for the orderings the two folded call sites cannot
+    /// reach.
+    ///
+    /// <para><b>Why a request at all.</b> <c>PrebuiltAssemblySeeder.Seed</c> writes CROSS-HUB, so
+    /// its lambda diffs against the MIRROR's snapshot of this node — which predates the
+    /// first-activation <c>CurrentSourceVersions</c> write that the seeder's own subscribe
+    /// triggers. Stamping <c>CompiledSources</c> from a field the owner has not published yet
+    /// stamped <c>null</c> under a non-empty snapshot, i.e. <see cref="NodeTypeDefinition.IsDirty"/>
+    /// — and the release request an install issues one step later then recompiled the type that had
+    /// just been adopted. The adopter therefore ASKS; the owner, whose copy of both fields is
+    /// authoritative, ANSWERS.</para>
+    ///
+    /// <para><b>Ordering, exhaustively.</b> Writing the request and publishing the snapshot are
+    /// concurrent by construction, so both orders must converge:
+    /// <list type="bullet">
+    ///   <item>request first — the sources watcher's publication fulfils it in the SAME write
+    ///     (see <see cref="InstallSourcesWatcher"/>), so there is no window at all;</item>
+    ///   <item>publication first — nothing re-emits the sources query, so THIS watcher fires on the
+    ///     adoption's own emission and stamps;</item>
+    ///   <item>a release request racing the second case — the release watcher fulfils the request
+    ///     itself before reading <c>IsDirty</c>.</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para>🚨 <b>It writes the node it watches, so the trigger cannot re-arm.</b> The request is
+    /// ONE-SHOT: every fulfilment clears it in the same write, and the <c>Where</c> requires it to
+    /// be present — so a pass can never schedule another pass (the write-storm shape of #223). The
+    /// commit advances a process-local high-water mark; an emission still carrying a trigger this
+    /// hub has already committed a stamp for is NON-CONVERGENCE, and is logged as an ERROR naming
+    /// the type rather than retried silently.</para>
+    /// </summary>
+    public static IDisposable InstallAdoptedSourceStampWatcher(
+        IMessageHub hub,
+        IWorkspace workspace)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.CompileWatcher");
+        var hubPath = hub.Address.Path;
+        var ownStream = workspace.GetMeshNodeStream();
+        // Advanced ONLY on the commit path (same discipline as the release watcher's mark), so a
+        // duplicate emission arriving before the write lands re-enqueues an idempotent update
+        // instead of being mistaken for non-convergence.
+        var stampHighWater = new MonotonicHighWaterMark();
+
+        return ActivityControlPlaneExtensions.SubscribeWithReEstablish(
+            () => ownStream
+                .Where(node => node?.Content is NodeTypeDefinition def
+                    && def.RequestedSourceStampAt is not null
+                    // The owner has not published its snapshot yet — nothing authoritative to
+                    // stamp FROM. The publication itself carries the stamp (InstallSourcesWatcher),
+                    // so waiting here costs nothing and guessing here would cost correctness.
+                    && def.CurrentSourceVersions is not null),
+            node =>
+            {
+                var observed = (NodeTypeDefinition)node!.Content!;
+                var requestedAt = observed.RequestedSourceStampAt!.Value;
+                if (!stampHighWater.IsPast(requestedAt))
+                {
+                    // We already committed a stamp for this very trigger and it is STILL standing.
+                    // Loud, and deliberately not retried: a reconcile that cannot converge must
+                    // name itself once, not spin (#223).
+                    if (observed.IsDirty)
+                        logger?.LogError(
+                            "[AdoptedSourceStamp] {HubPath}: the adopted build's source stamp was "
+                            + "committed for request {RequestedAt} and the request is still standing "
+                            + "with IsDirty=true — the write did not converge; the next release "
+                            + "request will recompile this type",
+                            hubPath, requestedAt);
+                    else
+                        logger?.LogDebug(
+                            "[AdoptedSourceStamp] {HubPath}: replayed emission for an already-"
+                            + "committed request {RequestedAt} — nothing to do",
+                            hubPath, requestedAt);
+                    return;
+                }
+
+                workspace.GetMeshNodeStream().Update(curr =>
+                {
+                    if (curr.Content is not NodeTypeDefinition def) return curr;
+                    // Consumed between the emission and this lambda (the sources watcher's
+                    // publication or a release dispatch got there first) — a legitimate no-op.
+                    if (def.RequestedSourceStampAt is null) return curr;
+                    if (def.CurrentSourceVersions is not { } liveSources) return curr;
+                    stampHighWater.Advance(def.RequestedSourceStampAt.Value);
+                    return curr with { Content = ApplyAdoptedSourceStamp(def, liveSources) };
+                }).Subscribe(
+                    _ => logger?.LogInformation(
+                        "[AdoptedSourceStamp] {HubPath}: adopted build stamped with the owner's live "
+                        + "source snapshot ({Count} source(s)) — the next release request is "
+                        + "satisfied by it instead of recompiling",
+                        hubPath, observed.CurrentSourceVersions!.Count),
+                    ex => logger?.LogWarning(ex,
+                        "[AdoptedSourceStamp] {HubPath}: failed to stamp the adopted build's source "
+                        + "snapshot — the next release request will recompile it", hubPath));
+            },
+            hub.Address,
+            logger,
+            "Adopted source-stamp watcher");
+    }
+
+    /// <summary>
     /// Subscribes (no <c>Take(1)</c>) to the shared <see cref="NodeSources.GetSources"/>
     /// synced query for this NodeType. Every emission recomputes
     /// <c>{path → MeshNode.LastModified.UtcTicks}</c> from the live source set
@@ -902,21 +1035,29 @@ internal static class NodeTypeCompilationHelpers
                     {
                         if (curr.Content is not NodeTypeDefinition def) return curr;
 
+                        // 🚨 #1834 — an adoption that could not know this snapshot asked the OWNER
+                        // to stamp it (NodeTypeDefinition.RequestedSourceStampAt). Fulfil it in the
+                        // SAME write that publishes the snapshot: one write instead of two on the
+                        // boot path, and — decisively — NO window in which the node carries a
+                        // published CurrentSourceVersions against an unstamped adopted build, which
+                        // is the state a release request reads as dirty and recompiles.
+                        var pendingStamp = def.RequestedSourceStampAt is not null;
+
                         // Idempotent: no-op when CurrentSourceVersions already
                         // matches the just-computed snapshot. IsDirty is a
                         // computed property — derives from CurrentSourceVersions
                         // vs CompiledSources — so no separate flag to write.
-                        if (def.CurrentSourceVersions is not null
+                        // (A pending stamp still has to be consumed, so it never no-ops.)
+                        if (!pendingStamp
+                            && def.CurrentSourceVersions is not null
                             && DictEquals(def.CurrentSourceVersions, snapshot))
                             return curr;
 
-                        return curr with
-                        {
-                            Content = def with
-                            {
-                                CurrentSourceVersions = snapshot
-                            }
-                        };
+                        var updated = def with { CurrentSourceVersions = snapshot };
+                        if (pendingStamp)
+                            updated = ApplyAdoptedSourceStamp(updated, snapshot);
+
+                        return curr with { Content = updated };
                     }).Subscribe(
                         _ => { },
                         ex => logger?.LogWarning(ex,
@@ -1105,6 +1246,17 @@ internal static class NodeTypeCompilationHelpers
                     workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def) return curr;
+                        // 🚨 #1834 — fulfil a pending adoption stamp BEFORE the satisfied-branch
+                        // reads IsDirty, in the same write. This is the last ordering in which the
+                        // adoption could still be thrown away: the sources watcher has published
+                        // CurrentSourceVersions, the standalone stamp watcher's write has not
+                        // committed yet, and the release request arrives in between — the node then
+                        // reads dirty and recompiles the build that was just adopted. Reading the
+                        // owner's own pair here is authoritative, so nothing is widened: the branch
+                        // still requires a genuinely non-dirty definition.
+                        if (def.RequestedSourceStampAt is not null
+                            && def.CurrentSourceVersions is { } liveSources)
+                            def = ApplyAdoptedSourceStamp(def, liveSources);
                         // 🚨 Gate on the CARRIED triggerAt, NOT def.RequestedReleaseAt
                         // (which may have flapped back to an older value). Already
                         // handled at or beyond this trigger? bail.
@@ -1566,7 +1718,12 @@ internal static class NodeTypeCompilationHelpers
             // with it (#1793). Leaving the token behind would make a LATER failure look like it
             // had already had its automatic attempt under these inputs, and the type would sit
             // broken with nothing due to retry it.
-            FailedBuildInputs = null
+            FailedBuildInputs = null,
+            // 🚨 This compile just answered the question an adoption's stamp request was asking
+            // (#1834), and answered it from the set it actually consumed. A request left standing
+            // would let a later CurrentSourceVersions publication re-stamp CompiledSources over
+            // THIS snapshot — which is how a needed rebuild gets suppressed. Consume it.
+            RequestedSourceStampAt = null
         };
 
     /// <summary>
@@ -1637,7 +1794,10 @@ internal static class NodeTypeCompilationHelpers
                 modulesHash, result?.CompiledSources ?? def.CurrentSourceVersions),
             // Clear the consumed release-requester on failure too — the failed request is
             // done; a fresh request must re-stamp it.
-            RequestedReleaseBy = null
+            RequestedReleaseBy = null,
+            // The adopted build this request belonged to is gone (CompiledSources is cleared
+            // above), so the request goes with it — see ApplyCompileSuccess (#1834).
+            RequestedSourceStampAt = null
         };
 
     /// <summary>
