@@ -30,6 +30,13 @@ public static class BundleReader
     /// consumer too — a bundle that quietly arrives with fewer assemblies than the package has types
     /// is indistinguishable from a complete one, and "adopted N" is the only evidence the whole
     /// distribution lane works.</param>
+    /// <param name="SourceIncluded">Whether <paramref name="Content"/> includes the package's C#
+    /// SOURCE. Null on a legacy bundle (unknown). 🚨 This is a DECLARATION, not an inference from
+    /// the file list, because the two answer different questions: a package may legitimately
+    /// contain no C# at all, and a consumer that cannot resolve a <c>shared=@…</c> include needs to
+    /// know whether the source was WITHHELD (its build cannot succeed and should say so) or simply
+    /// never existed (nothing is wrong). Inferring "no .cs files ⇒ source withheld" would report
+    /// the first for the second.</param>
     /// <param name="Content">The package's own NODE DEFINITION files, relative to
     /// <see cref="NuGetPackageWriter.ContentFolder"/> — present when the producer shipped the
     /// package tree alongside its bytes, null for an assemblies-only bundle. A consumer that means
@@ -43,7 +50,8 @@ public static class BundleReader
         ModuleRef? Module = null,
         string? Architecture = null,
         IReadOnlyList<string>? Misses = null,
-        IReadOnlyList<string>? Content = null);
+        IReadOnlyList<string>? Content = null,
+        bool? SourceIncluded = null);
 
     /// <summary>One assembly and the NodeType it implements.</summary>
     /// <param name="NodePath">Mesh path of the NodeType — the key a consumer re-seeds under.</param>

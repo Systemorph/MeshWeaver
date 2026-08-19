@@ -96,7 +96,8 @@ public static class BundleWriter
         string frameworkMvid,
         IReadOnlyList<AssemblyEntry> assemblies,
         string? sourceSha = null,
-        IReadOnlyList<ContentEntry>? content = null)
+        IReadOnlyList<ContentEntry>? content = null,
+        bool? sourceIncluded = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(frameworkMvid);
         ArgumentNullException.ThrowIfNull(assemblies);
@@ -127,6 +128,7 @@ public static class BundleWriter
             // not tell a package file from a stray entry a future producer adds, and would silently
             // recreate it into the consumer's tree.
             content = content?.Select(c => c.RelativePath).ToList(),
+            sourceIncluded,
         };
 
         WriteText(archive, NuGetPackageWriter.ManifestEntry, JsonSerializer.Serialize(manifest, Json));
