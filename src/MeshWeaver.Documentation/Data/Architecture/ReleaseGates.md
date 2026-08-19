@@ -21,6 +21,36 @@ of them available?** It is stated exactly once, in
 `MeshWeaver.PluginCatalog.ReleaseAvailability.IsUpdatable`, and read by every caller — because a
 rule only one path honours is not a rule.
 
+## 🚨 The rule: NOBODY REBUILDS AN UPSTREAM FROM SCRATCH
+
+Everything below is machinery in service of one directive, so it is stated first and plainly:
+
+> **A repo builds only what it OWNS. Every dependency is consumed as a RELEASED ARTIFACT — never
+> rebuilt, never compiled from source, never staged out of a source checkout.**
+>
+> **And it builds only once ALL of its dependencies have released.** Not "usually", not "when
+> convenient": a repo woken before its upstreams are published EXITS without building and is woken
+> again by the upstream's publication.
+
+Two consequences people get wrong, both of which look harmless in a green pipeline:
+
+- **Checking out an upstream's SOURCE to build against it is a rebuild.** It does not matter that
+  the checkout is cheap or that the mesh compiles it lazily — the dependent is now producing its
+  own copy of the upstream, from a commit nobody released, against a framework nobody gated. Two
+  repos then ship different bytes for the same package and the difference surfaces at a customer's
+  next boot, not in CI. Education's e2e is the live example: it checks out
+  `Systemorph/MeshWeaver.Plugins` and lets the mesh Roslyn-compile it (17–34 min per run), which is
+  a full rebuild of an upstream wearing the costume of a test fixture.
+- **"It passed" is not evidence of the ordering.** A dependent that builds before its upstream has
+  released usually still goes green — it simply gated against the PREVIOUS release. The gate exists
+  because that outcome is indistinguishable from a correct one until the mismatch reaches a pod.
+
+**Binaries travel exactly one way: through the registry.** A released DLL is fetched from
+`memex.meshweaver.cloud/api/plugins/bundles/…`, never from a sibling checkout, a build artifact
+passed between workflows, or a rebuilt `bin/`. The registry is where a release becomes a thing that
+exists for anyone other than the run that produced it — one credential model, one entitlement
+check, one set of bytes. See [Plugin Registry](../PluginRegistry).
+
 ## "Available" has exactly two forms
 
 | Kind | Gate | Why this one |
@@ -245,6 +275,36 @@ So dropping staging requires the published artifact to carry the upstream's node
 alongside its assemblies. Until it does, `stage-repo`/`stage-modules` stay, marked transitional; the
 gate already refuses to build when the upstream artifact is missing, which is the behaviour that
 does not change when the artifact grows.
+
+### What closing it looks like
+
+The gate (does the upstream exist?) is done. What is missing is the FETCH — a way for a build to
+take the released bytes rather than remake them. Four pieces, in the order they unblock each other:
+
+1. **The artifact carries node definitions.** `BundleWriter.Write` gains the upstream's node repo
+   beside the assemblies, so a consumer gets both the bytes and the definitions its roots are typed
+   by. This is the blocking one: every other piece is inert without it.
+2. **A CLI fetches it.** The inverse of the `module-pack` tool CI already runs
+   (`MeshWeaver.Plugin.Build`): a `module-fetch`-shaped command that pulls a released package from
+   the registry into a local directory, so a satellite's workflow replaces its
+   `stage-repo`/checkout step with one fetch of the thing that was actually released. The mechanism
+   belongs IN THE TECH, not in each repo's YAML — five hand-rolled fetches would drift, and the
+   fetch has to make the same floor/identity checks the seeder makes.
+3. **CI registers as a consumer.** A build is an instance like any other: it registers with the
+   registry and is issued an `mwi_` instance key, which is what the bundle routes already
+   authenticate (`InstanceRegistryAuthenticator`). No new entitlement path — a CI process is simply
+   a registered reader, and what it may read stays governed by its `PluginGrant`.
+4. **The instance is given a blob access token.** Serving every byte through the portal is fine for
+   an install and wrong for a build fleet pulling whole packages; an issued, scoped token lets the
+   registered instance read the assembly blobs directly. ⚠️ This deliberately REVERSES today's
+   stance in `PluginBundleEndpoints` ("the portal serves the bytes rather than handing out storage
+   access"), whose stated objection is that a scoped SAS is a second entitlement path to keep
+   honest. That objection is answered by issuing the token AS the entitlement — minted per
+   registered instance, expiring, and revoked with the grant — not by adding a credential beside it.
+
+Until all four land, a satellite still stages from source, and that staging is the one sanctioned
+exception to the rule at the top of this page — marked transitional everywhere it appears so it is
+never mistaken for the intended shape.
 
 ## See also
 

@@ -1336,19 +1336,56 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: "Dispatch meshweaver-framework-released"
+      # 🚨 The `secrets` context is NOT available in a step-level `if:`, so configuredness is
+      # probed HERE, in a run step, rather than as a condition on the mint below. Getting that
+      # wrong does not fail loudly — the expression evaluates empty, the step runs anyway, and
+      # the mint fails with an authentication error that reads like a broken credential rather
+      # than an absent one.
+      - name: "Is the dispatch configured?"
+        id: cfg
         env:
-          TOKEN: ${{ secrets.DEPENDENT_DISPATCH_TOKEN }}
+          APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          APP_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+          REPOS: ${{ vars.BAKE_SUBSCRIBER_REPOS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_ID:-}" ] || [ -z "${APP_KEY:-}" ] || [ -z "${REPOS:-}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Dependent-repo dispatch NOT CONFIGURED — set repo var BAKE_SUBSCRIBER_REPOS (owner/repo, whitespace-separated) plus secrets DEPENDENT_DISPATCH_APP_ID and DEPENDENT_DISPATCH_APP_PRIVATE_KEY (the meshweaver-cloud GitHub App) so node repos rebake on every framework release."
+            echo "### ⚠️ Dependent-repo dispatch not configured (BAKE_SUBSCRIBER_REPOS / DEPENDENT_DISPATCH_APP_ID / DEPENDENT_DISPATCH_APP_PRIVATE_KEY)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The dispatch credential is the **meshweaver-cloud GitHub App** — the SAME machine identity
+      # the registry already uses for private-repo reads, not a second one to keep honest. Why an
+      # App and not a PAT:
+      #   • a PAT belongs to a PERSON — it carries that person's whole access, dies when they
+      #     rotate it or leave, and makes "who released this" a human name in every subscriber's
+      #     audit log;
+      #   • the installation grants exactly `contents: write` + `metadata: read`, which is the
+      #     minimum `POST /repos/{owner}/{repo}/dispatches` needs and nothing more;
+      #   • the minted token expires in an hour, so a leak has a floor on its blast radius.
+      # The token is scoped to this owner's installation; every subscriber must be a repo the
+      # App is installed on (it is installed org-wide today).
+      - name: "Mint an installation token for the subscribers"
+        id: app
+        if: steps.cfg.outputs.configured == 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: "Dispatch meshweaver-framework-released"
+        if: steps.cfg.outputs.configured == 'true'
+        env:
+          TOKEN: ${{ steps.app.outputs.token }}
           REPOS: ${{ vars.BAKE_SUBSCRIBER_REPOS }}
           SHA: ${{ needs.gate.outputs.sha }}
           VERSION: ${{ needs.portal-image.outputs.version }}
         run: |
           set -euo pipefail
-          if [ -z "${TOKEN:-}" ] || [ -z "${REPOS:-}" ]; then
-            echo "::notice::Dependent-repo dispatch NOT CONFIGURED — set repo var BAKE_SUBSCRIBER_REPOS (owner/repo, whitespace-separated) and secret DEPENDENT_DISPATCH_TOKEN (a token with repo scope on the subscribers) so node repos rebake on every framework release."
-            echo "### ⚠️ Dependent-repo dispatch not configured (BAKE_SUBSCRIBER_REPOS / DEPENDENT_DISPATCH_TOKEN)" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
           for repo in $REPOS; do
             echo "→ $repo"
             curl -sS -o /tmp/resp -w '%{http_code}\n' -X POST \
