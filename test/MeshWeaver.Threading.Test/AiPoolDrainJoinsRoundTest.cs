@@ -126,6 +126,27 @@ public class AiPoolDrainJoinsRoundTest(ITestOutputHelper output) : MonolithMeshT
         residual.Should().Be(0,
             "a round that observes the pool's cancellation token unwinds and releases its gate "
             + "permit, so the join is real and teardown may unload node ALCs safely");
+
+        // 🚨 …and it must unwind as a CANCEL, not as a #147 wall-clock timeout. Linking poolCt made
+        // teardown fire streamingTimeoutCts WITHOUT executionCts — byte for byte the shape the
+        // generic catch converts into "AI streaming exceeded the maximum round duration of
+        // 00:30:00" and terminates as Status=Error. Draining the pool is an ordinary shutdown, so
+        // reporting that to the user would be a false alarm written to their response cell. Without
+        // this assertion the join above passes while the classification is wrong. (Copilot, #1879.)
+        var settled = await workspace.GetMeshNodeStream(threadPath)
+            .Select(n => n.Content as MeshThread)
+            .Should().Within(30.Seconds()).Match(t => t is { IsExecuting: false });
+        settled!.Status.Should().Be(ThreadExecutionStatus.Cancelled,
+            "a round stopped by pool drain is a graceful shutdown cancel. Verified to FAIL without "
+            + "the poolCt classification guards, reporting Idle — the terminal thread state of the "
+            + "ERROR path, which is where a misclassified teardown cancel lands after being "
+            + "converted into a #147 streaming-timeout TimeoutException");
+
+        var responseText = (await workspace.GetMeshNodeStream($"{threadPath}/{responseMsgId}")
+            .Select(n => (n.Content as ThreadMessage)?.Text ?? "")
+            .Should().Within(10.Seconds()).Match(_ => true)) ?? "";
+        responseText.Should().NotContain("exceeded the maximum round duration",
+            "the #147 timeout message must never be shown for a shutdown-cancelled round");
     }
 
     #region A model call that parks until ITS token is cancelled — and nothing else

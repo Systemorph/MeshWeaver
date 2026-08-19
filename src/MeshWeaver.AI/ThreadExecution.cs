@@ -2538,7 +2538,15 @@ internal static class ThreadExecution
                     // OperationCanceledException (the linked streamingTimeoutCts fired WITHOUT
                     // executionCts) but must NOT masquerade as a user cancel — it falls through to
                     // the generic catch below and terminates as a round ERROR (#147).
-                    catch (OperationCanceledException) when (executionCts.IsCancellationRequested)
+                    // poolCt is the SHUTDOWN cancel: IoPool.Drain() cancelling the pool is teardown,
+                    // semantically the same graceful stop as hub disposal — NOT a streaming hang. It
+                    // must be classified here, because it fires streamingTimeoutCts WITHOUT
+                    // executionCts, which is exactly the shape the generic catch below converts into
+                    // "AI streaming exceeded the maximum round duration of 00:30:00" and terminates
+                    // as Status=Error. Without this clause every round alive at shutdown would write
+                    // that alarming, false timeout to the user's response cell. (Copilot review, #1879.)
+                    catch (OperationCanceledException)
+                        when (executionCts.IsCancellationRequested || poolCt.IsCancellationRequested)
                     {
                         logger.LogInformation("[ThreadExec] CANCELLED: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
                         // ToString must be under logLock — UpdateDelegationStatus
@@ -2634,9 +2642,14 @@ internal static class ThreadExecution
                         // below (response cell → Status=Error, thread → Idle, parent notified)
                         // tells the user WHY the round was aborted instead of a bare "The
                         // operation was canceled." — never a silent swallow, never a fake cancel.
+                        // 🚨 !poolCt: a pool-driven (teardown) cancel also fires streamingTimeoutCts
+                        // without executionCts, so without this guard shutdown would be reported as
+                        // a #147 streaming timeout. The catch above already claims that case; this
+                        // keeps the predicate honest if the clauses are ever reordered.
                         var ex = exRaw is OperationCanceledException
                                  && streamingTimeoutCts.IsCancellationRequested
                                  && !executionCts.IsCancellationRequested
+                                 && !poolCt.IsCancellationRequested
                             ? new TimeoutException(
                                 $"AI streaming exceeded the maximum round duration of " +
                                 $"{maxStreamingDuration} and was aborted (#147). The model endpoint " +
