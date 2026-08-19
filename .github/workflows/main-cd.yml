@@ -116,8 +116,20 @@ permissions:
 # distinct and nothing here mutates a live environment. Under the shared group GitHub's
 # one-pending-slot rule CANCELLED queued CD runs during merge bursts (6 cancelled runs
 # on 2026-08-07 alone), silently dropping release increments.
+# 🚨 SERIALIZE, and never cancel. The group used to be keyed on `github.run_id`, which is unique
+# per run — so it grouped each run with itself and serialized NOTHING. Two CD runs for the same
+# commit could therefore overlap, and because each one skipped when it saw "another CD run is
+# already in flight", BOTH deferred and NEITHER published. Observed 2026-08-19 on cb33558: a
+# workflow_run CD and a manual dispatch raced, both reported success, and no image was built —
+# a mutual deferral that reads exactly like a healthy skip.
+#
+# Keyed on the ref, concurrent runs QUEUE instead: the second waits for the first, then finds a
+# complete image set and exits with "nothing to reconcile", which is the honest no-op. And
+# `cancel-in-progress: false` matters as much as the group — a CD run that is midway through
+# pushing a multi-image set must never be killed, or the set is left incomplete, which is the
+# very state the reconciler exists to repair.
 concurrency:
-  group: main-cd-${{ github.run_id }}
+  group: main-cd-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -228,6 +240,10 @@ jobs:
       short_sha: ${{ steps.target.outputs.short_sha }}
       staging_tag: ${{ steps.target.outputs.staging_tag }}
       reason: ${{ steps.target.outputs.reason }}
+      # The three facts the delivery verdict below judges. Exposed as outputs so the check is a
+      # JOB anyone can read in the run summary, not a conclusion buried in this job's log.
+      complete: ${{ steps.acr.outputs.complete }}
+      green: ${{ steps.required.outputs.green }}
     steps:
       - uses: actions/checkout@v7
       - name: "Resolve the target commit"
@@ -521,14 +537,11 @@ jobs:
           # 🚨 Never race an in-flight publish for the same commit. A CD run's head_sha IS the
           # commit it targets, so this is an observed-state check, not a lock: if someone's merge
           # is already building $SHORT, there is nothing to reconcile yet.
-          inflight=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow main-cd.yml --limit 50 \
-            --json databaseId,headSha,status \
-            --jq "[.[] | select(.headSha[0:7]==\"$SHORT\" and (.status==\"in_progress\" or .status==\"queued\")
-                                and (.databaseId|tostring) != \"$GITHUB_RUN_ID\")] | length")
-          if [ "$inflight" -gt 0 ]; then
-            decision false "⏳ a CD run for \`$SHORT\` is already in flight — reconcile skipped"
-            exit 0
-          fi
+          # (The "another run is in flight" guard that used to sit here is GONE. It was the
+          # mutual-deferral bug: with the concurrency group above, runs for a ref cannot overlap,
+          # so a second run is queued rather than concurrent — and once it starts, the COMPLETE
+          # check a few lines up is what makes it a no-op. Re-adding an in-flight test would
+          # re-arm the defect, because a run QUEUED behind this one also counts as "in flight".)
 
           # The ledger has to exist before an attempt is recorded — an attempt that is not written
           # down is an attempt that can be repeated forever.
@@ -1528,6 +1541,48 @@ jobs:
   # - Idempotent: one open `ci-failure` issue collects repeat failures as comments; a new issue is
   #   only created when none is open (close the issue once CD is green again). The reconciler
   #   writes its attempt ledger to the same issue, so the whole story is in one place.
+  # ─────────────────────────── DELIVERY VERDICT ───────────────────────────
+  # 🚨 The gate for "green, and shipped NOTHING".
+  #
+  # `alert-on-failure` below only fires on failure(). A CD run in which every image job SKIPPED is
+  # a SUCCESS, so nothing alerted — and that is the exact state observed on 2026-08-19: two runs
+  # for cb33558 each deferred to the other, both reported success, no image was built, and every
+  # self-updating install silently stayed on the previous image. The cause is fixed (the
+  # concurrency group, above), but the CLASS needs a post-condition, because a skip and a success
+  # are indistinguishable in the UI — the same reason the node repos grew a skip-detection gate.
+  #
+  # It fires ONLY on the reconcile path, and that narrowness is deliberate:
+  #   * the reconciler's entire purpose is to repair an incomplete image set. If it runs while
+  #     main is GREEN and the set is INCOMPLETE and it still publishes nothing, delivery is stuck
+  #     and no one is being told;
+  #   * the PUSH path legitimately defers — batching hands the commit to the reconciler within
+  #     the hour — so failing there would be noise, and noise is how a real red gets ignored.
+  delivery-verdict:
+    name: "CD delivered, or had a good reason not to"
+    needs: [gate, promote]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: A green, incomplete main must never end a reconcile unpublished
+        env:
+          REASON: ${{ needs.gate.outputs.reason }}
+          PUBLISH: ${{ needs.gate.outputs.publish }}
+          COMPLETE: ${{ needs.gate.outputs.complete }}
+          GREEN: ${{ needs.gate.outputs.green }}
+          SHORT: ${{ needs.gate.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          echo "reason=$REASON publish=$PUBLISH complete=$COMPLETE green=$GREEN sha=$SHORT"
+
+          if [ "$REASON" = "reconcile" ] && [ "$PUBLISH" != "true" ] \
+             && [ "$COMPLETE" = "false" ] && [ "$GREEN" = "true" ]; then
+            echo "::error::main \`$SHORT\` is GREEN and has an INCOMPLETE image set, and this reconcile published nothing. Delivery is stuck: every self-updating install stays on the previous image. This job exists because that state is otherwise INVISIBLE — the run reports success and every image job simply reads as skipped."
+            exit 1
+          fi
+
+          echo "OK — either something was published, or not publishing was the correct answer."
+
   alert-on-failure:
     name: "Alert: CD failed on main"
     needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images, publish-bake, notify-dependents]
