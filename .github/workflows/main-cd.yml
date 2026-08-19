@@ -116,8 +116,20 @@ permissions:
 # distinct and nothing here mutates a live environment. Under the shared group GitHub's
 # one-pending-slot rule CANCELLED queued CD runs during merge bursts (6 cancelled runs
 # on 2026-08-07 alone), silently dropping release increments.
+# 🚨 SERIALIZE, and never cancel. The group used to be keyed on `github.run_id`, which is unique
+# per run — so it grouped each run with itself and serialized NOTHING. Two CD runs for the same
+# commit could therefore overlap, and because each one skipped when it saw "another CD run is
+# already in flight", BOTH deferred and NEITHER published. Observed 2026-08-19 on cb33558: a
+# workflow_run CD and a manual dispatch raced, both reported success, and no image was built —
+# a mutual deferral that reads exactly like a healthy skip.
+#
+# Keyed on the ref, concurrent runs QUEUE instead: the second waits for the first, then finds a
+# complete image set and exits with "nothing to reconcile", which is the honest no-op. And
+# `cancel-in-progress: false` matters as much as the group — a CD run that is midway through
+# pushing a multi-image set must never be killed, or the set is left incomplete, which is the
+# very state the reconciler exists to repair.
 concurrency:
-  group: main-cd-${{ github.run_id }}
+  group: main-cd-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -521,14 +533,11 @@ jobs:
           # 🚨 Never race an in-flight publish for the same commit. A CD run's head_sha IS the
           # commit it targets, so this is an observed-state check, not a lock: if someone's merge
           # is already building $SHORT, there is nothing to reconcile yet.
-          inflight=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow main-cd.yml --limit 50 \
-            --json databaseId,headSha,status \
-            --jq "[.[] | select(.headSha[0:7]==\"$SHORT\" and (.status==\"in_progress\" or .status==\"queued\")
-                                and (.databaseId|tostring) != \"$GITHUB_RUN_ID\")] | length")
-          if [ "$inflight" -gt 0 ]; then
-            decision false "⏳ a CD run for \`$SHORT\` is already in flight — reconcile skipped"
-            exit 0
-          fi
+          # (The "another run is in flight" guard that used to sit here is GONE. It was the
+          # mutual-deferral bug: with the concurrency group above, runs for a ref cannot overlap,
+          # so a second run is queued rather than concurrent — and once it starts, the COMPLETE
+          # check a few lines up is what makes it a no-op. Re-adding an in-flight test would
+          # re-arm the defect, because a run QUEUED behind this one also counts as "in flight".)
 
           # The ledger has to exist before an attempt is recorded — an attempt that is not written
           # down is an attempt that can be repeated forever.
