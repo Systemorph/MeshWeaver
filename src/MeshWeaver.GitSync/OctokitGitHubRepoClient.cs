@@ -63,6 +63,35 @@ public sealed class OctokitGitHubRepoClient(IoPoolRegistry ioPools, ILogger<Octo
     private static string StripGit(string repo) =>
         repo.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? repo[..^4] : repo;
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// 🚨 <b>This is the call that survives a RENAME.</b> GitHub answers
+    /// <c>GET /repos/{owner}/{repo}</c> for a repository's OLD name with a <c>301</c> to its current
+    /// location, and Octokit's <c>RedirectHandler</c> follows it — so the repository object that
+    /// comes back carries the name the repository announces itself under TODAY, which is the name
+    /// every webhook payload uses. Reading <c>Owner.Login</c> + <c>Name</c> off that RESPONSE (never
+    /// re-parsing the url we asked with) is what turns <c>Systemorph/education</c> into
+    /// <c>Systemorph/MeshWeaver.Education</c> (#1856).
+    ///
+    /// <para>The call ERRORS — a 404 for a repository this token cannot see, a transport fault —
+    /// rather than emitting null: "unreachable" is a fact the CALLER must classify (a private
+    /// repository read with no credential is not the same as one that does not exist), and
+    /// swallowing it here would hide a permanently mis-credentialled resolution behind a
+    /// permanently cached "unknown".</para>
+    /// </remarks>
+    public IObservable<RepoIdentity?> GetCanonicalRepository(string repositoryUrl, string accessToken)
+    {
+        var (owner, repo) = ParseRepoUrl(repositoryUrl);
+        var client = Client(accessToken);
+        return Http.InvokeObservable(_ => client.Repository.Get(owner, repo))
+            .Select(r => r?.Owner?.Login is { Length: > 0 } login && r.Name is { Length: > 0 } name
+                ? new RepoIdentity(login, name)
+                : null)
+            .Do(id => logger?.LogDebug(
+                "Canonical identity of {Url} resolved to {Identity}.",
+                repositoryUrl, id?.ToString() ?? "(unknown)"));
+    }
+
     /// <summary>
     /// Mirrors the request's files into the repo as a single commit (blob → tree → commit →
     /// update ref), creating the repo and/or branch when missing per the request flags.
