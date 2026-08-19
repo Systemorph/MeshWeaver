@@ -1176,6 +1176,12 @@ public static class MemexConfiguration
         // PluginCatalog:DefaultGrants seeding applies. The bootstrap key in the body IS the auth.
         app.MapInstanceRegistration();
 
+        // Short-lived credential exchange — POST /api/instances/token. A registered instance trades
+        // its durable mwi_ key for a scoped, minutes-long mwa_ token, so a consumer (a build agent,
+        // a disposable mesh) holds nothing long-lived. Only the durable key may mint; a token can
+        // never mint its successor.
+        app.MapInstanceTokenExchange();
+
         // Crawler plumbing — a real /robots.txt + /sitemap.xml (the Blazor catch-all otherwise
         // serves the SPA shell on both). The sitemap lists exactly the anonymous surface: every
         // top-level node passing the AnonymousGate plus store plugins' public segments.

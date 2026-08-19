@@ -78,7 +78,6 @@ src/MeshWeaver.Observability/LogIncidentControlPlane.cs	1
 src/MeshWeaver.Observability/LogIncidentIngestService.cs	1
 src/MeshWeaver.PluginCatalog/InstanceAutoRegistrationService.cs	6
 src/MeshWeaver.PluginCatalog/InstanceComboReader.cs	1
-src/MeshWeaver.PluginCatalog/InstanceRegistryAuthenticator.cs	1
 src/MeshWeaver.PluginCatalog/ModuleDiscoveryService.cs	4
 src/MeshWeaver.PluginCatalog/PackageInstaller.cs	10
 src/MeshWeaver.PluginCatalog/PackageUpdateReconciler.cs	2
