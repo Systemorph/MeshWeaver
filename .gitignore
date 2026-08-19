@@ -38,12 +38,27 @@ bld/
 # installs it from here) — not build output. Re-include it.
 !/deploy/homebrew/bin/
 !/deploy/homebrew/bin/**
-# Per-tenant AKS deploy envs are PRIVATE — keep ONLY the memex-cloud reference example;
-# every other tenant env directory is ignored in full (directory names are tenant
+# A real `.env` is deployment configuration — hosts, database names, keys. `deploy/.env.example`
+# is the documented surface and is tracked; the filled-in copy beside a compose file never is.
+# `deploy/compose/.env` and `deploy/compose-ha/.env` had been committed as Aspire emitted them
+# (empty password placeholders, so nothing leaked) — but a tracked `.env` is a file people fill
+# in locally and push back without noticing. Ignored so that cannot happen.
+.env
+!deploy/.env.example
+
+# Per-tenant AKS deploy envs are PRIVATE — keep ONLY the placeholder template;
+# every real tenant env directory is ignored in full (directory names are tenant
 # identities and must not enter this public repo). Placed after the !/deploy/** re-include
 # above so this re-exclusion wins.
+#
+# The re-include used to name `memex-cloud/` — a TENANT directory, and by 2026-08-08 one
+# that had already been moved to the private Systemorph/Memex repo. So the rule was both
+# dead and pointed the wrong way: it re-admitted the one kind of directory the comment
+# above says must never enter this repo, and it left `example/` — the template operators
+# copy from — ignored, which is why that folder could never grow a new file.
 /deploy/aks/envs/*/
-!/deploy/aks/envs/memex-cloud/
+!/deploy/aks/envs/example/
+!/deploy/aks/envs/example/**
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/

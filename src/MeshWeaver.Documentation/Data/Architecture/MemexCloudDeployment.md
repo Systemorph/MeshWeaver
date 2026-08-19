@@ -303,14 +303,14 @@ To reset to the post-initialize state, drop the per-user partition schemas and t
 
 ### 10.6 Secrets via Key Vault (CSI Secrets Store)
 
-Production secrets live in **`meshweaverkeyvault`** (access-policy mode) and are projected into the pod by the AKS **CSI Secrets Store** add-on — no plaintext env vars; the vault is the source of truth.
+Production secrets live in **Key Vault** (access-policy mode) and are projected into the pod by the AKS **CSI Secrets Store** add-on — no plaintext env vars; the vault is the source of truth.
 
 One-time wiring: grant the CSI add-on's identity `get/list` on the vault, store each secret, then create a `SecretProviderClass` that maps Key Vault secret names → env-var keys and syncs them into a k8s Secret the deployment mounts (CSI volume) and reads via `envFrom`:
 
 ```bash
 # CSI identity object id: az aks show -g <rg> -n <cluster> --query addonProfiles.azureKeyvaultSecretsProvider.identity.objectId -o tsv
-az keyvault set-policy -n meshweaverkeyvault --object-id <csi-identity-objectid> --secret-permissions get list
-az keyvault secret set --vault-name meshweaverkeyvault --name ai-keyprotection-masterkey --value '<value>'   # dashes only in KV names
+az keyvault set-policy -n <key-vault> --object-id <csi-identity-objectid> --secret-permissions get list
+az keyvault secret set --vault-name <key-vault> --name ai-keyprotection-masterkey --value '<value>'   # dashes only in KV names
 # SecretProviderClass `memex-kv` maps ai-keyprotection-masterkey -> Ai__KeyProtection__MasterKey (and the
 # PG conn / Microsoft secret / Bootstrap secret) and syncs them into the `memex-kv-secrets` k8s Secret;
 # the portal has a CSI volume for `memex-kv` + `envFrom: secretRef: memex-kv-secrets`.
@@ -333,7 +333,7 @@ Visiting an auth-flow route (`/onboarding`, `/login`, `/welcome`) can create a s
 If a static node provider seeds a User for the admin email, a fresh `CreateUser` fails with "Node already exists" and the interactive form shows "user exists" even with 0 DB users. Remove the seed so real onboarding can persist the partition root.
 
 **Secrets in Key Vault (done)**
-The master key, PG connection string, Microsoft client secret, and `Bootstrap:Secret` live in `meshweaverkeyvault`; a `SecretProviderClass` + the AKS CSI Secrets Store add-on sync them into a k8s Secret the portal reads via `envFrom` (see §10.6). Remaining: the Grafana admin password (monitoring namespace), and folding the `SecretProviderClass` + deployment CSI volume/`envFrom` into the chart/AddMemex so a fresh deploy wires Key Vault automatically instead of requiring the current post-`deploy.sh` patch.
+The master key, PG connection string, Microsoft client secret, and `Bootstrap:Secret` live in Key Vault; a `SecretProviderClass` + the AKS CSI Secrets Store add-on sync them into a k8s Secret the portal reads via `envFrom` (see §10.6). Remaining: the Grafana admin password (monitoring namespace), and folding the `SecretProviderClass` + deployment CSI volume/`envFrom` into the chart/AddMemex so a fresh deploy wires Key Vault automatically instead of requiring the current post-`deploy.sh` patch.
 
 **Multi-replica HA**
 Needs Orleans `AzureTables`/`AdoNet` clustering wired on the Filesystem backend.
