@@ -169,8 +169,33 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         using var watcher = StartWatcher();
         var armed = await AwaitSubscription(postPath);
 
-        Assert.False(string.IsNullOrWhiteSpace(armed.CreatedBy),
-            "a timer with no CreatedBy is refused at fire time — it would have to publish as system");
+        // The identity the publish will run as. Asserted exactly, not merely "not blank".
+        //
+        // 🚨 This assertion CANNOT catch the projection bug it looks like it covers, and saying so
+        // is the point. In production the watcher's query projected no lastModifiedBy, so CreatedBy
+        // came back null and every publish was refused with "names no CreatedBy" — hours later, at
+        // the slot, on a post that looked perfectly scheduled (2026-08-19). This test passed
+        // throughout: the IN-MEMORY query provider ignores `select:` and hands back the whole node,
+        // so the projection is only real on the Postgres/Orleans path. ProjectionCarriesTheIdentity
+        // below guards the string itself, which is the only part a test here can actually hold.
+        Assert.Equal(SeededBy, armed.CreatedBy);
+    }
+
+    /// <summary>
+    /// The candidate query must PROJECT the field the watcher reads. A guard on the string, not on
+    /// behaviour — and deliberately so: the in-memory query provider ignores <c>select:</c>, so no
+    /// test in this suite can observe a missing projection. What this does catch is the change that
+    /// actually caused the outage — someone editing the select and dropping a field the code below
+    /// still reads. In production that is silent: the field is null, the timer arms with no
+    /// identity, and every publish is refused at its slot.
+    /// </summary>
+    [Fact]
+    public void ProjectionCarriesTheIdentity()
+    {
+        var query = typeof(ScheduledPostWatcher)
+            .GetField("Query", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .GetRawConstantValue() as string;
+        Assert.Contains("lastModifiedBy", query!, StringComparison.Ordinal);
     }
 
     // ---- helpers ----
@@ -185,6 +210,10 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         watcher.StartAsync(default).GetAwaiter().GetResult();
         return watcher;
     }
+
+    /// <summary>The identity the seeded posts are written by — what the watcher must carry onto the
+    /// timer as the identity the publish will run as.</summary>
+    private const string SeededBy = "Roland";
 
     private Task SeedPostAsync(
         string postPath, string status, string scheduledAt, string? publishedUrn = null)
