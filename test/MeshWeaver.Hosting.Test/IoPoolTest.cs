@@ -147,6 +147,34 @@ public class IoPoolTest
     }
 
     /// <summary>
+    /// 🚨 A pool obtained AFTER disposal began must be REFUSED, not created live.
+    ///
+    /// <para><c>Dispose()</c> snapshots <c>_pools</c> and clears it. Without a guard, a racing
+    /// <c>Get(...)</c> re-populates the dictionary with a brand-new, fully live pool that nobody
+    /// will ever cancel or join — work issued on it runs unsupervised straight through the ALC
+    /// unload, which is the exact hole this teardown path exists to close. (Copilot review, #1887.)</para>
+    /// </summary>
+    [Fact]
+    public async Task A_pool_requested_after_disposal_is_refused_not_created_live()
+    {
+        var registry = new IoPoolRegistry();
+        registry.Get("before");          // one real pool, so disposal has something to do
+        registry.Dispose();
+        await registry.Disposed.Timeout(Timeout10).FirstAsync().ToTask(TestContext.Current.CancellationToken);
+
+        // A name never seen before disposal — the case that used to mint a live pool.
+        var late = registry.Get("after-disposal");
+        var ran = false;
+        var act = async () => await late.Invoke(_ => { ran = true; return Task.FromResult(1); })
+            .FirstAsync().ToTask(TestContext.Current.CancellationToken);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        ran.Should().BeFalse("work must not run on a pool handed out after teardown began");
+        registry.TotalInFlight.Should().Be(0,
+            "a refused pool is not tracked — nothing can be in flight on it");
+    }
+
+    /// <summary>
     /// 🚨 A leaf issued AFTER disposal must be CANCELLED, never <see cref="ObjectDisposedException"/>.
     ///
     /// <para>This is what makes disposing the pool during SILO shutdown safe. The mesh is torn down
