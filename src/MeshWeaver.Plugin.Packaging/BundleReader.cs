@@ -214,6 +214,28 @@ public static class BundleReader
     }
 
     /// <summary>
+    /// Rejects a declared content path that could escape the directory a consumer extracts into.
+    ///
+    /// <para>🚨 This is the one place in the bundle format where PRODUCER-CONTROLLED STRINGS BECOME
+    /// FILE PATHS on a consumer's machine. Everything else a bundle carries is either bytes keyed by
+    /// a node path (used as a dictionary key, never as a path) or a module file name the module
+    /// lane validates. A relative path is joined to an output directory and written, so
+    /// <c>../../…</c>, a rooted path, or a drive-qualified one would place attacker-chosen bytes
+    /// outside it — on a BUILD AGENT, which then compiles what it finds.</para>
+    ///
+    /// <para>Enforced on READ rather than only at the extraction site, because the alternative is
+    /// every consumer re-deriving the same rule and one of them getting it wrong. The writer
+    /// refuses to declare such a path too; this is the half that also holds for a bundle this
+    /// process did not produce.</para>
+    /// </summary>
+    private static bool IsUnsafeContentPath(string relativePath) =>
+        string.IsNullOrWhiteSpace(relativePath)
+        || Path.IsPathRooted(relativePath)
+        || relativePath.Contains('\\')                       // a Windows separator is not our shape
+        || relativePath.Contains(':')                          // drive- or scheme-qualified
+        || relativePath.Split('/').Any(segment => segment is ".." or ".");
+
+    /// <summary>
     /// Extracts the package's NODE DEFINITIONS — the tree a consumer recreates to use this package
     /// as an upstream WITHOUT cloning and recompiling it.
     ///
@@ -250,6 +272,16 @@ public static class BundleReader
         var files = new List<ContentFile>();
         foreach (var relativePath in declared)
         {
+            // 🚨 THROWS rather than returning empty. An incomplete archive is a benign producer
+            // bug and degrades to "no content"; a path that escapes the extraction directory is
+            // hostile or corrupt, and a caller about to write files must not be able to mistake it
+            // for "this bundle carries none".
+            if (IsUnsafeContentPath(relativePath))
+                throw new InvalidOperationException(
+                    $"bundle declares an unsafe content path '{relativePath}' — a package tree is "
+                    + "extracted relative to an output directory, so a rooted or parent-traversing "
+                    + "path would write outside it");
+
             var entry = archive.GetEntry($"{NuGetPackageWriter.ContentFolder}/{relativePath}");
             if (entry is null)
                 // Incomplete tree — all or nothing (see remarks).
