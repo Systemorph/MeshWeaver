@@ -12,6 +12,7 @@ using PackagingManifest = MeshWeaver.Plugin.Packaging.PluginManifest;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -121,7 +122,116 @@ public static class PluginBundleEndpoints
                     Caller(http),
                     ct));
 
+        MapPublish(endpoints);
         return endpoints;
+    }
+
+    /// <summary>
+    /// The PUBLISH route — the registry's acquisition half (#1664 step 13).
+    ///
+    /// <para>A registry serves the module bytes it itself runs, and that folder is written by the
+    /// platform image's publish layout. So a module whose source has LEFT the platform repo could
+    /// be packed, declared and installed — and still reach nobody. This is how the repo that owns
+    /// it hands the bytes over: <c>POST /api/plugins/bundles/{plugin}</c> with the packed
+    /// <c>.module.nupkg</c>, after which the existing serve → fetch → floor-gate → land chain
+    /// carries it to every consumer unchanged.</para>
+    ///
+    /// <para>🚨 <b>Mapped only when a publish token is configured</b>
+    /// (<see cref="ModulePublish.TokenConfigKey"/>) — an unconfigured registry has no publish
+    /// surface at all, rather than one that answers 401. Same shape as the log-ingest route, and
+    /// for the same reason: the caller is a build, not a signed-in user, so this is deliberately
+    /// NOT the instance-key group above — a read grant says which packages an instance may PULL,
+    /// while publishing writes bytes every consumer will then load.</para>
+    /// </summary>
+    private static void MapPublish(IEndpointRouteBuilder endpoints)
+    {
+        var config = endpoints.ServiceProvider.GetService<IConfiguration>();
+        var token = config?[ModulePublish.TokenConfigKey];
+        if (string.IsNullOrWhiteSpace(token))
+            return;
+
+        endpoints.MapPost($"{RoutePrefix}/{{plugin}}", async (
+                HttpContext http, string plugin, CancellationToken ct) =>
+            {
+                var logger = http.RequestServices.GetService<ILoggerFactory>()
+                    ?.CreateLogger(typeof(PluginBundleEndpoints));
+
+                if (ModulePublish.DeclineAuthorization(token, http.Request.Headers.Authorization) is { } denied)
+                {
+                    logger?.LogWarning("Module publish for {Plugin} REJECTED: {Reason}", plugin, denied);
+                    return Results.Json(new { error = denied }, statusCode: StatusCodes.Status401Unauthorized);
+                }
+
+                var landing = http.RequestServices.GetService<ModuleLandingService>()
+                              ?? RootHub(http).ServiceProvider.GetService<ModuleLandingService>();
+                if (landing is null)
+                    return Results.Json(
+                        new { error = "this instance cannot land modules (no ModuleLandingService)" },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+
+                using var buffer = new MemoryStream();
+                await http.Request.Body.CopyToAsync(buffer, ct);
+                var bytes = buffer.ToArray();
+                if (bytes.Length == 0)
+                    return Results.Json(new { error = "the request carried no bundle" },
+                        statusCode: StatusCodes.Status400BadRequest);
+
+                BundleReader.Manifest? manifest;
+                IReadOnlyList<BundleReader.ModuleFile> files;
+                try
+                {
+                    (manifest, files) = BundleReader.ReadModule(bytes);
+                }
+                catch (Exception exception)
+                {
+                    logger?.LogWarning(exception, "Module publish for {Plugin}: unreadable bundle", plugin);
+                    return Results.Json(new { error = "the upload is not a readable module bundle" },
+                        statusCode: StatusCodes.Status400BadRequest);
+                }
+
+                var (accepted, decline) = ModulePublish.Validate(
+                    plugin, manifest, files, http.Request.Query["version"]);
+                if (accepted is null)
+                {
+                    logger?.LogWarning("Module publish for {Plugin} REFUSED: {Reason}", plugin, decline);
+                    return Results.Json(new { error = decline }, statusCode: StatusCodes.Status400BadRequest);
+                }
+
+                try
+                {
+                    // The floor gate and the same-identity trap-door hold HERE, at placement —
+                    // one owner for each rule. A refusal surfaces as the observable's error.
+                    await landing.LandModule(
+                        accepted.Module, accepted.Files,
+                        frameworkMvid: accepted.FrameworkMvid,
+                        version: accepted.Version,
+                        minMeshVersion: accepted.MinMeshVersion)
+                        .FirstAsync().ToTask(ct);
+                }
+                catch (Exception exception)
+                {
+                    logger?.LogWarning(exception,
+                        "Module publish for {Plugin}: landing refused '{Module}'", plugin, accepted.Module);
+                    return Results.Json(new { error = exception.Message },
+                        statusCode: StatusCodes.Status409Conflict);
+                }
+
+                logger?.LogInformation(
+                    "Module publish: landed '{Module}' for {Plugin} ({Files} file(s), version {Version}, "
+                    + "floor {Floor}) — it serves from this registry and loads here on the next restart",
+                    accepted.Module, plugin, accepted.Files.Count,
+                    accepted.Version ?? "(unversioned)", accepted.MinMeshVersion ?? "(none)");
+
+                return Results.Json(new
+                {
+                    plugin,
+                    module = accepted.Module,
+                    version = accepted.Version,
+                    files = accepted.Files.Count,
+                    pendingRestart = true,
+                });
+            })
+            .AllowAnonymous();
     }
 
     /// <summary>
