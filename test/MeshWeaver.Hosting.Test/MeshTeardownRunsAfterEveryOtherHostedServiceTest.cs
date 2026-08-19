@@ -1,4 +1,6 @@
 using System;
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Messaging;
@@ -49,6 +51,18 @@ public class MeshTeardownRunsAfterEveryOtherHostedServiceTest
 
         var mesh = host.Services.GetRequiredService<IMessageHub>();
         mesh.IsDisposing.Should().BeFalse("the mesh must be alive while the host runs");
+
+        // 🚨 Resolving the mesh is what CONSTRUCTS it, and its RunLevel reaches Started
+        // asynchronously afterwards — `host.StartAsync()` does not wait for that. Stopping straight
+        // away therefore raced the hub's own startup and recorded `Starting` at the probe, which is
+        // a race in this TEST, not the ordering it pins. Wait on the source of truth
+        // (RunLevelChanged replays the current level) instead of hoping the window stays wide:
+        // adding one unrelated test class to this assembly was enough to lose it.
+        await mesh.RunLevelChanged
+            .Where(level => level >= MessageHubRunLevel.Started)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .ToTask(TestContext.Current.CancellationToken);
 
         await host.StopAsync();
 
