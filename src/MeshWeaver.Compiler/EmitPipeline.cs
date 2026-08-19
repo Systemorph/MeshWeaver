@@ -173,7 +173,10 @@ public static class EmitPipeline
     ///   <item><c>canary=REFERENCES</c> — pristine emits, shared does not: the poison travels
     ///     with the reference instances (or the symbols Roslyn caches on their
     ///     <c>AssemblyMetadata</c>), and scoping the set per-mesh is on the right axis.</item>
-    ///   <item><c>canary=BELOW-ROSLYN</c> — neither emits: brand-new references and freshly
+    ///   <item><c>canary=DIVERGENT</c> — neither emits, but they died in DIFFERENT frames. The
+    ///     two legs run identical source, so two different faults are not evidence of one
+    ///     process-wide fault; both sites are named and the below-Roslyn claim is withheld.</item>
+    ///   <item><c>canary=BELOW-ROSLYN</c> — neither emits, IN THE SAME FRAME: brand-new references and freshly
     ///     parsed source still cannot emit, so nothing about the reference set explains it. The
     ///     broken state is under Roslyn (CLR heap / JIT / GC) and no reference-set change can fix
     ///     it. Roslyn keeps no cross-emit state — the metadata writer's indices are per-emit, its
@@ -233,18 +236,73 @@ public static class EmitPipeline
                 + "— the shared reference set cannot emit, but the pristine control could not be "
                 + "BUILT, so this says nothing about whether the reference set is the cause";
 
-        var pristine = EmitCanary(() => pristineRefs);
+        return Verdict(shared, EmitCanary(() => pristineRefs));
+    }
 
-        return pristine.StartsWith("OK", StringComparison.Ordinal)
-            ? $"canary=REFERENCES shared:{shared} pristine:{pristine} — the same source emits fine "
+    /// <summary>
+    /// Reduces the two canary legs to the one-line verdict. Pure — no Roslyn, no process state —
+    /// so every branch is unit-testable (<c>EmitCanaryVerdictTest</c>).
+    ///
+    /// <para>🚨 <b><c>BELOW-ROSLYN</c> requires the two legs to have died in the SAME frame</b>,
+    /// not merely to have both failed. Both legs run the SAME source; the only difference is the
+    /// reference set. So "shared threw and pristine threw" is the evidence for a process-wide
+    /// fault only when it is the SAME fault — and until the throw site was recorded
+    /// (<see cref="ThrowSite"/>) nothing checked that. Every <see cref="NullReferenceException"/>
+    /// in .NET carries the identical message, so an unrelated NRE in the pristine leg (a
+    /// reference that could not be read, an OOM surfacing as a null, a probe-side bug) read as a
+    /// confirmation and the probe answered its most expensive branch — *"the broken state is
+    /// below Roslyn (CLR heap / JIT / GC) … capture a core dump"* — on a coincidence of wording.
+    /// When the sites differ the verdict is <c>DIVERGENT</c>: both sites are named and the strong
+    /// claim is withheld, exactly as <c>INCONCLUSIVE</c> withholds it when the control never
+    /// ran.</para>
+    /// </summary>
+    /// <param name="shared">Leg 1's outcome token — the same reference set as the failed compile.</param>
+    /// <param name="pristine">Leg 2's outcome token — brand-new references.</param>
+    internal static string Verdict(string shared, string pristine)
+    {
+        if (pristine.StartsWith("OK", StringComparison.Ordinal))
+            return $"canary=REFERENCES shared:{shared} pristine:{pristine} — the same source emits fine "
                 + "against BRAND-NEW references but fails against the shared set ⇒ the poison "
                 + "travels with the MetadataReference instances / the Roslyn symbols cached on "
-                + "them (reference-set scoping is the right axis)"
-            : $"canary=BELOW-ROSLYN shared:{shared} pristine:{pristine} — a trivial compilation "
-                + "with BRAND-NEW references and freshly parsed source cannot emit either ⇒ "
-                + "nothing about the reference set explains this; the broken state is below "
-                + "Roslyn (CLR heap / JIT / GC), so no reference-set change can fix it — "
-                + "capture a core dump and re-run with tiering disabled";
+                + "them (reference-set scoping is the right axis)";
+
+        var sharedSite = SiteOf(shared);
+        var pristineSite = SiteOf(pristine);
+        if (sharedSite is null || pristineSite is null
+            || !string.Equals(sharedSite, pristineSite, StringComparison.Ordinal))
+            return $"canary=DIVERGENT shared:{shared} pristine:{pristine} — both legs failed, but "
+                + "NOT in the same way (shared died at "
+                + $"'{sharedSite ?? "an unrecorded site"}', pristine at '{pristineSite ?? "an unrecorded site"}'), "
+                + "and the two legs run identical source. Two different faults are not evidence of "
+                + "one process-wide fault, so the below-Roslyn verdict is withheld — COMPARE THE "
+                + "TWO SITES: one corruption can surface a frame apart, but two unrelated faults "
+                + "look exactly like this as well, and only the sites tell them apart. Start with "
+                + "whichever site is not the emit itself";
+
+        return $"canary=BELOW-ROSLYN shared:{shared} pristine:{pristine} — a trivial compilation "
+            + "with BRAND-NEW references and freshly parsed source cannot emit either, and BOTH "
+            + $"legs died in the same frame ({sharedSite}) ⇒ nothing about the reference set "
+            + "explains this; the broken state is below Roslyn (CLR heap / JIT / GC), so no "
+            + "reference-set change can fix it — capture a core dump and re-run with tiering "
+            + "disabled";
+    }
+
+    /// <summary>
+    /// The <c>Type.Method</c> frame out of a leg token shaped
+    /// <c>THREW {Type} at {Site}: {Message}</c>, or <c>null</c> when the leg did not throw or
+    /// recorded no site (a <c>DIAGNOSTICS(...)</c> outcome, or a token from an older shape).
+    /// </summary>
+    private static string? SiteOf(string leg)
+    {
+        const string marker = " at ";
+        if (!leg.StartsWith("THREW ", StringComparison.Ordinal))
+            return null;
+        var at = leg.IndexOf(marker, StringComparison.Ordinal);
+        if (at < 0)
+            return null;
+        var colon = leg.IndexOf(':', at);
+        var site = (colon < 0 ? leg[(at + marker.Length)..] : leg[(at + marker.Length)..colon]).Trim();
+        return string.IsNullOrEmpty(site) || site == "(no stack)" ? null : site;
     }
 
     /// <summary>
@@ -277,7 +335,49 @@ public static class EmitPipeline
         }
         catch (Exception probeError)
         {
-            return $"THREW {probeError.GetType().Name}: {probeError.Message}";
+            return $"THREW {probeError.GetType().Name} at {ThrowSite(probeError)}: {probeError.Message}";
+        }
+    }
+
+    /// <summary>
+    /// The frame an exception was thrown FROM, as <c>Type.Method</c> — the discriminator the
+    /// canary's verdict is decided on.
+    ///
+    /// <para>🚨 Why the verdict cannot be decided on the message. Both legs reduced their outcome
+    /// to <c>"THREW {Type}: {Message}"</c>, and <c>BELOW-ROSLYN</c> was claimed whenever the
+    /// pristine leg <i>also threw anything at all</i>. "Object reference not set to an instance of
+    /// an object." is the same string for every <see cref="NullReferenceException"/> in .NET, so
+    /// two throws from completely different code read as the same fault — and the verdict that
+    /// follows ("the broken state is below Roslyn (CLR heap / JIT / GC) … capture a core dump")
+    /// is the most expensive one this probe can hand triage. That is the same defect the
+    /// <c>INCONCLUSIVE</c> branch exists to avoid, one step further in: a probe must not answer
+    /// its scariest branch on evidence it never checked. With the site recorded, "both legs died
+    /// in the SAME frame" is a fact rather than an inference.</para>
+    ///
+    /// <para>Never throws and never returns null — it runs on an already-failing path (see the
+    /// "cannot fail into the fault path it is diagnosing" note on
+    /// <see cref="ProbeSharedEmitState"/>), so an unavailable stack degrades to
+    /// <c>(no stack)</c>.</para>
+    /// </summary>
+    internal static string ThrowSite(Exception error)
+    {
+        try
+        {
+            // TargetSite is the throwing method itself and survives a stack trace the runtime
+            // could not materialize; the first stack frame is the fallback for the rare
+            // TargetSite-less throw.
+            var method = error.TargetSite;
+            if (method is not null)
+                return $"{method.DeclaringType?.Name ?? "?"}.{method.Name}";
+            var firstFrame = error.StackTrace?
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault()?
+                .Trim();
+            return string.IsNullOrEmpty(firstFrame) ? "(no stack)" : firstFrame;
+        }
+        catch
+        {
+            return "(no stack)";
         }
     }
 

@@ -171,6 +171,15 @@ namespace MeshWeaver.Hosting
             using (delivery.AccessContext is null ? access?.ImpersonateAsSystem() : null)
                 Mesh.Post(new DeliveryFailure(delivery)
                 {
+                    // 🚨 Unavailable, not the default Unknown. Everything that faults the route
+                    // chain is an availability fact about the TARGET, not about this request:
+                    // path resolution stalled past its 30 s bound, or building the per-node hub
+                    // threw — which is the monolith's shape of the Orleans activation fault in
+                    // issue #1693, where a NullReferenceException inside a package root's
+                    // activation reached the content route as an unclassified failure and was
+                    // alerted as a route defect. Retry-worthy by construction: the next access
+                    // re-runs resolution and hub creation from scratch.
+                    ErrorType = ErrorType.Unavailable,
                     Message = ex.Message,
                     ExceptionType = ex.GetType().Name,
                     StackTrace = ex.StackTrace!

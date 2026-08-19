@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
@@ -176,9 +177,11 @@ public static class AccessAssignmentGuard
                && string.Equals(r.Role, Role.Admin.Id, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// 🚨 A SYSTEM-OWNED space grants nobody write access. A partition with a <c>_GitSync</c> is
-    /// rewritten from its repo on every sync, so the ONLY identity that may write it is the one the
-    /// importer runs as (<see cref="WellKnownUsers.System"/>). Any other Admin/Editor grant is an
+    /// 🚨 A SYSTEM-OWNED space grants nobody write access. A partition with a ONE-WAY
+    /// <c>_GitSync</c> is rewritten from its repo on every sync, so the ONLY identity that may
+    /// write it is the one the importer runs as (<see cref="WellKnownUsers.System"/>). A
+    /// <b>bijective</b> sync is a different contract and is NOT system-owned — see
+    /// <see cref="IsSystemOwned"/>. Any other Admin/Editor grant is an
     /// ownership claim over content the repo owns — and the change it enables is silently reverted
     /// by the next sync, which is the worst of both worlds.
     ///
@@ -198,8 +201,10 @@ public static class AccessAssignmentGuard
     /// <param name="node">The grant node, already normalised.</param>
     /// <param name="assignment">Its content, materialised by the caller through the typed accessor
     /// — never re-read here as raw JSON, which is how a typed content silently reads as empty.</param>
-    /// <param name="systemOwned">Whether the partition has a <c>_GitSync</c>. The caller reads it;
-    /// keeping it a parameter is what makes this predicate pure and unit-testable with no hub.</param>
+    /// <param name="systemOwned">Whether the partition is system-owned — a ONE-WAY <c>_GitSync</c>
+    /// (see <see cref="IsSystemOwned"/>); a bijective sync is NOT, because there the mesh nodes are
+    /// the working copy. The caller reads it; keeping it a parameter is what makes this predicate
+    /// pure and unit-testable with no hub.</param>
     public static bool IsForbiddenOnSystemOwned(
         MeshNode? node, AccessAssignment? assignment, bool systemOwned, out string reason)
     {
@@ -227,6 +232,69 @@ public static class AccessAssignmentGuard
                + "live edit by anyone else is reverted by the next sync. Grant Viewer as an "
                + "entitlement instead, or change the repo and sync it.";
         return true;
+    }
+
+    /// <summary>
+    /// 🚨 THE definition of SYSTEM-OWNED, and the reason it is not simply "has a <c>_GitSync</c>".
+    ///
+    /// <para>A sync has two directions, and they imply opposite ownership:</para>
+    /// <list type="bullet">
+    ///   <item><b>One-way</b> (<c>twoWay: false</c>, the default) — import is git-first: the repo
+    ///     overwrites the live node on every sync. The mesh copy is a PROJECTION, so a write by
+    ///     anyone other than the importer is silently reverted. That partition is system-owned and
+    ///     grants nobody write access.</item>
+    ///   <item><b>Bijective</b> (<c>twoWay: true</c>) — a node edited on the server since the last
+    ///     sync is PRESERVED and committed back. The mesh nodes ARE the working copy, editing them
+    ///     is the entire point, and refusing write grants there makes the feature unusable: the
+    ///     space advertises two-way editing that nobody but the importer may do.</item>
+    /// </list>
+    ///
+    /// <para>Keying on the existence of the config alone conflated the two. Measured on
+    /// memex.systemorph.com 2026-08-18: <c>Deployments</c> was configured <c>twoWay: true</c> and
+    /// its skill documented UI editing as "a first-class way of writing it", yet granting a second
+    /// person Editor was refused as an ownership claim. The only account that could use the
+    /// two-way sync was the one whose grant PREDATED this guard — every later grant was refused,
+    /// which is a rule that enforces itself only against newcomers.</para>
+    ///
+    /// <para>Reads <c>twoWay</c> SHAPE-TOLERANTLY: the config arrives typed on the hub that owns
+    /// it, as a <c>JsonObject</c> from the node builders, and as a <c>JsonElement</c> from
+    /// persistence. A bare <c>is JsonElement</c> test would read the typed form as "no twoWay" and
+    /// fail CLOSED — which is the safe direction, but silently reinstates the exact bug above.
+    /// Absence of the property means <c>false</c>, which is the documented default.</para>
+    /// </summary>
+    /// <param name="syncNode">The <c>{partition}/_GitSync</c> node, or null when there is none.</param>
+    /// <param name="options">The HUB's serializer options — never a hand-rolled instance.</param>
+    public static bool IsSystemOwned(MeshNode? syncNode, JsonSerializerOptions? options)
+        => syncNode is not null && !IsTwoWay(syncNode, options);
+
+    /// <summary>
+    /// Whether a sync config is bijective. Pure and total: an unreadable or absent
+    /// <c>twoWay</c> is <c>false</c>, matching <c>GitHubSyncConfig.TwoWay</c>'s own default.
+    /// </summary>
+    public static bool IsTwoWay(MeshNode? syncNode, JsonSerializerOptions? options)
+    {
+        if (syncNode?.Content is not { } content)
+            return false;
+        try
+        {
+            // Serialized as the CONCRETE runtime type — the object overload routes through the
+            // polymorphic converter, which adopts a foreign type into this hub's registry as a
+            // side effect of a read.
+            var element = content is JsonElement je
+                ? je
+                : JsonSerializer.SerializeToElement(content, content.GetType(), options);
+            return element.ValueKind == JsonValueKind.Object
+                   && element.TryGetProperty("twoWay", out var twoWay)
+                   && twoWay.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;   // unreadable config → treat as one-way, i.e. keep the space protected
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
     }
 
     /// <summary>The partition a scope belongs to — its first segment. <c>Store/Plugin</c> → <c>Store</c>,

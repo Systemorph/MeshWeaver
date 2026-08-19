@@ -366,26 +366,37 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
         _sealInFlight = true;
         // CreateOrUpdateNode (not CreateNode): a retried seal re-writes the SAME index with the same
         // content rather than failing on an existing path.
-        // Observable.Using holds the System scope across the COLD write's Subscribe — a plain `using`
-        // would have lapsed before the subscribe ran and the write would post context-null.
-        Observable.Using<MeshNode, IDisposable>(
-                () => _accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                _ => meshService.CreateOrUpdateNode(segmentNode))
-            .Subscribe(
-                _ =>
-                {
-                    lock (_publishLock)
+        //
+        // 🚨 #1790 — a SYNCHRONOUS using, never Observable.Using / RunAsSystem, for exactly the
+        // reason spelled out on the publish write above: impersonation is an AsyncLocal scope, and
+        // both reactive shapes open it on the SUBSCRIBING thread while disposing it on whichever
+        // thread the write terminates. This call site is on the same thread as that one — the seal
+        // runs inside PublishSnapshotLocked — so the latch it leaves behind runs the rest of the
+        // script as System. #1785 fixed the publish and split the seal out to #1790 rather than
+        // change it without a repro; ActivityLogSealIdentityTest is that repro.
+        //
+        // Sound here because the capture is synchronous: MeshService.CreateOrUpdateNode reads
+        // AccessService.Context on the CALLING thread and pins it onto the request (RequestedBy)
+        // and onto the delivery (PostOptions.WithAccessContext), so nothing re-reads the ambient
+        // afterwards. The Subscribe sits inside the block as well, which costs nothing and keeps
+        // the cold pipeline's synchronous prologue covered too.
+        using (_accessService?.ImpersonateAsSystem())
+            meshService.CreateOrUpdateNode(segmentNode)
+                .Subscribe(
+                    _ =>
                     {
-                        _sealedCount = firstOrdinal + take;
-                        _sealedSegments = index + 1;
-                        _sealInFlight = false;
-                    }
-                },
-                _ =>
-                {
-                    // Best-effort, like every other write on this path: the lines stay in the window
-                    // and the next flush retries them.
-                    lock (_publishLock) _sealInFlight = false;
-                });
+                        lock (_publishLock)
+                        {
+                            _sealedCount = firstOrdinal + take;
+                            _sealedSegments = index + 1;
+                            _sealInFlight = false;
+                        }
+                    },
+                    _ =>
+                    {
+                        // Best-effort, like every other write on this path: the lines stay in the window
+                        // and the next flush retries them.
+                        lock (_publishLock) _sealInFlight = false;
+                    });
     }
 }

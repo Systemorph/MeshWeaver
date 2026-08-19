@@ -138,6 +138,12 @@ public sealed class GitProtocolRepoClient(
         => octokit.CreateBranch(request);
 
     /// <inheritdoc />
+    /// <remarks>A single REST lookup that follows GitHub's rename redirect — the git wire protocol
+    /// cannot answer "what is this repository called now", so this one stays on Octokit.</remarks>
+    public IObservable<RepoIdentity?> GetCanonicalRepository(string repositoryUrl, string accessToken)
+        => octokit.GetCanonicalRepository(repositoryUrl, accessToken);
+
+    /// <inheritdoc />
     public IObservable<GitHubPullRequestInfo> OpenPullRequest(GitHubOpenPullRequestRequest request)
         => octokit.OpenPullRequest(request);
 

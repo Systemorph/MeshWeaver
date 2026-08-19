@@ -235,15 +235,22 @@ public static class MeshDataSourceExtensions
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
             // 🚨 REACTIVE init, NOT the synchronous overload. SyncBuildupActions run INSIDE
             // MessageHubConfiguration.Build, and SubscribeToOwnDeletion resolves the own-node
-            // stream — which can create another hub. That made hub construction RE-ENTER hub
-            // construction and nest an Autofac ComponentRegistryBuilder.Build inside the
-            // in-progress one; the registry builder is not re-entrant, so the process died with
-            // an access violation (SIGSEGV / exit=139) with no test named. Seen on CI as an
-            // intermittent MeshWeaver.FutuRe.Test crash; the core dump's faulting thread was
-            //   CreateHub → Build → SubscribeToOwnDeletion → GetStream → GetHub → CreateHub
-            //   → Build → Autofac ResolvePipelineBuilder.BuildPipeline
-            // Running it as a BuildupAction defers it to InitializeHubRequest — after Build has
-            // finished — so resolving a stream can never nest a container build.
+            // stream — which creates another hub (SynchronizationStream's ctor always calls
+            // GetHostedHub(…, Always) for its sync sub-hub). So the synchronous overload makes hub
+            // construction RE-ENTER hub construction: a second hub — and a second container build
+            // — inside the first one's Build, before StartMessageProcessing. Running it as a
+            // BuildupAction defers it to InitializeHubRequest, after Build has returned, where the
+            // hub exists, its container is settled, and a disposal racing the construction has one
+            // frame to finish instead of a tree. That is reason enough to keep the reactive form.
+            //
+            // ⚠️ Withdrawn: the claim that this nesting KILLED the process. This comment used to
+            // say "the registry builder is not re-entrant, so the process died with an access
+            // violation (SIGSEGV / exit=139)". That was read off a stack and never tested.
+            // Measured 2026-08-18 on MeshWeaver.FutuRe.Test (59/59, exit=0, 23 s): 1,350 nested
+            // Builds in one GREEN run, every one a sync/{clientId} hub built inside another hub's
+            // Build. Nested construction is the framework's steady state, not a crash signature —
+            // and in every #613 core dump the FAULTING thread is the background GC thread, with no
+            // managed frames at all. See #613 and Doc/Architecture/DebuggingNativeCrashes.
             .WithInitialization(SubscribeToOwnDeletionInit)
             .WithNodeOperationHandlers()
             // Per-node-hub contract for resolving (assembly + HubConfiguration) of the
@@ -1381,6 +1388,14 @@ public static class MeshDataSourceExtensions
                 var sourcesSub = NodeTypeCompilationHelpers
                     .InstallSourcesWatcher(hub, workspace);
                 hub.RegisterForDisposal(sourcesSub);
+                // Adopted-build source stamp (#1834). A prebuilt adoption is written
+                // CROSS-HUB, so it cannot see this hub's CurrentSourceVersions — it asks
+                // (RequestedSourceStampAt) and the owner answers with its own authoritative
+                // snapshot. Without it the adopted build is born IsDirty and the release
+                // request an install issues one step later recompiles what was just adopted.
+                var stampSub = NodeTypeCompilationHelpers
+                    .InstallAdoptedSourceStampWatcher(hub, workspace);
+                hub.RegisterForDisposal(stampSub);
             }
 
             // Compile-state mirror (issue #748, phase 1): every real change of a NodeType
@@ -1694,7 +1709,7 @@ public static class MeshDataSourceExtensions
         // LatestReleasePath + ReleaseNotes — the explicit release's
         // notes-carrying write gets clobbered last-write-wins).
         workspace.GetMeshNodeStream()
-            .AwaitCompilationSettled()
+            .AwaitCompilationSettled(hub.JsonSerializerOptions)
             .Take(1)
             .Subscribe(ownNode =>
             {
@@ -1809,11 +1824,37 @@ public static class MeshDataSourceExtensions
     /// the mesh hub that leaks if the test times out before its response lands).
     /// Non-NodeType nodes pass through unchanged so this is safe to chain on any
     /// MeshNode stream.
+    ///
+    /// <para>🚨 <b>Read the definition the way its CONSUMER reads it</b> — hence the
+    /// <paramref name="options"/>. The predicate used to pattern-match
+    /// <c>node.Content is not NodeTypeDefinition</c>, a CLR type test whose "not a NodeType at
+    /// all" escape answers SETTLED. That escape also fires for a NodeType node whose Content
+    /// arrived UN-MATERIALIZED (a <see cref="JsonElement"/> / <c>JsonNode</c> mirror snapshot —
+    /// the normal shape for a node that just crossed a sync stream or was just created), so a
+    /// Pending/Compiling type in that shape was admitted as settled and the caller acted on a
+    /// pre-compile snapshot. <c>ContentAs</c> recovers every shape, which is exactly what the
+    /// downstream consumer uses, so the gate and the consumer can no longer disagree. Same defect,
+    /// same fix as <c>NodeTypeEnrichmentHelpers.IsCompileSettled</c>
+    /// (<c>CompileSettlePredicateTest</c>); pinned here by <c>LoadableBuildPredicateTest</c>.</para>
     /// </summary>
-    public static IObservable<MeshNode> AwaitCompilationSettled(this IObservable<MeshNode> source)
-        => source.Where(node => node?.Content is not NodeTypeDefinition def
+    /// <param name="source">The NodeType's MeshNode stream.</param>
+    /// <param name="options">The reading hub's <c>JsonSerializerOptions</c> — what resolves a
+    /// mirror snapshot's <c>$type</c> back into a <see cref="NodeTypeDefinition"/>.</param>
+    public static IObservable<MeshNode> AwaitCompilationSettled(
+        this IObservable<MeshNode> source, JsonSerializerOptions options)
+        => source.Where(node => IsCompilationSettled(node, options));
+
+    /// <summary>
+    /// The predicate behind <see cref="AwaitCompilationSettled"/>, as a pure function of one
+    /// emission — unit-testable with no hub and no stream.
+    /// </summary>
+    public static bool IsCompilationSettled(this MeshNode? node, JsonSerializerOptions options)
+    {
+        var def = node.ContentAs<NodeTypeDefinition>(options);
+        return def is null
             || (def.CompilationStatus != CompilationStatus.Compiling
-                && def.CompilationStatus != CompilationStatus.Pending));
+                && def.CompilationStatus != CompilationStatus.Pending);
+    }
 
     /// <summary>
     /// Holds a NodeType MeshNode stream until the type is settled AND is not advertising a build
@@ -1836,7 +1877,14 @@ public static class MeshDataSourceExtensions
     /// still bound the wait (a type that can never produce a loadable build would otherwise hold
     /// forever) and degrade rather than fail.</para>
     ///
-    /// <para>Non-NodeType nodes answer <c>true</c>, so this is safe to ask about any MeshNode.</para>
+    /// <para>Non-NodeType nodes answer <c>true</c>, so this is safe to ask about any MeshNode —
+    /// and that pass-through is decided by <c>ContentAs</c>, never by a CLR type test. A NodeType
+    /// node whose Content arrived un-materialized IS a NodeType node; reading it with
+    /// <c>Content is not NodeTypeDefinition</c> answered "loadable" for a type that was still
+    /// COMPILING, which is the one answer this predicate exists to withhold — the installer then
+    /// recycles the retyped root before its in-package type has a build, and the hub that comes
+    /// back binds the fallback configuration for its whole lifetime. See
+    /// <see cref="AwaitCompilationSettled"/> for the full note.</para>
     ///
     /// <para>🚨 Deliberately a NULL caller of the modules-hash join (#1664 step 11): this is a
     /// pure <see cref="MeshNode"/> predicate with no hub in scope, so it cannot resolve the mesh's
@@ -1846,13 +1894,18 @@ public static class MeshDataSourceExtensions
     /// hash-decisive gates are the kickoff/enrichment paths, which all pass the live hash.</para>
     /// </summary>
     /// <param name="node">The NodeType MeshNode to judge.</param>
+    /// <param name="options">The reading hub's <c>JsonSerializerOptions</c> — what resolves a
+    /// mirror snapshot's <c>$type</c> back into a <see cref="NodeTypeDefinition"/>.</param>
     /// <returns>False only while the node is mid-compile or is advertising an unloadable build.</returns>
-    public static bool HasLoadableBuild(this MeshNode? node)
-        => node?.Content is not NodeTypeDefinition def
+    public static bool HasLoadableBuild(this MeshNode? node, JsonSerializerOptions options)
+    {
+        var def = node.ContentAs<NodeTypeDefinition>(options);
+        return def is null
             || (def.CompilationStatus != CompilationStatus.Compiling
                 && def.CompilationStatus != CompilationStatus.Pending
                 && (string.IsNullOrEmpty(def.LatestAssemblyPath)
-                    || NodeTypeCompilationHelpers.HasUsableBuild(node, def)));
+                    || NodeTypeCompilationHelpers.HasUsableBuild(node!, def)));
+    }
 
     /// <summary>
     /// Stream form of <see cref="HasLoadableBuild"/> — holds a NodeType MeshNode stream until the
@@ -1860,9 +1913,11 @@ public static class MeshDataSourceExtensions
     /// the wait: a type that can never produce a loadable build would otherwise hold forever.
     /// </summary>
     /// <param name="source">The NodeType's MeshNode stream.</param>
+    /// <param name="options">The reading hub's <c>JsonSerializerOptions</c>.</param>
     /// <returns>The same stream, filtered to loadable-build emissions.</returns>
-    public static IObservable<MeshNode> AwaitLoadableBuild(this IObservable<MeshNode> source)
-        => source.Where(node => node.HasLoadableBuild());
+    public static IObservable<MeshNode> AwaitLoadableBuild(
+        this IObservable<MeshNode> source, JsonSerializerOptions options)
+        => source.Where(node => node.HasLoadableBuild(options));
 
     // StartCompile relocated to NodeTypeCompilationHelpers.RunCompile so the
     // per-NodeType-hub auto-watcher and the CreateReleaseRequest handler share

@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -67,16 +68,62 @@ public static class MeshNodeBindingExtensions
     /// field is absent) so the caller's existing converter pipeline (<c>Hub.ConvertSingle</c> /
     /// <c>ConversionToValue</c>) deserializes it exactly as it would a <c>/data</c> value. Stays
     /// subscribed for the component lifetime — no <c>.Take(1)</c>.
+    ///
+    /// <para>🚨 <b>Bounded on the FIRST value only</b> (<see cref="ReadBudget"/>, 10 s). Two ways
+    /// this binding could previously produce a control that spins forever with nothing logged, both
+    /// seen in production:</para>
+    /// <list type="bullet">
+    ///   <item>the owning hub is unreachable / still starting, so the stream's hydrating
+    ///     <c>SubscribeRequest</c> burns the hub's whole 60 s <c>RequestTimeout</c> before the fault
+    ///     even reaches the view (Systemorph/MeshWeaver#1748 —
+    ///     <c>"No response received in hub cache/… → target Posts/RobertHaircuts"</c>);</item>
+    ///   <item>the node is genuinely ABSENT, in which case the <c>Where(node is not null)</c> below
+    ///     filters every emission and this observable never emits or errors AT ALL — no timeout, no
+    ///     log, a control that waits for the life of the circuit.</item>
+    /// </list>
+    ///
+    /// <para><b>It degrades rather than errors, deliberately.</b> An error would tear the
+    /// subscription down, and a hub that is merely slow — a cold NodeType compile legitimately
+    /// outruns any interactive budget — would then never populate the control at all. Instead the
+    /// budget emits the same <c>null</c> the binding emits for an absent field, so the control
+    /// draws, AND the subscription stays live so a late value replaces it. The degradation is
+    /// logged at Warning naming the node, the field and the budget — it is never silent.</para>
     /// </summary>
+    /// <param name="hub">The hub whose node stream is read.</param>
+    /// <param name="nodePath">The node to bind against.</param>
+    /// <param name="bindContent">Bind against the node's Content (true) or the whole node (false).</param>
+    /// <param name="subPath">Optional content sub-path the field pointer is nested under.</param>
+    /// <param name="reference">The field pointer.</param>
+    /// <param name="firstValueBudget">
+    /// How long to wait for the FIRST value before drawing the control with no value;
+    /// <see cref="ReadBudget.Default"/> when omitted. Only the first value is bounded — an idle,
+    /// healthy binding is never cut short.
+    /// </param>
+    /// <param name="scheduler">Clock for the budget — pass a <c>TestScheduler</c> to drive it in
+    /// virtual time.</param>
+    /// <returns>The live field stream.</returns>
     public static IObservable<object?> Bind(
-        IMessageHub hub, string nodePath, bool bindContent, string? subPath, JsonPointerReference reference)
+        IMessageHub hub, string nodePath, bool bindContent, string? subPath, JsonPointerReference reference,
+        TimeSpan? firstValueBudget = null,
+        IScheduler? scheduler = null)
     {
         var options = hub.JsonSerializerOptions;
         var pointer = Combine(subPath, reference.Pointer);
         return hub.GetMeshNodeStream(nodePath)
             .Where(node => node is not null)
             .Select(node => (object?)EvaluateField(BindingRoot(node, bindContent, options), pointer))
-            .DistinctUntilChanged(JsonElementValueComparer.Instance);
+            .DistinctUntilChanged(JsonElementValueComparer.Instance)
+            .DegradeIfNoFirstEmission(
+                fallback: null,
+                onDegraded: failure => ReadBudget.Logger(hub)?.LogWarning(
+                    "MeshNodeBinding: '{Field}' on {Path} has no value yet — drawing the control "
+                    + "empty and staying subscribed. {Reason}",
+                    pointer, nodePath, failure.Message),
+                reader: hub,
+                target: nodePath,
+                what: $"field '{pointer}'",
+                budget: firstValueBudget,
+                scheduler: scheduler);
     }
 
     /// <summary>

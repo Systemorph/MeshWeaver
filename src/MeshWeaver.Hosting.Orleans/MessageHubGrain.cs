@@ -486,6 +486,23 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 // activation error so a later transient rejection doesn't surface an outdated cause.
                 activationFailures?.Clear(streamId);
             }
+            // 🚨 NULLABLE, and the `!` that used to sit on this call was a lie that cost a
+            // production diagnosis (issue #1693). GetHostedHub → HostedHubsCollection.CreateHub
+            // returns NULL on three real paths, every one of them reachable here:
+            //   • the hub CONFIGURATION threw — and Build runs every SyncBuildupAction inline, so
+            //     that covers a compiled NodeType's own configuration lambda, AddData's workspace
+            //     construction, and every ConfigureDefaultNodeHub overlay. CreateHub catches it,
+            //     logs "Failed to create hosted hub for address {Address}" WITH the real stack, and
+            //     returns null;
+            //   • the collection is disposing ("Preventing hub creation for address …");
+            //   • an ancestor froze creation ("Rejecting hosted hub creation for address …").
+            // Dereferencing that null threw a NullReferenceException, which the catch below then
+            // reported as the activation's cause — so the caller got
+            // "Hub activation failed for AdvancedBusinessRules: Object reference not set to an
+            // instance of an object.", a message that names nothing and points at no line, while
+            // the ACTUAL exception sat in a separate log entry milliseconds earlier. The Monolith
+            // twin has always been null-safe here (MonolithRoutingService: `createdHub?.Register…`);
+            // this is the same treatment plus a message that says which of the three it was.
             var hub = meshHub.GetHostedHub(address, config =>
             {
                 config = config.WithOwnNodeStream(ownNodeStream);
@@ -511,7 +528,21 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                             this.GetPrimaryKeyString());
                         TryDeactivateOnIdle();
                     }));
-            })!;
+            });
+
+            if (hub is null)
+            {
+                // Not a defect in THIS method — the cause is already logged with its stack by
+                // HostedHubsCollection. Report the fact in terms a caller can act on, and keep the
+                // retry-on-next-access semantics the rest of this method has: the next delivery
+                // re-runs resolution and hub construction from scratch.
+                var reason = HubConstructionFailureReason(node);
+                logger.LogError("[ACTIVATE] Grain {StreamId}: {Reason}", streamId, reason);
+                activationFailures?.Record(streamId, reason);
+                _hubReadyRaw.OnError(new InvalidOperationException(reason));
+                TryDeactivateOnIdle();
+                return;
+            }
 
             hub.RegisterForDisposal(_ => TryDeactivateOnIdle());
             _hub = hub;
@@ -533,6 +564,29 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             TryDeactivateOnIdle();
         }
     }
+
+    /// <summary>
+    /// What a caller is told when hub CONSTRUCTION produced no hub —
+    /// <c>HostedHubsCollection.CreateHub</c> returned null (issue #1693).
+    ///
+    /// <para>Pure and <c>internal static</c> so the message contract is unit-testable without a
+    /// cluster, like <see cref="LongRunningOperationCapExceeded"/> and
+    /// <see cref="ComposeActivationSource"/>. That matters because the message IS the fix: the
+    /// previous code dereferenced the null and reported the resulting
+    /// <see cref="NullReferenceException"/> as the activation's cause, so the caller received
+    /// <c>"Hub activation failed for AdvancedBusinessRules: Object reference not set to an instance
+    /// of an object."</c> — a sentence that names nothing, points at no line, and hides the fact
+    /// that the REAL exception had already been logged with its stack a moment earlier. Naming the
+    /// node, its type, and where the real cause is written is the whole difference between an
+    /// unactionable alert and a diagnosis.</para>
+    /// </summary>
+    /// <param name="node">The node whose hub could not be constructed.</param>
+    /// <returns>The failure reason.</returns>
+    internal static string HubConstructionFailureReason(MeshNode node) =>
+        $"Hub construction returned no hub for {node.Path} (NodeType: {node.NodeType ?? "(null)"}). "
+        + "Either the hub configuration threw — see the 'Failed to create hosted hub' entry logged "
+        + "immediately before this one, which carries the real exception — or hosted-hub creation is "
+        + "frozen because this host (or an ancestor) is disposing.";
 
     /// <summary>
     /// Composes the per-emission "enrich with HubConfiguration" step as an
@@ -651,10 +705,28 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 try { tcs.TrySetResult(hub.DeliverMessage(delivery)); }
                 catch (Exception ex) { tcs.TrySetException(ex); }
             },
+            // 🚨 CLASSIFY, at the one place that knows. Both arms used to take the UNCLASSIFIED
+            // Failed(string) overload, so the DeliveryFailure that reached the caller carried
+            // ErrorType.Unknown — indistinguishable from a handler blowing up, from a bad request,
+            // from anything. Callers therefore could not tell "the target could not START" (an
+            // availability fact, retryable — Orleans deactivates and the next access re-runs
+            // resolution from scratch) apart from a genuine defect, and mapped it to a 500 with a
+            // fail:-level log. That is issue #1693: one NullReferenceException inside
+            // AdvancedBusinessRules' activation was reported to the content route as an unclassified
+            // failure and alerted as if the ROUTE were broken.
+            //
+            // Unavailable is the member whose whole contract is "NO VERDICT WAS REACHED … retryable
+            // by construction", which is exactly what an activation fault is. ShuttingDown is the
+            // matching transient for the disposal race — the same classification
+            // MonolithRoutingService already mints for it, so the two hosting models agree, and the
+            // consumers with their own recovery machinery (SynchronizationStream's resubscribe
+            // latch) ride it out instead of tearing down.
             ex => tcs.TrySetResult(delivery.Failed(
-                $"Hub activation failed for {this.GetPrimaryKeyString()}: {ex.Message}")),
+                $"Hub activation failed for {this.GetPrimaryKeyString()}: {ex.Message}",
+                ErrorType.Unavailable)),
             () => tcs.TrySetResult(delivery.Failed(
-                $"Hub disposed before delivery for {this.GetPrimaryKeyString()}.")));
+                $"Hub disposed before delivery for {this.GetPrimaryKeyString()}.",
+                ErrorType.ShuttingDown)));
         return tcs.Task;
     }
 
@@ -722,14 +794,41 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // DisposalCompleted above — pooled I/O leaves are mesh-shared, so this grain cannot
         // drain them (DrainAll here would cancel every OTHER grain's work). A pooled leaf
         // started by this grain's hub that still references this ALC when Unload begins is
-        // the use-after-unload class. Silo SHUTDOWN is safe (MeshTeardownHostedService drains
-        // the whole mesh and fires MeshTeardownSignal before the scope dies); a single grain
-        // deactivating on a LIVE silo needs per-ALC in-flight tracking to close fully.
-        if (loadContext != null)
+        // the use-after-unload class. A single grain deactivating on a LIVE silo still needs
+        // per-ALC in-flight tracking to close fully.
+        //
+        // 🚨 SILO SHUTDOWN IS NOT SAFE, and this comment used to claim it was — on the grounds
+        // that "MeshTeardownHostedService drains the whole mesh before the scope dies". It does,
+        // but it runs in StoppedAsync, i.e. AFTER every hosted service's StopAsync — and the silo
+        // IS a hosted service. So on shutdown the order is: silo stops → every grain deactivates
+        // → every one of these Unload() calls runs → only THEN does the mesh drain. Every pooled
+        // leaf still executing this ALC's compiled types was live across that unload. That is the
+        // native use-after-unload SIGSEGV at/near process exit, after every test has passed (#613).
+        //
+        // On shutdown the unload also buys NOTHING: the process is terminating, so the OS reclaims
+        // the mapping regardless. Unloading is only worth doing on a LIVE silo, where reclaiming a
+        // superseded ALC actually returns memory. So skip it here and let the process exit — and
+        // for the live-silo case IoPoolSiloTeardown now cancels + joins the pools before the silo
+        // releases, which is what makes any remaining unload safe.
+        if (loadContext != null && !IsSiloShuttingDown(reason))
             loadContext.Unload();
         loadContext = null;
         await base.OnDeactivateAsync(reason, cancellationToken);
     }
+
+    /// <summary>
+    /// Is this deactivation the silo going away (as opposed to idle collection, a recycle, or an
+    /// application request)? Only then is skipping the ALC unload correct: the process is exiting,
+    /// so the unload reclaims nothing and is purely the use-after-unload window.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="DeactivationReasonCode.ShuttingDown"/> ONLY. Every other reason — idle
+    /// collection, <see cref="DeactivationReasonCode.Migrating"/>, an application request, a
+    /// recycle — happens on a LIVE silo, where unloading the superseded context genuinely returns
+    /// memory and must keep happening.
+    /// </remarks>
+    private static bool IsSiloShuttingDown(DeactivationReason reason)
+        => reason.ReasonCode is DeactivationReasonCode.ShuttingDown;
 
     /// <summary>
     /// Synchronous lookup for built-in MeshNodes via IStaticNodeProvider. For
