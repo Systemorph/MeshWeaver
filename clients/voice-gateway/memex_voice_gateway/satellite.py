@@ -107,14 +107,19 @@ class SatelliteLink:
         available = [w.id for w in conf.available_wake_words]
         active = list(conf.active_wake_words)
         logger.info("wake words available=%s active=%s", available, active)
-        if active or not available:
+        if not available:
             return
         wanted = self.cfg.wake_word
-        chosen = wanted if wanted in available else available[0]
+        chosen = wanted if wanted in available else (active[0] if active else available[0])
         if wanted and wanted not in available:
             logger.warning("WAKE_WORD %r not on the device; using %r", wanted, chosen)
-        await self.client.set_voice_assistant_configuration(active_wake_words=[chosen])
-        logger.info("activated wake word %r", chosen)
+        # The CONFIGURED wake word must actually be active — a reflash or NVS can leave an
+        # old selection in place, and "available but inactive" hears nothing.
+        if chosen not in active:
+            limit = getattr(conf, "max_active_wake_words", 1) or 1
+            desired = ([chosen] + [w for w in active if w != chosen])[:limit]
+            await self.client.set_voice_assistant_configuration(active_wake_words=desired)
+            logger.info("activated wake words %s", desired)
 
     # --- voice assistant callbacks ----------------------------------------------------
 
