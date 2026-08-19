@@ -7,3 +7,8 @@
 */values.*.yaml
 !*/values.deploy.example.yaml
 */secretproviderclass.yaml
+# ...except the example env's, which is a CHANGE_ME template carrying no real
+# vault, tenant or identity. Without this line `example/deploy.sh` applies a
+# file the repo does not ship — the template was incomplete in exactly the
+# place operators copy from.
+!example/secretproviderclass.yaml

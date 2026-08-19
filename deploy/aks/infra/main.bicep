@@ -106,12 +106,13 @@ param deployPortalIdentity bool = true
 @description('Name of the portal UAMI. Empty = "<namePrefix>-portal-mi".')
 param portalIdentityName string = ''
 
-@description('Kubernetes namespaces that run the portal. One federated credential (subject system:serviceaccount:<ns>:memex-portal-sa) is created per namespace. Keep in sync with the deployed environments (memex, prod, memex-cloud).')
-param portalNamespaces array = [
-  'memex'
-  'prod'
-  'memex-cloud'
-]
+// REQUIRED, deliberately: no default. The namespace names ARE the deployment inventory, and this
+// is a public repo — they belong with the deployments, not here (see deploy/aks/README.md). A
+// default of [] would be worse than a wrong one: the federated-credential loop below would create
+// nothing and the deployment would still succeed, leaving every portal pod unable to authenticate
+// to ACR with no error to read. Supply it from main.parameters.json or -p portalNamespaces=...
+@description('Kubernetes namespaces that run the portal. One federated credential (subject system:serviceaccount:<ns>:memex-portal-sa) is created per namespace. Required — keep in sync with the environments actually deployed.')
+param portalNamespaces array
 
 @description('Author AcrPull for the portal UAMI on the SHARED (cross-RG) registry as IaC. Requires the deploying principal to have User Access Administrator/Owner on the shared ACR resource group. Default false = grant it out-of-band (az role assignment create), matching how the kubelet AcrPull is granted. Ignored when a per-deployment ACR is created (that grant is authored in-bicep).')
 param grantSharedAcrPull bool = false
