@@ -77,6 +77,10 @@
         background-color: var(--neutral-layer-4);
     }
 
+    /* 🚨 This 1100 is the floor every top-of-viewport overlay has to clear. The toast container
+       sits at top:24px — INSIDE this band — so it is layered above by `.fluent-toast-provider`
+       in standard-page-layout.css (#1883). Re-tier this value and that rule must move with it;
+       PortalOverlayLayeringTest fails if the toast stops out-ranking the header. */
     ::deep.layout>header {
         grid-area: head;
         position: relative;
@@ -321,6 +325,10 @@
         background-color: var(--neutral-layer-4);
     }
 
+    /* 🚨 This 1100 is the floor every top-of-viewport overlay has to clear. The toast container
+       sits at top:24px — INSIDE this band — so it is layered above by `.fluent-toast-provider`
+       in standard-page-layout.css (#1883). Re-tier this value and that rule must move with it;
+       PortalOverlayLayeringTest fails if the toast stops out-ranking the header. */
     ::deep.layout>header {
         grid-area: head;
         position: relative;
