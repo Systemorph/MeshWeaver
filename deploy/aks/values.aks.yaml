@@ -75,8 +75,11 @@ config:
     ASPNETCORE_HTTP_PORTS: "8080"
     # ---- Instance branding (per-env) ----------------------------------------
     # Large Safari bookmark / Start-Page / Add-to-Dock tile (apple-touch-icon, 180×180 PNG).
-    # This base ships the project mark. Override per environment at deploy
-    # (e.g. brand/<env>-180.png); empty leaves Safari's letter-tile fallback.
+    # This ships the PROJECT's own mark (Systemorph builds MeshWeaver — the chart's
+    # default registry is ghcr.io/systemorph too), which is why it is not a
+    # CHANGE_ME: it is a working default, not a placeholder. Override it per
+    # environment at deploy (`brand/<env>-180.png`, an asset your own deployment
+    # supplies); empty leaves Safari's letter-tile fallback.
     Portal__AppleTouchIcon: "_content/Memex.Portal.Shared/brand/systemorph-180.png"
     Deployment__Backend: "Filesystem"
     # /data holds ONLY framework caches now: DataProtection keys
