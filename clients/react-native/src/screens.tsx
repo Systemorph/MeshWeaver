@@ -3,7 +3,7 @@
 // mesh): Voice (speech), Connect (remote instances), Profile, Settings.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet } from "react-native";
-import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, discoverInstances, mergeDiscovered, type MeshInstance } from "./connection";
+import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, discoverInstances, mergeDiscovered, getConnectStatus, onConnectStatus, type MeshInstance } from "./connection";
 import { refreshOAuth, signInWithOAuth } from "./oauth";
 import { useStyles, useTheme, type Palette } from "./theme";
 
@@ -136,6 +136,10 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
   // primary choice; the raw add-a-portal form is advanced and folded away. Signing in is a
   // per-mesh act (tap a mesh → paste a token), not a wall in front of the app.
   const firstRun = !instances.some((i) => !i.local && i.token);
+  // The live connect's status, rendered HERE — a Release build has no console, and a
+  // failed connect must be readable where the user is looking.
+  const [connectStatus, setConnectStatus_] = useState(getConnectStatus());
+  useEffect(() => onConnectStatus(() => setConnectStatus_(getConnectStatus())), []);
   const [showForm, setShowForm] = useState(false);
   const [tokenFor, setTokenFor] = useState<string | null>(null);
   const [rowToken, setRowToken] = useState("");
@@ -214,6 +218,11 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
       subtitle={firstRun
         ? "Choose a mesh to connect to. You can browse public content right away — to sign in, tap a mesh and paste an API token (portal ▸ Settings ▸ Security ▸ API Tokens)."
         : "Your meshes. Tap to connect; discovered instances of a connected mesh appear here automatically."}>
+      {connectStatus ? (
+        <Text style={{ color: connectStatus.includes("failed") ? "#d13438" : "#4c8dff", marginBottom: 10 }}>
+          {connectStatus}
+        </Text>
+      ) : null}
       {instances.map((i) => {
         const id = instanceIdentity(i);
         const loud = id.tone === "prod" || id.tone === "client";

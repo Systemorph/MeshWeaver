@@ -81,6 +81,22 @@ export const KNOWN_INSTANCES: MeshInstance[] = [
   { name: "memex", url: "https://memex.meshweaver.cloud", token: "", local: false, icon: "☁️", color: "#4c8dff", kind: "Prod" },
 ];
 
+// Live connect status — a tiny observable the Connect screen renders, because a Release
+// build swallows console and a failed connect must be VISIBLE truth on the device, not a
+// silently reopened onboarding.
+type StatusListener = () => void;
+const statusListeners = new Set<StatusListener>();
+let lastConnectStatus = "";
+export function setConnectStatus(status: string): void {
+  lastConnectStatus = status;
+  for (const l of statusListeners) l();
+}
+export function getConnectStatus(): string { return lastConnectStatus; }
+export function onConnectStatus(listener: StatusListener): () => void {
+  statusListeners.add(listener);
+  return () => statusListeners.delete(listener);
+}
+
 /**
  * Discover the fleet from a connected mesh: instances are MESH NODES (nodeType
  * `Hosting/Deployment`, populated in the mesh's Deployments space), so the connect list is
