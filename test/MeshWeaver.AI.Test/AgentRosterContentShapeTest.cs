@@ -101,6 +101,35 @@ public class AgentRosterContentShapeTest
     }
 
     /// <summary>
+    /// 🚨 The SKILL roster carried the identical two-arm switch in <c>SkillNodeType.ProjectSkills</c>,
+    /// where a null projection hits a bare <c>continue</c> — so a newly created Skill node written as
+    /// a DOM was silently missing from the slash-command list. This is the "skill projection cache"
+    /// staleness this bug family is known for, and it was never a cache either.
+    /// </summary>
+    [Fact]
+    public void Skill_WhoseContentIsTheAsWrittenDom_StillProjects()
+    {
+        var node = MeshNode.FromPath("rbuergi/Skill/deploy") with
+        {
+            Id = "deploy",
+            Name = "/deploy",
+            NodeType = SkillNodeType.NodeType,
+            Content = new JsonObject
+            {
+                ["id"] = "deploy",
+                ["name"] = "/deploy",
+                ["description"] = "Ship it.",
+            },
+        };
+
+        var skills = SkillNodeType.ProjectSkills([node], Options);
+
+        Assert.Single(skills);
+        Assert.Equal("deploy", skills[0].Id);
+        Assert.Equal("rbuergi/Skill/deploy", skills[0].Path);
+    }
+
+    /// <summary>
     /// The model picker's projection carries the identical two-arm switch, from the same file, and
     /// would fail the same way for a model node written as a DOM. Fixed together so the next reader
     /// does not have to rediscover it.

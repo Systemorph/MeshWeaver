@@ -1006,25 +1006,15 @@ public sealed class ChatClientCredentialResolver : IDisposable
         return got ? captured : fallback;
     }
 
+    /// <summary>
+    /// Content as <typeparamref name="T"/> in whatever shape it arrives. Goes through the shared
+    /// <see cref="ObjectAsExtensions.As{T}"/> rather than a switch over the two shapes we happen to
+    /// expect (#1853): the as-written DOM (JsonObject) matched neither arm and returned null, which
+    /// here means "this provider has no credential" for a provider that is configured correctly.
+    /// This takes a bare object rather than a MeshNode, so it is As, not ContentAs.
+    /// </summary>
     private T? ExtractContent<T>(object? content) where T : class
-    {
-        return content switch
-        {
-            T typed => typed,
-            JsonElement je => TryDeserialise<T>(je),
-            _ => null,
-        };
-    }
-
-    private T? TryDeserialise<T>(JsonElement je) where T : class
-    {
-        try { return JsonSerializer.Deserialize<T>(je.GetRawText(), hub.JsonSerializerOptions); }
-        catch (Exception ex)
-        {
-            logger?.LogDebug(ex, "Failed to deserialise content as {Type}", typeof(T).Name);
-            return null;
-        }
-    }
+        => content.As<T>(hub.JsonSerializerOptions, logger);
 
     private static bool HasAnyCredential(ModelProviderConfiguration p) =>
         !string.IsNullOrEmpty(p.ApiKey) || !string.IsNullOrEmpty(p.Endpoint);
