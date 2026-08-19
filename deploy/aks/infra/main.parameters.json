@@ -53,8 +53,11 @@
     "deployBackupStorage": {
       "value": false
     },
+    "portalNamespaces": {
+      "value": ["<portal-namespace>"]
+    },
     "pgBackRestServiceAccountSubject": {
-      "value": "system:serviceaccount:memex:pgbackrest-sa"
+      "value": "system:serviceaccount:<portal-namespace>:pgbackrest-sa"
     },
     "deployContentFileShares": {
       "value": true
