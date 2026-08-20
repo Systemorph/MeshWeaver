@@ -383,6 +383,10 @@ config:
     ASPNETCORE_HTTP_PORTS: "8080"
     Deployment__Backend: "Filesystem"
     Deployment__DataRoot: "/data"
+    # The writable root for store-installed modules (ModuleRoot.ConfigKey). Empty here means
+    # "follow Deployment__DataRoot", which the template applies — a deployment only sets this
+    # when its module tree must live somewhere other than the data root.
+    Modules__Root: ""
     # 🔗 ONE setting in two keys — they are not independent, and the gate is worthless
     # without the sweep. GateReadiness gates on state that ONLY the sweep writes, and the
     # health check reports Healthy while the sweep has not started (by design: a config
