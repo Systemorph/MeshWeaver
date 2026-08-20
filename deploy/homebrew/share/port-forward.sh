@@ -23,11 +23,16 @@ HOST_PORT="${MEMEX_PORT:-8443}"
 colima status >/dev/null 2>&1 || colima start
 
 # 2. Wait until the ingress-nginx namespace/controller is ready.
-until kubectl get ns ingress-nginx >/dev/null 2>&1; do sleep 2; done
+# 🚨 PIN the kube context: this agent runs with whatever context the USER last
+# selected — a kubectl pointed at a remote (or unreachable) cluster left the wait
+# loop spinning forever while the local stack sat healthy (2026-08-20). The local
+# stack always lives in the colima context.
+KUBE_CONTEXT="${MEMEX_KUBE_CONTEXT:-colima}"
+until kubectl --context "$KUBE_CONTEXT" get ns ingress-nginx >/dev/null 2>&1; do sleep 2; done
 
 # 3. Forward the portless URLs AND the legacy port: one process carries all three
 #    mappings, so http://memex.localhost and https://memex.localhost work directly
 #    (macOS allows unprivileged binds below 1024 since Mojave — still NO sudo) and
 #    https://memex.localhost:8443 keeps working for anything that learned it.
-exec kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller \
+exec kubectl --context "$KUBE_CONTEXT" port-forward -n ingress-nginx svc/ingress-nginx-controller \
     80:80 443:443 "${HOST_PORT}:443"
