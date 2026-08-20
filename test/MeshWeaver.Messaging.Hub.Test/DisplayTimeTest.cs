@@ -36,6 +36,31 @@ public class DisplayTimeTest
         display.Date.Should().Be(utc.UtcDateTime.Date); // no day rollover for these cases
     }
 
+    /// <summary>
+    /// 🚨 The DATE moves. A conversion that never happened reads as an off-by-one DAY rather than
+    /// as a time-zone bug, which is why it survives review — and why an "as of" list, an activity
+    /// feed or a "last deployed" line can be a whole day wrong while every hour on the page looks
+    /// plausible. Both directions: forward across midnight for a zone ahead of UTC, backward for
+    /// one behind it.
+    /// </summary>
+    [Theory]
+    // 23:30Z on 29 July is 01:30 on the THIRTIETH in Zurich (CEST, +2).
+    [InlineData("Europe/Zurich", 2026, 7, 29, 23, 30, 2026, 7, 30, 1, 30)]
+    // 00:30Z on 30 July is 20:30 on the TWENTY-NINTH in New York (EDT, -4).
+    [InlineData("America/New_York", 2026, 7, 30, 0, 30, 2026, 7, 29, 20, 30)]
+    public void ConvertsAcrossMidnight_TheDateMoves(
+        string zoneId,
+        int utcYear, int utcMonth, int utcDay, int utcHour, int utcMinute,
+        int expectedYear, int expectedMonth, int expectedDay, int expectedHour, int expectedMinute)
+    {
+        var utc = new DateTimeOffset(utcYear, utcMonth, utcDay, utcHour, utcMinute, 0, TimeSpan.Zero);
+
+        var display = DisplayTimeExtensions.ToDisplayTime(utc, zoneId);
+
+        display.ToString("yyyy-MM-dd HH:mm")
+            .Should().Be($"{expectedYear:D4}-{expectedMonth:D2}-{expectedDay:D2} {expectedHour:D2}:{expectedMinute:D2}");
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
