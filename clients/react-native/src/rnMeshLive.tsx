@@ -323,7 +323,7 @@ const MeshSearch: ControlComponent = ({ control }) => {
       {loading ? <ActivityIndicator /> : null}
       {!loading && items.length === 0 && showEmptyMessage ? <Text style={styles.muted}>{t("common.noResults")}</Text> : null}
       {items.map((n) => (
-        <Pressable key={n.path} style={styles.resultRow} onPress={() => navigate({ address: n.path, area: "Overview" })}>
+        <Pressable key={n.path} style={styles.resultRow} onPress={() => navigate({ address: n.path, area: "" })}>
           <Text style={styles.resultName}>{n.name}</Text>
           {n.description ? <Text style={styles.muted}>{n.description}</Text> : null}
           <Text style={styles.resultPath}>{n.path}</Text>
@@ -377,7 +377,7 @@ const MeshNodeCollection: ControlComponent = ({ control }) => {
   return (
     <View style={{ gap: 8 }}>
       {items.map((n) => (
-        <Pressable key={n.path} style={styles.resultRow} onPress={() => navigate({ address: n.path, area: "Overview" })}>
+        <Pressable key={n.path} style={styles.resultRow} onPress={() => navigate({ address: n.path, area: "" })}>
           <Text style={styles.resultName}>{n.name}</Text>
           {n.description ? <Text style={styles.muted}>{n.description}</Text> : null}
         </Pressable>
