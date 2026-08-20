@@ -12,6 +12,9 @@
     <PackageReference Include="Azure.Storage.Blobs" />
     <PackageReference Include="Namotion.Reflection" />
     <PackageReference Include="NSubstitute" />
+    <!-- TestScheduler: ActivityWriteSurvivesConflictTest drives the conflict-rebase bound
+         deterministically (issue #1910) rather than sleeping on it. -->
+    <PackageReference Include="Microsoft.Reactive.Testing" />
   </ItemGroup>
 
   <ItemGroup>
