@@ -23,6 +23,12 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.NuGet\MeshWeaver.NuGet.csproj" />
+    <!-- The red-log watcher's burst aggregation. CompileFailureReportOrderTest reproduces #1840
+         end to end — the console burst the portal writes, through the SAME aggregation the watcher
+         runs, to the evidence sample the incident carries — because the defect was invisible in
+         every other view: the diagnostics were in the pod log and only ever missing from the
+         ticket. Asserting on the report alone would re-state the fix instead of testing it. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Observability.Contract\MeshWeaver.Observability.Contract.csproj" />
   </ItemGroup>
 
 </Project>
