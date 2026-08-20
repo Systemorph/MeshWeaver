@@ -109,7 +109,23 @@ public sealed class ScheduledPostWatcher(
     private void Reconcile(IEnumerable<MeshNode> nodes, IEnumerable<MeshNode> timerNodes)
     {
         var all = nodes.ToList();
-        var posts = all.Where(IsSchedulablePost).ToList();
+        var asking = all.Where(IsSchedulablePost).ToList();
+
+        // 🚨 A post that names no author profile CANNOT publish — LinkedInPublishService refuses it
+        // with `profile-path-missing`, because the credential is chosen by the post's own authorPath.
+        // Arming a timer for one buys nothing and costs the worst failure mode there is: the calendar
+        // shows the post as scheduled, the slot passes, and NOTHING happens or is said. So they are
+        // separated out here and reported LOUDLY at every reconcile, naming the posts, because the
+        // fix (pick the profile) is a human action nobody will take if nobody is told.
+        var authorless = asking.Where(p => string.IsNullOrWhiteSpace(AuthorPathOf(p))).ToList();
+        if (authorless.Count > 0)
+            logger?.LogWarning(
+                "{Count} post(s) are marked Scheduled but name NO author profile, so they can never "
+                + "publish (the credential is chosen by authorPath). No timer is armed for them. "
+                + "Set authorPath, or reset them to Draft: {Paths}",
+                authorless.Count, string.Join(", ", authorless.Select(p => p.Path)));
+
+        var posts = asking.Where(p => !string.IsNullOrWhiteSpace(AuthorPathOf(p))).ToList();
         var timers = timerNodes
             .Select(n => n.ContentAs<EventSubscription>(hub.JsonSerializerOptions))
             .Where(s => s is { ContinuationType: EventContinuationType.PublishSocialPost })
@@ -243,6 +259,15 @@ public sealed class ScheduledPostWatcher(
         return string.IsNullOrEmpty(platform)
             || string.Equals(platform, "LinkedIn", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// The profile this post goes out AS, or null when it names none. Reads both spellings for the
+    /// same reason <see cref="LinkedInPublishService"/> does: <c>profilePath</c> is the imported
+    /// shape and <c>authorPath</c> the node-native one, and a post naming its profile in the other
+    /// spelling must not be mistaken for one naming none.
+    /// </summary>
+    public static string? AuthorPathOf(MeshNode node) =>
+        Prop(node, "profilePath") ?? Prop(node, "authorPath");
 
     /// <summary>The post's slot as an instant, or null when it names none. A bare (unzoned) timestamp is
     /// read as UTC — every stored <c>scheduledAt</c> in the mesh is UTC, and guessing a local zone here
