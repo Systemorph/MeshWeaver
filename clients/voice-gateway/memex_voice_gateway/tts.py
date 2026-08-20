@@ -179,22 +179,35 @@ class TtsFileServer:
                 self._live.discard(stream)
         return response
 
+    @staticmethod
+    def _wav_to_flac(wav: bytes) -> bytes:
+        """The satellite's micro_decoder ships WITHOUT the WAV codec (its own config:
+        'FLAC is the least processor intensive') — Home Assistant transcodes announcements
+        to the device's announced format, and so must we."""
+        import subprocess
+        r = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
+                            "-f", "flac", "-compression_level", "0", "pipe:1"],
+                           input=wav, capture_output=True)
+        if r.returncode != 0 or not r.stdout:
+            raise RuntimeError(f"flac transcode failed: {r.stderr.decode()[:200]}")
+        return r.stdout
+
     def add(self, wav: bytes) -> str:
         now = time.monotonic()
         self._files = {k: v for k, v in self._files.items() if now - v[0] < self.ttl_s}
         file_id = secrets.token_urlsafe(8)
-        self._files[file_id] = (now, wav)
-        return f"http://{self.host}:{self.port}/tts/{file_id}.wav"
+        self._files[file_id] = (now, self._wav_to_flac(wav))
+        return f"http://{self.host}:{self.port}/tts/{file_id}.flac"
 
     async def _handle(self, request: web.Request) -> web.Response:
         entry = self._files.get(request.match_info["id"])
         if entry is None:
             return web.Response(status=404)
-        return web.Response(body=entry[1], content_type="audio/wav")
+        return web.Response(body=entry[1], content_type="audio/flac")
 
     async def start(self) -> None:
         app = web.Application()
-        app.router.add_get("/tts/{id}.wav", self._handle)
+        app.router.add_get("/tts/{id}.flac", self._handle)
         app.router.add_get("/tts-stream/{id}.wav", self._handle_stream)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
