@@ -16,6 +16,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -81,6 +82,15 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
         if (!string.IsNullOrWhiteSpace(registry.Token))
             return Observable.Return(registry.Token.Trim());
 
+        if (hub.ServiceProvider.GetService<IOptions<PluginCatalogOptions>>()?.Value is { } options
+            && LegacyTokenFallback(options, registry) is { } legacy)
+        {
+            logger.LogInformation(
+                "Registry {Url}: using the legacy PluginCatalog:RegistryToken (no per-registry token configured)",
+                registry.Url);
+            return Observable.Return(legacy);
+        }
+
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         return Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
@@ -104,6 +114,28 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
                 logger.LogWarning(ex, "Reading the stored registry credential for {Url} failed", registry.Url);
                 return Observable.Return("");
             });
+    }
+
+    /// <summary>
+    /// The legacy-token fallback decision, PURE: a named registry with no token of its own may
+    /// use the legacy single-registry <see cref="PluginCatalogOptions.RegistryToken"/> ONLY when
+    /// the attribution is unambiguous — the registry IS the legacy URL, or it is the sole one
+    /// configured. Without the fallback, upgrading a consumer from RegistryUrl+RegistryToken to
+    /// the named Registries shape silently drops auth and every catalog read 401s (systemorph,
+    /// 2026-08-20); without the ambiguity guard, a token could be sent to a host it was not
+    /// issued for. Null → no fallback, resolve the stored credential.
+    /// </summary>
+    public static string? LegacyTokenFallback(
+        PluginCatalogOptions options, PluginRegistryReference registry)
+    {
+        if (string.IsNullOrWhiteSpace(options.RegistryToken)
+            || !string.IsNullOrWhiteSpace(registry.Token))
+            return null;
+        var matchesLegacyUrl = !string.IsNullOrWhiteSpace(options.RegistryUrl)
+            && string.Equals(registry.Url.TrimEnd('/'), options.RegistryUrl.TrimEnd('/'),
+                StringComparison.OrdinalIgnoreCase);
+        var sole = options.Registries.Count(r => !string.IsNullOrWhiteSpace(r.Url)) == 1;
+        return matchesLegacyUrl || sole ? options.RegistryToken.Trim() : null;
     }
 
     private PluginRegistryCredential? ContentAs(MeshNode? node)
