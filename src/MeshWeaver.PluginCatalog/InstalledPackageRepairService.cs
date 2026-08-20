@@ -29,6 +29,16 @@ namespace MeshWeaver.PluginCatalog;
 /// record carries the manifest whose declarations drive the shape — so "re-asserted on boot, a lost
 /// policy self-heals" holds for EVERY installed package, not just the baseline (#920).</para>
 ///
+/// <para><b>Why the RECORDS partition is published first.</b> Step 0 is
+/// <see cref="PackageInstaller.EnsureRecordsPartitionReadable"/> — the durable
+/// <c>Plugins/_Policy</c> that the SQL permission fold projects into
+/// <c>public.partition_access</c>. It runs BEFORE the record listing below, and unconditionally,
+/// for two reasons. First, an instance that has never installed anything still needs its records
+/// partition readable — a registry serving bundles is exactly such an instance. Second, and this is
+/// the trap: the listing is itself a partition-scoped query, so while the partition is invisible it
+/// returns ZERO records and this whole pass exits early. A heal placed after it could never fire on
+/// the instance that needed it (#1950).</para>
+///
 /// <para><b>Safe to run every boot.</b> Hooks are required to be idempotent, and the access shape is
 /// create-only — so on an already-consistent instance this reads and writes nothing. It is
 /// deliberately fire-and-forget and failure-tolerant: repair must never delay or fail startup (the
@@ -45,7 +55,15 @@ public sealed class InstalledPackageRepairService(IMessageHub hub) : IHostedServ
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger<InstalledPackageRepairService>();
 
-        subscription = InstalledRecords(logger)
+        subscription = PackageInstaller.EnsureRecordsPartitionReadable(hub, logger)
+            .Catch<Unit, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "[PackageRepair] publishing the install-records partition failed — catalog "
+                    + "surfaces and the bundle index may read empty until the next boot");
+                return Observable.Return(Unit.Default);
+            })
+            .SelectMany(_ => InstalledRecords(logger))
             .SelectMany(records => records.Count == 0
                 ? Observable.Return(Unit.Default)
                 : records

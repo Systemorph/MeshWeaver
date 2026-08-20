@@ -319,8 +319,13 @@ public static class PluginBundleEndpoints
         var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}";
 
         return ServableEntries(rootHub, ct)
-            .Select(packages => (IReadOnlyList<BundleEntry>)packages
-                .Where(p => IsGranted(caller, p)).ToArray())
+            .Select(servable =>
+            {
+                var granted = (IReadOnlyList<BundleEntry>)servable
+                    .Where(p => IsGranted(caller, p)).ToArray();
+                WarnAboutAnEmptyIndex(rootHub, caller, servable, granted);
+                return granted;
+            })
             .SelectMany(packages => ServableModules(rootHub, packages)
                 .Select(modules => Results.Json(new
                 {
@@ -404,6 +409,48 @@ public static class PluginBundleEndpoints
                     return (IReadOnlyList<BundleEntry>)records.Concat(published).ToArray();
                 });
             });
+
+    /// <summary>
+    /// 🚨 Says so when an index request serves NOTHING — the one outcome that is silent on both
+    /// sides and looks exactly like a healthy day.
+    ///
+    /// <para>A consumer that receives <c>{"bundles": []}</c> concludes <c>SkipNoBundle</c> for every
+    /// module, lands nothing, and logs nothing worth reading; the registry logs nothing at all. That
+    /// is how the whole distribution lane went dark on 2026-08-20 with every consumer quietly
+    /// compiling: the <c>Plugins</c> partition was invisible to the record query, so
+    /// <see cref="InstalledPackages"/> returned an empty list and the emptiness had no author
+    /// (#1950). The two empties need different responses, so they get different lines: nothing
+    /// SERVABLE at all points at this instance's own state, while entries filtered down to zero
+    /// points at the caller's grant.</para>
+    /// </summary>
+    private static void WarnAboutAnEmptyIndex(
+        IMessageHub rootHub, AuthenticatedInstance? caller,
+        IReadOnlyList<BundleEntry> servable, IReadOnlyList<BundleEntry> granted)
+    {
+        if (granted.Count > 0)
+            return;
+
+        var logger = rootHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(PluginBundleEndpoints));
+        if (logger is null)
+            return;
+
+        if (servable.Count == 0)
+            logger.LogWarning(
+                "Plugin bundles: serving an EMPTY index to {Instance} — this instance has nothing "
+                + "servable at all (no install records in the '{Partition}' partition and no "
+                + "published module entries). Every consumer will read SkipNoBundle for every "
+                + "package. If packages ARE installed here, the records partition is not readable "
+                + "by the query — check that its '_Policy' exists as a DURABLE node (#1950).",
+                caller?.Instance.InstanceId ?? "an unauthenticated caller",
+                PackageInstaller.InstalledPartition);
+        else
+            logger.LogWarning(
+                "Plugin bundles: serving an EMPTY index to {Instance} — {Count} servable "
+                + "package(s) exist here, but none is covered by that instance's grant, so it will "
+                + "read SkipNoBundle for every package. Grant it the sources it needs.",
+                caller?.Instance.InstanceId ?? "an unauthenticated caller", servable.Count);
+    }
 
     private static void WarnAboutUnstampedRecords(
         IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
