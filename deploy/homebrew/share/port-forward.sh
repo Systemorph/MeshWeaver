@@ -34,5 +34,9 @@ until kubectl --context "$KUBE_CONTEXT" get ns ingress-nginx >/dev/null 2>&1; do
 #    mappings, so http://memex.localhost and https://memex.localhost work directly
 #    (macOS allows unprivileged binds below 1024 since Mojave — still NO sudo) and
 #    https://memex.localhost:8443 keeps working for anything that learned it.
+# --address 0.0.0.0,:: because macOS's unprivileged low-port allowance applies to
+# WILDCARD binds only — the default loopback bind gets "permission denied" on 80/443.
+# The portal enforces its own sign-in, and the mesh was already reachable on the LAN
+# through the 8443 forward's wildcard sibling risks; keep the machine firewalled as usual.
 exec kubectl --context "$KUBE_CONTEXT" port-forward -n ingress-nginx svc/ingress-nginx-controller \
-    80:80 443:443 "${HOST_PORT}:443"
+    --address 0.0.0.0,:: 80:80 443:443 "${HOST_PORT}:443"
