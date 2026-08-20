@@ -16,8 +16,10 @@ export const useCurrentAddress = (): string => useContext(CurrentAddressContext)
 
 /**
  * Resolve a mesh href to a nav target. Absolute (`/Doc/Architecture/X`) and relative (`Sibling`,
- * `../Other`) links both resolve to a node whose default area is `Overview`; in-page anchors (`#x`)
- * and external `http(s)` links return null (handled elsewhere / ignored).
+ * `../Other`) links both resolve to the node with an EMPTY area — the server renders the node's
+ * DECLARED default area (the same standard-layout resolution Blazor and portal-next use; the tree
+ * carries a `""` indirection to the resolved area). In-page anchors (`#x`) and external `http(s)`
+ * links return null (handled elsewhere / ignored).
  */
 export function parseHref(href: string, currentAddress: string): NavTarget | null {
   if (!href || href.startsWith("#") || /^https?:\/\//i.test(href) || href.startsWith("mailto:")) return null;
@@ -28,5 +30,5 @@ export function parseHref(href: string, currentAddress: string): NavTarget | nul
     else if (seg && seg !== ".") parts.push(seg);
   }
   if (parts.length === 0) return null;
-  return { address: parts.join("/"), area: "Overview" };
+  return { address: parts.join("/"), area: "" };
 }

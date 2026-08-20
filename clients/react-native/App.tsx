@@ -64,10 +64,11 @@ const CHAT: ChatOptions | null = {
 const chatNamespace = (inst: MeshInstance): string =>
   Platform.OS !== "web" && inst.local ? "device-user" : (CHAT?.namespacePath ?? "");
 
-// 📱 The native-local landing: the device user's own activities (the same landing as the MAUI
-// shell), served by the local mesh's device-user partition. Web keeps the docs HOME — a same-origin
+// 📱 The native-local landing: the device user's own node, rendered with its DECLARED default
+// area (the User layout declares the activities — the same landing as the MAUI shell) — the app
+// asks for the standard layout instead of naming an area. Web keeps the docs HOME — a same-origin
 // viewer is a real portal user whose partition this app cannot know.
-const DEVICE_HOME: NavTarget = { address: "device-user", area: "Activity" };
+const DEVICE_HOME: NavTarget = { address: "device-user", area: "" };
 const homeFor = (inst: MeshInstance): NavTarget =>
   Platform.OS !== "web" && inst.local ? DEVICE_HOME : HOME;
 

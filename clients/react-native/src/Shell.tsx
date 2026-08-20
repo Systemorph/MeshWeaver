@@ -15,7 +15,7 @@
 // client contexts (You: profile / voice / connect) — the same split the MAUI PortalShellPage renders.
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet, useWindowDimensions } from "react-native";
-import { RenderArea, type AreaSource, type AreaTree } from "@meshweaver/react/core";
+import { RenderArea, useMeshOps, type AreaSource, type AreaTree } from "@meshweaver/react/core";
 import { areaErrorMessage } from "./areaError";
 import { type NavTarget } from "./nav";
 import { CLIENT_MENUS, ClientScreen, type ClientDestination } from "./screens";
@@ -25,11 +25,14 @@ import { LeftMenuView } from "./leftMenu";
 
 const useSheet = () => useStyles(makeStyles);
 
-const CONTENT_AREA = "Overview";
+// EMPTY area = the node's DECLARED default area, resolved server-side — the same standard-layout
+// resolution Blazor and portal-next use (the layout tree carries a `""` indirection to whatever
+// area the node's layout declares). The shell never hardcodes an area name for plain navigation.
+const DEFAULT_AREA = "";
 // The default home landing — the documentation home, used on the web (a same-origin viewer's own
 // partition is unknown to this app). On the native LOCAL mesh App.tsx passes the device user's
-// activities instead (device-user/Activity, the MAUI shell's landing) via the `home` prop.
-export const HOME: NavTarget = { address: "Doc/Architecture", area: CONTENT_AREA };
+// node instead via the `home` prop; its declared default area is the activities.
+export const HOME: NavTarget = { address: "Doc/Architecture", area: DEFAULT_AREA };
 
 // The mesh menu contexts streamed as $Menu:{context}, in display order, with a glyph like MAUI's.
 const MESH_CONTEXTS: { key: string; label: string; glyph: string }[] = [
@@ -152,7 +155,7 @@ function TopBar({ onNavigate, home, isMobile, onToggleMenu, onReconnect, onManag
           placeholderTextColor={palette.textMuted}
           onSubmitEditing={() => {
             const a = q.trim().replace(/^\/+/, "");
-            if (a) onNavigate({ address: a, area: CONTENT_AREA });
+            if (a) onNavigate({ address: a, area: DEFAULT_AREA });
           }}
           returnKeyType="go"
         />
@@ -239,6 +242,40 @@ function InstanceSwitcher({ isMobile, onReconnect, onManage }: { isMobile: boole
 }
 
 // ── breadcrumb toolbar ──────────────────────────────────────────────────────────
+
+// Node display names for the breadcrumb — resolved from the mesh (each node's Name, exactly what
+// the Blazor breadcrumb shows) and cached per instance+path; the raw path segment is only the
+// not-yet-resolved fallback. Without this the crumb reads like an id ("device-user"), not a name.
+const crumbNameCache = new Map<string, string>();
+// Prefixes already looked up (in flight, or resolved to no node/name) — each instance+path is
+// queried at most once; only a THROWN search (transient network fault) clears the mark so a later
+// navigation retries. Without this, a nameless prefix re-queried on every navigation.
+const crumbNameRequested = new Set<string>();
+function useCrumbNames(address: string): (prefix: string) => string | undefined {
+  const ops = useMeshOps();
+  const [, tick] = useState(0);
+  const instanceUrl = currentInstance().url;
+  const keyFor = (prefix: string) => `${instanceUrl}|${prefix}`;
+  useEffect(() => {
+    if (!ops?.search) return;
+    const segs = address.split("/").filter(Boolean);
+    for (let i = 0; i < segs.length; i++) {
+      const prefix = segs.slice(0, i + 1).join("/");
+      const key = keyFor(prefix);
+      if (crumbNameCache.has(key) || crumbNameRequested.has(key)) continue;
+      crumbNameRequested.add(key);
+      void ops.search(`path:${prefix}`, undefined, 1)
+        .then((rows) => {
+          const name = rows?.[0] && typeof (rows[0] as any).name === "string" ? String((rows[0] as any).name) : null;
+          if (name) { crumbNameCache.set(key, name); tick((n) => n + 1); }
+        })
+        .catch(() => crumbNameRequested.delete(key));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, ops, instanceUrl]);
+  return (prefix) => crumbNameCache.get(keyFor(prefix));
+}
+
 function Breadcrumb({
   nav,
   home,
@@ -252,6 +289,7 @@ function Breadcrumb({
 }): ReactNode {
   const segs = nav.address.split("/").filter(Boolean);
   const styles = useSheet();
+  const nameOf = useCrumbNames(nav.address);
   return (
     <View style={styles.crumbs}>
       <Pressable style={({ hovered }: any) => [styles.crumbBtn, hovered && styles.crumbHover]} onPress={() => onNavigate(home)}>
@@ -264,13 +302,13 @@ function Breadcrumb({
           return (
             <View key={address} style={styles.crumbSeg}>
               <Text style={styles.crumbSep}>›</Text>
-              <Pressable style={({ hovered }: any) => [styles.crumbBtn, hovered && styles.crumbHover]} onPress={() => onNavigate({ address, area: CONTENT_AREA })}>
-                <Text style={[styles.crumbText, last && styles.crumbTextLast]}>{seg}</Text>
+              <Pressable style={({ hovered }: any) => [styles.crumbBtn, hovered && styles.crumbHover]} onPress={() => onNavigate({ address, area: DEFAULT_AREA })}>
+                <Text style={[styles.crumbText, last && styles.crumbTextLast]}>{nameOf(address) ?? seg}</Text>
               </Pressable>
             </View>
           );
         })}
-      {nav.area !== CONTENT_AREA && !clientScreen ? <Text style={[styles.crumbSep, { marginLeft: 4 }]}>· {nav.area}</Text> : null}
+      {nav.area !== DEFAULT_AREA && !clientScreen ? <Text style={[styles.crumbSep, { marginLeft: 4 }]}>· {nav.area}</Text> : null}
     </View>
   );
 }
@@ -399,7 +437,7 @@ function parseHrefLocal(href: string, currentAddress: string): NavTarget | null 
     if (seg === "..") parts.pop();
     else if (seg && seg !== ".") parts.push(seg);
   }
-  return parts.length ? { address: parts.join("/"), area: CONTENT_AREA } : null;
+  return parts.length ? { address: parts.join("/"), area: DEFAULT_AREA } : null;
 }
 function ensureId(el: HTMLElement): string {
   if (!el.id) el.id = (el.textContent ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
