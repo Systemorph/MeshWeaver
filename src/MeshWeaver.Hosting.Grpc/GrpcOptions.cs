@@ -1,3 +1,5 @@
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.Hosting.Grpc;
 
 /// <summary>
@@ -25,4 +27,15 @@ public class GrpcOptions
     /// authenticates via API token and is re-stamped with the validated identity.</para>
     /// </summary>
     public int? TrustedPort { get; set; }
+
+    /// <summary>
+    /// The identity a TOKEN-LESS connection acts as — the device-mesh trust model: a single-user
+    /// host serving only its own shells (Memex.LocalMesh) declares that an anonymous connection IS
+    /// the device user, so its layout areas render the owner view and its writes are attributed.
+    ///
+    /// <para><c>null</c> (default) keeps the portal behavior: token-less connections stay the
+    /// well-known Anonymous principal. A connection presenting an INVALID token always fails
+    /// closed to Anonymous regardless of this option — a bad credential is not "no credential".</para>
+    /// </summary>
+    public AccessContext? AnonymousUser { get; set; }
 }

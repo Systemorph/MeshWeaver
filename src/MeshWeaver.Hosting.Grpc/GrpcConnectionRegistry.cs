@@ -10,6 +10,7 @@ using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.Hosting.Grpc;
 
@@ -48,14 +49,22 @@ public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
     public GrpcConnectionRegistry(
         IMessageHub hub,
         IRoutingService routingService,
-        IoPoolRegistry? ioPools = null)
+        IoPoolRegistry? ioPools = null,
+        IOptions<GrpcOptions>? options = null)
     {
         this.hub = hub;
         this.routingService = routingService;
         accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         ioPool = ioPools?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<GrpcConnectionRegistry>>();
+        // Token-less connections act as this identity when the host declares one — the device-mesh
+        // trust model (GrpcOptions.AnonymousUser); portals leave it unset and keep Anonymous.
+        anonymousUser = (options ?? hub.ServiceProvider.GetService<IOptions<GrpcOptions>>())
+            ?.Value.AnonymousUser ?? Anonymous;
     }
+
+    /// <summary>The identity token-less connections act as (see <see cref="GrpcOptions.AnonymousUser"/>).</summary>
+    private readonly AccessContext anonymousUser;
 
     /// <summary>
     /// Per-registry disambiguator for this transport's portal-hub address. Instance state, never
@@ -163,7 +172,7 @@ public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
     /// <summary>Register the per-connection outbound channel (the <c>Open</c> call drains it to the wire).
     /// Always runs first for a connection, before <see cref="Authenticate"/> / <see cref="Connect"/>.</summary>
     public void Begin(string connectionId, ChannelWriter<ServerFrame> outbound) =>
-        connections[connectionId] = new ConnectionState(Anonymous, outbound);
+        connections[connectionId] = new ConnectionState(anonymousUser, outbound);
 
     /// <summary>
     /// Validate the connection's Bearer token (if any) → remember the user for this connection.
@@ -185,7 +194,7 @@ public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
         if (string.IsNullOrWhiteSpace(rawToken)
             || !rawToken.StartsWith(ValidateTokenRequest.TokenPrefix, StringComparison.Ordinal))
         {
-            SetUser(connectionId, Anonymous);
+            SetUser(connectionId, anonymousUser);
             return Observable.Return(Unit.Default);
         }
 
