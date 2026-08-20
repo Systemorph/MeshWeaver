@@ -106,14 +106,19 @@ public static class DeviceSeed
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(nameof(DeviceSeed));
 
-        IsOnboarded(hub)
-            .Where(onboarded => onboarded)
-            .SelectMany(_ => hub.GetWorkspace()
+        hub.GetWorkspace()
+            .GetQuery("repair-grant-user", $"nodeType:User content.email:{DeviceUserId}@local limit:1")
+            .Take(1).Timeout(TimeSpan.FromSeconds(15))
+            .Where(users => users.Any())
+            // The grant carries the ONBOARDED profile name (the user node's), not the OS account —
+            // they differ whenever the person entered their real name in the onboarding dialog.
+            .SelectMany(users => hub.GetWorkspace()
                 .GetQuery("seed-admin-grant", $"path:Admin/_Access/{DeviceUserId}_Access limit:1")
-                .Take(1).Timeout(TimeSpan.FromSeconds(15)))
-            .Where(existing => !existing.Any())
-            .SelectMany(_ => accessService.RunAsSystem(
-                () => meshService.CreateNode(AdminGrant(OsUserName()))))
+                .Take(1).Timeout(TimeSpan.FromSeconds(15))
+                .Where(existing => !existing.Any())
+                .Select(_ => users.First().Name ?? OsUserName()))
+            .SelectMany(name => accessService.RunAsSystem(
+                () => meshService.CreateNode(AdminGrant(name))))
             .Subscribe(
                 _ => logger?.LogInformation("Repaired the missing global-admin grant"),
                 ex => logger?.LogWarning(ex, "Admin-grant repair failed"));
