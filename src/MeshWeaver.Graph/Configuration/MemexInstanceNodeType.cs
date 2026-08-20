@@ -68,6 +68,12 @@ public static class MemexInstanceNodeType
     /// <summary>Registers the built-in "MemexInstance" MeshNode on the mesh builder.</summary>
     public static TBuilder AddMemexInstanceType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
+        // The content type must resolve on EVERY hub that materializes these nodes — the per-node
+        // hub gets it via WithContentType below, but node-stream/query hubs (MeshNodeStreamCache)
+        // otherwise degrade the content to an untyped JsonElement ("stayed an untyped JsonElement"
+        // boot warning; typed ContentAs<MemexInstanceContent> consumers then read null). Mesh-level
+        // registry, so all hubs inherit it (the UiContributionNodeType pattern).
+        builder.WithMeshType(typeof(MemexInstanceContent), nameof(MemexInstanceContent));
         builder.AddMeshNodes(CreateMeshNode());
         return builder;
     }
