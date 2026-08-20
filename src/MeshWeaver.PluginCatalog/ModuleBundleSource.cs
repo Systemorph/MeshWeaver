@@ -52,14 +52,11 @@ public static class ModuleBundleSource
             // registry must never fan out a module it could not load itself.
             return ([], $"module '{moduleName}' is not loadable on this instance: {unsatisfied}");
 
-        var folder = Path.Combine(baseDirectory, "modules", moduleName);
-        // A DEFERRED re-land (the running instance had the module loaded, so the swap parked at
-        // .pending-<name> until the next boot) is the NEWEST landed content — serve it: consumers
-        // must fetch what was published, not what this process happens to still be running.
-        var pending = ModuleLandingService.PendingPathFor(baseDirectory, moduleName);
-        if (Directory.Exists(pending)
-            && File.Exists(Path.Combine(pending, moduleName + ".dll")))
-            folder = pending;
+        // The entry's GENERATION directory is the newest landed content — the one resolution
+        // rule (ModuleDirectoryFor), shared with boot. Serving follows the pointer immediately,
+        // so consumers fetch what was PUBLISHED even while this process still runs an older
+        // generation it loaded at ITS boot.
+        var folder = ModuleLandingService.ModuleDirectoryFor(baseDirectory, moduleName, entry);
         var entryDll = Path.Combine(folder, moduleName + ".dll");
         if (!File.Exists(entryDll))
             // Covers the missing folder, the transitional publish state (a module still riding the

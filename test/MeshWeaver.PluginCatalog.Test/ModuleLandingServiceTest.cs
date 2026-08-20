@@ -53,19 +53,22 @@ public class ModuleLandingServiceTest : IDisposable
                 minMeshVersion: "0.0.1")
             .FirstAsync().ToTask();
 
-        // The files, in the exact layout ResolveModulePath probes.
-        File.ReadAllBytes(Path.Combine(baseDirectory, "modules", "Acme.Widgets", "Acme.Widgets.dll"))
-            .Should().Equal([1, 2, 3]);
-        File.Exists(Path.Combine(baseDirectory, "modules", "Acme.Widgets", "Acme.Widgets.Support.dll"))
-            .Should().BeTrue();
+        // The activation entry + the minimal step-10 restart-required signal.
+        var list = ModuleActivationSidecar.Read(baseDirectory);
+        var entry = list.Entries.Should().ContainSingle().Subject;
+
+        // The files land in a fresh GENERATION directory the entry points at — resolved by the
+        // one rule boot and the serving side share.
+        entry.Directory.Should().StartWith("Acme.Widgets@",
+            "a landing writes modules/<name>@<id>/ and moves the pointer — it never overwrites");
+        var dir = ModuleLandingService.ModuleDirectoryFor(baseDirectory, "Acme.Widgets", entry);
+        File.ReadAllBytes(Path.Combine(dir, "Acme.Widgets.dll")).Should().Equal([1, 2, 3]);
+        File.Exists(Path.Combine(dir, "Acme.Widgets.Support.dll")).Should().BeTrue();
         // No staging leftovers.
         Directory.GetDirectories(Path.Combine(baseDirectory, "modules"))
             .Select(Path.GetFileName)
             .Should().NotContain(n => n!.StartsWith(".staging-"));
 
-        // The activation entry + the minimal step-10 restart-required signal.
-        var list = ModuleActivationSidecar.Read(baseDirectory);
-        var entry = list.Entries.Should().ContainSingle().Subject;
         entry.Name.Should().Be("Acme.Widgets");
         entry.Source.Should().Be(ModuleActivationSources.Store);
         entry.PackagePath.Should().Be("Plugins/acme-widgets");
@@ -85,10 +88,16 @@ public class ModuleLandingServiceTest : IDisposable
         await service.LandModule("Acme.Widgets", [("Acme.Widgets.dll", [9, 9])], LiveFrameworkMvid)
             .FirstAsync().ToTask();
 
-        File.ReadAllBytes(Path.Combine(baseDirectory, "modules", "Acme.Widgets", "Acme.Widgets.dll"))
-            .Should().Equal([9, 9], "a re-landing replaces the folder atomically");
-        ModuleActivationSidecar.Read(baseDirectory).Entries
-            .Should().ContainSingle("re-landing upserts the entry, never appends a duplicate");
+        var entry = ModuleActivationSidecar.Read(baseDirectory).Entries
+            .Should().ContainSingle("re-landing upserts the entry, never appends a duplicate")
+            .Subject;
+        var dir = ModuleLandingService.ModuleDirectoryFor(baseDirectory, "Acme.Widgets", entry);
+        File.ReadAllBytes(Path.Combine(dir, "Acme.Widgets.dll"))
+            .Should().Equal([9, 9], "the pointer moves to the fresh generation");
+        Directory.GetDirectories(Path.Combine(baseDirectory, "modules"))
+            .Should().HaveCount(2,
+                "the superseded generation SURVIVES the landing path — a running pod may hold "
+                + "it open; boot GC reclaims it once nothing references it");
     }
 
     [Fact]
@@ -109,8 +118,9 @@ public class ModuleLandingServiceTest : IDisposable
                 ModulePlatformFloor.RunningVersion!,
                 "the refusal must name BOTH versions so the operator can see which side is behind");
 
-        Directory.Exists(Path.Combine(baseDirectory, "modules", "Acme.Widgets"))
-            .Should().BeFalse("declined bytes never reach disk");
+        var modulesRoot = Path.Combine(baseDirectory, "modules");
+        (Directory.Exists(modulesRoot) ? Directory.GetDirectories(modulesRoot) : [])
+            .Should().BeEmpty("declined bytes never reach disk — no generation, no staging");
         ModuleActivationSidecar.Read(baseDirectory).Entries.Should().BeEmpty();
     }
 
@@ -129,11 +139,14 @@ public class ModuleLandingServiceTest : IDisposable
                 "Acme.Widgets", [("Acme.Widgets.dll", [1])], foreignBuild, version: "1.0.0")
             .FirstAsync().ToTask();
 
-        File.Exists(Path.Combine(baseDirectory, "modules", "Acme.Widgets", "Acme.Widgets.dll"))
+        var entry = ModuleActivationSidecar.Read(baseDirectory).Entries.Should().ContainSingle()
+            .Subject;
+        File.Exists(Path.Combine(
+                ModuleLandingService.ModuleDirectoryFor(baseDirectory, "Acme.Widgets", entry),
+                "Acme.Widgets.dll"))
             .Should().BeTrue();
-        ModuleActivationSidecar.Read(baseDirectory).Entries.Should().ContainSingle()
-            .Which.FrameworkMvid.Should().Be(foreignBuild,
-                "the built-against MVID is kept as diagnostics naming the exact producing build");
+        entry.FrameworkMvid.Should().Be(foreignBuild,
+            "the built-against MVID is kept as diagnostics naming the exact producing build");
     }
 
     [Fact]
@@ -178,11 +191,15 @@ public class ModuleLandingServiceTest : IDisposable
 
         await service.RemoveModule("Acme.Widgets").FirstAsync().ToTask();
 
-        Directory.Exists(Path.Combine(baseDirectory, "modules", "Acme.Widgets"))
-            .Should().BeFalse("uninstall deletes the landed folder");
+        Directory.GetDirectories(Path.Combine(baseDirectory, "modules"))
+            .Should().BeEmpty("uninstall deletes the landed generation (best-effort here; on a "
+                + "shared volume a loaded copy survives to boot GC)");
         var list = ModuleActivationSidecar.Read(baseDirectory);
         var entry = list.Entries.Should().ContainSingle().Subject;
         entry.Enabled.Should().BeFalse("the entry is kept, disabled — history + idempotence");
+        entry.Directory.Should().BeNull(
+            "the pointer is cleared so boot GC can reclaim the generation — a disabled entry "
+            + "must not keep its directory referenced");
         list.PendingRestart.Should().BeTrue("the removal takes effect at the next restart");
     }
 
