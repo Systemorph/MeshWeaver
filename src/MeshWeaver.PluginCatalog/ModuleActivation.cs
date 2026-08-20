@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MeshWeaver.Mesh;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -163,6 +164,18 @@ public static class ModuleActivationSidecar
 }
 
 /// <summary>
+/// One module the boot union activates, with the LANE it came from.
+/// </summary>
+/// <param name="Entry">The <c>Modules:Assemblies</c>-shaped entry (<c>&lt;Name&gt;.dll</c> for a
+/// sidecar entry; the operator's raw value for a baseline one).</param>
+/// <param name="Landed">The sidecar entry this came from, or <c>null</c> when it came from the
+/// appsettings baseline. 🚨 Provenance is carried rather than re-derived: a landed module's bytes
+/// live in the directory ITS entry points at, a baseline module's are resolved by probing, and a
+/// caller that guesses which lane a name belongs to is how the boot gate and the boot loader came
+/// to disagree (#1949).</param>
+public sealed record EffectiveModule(string Entry, ModuleActivationEntry? Landed);
+
+/// <summary>
 /// The boot-time union of #1664 step 9: appsettings baseline ∪ enabled persisted store installs,
 /// deduped by module name, with the two skip rules (missing DLL, unsatisfied platform floor)
 /// applied loudly — extracted PURE so the computation is unit-testable without booting a portal.
@@ -170,8 +183,15 @@ public static class ModuleActivationSidecar
 public static class ModuleActivationBoot
 {
     /// <summary>
-    /// Computes the effective <c>Modules:Assemblies</c>-shaped entry list the boot loader feeds
-    /// to <c>MeshBuilder.InstallAssemblies</c> (after per-entry <c>ResolveModulePath</c>).
+    /// Computes the effective module list the boot loader feeds to
+    /// <c>MeshBuilder.InstallAssemblies</c> (after per-module <see cref="ResolveLoadPath"/>).
+    ///
+    /// <para>Each result carries its PROVENANCE — the sidecar entry it came from, or null for an
+    /// appsettings-baseline entry — because the two lanes resolve to a file by different rules and
+    /// the caller must not re-derive which lane a name belongs to. That re-derivation is what
+    /// #1949 was: the existence gate and the load-path resolver each decided for themselves where
+    /// a module's bytes were, disagreed about generation directories, and every store module on
+    /// the deployment was skipped at boot while its bytes sat correctly on disk.</para>
     ///
     /// <para>Rules, in order:</para>
     /// <list type="bullet">
@@ -199,30 +219,33 @@ public static class ModuleActivationBoot
     /// passes <see cref="ModulePlatformFloor.DeclineReason(string?)"/> so there is never a second
     /// notion of the module platform requirement.</param>
     /// <param name="landedModuleDllExists">Whether a persisted module's LANDED entry DLL exists —
-    /// called with the module NAME, and 🚨 it must check <c>modules/&lt;name&gt;/&lt;name&gt;.dll</c>
-    /// SPECIFICALLY (production passes <see cref="LandedModuleDllExists"/>), never
-    /// <c>MeshBuilder.ResolveModulePath</c>: that resolver falls back to the app's base directory,
-    /// so a sidecar entry whose <c>modules/&lt;name&gt;/</c> folder is gone (tampered sidecar,
-    /// deleted folder) would silently BIND a same-named app-closure DLL instead of being skipped.
-    /// A store-installed module never legitimately lives in the app closure — a name collision
-    /// there is exactly what <see cref="ModuleLandingService"/> refuses at landing.</param>
+    /// called with the ENTRY, never with the bare name, because the entry is what says WHERE its
+    /// bytes are: <see cref="ModuleActivationEntry.Directory"/> names the generation directory
+    /// landing wrote them into. 🚨 It must check that ONE directory
+    /// (<c>modules/&lt;entry.Directory ?? name&gt;/&lt;name&gt;.dll</c> — production passes
+    /// <see cref="LandedModuleDllExists"/>), never <c>MeshBuilder.ResolveModulePath</c>: that
+    /// resolver falls back to the app's base directory, so a sidecar entry whose landed folder is
+    /// gone (tampered sidecar, deleted folder) would silently BIND a same-named app-closure DLL
+    /// instead of being skipped. A store-installed module never legitimately lives in the app
+    /// closure — a name collision there is exactly what <see cref="ModuleLandingService"/> refuses
+    /// at landing.</param>
     /// <param name="onSkipped">The loud channel: called once per skipped persisted entry with
     /// (module name, reason).</param>
-    public static ImmutableList<string> ComputeEffectiveModuleEntries(
+    public static ImmutableList<EffectiveModule> ComputeEffectiveModuleEntries(
         IReadOnlyList<string>? baselineEntries,
         ModuleActivationList? persisted,
         Func<string?, string?> platformGate,
-        Func<string, bool> landedModuleDllExists,
+        Func<ModuleActivationEntry, bool> landedModuleDllExists,
         Action<string, string>? onSkipped = null)
     {
-        var effective = ImmutableList.CreateBuilder<string>();
+        var effective = ImmutableList.CreateBuilder<EffectiveModule>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var entry in baselineEntries ?? [])
         {
             if (string.IsNullOrWhiteSpace(entry))
                 continue;
-            effective.Add(entry);
+            effective.Add(new EffectiveModule(entry, Landed: null));
             seen.Add(Path.GetFileNameWithoutExtension(entry));
         }
 
@@ -239,38 +262,75 @@ public static class ModuleActivationBoot
                 continue;
             }
 
-            if (!landedModuleDllExists(module.Name))
+            if (!landedModuleDllExists(module))
             {
                 onSkipped?.Invoke(module.Name,
-                    $"its landed DLL 'modules/{module.Name}/{module.Name}.dll' does not exist "
+                    $"its landed DLL '{RelativeLandedDll(module)}' does not exist "
                     + "(folder lost or never landed; a same-named app-closure DLL deliberately "
                     + "does NOT satisfy a store-installed entry) — re-install the module");
                 continue;
             }
 
-            effective.Add(module.Name + ".dll");
+            effective.Add(new EffectiveModule(module.Name + ".dll", module));
         }
 
         return effective.ToImmutable();
     }
 
     /// <summary>
-    /// The landed entry-DLL path of a store-installed module:
-    /// <c>{baseDirectory}/modules/{name}/{name}.dll</c> — the ONE location the landing service
-    /// writes and the boot union checks.
+    /// The landed entry-DLL path of a store-installed entry:
+    /// <c>{baseDirectory}/modules/{entry.Directory ?? entry.Name}/{entry.Name}.dll</c>.
+    ///
+    /// <para>🚨 The directory comes from the ENTRY, through the ONE resolution rule
+    /// (<see cref="ModuleLandingService.ModuleDirectoryFor"/>) the serve side and the boot loader
+    /// already share. Landing writes every version into a FRESH generation
+    /// (<c>modules/&lt;name&gt;@&lt;id&gt;/</c>) and moves this pointer; a check that looked in the
+    /// legacy fixed <c>modules/&lt;name&gt;/</c> folder would find NOTHING for any
+    /// generation-landed module — which is exactly how every store module on a
+    /// generation-landing build came up skipped at boot while its bytes sat correctly on disk
+    /// (#1949). The gate and the resolver must name ONE path or landing and activation never
+    /// converge.</para>
     /// </summary>
-    public static string LandedDllPath(string baseDirectory, string moduleName) =>
-        Path.Combine(baseDirectory, "modules", moduleName, moduleName + ".dll");
+    public static string LandedDllPath(string baseDirectory, ModuleActivationEntry entry) =>
+        Path.Combine(
+            ModuleLandingService.ModuleDirectoryFor(baseDirectory, entry.Name, entry),
+            entry.Name + ".dll");
 
     /// <summary>
     /// The PRODUCTION existence check for a persisted (store-installed) entry — the landed DLL at
     /// <see cref="LandedDllPath"/>, and nothing else. 🚨 Deliberately NOT
     /// <c>MeshBuilder.ResolveModulePath</c>: that resolver falls back to the app's base directory,
     /// which is correct for appsettings-baseline entries (both locations are legitimate for them)
-    /// but would let a sidecar entry whose <c>modules/&lt;name&gt;/</c> folder is gone silently
-    /// bind a same-named app-closure DLL instead of being skipped — a store-installed module never
-    /// legitimately lives in the app closure (the landing service refuses that collision).
+    /// but would let a sidecar entry whose landed folder is gone silently bind a same-named
+    /// app-closure DLL instead of being skipped — a store-installed module never legitimately
+    /// lives in the app closure (the landing service refuses that collision).
     /// </summary>
-    public static bool LandedModuleDllExists(string baseDirectory, string moduleName) =>
-        File.Exists(LandedDllPath(baseDirectory, moduleName));
+    public static bool LandedModuleDllExists(string baseDirectory, ModuleActivationEntry entry) =>
+        File.Exists(LandedDllPath(baseDirectory, entry));
+
+    /// <summary>
+    /// The file the boot loader loads for one <see cref="EffectiveModule"/> — the SAME resolution
+    /// the existence gate applied, which is the whole point of it living here:
+    ///
+    /// <list type="bullet">
+    ///   <item>a SIDECAR (store-landed) module resolves to <see cref="LandedDllPath"/> — its own
+    ///     landed directory and nothing else. Never <c>ResolveModulePath</c>: its app-closure
+    ///     fallback would bind a same-named platform binary for an entry the gate just decided
+    ///     was present, which is the trap-door <see cref="ModuleLandingService"/> refuses at
+    ///     landing.</item>
+    ///   <item>a BASELINE entry keeps <c>MeshBuilder.ResolveModulePath</c>'s probes (landed root's
+    ///     <c>modules/&lt;name&gt;/</c>, the image's own, then the classic BaseDirectory-relative
+    ///     location) — all of them legitimate for the image's own closure.</item>
+    /// </list>
+    /// </summary>
+    public static string ResolveLoadPath(string baseDirectory, EffectiveModule module) =>
+        module.Landed is not null
+            ? LandedDllPath(baseDirectory, module.Landed)
+            : MeshBuilder.ResolveModulePath(module.Entry, baseDirectory);
+
+    /// <summary>The entry's landed DLL as the deployment-relative path a skip report names —
+    /// the generation directory when the entry carries one, else the legacy fixed folder.</summary>
+    private static string RelativeLandedDll(ModuleActivationEntry entry) =>
+        $"modules/{(string.IsNullOrWhiteSpace(entry.Directory) ? entry.Name : entry.Directory)}"
+        + $"/{entry.Name}.dll";
 }
