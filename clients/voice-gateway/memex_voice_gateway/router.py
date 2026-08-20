@@ -81,7 +81,9 @@ _DEFAULT_PHRASES = {
 class BrainRouter:
     def __init__(self, brains: dict[str, Brain], active: str,
                  phrases: dict[str, str] | None = None,
-                 mesh_brains: set[str] | None = None) -> None:
+                 mesh_brains: set[str] | None = None,
+                 home: object = None,
+                 agent_homes: dict[str, str] | None = None) -> None:
         if active not in brains:
             raise ValueError(f"active brain {active!r} not among {list(brains)}")
         self._brains = brains
@@ -89,6 +91,10 @@ class BrainRouter:
         self._phrases = {**_DEFAULT_PHRASES, **(phrases or {})}
         self._mesh = mesh_brains if mesh_brains is not None else {
             n for n, b in brains.items() if hasattr(b, "delegate")}
+        self._home = home     # HomeAssistant client, when configured
+        # Agent name → the portal that HOSTS it (a portal entry's "agents" list): the
+        # ExecutiveAssistant may live on the local mesh while Researcher lives in the cloud.
+        self._agent_homes = agent_homes or {}
 
     def _mesh_target(self) -> str | None:
         """The portal delegations go to: the active brain when it is a mesh, else the first mesh."""
@@ -98,12 +104,35 @@ class BrainRouter:
 
     async def delegate_task(self, task: str, agent: str | None = None) -> str:
         """The local brain's triage seam: open a mesh thread, return the STAMPED handle so
-        await_reply later polls the right brain. Raises when no mesh portal is configured."""
-        target = self._mesh_target()
+        await_reply later polls the right brain. An agent with a declared HOME portal goes
+        there; anything else goes to the active/first mesh. Raises when no mesh is configured."""
+        target = None
+        if agent and (housed := self._agent_homes.get(agent)) in self._mesh:
+            target = housed
+        target = target or self._mesh_target()
         if target is None:
             raise RuntimeError("no mesh portal configured")
         path = await self._brains[target].delegate(task, agent)  # type: ignore[attr-defined]
         return f"{target}::{path}"
+
+    async def run_tool(self, name: str, args: dict) -> str:
+        """The local brain's quick tools, run in-round: mesh reads go to the same portal
+        delegations would (the active brain when it is a mesh, else the first mesh);
+        home_assistant goes to the configured HA instance."""
+        if name == "home_assistant":
+            if self._home is None:
+                return "Home Assistant is not configured."
+            return await self._home.run(args)
+        target = self._mesh_target()
+        if target is None:
+            return "No mesh portal is configured."
+        client = self._brains[target]
+        if name == "search_mesh":
+            return await client.call("search", {"query": str(args.get("query", "")).strip(),
+                                                "limit": 8})  # type: ignore[attr-defined]
+        if name == "get_node":
+            return await client.call("get", {"path": str(args.get("path", "")).strip()})  # type: ignore[attr-defined]
+        return f"Unknown tool: {name}"
 
     def drain_delegations(self) -> list:
         """Pending (handle, task) pairs from ANY brain that collects them (the local one)."""
@@ -183,3 +212,5 @@ class BrainRouter:
     async def close(self) -> None:
         for brain in self._brains.values():
             await brain.close()
+        if self._home is not None:
+            await self._home.close()  # type: ignore[attr-defined]

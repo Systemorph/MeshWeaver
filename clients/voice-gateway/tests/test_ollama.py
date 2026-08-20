@@ -89,3 +89,39 @@ def test_triage_delegates_and_collects_pending():
         await brain.close()
 
     asyncio.run(scenario())
+
+
+def test_dispatch_tool_routes_delegate_and_quick_tools():
+    async def scenario():
+        brain = OllamaBrain("http://unused", "test-model")
+        calls = []
+
+        async def delegator(task, agent=None):
+            calls.append(("delegate", task, agent))
+            return "memex::u/_Thread/t1"
+
+        async def tool_runner(name, args):
+            calls.append((name, args))
+            return "x" * 2000 if name == "search_mesh" else "state: on"
+
+        brain.delegator = delegator
+        brain.tool_runner = tool_runner
+
+        out = await brain._dispatch_tool({"function": {
+            "name": "delegate_to_memex",
+            "arguments": {"task": "Wetter morgen", "agent": "Voice"}}})
+        assert "announced" in out
+        assert brain.drain_delegations() == [("memex::u/_Thread/t1", "Wetter morgen")]
+
+        out = await brain._dispatch_tool({"function": {
+            "name": "search_mesh", "arguments": '{"query": "kantone"}'}})
+        assert out.endswith("…(truncated)") and len(out) < 2000
+
+        out = await brain._dispatch_tool({"function": {
+            "name": "home_assistant", "arguments": {"action": "get_state"}}})
+        assert out == "state: on"
+        assert calls[0] == ("delegate", "Wetter morgen", "Voice")
+        assert calls[1] == ("search_mesh", {"query": "kantone"})
+        await brain.close()
+
+    asyncio.run(scenario())
