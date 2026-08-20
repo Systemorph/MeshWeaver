@@ -101,6 +101,67 @@ public sealed class PostgreSqlPartitionStorageProvider : IPartitionStorageProvid
     /// </summary>
     internal IObservable<DataChangeNotification> MergedChanges => _adapter.Changes;
 
+    /// <summary>
+    /// Routes a change notification that came from ANOTHER process (the <c>mesh_node_changes</c>
+    /// LISTEN feed) to the per-schema feed that owns its path, or — for a partition no adapter has
+    /// been materialised for in this process — to the merged feed the cross-partition subscribers
+    /// watch. Returns <c>false</c> for a path that is not a routable partition, which is the cheap
+    /// discard: one synchronous segment resolution, no DB round-trip, no adapter created.
+    /// See <see cref="PostgreSqlPathRoutingAdapter.TryPublishExternalChange"/>.
+    /// </summary>
+    internal bool PublishExternalChange(DataChangeNotification notification)
+        => _adapter.TryPublishExternalChange(notification);
+
+    /// <summary>
+    /// Builds the change listener's OWN data source: one connection, never pruned, kept alive, and
+    /// configured through the SAME <c>configureDataSource</c> hook as every other source this
+    /// provider builds.
+    ///
+    /// <para>🚨 That hook is not optional. On Azure Postgres the portal has NO password in its
+    /// connection string — the credential is an AAD token supplied by
+    /// <c>UsePeriodicPasswordProvider</c> through this very hook (see
+    /// <c>Memex.Portal.Distributed/Program.cs</c>). A listener built from the connection string
+    /// alone would fail to authenticate and sit in its 5-second reconnect loop for ever on exactly
+    /// the deployment this feed exists for — a failure indistinguishable, from outside, from the
+    /// listener never having been wired at all.</para>
+    ///
+    /// <para><c>KeepAlive</c> is not decoration either: a LISTEN connection is idle by design, and
+    /// an idle TCP session behind a NAT/firewall (AKS → Azure Postgres) is dropped silently after
+    /// minutes. Without keepalives <c>WaitAsync</c> waits for ever on a dead socket and the process
+    /// is back to "never told" — with nothing to notice, because nothing failed.</para>
+    ///
+    /// <para>No <c>UseVector()</c>: nothing but <c>LISTEN</c> and its payloads runs here, so the
+    /// vector type mapping would be dead weight on a connection that never reads a column.</para>
+    /// </summary>
+    internal NpgsqlDataSource CreateChangeListenerDataSource()
+    {
+        var csb = new NpgsqlConnectionStringBuilder(_baseConnectionString)
+        {
+            // Exactly one connection, always the same one: the session IS the subscription, so it
+            // must not be pruned away underneath the LISTEN. MinPoolSize pins it; pruning only
+            // ever touches connections IDLE IN THE POOL, and this one is checked out for the life
+            // of the process. (ConnectionIdleLifetime = 0 is NOT the way to say this — Npgsql
+            // refuses it outright under the default pruning interval, and the throw lands in the
+            // DI factory at host startup.)
+            MinPoolSize = 1,
+            MaxPoolSize = 1,
+            KeepAlive = 30,
+            TcpKeepAlive = true,
+            ApplicationName = "meshweaver-change-listener",
+        };
+        var builder = new NpgsqlDataSourceBuilder(csb.ConnectionString);
+        _configureDataSource?.Invoke(builder);
+        return builder.Build();
+    }
+
+    /// <summary>
+    /// Test seam: how many per-schema adapters this process has materialised. Pins that routing a
+    /// cross-process notification for a partition nobody here has touched does NOT construct (and
+    /// permanently cache) an adapter for it — on a 140-partition mesh that would leave every
+    /// process holding one per partition purely because someone, somewhere, wrote.
+    /// </summary>
+    internal int MaterialisedPartitionAdapterCount => _adapter.MaterialisedAdapterCount;
+
     /// <summary>Embedding provider for vector scoring, shared with the per-schema delegate.</summary>
     internal IEmbeddingProvider? EmbeddingProvider => _embeddingProvider;
 

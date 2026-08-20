@@ -190,6 +190,54 @@ internal sealed class PostgreSqlPathRoutingAdapter : IStorageAdapter
     internal PostgreSqlStorageAdapter? GetSchemaAdapter(string path) => AdapterForRead(path);
 
     /// <summary>
+    /// Test seam: number of per-schema adapters materialised so far — pins that routing a
+    /// notification for an untouched partition does not construct one.
+    /// </summary>
+    internal int MaterialisedAdapterCount => _adaptersBySchema.Count;
+
+    /// <summary>
+    /// Publishes a change notification that arrived from OUTSIDE this process — a
+    /// <c>LISTEN mesh_node_changes</c> event delivered by <see cref="PostgreSqlChangeListener"/> —
+    /// onto the feed that owns its path. Returns <c>false</c> when the path is not a routable
+    /// partition, so the caller can count the discard.
+    ///
+    /// <para><b>This is the routing the partitioned change feed was missing.</b> The NOTIFY channel
+    /// is per DATABASE, so ONE listener connection receives every schema's events, while the
+    /// in-process feed is per SCHEMA — a per-schema <see cref="PostgreSqlStorageAdapter"/> each
+    /// publishing its own Write/Delete. Without a router there was no answer to "whose feed is
+    /// this?", which is why the listener wiring was left commented out and why a mirror in another
+    /// process could be arbitrarily far behind a rival's write and never be told (#1440 → #1814).
+    /// The answer is the SAME resolution a write uses — <see cref="ResolveSchema"/>, first path
+    /// segment → schema — so a notification can never land on a feed the write would not have
+    /// published to.</para>
+    ///
+    /// <para><b>It never MATERIALISES an adapter.</b> A notification for a partition this process
+    /// has never touched routes to the merged feed directly rather than constructing (and
+    /// permanently caching) a per-schema adapter for it: on a mesh with 140+ partitions, every
+    /// process would otherwise end up holding an adapter for every partition in the database
+    /// purely because someone, somewhere, wrote to it. Nothing is lost — a per-schema adapter that
+    /// does not exist has no subscribers, and the cross-partition subscribers (the unscoped
+    /// fan-out query, the pedestrian provider) all watch the merge, which still receives it.</para>
+    ///
+    /// <para>Cost of the discard branch: one <see cref="ResolveSchema"/> call — pure string work,
+    /// no DB round-trip, no allocation beyond the resolved definition.</para>
+    /// </summary>
+    internal bool TryPublishExternalChange(DataChangeNotification notification)
+    {
+        var def = ResolveSchema(notification.Path);
+        if (def is null)
+            return false;
+        var schema = !string.IsNullOrEmpty(def.Schema) ? def.Schema : def.Namespace;
+        if (schema is not null && _adaptersBySchema.TryGetValue(schema, out var adapter))
+            // The per-schema feed, exactly as its own Write would have published — and it forwards
+            // into the merged feed, so a merged subscriber sees it once, not twice.
+            adapter.ChangeObserver.OnNext(notification);
+        else
+            _changes.OnNext(notification);
+        return true;
+    }
+
+    /// <summary>
     /// Cold write pipeline. <b>NEVER creates a schema.</b> Provisioning is eager and
     /// gated to partition-owning creates (<c>OwnsPartitionProvisioningValidator</c> →
     /// <see cref="PostgreSqlPartitionStorageProvider.EnsurePartitionProvisioned"/>) — the

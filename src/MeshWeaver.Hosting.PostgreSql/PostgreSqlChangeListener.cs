@@ -12,6 +12,9 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public class PostgreSqlChangeListener : IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
+    // Non-null only when this listener BUILT its data source (see OwningDataSource) and must
+    // therefore dispose it. A data source handed in from outside belongs to its owner.
+    private readonly NpgsqlDataSource? _ownedDataSource;
     private readonly IObserver<DataChangeNotification> _changeNotifier;
     private readonly ILogger<PostgreSqlChangeListener>? _logger;
     private CancellationTokenSource? _cts;
@@ -31,6 +34,39 @@ public class PostgreSqlChangeListener : IAsyncDisposable
         _dataSource = dataSource;
         _changeNotifier = changeNotifier;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Builds a listener that OWNS <paramref name="dedicatedDataSource"/> and disposes it with
+    /// itself — the shape the partitioned wiring uses, where
+    /// <c>PostgreSqlPartitionStorageProvider.CreateChangeListenerDataSource</c> builds a
+    /// single-connection source configured exactly like every other source that provider builds.
+    ///
+    /// <para>🚨 The <c>LISTEN</c> session holds one connection open for the life of the process, so
+    /// taking it from the shared pool permanently removes a connection every read and write
+    /// competes for — on a pool the portal has already exhausted once ("the connection pool has
+    /// been exhausted (currently 50)"). A dedicated source keeps that cost off the pool that serves
+    /// queries and names the session in <c>pg_stat_activity</c>, so a permanently-idle connection
+    /// is identifiable rather than suspicious.</para>
+    /// </summary>
+    /// <param name="dedicatedDataSource">The listener's own data source; disposed with the listener.</param>
+    /// <param name="changeNotifier">Observer that receives a notification per NOTIFY payload.</param>
+    /// <param name="logger">Optional logger for listener lifecycle and error diagnostics.</param>
+    internal static PostgreSqlChangeListener OwningDataSource(
+        NpgsqlDataSource dedicatedDataSource,
+        IObserver<DataChangeNotification> changeNotifier,
+        ILogger<PostgreSqlChangeListener>? logger = null)
+        => new(dedicatedDataSource, changeNotifier, logger, ownsDataSource: true);
+
+    private PostgreSqlChangeListener(
+        NpgsqlDataSource dataSource,
+        IObserver<DataChangeNotification> changeNotifier,
+        ILogger<PostgreSqlChangeListener>? logger,
+        bool ownsDataSource)
+        : this(dataSource, changeNotifier, logger)
+    {
+        if (ownsDataSource)
+            _ownedDataSource = dataSource;
     }
 
     /// <summary>
@@ -140,5 +176,7 @@ public class PostgreSqlChangeListener : IAsyncDisposable
     {
         await StopAsync().ConfigureAwait(false);
         _cts?.Dispose();
+        if (_ownedDataSource is not null)
+            await _ownedDataSource.DisposeAsync().ConfigureAwait(false);
     }
 }

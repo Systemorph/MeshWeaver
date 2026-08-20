@@ -940,6 +940,22 @@ public static class MeshDataSourceExtensions
     private static readonly TimeSpan SaveSampleInterval = TimeSpan.FromMilliseconds(200);
 
     /// <summary>
+    /// Coalescing window for the own-node RE-READ the change-feed reconcile performs when a
+    /// durable notification arrives without its entity (see the pipeline in
+    /// <c>SubscribeToOwnDeletion</c>). A notification storm on one path collapses to at most one
+    /// read per quiet window, and the reads are serialised, so a bulk import cannot turn a
+    /// notification storm into a read storm.
+    ///
+    /// <para>🚨 <c>Throttle</c>, deliberately NOT <c>Sample</c>: <c>Sample</c> arms a PERIODIC
+    /// timer per subscription and there is one of these subscriptions per live node hub, so an
+    /// idle mesh would pay one timer tick per hub per window for nothing. <c>Throttle</c> arms a
+    /// one-shot timer only while a burst is in flight — an idle hub costs nothing — and it always
+    /// emits the LAST trigger of a burst, so the read that CONVERGES the mirror can never be the
+    /// one that gets dropped.</para>
+    /// </summary>
+    private static readonly TimeSpan OwnNodeReReadCoalesceWindow = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
     /// Resolves the static node SERVED at <paramref name="hubPath"/>: the first
     /// non-<see cref="MeshNode.IsDefinitionOnly"/> static node across every registered
     /// <see cref="IStaticNodeProvider"/> whose <see cref="MeshNode.Path"/> matches
@@ -1456,8 +1472,65 @@ public static class MeshDataSourceExtensions
             .Subscribe(n => lastSelfWrite.OnNext(n.Version));
         hub.RegisterForDisposal(saveEchoSub);
 
+        // 🚨 THE DURABLE FEED DOES NOT ALWAYS CARRY THE NODE — and the notification that arrives
+        // WITHOUT one is precisely the CROSS-PROCESS notification this reconcile exists for.
+        // `Entity = null` is the CONTRACT of every source whose notification can outrun row
+        // visibility: PG's LISTEN/NOTIFY (PostgreSqlChangeListener parses `{path, op}` out of the
+        // NOTIFY payload — there is no node in it), the Cosmos change feed, the Snowflake poller
+        // ("Entity = null (subscribers re-read…)"). Until this branch existed, every one of them
+        // was DISCARDED here, so a mirror in another process could be arbitrarily far behind a
+        // rival's write and would never be told (#1440, and the deterministic cross-hub write
+        // conflict in #1814).
+        //
+        // 🚨 The fix is a RE-READ, never a supplement. Populating `Entity` from the payload is the
+        // defect StorageAdapterMeshQueryProvider REMOVED (#1250): whenever the supplement changed
+        // the outcome, the re-read was the one that was right — the row it re-added was one the
+        // read had excluded by RLS, by satellite-table routing (#1193), by a path filter or past
+        // the load cap — and it raced row visibility besides. Reading keeps the PROVENANCE the
+        // adoption below depends on: what the store returns IS the durable state, by construction.
+        //
+        // 🚨 It cannot feed itself (the #223 write-storm shape). The trigger's only effects are a
+        // READ and an AdoptPersisted, and AdoptPersisted neither mints nor writes — it records the
+        // durable version so the persistence sampler and the dispose-time flush both skip it. No
+        // write on this path ⇒ no notification of our own to re-trigger it.
+        //
+        // The subject is deliberately NOT disposed: `delSub` publishes into it, and disposing the
+        // subject first would turn a write landing in the teardown window into an
+        // ObjectDisposedException thrown back into the adapter's change-feed fan-out — the exact
+        // ordering trap the synced-query pipelines document. An OnNext into a subject whose only
+        // subscription is already disposed is a harmless no-op.
+        var reReadTrigger = new System.Reactive.Subjects.Subject<Unit>();
+        var reReadSub = reReadTrigger
+            .Throttle(OwnNodeReReadCoalesceWindow)
+            .Select(_ => storage.Read(ownPath, hub.JsonSerializerOptions)
+                .Catch((Exception ex) =>
+                {
+                    // Surfaced, not swallowed: without this the Concat below would terminate on
+                    // the first transient read failure and this hub would stop reconciling for
+                    // the rest of its life. The next notification re-reads.
+                    TryLogWarning(hub, ex,
+                        "Own-node re-read after an entity-less change notification failed on "
+                        + "{Hub} — the mirror stays on its current state until the next "
+                        + "notification", hub.Address);
+                    return Observable.Empty<MeshNode?>();
+                }))
+            // One read at a time: a second burst can never interleave its adoption with the
+            // first's, and at most one read per hub is ever in flight.
+            .Concat()
+            .Subscribe(node =>
+            {
+                // null = the row is gone (a delete landed between the notification and the read).
+                // The Deleted notification carries that fact on its own branch; nothing to adopt.
+                if (node is not null)
+                    AdoptDurable(node);
+            });
+        hub.RegisterForDisposal(reReadSub);
+
         var delSub = storage.Changes.Subscribe(notification =>
         {
+            // Not this hub's node: ONE ordinal string compare, no read, no allocation. Every
+            // notification in the process reaches every live node hub, so this discard is on the
+            // hot path of the cross-process feed and has to stay this cheap.
             if (!string.Equals(notification.Path, ownPath, StringComparison.OrdinalIgnoreCase))
                 return;
 
@@ -1476,63 +1549,79 @@ public static class MeshDataSourceExtensions
 
                 case DataChangeKind.Created:
                 case DataChangeKind.Updated:
-                    if (notification.Entity is not MeshNode newNode)
-                        return;
-                    // Echo-suppression: this notification matches the version
-                    // we just wrote via saveSub → skip the Update that would
-                    // close the loop.
-                    if (newNode.Version == lastSelfWrite.Value)
-                        return;
-                    cache.IsDeleted = false;
-                    // A genuine (re)create/update clears the tombstone so a same-id recreate
-                    // persists normally (a self-write echo was already suppressed above).
-                    recentlyDeleted?.Clear(ownPath);
-                    try
+                    if (notification.Entity is MeshNode newNode)
                     {
-                        // 🚨 ADOPTION, NOT A WRITE — `notification.Entity` is the node as PERSISTED,
-                        // at the version storage already holds it under. AdoptPersisted lands it
-                        // VERBATIM: it does not mint (an `Update` here minted durable+1 — a phantom
-                        // revision that exists nowhere, which the persistence sampler then wrote back,
-                        // #1432) and it records the durable version so neither the sampler nor the
-                        // dispose-time flush echoes the observation to storage. Provenance is the
-                        // discriminator: only the durable change feed reaches this line, so nothing
-                        // here has to guess whether content is "already durable" — it is, by
-                        // construction. Every genuine change keeps going through Update and mints.
-                        //
-                        // 🚨 FORWARD-ONLY (AdoptPersisted's built-in guard) — never move the in-RAM
-                        // node BACKWARD. The durable write + its change notification are OFF-TURN, so
-                        // under a write burst this notification LAGS the in-RAM stream: by the time it
-                        // arrives, the in-RAM commit may already carry many newer writes. A blind
-                        // `_ => newNode` overwrite re-applied that STALE persisted snapshot over fresher
-                        // in-RAM state and silently dropped every field added since it was persisted —
-                        // the concurrent cross-hub-write data-loss bug (CrossHubPatchAtomicityTest: a
-                        // burst of cross-mirror dict-adds settling with entries permanently lost). The
-                        // single-write echo-suppression above only skips the EXACT latest version, not
-                        // the older lagging echoes. The IN-RAM commit is authoritative (the owner's
-                        // monotonic Version is the one clock); a persisted snapshot may only REPLACE it
-                        // when it is STRICTLY NEWER (a genuine out-of-band external write). A lagged
-                        // own-write echo (version <= live) is a no-op, so the in-RAM stream only ever
-                        // moves forward.
-                        hub.GetWorkspace().GetMeshNodeStream()
-                            .AdoptPersisted(newNode)
-                            .Subscribe(
-                                _ => { },
-                                ex => TryLogWarning(hub, ex,
-                                    "Own-node refresh from change notification failed on {Hub}",
-                                    hub.Address));
+                        // An in-process publish: the adapter committed BEFORE publishing, so the
+                        // entity IS the durable state and no read is needed.
+                        AdoptDurable(newNode);
+                        return;
                     }
-                    catch (Exception ex)
-                    {
-                        // Expected: workspace has no MeshNodeReference reducer. Logged for the same
-                        // reason as the setup guard above — this path also reaches stream
-                        // materialisation, so a silent swallow here hides a real fault.
-                        TryLogWarning(hub, ex,
-                            "Own-node change-notification reconcile failed on {Hub}", hub.Address);
-                    }
+                    // Entity-less ⇒ the durable CROSS-PROCESS feed. Trigger the coalesced re-read.
+                    reReadTrigger.OnNext(Unit.Default);
                     return;
             }
         });
         hub.RegisterForDisposal(delSub);
+        return;
+
+        // Adopts a state that is ALREADY DURABLE, whether it arrived ON the notification (an
+        // in-process publish) or was just read back for one that carried none (the cross-process
+        // feed). Both provenances are identical by construction — the store committed first —
+        // which is what makes AdoptPersisted the right call for either.
+        void AdoptDurable(MeshNode newNode)
+        {
+            // Echo-suppression: this state matches the version we just wrote via saveSub → skip
+            // the adoption that would close the loop. It works for the re-read too, because the
+            // read returns the version the write landed at.
+            if (newNode.Version == lastSelfWrite.Value)
+                return;
+            cache.IsDeleted = false;
+            // A genuine (re)create/update clears the tombstone so a same-id recreate
+            // persists normally (a self-write echo was already suppressed above).
+            recentlyDeleted?.Clear(ownPath);
+            try
+            {
+                // 🚨 ADOPTION, NOT A WRITE — `newNode` is the node as PERSISTED, at the version
+                // storage already holds it under. AdoptPersisted lands it VERBATIM: it does not
+                // mint (an `Update` here minted durable+1 — a phantom revision that exists
+                // nowhere, which the persistence sampler then wrote back, #1432) and it records
+                // the durable version so neither the sampler nor the dispose-time flush echoes the
+                // observation to storage. Provenance is the discriminator: only the durable change
+                // feed reaches this line, so nothing here has to guess whether content is "already
+                // durable" — it is, by construction. Every genuine change keeps going through
+                // Update and mints.
+                //
+                // 🚨 FORWARD-ONLY (AdoptPersisted's built-in guard) — never move the in-RAM
+                // node BACKWARD. The durable write + its change notification are OFF-TURN, so
+                // under a write burst this notification LAGS the in-RAM stream: by the time it
+                // arrives, the in-RAM commit may already carry many newer writes. A blind
+                // `_ => newNode` overwrite re-applied that STALE persisted snapshot over fresher
+                // in-RAM state and silently dropped every field added since it was persisted —
+                // the concurrent cross-hub-write data-loss bug (CrossHubPatchAtomicityTest: a
+                // burst of cross-mirror dict-adds settling with entries permanently lost). The
+                // single-write echo-suppression above only skips the EXACT latest version, not
+                // the older lagging echoes. The IN-RAM commit is authoritative (the owner's
+                // monotonic Version is the one clock); a persisted snapshot may only REPLACE it
+                // when it is STRICTLY NEWER (a genuine out-of-band external write). A lagged
+                // own-write echo (version <= live) is a no-op, so the in-RAM stream only ever
+                // moves forward.
+                hub.GetWorkspace().GetMeshNodeStream()
+                    .AdoptPersisted(newNode)
+                    .Subscribe(
+                        _ => { },
+                        ex => TryLogWarning(hub, ex,
+                            "Own-node refresh from change notification failed on {Hub}",
+                            hub.Address));
+            }
+            catch (Exception ex)
+            {
+                // Expected: workspace has no MeshNodeReference reducer. Logged for the same
+                // reason as the setup guard above — this path also reaches stream
+                // materialisation, so a silent swallow here hides a real fault.
+                TryLogWarning(hub, ex,
+                    "Own-node change-notification reconcile failed on {Hub}", hub.Address);
+            }
+        }
     }
 
     /// <summary>
