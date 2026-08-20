@@ -1286,8 +1286,16 @@ jobs:
         # module) and on main-cd's refreshed mw-plugin-test image. Widen this list only if a
         # module turns out to be a second choke point; each addition costs PR wall-clock.
         VITAL_MODULES: "Store Essentials"
+        # A crash of the tester itself (SIGSEGV'd on main 2026-08-20, mid NodeType compile —
+        # exit 139, verdictless) must leave a dump the failure can be analyzed from: the runner's
+        # core file dies with the VM, so the CLR writes a minidump-with-heap to a path the
+        # failure-only artifact upload below preserves.
+        DOTNET_DbgEnableMiniDump: "1"
+        DOTNET_DbgMiniDumpType: "2"
+        DOTNET_DbgMiniDumpName: "/tmp/gate-dumps/tester-%p.dmp"
       run: |
         set -euo pipefail
+        mkdir -p /tmp/gate-dumps
         TESTER="$(find . -path '*/MeshWeaver.PluginTester/bin/*/mw-plugin-test.dll' | head -1)"
         if [ -z "$TESTER" ]; then
           echo "::error::mw-plugin-test.dll not in the build output — the gate cannot run."
@@ -1357,6 +1365,16 @@ jobs:
           fi
           exit "$status"
         fi
+    # Failure-only: preserve any CLR minidump the tester wrote (DOTNET_DbgEnableMiniDump above) —
+    # the runner's own core file dies with the VM, so without this a segfault is unanalyzable.
+    - name: "Upload gate crash dumps"
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: plugins-gate-dumps
+        path: /tmp/gate-dumps/
+        if-no-files-found: ignore
+        retention-days: 7
     # Same postcondition contract as doc-gate's bake: a green gate with no bake identity is a
     # bake-stage regression — RED, never a skip.
     - name: "Bake summary + identity"
