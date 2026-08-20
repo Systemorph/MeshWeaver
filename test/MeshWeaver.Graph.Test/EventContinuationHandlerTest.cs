@@ -33,6 +33,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
     {
         public EventContinuationType ContinuationType => EventContinuationType.PublishSocialPost;
         public string? SeenTargetPath { get; private set; }
+        public string? SeenCreatedBy { get; private set; }
         public int Calls { get; private set; }
         public string? FailWith { get; set; }
 
@@ -42,6 +43,7 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
         {
             Calls++;
             SeenTargetPath = subscription.TargetPath;
+            SeenCreatedBy = subscription.CreatedBy;
             return FailWith is { } reason
                 ? Observable.Throw<MeshNode>(new InvalidOperationException(reason))
                 : Observable.Return(new MeshNode(subscription.TargetPath!));
@@ -136,6 +138,93 @@ public class EventContinuationHandlerTest(ITestOutputHelper output) : MonolithMe
         Assert.Equal(EventSubscriptionStatus.Pending, current.Status);
         Assert.True(current.FireAt > DateTimeOffset.UtcNow,
             "a repeater records its NEXT slot, or a restart replays the old one");
+    }
+
+    /// <summary>
+    /// A subscription CANCELLED between arming and its slot must not fire. Observed failing in
+    /// production on 2026-08-20: a post's timer was cancelled at 05:58:53 when the post stopped
+    /// being schedulable, and fired regardless at 06:00:00.005.
+    ///
+    /// <para>🚨 <b>This test does NOT reproduce that, and passes with or without the fix</b> —
+    /// measured, not assumed. Here the pending-set query re-emits within milliseconds of the cancel
+    /// and the runner's existing reconcile disposes the timer, so cancellation is caught by a path
+    /// that in production did not run inside the 67 seconds available. What actually protects the
+    /// deployed system is the fire-time status re-read, and the guard for THAT is
+    /// <see cref="ATimerFiresWithTheSubscriptionAsItStandsAtItsSlot"/>, which does fail without it.
+    /// This one is kept because it would catch cancellation breaking outright — not because it
+    /// covers the bug it describes.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ATimerCancelledBeforeItsSlot_DoesNotFire()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.Timer,
+            FireAt = DateTimeOffset.UtcNow.AddSeconds(6),
+            ContinuationType = EventContinuationType.PublishSocialPost,
+            TargetPath = PostPath,
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+
+        var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
+            Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
+        runners.Add(runner);
+        await runner.StartAsync(default);
+
+        // Cancel it while the timer is armed and still counting down.
+        await EventSubscriptionOps.SetStatus(Mesh, EventSubscriptionNodeType.Path(subscription.Id),
+            EventSubscriptionStatus.Cancelled, "no longer wanted").Should().Emit();
+
+        // Well past the slot: the handler must never have been reached.
+        await Task.Delay(12.Seconds());
+        Assert.Equal(0, handler.Calls);
+    }
+
+    /// <summary>
+    /// 🚨 A timer fires with the subscription as it stands AT ITS SLOT, not as it was when armed.
+    /// Time passing is the entire nature of a timer, and edits land in that gap: in production an
+    /// operator set CreatedBy hours after arming, and the fire still reported "names no CreatedBy"
+    /// because the closure held the value from arming time. A schedule that ignores every edit made
+    /// after it was scheduled is a recording, not a schedule.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ATimerFiresWithTheSubscriptionAsItStandsAtItsSlot()
+    {
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var changeFeed = Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        var subscription = new EventSubscription
+        {
+            TriggerType = EventTriggerType.Timer,
+            FireAt = DateTimeOffset.UtcNow.AddSeconds(6),
+            ContinuationType = EventContinuationType.PublishSocialPost,
+            TargetPath = PostPath,
+            CreatedBy = null,          // armed WITHOUT an identity …
+        };
+        await EventSubscriptionOps.CreateSubscription(meshService, subscription).Should().Emit();
+
+        var runner = new EventSubscriptionRunner(Mesh, changeFeed, meshService, accessService,
+            Mesh.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<EventSubscriptionRunner>>());
+        runners.Add(runner);
+        await runner.StartAsync(default);
+
+        // … and given one while the timer counts down, exactly as the operator did.
+        await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Update(node => node.Content is EventSubscription s
+                ? node with { Content = s with { CreatedBy = "rbuergi" } }
+                : node)
+            .Should().Emit();
+
+        var seen = await Mesh.GetWorkspace().GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id))
+            .Select(_ => handler.SeenCreatedBy)
+            .Where(v => v is not null)
+            .FirstAsync().Timeout(40.Seconds());
+        Assert.Equal("rbuergi", seen);
     }
 
     private async Task<EventSubscription> ArmDueTimer()
