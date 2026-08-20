@@ -114,6 +114,18 @@ async def run() -> None:
     cfg = Config.from_env()
     http = aiohttp.ClientSession()
     router = make_router(cfg)
+    # The STANDARD voice prompt lives in the mesh (@{user}/Voice/Prompt — deposited on
+    # first start, editable in the portal); an explicit SYSTEM_PROMPT_FILE stays the
+    # strongest override for local experiments.
+    if not cfg.system_prompt_file:
+        from .ollama import SYSTEM_PROMPT
+        try:
+            remote = await router.sync_system_prompt(SYSTEM_PROMPT)
+        except Exception:
+            remote = SYSTEM_PROMPT
+        if remote.strip():
+            router.apply_system_prompt(remote.strip()
+                                       + (DIALECT_SUFFIX if cfg.speak_dialect else ""))
     tts = make_tts(cfg)
     server = TtsFileServer(cfg.gateway_host, cfg.gateway_port)
     await server.start()
