@@ -390,6 +390,39 @@ code {
     z-index: 10001 !important;
 }
 
+/* ————————————————————————————————————————————————————————————————— toast layer
+   The toast container must paint ABOVE the portal's top menu bar.
+
+   Fluent ships `.fluent-toast-provider { position: fixed; top: 24px; right: 24px; z-index: 999 }`,
+   while the portal header is `z-index: 1100` (PortalLayoutBase.razor.css, desktop AND mobile) and
+   occupies the top ~48px of the viewport. A top-right toast therefore opened INSIDE the header's
+   band with a LOWER z-index, and the header painted over it — issue #1883, where the
+   download-complete confirmation was hidden behind the menu bar.
+
+   🚨 This is a plain ordering collision in the ROOT stacking context, NOT a trapped-context bug:
+   no ancestor of the provider establishes one. `.body-content` is deliberately `position: relative`
+   with NO z-index for exactly this reason (see the comment on it in PortalLayoutBase.razor.css,
+   left behind by the same bug hitting the chat popups), and `.layout`'s `overflow: hidden` cannot
+   clip a `position: fixed` descendant. So a z-index above the header is sufficient and sufficient
+   alone — the value is what was missing, not a containing block.
+
+   `!important` because Fluent's own rule is SCOPED — `.fluent-toast-provider[b-wmvy1145n8]`,
+   specificity 0-2-0 — so a global class selector (0-1-0) loses to it outright and an
+   equal-specificity override would be decided by bundle order. Same reason the Monaco overflow
+   widgets above carry it.
+
+   The value joins the established "clears the header" tier already used by the chat widget, the
+   /model · /agent pickers and the Monaco popups (10000). PortalOverlayLayeringTest pins the
+   RELATIONSHIP (toast > header) rather than the literal number, so re-tiering the header fails
+   loudly here instead of silently burying the toast again.
+
+   This lives in the GLOBAL sheet, not in PortalLayoutBase's scoped CSS, so it covers every
+   FluentToastProvider the app mounts — the portal layout's, MainView's and AreaPage's — rather
+   than only the shell that happened to report the bug. */
+.fluent-toast-provider {
+    z-index: 10000 !important;
+}
+
 /* Title bar text field - borderless inline editor for page titles */
 fluent-text-field.title-bar-field::part(root) {
     border: none;
