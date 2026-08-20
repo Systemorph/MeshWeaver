@@ -535,13 +535,12 @@ public static class MemexConfiguration
             // read from somewhere else is simply invisible, and on a deployment whose /app is
             // read-only the writer cannot use AppContext.BaseDirectory at all.
             var moduleRoot = ModuleRoot.Resolve(configuration);
-            // Deferred re-lands FIRST — before anything is loaded, while no module file is open.
-            // A re-land onto a RUNNING instance cannot swap the loaded copy on an SMB volume
-            // (open files refuse deletion), so it parks at modules/.pending-<name>; this is the
-            // boot half that swaps it in. See ModuleLandingService.ApplyPendingLandings.
-            var appliedPending = ModuleLandingService.ApplyPendingLandings(moduleRoot);
-            if (appliedPending > 0)
-                Console.WriteLine($"[ModuleActivation] applied {appliedPending} deferred landing(s) before load");
+            // Generations GC — delete only what NO activation entry references and nothing holds
+            // open (skip-on-locked). Landing never deletes anything on a shared volume; this is
+            // the one reclaim point. See ModuleLandingService.CollectGarbage.
+            var collected = ModuleLandingService.CollectGarbage(moduleRoot);
+            if (collected > 0)
+                Console.WriteLine($"[ModuleActivation] modules GC removed {collected} unreferenced generation(s)");
             var persistedActivation = ModuleActivationSidecar.Read(moduleRoot,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
@@ -571,9 +570,23 @@ public static class MemexConfiguration
             // itself known as a missing FEATURE, which is diagnosable — a portal that will not
             // start is not.
             var resolvedModules = effectiveModules
-                // ResolveModulePath probes the modules/<name>/ publish layout first (#1644),
-                // then falls back to the classic BaseDirectory-relative location.
-                .Select(entry => (Entry: entry, Path: MeshBuilder.ResolveModulePath(entry, moduleRoot)))
+                // A store-landed entry with a GENERATION directory resolves THERE (the landing
+                // pointer — see ModuleActivationEntry.Directory); everything else keeps
+                // ResolveModulePath's probes (modules/<name>/ first, then the classic
+                // BaseDirectory-relative location).
+                .Select(entry =>
+                {
+                    var landed = persistedActivation.Entries.FirstOrDefault(e =>
+                        string.Equals(e.Name, Path.GetFileNameWithoutExtension(entry),
+                            StringComparison.OrdinalIgnoreCase));
+                    var path = !string.IsNullOrWhiteSpace(landed?.Directory)
+                        ? Path.Combine(
+                            ModuleLandingService.ModuleDirectoryFor(
+                                moduleRoot, landed!.Name, landed),
+                            landed.Name + ".dll")
+                        : MeshBuilder.ResolveModulePath(entry, moduleRoot);
+                    return (Entry: entry, Path: path);
+                })
                 .Where(candidate =>
                 {
                     if (File.Exists(candidate.Path))
