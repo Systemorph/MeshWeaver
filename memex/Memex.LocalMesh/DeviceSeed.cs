@@ -22,12 +22,18 @@ public static class DeviceSeed
 {
     public const string DeviceUserId = "device-user";
 
+    /// <summary>
+    /// The single device-user identity every token-less connection to this host acts as (wired
+    /// into <c>GrpcOptions.AnonymousUser</c> by Program.cs) — the same trust model as the MAUI
+    /// client's in-process mesh. Immutable constant (NoStaticState permits these).
+    /// </summary>
+    public static AccessContext DeviceUser { get; } = new() { ObjectId = DeviceUserId, Name = OsUserName() };
+
     public static void Seed(IMessageHub hub)
     {
         // Single-user device mesh: the shells this host serves (RN, web, desktop) connect
         // anonymously; identity lives HERE, exactly like the MAUI client's in-process mesh.
-        hub.ServiceProvider.GetRequiredService<AccessService>().SetHostIdentity(
-            new AccessContext { ObjectId = DeviceUserId, Name = OsUserName() });
+        hub.ServiceProvider.GetRequiredService<AccessService>().SetHostIdentity(DeviceUser);
 
         SeedInstances(hub);
         RepairAdminGrant(hub);

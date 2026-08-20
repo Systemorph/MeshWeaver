@@ -10,6 +10,7 @@ using MeshWeaver.Hosting.Grpc.Protocol;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -159,6 +160,43 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
         untrusted.Connection.LocalPort = 8081;
         Assert.Equal(WellKnownUsers.Anonymous, await WhoAmI(service, cts.Token, untrusted,
             new AccessContext { ObjectId = "alice", Name = "Alice" }));
+    }
+
+    [Fact]
+    public async Task Tokenless_connection_acts_as_the_configured_anonymous_user()
+    {
+        // The device-mesh trust model (GrpcOptions.AnonymousUser): a single-user host
+        // (Memex.LocalMesh) declares that a TOKEN-LESS connection IS the device user — its layout
+        // areas render the owner view and its writes are attributed. Portals leave the option unset
+        // (the test above pins the Anonymous default), and a forged carried context is still
+        // re-stamped — to the configured identity, never passed through.
+        var hub = Mesh;
+        using var registry = new GrpcConnectionRegistry(
+            hub,
+            hub.ServiceProvider.GetRequiredService<IRoutingService>(),
+            options: Options.Create(new GrpcOptions
+            {
+                AnonymousUser = new AccessContext { ObjectId = "device-user", Name = "Device Owner" },
+            }));
+        var service = new MeshGrpcService(hub, registry);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var untrusted = new DefaultHttpContext();
+        untrusted.Connection.LocalPort = 8081;
+        Assert.Equal("device-user", await WhoAmI(service, cts.Token, untrusted, null));
+        Assert.Equal("device-user", await WhoAmI(service, cts.Token, untrusted,
+            new AccessContext { ObjectId = "alice", Name = "Alice" }));
+
+        // An EMPTY configured ObjectId is not an identity — normalized back to Anonymous.
+        using var emptyRegistry = new GrpcConnectionRegistry(
+            hub,
+            hub.ServiceProvider.GetRequiredService<IRoutingService>(),
+            options: Options.Create(new GrpcOptions
+            {
+                AnonymousUser = new AccessContext { ObjectId = "", Name = "" },
+            }));
+        var emptyService = new MeshGrpcService(hub, emptyRegistry);
+        Assert.Equal(WellKnownUsers.Anonymous, await WhoAmI(emptyService, cts.Token, untrusted, null));
     }
 
     private async Task<string> WhoAmI(
