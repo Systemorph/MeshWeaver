@@ -97,4 +97,144 @@ public class ModulePackCommandTest : IDisposable
         Assert.Equal("Widget.dll", only.FileName);
         Assert.Equal("WIDGET", Encoding.UTF8.GetString(only.Bytes));
     }
+
+    [Fact]
+    public void DepsClosure_BundlesTheModulesOwnDependencies_AndReadsBack()
+    {
+        // The build output the flag expects: entry DLL + its private dependency (copied there by
+        // CopyLocalLockFileAssemblies=true) + the SDK's deps.json declaring the split.
+        File.WriteAllBytes(Path.Combine(root, "closure", "Gadget.Sdk.dll"), "SDK"u8.ToArray());
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "MeshWeaver.AI": "3.0.0", "Gadget.Sdk": "2.0.0" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "MeshWeaver.AI/3.0.0": { "runtime": { "MeshWeaver.AI.dll": {} } },
+                  "Gadget.Sdk/2.0.0": { "runtime": { "lib/net10.0/Gadget.Sdk.dll": {} } }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "MeshWeaver.AI/3.0.0": { "type": "project" },
+                "Gadget.Sdk/2.0.0": { "type": "package" }
+              }
+            }
+            """);
+
+        var outDir = Path.Combine(root, "out-deps");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--deps-closure",
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.3.0",
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(0, exit);
+        var (manifest, files) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.3.0.module.nupkg")));
+
+        // The private dependency rides in the bundle AND in the manifest's declared closure;
+        // the platform side does not.
+        Assert.Contains("Gadget.Sdk.dll", manifest!.Module!.Assemblies!);
+        Assert.DoesNotContain("MeshWeaver.AI.dll", manifest.Module.Assemblies!);
+        Assert.Contains(files, f => f.FileName == "Gadget.Sdk.dll"
+                                    && Encoding.UTF8.GetString(f.Bytes) == "SDK");
+    }
+
+    [Fact]
+    public void DepsClosure_SkipsFrameworkTrimmedFiles_WhenOthersArePresent()
+    {
+        // Gadget.Sdk was copied to the output; Microsoft.Extensions.Options was FRAMEWORK-TRIMMED
+        // by the SDK (resolved to the shared framework, so CopyLocalLockFileAssemblies does not
+        // copy it). The bundle carries what is present and skips what the consumer's runtime
+        // provides — loudly, never as an error, because failing here blocked six of fourteen
+        // modules on CI while the same pack passed on a dev machine whose SDK had copied the file.
+        File.WriteAllBytes(Path.Combine(root, "closure", "Gadget.Sdk.dll"), "SDK"u8.ToArray());
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "Gadget.Sdk": "2.0.0", "Microsoft.Extensions.Options": "10.0.0" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "Gadget.Sdk/2.0.0": { "runtime": { "lib/net10.0/Gadget.Sdk.dll": {} } },
+                  "Microsoft.Extensions.Options/10.0.0": { "runtime": { "lib/net10.0/Microsoft.Extensions.Options.dll": {} } }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "Gadget.Sdk/2.0.0": { "type": "package" },
+                "Microsoft.Extensions.Options/10.0.0": { "type": "package" }
+              }
+            }
+            """);
+
+        var outDir = Path.Combine(root, "out-trimmed");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--deps-closure",
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.5.0",
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(0, exit);
+        var (manifest, files) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.5.0.module.nupkg")));
+        Assert.Contains("Gadget.Sdk.dll", manifest!.Module!.Assemblies!);
+        Assert.DoesNotContain("Microsoft.Extensions.Options.dll", manifest.Module.Assemblies!);
+        Assert.Contains(files, f => f.FileName == "Gadget.Sdk.dll");
+    }
+
+    [Fact]
+    public void DepsClosure_WithTheFileMissingFromTheOutput_IsARefusal()
+    {
+        // deps.json names a dependency that is NOT in the folder — the build ran without
+        // CopyLocalLockFileAssemblies, so NOTHING was copied. Packing anyway would land a module
+        // that faults at first use, which is the outage this flag exists to close. (A PARTIAL
+        // absence is the framework-trim case above — skipped, not refused.)
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "Absent.Sdk": "1.0.0" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "Absent.Sdk/1.0.0": { "runtime": { "lib/net10.0/Absent.Sdk.dll": {} } }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "Absent.Sdk/1.0.0": { "type": "package" }
+              }
+            }
+            """);
+
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--deps-closure",
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.4.0",
+            "--out", Path.Combine(root, "out-missing"),
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.False(Directory.Exists(Path.Combine(root, "out-missing")),
+            "a refused invocation must not have written anything");
+    }
 }

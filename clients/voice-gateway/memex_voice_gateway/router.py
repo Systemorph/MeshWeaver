@@ -29,6 +29,17 @@ class Brain(Protocol):
 
 _STOP = re.compile(r"^\s*(?:stop|stopp|halt|sei still|ruhe|schweig|genug)[.!]?\s*$", re.IGNORECASE)
 
+# Courteous closure is the END of an exchange, not a prompt: answering "Vielen Dank" with
+# "Gerne geschehen!" made the device hear its own reply (or the TV's politeness) and wake
+# again — a self-thanking loop, five rounds in 90 seconds, observed live.
+# A wake-word chant ("hey memex hey memex …") is a TRAINING RECORDING, not a question —
+# record it (the satellite already has), answer nothing.
+_CHANT = re.compile(r"^\s*(?:hey,?\s*(?:memex|jarvis|nabu)[.!,;\s]*){2,}$", re.IGNORECASE)
+
+_CLOSURE = re.compile(r"^\s*(?:vielen dank|danke(?:\s*(?:dir|sch(?:ö|oe)n|vielmals))?|merci(?:\s*vielmal)?|"
+                      r"thank(?:s| you)|ok(?:ay)?|gut|super|perfekt|alles klar|tsch(?:ü|ue)ss|"
+                      r"bis sp(?:ä|ae)ter|gute nacht)[.!,\s]*$", re.IGNORECASE)
+
 _SWITCH = re.compile(
     r"^\s*(?:switch to|connect to|go to|wechsle zu|wechsel zu|verbinde mit|verbinde dich mit|"
     r"gang uf|verbind mit|geh zu)\s+(?P<target>[\wäöüéè .-]+?)[.!?]?\s*$",
@@ -70,7 +81,9 @@ _DEFAULT_PHRASES = {
 class BrainRouter:
     def __init__(self, brains: dict[str, Brain], active: str,
                  phrases: dict[str, str] | None = None,
-                 mesh_brains: set[str] | None = None) -> None:
+                 mesh_brains: set[str] | None = None,
+                 home: object = None,
+                 agent_homes: dict[str, str] | None = None) -> None:
         if active not in brains:
             raise ValueError(f"active brain {active!r} not among {list(brains)}")
         self._brains = brains
@@ -78,12 +91,57 @@ class BrainRouter:
         self._phrases = {**_DEFAULT_PHRASES, **(phrases or {})}
         self._mesh = mesh_brains if mesh_brains is not None else {
             n for n, b in brains.items() if hasattr(b, "delegate")}
+        self._home = home     # HomeAssistant client, when configured
+        # Agent name → the portal that HOSTS it (a portal entry's "agents" list): the
+        # ExecutiveAssistant may live on the local mesh while Researcher lives in the cloud.
+        self._agent_homes = agent_homes or {}
 
     def _mesh_target(self) -> str | None:
         """The portal delegations go to: the active brain when it is a mesh, else the first mesh."""
         if self.active in self._mesh:
             return self.active
         return next(iter(self._mesh), None)
+
+    async def delegate_task(self, task: str, agent: str | None = None) -> str:
+        """The local brain's triage seam: open a mesh thread, return the STAMPED handle so
+        await_reply later polls the right brain. An agent with a declared HOME portal goes
+        there; anything else goes to the active/first mesh. Raises when no mesh is configured."""
+        target = None
+        if agent and (housed := self._agent_homes.get(agent)) in self._mesh:
+            target = housed
+        target = target or self._mesh_target()
+        if target is None:
+            raise RuntimeError("no mesh portal configured")
+        path = await self._brains[target].delegate(task, agent)  # type: ignore[attr-defined]
+        return f"{target}::{path}"
+
+    async def run_tool(self, name: str, args: dict) -> str:
+        """The local brain's quick tools, run in-round: mesh reads go to the same portal
+        delegations would (the active brain when it is a mesh, else the first mesh);
+        home_assistant goes to the configured HA instance."""
+        if name == "home_assistant":
+            if self._home is None:
+                return "Home Assistant is not configured."
+            return await self._home.run(args)
+        target = self._mesh_target()
+        if target is None:
+            return "No mesh portal is configured."
+        client = self._brains[target]
+        if name == "search_mesh":
+            return await client.call("search", {"query": str(args.get("query", "")).strip(),
+                                                "limit": 8})  # type: ignore[attr-defined]
+        if name == "get_node":
+            return await client.call("get", {"path": str(args.get("path", "")).strip()})  # type: ignore[attr-defined]
+        return f"Unknown tool: {name}"
+
+    def drain_delegations(self) -> list:
+        """Pending (handle, task) pairs from ANY brain that collects them (the local one)."""
+        pending: list = []
+        for brain in self._brains.values():
+            drain = getattr(brain, "drain_delegations", None)
+            if drain:
+                pending.extend(drain())
+        return pending
 
     def describe_hold(self, handle: str) -> str:
         """What to say when the answer will come later — mesh submissions are ACKNOWLEDGED
@@ -105,8 +163,9 @@ class BrainRouter:
     async def handle_command(self, transcript: str) -> str | None:
         """Returns the spoken confirmation when the transcript was a command;
         empty string = handled silently (say nothing)."""
-        if _STOP.match(transcript.strip()):
-            return ""     # barge-in already stopped playback at wake; just end quietly
+        if (_STOP.match(transcript.strip()) or _CLOSURE.match(transcript.strip())
+                or _CHANT.match(transcript.strip())):
+            return ""     # stop or courteous closure: end quietly, never reply to a reply
 
         # Delegation: launch a real thread for a STANDARD agent on the mesh and leave the
         # work to be evaluated THERE — the speaker only confirms the submission.
@@ -153,3 +212,5 @@ class BrainRouter:
     async def close(self) -> None:
         for brain in self._brains.values():
             await brain.close()
+        if self._home is not None:
+            await self._home.close()  # type: ignore[attr-defined]
