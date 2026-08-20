@@ -149,11 +149,61 @@ public class ModulePackCommandTest : IDisposable
     }
 
     [Fact]
+    public void DepsClosure_SkipsFrameworkTrimmedFiles_WhenOthersArePresent()
+    {
+        // Gadget.Sdk was copied to the output; Microsoft.Extensions.Options was FRAMEWORK-TRIMMED
+        // by the SDK (resolved to the shared framework, so CopyLocalLockFileAssemblies does not
+        // copy it). The bundle carries what is present and skips what the consumer's runtime
+        // provides — loudly, never as an error, because failing here blocked six of fourteen
+        // modules on CI while the same pack passed on a dev machine whose SDK had copied the file.
+        File.WriteAllBytes(Path.Combine(root, "closure", "Gadget.Sdk.dll"), "SDK"u8.ToArray());
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "Gadget.Sdk": "2.0.0", "Microsoft.Extensions.Options": "10.0.0" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "Gadget.Sdk/2.0.0": { "runtime": { "lib/net10.0/Gadget.Sdk.dll": {} } },
+                  "Microsoft.Extensions.Options/10.0.0": { "runtime": { "lib/net10.0/Microsoft.Extensions.Options.dll": {} } }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "Gadget.Sdk/2.0.0": { "type": "package" },
+                "Microsoft.Extensions.Options/10.0.0": { "type": "package" }
+              }
+            }
+            """);
+
+        var outDir = Path.Combine(root, "out-trimmed");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--deps-closure",
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.5.0",
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(0, exit);
+        var (manifest, files) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.5.0.module.nupkg")));
+        Assert.Contains("Gadget.Sdk.dll", manifest!.Module!.Assemblies!);
+        Assert.DoesNotContain("Microsoft.Extensions.Options.dll", manifest.Module.Assemblies!);
+        Assert.Contains(files, f => f.FileName == "Gadget.Sdk.dll");
+    }
+
+    [Fact]
     public void DepsClosure_WithTheFileMissingFromTheOutput_IsARefusal()
     {
         // deps.json names a dependency that is NOT in the folder — the build ran without
-        // CopyLocalLockFileAssemblies. Packing anyway would land a module that faults at first
-        // use, which is the outage this flag exists to close.
+        // CopyLocalLockFileAssemblies, so NOTHING was copied. Packing anyway would land a module
+        // that faults at first use, which is the outage this flag exists to close. (A PARTIAL
+        // absence is the framework-trim case above — skipped, not refused.)
         File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
             {
               "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },

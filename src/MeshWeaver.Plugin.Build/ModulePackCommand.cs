@@ -308,23 +308,36 @@ public static class ModulePackCommand
             }
             foreach (var warning in derived.Warnings)
                 Console.Error.WriteLine($"warning: {warning}");
-            var missing = derived.Files
-                .Where(f => !File.Exists(Path.Combine(moduleDirectory, f)))
+            var present = derived.Files
+                .Where(f => File.Exists(Path.Combine(moduleDirectory, f)))
                 .ToList();
-            if (missing.Count > 0)
+            var missing = derived.Files.Except(present, StringComparer.OrdinalIgnoreCase).ToList();
+
+            // A derived file ABSENT from a CopyLocalLockFileAssemblies build was FRAMEWORK-TRIMMED:
+            // the SDK resolved that package to the shared framework (Microsoft.Extensions.* riding
+            // in Microsoft.AspNetCore.App), so the consumer's runtime provides it and the bundle
+            // need not. Skipped with a line each, never silently. The one case that must STAY an
+            // error is a build that ran without the flag at all — then NOTHING was copied, and
+            // skipping would pack the entry-only bundle this flag exists to abolish. The two are
+            // distinguishable: package assemblies in the output prove the flag was on (project
+            // references copy only MeshWeaver.*, which the derivation never includes).
+            if (missing.Count > 0 && present.Count == 0)
             {
                 Console.Error.WriteLine(
-                    "error: --deps-closure derived files that are not in the module output — build "
+                    "error: --deps-closure derived files and NONE are in the module output — build "
                     + "with -p:CopyLocalLockFileAssemblies=true so package assemblies are copied. "
                     + $"Missing: {string.Join(", ", missing)}");
                 return 2;
             }
-            foreach (var file in derived.Files)
+            foreach (var file in missing)
+                Console.WriteLine($"deps-closure: excluded (framework-resolved): {file}");
+            foreach (var file in present)
                 if (!closure.Contains(file, StringComparer.OrdinalIgnoreCase))
                     closure.Add(file);
             Console.WriteLine(
-                $"deps-closure: bundling {derived.Files.Count} private dependency file(s); "
-                + $"excluded {derived.ExcludedPlatformCarried.Count} platform-carried");
+                $"deps-closure: bundling {present.Count} private dependency file(s); "
+                + $"excluded {derived.ExcludedPlatformCarried.Count} platform-carried, "
+                + $"{missing.Count} framework-resolved");
         }
 
         foreach (var extra in extras)
