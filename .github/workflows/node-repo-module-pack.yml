@@ -77,9 +77,14 @@ jobs:
           echo "packing $MODULE as $PACKAGE@$version, platform floor $floor"
 
       - name: Build the module (Release, warnings-as-errors)
+        # CopyLocalLockFileAssemblies puts the module's PACKAGE dependencies into the output
+        # folder, where the pack step's --deps-closure derivation expects to find them — a module
+        # bundle must carry its own private closure (the platform does not: those packages left
+        # /app with the module's source, and an entry-DLL-only bundle faults at first use).
         run: >
           dotnet build "${{ matrix.entry.project }}" -c Release -warnaserror
           -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
+          -p:CopyLocalLockFileAssemblies=true
           -p:Version=${{ steps.identity.outputs.version }}
 
       - name: Run the module's tests, when it ships any
@@ -106,6 +111,7 @@ jobs:
         run: >
           dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build --
           module-pack "$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0"
+          --deps-closure
           --module-name "${{ matrix.entry.module }}"
           --plugin "${{ matrix.entry.package }}"
           --package-version "${{ steps.identity.outputs.version }}"
@@ -135,6 +141,14 @@ jobs:
             || { echo "::error::manifest module.assemblies misses the entry DLL"; exit 1; }
           jq -e --arg f "$FLOOR" '.module.minMeshVersion == $f' "$manifest" > /dev/null \
             || { echo "::error::manifest floor differs from content.minMeshVersion"; exit 1; }
+          # A module bundle must NEVER carry a platform assembly beside its entry — it would
+          # shadow the platform's own binary at the consumer (the same trap-door landing refuses
+          # for the entry DLL). The deps-closure derivation excludes MeshWeaver.* by construction;
+          # this asserts that from the outside.
+          jq -e --arg m "$MODULE" \
+            '[.module.assemblies[] | select(startswith("MeshWeaver.") and (. != $m + ".dll") and (. != $m + ".pdb"))] | length == 0' \
+            "$manifest" > /dev/null \
+            || { echo "::error::bundle carries platform (MeshWeaver.*) assemblies beside the module"; exit 1; }
           echo "path=$bundle" >> "$GITHUB_OUTPUT"
           echo "bundle OK:"; jq . "$manifest"
 
