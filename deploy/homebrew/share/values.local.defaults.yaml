@@ -18,6 +18,17 @@
 
 config:
   memex_portal:
+    # ---- Store-installed modules land on the PERSISTENT volume ---------------
+    # A module that ships in the image is not automatically ACTIVE: /mcp, the gRPC
+    # endpoint and every other module route is mapped from `Modules:Assemblies`,
+    # which is the appsettings baseline plus the store-activation sidecar. The
+    # sidecar and the landed DLLs are written under this root.
+    #
+    # 🚨 Unset means AppContext.BaseDirectory — /app — which is READ-ONLY in the
+    # container, so the landing service cannot write and NOTHING can ever be
+    # store-activated. /data is the hostPath the chart already mounts, so a module
+    # landed here also survives `memex-local update` (a new image, same volume).
+    Modules__Root: "/data"
     # ---- Startup: ADOPT prebuilt modules, do NOT compile them ----------------
     # A laptop is not a build farm. The startup bake this replaced compiled
     # EVERY dynamic NodeType in-process, and it did so again from scratch on

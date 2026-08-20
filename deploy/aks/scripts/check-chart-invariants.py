@@ -166,6 +166,48 @@ if scaled is not None:
             "without protecting anything.",
         )
 
+# ---------------------------------------------------------------------------
+# 8. Every key the PLATFORM must let a deployment set is actually RENDERED.
+#
+# 🚨 This is the `replicas.portal: 2` defect in its other direction, and it is the one this
+# ConfigMap invites: the template names every key EXPLICITLY and the Deployment's only env path is
+# `envFrom` on it, so a key the template omits is consumed by nothing — a values file can set it in
+# three environments and no container ever sees it. helm reports success either way, because the
+# values file is syntactically perfect and the template simply never mentions it.
+#
+# That is not hypothetical. Memex#53 set `config.memex_portal.Modules__Root: /data` in all three
+# AKS values files, titled "Modules__Root belongs in the chart — that is why it kept vanishing".
+# It kept vanishing because it was never templated here.
+#
+# So: for each key below, the rendered ConfigMap must CARRY it and its value must be non-blank.
+# Blank matters as much as absent for any key whose consumer treats blank as unset — ModuleRoot
+# does exactly that and falls back to AppContext.BaseDirectory (/app), which is READ-ONLY in the
+# container, so a blank key silently restores the very defect the key exists to fix.
+REQUIRED_CONFIG = {
+    "Modules__Root":
+        "the writable root the store-installed modules/ tree and its activation.json sidecar are "
+        "written under (ModuleRoot.ConfigKey). Unset or blank resolves to AppContext.BaseDirectory "
+        "— /app, read-only in the container — so nothing can be store-activated and every "
+        "module-contributed route (/mcp among them) stays unmapped.",
+}
+
+cfg_data = (cfg or {}).get("data") or {}
+for key, why in REQUIRED_CONFIG.items():
+    checks += 1
+    if key not in cfg_data:
+        finding(
+            f"the rendered memex-portal-config carries no '{key}'",
+            f"{why} The ConfigMap names every key explicitly and the Deployment reads it via "
+            f"envFrom, so an un-templated key reaches no container — setting it in a values file "
+            f"changes nothing, silently.",
+        )
+    elif not str(cfg_data[key]).strip():
+        finding(
+            f"'{key}' renders BLANK in memex-portal-config",
+            f"{why} Give it a value in the template (defaulting to another key is fine) rather "
+            f"than emitting an empty string.",
+        )
+
 MIN_CHECKS = 5
 if checks < MIN_CHECKS:
     print(
