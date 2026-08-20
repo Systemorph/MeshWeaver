@@ -536,6 +536,13 @@ public static class MemexConfiguration
             // read from somewhere else is simply invisible, and on a deployment whose /app is
             // read-only the writer cannot use AppContext.BaseDirectory at all.
             var moduleRoot = ModuleRoot.Resolve(configuration);
+            // Deferred re-lands FIRST — before anything is loaded, while no module file is open.
+            // A re-land onto a RUNNING instance cannot swap the loaded copy on an SMB volume
+            // (open files refuse deletion), so it parks at modules/.pending-<name>; this is the
+            // boot half that swaps it in. See ModuleLandingService.ApplyPendingLandings.
+            var appliedPending = ModuleLandingService.ApplyPendingLandings(moduleRoot);
+            if (appliedPending > 0)
+                Console.WriteLine($"[ModuleActivation] applied {appliedPending} deferred landing(s) before load");
             var persistedActivation = ModuleActivationSidecar.Read(moduleRoot,
                 msg => Console.Error.WriteLine($"[ModuleActivation] {msg}"));
             var effectiveModules = ModuleActivationBoot.ComputeEffectiveModuleEntries(
