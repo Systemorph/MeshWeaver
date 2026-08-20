@@ -99,7 +99,14 @@ _DEFAULT_PHRASES = {
     "no_thread": "I have no open thread about {topic}.",
     "threads_open": "Open threads: {list}.",
     "no_threads": "No open threads.",
+    "ready": "The answer about {topic} is ready. Say: read it.",
+    "nothing_new": "No new answers.",
+    "answer_to": "Answering your question: {question} —",
 }
+
+_READ = re.compile(
+    r"^\s*(?:vorlesen|lies\s+(?:es|sie|mir|die antwort)?\s*vor|antwort(?:en)? vorlesen|"
+    r"read (?:it|the answer)|play (?:it|the answer))[.!]?\s*$", re.IGNORECASE)
 
 
 class BrainRouter:
@@ -126,15 +133,19 @@ class BrainRouter:
         self._context: dict | None = None
         self._threads: list[dict] = []
         self._pending: list = []
+        # The MAILBOX: answers that arrived after their conversation ended. In signal mode
+        # the speaker plays a short ready-chime and the full text waits here for "vorlesen".
+        self._inbox: list[dict] = []
         self.on_change: Callable[[], None] | None = None
 
     # ----- the spoken context (session state) -----
 
     def session_state(self) -> dict:
-        return {"portal": self.active, "context": self._context, "threads": self._threads}
+        return {"portal": self.active, "context": self._context, "threads": self._threads,
+                "inbox": self._inbox}
 
     def restore(self, state: dict) -> None:
-        """Resume a persisted session: active portal, context, open threads."""
+        """Resume a persisted session: active portal, context, open threads, unread answers."""
         if state.get("portal") in self._brains:
             self.active = state["portal"]
         context = state.get("context")
@@ -142,6 +153,20 @@ class BrainRouter:
             self._context = context
         self._threads = [t for t in state.get("threads", [])
                          if t.get("portal") in self._mesh]
+        self._inbox = list(state.get("inbox", []))
+
+    def deliver_answer(self, handle: str, task: str, reply: str) -> str:
+        """An async answer arrived: store the full text in the mailbox and return the short
+        READY signal to speak — 'vorlesen' plays it. The answer's thread stays the pinned
+        context, so follow-ups continue exactly where the work happened."""
+        topic = task if len(task) <= 50 else task[:47] + "…"
+        self._inbox.append({"handle": handle, "task": task, "reply": reply})
+        for entry in self._threads:
+            if f"{entry['portal']}::{entry['path']}" == handle:
+                self._context = entry
+                break
+        self._changed()
+        return self._phrases["ready"].format(topic=topic)
 
     def _changed(self) -> None:
         if self.on_change is not None:
@@ -202,6 +227,8 @@ class BrainRouter:
             raise RuntimeError("no mesh portal configured")
         path = await self._brains[target].delegate(task, agent)  # type: ignore[attr-defined]
         self._remember(target, path, task, agent)
+        import logging
+        logging.getLogger(__name__).info("delegated to %s (%s): %r", target, agent or "-", task[:80])
         return f"{target}::{path}"
 
     # Irreversible mesh tools stay behind an explicit opt-in — one mis-heard word must
@@ -276,6 +303,13 @@ class BrainRouter:
         # The spoken CONTEXT commands come BEFORE the portal switch — "wechsle zum Thread
         # über X" must never be eaten by "wechsle zu {portal}".
         stripped = transcript.strip()
+        if _READ.match(stripped):
+            if not self._inbox:
+                return self._phrases["nothing_new"]
+            item = self._inbox.pop(0)
+            self._changed()
+            question = item["task"] if len(item["task"]) <= 60 else item["task"][:57] + "…"
+            return f"{self._phrases['answer_to'].format(question=question)} {item['reply']}"
         if _NEW_TOPIC.match(stripped):
             self._context = None
             self._changed()

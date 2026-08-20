@@ -174,6 +174,7 @@ async def run() -> None:
         hold_phrase_for=router.describe_hold,
         answer_to_template=phrases_for(cfg.stt_language)["answer_to"],
         drain_delegations=router.drain_delegations,
+        deliver=router.deliver_answer if cfg.announce_mode == "signal" else None,
     )
     link = SatelliteLink(cfg, pipeline)
 

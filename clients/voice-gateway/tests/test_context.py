@@ -122,3 +122,24 @@ def test_mesh_tool_passthrough_gates_destructive():
                                                    "arguments": {"path": "@X"}}) == "ok"
 
     asyncio.run(scenario())
+
+
+def test_mailbox_signal_then_read_aloud():
+    async def scenario():
+        mesh = FakeMesh()
+        router = BrainRouter({"memex": mesh}, "memex")
+        handle = await router.delegate_task("Wetter morgen in Zürich")
+        await router.handle_command("Neues Thema")
+        # The answer lands: only a short READY signal is spoken; the text waits.
+        signal = router.deliver_answer(handle, "Wetter morgen in Zürich",
+                                       "Morgen wird es sonnig bei 24 Grad.")
+        assert "ready" in signal.lower() or "bereit" in signal.lower()
+        # …and the answered thread is pinned back as the context for follow-ups.
+        assert (await router.delegate_task("Und übermorgen?")) == handle
+        # "vorlesen" plays the stored answer, attributed to its question.
+        out = await router.handle_command("Vorlesen")
+        assert "sonnig" in out and "Wetter morgen" in out
+        # The mailbox is empty afterwards.
+        assert await router.handle_command("Lies vor") == router._phrases["nothing_new"]
+
+    asyncio.run(scenario())
