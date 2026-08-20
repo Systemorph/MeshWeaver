@@ -97,4 +97,94 @@ public class ModulePackCommandTest : IDisposable
         Assert.Equal("Widget.dll", only.FileName);
         Assert.Equal("WIDGET", Encoding.UTF8.GetString(only.Bytes));
     }
+
+    [Fact]
+    public void DepsClosure_BundlesTheModulesOwnDependencies_AndReadsBack()
+    {
+        // The build output the flag expects: entry DLL + its private dependency (copied there by
+        // CopyLocalLockFileAssemblies=true) + the SDK's deps.json declaring the split.
+        File.WriteAllBytes(Path.Combine(root, "closure", "Gadget.Sdk.dll"), "SDK"u8.ToArray());
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "MeshWeaver.AI": "3.0.0", "Gadget.Sdk": "2.0.0" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "MeshWeaver.AI/3.0.0": { "runtime": { "MeshWeaver.AI.dll": {} } },
+                  "Gadget.Sdk/2.0.0": { "runtime": { "lib/net10.0/Gadget.Sdk.dll": {} } }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "MeshWeaver.AI/3.0.0": { "type": "project" },
+                "Gadget.Sdk/2.0.0": { "type": "package" }
+              }
+            }
+            """);
+
+        var outDir = Path.Combine(root, "out-deps");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--deps-closure",
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.3.0",
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(0, exit);
+        var (manifest, files) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.3.0.module.nupkg")));
+
+        // The private dependency rides in the bundle AND in the manifest's declared closure;
+        // the platform side does not.
+        Assert.Contains("Gadget.Sdk.dll", manifest!.Module!.Assemblies!);
+        Assert.DoesNotContain("MeshWeaver.AI.dll", manifest.Module.Assemblies!);
+        Assert.Contains(files, f => f.FileName == "Gadget.Sdk.dll"
+                                    && Encoding.UTF8.GetString(f.Bytes) == "SDK");
+    }
+
+    [Fact]
+    public void DepsClosure_WithTheFileMissingFromTheOutput_IsARefusal()
+    {
+        // deps.json names a dependency that is NOT in the folder — the build ran without
+        // CopyLocalLockFileAssemblies. Packing anyway would land a module that faults at first
+        // use, which is the outage this flag exists to close.
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "Absent.Sdk": "1.0.0" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "Absent.Sdk/1.0.0": { "runtime": { "lib/net10.0/Absent.Sdk.dll": {} } }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "Absent.Sdk/1.0.0": { "type": "package" }
+              }
+            }
+            """);
+
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--deps-closure",
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.4.0",
+            "--out", Path.Combine(root, "out-missing"),
+        ]);
+
+        Assert.Equal(2, exit);
+        Assert.False(Directory.Exists(Path.Combine(root, "out-missing")),
+            "a refused invocation must not have written anything");
+    }
 }
