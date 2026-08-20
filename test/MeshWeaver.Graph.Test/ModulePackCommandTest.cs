@@ -198,6 +198,60 @@ public class ModulePackCommandTest : IDisposable
     }
 
     [Fact]
+    public void DepsClosure_AllOwnDepsFrameworkTrimmed_PacksEntryOnly_WhenTheFolderHasPackageAssets()
+    {
+        // The Notifications shape in a publish folder: the module's OWN dependencies are all
+        // framework-trimmed (absent), but the folder plainly materializes package assets — a
+        // platform-reachable package file is right there. That is a valid entry-only bundle,
+        // not a broken lane; refusing it blocked 2 of 14 modules on CI (2026-08-20).
+        File.WriteAllBytes(Path.Combine(root, "closure", "Autofac.dll"), "AF"u8.ToArray());
+        File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
+            {
+              "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+              "targets": {
+                ".NETCoreApp,Version=v10.0": {
+                  "Widget/1.0.0": {
+                    "dependencies": { "MeshWeaver.AI": "3.0.0", "Microsoft.Extensions.Options": "10.0.0" },
+                    "runtime": { "Widget.dll": {} }
+                  },
+                  "MeshWeaver.AI/3.0.0": {
+                    "dependencies": { "Autofac": "8.0.0" },
+                    "runtime": { "MeshWeaver.AI.dll": {} }
+                  },
+                  "Autofac/8.0.0": { "runtime": { "lib/net8.0/Autofac.dll": {} } },
+                  "Microsoft.Extensions.Options/10.0.0": { "runtime": { "lib/net10.0/Microsoft.Extensions.Options.dll": {} } }
+                }
+              },
+              "libraries": {
+                "Widget/1.0.0": { "type": "project" },
+                "MeshWeaver.AI/3.0.0": { "type": "project" },
+                "Autofac/8.0.0": { "type": "package" },
+                "Microsoft.Extensions.Options/10.0.0": { "type": "package" }
+              }
+            }
+            """);
+
+        var outDir = Path.Combine(root, "out-fw-only");
+        var exit = ModulePackCommand.Run(
+        [
+            Path.Combine(root, "closure"),
+            "--deps-closure",
+            "--module-name", "Widget",
+            "--plugin", "WidgetPkg",
+            "--package-version", "1.6.0",
+            "--out", outDir,
+        ]);
+
+        Assert.Equal(0, exit);
+        var (manifest, _) = BundleReader.ReadModule(File.ReadAllBytes(
+            Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.6.0.module.nupkg")));
+        // Entry only: the trimmed dependency stays out, and the platform-reachable Autofac —
+        // present in the folder — must NOT ride either.
+        Assert.DoesNotContain("Microsoft.Extensions.Options.dll", manifest!.Module!.Assemblies!);
+        Assert.DoesNotContain("Autofac.dll", manifest.Module.Assemblies!);
+    }
+
+    [Fact]
     public void DepsClosure_WithTheFileMissingFromTheOutput_IsARefusal()
     {
         // deps.json names a dependency that is NOT in the folder — the build ran without

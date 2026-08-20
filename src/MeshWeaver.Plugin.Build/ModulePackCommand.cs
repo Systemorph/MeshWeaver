@@ -313,19 +313,26 @@ public static class ModulePackCommand
                 .ToList();
             var missing = derived.Files.Except(present, StringComparer.OrdinalIgnoreCase).ToList();
 
-            // A derived file ABSENT from a CopyLocalLockFileAssemblies build was FRAMEWORK-TRIMMED:
-            // the SDK resolved that package to the shared framework (Microsoft.Extensions.* riding
-            // in Microsoft.AspNetCore.App), so the consumer's runtime provides it and the bundle
-            // need not. Skipped with a line each, never silently. The one case that must STAY an
-            // error is a build that ran without the flag at all — then NOTHING was copied, and
-            // skipping would pack the entry-only bundle this flag exists to abolish. The two are
-            // distinguishable: package assemblies in the output prove the flag was on (project
-            // references copy only MeshWeaver.*, which the derivation never includes).
-            if (missing.Count > 0 && present.Count == 0)
+            // A derived file ABSENT from a folder that materializes package assets was
+            // FRAMEWORK-TRIMMED: the SDK resolved that package to the shared framework
+            // (Microsoft.Extensions.* riding in Microsoft.AspNetCore.App), so the consumer's
+            // runtime provides it and the bundle need not. Skipped with a line each, never
+            // silently. The one case that must STAY an error is a folder that never had package
+            // assets at all — a plain classlib build output — where skipping would pack the
+            // entry-only bundle this flag exists to abolish. The witness is the PACKAGE UNIVERSE
+            // (every non-MeshWeaver package runtime file in the whole graph, platform-reachable
+            // ones included): a publish folder contains some of it even when the module's OWN
+            // dependencies are entirely framework-trimmed, because the MeshWeaver references drag
+            // their package deps in — so an empty intersection cleanly means "wrong folder",
+            // never "everything was framework-resolved". (Checking only the module's own derived
+            // set got this wrong both ways on CI, 2026-08-20.)
+            if (missing.Count > 0
+                && !derived.PackageUniverse.Any(f => File.Exists(Path.Combine(moduleDirectory, f))))
             {
                 Console.Error.WriteLine(
-                    "error: --deps-closure derived files and NONE are in the module output — build "
-                    + "with -p:CopyLocalLockFileAssemblies=true so package assemblies are copied. "
+                    "error: --deps-closure derived files and the folder holds NO package assets at "
+                    + "all — pack from `dotnet publish` output (or a CopyLocalLockFileAssemblies "
+                    + "build), not a plain build folder. "
                     + $"Missing: {string.Join(", ", missing)}");
                 return 2;
             }
