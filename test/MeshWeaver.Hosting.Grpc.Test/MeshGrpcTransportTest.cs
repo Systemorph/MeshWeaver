@@ -171,7 +171,7 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
         // (the test above pins the Anonymous default), and a forged carried context is still
         // re-stamped — to the configured identity, never passed through.
         var hub = Mesh;
-        var registry = new GrpcConnectionRegistry(
+        using var registry = new GrpcConnectionRegistry(
             hub,
             hub.ServiceProvider.GetRequiredService<IRoutingService>(),
             options: Options.Create(new GrpcOptions
@@ -186,6 +186,17 @@ public class MeshGrpcTransportTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.Equal("device-user", await WhoAmI(service, cts.Token, untrusted, null));
         Assert.Equal("device-user", await WhoAmI(service, cts.Token, untrusted,
             new AccessContext { ObjectId = "alice", Name = "Alice" }));
+
+        // An EMPTY configured ObjectId is not an identity — normalized back to Anonymous.
+        using var emptyRegistry = new GrpcConnectionRegistry(
+            hub,
+            hub.ServiceProvider.GetRequiredService<IRoutingService>(),
+            options: Options.Create(new GrpcOptions
+            {
+                AnonymousUser = new AccessContext { ObjectId = "", Name = "" },
+            }));
+        var emptyService = new MeshGrpcService(hub, emptyRegistry);
+        Assert.Equal(WellKnownUsers.Anonymous, await WhoAmI(emptyService, cts.Token, untrusted, null));
     }
 
     private async Task<string> WhoAmI(

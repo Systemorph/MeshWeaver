@@ -58,9 +58,13 @@ public sealed class GrpcConnectionRegistry : IDisposable, IParticipantPresence
         ioPool = ioPools?.Get(IoPoolNames.Http) ?? IoPool.Unbounded;
         logger = hub.ServiceProvider.GetRequiredService<ILogger<GrpcConnectionRegistry>>();
         // Token-less connections act as this identity when the host declares one — the device-mesh
-        // trust model (GrpcOptions.AnonymousUser); portals leave it unset and keep Anonymous.
+        // trust model (GrpcOptions.AnonymousUser); portals leave it unset and keep Anonymous. An
+        // EMPTY ObjectId is not an identity (the trusted path treats a carried one the same way) —
+        // normalize it back to Anonymous rather than stamping an empty principal.
         anonymousUser = (options ?? hub.ServiceProvider.GetService<IOptions<GrpcOptions>>())
-            ?.Value.AnonymousUser ?? Anonymous;
+                ?.Value.AnonymousUser is { ObjectId.Length: > 0 } configured
+            ? configured
+            : Anonymous;
     }
 
     /// <summary>The identity token-less connections act as (see <see cref="GrpcOptions.AnonymousUser"/>).</summary>
