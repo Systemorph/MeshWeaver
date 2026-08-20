@@ -2177,6 +2177,14 @@ internal static class ThreadExecution
                         });
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
+                    // 🚨 #1715 — evidence that the CLOSING model turn produced something.
+                    // Re-stamped to the accumulated text length every time a tool result
+                    // lands; if the final text has not grown past it, the model never wrote
+                    // an answer after its last tool call and the persisted text is the
+                    // abandoned mid-round fragment. Seeded BELOW zero so a round with no
+                    // tool results at all trivially counts as having closed (the
+                    // zero-output case is caught by its own rule in RoundOutcome).
+                    var textLengthAtLastToolResult = -1;
 
                     // Diagnostic: log the message + tool set we hand to the chat client.
                     // The 6 OrleansDelegation* tests fail with toolCalls=0 — this lets us
@@ -2303,6 +2311,12 @@ internal static class ThreadExecution
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
+                        // #1715 watermark: everything appended from here on is the CLOSING
+                        // turn. Read under the same lock that guards every other
+                        // responseText access (UpdateDelegationStatus appends from the
+                        // sub-thread hub concurrently).
+                        lock (logLock)
+                            textLengthAtLastToolResult = responseText.Length;
                         logger.LogDebug("[ThreadExec] TOOL_RESULT: {Time:HH:mm:ss.fff} callId={CallId}, success={Success}, resultLen={Length}",
                             DateTime.UtcNow, functionResult.CallId,
                             functionResult.Result?.ToString()?.StartsWith("Error") != true,
@@ -2320,8 +2334,13 @@ internal static class ThreadExecution
                             string? resultText = null;
                             bool isSuccess;
 
-                            // Extract typed result fields when available (DelegationResult, etc.)
-                            var (extractedText, extractedPath, extractedSuccess) = ExtractToolResult(functionResult.Result);
+                            // Extract typed result fields when available (DelegationResult, etc.).
+                            // 🚨 The FAULT is passed alongside the result: FunctionInvokingChatClient
+                            // sets FunctionResultContent.Exception when the tool threw, and reading
+                            // only the result string made an exception-failed call indistinguishable
+                            // from a successful one (#1689).
+                            var (extractedText, extractedPath, extractedSuccess) =
+                                ExtractToolResult(functionResult.Result, functionResult.Exception);
                             resultText = extractedText;
                             isSuccess = extractedSuccess;
 
@@ -2363,6 +2382,11 @@ internal static class ThreadExecution
                                     Arguments = SerializeArgs(originalCall.Arguments),
                                     Result = Truncate(resultText),
                                     IsSuccess = isSuccess,
+                                    // 🚨 Status must AGREE with IsSuccess. It was never stamped
+                                    // here, so it kept the record's default (Success) even for a
+                                    // call whose IsSuccess was false — a self-contradictory entry,
+                                    // and Status is what the UI and monitoring read (#1689).
+                                    Status = isSuccess ? ToolCallStatus.Success : ToolCallStatus.Failed,
                                     DelegationPath = delegationPath ?? existingDelegationPath,
                                     CallId = originalCall.CallId,
                                     Timestamp = DateTime.UtcNow
@@ -2436,11 +2460,32 @@ internal static class ThreadExecution
                     logger.LogInformation("[ThreadExec] EXECUTION_COMPLETE: {Time:HH:mm:ss.fff} threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}, tokens={In}/{Out}/{Total}",
                         DateTime.UtcNow, threadPath, finalTextLen, finalToolCalls.Count,
                         inputTokens, outputTokens, totalTokens);
-                    // Empty stream + no tool calls = silent agent failure
-                    // (e.g. underlying API returned nothing). Surface so the
-                    // user sees a real terminal state instead of a blank cell.
-                    if (string.IsNullOrEmpty(finalText) && finalToolCalls.IsEmpty)
-                        finalText = "*Agent returned no response — streaming completed with zero tokens.*";
+                    // 🚨 #1689 / #1715 — THE ROUND'S TERMINAL STATE IS DERIVED FROM EVIDENCE,
+                    // never asserted by default. A round may claim Completed only when every
+                    // dispatched tool call returned AND the model wrote a closing answer;
+                    // otherwise it terminates in a state that NAMES what happened. Both issues
+                    // are the same defect: "no evidence of failure" was being persisted as a
+                    // positive success claim, so a round that lost its tool execution (#1689)
+                    // and a round whose closing turn produced zero tokens (#1715) were both
+                    // indistinguishable from a genuinely successful one.
+                    var conclusion = RoundOutcome.Classify(
+                        finalText, finalToolCalls,
+                        producedClosingText: finalTextLen > textLengthAtLastToolResult);
+                    // Unfinished tool calls come back stamped Failed instead of the record's
+                    // default Success — the log must stop claiming calls that never returned.
+                    finalToolCalls = conclusion.ToolCalls;
+                    if (conclusion.Diagnosis is { } roundDiagnosis)
+                    {
+                        logger.LogWarning(
+                            "[ThreadExec] ROUND_NOT_ANSWERED: threadPath={ThreadPath} responseId={ResponseId} "
+                            + "verdict={Verdict} toolCalls={ToolCalls} textLen={TextLen} — {Diagnosis}",
+                            threadPath, responseMsgId, conclusion.Verdict, finalToolCalls.Count,
+                            finalTextLen, roundDiagnosis);
+                        finalText = string.IsNullOrEmpty(finalText)
+                            ? $"*{roundDiagnosis}*"
+                            : finalText.TrimEnd() + $"\n\n*{roundDiagnosis}*";
+                        finalTextLen = finalText.Length;
+                    }
 
                     // Dedicated summary: parse <summary>...</summary> the agent
                     // is instructed to emit at end-of-response (system prompt
@@ -2453,14 +2498,18 @@ internal static class ThreadExecution
                     // streaming foreach drives both. Streaming-time pushes
                     // already strip the in-flight <summary> block via
                     // StripSummaryBlock so the user never sees the markers.
-                    var summaryText = finalText;
+                    // An unanswered round's Summary must name the failure — it is what a
+                    // delegating parent relays and what the thread list shows, so leaving the
+                    // abandoned fragment there re-tells the same lie one level up.
+                    var summaryText = conclusion.Diagnosis ?? finalText;
                     var summaryMatch = System.Text.RegularExpressions.Regex.Match(
                         finalText,
                         @"<summary>(?<inner>[\s\S]*?)</summary>",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     if (summaryMatch.Success)
                     {
-                        summaryText = summaryMatch.Groups["inner"].Value.Trim();
+                        if (conclusion.IsHonestCompletion)
+                            summaryText = summaryMatch.Groups["inner"].Value.Trim();
                         finalText = (finalText[..summaryMatch.Index] + finalText[(summaryMatch.Index + summaryMatch.Length)..]).TrimEnd();
                         finalTextLen = finalText.Length;
                     }
@@ -2472,7 +2521,7 @@ internal static class ThreadExecution
                         request.AgentName, actualModel ?? effectiveModel ?? request.ModelName,
                         inputTokens: inputTokens, outputTokens: outputTokens,
                         totalTokens: totalTokens, completedAt: DateTime.UtcNow,
-                        status: ThreadMessageStatus.Completed,
+                        status: conclusion.Status,
                         summary: summaryText, harness: request.Harness,
                         cacheReadTokens: cacheReadTokens, cacheWriteTokens: cacheWriteTokens,
                         requestedModelName: substitutedFrom).Subscribe(
@@ -2534,7 +2583,11 @@ internal static class ThreadExecution
                     // Notify parent via SubmitMessageResponse so delegation callback resolves.
                     // Must post on the _Exec hub (hub) — the SubmitMessageResponse handler
                     // is registered there and forwards to the thread hub via ResponseFor.
-                    NotifyParentCompletion(parentHub, threadPath, finalText, true, aggregatedChanges);
+                    // 🚨 isSuccess is the CONCLUSION, not a constant. It used to be a literal
+                    // `true`, so a delegating parent recorded a sub-round that never answered —
+                    // or never finished its tool calls — as a successful delegation.
+                    NotifyParentCompletion(parentHub, threadPath, finalText,
+                        conclusion.IsHonestCompletion, aggregatedChanges);
                     EmitCompletionNotification(parentHub, threadPath, finalText, request.AgentName);
                     }
                     // Only a REQUESTED cancel (Stop button via RequestedStatus=Cancelled, delegation
@@ -3238,8 +3291,29 @@ internal static class ThreadExecution
         return builder.ToImmutable();
     }
 
-    private static (string? ResultText, string? DelegationPath, bool IsSuccess) ExtractToolResult(object? result)
+    /// <summary>
+    /// Reads a tool result into (text, delegation path, success).
+    /// </summary>
+    /// <param name="result">The tool's returned value.</param>
+    /// <param name="exception">The fault <c>FunctionInvokingChatClient</c> recorded on
+    /// <see cref="FunctionResultContent.Exception"/> when the tool threw. A non-null value is
+    /// DEFINITIVE evidence of failure and outranks every heuristic below — before #1689 it was
+    /// never read, so a tool that threw was persisted as a successful call.</param>
+    /// <remarks>
+    /// 🚨 The remaining <c>StartsWith("Error")</c> test is a HEURISTIC over an opaque string and
+    /// is knowingly incomplete: a tool that catches its own failure and returns prose
+    /// ("CreateEvent failed: …") still reads as success. That is not fixable from here — the
+    /// structural signal is the tool returning <c>{"success": false}</c> (parsed below) or
+    /// throwing. Broadening the sniff to "contains 'failed'" would misclassify successful
+    /// results that merely mention the word.
+    /// </remarks>
+    private static (string? ResultText, string? DelegationPath, bool IsSuccess) ExtractToolResult(
+        object? result, Exception? exception = null)
     {
+        if (exception is not null)
+            return (result?.ToString() is { Length: > 0 } faultText ? faultText : exception.Message,
+                null, false);
+
         if (result is null)
             return (null, null, true);
 
