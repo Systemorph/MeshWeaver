@@ -352,20 +352,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<IoPoolRegistry>(),
                 sp.GetService<MeshConfiguration>()));
 
-        // pg_notify listener: register both the singleton and an IHostedService
-        // wrapper so the LISTEN session opens at host startup. Without the
-        // hosted-service wrapper the listener never starts and every synced
-        // query's Replay(1) cache freezes at its Initial value (writes propagate
-        // to the table but the cached observable never re-emits).
-        // TODO partitioned-pg change feed: in the partitioned setup the
-        // listener pump-notifications across many per-partition adapters.
-        // For now this PG listener wiring is disabled — each
-        // PostgreSqlStorageAdapter publishes from its own Write/Delete (no
-        // cross-process LISTEN) which is enough for the in-process test
-        // scenarios. A follow-up will route LISTEN events to the right
-        // partition adapter's ChangeObserver via the partition registry.
-        // services.AddSingleton(sp => new PostgreSqlChangeListener(baseDataSource, ..., ...));
-        // services.AddHostedService<PostgreSqlChangeListenerHostedService>();
+        services.AddPartitionedChangeListener();
+
         // Boot-time seed: CREATE SCHEMA + table init for every framework
         // partition advertised by a static node provider. No enumeration —
         // only what's explicitly registered.
@@ -469,6 +457,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<IoPoolRegistry>(),
                 sp.GetService<MeshConfiguration>()));
 
+        services.AddPartitionedChangeListener();
+
         // Start the Admin/Partition/* subscription so writes can route — see
         // the longer comment on the same registration in the connection-string
         // overload above.
@@ -492,6 +482,43 @@ public static class PostgreSqlExtensions
 
         services.AddPartitionedCoreAndWrapperServices();
 
+        return services;
+    }
+
+    /// <summary>
+    /// Wires the cross-process change feed: a <see cref="PostgreSqlChangeListener"/> holding one
+    /// <c>LISTEN mesh_node_changes</c> session, an <c>IHostedService</c> that OPENS it at
+    /// host startup, and a <see cref="PartitionChangeRouter"/> that delivers each event to the
+    /// per-partition feed owning its path.
+    ///
+    /// <para>🚨 <b>Both registrations, always.</b> Registering the listener without the hosted
+    /// service is the shape this repo shipped for months (<c>AddPostgreSqlPersistenceWithChangeNotifications</c>
+    /// still does): a singleton nobody resolves, so the LISTEN session never opens and the defect
+    /// is INVISIBLE — no error, no log line, just a change feed that carries only this process's
+    /// own writes. That is #1440, and it is the middle leg of the three-way-broken notify chain
+    /// behind #1814 (the trigger, restored by V54/#1816; this listener; and the consumer that used
+    /// to discard an entity-less notification, fixed in <c>MeshDataSource</c>).</para>
+    ///
+    /// <para>The routing that was missing — and the reason the wiring was left commented out — is
+    /// <see cref="PartitionChangeRouter"/>: the NOTIFY channel is per database while the change
+    /// feed is per schema, so an event has to be resolved to a partition before it can be
+    /// published. It resolves exactly as a WRITE resolves, through the routing adapter.</para>
+    /// </summary>
+    private static IServiceCollection AddPartitionedChangeListener(this IServiceCollection services)
+    {
+        services.AddSingleton(sp =>
+        {
+            var provider = sp.GetRequiredService<PostgreSqlPartitionStorageProvider>();
+            return PostgreSqlChangeListener.OwningDataSource(
+                // Built BY THE PROVIDER, from its resolved connection string and its
+                // configureDataSource hook — never from NpgsqlDataSource.ConnectionString (Npgsql
+                // strips the password) and never from the connection string alone (on Azure the
+                // credential arrives only through that hook).
+                provider.CreateChangeListenerDataSource(),
+                new PartitionChangeRouter(provider, sp.GetService<ILogger<PartitionChangeRouter>>()),
+                sp.GetService<ILogger<PostgreSqlChangeListener>>());
+        });
+        services.AddHostedService<PostgreSqlChangeListenerHostedService>();
         return services;
     }
 }
