@@ -55,24 +55,36 @@ public static class DeviceSeed
                         Name = name,
                         State = MeshNodeState.Active,
                         Content = new User { FullName = name, Email = $"{DeviceUserId}@local" },
-                    })
-                    // Global admin of this instance — Admin/_Access with MainNode="Admin" (the sanctioned
-                    // shape; an empty MainNode would be a root/data-superuser grant and is refused).
-                    .SelectMany(_ => meshService.CreateNode(new MeshNode($"{DeviceUserId}_Access", "Admin/_Access")
-                    {
-                        NodeType = "AccessAssignment",
-                        Name = $"{name} — Admin",
-                        MainNode = "Admin",
-                        Content = new AccessAssignment
-                        {
-                            AccessObject = DeviceUserId,
-                            DisplayName = name,
-                            Roles = [new RoleAssignment { Role = "Admin" }],
-                        },
-                    }))))
+                    })))
             .Subscribe(
                 _ => logger?.LogInformation("Seeded device user {Name}", name),
                 ex => logger?.LogWarning(ex, "Device-user seed failed"));
+
+        // Global admin of this instance — Admin/_Access with MainNode="Admin" (the sanctioned shape;
+        // an empty MainNode would be a root/data-superuser grant and is refused). Guarded by the
+        // GRANT's own existence, not the user's: a crash between the two creates heals on the next
+        // boot, and on a single-user device mesh the owner must ALWAYS hold this grant.
+        hub.GetWorkspace()
+            .GetQuery("seed-admin-grant", $"path:Admin/_Access/{DeviceUserId}_Access limit:1")
+            .Take(1).Timeout(TimeSpan.FromSeconds(15))
+            .Where(existing => !existing.Any())
+            .SelectMany(_ => Observable.Using(
+                () => accessService.ImpersonateAsSystem(),
+                _ => meshService.CreateNode(new MeshNode($"{DeviceUserId}_Access", "Admin/_Access")
+                {
+                    NodeType = "AccessAssignment",
+                    Name = $"{name} — Admin",
+                    MainNode = "Admin",
+                    Content = new AccessAssignment
+                    {
+                        AccessObject = DeviceUserId,
+                        DisplayName = name,
+                        Roles = [new RoleAssignment { Role = "Admin" }],
+                    },
+                })))
+            .Subscribe(
+                _ => logger?.LogInformation("Seeded global-admin grant for {Name}", name),
+                ex => logger?.LogWarning(ex, "Admin-grant seed failed"));
     }
 
     /// <summary>
@@ -87,6 +99,9 @@ public static class DeviceSeed
         var deviceName = Environment.MachineName;
         if (string.IsNullOrWhiteSpace(deviceName)) deviceName = "My Memex";
 
+        // Guarded on "ANY MemexInstance exists" — deliberately, so a seeded instance the user
+        // REMOVED is not resurrected on the next boot. The two creates below are merged (not
+        // chained) so one failing cannot skip the other.
         hub.GetWorkspace()
             .GetQuery("seed-instances", $"nodeType:{MemexInstanceNodeType.NodeType}")
             .Take(1).Timeout(TimeSpan.FromSeconds(15))
@@ -99,7 +114,7 @@ public static class DeviceSeed
                 })
                 // Keyed by URL host — the id MeshConnector (MAUI) and the RN store both derive, so a
                 // later token save PATCHES this node instead of minting a duplicate.
-                .SelectMany(_ => meshService.CreateNode(new MeshNode("memex.meshweaver.cloud", MemexInstanceNodeType.Segment)
+                .Merge(meshService.CreateNode(new MeshNode("memex.meshweaver.cloud", MemexInstanceNodeType.Segment)
                 {
                     NodeType = MemexInstanceNodeType.NodeType,
                     Name = "memex",

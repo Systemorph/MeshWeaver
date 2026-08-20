@@ -156,10 +156,10 @@ async function hydrate(mesh: InstanceStoreMesh): Promise<void> {
   }
 }
 
-/** The Instance/{id} node id for a portal URL — its host (the MAUI meshId), port made path-safe. */
+/** The Instance/{id} node id for a portal URL — its HOST, port-free: the exact meshId MAUI's
+ *  MeshConnector derives (`new Uri(url).Host`), so both clients patch ONE node per portal. */
 function instanceIdFor(url: string): string {
-  const host = url.replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
-  return host.replace(/:/g, "-").toLowerCase();
+  return url.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").replace(/:.*$/, "").toLowerCase();
 }
 
 /** Persist one instance as its MemexInstance node — create-or-patch, fire-and-forget (the in-memory

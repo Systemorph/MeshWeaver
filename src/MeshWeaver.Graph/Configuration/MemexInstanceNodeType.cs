@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 
@@ -18,7 +19,9 @@ public record MemexInstanceContent
     /// <summary>The portal base URL; the SignalR endpoint is <c>{Url}/signalr</c>.</summary>
     public string Url { get; init; } = "";
 
-    /// <summary>API token authenticating this client to the remote mesh. Null/empty = not yet joined.</summary>
+    /// <summary>API token authenticating this client to the remote mesh. Null/empty = not yet joined.
+    /// Credential material — hidden from the default editor forms.</summary>
+    [Browsable(false)]
     public string? Token { get; init; }
 
     /// <summary>
@@ -30,10 +33,13 @@ public record MemexInstanceContent
     /// <summary>Last time the client connected to this mesh (stamped on connect).</summary>
     public DateTime? LastConnected { get; init; }
 
-    /// <summary>OAuth refresh token from a browser sign-in; null for pasted API tokens.</summary>
+    /// <summary>OAuth refresh token from a browser sign-in; null for pasted API tokens.
+    /// Credential material — hidden from the default editor forms.</summary>
+    [Browsable(false)]
     public string? RefreshToken { get; init; }
 
     /// <summary>OAuth client id the client registered at this portal (dynamic client registration).</summary>
+    [Browsable(false)]
     public string? ClientId { get; init; }
 
     /// <summary>When the OAuth access token expires; null for pasted API tokens.</summary>
