@@ -159,7 +159,7 @@ def test_music_commands_play_and_are_honest_about_songs():
         assert "noch nicht" in out and len(played) == 2
         # A named station is honored.
         out = await router.handle_command("Spiel Radio SRF 3")
-        assert "SRF 3" in out and played[-1].endswith("drs3/mp3_128")
+        assert "SRF 3" in out and played[-1].endswith("srf3/mp3/128")
         # "Musik aus" ends quietly through the interrupt path.
         assert await router.handle_command("Musik aus") == ""
         # Without a player wired, music requests fall through to the brain.
@@ -183,6 +183,6 @@ def test_station_name_alone_plays_despite_lost_first_word():
         router.player = player
         # The device loses the first word after wake: "Spiel Radio SRF 3" arrives mangled.
         out = await router.handle_command("Die Radio-SRF 3.")
-        assert out == "Hier kommt Radio SRF 3." and played[-1].endswith("drs3/mp3_128")
+        assert out == "Hier kommt Radio SRF 3." and played[-1].endswith("srf3/mp3/128")
 
     asyncio.run(scenario())
