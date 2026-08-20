@@ -160,15 +160,9 @@ public static class UserNodeType
         if (node is null)
             return stack.WithView(Controls.Html("<p><em>User not found.</em></p>"));
 
-        stack = stack.WithView(Controls.Markdown(
-            "Your **display time zone** controls how timestamps are shown to you across the portal — "
-            + "stored times stay in UTC; only the display converts. It is detected from your browser "
-            + "on first sign-in; pick a named IANA zone here to override a wrong guess (DST is applied "
-            + "automatically). Leave it blank to see times in UTC.")
-            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
-
-        stack = stack.WithView(Controls.Markdown(access.Localize("settings.languageDescription"))
-            .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
+        foreach (var key in PreferencesDescriptionKeys)
+            stack = stack.WithView(Controls.Markdown(access.Localize(key))
+                .WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
 
         // Data-bound editor: reads/writes User.TimeZoneId and User.Locale straight on the node
         // stream (IMeshNodeStreamCache) — no /data replica, no save loop. The tab is only shown to
@@ -176,28 +170,54 @@ public static class UserNodeType
         var editor = new MeshNodeContentEditorControl(node.Path)
         {
             CanEdit = true,
-            Fields = ImmutableList.Create(
-                new MeshNodeEditorField(
-                    nameof(User.TimeZoneId).ToCamelCase()!,
-                    "Display time zone (IANA)",
-                    MeshNodeEditorFieldKind.Enum)
-                {
-                    Options = TimeZonePreference.SystemZoneIds()
-                },
-                new MeshNodeEditorField(
-                    nameof(User.Locale).ToCamelCase()!,
-                    access.Localize("settings.language"),
-                    MeshNodeEditorFieldKind.Enum)
-                {
-                    // Stores the BCP-47 tag ("de") but shows the endonym ("Deutsch") — a German
-                    // speaker looks for "Deutsch", not "German" or a raw tag.
-                    Options = Locales.Supported,
-                    OptionLabels = Locales.DisplayNames
-                })
+            Fields = PreferenceFields(key => access.Localize(key))
         };
         stack = stack.WithView(editor);
         return stack;
     }
+
+    /// <summary>
+    /// The catalog keys for the tab's explanatory prose, in render order — one paragraph per
+    /// picker. Exposed (rather than inlined) so the localization guard can assert they ARE keys:
+    /// the time-zone paragraph shipped as an English literal while the language one beside it was
+    /// localized from the start, which is precisely the shape that survives review.
+    /// </summary>
+    internal static readonly ImmutableList<string> PreferencesDescriptionKeys =
+        ImmutableList.Create("settings.timeZoneDescription", "settings.languageDescription");
+
+    /// <summary>
+    /// The tab's two pickers, with every label resolved through <paramref name="localize"/>.
+    ///
+    /// <para>🚨 The localizer is a parameter for the same reason
+    /// <c>PlatformUpdateChip.Describe</c>'s is: it makes the WORDING assertable without a hub, a
+    /// circuit or a rendered layout area. That matters here because the defect this seam exists to
+    /// prevent is invisible to every other gate — a hard-coded label is not a MISSING catalog key,
+    /// so <c>LocalizationTest</c>'s completeness check passes, and a render test run under an
+    /// English viewer sees the correct text either way.</para>
+    ///
+    /// <para>🚨 Every label added here MUST be a key. The time-zone label read
+    /// "Display time zone (IANA)" to a German viewer for a month, sitting directly beside a
+    /// language picker that had gone through the catalog since the day it was written.</para>
+    /// </summary>
+    internal static ImmutableList<MeshNodeEditorField> PreferenceFields(Func<string, string> localize)
+        => ImmutableList.Create(
+            new MeshNodeEditorField(
+                nameof(User.TimeZoneId).ToCamelCase()!,
+                localize("settings.timeZone"),
+                MeshNodeEditorFieldKind.Enum)
+            {
+                Options = TimeZonePreference.SystemZoneIds()
+            },
+            new MeshNodeEditorField(
+                nameof(User.Locale).ToCamelCase()!,
+                localize("settings.language"),
+                MeshNodeEditorFieldKind.Enum)
+            {
+                // Stores the BCP-47 tag ("de") but shows the endonym ("Deutsch") — a German
+                // speaker looks for "Deutsch", not "German" or a raw tag.
+                Options = Locales.Supported,
+                OptionLabels = Locales.DisplayNames
+            });
 
     /// <summary>
     /// Grants read access to every SIGNED-IN user on the User node itself (path == "{userId}"),
