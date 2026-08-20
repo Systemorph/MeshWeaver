@@ -39,6 +39,50 @@ namespace MeshWeaver.PluginCatalog;
 /// </summary>
 public sealed class ModuleLandingService : IDisposable
 {
+    /// <summary>The deferred-swap folder for a module (see the re-land fallback in
+    /// <see cref="LandModule"/>). Pure.</summary>
+    public static string PendingPathFor(string baseDirectory, string moduleName) =>
+        Path.Combine(baseDirectory, "modules", ".pending-" + moduleName);
+
+    /// <summary>
+    /// Applies every deferred landing under <c>modules/.pending-*</c> — the boot half of the
+    /// re-land fallback. MUST run before any module assembly is loaded: at that moment no file
+    /// is open, so the delete the running instance could not perform succeeds. A failed apply
+    /// logs, leaves the pending folder for the next boot, and the OLD module folder keeps
+    /// loading — stale but working, never a boot failure.
+    /// </summary>
+    /// <returns>How many pending landings were applied.</returns>
+    public static int ApplyPendingLandings(string baseDirectory, ILogger? logger = null)
+    {
+        var modulesRoot = Path.Combine(baseDirectory, "modules");
+        if (!Directory.Exists(modulesRoot))
+            return 0;
+        var applied = 0;
+        foreach (var pending in Directory.EnumerateDirectories(modulesRoot, ".pending-*"))
+        {
+            var name = Path.GetFileName(pending)[".pending-".Length..];
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+            var target = Path.Combine(modulesRoot, name);
+            try
+            {
+                if (Directory.Exists(target))
+                    Directory.Delete(target, recursive: true);
+                Directory.Move(pending, target);
+                applied++;
+                logger?.LogInformation(
+                    "Module '{Name}': deferred landing applied at boot ({Target})", name, target);
+            }
+            catch (Exception e)
+            {
+                logger?.LogError(e,
+                    "Module '{Name}': deferred landing could NOT be applied — the previous copy "
+                    + "keeps loading; the pending folder stays for the next boot", name);
+            }
+        }
+        return applied;
+    }
+
     // Cap 1 deliberately: LandModule/RemoveModule each read-modify-write the shared
     // activation.json sidecar, and the cap IS the serialization — no lock, no semaphore
     // outside the sealed IoPool primitive. Landing is rare and short; 1 costs nothing.
@@ -177,9 +221,33 @@ public sealed class ModuleLandingService : IDisposable
         {
             foreach (var (fileName, bytes) in assemblies)
                 File.WriteAllBytes(Path.Combine(staging, fileName), bytes);
-            if (Directory.Exists(target))
-                Directory.Delete(target, recursive: true);
-            Directory.Move(staging, target);
+            try
+            {
+                if (Directory.Exists(target))
+                    Directory.Delete(target, recursive: true);
+                Directory.Move(staging, target);
+            }
+            catch (Exception swap) when (swap is IOException or UnauthorizedAccessException)
+            {
+                // 🚨 The target's files are OPEN — this instance has the module LOADED, and on an
+                // SMB-backed volume (Azure Files) an open file cannot be deleted, so the in-place
+                // swap fails with "Directory not empty". That is the RE-LAND-ONTO-A-RUNNING-
+                // REGISTRY case (first hit 2026-08-20: every re-published module 409'd the moment
+                // the portal actually loaded its modules). The bytes are not lost and the publish
+                // must not fail: they park as modules/.pending-<name>/, the activation entry still
+                // flips PendingRestart, and ApplyPendingLandings swaps them in at the next boot —
+                // BEFORE anything is loaded, when the delete cannot be refused. The serving side
+                // prefers the pending folder, so consumers fetch the NEW bytes immediately even
+                // while this process still runs the old ones.
+                var pending = PendingPathFor(baseDirectory, name);
+                if (Directory.Exists(pending))
+                    Directory.Delete(pending, recursive: true);
+                Directory.Move(staging, pending);
+                logger?.LogWarning(
+                    "Module '{Name}': the loaded copy's files are open, so the swap is DEFERRED — "
+                    + "staged at {Pending}; applies at the next restart ({Reason})",
+                    name, pending, swap.Message);
+            }
         }
         catch
         {

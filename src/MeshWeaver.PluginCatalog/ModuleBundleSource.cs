@@ -53,6 +53,13 @@ public static class ModuleBundleSource
             return ([], $"module '{moduleName}' is not loadable on this instance: {unsatisfied}");
 
         var folder = Path.Combine(baseDirectory, "modules", moduleName);
+        // A DEFERRED re-land (the running instance had the module loaded, so the swap parked at
+        // .pending-<name> until the next boot) is the NEWEST landed content — serve it: consumers
+        // must fetch what was published, not what this process happens to still be running.
+        var pending = ModuleLandingService.PendingPathFor(baseDirectory, moduleName);
+        if (Directory.Exists(pending)
+            && File.Exists(Path.Combine(pending, moduleName + ".dll")))
+            folder = pending;
         var entryDll = Path.Combine(folder, moduleName + ".dll");
         if (!File.Exists(entryDll))
             // Covers the missing folder, the transitional publish state (a module still riding the
