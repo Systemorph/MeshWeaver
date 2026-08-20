@@ -31,6 +31,18 @@ data:
 {{- end }}
   Deployment__Backend: "{{ .Values.config.memex_portal.Deployment__Backend }}"
   Deployment__DataRoot: "{{ .Values.config.memex_portal.Deployment__DataRoot }}"
+  # The writable root the store-installed `modules/` tree lives under (ModuleRoot.ConfigKey).
+  # 🚨 It MUST be templated here to exist at all: this ConfigMap names every key explicitly and
+  #   the Deployment's only env path is `envFrom` — so a values file that sets a key this
+  #   template does not render produces nothing, silently. That is precisely how it "kept
+  #   vanishing" (Memex#53 set it in three AKS values files; none of them could reach a
+  #   container).
+  # 🚨 Blank is NOT the same as unset-but-harmless: ModuleRoot treats blank as absent and falls
+  #   back to AppContext.BaseDirectory (/app), which is READ-ONLY in the container — so the
+  #   module lane cannot land anything and every store-installed module's routes stay unmapped.
+  #   Default it to the deployment's data root, which is the shared writable volume by
+  #   construction, rather than emitting an empty string.
+  Modules__Root: "{{ .Values.config.memex_portal.Modules__Root | default .Values.config.memex_portal.Deployment__DataRoot }}"
   # ---- NodeType bake ------------------------------------------------------
   # 🚨 ADOPTION IS NOT CONFIGURED HERE — it is unconditional. Every boot seeds the prebuilt
   #   bundles (PreWarm__PrebuiltBundleRoot below, plus the image's own prebuilt/ directory) and
