@@ -192,9 +192,14 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public void ProjectionCarriesTheIdentity()
     {
-        var query = typeof(ScheduledPostWatcher)
-            .GetField("Query", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-            .GetRawConstantValue() as string;
+        var field = typeof(ScheduledPostWatcher)
+            .GetField("Query", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.True(field is not null,
+            "ScheduledPostWatcher.Query (private const string) is gone or was renamed — this test reads it by "
+            + "reflection, so update the name here rather than deleting the guard: the projection dropping "
+            + "lastModifiedBy is what armed every timer with no identity.");
+        var query = field!.GetRawConstantValue() as string;
+        Assert.True(query is not null, "ScheduledPostWatcher.Query is no longer a compile-time string const.");
         Assert.Contains("lastModifiedBy", query!, StringComparison.Ordinal);
     }
 
@@ -212,8 +217,10 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>The identity the seeded posts are written by — what the watcher must carry onto the
-    /// timer as the identity the publish will run as.</summary>
-    private const string SeededBy = "Roland";
+    /// timer as the identity the publish will run as. Derived from the DevLogin harness identity
+    /// rather than repeated as a literal, so it follows the login context instead of drifting from
+    /// it.</summary>
+    private static readonly string SeededBy = TestUsers.Admin.Name!;
 
     private Task SeedPostAsync(
         string postPath, string status, string scheduledAt, string? publishedUrn = null)
