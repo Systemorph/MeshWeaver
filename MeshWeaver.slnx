@@ -82,7 +82,6 @@
     <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
     <Project Path="src/MeshWeaver.GitSync/MeshWeaver.GitSync.csproj" />
     <Project Path="src/MeshWeaver.InstanceSync/MeshWeaver.InstanceSync.csproj" />
-    <Project Path="src/MeshWeaver.Hosting.AzureBlob/MeshWeaver.Hosting.AzureBlob.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Blazor/MeshWeaver.Hosting.Blazor.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Monolith/MeshWeaver.Hosting.Monolith.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Orleans/MeshWeaver.Hosting.Orleans.csproj" />
@@ -105,7 +104,6 @@
     <Project Path="src/MeshWeaver.Mesh.Contract/MeshWeaver.Mesh.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Contract/MeshWeaver.Messaging.Contract.csproj" />
     <Project Path="src/MeshWeaver.Messaging.Hub/MeshWeaver.Messaging.Hub.csproj" />
-    <Project Path="src/MeshWeaver.NuGet.AzureBlob/MeshWeaver.NuGet.AzureBlob.csproj" />
     <Project Path="src/MeshWeaver.NuGet/MeshWeaver.NuGet.csproj" />
     <Project Path="src/MeshWeaver.Observability.Contract/MeshWeaver.Observability.Contract.csproj" />
     <Project Path="src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj" />
