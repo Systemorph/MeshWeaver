@@ -32,6 +32,10 @@ _STOP = re.compile(r"^\s*(?:stop|stopp|halt|sei still|ruhe|schweig|genug)[.!]?\s
 # Courteous closure is the END of an exchange, not a prompt: answering "Vielen Dank" with
 # "Gerne geschehen!" made the device hear its own reply (or the TV's politeness) and wake
 # again — a self-thanking loop, five rounds in 90 seconds, observed live.
+# A wake-word chant ("hey memex hey memex …") is a TRAINING RECORDING, not a question —
+# record it (the satellite already has), answer nothing.
+_CHANT = re.compile(r"^\s*(?:hey,?\s*(?:memex|jarvis|nabu)[.!,;\s]*){2,}$", re.IGNORECASE)
+
 _CLOSURE = re.compile(r"^\s*(?:vielen dank|danke(?:\s*(?:dir|sch(?:ö|oe)n|vielmals))?|merci(?:\s*vielmal)?|"
                       r"thank(?:s| you)|ok(?:ay)?|gut|super|perfekt|alles klar|tsch(?:ü|ue)ss|"
                       r"bis sp(?:ä|ae)ter|gute nacht)[.!,\s]*$", re.IGNORECASE)
@@ -92,6 +96,24 @@ class BrainRouter:
             return self.active
         return next(iter(self._mesh), None)
 
+    async def delegate_task(self, task: str, agent: str | None = None) -> str:
+        """The local brain's triage seam: open a mesh thread, return the STAMPED handle so
+        await_reply later polls the right brain. Raises when no mesh portal is configured."""
+        target = self._mesh_target()
+        if target is None:
+            raise RuntimeError("no mesh portal configured")
+        path = await self._brains[target].delegate(task, agent)  # type: ignore[attr-defined]
+        return f"{target}::{path}"
+
+    def drain_delegations(self) -> list:
+        """Pending (handle, task) pairs from ANY brain that collects them (the local one)."""
+        pending: list = []
+        for brain in self._brains.values():
+            drain = getattr(brain, "drain_delegations", None)
+            if drain:
+                pending.extend(drain())
+        return pending
+
     def describe_hold(self, handle: str) -> str:
         """What to say when the answer will come later — mesh submissions are ACKNOWLEDGED
         by portal name, because their answers can arrive highly asynchronously."""
@@ -112,7 +134,8 @@ class BrainRouter:
     async def handle_command(self, transcript: str) -> str | None:
         """Returns the spoken confirmation when the transcript was a command;
         empty string = handled silently (say nothing)."""
-        if _STOP.match(transcript.strip()) or _CLOSURE.match(transcript.strip()):
+        if (_STOP.match(transcript.strip()) or _CLOSURE.match(transcript.strip())
+                or _CHANT.match(transcript.strip())):
             return ""     # stop or courteous closure: end quietly, never reply to a reply
 
         # Delegation: launch a real thread for a STANDARD agent on the mesh and leave the
