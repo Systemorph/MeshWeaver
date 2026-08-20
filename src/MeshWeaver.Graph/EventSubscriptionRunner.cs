@@ -389,12 +389,49 @@ public sealed class EventSubscriptionRunner(
         var delay = subscription.FireAt!.Value - DateTimeOffset.UtcNow;
         if (delay < TimeSpan.Zero)
             delay = TimeSpan.Zero;
-        slot.Disposable = Observable.Timer(delay).Subscribe(_tick =>
-        {
-            if (timerSubs.TryRemove(subscription.Id, out var d))
-                d.Dispose();
-            Execute(subscription, subscription.SubjectId ?? "");
-        });
+        slot.Disposable = Observable.Timer(delay)
+            // 🚨 RE-READ AT FIRE TIME. The subscription captured when this timer was ARMED is a
+            // snapshot, and a timer's whole nature is that time passes between arming and firing —
+            // during which the subscription can be edited, or cancelled outright.
+            //
+            // Both failures were observed in production on 2026-08-20, on one post:
+            //   • it was CANCELLED at 05:58:53 (its post stopped being schedulable) and fired anyway
+            //     at 06:00:00.005, because cancelling writes the NODE and never touched this
+            //     already-scheduled in-memory timer; and
+            //   • it fired reporting "names no CreatedBy" while the stored node plainly had one —
+            //     an operator had set it hours after the timer armed, and the closure still held the
+            //     value from arming time.
+            // A scheduled job that ignores every edit made after it was scheduled is not a schedule,
+            // it is a recording.
+            .SelectMany(_ => AsSystem(() => hub.GetWorkspace()
+                    .GetMeshNodeStream(EventSubscriptionNodeType.Path(subscription.Id)))
+                .Take(1)
+                .Select(node => node?.ContentAs<EventSubscription>(hub.JsonSerializerOptions))
+                .Catch<EventSubscription?, Exception>(ex =>
+                {
+                    // Unreadable at fire time: fall back to the snapshot rather than silently skip.
+                    // A missed publish is worse than one made on slightly stale data, and the
+                    // continuation re-checks its own target anyway.
+                    logger?.LogWarning(ex,
+                        "Could not re-read subscription {Id} at fire time; using the armed snapshot",
+                        subscription.Id);
+                    return Observable.Return<EventSubscription?>(subscription);
+                }))
+            .Subscribe(current =>
+            {
+                if (timerSubs.TryRemove(subscription.Id, out var d))
+                    d.Dispose();
+
+                var live = current ?? subscription;
+                if (live.Status != EventSubscriptionStatus.Pending)
+                {
+                    logger?.LogInformation(
+                        "Timer {Id} reached its slot but the subscription is {Status} — not firing.",
+                        subscription.Id, live.Status);
+                    return;
+                }
+                Execute(live, live.SubjectId ?? "");
+            });
     }
 
     /// <summary>
