@@ -68,7 +68,9 @@ class MemexThreads:
     _session_id: str | None = field(default=None, init=False)
     _http: aiohttp.ClientSession | None = field(default=None, init=False)
     _thread_path: str | None = field(default=None, init=False)
-    _known_ids: set[str] = field(default_factory=set, init=False)
+    # Seen message ids PER THREAD — one shared set would let a reused conversation thread
+    # reset a delegated thread's watermark and re-announce an old answer.
+    _known: dict[str, set[str]] = field(default_factory=dict, init=False)
     _last_used: float = field(default=0.0, init=False)
 
     async def _post(self, payload: dict) -> tuple[dict, str]:
@@ -122,29 +124,38 @@ class MemexThreads:
     async def delegate(self, text: str, agent: str | None = None) -> str:
         """Fire-and-forget: launch a NEW thread for a standard agent (Assistant, Researcher,
         …) and return its path. Deliberately does NOT become the voice conversation thread —
-        the task runs and is evaluated in the portal, not read aloud."""
+        the task runs and is evaluated in the portal, not read aloud. CONTINUATION policy
+        (post follow-ups into the open thread) lives in the router's context, not here."""
         args: dict = {"namespacePath": self.namespace, "message": text}
         if agent or self.agent:
             args["agentName"] = agent or self.agent
         started = json.loads(await self.call("start_thread", args))
-        return started["threadPath"]
+        path = started["threadPath"]
+        self._known[path] = set()
+        return path
+
+    async def submit(self, thread_path: str, text: str, agent: str | None = None) -> str:
+        """Post a follow-up into an EXISTING thread — the context stays. The id watermark is
+        re-snapshotted first so await_reply announces only what lands AFTER this message."""
+        self._known[thread_path] = await self._snapshot_ids(thread_path)
+        args: dict = {"threadPath": thread_path, "message": text}
+        if agent or self.agent:
+            args["agentName"] = agent or self.agent
+        await self.call("submit_message", args)
+        return thread_path
 
     async def ask(self, text: str) -> str:
         """Submit an utterance; returns the thread path. Reuses a recent thread for context."""
         fresh = self._thread_path and (time.monotonic() - self._last_used) < self.thread_idle_minutes * 60
         if fresh and self._thread_path:
-            self._known_ids = await self._snapshot_ids(self._thread_path)
-            args: dict = {"threadPath": self._thread_path, "message": text}
-            if self.agent:
-                args["agentName"] = self.agent
-            await self.call("submit_message", args)
+            await self.submit(self._thread_path, text)
         else:
             args = {"namespacePath": self.namespace, "message": text}
             if self.agent:
                 args["agentName"] = self.agent
             started = json.loads(await self.call("start_thread", args))
             self._thread_path = started["threadPath"]
-            self._known_ids = set()
+            self._known[self._thread_path] = set()
         self._last_used = time.monotonic()
         return self._thread_path  # type: ignore[return-value]
 
@@ -152,13 +163,14 @@ class MemexThreads:
                           poll_interval_s: float = 1.5) -> str | None:
         """Poll until an assistant reply (or a dispatch failure) lands; None on budget miss."""
         deadline = time.monotonic() + budget_s
+        known = self._known.setdefault(thread_path, set())
         while time.monotonic() < deadline:
             thread_json = await self.call("get", {"path": f"@{thread_path}"})
-            new_ids, failure = extract_reply(thread_json, self._known_ids)
+            new_ids, failure = extract_reply(thread_json, known)
             for message_id in new_ids:
                 child = json.loads(await self.call("get", {"path": f"@{thread_path}/{message_id}"}))
                 content = child.get("content") or {}
-                self._known_ids.add(message_id)
+                known.add(message_id)
                 if content.get("role") == "assistant" and content.get("text"):
                     return content["text"]
             if failure:

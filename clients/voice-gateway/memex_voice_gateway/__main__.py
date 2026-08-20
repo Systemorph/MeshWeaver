@@ -67,7 +67,7 @@ def make_router(cfg: Config) -> BrainRouter:
         # A portal entry's "agents" pins agents to the portal that HOSTS them (list of
         # names, or name → spoken-roster description) — e.g. the ExecutiveAssistant on the
         # local mesh: {"name":"mac", …, "agents": {"ExecutiveAssistant": "email"}}.
-        from .ollama import DEFAULT_AGENTS, HOME_TOOL, MESH_TOOLS
+        from .ollama import DEFAULT_AGENTS, HOME_TOOL, MESH_TOOL, MESH_TOOLS
         roster = dict(DEFAULT_AGENTS)
         agent_homes: dict[str, str] = {}
         for entry in cfg.portals:
@@ -79,14 +79,23 @@ def make_router(cfg: Config) -> BrainRouter:
                 agent_homes[name] = entry["name"]
         router = BrainRouter(brains, active, phrases=phrases, home=home,
                              agent_homes=agent_homes)
+        router.allow_destructive = cfg.allow_destructive
         # The local brain TRIAGES: quick lookups through the normal tools (search_mesh,
-        # get_node, home_assistant), real work through delegate_to_memex — a mesh thread.
+        # get_node, mesh_tool = full MCP, home_assistant), real work through
+        # delegate_to_memex — a mesh thread the context sticks to.
         for brain in brains.values():
             if isinstance(brain, OllamaBrain):
                 brain.delegator = router.delegate_task
                 brain.tool_runner = router.run_tool
-                brain.tools = list(MESH_TOOLS) + ([HOME_TOOL] if home is not None else [])
+                brain.tools = (list(MESH_TOOLS) + [MESH_TOOL]
+                               + ([HOME_TOOL] if home is not None else []))
                 brain.agents = roster
+        # The SESSION COOKIE: resume the speaker's context within the TTL, persist on
+        # every context mutation — an MCP-session-style continuity for the voice.
+        from .session import SpokenSession
+        session = SpokenSession(cfg.session_file, cfg.session_ttl_h)
+        router.restore(session.load())
+        router.on_change = lambda: session.save(**router.session_state())
         return router
     if cfg.brain == "ollama":
         return BrainRouter({"lokal": ollama({})}, "lokal", phrases=phrases, home=home)

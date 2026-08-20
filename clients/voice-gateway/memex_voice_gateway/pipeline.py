@@ -108,6 +108,8 @@ class VoicePipeline:
             if confirmation == "":
                 return RoundResult(transcript, None, None, interrupt=True)  # spoken "stop"
             if confirmation is not None:
+                # A spoken post-to-thread queues its announcement like any delegation.
+                self._schedule_delegations()
                 return RoundResult(transcript, confirmation,
                                    await self._try_speak(confirmation))
 
@@ -133,11 +135,7 @@ class VoicePipeline:
 
         # The local brain may have TRIAGED work to the mesh mid-round: schedule the
         # announcement of each delegated thread's answer, attributed to its task.
-        if self._drain_delegations is not None:
-            for handle, task in self._drain_delegations():
-                delegated = asyncio.create_task(self._announce_when_ready(handle, task))
-                self._background.add(delegated)
-                delegated.add_done_callback(self._background.discard)
+        self._schedule_delegations()
 
         if reply is not None:
             return RoundResult(transcript, reply, await self._try_speak(reply))
@@ -151,6 +149,14 @@ class VoicePipeline:
         hold = (self._hold_phrase_for(thread_path) if self._hold_phrase_for
                 else self._hold_phrase)
         return RoundResult(transcript, None, await self._try_speak(hold))
+
+    def _schedule_delegations(self) -> None:
+        if self._drain_delegations is None:
+            return
+        for handle, task in self._drain_delegations():
+            delegated = asyncio.create_task(self._announce_when_ready(handle, task))
+            self._background.add(delegated)
+            delegated.add_done_callback(self._background.discard)
 
     async def _announce_when_ready(self, thread_path: str, transcript: str) -> None:
         try:
