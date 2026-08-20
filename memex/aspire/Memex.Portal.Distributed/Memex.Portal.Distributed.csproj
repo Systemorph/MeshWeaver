@@ -33,7 +33,6 @@
          and the migrations cannot drift apart (the gate sat at 32 while migrations ran to V52). -->
     <Compile Include="..\Memex.Database.Migration\DbVersion.cs" Link="DbVersion.cs" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.NuGet.AzureBlob\MeshWeaver.NuGet.AzureBlob.csproj" />
     <!-- 🚨 MeshWeaver.Import is deliberately NOT referenced (#1644 step 2), and the reason it was
          referenced before is preserved rather than dropped. It was here for IN-MESH compiles, never
          for this project's own code: NodeType sources compile against TRUSTED_PLATFORM_ASSEMBLIES,

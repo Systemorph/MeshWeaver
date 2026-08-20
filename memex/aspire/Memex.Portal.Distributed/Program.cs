@@ -12,7 +12,6 @@ using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
-using MeshWeaver.NuGet.AzureBlob;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using Orleans.Configuration;
@@ -51,13 +50,26 @@ if (useAzureBackend)
     // Persistent NuGet package cache backed by the content-storage account. Each resolved
     // package is stored as a .zip blob under container "nuget-cache" keyed by {id}/{version}.
     // On a new replica the resolver hydrates from blob instead of re-downloading from nuget.org.
+    // 🚨 The implementation RELOCATED to the MeshWeaver.Azure.Blob MODULE ("move all the Azure
+    // stuff to modules", 2026-08-20). The app keeps the DECISION — this is the Azure branch — and
+    // reaches the type by probe-and-delegate at first resolve, when module assemblies are
+    // certainly loaded. throwOnError: an Azure-backend deployment without the AzureBlob module is
+    // a misconfiguration that must fail NAMING the module, not quietly re-download from nuget.org.
     builder.Services.Replace(ServiceDescriptor.Singleton<INuGetPackageCache>(sp =>
-        new BlobNuGetPackageCache(
+    {
+        var type = Type.GetType(
+            "MeshWeaver.Azure.Blob.BlobNuGetPackageCache, MeshWeaver.Azure.Blob",
+            throwOnError: false)
+            ?? throw new InvalidOperationException(
+                "Deployment:Backend is Azure but the MeshWeaver.Azure.Blob module is not landed — "
+                + "the blob NuGet package cache lives there. Land the AzureBlob package.");
+        return (INuGetPackageCache)Activator.CreateInstance(type,
             sp.GetRequiredKeyedService<BlobServiceClient>("storage"),
-            containerName: "nuget-cache",
-            logger: sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<BlobNuGetPackageCache>>(),
+            "nuget-cache",
+            sp.GetRequiredService(typeof(Microsoft.Extensions.Logging.ILogger<>).MakeGenericType(type)),
             // Mesh-scoped Blob pool caps blob concurrency; absent it falls back to IoPool.Unbounded.
-            ioPoolRegistry: sp.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>())));
+            sp.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>())!;
+    }));
 
     // Data protection: persist keys to Azure Blob Storage (shared across replicas)
     var dpConfig = builder.Configuration.GetSection("DataProtection");

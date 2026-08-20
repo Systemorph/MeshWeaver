@@ -82,7 +82,7 @@ public static class PostgreSqlExtensions
     /// selecting the backend by <see cref="EmbeddingOptions.Provider"/>:
     /// <list type="bullet">
     /// <item>"Ollama" / "OpenAICompatible" → <see cref="OllamaEmbeddingProvider"/> (local, on-host).</item>
-    /// <item>anything else (default) → <see cref="AzureFoundryEmbeddingProvider"/> (cloud; requires an API key).</item>
+    /// <item>anything else (default) → the Azure Foundry provider (the MeshWeaver.AI.AzureFoundry module) (cloud; requires an API key).</item>
     /// </list>
     /// No <see cref="EmbeddingOptions.Endpoint"/> ⇒ no provider registered, so the query path
     /// falls back to the ILIKE text search via <see cref="NullEmbeddingProvider"/>.

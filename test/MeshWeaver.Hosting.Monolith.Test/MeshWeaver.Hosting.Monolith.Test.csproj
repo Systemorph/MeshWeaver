@@ -39,7 +39,6 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.GitSync\MeshWeaver.GitSync.csproj" />
-        <ProjectReference Include="..\..\src\MeshWeaver.Hosting.AzureBlob\MeshWeaver.Hosting.AzureBlob.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
         <!-- GrpcModuleContributionTest pins the gRPC transport's module shape (mesh half +
              endpoint half, anonymous-by-explicit-opt-out). -->
