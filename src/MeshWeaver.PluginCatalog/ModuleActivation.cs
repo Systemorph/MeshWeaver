@@ -37,6 +37,17 @@ public sealed record ModuleActivationEntry
     /// the store lane wrote it — the back-pointer Slice C's funnel uses.</summary>
     public string? PackagePath { get; init; }
 
+    /// <summary>
+    /// The GENERATION directory under <c>modules/</c> this entry's bytes live in
+    /// (<c>&lt;name&gt;@&lt;id&gt;</c>). Landing writes every version into a FRESH generation and
+    /// moves this pointer — nothing on the landing path ever deletes or overwrites a directory a
+    /// running pod may hold open, which is what made delete-based swaps unsafe on a shared volume
+    /// (2026-08-20: a rolling restart's boot-time applies half-deleted 13 of 15 module closures).
+    /// Absent → the legacy fixed folder <c>modules/&lt;name&gt;/</c>. Unreferenced generations are
+    /// garbage-collected at boot, skip-on-locked.
+    /// </summary>
+    public string? Directory { get; init; }
+
     /// <summary>The framework MVID (MeshWeaver.Graph's ModuleVersionId) the landed assemblies
     /// were built against, as the producer recorded it — DIAGNOSTIC metadata only: it names the
     /// exact build behind the bytes when something needs debugging, but it is never a gate.
