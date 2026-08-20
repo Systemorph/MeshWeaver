@@ -81,6 +81,15 @@ public sealed class FakeGitHubRepoClient : IGitHubRepoClient
         lock (_lock) return _head.TryGetValue(Key(repositoryUrl), out var t) ? t.ToList() : new List<RepoFile>();
     }
 
+    /// <summary>The issues currently on a repo, ordered by number (for test assertions).</summary>
+    public IReadOnlyList<GitHubIssue> IssuesOn(string repositoryUrl)
+    {
+        lock (_lock)
+            return _issues.TryGetValue(Key(repositoryUrl), out var m)
+                ? m.Values.OrderBy(i => i.Number).ToList()
+                : new List<GitHubIssue>();
+    }
+
     /// <summary>True when <paramref name="branch"/> exists in the repo (for test assertions).</summary>
     public bool BranchExists(string repositoryUrl, string branch)
     {
