@@ -99,7 +99,19 @@ _DEFAULT_PHRASES = {
     "no_thread": "I have no open thread about {topic}.",
     "threads_open": "Open threads: {list}.",
     "no_threads": "No open threads.",
+    "ready": "The answer about {topic} is ready. Say: read it.",
+    "nothing_new": "No new answers.",
+    "answer_to": "Answering your question: {question} —",
 }
+
+_READ = re.compile(
+    r"^\s*(?:vorlesen|lies\s+(?:es|sie|mir|die antwort)?\s*vor|antwort(?:en)? vorlesen|"
+    r"read (?:it|the answer)|play (?:it|the answer))[.!]?\s*$", re.IGNORECASE)
+
+# EMAIL routes DETERMINISTICALLY to the ExecutiveAssistant — a small local model told
+# "delegate email" still answers "open your mail program" often enough that the rule
+# cannot live in its prompt alone (observed 2026-08-20).
+_EMAIL = re.compile(r"\b(?:e-?mails?|mails?|inbox|posteingang|mailbox)\b", re.IGNORECASE)
 
 
 class BrainRouter:
@@ -126,15 +138,19 @@ class BrainRouter:
         self._context: dict | None = None
         self._threads: list[dict] = []
         self._pending: list = []
+        # The MAILBOX: answers that arrived after their conversation ended. In signal mode
+        # the speaker plays a short ready-chime and the full text waits here for "vorlesen".
+        self._inbox: list[dict] = []
         self.on_change: Callable[[], None] | None = None
 
     # ----- the spoken context (session state) -----
 
     def session_state(self) -> dict:
-        return {"portal": self.active, "context": self._context, "threads": self._threads}
+        return {"portal": self.active, "context": self._context, "threads": self._threads,
+                "inbox": self._inbox}
 
     def restore(self, state: dict) -> None:
-        """Resume a persisted session: active portal, context, open threads."""
+        """Resume a persisted session: active portal, context, open threads, unread answers."""
         if state.get("portal") in self._brains:
             self.active = state["portal"]
         context = state.get("context")
@@ -142,10 +158,63 @@ class BrainRouter:
             self._context = context
         self._threads = [t for t in state.get("threads", [])
                          if t.get("portal") in self._mesh]
+        self._inbox = list(state.get("inbox", []))
+
+    def deliver_answer(self, handle: str, task: str, reply: str) -> str:
+        """An async answer arrived: store the full text in the mailbox and return the short
+        READY signal to speak — 'vorlesen' plays it. The answer's thread stays the pinned
+        context, so follow-ups continue exactly where the work happened."""
+        topic = task if len(task) <= 50 else task[:47] + "…"
+        self._inbox.append({"handle": handle, "task": task, "reply": reply})
+        for entry in self._threads:
+            if f"{entry['portal']}::{entry['path']}" == handle:
+                self._context = entry
+                break
+        self._changed()
+        return self._phrases["ready"].format(topic=topic)
 
     def _changed(self) -> None:
         if self.on_change is not None:
             self.on_change()
+
+    async def sync_system_prompt(self, default_text: str) -> str:
+        """THE STANDARD VOICE PROMPT LIVES IN THE MESH, PER USER: read
+        @{namespace}/Voice/Prompt from the delegation portal; when absent, DEPOSIT the
+        built-in standard there so the user can edit it in the portal. The mesh node wins
+        over the built-in; a local SYSTEM_PROMPT_FILE (checked by the caller) wins over
+        both. Failures degrade to the built-in — the voice must come up without a mesh."""
+        import json as _json
+        import logging
+        target = self._mesh_target()
+        if target is None:
+            return default_text
+        client = self._brains[target]
+        ns = getattr(client, "namespace", None)
+        if not ns:
+            return default_text
+        path = f"{ns}/Voice/Prompt"
+        try:
+            node = _json.loads(await client.call("get", {"path": f"@{path}"}))  # type: ignore[attr-defined]
+            body = ((node.get("content") or {}).get("body") or "").strip()
+            if body:
+                logging.getLogger(__name__).info("system prompt loaded from @%s", path)
+                return body
+        except Exception as e:
+            logging.getLogger(__name__).info("no prompt node at @%s (%r) — depositing", path, e)
+        try:
+            await client.call("create", {"node": _json.dumps({  # type: ignore[attr-defined]
+                "id": "Prompt", "namespace": f"{ns}/Voice",
+                "name": "Voice System Prompt", "nodeType": "Markdown",
+                "content": {"$type": "MarkdownContent", "body": default_text}})})
+            logging.getLogger(__name__).info("system prompt DEPOSITED at @%s — edit it there", path)
+        except Exception as e:
+            logging.getLogger(__name__).warning("could not deposit the voice prompt at @%s: %r", path, e)
+        return default_text
+
+    def apply_system_prompt(self, text: str) -> None:
+        for brain in self._brains.values():
+            if hasattr(brain, "system_prompt"):
+                brain.system_prompt = text  # type: ignore[attr-defined]
 
     def _remember(self, portal: str, path: str, task: str, agent: str | None) -> dict:
         import time
@@ -175,10 +244,13 @@ class BrainRouter:
         return best
 
     def _mesh_target(self) -> str | None:
-        """The portal delegations go to: the active brain when it is a mesh, else the first mesh."""
+        """The portal delegations go to: the active brain when it is a mesh, else the FIRST
+        mesh in configured order — `_mesh` is a set, and iterating it directly once sent
+        delegations to an arbitrary portal (observed: the prompt sync landing on systemorph
+        instead of the local mesh)."""
         if self.active in self._mesh:
             return self.active
-        return next(iter(self._mesh), None)
+        return next((name for name in self._brains if name in self._mesh), None)
 
     async def delegate_task(self, task: str, agent: str | None = None) -> str:
         """The local brain's triage seam, with CONTEXT: while a context thread is open,
@@ -202,6 +274,8 @@ class BrainRouter:
             raise RuntimeError("no mesh portal configured")
         path = await self._brains[target].delegate(task, agent)  # type: ignore[attr-defined]
         self._remember(target, path, task, agent)
+        import logging
+        logging.getLogger(__name__).info("delegated to %s (%s): %r", target, agent or "-", task[:80])
         return f"{target}::{path}"
 
     # Irreversible mesh tools stay behind an explicit opt-in — one mis-heard word must
@@ -276,6 +350,13 @@ class BrainRouter:
         # The spoken CONTEXT commands come BEFORE the portal switch — "wechsle zum Thread
         # über X" must never be eaten by "wechsle zu {portal}".
         stripped = transcript.strip()
+        if _READ.match(stripped):
+            if not self._inbox:
+                return self._phrases["nothing_new"]
+            item = self._inbox.pop(0)
+            self._changed()
+            question = item["task"] if len(item["task"]) <= 60 else item["task"][:57] + "…"
+            return f"{self._phrases['answer_to'].format(question=question)} {item['reply']}"
         if _NEW_TOPIC.match(stripped):
             self._context = None
             self._changed()
@@ -297,6 +378,10 @@ class BrainRouter:
             self._remember(entry["portal"], entry["path"], entry["task"], entry["agent"] or None)
             self._pending.append((f"{entry['portal']}::{entry['path']}", message))
             return self._phrases["posted"].format(topic=posted.group("topic").strip())
+        if _EMAIL.search(stripped) and self._mesh_target() is not None:
+            handle = await self.delegate_task(stripped, "ExecutiveAssistant")
+            self._pending.append((handle, stripped))
+            return self._phrases["submitted"].format(portal=handle.partition("::")[0])
         switched = _SWITCH_THREAD.match(stripped)
         if switched is not None:
             entry = self._find_thread(switched.group("topic"))

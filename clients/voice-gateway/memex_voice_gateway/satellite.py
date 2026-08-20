@@ -36,6 +36,7 @@ class SatelliteLink:
             cfg.satellite_password, noise_psk=cfg.satellite_psk,
         )
         self._endpointer: Endpointer | None = None
+        self._alt_audio = bytearray()   # channel 1 of the round, for capture diagnostics
         self._utterance_done = asyncio.Event()
         self._media_player_key: int | None = None
         self._round_task: asyncio.Task | None = None
@@ -160,13 +161,18 @@ class SatelliteLink:
             onset_timeout_s=5.0 if follow_up else 8.0,
         )
         self._utterance_done.clear()
+        self._alt_audio = bytearray()
         self._round_task = asyncio.create_task(self._run_round())
         return 0  # 0 = stream microphone audio over the API connection (no UDP)
 
     async def _handle_audio(self, data: bytes, data2: bytes | None = None) -> None:
-        # Two channels on devices with MULTI_CHANNEL_AUDIO (the XMOS sends processed + raw);
-        # channel 0 (`data`) is the echo-cancelled one — feed only that.
+        # Two channels on devices with MULTI_CHANNEL_AUDIO (the XMOS sends two feeds);
+        # we feed channel 0 to STT and RECORD channel 1 beside it — which one is actually
+        # the echo-cancelled/beamformed feed is an ASSUMPTION under test (2026-08-20:
+        # every STT model garbles room audio while the on-device wake engine hears fine).
         endpointer = self._endpointer
+        if data2 and self._endpointer is not None:
+            self._alt_audio.extend(data2)
         if endpointer is not None and endpointer.feed(data):
             self._utterance_done.set()
 
@@ -198,6 +204,10 @@ class SatelliteLink:
                 name = f"round_{_t.strftime('%Y%m%d_%H%M%S')}_{'fu' if self._follow_up else 'wake'}.wav"
                 with open(_os.path.join(self.cfg.record_dir, name), "wb") as f:
                     f.write(_wav(pcm, self.cfg.sample_rate))
+                if self._alt_audio:   # channel 1, for the which-channel-is-clean experiment
+                    with open(_os.path.join(self.cfg.record_dir,
+                                            name.replace(".wav", "_ch2.wav")), "wb") as f:
+                        f.write(_wav(bytes(self._alt_audio), self.cfg.sample_rate))
             except Exception:
                 logger.debug("recording save failed", exc_info=True)
         # A follow-up that never paused (TV, music) or never started (silence) is not
