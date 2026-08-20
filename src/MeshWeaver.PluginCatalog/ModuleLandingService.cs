@@ -39,48 +39,59 @@ namespace MeshWeaver.PluginCatalog;
 /// </summary>
 public sealed class ModuleLandingService : IDisposable
 {
-    /// <summary>The deferred-swap folder for a module (see the re-land fallback in
-    /// <see cref="LandModule"/>). Pure.</summary>
-    public static string PendingPathFor(string baseDirectory, string moduleName) =>
-        Path.Combine(baseDirectory, "modules", ".pending-" + moduleName);
+    /// <summary>
+    /// The directory a landed module's bytes live in: the entry's GENERATION when it names one,
+    /// else the legacy fixed folder <c>modules/&lt;name&gt;/</c>. Pure — the one resolution rule,
+    /// shared by boot and the serving side.
+    /// </summary>
+    public static string ModuleDirectoryFor(
+        string baseDirectory, string moduleName, ModuleActivationEntry? entry) =>
+        Path.Combine(baseDirectory, "modules",
+            string.IsNullOrWhiteSpace(entry?.Directory) ? moduleName : entry!.Directory!);
 
     /// <summary>
-    /// Applies every deferred landing under <c>modules/.pending-*</c> — the boot half of the
-    /// re-land fallback. MUST run before any module assembly is loaded: at that moment no file
-    /// is open, so the delete the running instance could not perform succeeds. A failed apply
-    /// logs, leaves the pending folder for the next boot, and the OLD module folder keeps
-    /// loading — stale but working, never a boot failure.
+    /// Boot-time garbage collection over <c>modules/</c>: deletes generation directories
+    /// (<c>&lt;name&gt;@&lt;id&gt;</c>) no activation entry references, leftover
+    /// <c>.staging-*</c>, and the retired <c>.pending-*</c> folders of the abandoned deferred-swap
+    /// scheme. Skip-on-locked: a directory some still-running pod holds open simply survives to
+    /// the next boot. Never touches legacy <c>&lt;name&gt;/</c> folders — entries without a
+    /// generation still resolve there.
     /// </summary>
-    /// <returns>How many pending landings were applied.</returns>
-    public static int ApplyPendingLandings(string baseDirectory, ILogger? logger = null)
+    /// <returns>How many directories were removed.</returns>
+    public static int CollectGarbage(string baseDirectory, ILogger? logger = null)
     {
         var modulesRoot = Path.Combine(baseDirectory, "modules");
         if (!Directory.Exists(modulesRoot))
             return 0;
-        var applied = 0;
-        foreach (var pending in Directory.EnumerateDirectories(modulesRoot, ".pending-*"))
+        var activation = ModuleActivationSidecar.Read(baseDirectory,
+            msg => logger?.LogError("{Message}", msg));
+        var referenced = activation.Entries
+            .Where(e => !string.IsNullOrWhiteSpace(e.Directory))
+            .Select(e => e.Directory!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var removed = 0;
+        foreach (var dir in Directory.EnumerateDirectories(modulesRoot))
         {
-            var name = Path.GetFileName(pending)[".pending-".Length..];
-            if (string.IsNullOrWhiteSpace(name))
+            var leaf = Path.GetFileName(dir);
+            var collectable =
+                leaf.StartsWith(".staging-", StringComparison.OrdinalIgnoreCase)
+                || leaf.StartsWith(".pending-", StringComparison.OrdinalIgnoreCase)
+                || (leaf.Contains('@') && !referenced.Contains(leaf));
+            if (!collectable)
                 continue;
-            var target = Path.Combine(modulesRoot, name);
             try
             {
-                if (Directory.Exists(target))
-                    Directory.Delete(target, recursive: true);
-                Directory.Move(pending, target);
-                applied++;
-                logger?.LogInformation(
-                    "Module '{Name}': deferred landing applied at boot ({Target})", name, target);
+                Directory.Delete(dir, recursive: true);
+                removed++;
+                logger?.LogInformation("Modules GC: removed {Dir}", leaf);
             }
-            catch (Exception e)
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                logger?.LogError(e,
-                    "Module '{Name}': deferred landing could NOT be applied — the previous copy "
-                    + "keeps loading; the pending folder stays for the next boot", name);
+                // Held open by a still-running pod — the next boot collects it.
+                logger?.LogDebug("Modules GC: {Dir} is in use, skipped ({Reason})", leaf, e.Message);
             }
         }
-        return applied;
+        return removed;
     }
 
     // Cap 1 deliberately: LandModule/RemoveModule each read-modify-write the shared
@@ -213,41 +224,24 @@ public sealed class ModuleLandingService : IDisposable
                 + $"modules/{name}/ would SHADOW it at the next boot "
                 + "(ResolveModulePath probes the modules folder first).");
 
+        // 🚨 GENERATIONS, NEVER SWAPS. Every landing writes a FRESH directory and moves the
+        // activation pointer; nothing on this path ever deletes or overwrites a directory a
+        // running pod may hold open. The delete-based swap could not be made safe on a shared
+        // volume: an open file refuses deletion on SMB (the 409s), and the boot-time deferred
+        // apply raced the OTHER pods of a rolling restart — deletes half-succeeded and 13 of 15
+        // module closures were reduced to their entry DLL (2026-08-20). Old generations are
+        // garbage-collected at boot (CollectGarbage), skip-on-locked, once no entry references
+        // them.
         var modulesRoot = Path.Combine(baseDirectory, "modules");
-        var target = Path.Combine(modulesRoot, name);
+        var generation = $"{name}@{Guid.NewGuid():N}"[..(name.Length + 9)];
+        var target = Path.Combine(modulesRoot, generation);
         var staging = Path.Combine(modulesRoot, $".staging-{name}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
         try
         {
             foreach (var (fileName, bytes) in assemblies)
                 File.WriteAllBytes(Path.Combine(staging, fileName), bytes);
-            try
-            {
-                if (Directory.Exists(target))
-                    Directory.Delete(target, recursive: true);
-                Directory.Move(staging, target);
-            }
-            catch (Exception swap) when (swap is IOException or UnauthorizedAccessException)
-            {
-                // 🚨 The target's files are OPEN — this instance has the module LOADED, and on an
-                // SMB-backed volume (Azure Files) an open file cannot be deleted, so the in-place
-                // swap fails with "Directory not empty". That is the RE-LAND-ONTO-A-RUNNING-
-                // REGISTRY case (first hit 2026-08-20: every re-published module 409'd the moment
-                // the portal actually loaded its modules). The bytes are not lost and the publish
-                // must not fail: they park as modules/.pending-<name>/, the activation entry still
-                // flips PendingRestart, and ApplyPendingLandings swaps them in at the next boot —
-                // BEFORE anything is loaded, when the delete cannot be refused. The serving side
-                // prefers the pending folder, so consumers fetch the NEW bytes immediately even
-                // while this process still runs the old ones.
-                var pending = PendingPathFor(baseDirectory, name);
-                if (Directory.Exists(pending))
-                    Directory.Delete(pending, recursive: true);
-                Directory.Move(staging, pending);
-                logger?.LogWarning(
-                    "Module '{Name}': the loaded copy's files are open, so the swap is DEFERRED — "
-                    + "staged at {Pending}; applies at the next restart ({Reason})",
-                    name, pending, swap.Message);
-            }
+            Directory.Move(staging, target);
         }
         catch
         {
@@ -274,6 +268,7 @@ public sealed class ModuleLandingService : IDisposable
             Version = version,
             MinMeshVersion = minMeshVersion,
             Enabled = true,
+            Directory = generation,
         };
         ModuleActivationSidecar.Write(baseDirectory, list with
         {
@@ -304,19 +299,38 @@ public sealed class ModuleLandingService : IDisposable
                 $"Module '{name}' was not landed by the store lane (no activation entry) — "
                 + "publish-laid-out module folders are managed by the deployment, not uninstall.");
 
+        // The generation pointer is CLEARED on uninstall — a disabled entry must not keep its
+        // directory 'referenced', or boot GC could never reclaim it.
         ModuleActivationSidecar.Write(baseDirectory, list with
         {
-            Entries = list.Entries.Replace(existing, existing with { Enabled = false }),
+            Entries = list.Entries.Replace(existing,
+                existing with { Enabled = false, Directory = null }),
             PendingRestart = true,
         });
 
-        var target = Path.Combine(baseDirectory, "modules", name);
-        if (Directory.Exists(target))
-            Directory.Delete(target, recursive: true);
+        // Best-effort immediate delete: on a shared volume the files of a LOADED module refuse
+        // deletion (SMB keeps them open) — that is fine, the cleared pointer above makes the
+        // next boot's CollectGarbage reclaim the generation once no pod holds it.
+        var targets = new List<string> { Path.Combine(baseDirectory, "modules", name) };
+        if (!string.IsNullOrWhiteSpace(existing.Directory))
+            targets.Add(Path.Combine(baseDirectory, "modules", existing.Directory!));
+        foreach (var target in targets.Where(Directory.Exists))
+        {
+            try
+            {
+                Directory.Delete(target, recursive: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                logger?.LogDebug(
+                    "Uninstall of '{Name}': {Dir} is in use, boot GC reclaims it ({Reason})",
+                    name, Path.GetFileName(target), e.Message);
+            }
+        }
 
         logger?.LogInformation(
-            "Module '{Name}' UNINSTALLED: activation disabled, modules/{Name}/ deleted — "
-            + "takes effect at the next restart", name, name);
+            "Module '{Name}' UNINSTALLED: activation disabled — takes effect at the next restart",
+            name);
     }
 
     private static void ValidateFileName(string? value, string what)

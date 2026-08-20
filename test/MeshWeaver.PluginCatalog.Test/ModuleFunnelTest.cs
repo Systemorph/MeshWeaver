@@ -120,12 +120,12 @@ public class ModuleFunnelTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             .FirstAsync().ToTask();
 
         landed.Should().Be(1);
-        File.ReadAllBytes(Path.Combine(
-                landingRoot, "modules", "MeshWeaver.Social", "MeshWeaver.Social.dll"))
-            .Should().Equal("SOCIAL"u8.ToArray());
-
         var list = ModuleActivationSidecar.Read(landingRoot);
         var entry = list.Entries.Should().ContainSingle().Subject;
+        File.ReadAllBytes(Path.Combine(
+                ModuleLandingService.ModuleDirectoryFor(landingRoot, "MeshWeaver.Social", entry),
+                "MeshWeaver.Social.dll"))
+            .Should().Equal("SOCIAL"u8.ToArray());
         entry.Name.Should().Be("MeshWeaver.Social");
         entry.Version.Should().Be("1.2.0",
             "the recorded version is what lets the reconcile answer 'already landed' without a download");
