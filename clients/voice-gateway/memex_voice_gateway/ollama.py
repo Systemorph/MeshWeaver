@@ -27,10 +27,14 @@ SYSTEM_PROMPT = (
     "wall-clock time in brackets — use it to judge gaps in the conversation.\n\n"
     "TRIAGE — decide per request: answer DIRECTLY yourself for time, dates, general "
     "knowledge, conversions, and small talk (you run on-device; speed is your virtue). "
-    "DELEGATE by calling delegate_to_memex for anything that needs the user's own data, "
-    "current information from the web, documents, or multi-step work — the mesh runs full "
-    "agents with tools there. After delegating, tell the user in ONE sentence that Memex is "
-    "on it and will announce the answer."
+    "For a QUICK lookup use your read-only tools: search_mesh finds nodes in the user's "
+    "mesh, get_node reads one, home_assistant controls the smart home. DELEGATE by calling "
+    "delegate_to_memex — it opens a thread in the mesh where a full agent with its own "
+    "tools works the task — for anything that needs current information from the web, "
+    "documents, writing or changing data, or multi-step work. Anything about EMAIL — "
+    "reading, summarizing, or sending mail — always delegates to the ExecutiveAssistant "
+    "agent. After delegating, tell the user in ONE sentence that Memex is on it and will "
+    "announce the answer."
 )
 
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -58,24 +62,79 @@ def build_messages(history: list[dict], text: str, system_prompt: str = SYSTEM_P
             {"role": "user", "content": text}]
 
 
-DELEGATE_TOOL = {
+# The standard agents offered for delegation — extended/overridden per deployment
+# (a portal entry's "agents" list adds names AND pins where each one runs).
+DEFAULT_AGENTS = {
+    "Voice": "quick data lookups",
+    "Assistant": "general work",
+    "Researcher": "deep research",
+    "ExecutiveAssistant": "EMAIL — reading, summarizing, and sending mail",
+}
+
+
+def delegate_tool(agents: dict[str, str] | None = None) -> dict:
+    """The delegate_to_memex spec, its agent enum built from the CONFIGURED roster."""
+    roster = agents or DEFAULT_AGENTS
+    return {
+        "type": "function",
+        "function": {
+            "name": "delegate_to_memex",
+            "description": "Open a THREAD in the user's mesh, where a full agent with its "
+                           "own system prompt and tools (their data, web search, documents, "
+                           "email) works the task. The answer is announced when ready.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The task, self-contained, in the user's language."},
+                    "agent": {"type": "string", "enum": list(roster),
+                              "description": " ".join(f"{n}: {d}." for n, d in roster.items())},
+                },
+                "required": ["task"],
+            },
+        },
+    }
+
+
+DELEGATE_TOOL = delegate_tool()
+
+# The normal read-only tools every mesh client has — run in-round by the router against the
+# active/first mesh portal, so a quick lookup never costs a whole thread.
+MESH_TOOLS = [
+    {"type": "function", "function": {
+        "name": "search_mesh",
+        "description": "Search the user's mesh (notes, documents, courses, data). Returns "
+                       "matching nodes with their paths. Free text works; so do filters "
+                       "like nodeType:Agent or name:*sales*.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Free text or GitHub-style query."}},
+            "required": ["query"]},
+    }},
+    {"type": "function", "function": {
+        "name": "get_node",
+        "description": "Read one mesh node by path (as returned by search_mesh), e.g. "
+                       "@Doc/Architecture/Plugins.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "The node path, e.g. @Edu/Guide."}},
+            "required": ["path"]},
+    }},
+]
+
+HOME_TOOL = {
     "type": "function",
     "function": {
-        "name": "delegate_to_memex",
-        "description": "Hand a task to the user's mesh, where full agents with tools "
-                       "(their data, web search, documents) run it in a thread. The answer "
-                       "is announced to the user when ready.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task": {"type": "string", "description": "The task, self-contained, in the user's language."},
-                "agent": {"type": "string", "enum": ["Voice", "Assistant", "Researcher"],
-                          "description": "Voice: quick data lookups. Assistant: general work. Researcher: deep research."},
-            },
-            "required": ["task"],
-        },
+        "name": "home_assistant",
+        "description": "Control or read the smart home via Home Assistant: list entities, "
+                       "read a state, or call a service (turn_on, turn_off, toggle, ...).",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list_entities", "get_state", "call_service"]},
+            "entity_id": {"type": "string", "description": "e.g. light.living_room"},
+            "domain": {"type": "string", "description": "service domain, e.g. light, switch, media_player"},
+            "service": {"type": "string", "description": "e.g. turn_on, turn_off, toggle"},
+        }, "required": ["action"]},
     },
 }
+
+_TOOL_RESULT_LIMIT = 1500   # a small on-device model drowns in a full search dump
 
 
 @dataclass
@@ -86,9 +145,13 @@ class OllamaBrain:
     num_predict: int = 200
     system_prompt: str = SYSTEM_PROMPT
     location: str | None = None    # anchors 'here'/weather questions to a real place
-    # The triage seam: set by the router — called as delegator(task, agent) -> stamped
-    # handle; the pipeline drains pending delegations and announces their answers.
+    # The triage seams, set by the router: delegator(task, agent) -> stamped handle OPENS A
+    # THREAD in the mesh (the pipeline drains pending delegations and announces their
+    # answers); tool_runner(name, args) -> str runs the quick read-only tools in-round.
     delegator: object = None
+    tool_runner: object = None
+    tools: list = field(default_factory=list)   # specs offered alongside delegate_to_memex
+    agents: dict | None = None                  # delegation roster: name → description
     _pending: list = field(default_factory=list, init=False)
 
     _history: list[dict] = field(default_factory=list, init=False)
@@ -132,13 +195,15 @@ class OllamaBrain:
         pieces: list[str] = []
         import json as _json
         working = list(messages)
+        offered = list(self.tools) + (
+            [delegate_tool(self.agents)] if self.delegator is not None else [])
         try:
-            for _round in range(3):   # model → (tool) → model, bounded
+            for _round in range(4):   # model → (tool) → … → model, bounded (search+get+answer)
                 payload = {"model": self.model, "messages": working, "stream": True,
                            "think": False, "keep_alive": "60m",
                            "options": {"num_predict": self.num_predict}}
-                if self.delegator is not None:
-                    payload["tools"] = [DELEGATE_TOOL]
+                if offered:
+                    payload["tools"] = offered
                 tool_calls: list = []
                 async with self._http.post(f"{self.base_url}/api/chat", json=payload,
                                            timeout=aiohttp.ClientTimeout(total=300)) as response:
@@ -158,26 +223,44 @@ class OllamaBrain:
                             break
                 if not tool_calls:
                     break
-                # TRIAGE chose the mesh: open the thread(s), tell the model, let it hand off.
                 working.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
                 for call in tool_calls:
-                    fn = (call.get("function") or {})
-                    args = fn.get("arguments") or {}
-                    if isinstance(args, str):
-                        try: args = _json.loads(args)
-                        except Exception: args = {"task": args}
-                    task = str(args.get("task", "")).strip()
-                    agent = args.get("agent") or None
-                    try:
-                        stamped = await self.delegator(task, agent)
-                        self._pending.append((stamped, task))
-                        result = "Delegated to memex. The answer will be announced when ready."
-                    except Exception as e:
-                        result = f"Delegation failed: {e}"
-                    working.append({"role": "tool", "content": result})
+                    working.append({"role": "tool",
+                                    "content": await self._dispatch_tool(call)})
         finally:
             await queue.put(None)
         return "".join(pieces).strip()
+
+    async def _dispatch_tool(self, call: dict) -> str:
+        """One tool call → its result string. delegate_to_memex OPENS A THREAD (via the
+        router's delegator) and queues the stamped handle for the announce path; everything
+        else runs through tool_runner, truncated to what a small model can digest."""
+        import json as _json
+        fn = (call.get("function") or {})
+        name = fn.get("name", "")
+        args = fn.get("arguments") or {}
+        if isinstance(args, str):
+            try: args = _json.loads(args)
+            except Exception: args = {"task": args} if name == "delegate_to_memex" else {}
+        if name == "delegate_to_memex":
+            if self.delegator is None:
+                return "Delegation is not configured."
+            task = str(args.get("task", "")).strip()
+            try:
+                stamped = await self.delegator(task, args.get("agent") or None)
+                self._pending.append((stamped, task))
+                return "Delegated: a memex thread is working on it. The answer will be announced."
+            except Exception as e:
+                return f"Delegation failed: {e}"
+        if self.tool_runner is None:
+            return f"Unknown tool: {name}"
+        try:
+            result = str(await self.tool_runner(name, args))
+        except Exception as e:
+            return f"Tool {name} failed: {e}"
+        if len(result) > _TOOL_RESULT_LIMIT:
+            result = result[:_TOOL_RESULT_LIMIT] + " …(truncated)"
+        return result
 
     def drain_delegations(self) -> list:
         """(stamped_handle, task) pairs the pipeline should announce answers for."""

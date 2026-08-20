@@ -88,6 +88,10 @@ class Config:
     location: str | None = None             # where the speaker is (weather/'here' questions)
     system_prompt_file: str | None = None   # override the built-in voice prompt with a file
 
+    # --- Home Assistant (optional) — a tool for the local brain, not a voice owner ---
+    ha_url: str | None = None               # e.g. http://homeassistant.local:8123
+    ha_token: str | None = None             # long-lived access token
+
     # --- endpointing (energy VAD) ---
     silence_ms: int = 800
     max_utterance_s: float = 15.0
@@ -143,6 +147,8 @@ class Config:
             speak_dialect=(_env("SPEAK_DIALECT", "false") or "false").lower() == "true",
             location=_env("LOCATION"),
             system_prompt_file=_env("SYSTEM_PROMPT_FILE"),
+            ha_url=(_env("HA_URL") or "").rstrip("/") or None,
+            ha_token=_env("HA_TOKEN"),
             silence_ms=int(_env("SILENCE_MS", "800")),
             tts_engine=(_env("TTS_ENGINE", "piper") or "piper").lower(),
             stream_tts=(_env("STREAM_TTS", "false") or "false").lower() == "true",
