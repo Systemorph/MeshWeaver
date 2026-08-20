@@ -251,9 +251,11 @@ public static class MeshModuleStaticAssetExtensions
     /// </param>
     /// <param name="logger">Receives one line per mounted or skipped dependency.</param>
     /// <param name="baseDirectory">
-    /// Where <c>modules/</c> lives; defaults to <see cref="AppContext.BaseDirectory"/>, which is
-    /// what <c>MeshBuilder.ResolveModulePath</c> probes. A parameter only so the mapping rules can
-    /// be exercised against a laid-out folder in a test.
+    /// FALLBACK root for the legacy <c>modules/&lt;Name&gt;/</c> layout, used only when a module's
+    /// loaded assembly does not say where it came from; defaults to
+    /// <see cref="AppContext.BaseDirectory"/>. The normal answer comes from the assembly itself —
+    /// see <see cref="ModuleWwwrootPath"/>. A parameter only so the mapping rules can be exercised
+    /// against a laid-out folder in a test.
     /// </param>
     internal static ModuleStaticAssetManifest Discover(
         IEnumerable<InstalledModuleAssembly> modules,
@@ -286,11 +288,11 @@ public static class MeshModuleStaticAssetExtensions
             if (string.IsNullOrEmpty(name))
                 continue;
 
-            // AppContext.BaseDirectory, matching MeshBuilder.ResolveModulePath — a module that
+            // BESIDE the assembly that was actually loaded — see ModuleWwwrootPath. A module that
             // still rides the app closure (the step-1 double-ship) has an EMPTY or absent folder
             // here, so it simply contributes nothing and the host's build-time manifest keeps
             // serving it. That is what makes this safe to switch on before any pack flips.
-            var moduleWwwroot = Path.Combine(baseDirectory, "modules", name, "wwwroot");
+            var moduleWwwroot = ModuleWwwrootPath(module.Assembly.Location, baseDirectory, name);
             if (!Directory.Exists(moduleWwwroot))
                 continue;
 
@@ -349,6 +351,46 @@ public static class MeshModuleStaticAssetExtensions
 
         return new ModuleStaticAssetManifest(mounts, stylesheets);
     }
+    /// <summary>
+    /// Where a boot-installed module's published static web assets live: <c>wwwroot</c> BESIDE the
+    /// assembly the loader actually loaded, whenever that assembly sits directly inside a
+    /// <c>modules/</c> tree.
+    ///
+    /// <para>🚨 The loaded assembly is the only thing that knows this, and asking it is what makes
+    /// the rule survive the two ways the tree moved out from under a name-based path. Landing
+    /// writes a fresh GENERATION directory per version (<c>modules/&lt;Name&gt;@&lt;id&gt;/</c>) and
+    /// moves the activation pointer — the legacy fixed <c>modules/&lt;Name&gt;/</c> folder is not
+    /// written at all any more (#1949) — and it writes into the deployment's WRITABLE, pod-shared
+    /// module root (<c>ModuleRoot</c>, <c>/data</c> on AKS), not the read-only app directory. A
+    /// path built from <see cref="AppContext.BaseDirectory"/> plus the module NAME misses on both
+    /// counts, and it misses SILENTLY: the module loads, its components render, and every asset
+    /// they request 404s.</para>
+    ///
+    /// <para>The "inside a <c>modules/</c> tree" test is what keeps a module that still rides the
+    /// APP CLOSURE contributing nothing: its assembly's directory is the app folder, whose
+    /// <c>wwwroot</c> is the HOST's — mounting that under <c>_content/&lt;Name&gt;</c> would serve
+    /// the whole host web root through a module namespace. Such a module falls back to the legacy
+    /// name-based path, which is absent for it, so it is skipped exactly as before.</para>
+    /// </summary>
+    /// <param name="assemblyLocation">The loaded module assembly's file location (empty for an
+    /// assembly with no file backing).</param>
+    /// <param name="baseDirectory">Fallback root for the legacy <c>modules/&lt;Name&gt;/</c> layout.</param>
+    /// <param name="moduleName">The module's assembly name.</param>
+    /// <returns>The absolute <c>wwwroot</c> path to inspect (it may not exist).</returns>
+    internal static string ModuleWwwrootPath(
+        string? assemblyLocation, string baseDirectory, string moduleName)
+    {
+        var assemblyDirectory = string.IsNullOrEmpty(assemblyLocation)
+            ? null
+            : Path.GetDirectoryName(assemblyLocation);
+        var parent = string.IsNullOrEmpty(assemblyDirectory)
+            ? null
+            : Path.GetFileName(Path.GetDirectoryName(assemblyDirectory));
+        return string.Equals(parent, "modules", StringComparison.OrdinalIgnoreCase)
+            ? Path.Combine(assemblyDirectory!, "wwwroot")
+            : Path.Combine(baseDirectory, "modules", moduleName, "wwwroot");
+    }
+
 }
 
 /// <summary>One mounted asset root: everything under <paramref name="PhysicalPath"/> is served at

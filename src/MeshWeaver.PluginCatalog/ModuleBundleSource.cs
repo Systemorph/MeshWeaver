@@ -62,11 +62,11 @@ public static class ModuleBundleSource
             // Covers the missing folder, the transitional publish state (a module still riding the
             // app closure prunes its modules/ folder empty), and a lost volume alike: no entry DLL,
             // no module bundle — the package still serves its content and NodeType assemblies.
-            return ([], $"modules/{moduleName}/{moduleName}.dll does not exist on this instance");
+            return ([], $"{Path.GetFileName(folder)}/{moduleName}.dll does not exist on this instance");
 
         // Entry DLL first, the rest of the closure (dlls + symbols) in stable order. Top level
-        // only — the modules/<name>/ layout is flat by construction (ModuleLandingService writes
-        // file names, and the publish target lays closures out flat).
+        // only — a module directory is flat by construction (ModuleLandingService writes file
+        // names, and the publish target lays closures out flat).
         var files = new List<string> { entryDll };
         files.AddRange(Directory.EnumerateFiles(folder)
             .Where(f => Path.GetExtension(f).ToLowerInvariant() is ".dll" or ".pdb")
