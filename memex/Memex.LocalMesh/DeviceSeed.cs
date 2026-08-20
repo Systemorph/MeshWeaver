@@ -10,13 +10,13 @@ using MeshWeaver.Messaging;
 namespace Memex.LocalMesh;
 
 /// <summary>
-/// First-boot seeding for the device mesh — the sidecar twin of the MAUI client's boot
-/// (MauiProgram + DeviceOnboarding): stamp the single device-user identity on the host, create the
-/// partition-root <c>User</c> node through the FRAMEWORK path (the framework provisions the
-/// <c>device-user</c> partition and grants self-admin; the <c>Admin/_Access</c> grant then makes the
-/// device owner the instance's global admin), and seed the <c>MemexInstance</c> nodes — this mesh IS
-/// the instance store the shells it serves read their mesh list from (no device storage).
-/// All idempotent: every seed checks existence via <c>GetQuery</c> first.
+/// Device identity + first-boot seeding for the device mesh — the sidecar twin of the MAUI client's
+/// boot (MauiProgram + DeviceOnboarding). Onboarding is INTERACTIVE, exactly like MAUI's
+/// OnboardingPage: the device user is created by <see cref="Onboard"/> with the profile the person
+/// entered (the shell shows the onboarding dialog on first launch, via <c>POST /api/mesh/onboard</c>)
+/// — never auto-seeded, which would land them on an empty profile they never set up. The boot pass
+/// only stamps the identity, seeds the <c>MemexInstance</c> nodes (this mesh IS the instance store
+/// the shells read their mesh list from), and repairs a missing global-admin grant. All idempotent.
 /// </summary>
 public static class DeviceSeed
 {
@@ -24,73 +24,113 @@ public static class DeviceSeed
 
     public static void Seed(IMessageHub hub)
     {
-        var osName = Environment.UserName;
-        if (string.IsNullOrWhiteSpace(osName)) osName = "Device User";
-
         // Single-user device mesh: the shells this host serves (RN, web, desktop) connect
         // anonymously; identity lives HERE, exactly like the MAUI client's in-process mesh.
-        var deviceUser = new AccessContext { ObjectId = DeviceUserId, Name = osName };
-        hub.ServiceProvider.GetRequiredService<AccessService>().SetHostIdentity(deviceUser);
+        hub.ServiceProvider.GetRequiredService<AccessService>().SetHostIdentity(
+            new AccessContext { ObjectId = DeviceUserId, Name = OsUserName() });
 
-        SeedDeviceUser(hub, osName);
         SeedInstances(hub);
+        RepairAdminGrant(hub);
     }
 
-    /// <summary>Creates the device user on first boot (absent = never onboarded), as DeviceOnboarding does.</summary>
-    private static void SeedDeviceUser(IMessageHub hub, string name)
+    private static string OsUserName()
+    {
+        var osName = Environment.UserName;
+        return string.IsNullOrWhiteSpace(osName) ? "Device User" : osName;
+    }
+
+    /// <summary>True once the device user's User node exists (first-launch detection).</summary>
+    public static IObservable<bool> IsOnboarded(IMessageHub hub) =>
+        hub.GetWorkspace()
+            .GetQuery("onboard-check", $"nodeType:User content.email:{DeviceUserId}@local limit:1")
+            .Take(1).Timeout(TimeSpan.FromSeconds(15))
+            .Select(existing => existing.Any());
+
+    /// <summary>
+    /// Interactive onboarding — the FRAMEWORK path DeviceOnboarding (MAUI) takes: creating the
+    /// partition-root <c>User</c> node provisions the <c>device-user</c> partition and grants
+    /// self-admin; the <c>Admin/_Access</c> grant then makes the device owner the instance's global
+    /// admin. Emits true when it created the user, false when already onboarded.
+    /// </summary>
+    public static IObservable<bool> Onboard(IMessageHub hub, string? fullName, string? bio, string? role)
+    {
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var name = string.IsNullOrWhiteSpace(fullName) ? OsUserName() : fullName.Trim();
+
+        return IsOnboarded(hub).SelectMany(onboarded => onboarded
+            ? Observable.Return(false)
+            // RunAsSystem, never Observable.Using(ImpersonateAsSystem…) — the latter latches the
+            // system identity on the subscribing thread (ImpersonationScopeSiteRatchetGuard, #1790).
+            : accessService.RunAsSystem(   // a brand-new partition root is owned by nobody yet
+                    () => meshService.CreateNode(new MeshNode(DeviceUserId)   // → provisions schema + self-Admin
+                    {
+                        NodeType = "User",
+                        Name = name,
+                        State = MeshNodeState.Active,
+                        Content = new User
+                        {
+                            FullName = name,
+                            Email = $"{DeviceUserId}@local",
+                            Bio = string.IsNullOrWhiteSpace(bio) ? null : bio.Trim(),
+                            Role = string.IsNullOrWhiteSpace(role) ? null : role.Trim(),
+                        },
+                    }))
+                .SelectMany(_ => accessService.RunAsSystem(
+                    () => meshService.CreateNode(AdminGrant(name))))
+                .Select(_ => true));
+    }
+
+    /// <summary>Global admin of this instance — Admin/_Access with MainNode="Admin" (the sanctioned
+    /// shape; an empty MainNode would be a root/data-superuser grant and is refused).</summary>
+    private static MeshNode AdminGrant(string name) => new($"{DeviceUserId}_Access", "Admin/_Access")
+    {
+        NodeType = "AccessAssignment",
+        Name = $"{name} — Admin",
+        MainNode = "Admin",
+        Content = new AccessAssignment
+        {
+            AccessObject = DeviceUserId,
+            DisplayName = name,
+            Roles = [new RoleAssignment { Role = "Admin" }],
+        },
+    };
+
+    /// <summary>
+    /// Heals a crash between Onboard's two creates: the device user exists but the global-admin
+    /// grant is missing — on a single-user device mesh the owner must ALWAYS hold it.
+    /// </summary>
+    private static void RepairAdminGrant(IMessageHub hub)
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(nameof(DeviceSeed));
 
         hub.GetWorkspace()
-            .GetQuery("seed-device-user", $"nodeType:User content.email:{DeviceUserId}@local limit:1")
+            .GetQuery("repair-grant-user", $"nodeType:User content.email:{DeviceUserId}@local limit:1")
             .Take(1).Timeout(TimeSpan.FromSeconds(15))
-            .Where(existing => !existing.Any())
-            // RunAsSystem, never Observable.Using(ImpersonateAsSystem…) — the latter latches the
-            // system identity on the subscribing thread (ImpersonationScopeSiteRatchetGuard, #1790).
-            .SelectMany(_ => accessService.RunAsSystem(   // a brand-new partition root is owned by nobody yet
-                () => meshService.CreateNode(new MeshNode(DeviceUserId)   // partition root → provisions schema + self-Admin
-                {
-                    NodeType = "User",
-                    Name = name,
-                    State = MeshNodeState.Active,
-                    Content = new User { FullName = name, Email = $"{DeviceUserId}@local" },
-                })))
+            .Where(users => users.Any())
+            // The grant carries the ONBOARDED profile name (the user node's), not the OS account —
+            // they differ whenever the person entered their real name in the onboarding dialog.
+            .SelectMany(users => hub.GetWorkspace()
+                .GetQuery("seed-admin-grant", $"path:Admin/_Access/{DeviceUserId}_Access limit:1")
+                .Take(1).Timeout(TimeSpan.FromSeconds(15))
+                .Where(existing => !existing.Any())
+                .Select(_ => users.First().Name ?? OsUserName()))
+            .SelectMany(name => accessService.RunAsSystem(
+                () => meshService.CreateNode(AdminGrant(name))))
             .Subscribe(
-                _ => logger?.LogInformation("Seeded device user {Name}", name),
-                ex => logger?.LogWarning(ex, "Device-user seed failed"));
-
-        // Global admin of this instance — Admin/_Access with MainNode="Admin" (the sanctioned shape;
-        // an empty MainNode would be a root/data-superuser grant and is refused). Guarded by the
-        // GRANT's own existence, not the user's: a crash between the two creates heals on the next
-        // boot, and on a single-user device mesh the owner must ALWAYS hold this grant.
-        hub.GetWorkspace()
-            .GetQuery("seed-admin-grant", $"path:Admin/_Access/{DeviceUserId}_Access limit:1")
-            .Take(1).Timeout(TimeSpan.FromSeconds(15))
-            .Where(existing => !existing.Any())
-            .SelectMany(_ => accessService.RunAsSystem(
-                () => meshService.CreateNode(new MeshNode($"{DeviceUserId}_Access", "Admin/_Access")
-                {
-                    NodeType = "AccessAssignment",
-                    Name = $"{name} — Admin",
-                    MainNode = "Admin",
-                    Content = new AccessAssignment
-                    {
-                        AccessObject = DeviceUserId,
-                        DisplayName = name,
-                        Roles = [new RoleAssignment { Role = "Admin" }],
-                    },
-                })))
-            .Subscribe(
-                _ => logger?.LogInformation("Seeded global-admin grant for {Name}", name),
-                ex => logger?.LogWarning(ex, "Admin-grant seed failed"));
+                _ => logger?.LogInformation("Repaired the missing global-admin grant"),
+                ex => logger?.LogWarning(ex, "Admin-grant repair failed"));
     }
 
     /// <summary>
     /// Seeds the instance list on first boot: the own-instance node (this mesh, named after the
     /// machine) plus the public memex — the same defaults the MAUI InstanceStore ships with. The
-    /// shells read these (<c>nodeType:MemexInstance</c>) as their connect list.
+    /// shells read these (<c>nodeType:MemexInstance</c>) as their connect list. Guarded on "ANY
+    /// MemexInstance exists" — deliberately, so a seeded instance the user REMOVED is not
+    /// resurrected on the next boot. The two creates are merged (not chained) so one failing cannot
+    /// skip the other.
     /// </summary>
     private static void SeedInstances(IMessageHub hub)
     {
@@ -99,9 +139,6 @@ public static class DeviceSeed
         var deviceName = Environment.MachineName;
         if (string.IsNullOrWhiteSpace(deviceName)) deviceName = "My Memex";
 
-        // Guarded on "ANY MemexInstance exists" — deliberately, so a seeded instance the user
-        // REMOVED is not resurrected on the next boot. The two creates below are merged (not
-        // chained) so one failing cannot skip the other.
         hub.GetWorkspace()
             .GetQuery("seed-instances", $"nodeType:{MemexInstanceNodeType.NodeType}")
             .Take(1).Timeout(TimeSpan.FromSeconds(15))
