@@ -3,13 +3,13 @@
 // mesh): Voice (speech), Connect (remote instances), Profile, Settings.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet } from "react-native";
-import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, discoverInstances, mergeDiscovered, getConnectStatus, onConnectStatus, onInstancesChanged, type MeshInstance } from "./connection";
-import { refreshOAuth, signInWithOAuth } from "./oauth";
+import { loadInstances, saveInstance, removeInstance, currentInstance, defaultPortalUrl, instanceIdentity, discoverInstances, mergeDiscovered, getConnectStatus, onConnectStatus, onInstancesChanged, selectAndSignIn, type MeshInstance } from "./connection";
+import { signInWithOAuth } from "./oauth";
 import { useStyles, useTheme, type Palette } from "./theme";
 
 const useSheet = () => useStyles(makeStyles);
 
-export type ClientDestination = "profile" | "voice" | "instances" | "settings";
+export type ClientDestination = "profile" | "voice" | "instances" | "settings" | "onboarding";
 
 export interface ClientMenuItem {
   label: string;
@@ -46,7 +46,57 @@ export function ClientScreen({
       return <ProfileScreen />;
     case "settings":
       return <SettingsScreen />;
+    case "onboarding":
+      return <OnboardingScreen onDone={onConnected} />;
   }
+}
+
+// ── First-launch onboarding (device mesh) ───────────────────────────────────────
+// The RN twin of MAUI's OnboardingPage: on the first launch against the local mesh there is no
+// device user yet, so the app opens INTO this dialog — the person enters their profile and
+// "Get started" posts it to the sidecar (POST /api/mesh/onboard → DeviceSeed.Onboard creates the
+// partition-root User + global-admin grant through the framework path). App.tsx shows this screen
+// when the local connect acks but GET /api/mesh/onboard reports onboarded=false.
+function OnboardingScreen({ onDone }: { onDone: () => void }): ReactNode {
+  const s = useSheet();
+  const [fullName, setFullName] = useState("");
+  const [bio, setBio] = useState("");
+  const [role, setRole] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const start = () => {
+    if (!fullName.trim()) {
+      setError("Enter your name — it is how your work is attributed.");
+      return;
+    }
+    setBusy(true); setError("");
+    const url = currentInstance().url.replace(/\/+$/, "");
+    fetch(`${url}/api/mesh/onboard`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fullName: fullName.trim(), bio: bio.trim() || null, role: role.trim() || null }),
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`onboarding failed (HTTP ${r.status})`);
+        await r.json();
+        onDone();
+      })
+      .catch((e) => setError(e?.message ?? "onboarding failed"))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <ScreenScroll
+      title="Welcome — set up your profile"
+      subtitle="This mesh is yours alone: your profile lives on it, and everything you create is attributed to it.">
+      <Field label="Your name" value={fullName} onChange={setFullName} placeholder="e.g. Ada Lovelace" />
+      <Field label="About you (optional)" value={bio} onChange={setBio} placeholder="A sentence or two about what you do" multiline />
+      <Field label="Role (optional)" value={role} onChange={setRole} placeholder="e.g. Actuary" />
+      {error ? <Text style={{ color: "#d13438", marginBottom: 8 }}>{error}</Text> : null}
+      <Pressable onPress={start} style={s.primaryBtn} disabled={busy}>
+        <Text style={s.primaryBtnText}>{busy ? "Setting up…" : "Get started"}</Text>
+      </Pressable>
+    </ScreenScroll>
+  );
 }
 
 // ── Voice (speech) ────────────────────────────────────────────────────────────
@@ -181,24 +231,18 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
     discoverInstances(inst).then((d) => { if (d.length) { mergeDiscovered(d); refresh(); } }).catch(() => {});
   };
   const select = (n: string) => {
-    setCurrentInstance(n); setCurrent(n);
-    const inst = loadInstances().find((i) => i.name === n);
-    if (inst && !inst.local) {
-      // An expired OAuth token refreshes silently; a dead refresh token falls back to the
-      // visible "Sign in" affordance rather than failing areas one by one.
-      if (inst.refreshToken && inst.clientId && inst.tokenExpiresAt && inst.tokenExpiresAt < Date.now()) {
-        refreshOAuth(inst.url, inst.clientId, inst.refreshToken).then((r) => {
-          if (r) {
-            saveInstance({ ...inst, token: r.accessToken, refreshToken: r.refreshToken, tokenExpiresAt: r.expiresAt });
-            refresh(); onConnected();
-          } else {
-            setRowError(`${inst.name}: session expired — sign in again.`);
-          }
-        }).catch(() => {});
-      }
-      discover(inst);
-    }
-    onConnected();
+    // Never dial a portal anonymously: selecting a remote without a usable token runs the
+    // browser sign-in first (selectAndSignIn refreshes an expired token silently).
+    setBusyFor(n); setRowError(null);
+    selectAndSignIn(n,
+      () => {
+        setBusyFor(null);
+        refresh();
+        const inst = loadInstances().find((i) => i.name === n);
+        if (inst && !inst.local) discover(inst);
+        onConnected();
+      },
+      (message) => { setBusyFor(null); setRowError(message); });
   };
   const add = () => {
     const nm = name.trim() || url.trim().replace(/^https?:\/\//, "");
@@ -318,13 +362,17 @@ function ScreenScroll({ title, subtitle, children }: { title: string; subtitle?:
   );
 }
 
-function Field({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }): ReactNode {
+function Field({ label, value, onChange, placeholder, multiline }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; multiline?: boolean }): ReactNode {
   const s = useSheet();
   const { palette } = useTheme();
   return (
     <View style={{ marginBottom: 12 }}>
       <Text style={s.fieldLabel}>{label}</Text>
-      <TextInput style={s.input} value={value} onChangeText={onChange} placeholder={placeholder} placeholderTextColor={palette.textMuted} autoCapitalize="none" autoCorrect={false} />
+      <TextInput
+        style={[s.input, multiline && { minHeight: 84, textAlignVertical: "top" as const }]}
+        value={value} onChangeText={onChange} placeholder={placeholder}
+        placeholderTextColor={palette.textMuted} autoCapitalize="none" autoCorrect={false}
+        multiline={multiline} numberOfLines={multiline ? 4 : 1} />
     </View>
   );
 }

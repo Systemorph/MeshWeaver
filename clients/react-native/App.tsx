@@ -125,9 +125,11 @@ function AppInner() {
   useEffect(() => {
     if (Platform.OS === "web") return;
     if (!liveConnected && clientScreen == null) setClientScreen("instances");
-    // Close the onboarding exactly ONCE, on the not-connected → connected transition —
-    // a connected user opening the switcher on purpose must not have it snap shut.
-    if (liveConnected && !wasLive.current) setClientScreen((c) => (c === "instances" ? null : c));
+    // Close the gate screens exactly ONCE, on the not-connected → connected transition —
+    // a connected user opening the switcher on purpose must not have it snap shut. The
+    // profile onboarding closes the same way: completing it reconnects, and the ack lands here.
+    if (liveConnected && !wasLive.current)
+      setClientScreen((c) => (c === "instances" || c === "onboarding" ? null : c));
     wasLive.current = liveConnected;
   }, [liveConnected, clientScreen]);
   const reconnect = () => {
@@ -168,6 +170,16 @@ function AppInner() {
         void attachInstanceStore(
           inst.local ? Mesh.from(l.connection, undefined, { url: inst.url, token: inst.token }) : null,
         );
+        // 📱 First launch on the device mesh: no device user yet → the app opens INTO the
+        // onboarding dialog (the RN twin of MAUI's OnboardingPage). "Get started" posts the
+        // profile (POST /api/mesh/onboard) and the following reconnect ack closes the screen.
+        if (Platform.OS !== "web" && inst.local)
+          void fetch(`${inst.url.replace(/\/+$/, "")}/api/mesh/onboard`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((j: { onboarded?: boolean } | null) => {
+              if (j && j.onboarded === false) setClientScreen("onboarding");
+            })
+            .catch(() => {});
       })
       .catch((e) => {
         // Release builds swallow console — surface the failure where the user IS (the

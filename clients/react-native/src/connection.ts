@@ -286,6 +286,34 @@ export function setCurrentInstance(name: string): void {
   currentName = remotes.some((i) => i.name === name) ? name : "";
 }
 
+import { refreshOAuth, signInWithOAuth } from "./oauth";
+
+/**
+ * Make `name` the current instance, ensuring a REMOTE portal is signed in FIRST — the app never
+ * dials a portal anonymously (an anonymous viewer gets 401s and renders nothing, which reads as a
+ * broken app). Local is the device's own mesh and connects as-is. An expired OAuth token refreshes
+ * silently; a missing or dead token opens the portal's own browser sign-in. onReady() fires when
+ * the selection is ready to dial; onError(message) when sign-in failed — the selection is NOT
+ * switched then, so the app stays on the mesh it could actually talk to.
+ */
+export function selectAndSignIn(name: string, onReady: () => void, onError: (message: string) => void): void {
+  const inst = loadInstances().find((i) => i.name === name);
+  if (!inst) return onError(`Unknown mesh: ${name}`);
+  if (inst.local) { setCurrentInstance(name); return onReady(); }
+  const expired = !!inst.tokenExpiresAt && inst.tokenExpiresAt < Date.now();
+  if (inst.token && !expired) { setCurrentInstance(name); return onReady(); }
+  const finish = (r: { accessToken: string; refreshToken?: string; clientId: string; expiresAt?: number }) => {
+    saveInstance({ ...inst, token: r.accessToken, refreshToken: r.refreshToken, clientId: r.clientId, tokenExpiresAt: r.expiresAt });
+    onReady();
+  };
+  const browser = () => signInWithOAuth(inst.url)
+    .then(finish)
+    .catch((e) => onError(`${inst.name}: ${e?.message ?? "sign-in failed"}`));
+  if (expired && inst.refreshToken && inst.clientId)
+    refreshOAuth(inst.url, inst.clientId, inst.refreshToken).then((r) => (r ? finish(r) : browser()), browser);
+  else void browser();
+}
+
 /** Add or replace a remote instance (keyed by name), persist its node, and make it current. */
 export function saveInstance(inst: MeshInstance): void {
   const clean: MeshInstance = { ...inst, local: false, url: inst.url.replace(/\/+$/, "") };

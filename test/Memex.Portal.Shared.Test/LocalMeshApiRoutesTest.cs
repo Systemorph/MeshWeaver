@@ -30,6 +30,7 @@ public class LocalMeshApiRoutesTest
         "/api/mesh/query-nodes",
         "/api/mesh/content/list",
         "/api/mesh/upload",
+        "/api/mesh/onboard",
     ];
 
     [Theory]

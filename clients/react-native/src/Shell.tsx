@@ -19,7 +19,7 @@ import { RenderArea, type AreaSource, type AreaTree } from "@meshweaver/react/co
 import { areaErrorMessage } from "./areaError";
 import { type NavTarget } from "./nav";
 import { CLIENT_MENUS, ClientScreen, type ClientDestination } from "./screens";
-import { loadInstances, currentInstance, setCurrentInstance, instanceIdentity, onInstancesChanged, type InstanceIdentity } from "./connection";
+import { loadInstances, currentInstance, instanceIdentity, onInstancesChanged, selectAndSignIn, setConnectStatus, type InstanceIdentity } from "./connection";
 import { useStyles, useTheme, type Palette } from "./theme";
 import { LeftMenuView } from "./leftMenu";
 
@@ -182,10 +182,12 @@ function InstanceSwitcher({ isMobile, onReconnect, onManage }: { isMobile: boole
   const cur = instances.find((i) => i.name === current) ?? instances[0];
   const id = instanceIdentity(cur);
   const pick = (n: string) => {
-    setCurrentInstance(n);
-    setCurrent(n);
     setOpen(false);
-    onReconnect();
+    // Never dial a portal anonymously: a remote without a usable token runs the browser
+    // sign-in first; a failed sign-in opens the manage screen, where the status renders.
+    selectAndSignIn(n,
+      () => { setCurrent(n); onReconnect(); },
+      (message) => { setConnectStatus(message); onManage(); });
   };
   const nameStyle = (t: InstanceIdentity, color: string) => [
     styles.switchName,
