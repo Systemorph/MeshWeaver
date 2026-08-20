@@ -88,6 +88,10 @@ class Config:
     location: str | None = None             # where the speaker is (weather/'here' questions)
     system_prompt_file: str | None = None   # override the built-in voice prompt with a file
 
+    # --- Home Assistant (optional) — a tool for the local brain, not a voice owner ---
+    ha_url: str | None = None               # e.g. http://homeassistant.local:8123
+    ha_token: str | None = None             # long-lived access token
+
     # --- endpointing (energy VAD) ---
     silence_ms: int = 800
     max_utterance_s: float = 15.0
@@ -95,6 +99,11 @@ class Config:
 
     # --- text-to-speech + the URL the satellite fetches audio from ---
     tts_engine: str = "piper"               # "piper" | "say" (macOS)
+    stream_tts: bool = False
+    record_dir: str | None = None           # save each round's raw utterance WAV here — the
+                                            # corpus for retraining the wake word on REAL voices                # chunked live TTS; OFF: ESPHome 2026's player
+                                            # aborts chunked bodies after ~200 bytes — replies
+                                            # ship as complete WAVs until device-verified
     piper_bin: str = "piper"
     piper_voice: str = "/voices/de_DE-thorsten-medium.onnx"
     say_voice: str = "Anna"                 # macOS German voice
@@ -138,13 +147,18 @@ class Config:
             speak_dialect=(_env("SPEAK_DIALECT", "false") or "false").lower() == "true",
             location=_env("LOCATION"),
             system_prompt_file=_env("SYSTEM_PROMPT_FILE"),
+            ha_url=(_env("HA_URL") or "").rstrip("/") or None,
+            ha_token=_env("HA_TOKEN"),
             silence_ms=int(_env("SILENCE_MS", "800")),
             tts_engine=(_env("TTS_ENGINE", "piper") or "piper").lower(),
+            stream_tts=(_env("STREAM_TTS", "false") or "false").lower() == "true",
+            record_dir=_env("RECORD_DIR"),
             piper_bin=_env("PIPER_BIN", "piper") or "piper",
             piper_voice=_env("PIPER_VOICE", Config.piper_voice) or Config.piper_voice,
             say_voice=_env("SAY_VOICE", "Anna") or "Anna",
             gateway_host=_env("GATEWAY_HOST") or "",
             gateway_port=int(_env("GATEWAY_PORT", "8200")),
+            sample_rate=int(_env("SAMPLE_RATE", "16000")),
             portals=portals,
         )
         required = [("SATELLITE_HOST", cfg.satellite_host), ("GATEWAY_HOST", cfg.gateway_host)]
