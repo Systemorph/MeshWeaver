@@ -1,7 +1,10 @@
-// Mesh instances — the RN/web twin of the MAUI app's InstanceStore (memex/Memex.Client/Services/
-// InstanceStore.cs). "Local" is the mesh that served this app (same origin, anonymous). Additional
-// remote instances are portals the user connects to by URL + API token; the live gRPC-web client dials
-// whichever instance is current. Persisted in localStorage (the browser twin of MAUI Preferences).
+// Mesh instances — the RN/web twin of the MAUI app's InstanceStore, with the SAME storage backend:
+// THE LOCAL MESH. Instances are MemexInstance nodes (Instance/{id}) in the mesh this app dials by
+// default — the monolith/SQLite sidecar (Memex.LocalMesh) on native/desktop, the serving portal on
+// web. There is NO device storage: the app connects to the local mesh as its MAIN mesh, hydrates the
+// switcher's list from it (attachInstanceStore, on the Local connect), and every edit (add / token /
+// remove) writes the node back. The in-module list is only a render cache of those nodes; it resets
+// to Local-only on launch, exactly until the local mesh answers.
 
 export interface MeshInstance {
   /** Display name. */
@@ -66,21 +69,6 @@ export function instanceIdentity(inst: MeshInstance): InstanceIdentity {
 
 import Constants from "expo-constants";
 
-const INSTANCES_KEY = "mw.instances";
-const CURRENT_KEY = "mw.currentInstance";
-const SEEDED_KEY = "mw.seedVersion";
-const SEED_VERSION = 1;
-
-/**
- * The user's known environments, seeded once so the instance switcher is populated out of the box
- * (the built-in "Local" SQLite sidecar is always present via localInstance()). Tokens are empty —
- * anonymous connect; paste an API token per portal in the Connect screen to sign in.
- */
-export const KNOWN_INSTANCES: MeshInstance[] = [
-  { name: "memex.localhost (k8s)", url: "https://memex.localhost:8443", token: "", local: false, icon: "☸", color: "#d29922", kind: "Local · k8s" },
-  { name: "memex", url: "https://memex.meshweaver.cloud", token: "", local: false, icon: "☁️", color: "#4c8dff", kind: "Prod" },
-];
-
 // Live connect status — a tiny observable the Connect screen renders, because a Release
 // build swallows console and a failed connect must be VISIBLE truth on the device, not a
 // silently reopened onboarding.
@@ -95,6 +83,145 @@ export function getConnectStatus(): string { return lastConnectStatus; }
 export function onConnectStatus(listener: StatusListener): () => void {
   statusListeners.add(listener);
   return () => statusListeners.delete(listener);
+}
+
+// The instance list changed (hydrated from the mesh, or edited) — the switcher and the Connect
+// screen subscribe so an async hydration reaches an already-rendered list.
+const instanceListeners = new Set<StatusListener>();
+export function onInstancesChanged(listener: StatusListener): () => void {
+  instanceListeners.add(listener);
+  return () => instanceListeners.delete(listener);
+}
+function emitInstancesChanged(): void {
+  for (const l of instanceListeners) l();
+}
+
+// ── the store: MemexInstance nodes on the local mesh ─────────────────────────────
+
+/** The node-op surface the store needs — structurally a @meshweaver/client-web Mesh. */
+export interface InstanceStoreMesh {
+  search(query: string, basePath?: string, limit?: number): Promise<Record<string, unknown>[]>;
+  get(path: string): Promise<unknown>;
+  create(node: Record<string, unknown>): Promise<Record<string, unknown>>;
+  patch(path: string, fields: Record<string, unknown>): void;
+  delete(path: string): Promise<void>;
+}
+
+const INSTANCE_NODE_TYPE = "MemexInstance";
+const INSTANCE_SEGMENT = "Instance";
+
+let storeMesh: InstanceStoreMesh | null = null;
+let remotes: MeshInstance[] = [];
+let localDisplayName: string | null = null; // from the own-instance node (named after the device)
+let currentName = "";                       // "" = the Local default
+
+/**
+ * Attach the LOCAL mesh connection as the instance store and hydrate the list from its
+ * MemexInstance nodes. App.tsx calls this on a Local connect (pass null when dialing a remote —
+ * the cache keeps serving; edits then only live for the session).
+ */
+export function attachInstanceStore(mesh: InstanceStoreMesh | null): Promise<void> {
+  storeMesh = mesh;
+  return mesh ? hydrate(mesh) : Promise.resolve();
+}
+
+async function hydrate(mesh: InstanceStoreMesh): Promise<void> {
+  try {
+    const rows = await mesh.search(`nodeType:${INSTANCE_NODE_TYPE}`, undefined, 50);
+    const loaded: MeshInstance[] = [];
+    let ownName: string | null = null;
+    for (const r of rows) {
+      const path = String((r as any).path ?? "");
+      if (!path) continue;
+      const node: any = await mesh.get(path).catch(() => null);
+      if (!node) continue;
+      const c: any = node.content ?? {};
+      const name = String(node.name ?? c.displayName ?? path);
+      if (!c.url) { ownName = name; continue; } // the own-instance node: it names Local
+      loaded.push({
+        name,
+        url: String(c.url).replace(/\/+$/, ""),
+        token: String(c.token ?? ""),
+        local: false,
+        refreshToken: c.refreshToken ? String(c.refreshToken) : undefined,
+        clientId: c.clientId ? String(c.clientId) : undefined,
+        tokenExpiresAt: c.tokenExpiresAt ? Date.parse(String(c.tokenExpiresAt)) : undefined,
+      });
+    }
+    remotes = loaded;
+    localDisplayName = ownName;
+    emitInstancesChanged();
+  } catch {
+    // Store unreachable — the session keeps its in-memory list; next Local connect re-hydrates.
+  }
+}
+
+/** The Instance/{id} node id for a portal URL — its HOST, port-free: the exact meshId MAUI's
+ *  MeshConnector derives (`new Uri(url).Host`), so both clients patch ONE node per portal. */
+function instanceIdFor(url: string): string {
+  return url.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").replace(/:.*$/, "").toLowerCase();
+}
+
+/** Persist one instance as its MemexInstance node — create-or-patch, fire-and-forget (the in-memory
+ *  list is already updated; a failed write surfaces on the next hydration, not as a blocked tap). */
+function persist(inst: MeshInstance): void {
+  const mesh = storeMesh;
+  if (!mesh) return;
+  const id = instanceIdFor(inst.url);
+  const path = `${INSTANCE_SEGMENT}/${id}`;
+  const content = {
+    $type: "MemexInstanceContent",
+    displayName: inst.name,
+    url: inst.url,
+    token: inst.token || null,
+    meshId: id,
+    refreshToken: inst.refreshToken ?? null,
+    clientId: inst.clientId ?? null,
+    tokenExpiresAt: inst.tokenExpiresAt ? new Date(inst.tokenExpiresAt).toISOString() : null,
+  };
+  void (async () => {
+    try {
+      const existing = await mesh.search(`path:${path}`, undefined, 1);
+      if (existing.length) mesh.patch(path, { name: inst.name, content });
+      else
+        await mesh.create({
+          id,
+          namespace: INSTANCE_SEGMENT,
+          path,
+          name: inst.name,
+          nodeType: INSTANCE_NODE_TYPE,
+          content,
+        });
+    } catch {
+      /* best-effort — see above */
+    }
+  })();
+}
+
+// The mesh a NATIVE build dials by default (it has no serving origin like the web build). Configured in
+// app.json → expo.extra.portalUrl; defaults to the LOCAL monolith mesh — Memex.LocalMesh, the in-process
+// SQLite-backed mesh sidecar (the MAUI-parity local-first host), reachable from the iOS simulator at
+// http://localhost:5250 anonymously (no token). Point it at a remote portal via Connect-to-mesh + a token.
+const DEFAULT_PORTAL_URL = String((Constants.expoConfig?.extra as any)?.portalUrl ?? "http://localhost:5250");
+
+/** The default portal URL a native build dials (app.json → expo.extra.portalUrl); prefill for the connect form. */
+export function defaultPortalUrl(): string {
+  return DEFAULT_PORTAL_URL;
+}
+
+const sameOrigin = (): string =>
+  typeof window !== "undefined" && window.location ? window.location.origin : "";
+
+/**
+ * The always-present default instance — the MAIN mesh. Web (served by the mesh) → same-origin,
+ * anonymous. Native has no serving origin, so it dials the configured default portal. Its display
+ * name comes from the mesh itself (the own-instance node, named after the device).
+ */
+export function localInstance(): MeshInstance {
+  const origin = sameOrigin();
+  return origin
+    ? { name: localDisplayName ?? "Local", url: origin, token: "", local: true }
+    : { name: localDisplayName ?? "Local mesh", url: DEFAULT_PORTAL_URL, token: "", local: true };
 }
 
 /**
@@ -130,100 +257,49 @@ export async function discoverInstances(from: MeshInstance): Promise<MeshInstanc
   }
 }
 
-/** Merge discovered instances into the saved list — an existing entry (its token, edits) always wins. */
+/** Merge discovered instances into the list — an existing entry (its token, edits) always wins.
+ *  New ones are persisted to the local mesh (the store), best-effort. */
 export function mergeDiscovered(discovered: MeshInstance[]): MeshInstance[] {
-  const existing = read<MeshInstance[]>(INSTANCES_KEY) ?? [];
-  const byName = new Map(existing.map((i) => [i.name, i]));
-  const byUrl = new Set(existing.map((i) => i.url));
-  for (const d of discovered) if (!byName.has(d.name) && !byUrl.has(d.url)) byName.set(d.name, d);
-  const merged = [...byName.values()];
-  write(INSTANCES_KEY, merged);
-  return merged;
+  const byName = new Map(remotes.map((i) => [i.name, i]));
+  const byUrl = new Set(remotes.map((i) => i.url));
+  for (const d of discovered)
+    if (!byName.has(d.name) && !byUrl.has(d.url)) {
+      byName.set(d.name, d);
+      persist(d);
+    }
+  remotes = [...byName.values()];
+  emitInstancesChanged();
+  return remotes;
 }
 
-/**
- * Idempotently add the known environments to the saved-instances list on first run (versioned, so
- * removing a seeded instance won't resurrect it). Never clobbers a user-edited instance of the same name.
- */
-export function seedDefaultInstances(): void {
-  if (typeof localStorage === "undefined") return;
-  if ((read<number>(SEEDED_KEY) ?? 0) >= SEED_VERSION) return;
-  const existing = (read<MeshInstance[]>(INSTANCES_KEY) ?? []).filter((i) => !i.local && i.url);
-  const byName = new Map(existing.map((i) => [i.name, i]));
-  for (const k of KNOWN_INSTANCES) if (!byName.has(k.name)) byName.set(k.name, k);
-  write(INSTANCES_KEY, [...byName.values()]);
-  write(SEEDED_KEY, SEED_VERSION);
-}
-
-// The mesh a NATIVE build dials by default (it has no serving origin like the web build). Configured in
-// app.json → expo.extra.portalUrl; defaults to the LOCAL monolith mesh — Memex.LocalMesh, the in-process
-// SQLite-backed mesh sidecar (the MAUI-parity local-first host), reachable from the iOS simulator at
-// http://localhost:5250 anonymously (no token). Point it at a remote portal via Connect-to-mesh + a token.
-const DEFAULT_PORTAL_URL = String((Constants.expoConfig?.extra as any)?.portalUrl ?? "http://localhost:5250");
-
-/** The default portal URL a native build dials (app.json → expo.extra.portalUrl); prefill for the connect form. */
-export function defaultPortalUrl(): string {
-  return DEFAULT_PORTAL_URL;
-}
-
-const sameOrigin = (): string =>
-  typeof window !== "undefined" && window.location ? window.location.origin : "";
-
-/**
- * The always-present default instance. Web (served by the mesh) → same-origin, anonymous. Native has no
- * serving origin, so it dials the configured default portal (the user supplies a token in-app).
- */
-export function localInstance(): MeshInstance {
-  const origin = sameOrigin();
-  return origin
-    ? { name: "Local", url: origin, token: "", local: true }
-    : { name: "Local mesh", url: DEFAULT_PORTAL_URL, token: "", local: true };
-}
-
-function read<T>(key: string): T | null {
-  if (typeof localStorage === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : null;
-  } catch {
-    return null;
-  }
-}
-
-function write(key: string, value: unknown): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* storage disabled — instances just won't persist */
-  }
-}
-
-/** All instances: Local first, then the saved remotes. */
+/** All instances: Local first, then the remotes hydrated from the local mesh. */
 export function loadInstances(): MeshInstance[] {
-  const saved = (read<MeshInstance[]>(INSTANCES_KEY) ?? []).filter((i) => !i.local && i.url);
-  return [localInstance(), ...saved];
+  return [localInstance(), ...remotes];
 }
 
-/** The instance the app is currently pointed at (defaults to Local). */
+/** The instance the app is currently pointed at (defaults to Local — the main mesh). */
 export function currentInstance(): MeshInstance {
-  const name = read<string>(CURRENT_KEY);
-  return loadInstances().find((i) => i.name === name) ?? localInstance();
+  return remotes.find((i) => i.name === currentName) ?? localInstance();
 }
 
 export function setCurrentInstance(name: string): void {
-  write(CURRENT_KEY, name);
+  currentName = remotes.some((i) => i.name === name) ? name : "";
 }
 
-/** Add or replace a remote instance (keyed by name) and make it current. */
+/** Add or replace a remote instance (keyed by name), persist its node, and make it current. */
 export function saveInstance(inst: MeshInstance): void {
-  const others = (read<MeshInstance[]>(INSTANCES_KEY) ?? []).filter((i) => !i.local && i.name !== inst.name);
-  write(INSTANCES_KEY, [...others, { ...inst, local: false }]);
-  setCurrentInstance(inst.name);
+  const clean: MeshInstance = { ...inst, local: false, url: inst.url.replace(/\/+$/, "") };
+  remotes = [...remotes.filter((i) => i.name !== clean.name), clean];
+  currentName = clean.name;
+  persist(clean);
+  emitInstancesChanged();
 }
 
 export function removeInstance(name: string): void {
-  const others = (read<MeshInstance[]>(INSTANCES_KEY) ?? []).filter((i) => !i.local && i.name !== name);
-  write(INSTANCES_KEY, others);
-  if (read<string>(CURRENT_KEY) === name) setCurrentInstance("Local");
+  const inst = remotes.find((i) => i.name === name);
+  remotes = remotes.filter((i) => i.name !== name);
+  if (currentName === name) currentName = "";
+  if (inst && storeMesh)
+    storeMesh.delete(`${INSTANCE_SEGMENT}/${instanceIdFor(inst.url)}`).catch(() => {});
+  emitInstancesChanged();
 }

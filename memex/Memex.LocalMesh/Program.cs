@@ -24,8 +24,16 @@ var builder = WebApplication.CreateBuilder(args);
 // One cleartext port serving both gRPC transports: HTTP/2 (h2c) for the bidi Open, HTTP/1.1 for gRPC-web.
 // Local sidecar → no TLS; the client points at http://localhost:<port>.
 var port = builder.Configuration.GetValue("Grpc:Port", 5250);
+// Loopback by default. Grpc:ListenLan=true additionally exposes the mesh on the LAN so a PHYSICAL
+// phone can dial this machine (http://<host-ip>:5250) — opt-in only: this host authenticates nobody
+// (DeviceSeed stamps the device-user identity on every request), so on a LAN listen anyone on the
+// network IS the device user. The simulator/desktop path needs none of this (localhost reaches it).
+var listenLan = builder.Configuration.GetValue("Grpc:ListenLan", false);
 builder.WebHost.ConfigureKestrel(k =>
-    k.ListenLocalhost(port, l => l.Protocols = HttpProtocols.Http1AndHttp2));
+{
+    if (listenLan) k.ListenAnyIP(port, l => l.Protocols = HttpProtocols.Http1AndHttp2);
+    else k.ListenLocalhost(port, l => l.Protocols = HttpProtocols.Http1AndHttp2);
+});
 
 // SQLite file under the OS local-app-data (same shape as the MAUI client's memex-local.db).
 var dbPath = builder.Configuration["Sqlite:Path"]
@@ -38,6 +46,7 @@ builder.UseMeshWeaver(
     mesh => mesh
         .AddPartitionedSqlitePersistence($"Data Source={dbPath}")
         .AddGraph()          // node types + graph
+        .AddMemexInstanceType() // the mesh list: this mesh IS the shells' instance store (DeviceSeed)
         .AddKernel()         // C# kernel (Roslyn, MeshWeaver.Kernel.Hub) — lets doc code samples Run on the sidecar
         .AddDocumentation()  // the embedded "Doc" partition — real layout areas the client can render
         .AddGrpcHub()        // py/node stream-routed address types + the gRPC services
@@ -55,6 +64,9 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 builder.Services.AddSpeechTranscription(builder.Configuration);
 
 var app = builder.Build();
+
+// Device identity + first-boot seeds (device user, own instance, public memex) — see DeviceSeed.
+DeviceSeed.Seed(app.Services.GetRequiredService<IMessageHub>());
 
 // Serve the packaged web client (the React-Native app exported to web, baked into wwwroot) from the SAME
 // origin as the gRPC endpoint. Same origin ⇒ the browser makes no cross-origin request ⇒ no CORS at all.

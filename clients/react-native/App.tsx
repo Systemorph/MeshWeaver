@@ -20,7 +20,7 @@ import { buildMeshOps } from "./src/liveOps";
 import { NavContext, CurrentAddressContext, type NavTarget } from "./src/nav";
 import { Shell, HOME } from "./src/Shell";
 import { ensureWebStyles } from "./src/webStyles";
-import { currentInstance, seedDefaultInstances, setConnectStatus } from "./src/connection";
+import { attachInstanceStore, currentInstance, setConnectStatus, type MeshInstance } from "./src/connection";
 import { type ClientDestination } from "./src/screens";
 import { ThemeProvider, useTheme } from "./src/theme";
 import { ChatComposer } from "./src/chat";
@@ -59,6 +59,18 @@ const CHAT: ChatOptions | null = {
 };
 // const CHAT: ChatOptions | null = null;
 
+// Threads anchor in the viewer's OWN partition: on the native local mesh that is the device user
+// (seeded by the sidecar's DeviceSeed); against a remote portal the configured namespacePath applies.
+const chatNamespace = (inst: MeshInstance): string =>
+  Platform.OS !== "web" && inst.local ? "device-user" : (CHAT?.namespacePath ?? "");
+
+// 📱 The native-local landing: the device user's own activities (the same landing as the MAUI
+// shell), served by the local mesh's device-user partition. Web keeps the docs HOME — a same-origin
+// viewer is a real portal user whose partition this app cannot know.
+const DEVICE_HOME: NavTarget = { address: "device-user", area: "Activity" };
+const homeFor = (inst: MeshInstance): NavTarget =>
+  Platform.OS !== "web" && inst.local ? DEVICE_HOME : HOME;
+
 // react-native-render-html (the native HTML renderer) still uses React's deprecated `defaultProps`,
 // which React 18.3 logs as a dev-only warning per node — suppress that one third-party message so it
 // doesn't bury real warnings (harmless; gone in a release build).
@@ -72,7 +84,8 @@ function deviceLocale(): string | null {
 
 export default function App() {
   ensureWebStyles();
-  seedDefaultInstances(); // populate the switcher with the known environments on first run (idempotent)
+  // No seeding here: the instance list IS the local mesh's MemexInstance nodes (the sidecar seeds
+  // its defaults on first boot) — hydrated by attachInstanceStore on the Local connect below.
   return (
     <ThemeProvider>
       {/* The viewer's language. The RN app talks to the sidecar ANONYMOUSLY (no user node to read a
@@ -87,7 +100,7 @@ export default function App() {
 
 function AppInner() {
   const { palette } = useTheme();
-  const [nav, setNav] = useState<NavTarget>(HOME);
+  const [nav, setNav] = useState<NavTarget>(() => homeFor(currentInstance()));
   const [clientScreen, setClientScreen] = useState<ClientDestination | null>(null);
   const [instanceTick, setInstanceTick] = useState(0);
   const [source, setSource] = useState<AreaSource>(() => new StaticAreaSource(sampleArea));
@@ -121,7 +134,7 @@ function AppInner() {
     // On a phone the onboarding stays visible until the mesh ACKS (the transition effect
     // closes it) — closing eagerly here made a tap read as "connect just closes".
     if (Platform.OS === "web") setClientScreen(null);
-    setNav(HOME);
+    setNav(homeFor(currentInstance()));
     setLiveConnected(false);
     wasLive.current = false;
     setInstanceTick((t) => t + 1);
@@ -149,7 +162,12 @@ function AppInner() {
         setEmbedFactory(() => createGrpcEmbeddedFactory(l.connection));
         // The full MeshOps over the same connection — renderMarkdown (server Markdig) + the per-view kernel
         // anchor the interactive markdown + runnable code cells; the kernel activity lives in CHAT's partition.
-        setMeshOps(buildMeshOps(l.connection, inst.url, CHAT?.namespacePath ?? "", inst.token));
+        setMeshOps(buildMeshOps(l.connection, inst.url, chatNamespace(inst), inst.token));
+        // The LOCAL mesh is the instance STORE: hydrate the switcher's mesh list from its
+        // MemexInstance nodes. A remote connect detaches (the in-memory cache keeps serving).
+        void attachInstanceStore(
+          inst.local ? Mesh.from(l.connection, undefined, { url: inst.url, token: inst.token }) : null,
+        );
       })
       .catch((e) => {
         // Release builds swallow console — surface the failure where the user IS (the
@@ -197,6 +215,7 @@ function AppInner() {
                 <Shell
                   source={source}
                   nav={effNav}
+                  home={homeFor(currentInstance())}
                   clientScreen={clientScreen}
                   onNavigate={navigate}
                   onClientScreen={setClientScreen}
@@ -211,7 +230,7 @@ function AppInner() {
       {CHAT && (
         <ChatComposer
           submitter={submitter}
-          namespacePath={CHAT.namespacePath}
+          namespacePath={chatNamespace(currentInstance())}
           recorder={speech?.recorder}
           transcriber={speech?.transcriber}
           language={speech?.language}

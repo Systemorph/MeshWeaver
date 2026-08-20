@@ -73,10 +73,11 @@ The **You** menu opens in-app screens that render in the content pane instead of
 - **Voice** — dictation via the browser Speech Recognition API, with a de-CH / de-DE / en-US / fr-CH
   language choice. This is the web twin of the MAUI `Voice/` stack (on-device Whisper, incl. a Swiss-German
   fine-tune); the transcript is meant to feed the composer / a thread submission.
-- **Connect to mesh** — the instance manager: **Local** is the mesh that served this app (same origin,
-  anonymous); add a remote portal by **URL + API token** and switch to it. Persisted in `localStorage`
-  (`src/connection.ts` — the browser twin of MAUI's `InstanceStore`). Selecting an instance reconnects the
-  live source to it and returns Home.
+- **Connect to mesh** — the instance manager: **Local** is the mesh that served this app (same origin
+  on web, the Memex.LocalMesh sidecar on native — the MAIN mesh the app always dials first); add a
+  remote portal by **URL + API token** and switch to it. The list is stored IN the local mesh as
+  `MemexInstance` nodes (`src/connection.ts` — the same store the MAUI client's MeshConnector writes;
+  no device storage). Selecting an instance reconnects the live source to it and returns Home.
 - **My profile** / **Zoom & display** — identity + display prefs.
 
 ## Dark mode
