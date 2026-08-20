@@ -193,6 +193,72 @@ Key shape:
 - **No `JsonPointerReference` indirection.** The control's `NodePath` is the only binding the layout area declares; the view does the resolve.
 - **Same handle as the writer.** The writer's `parentHub.GetMeshNodeStream(path).Update(...)` and this view's `Hub.GetMeshNodeStream(path)` resolve the identical process-wide `IMeshNodeStreamCache` entry — one upstream subscription, every write visible to every reader, in order.
 
+## 🚨 A round may only report `Completed` if it produced what `Completed` asserts
+
+The streaming loop above ends in a **terminal write**, and that write is a CLAIM about the round.
+The rule is one sentence:
+
+> A round persists `ThreadMessageStatus.Completed` **only** when every dispatched tool call
+> returned **and** the model wrote a closing answer. Anything else terminates in a state that
+> NAMES what happened.
+
+**Why this needs stating.** The round used to assert success *by default* rather than *from
+evidence*, in three places that all defaulted the same way — `ToolCallEntry.Status` defaults to
+`Success`, `ToolCallEntry.IsSuccess` defaults to `true`, and `ThreadMessage.Status` defaults to
+`Completed`. So *absence of a failure signal* was persisted as a *positive success claim*, and two
+production defects that look unrelated are the same bug seen from two sides:
+
+| Observed | What the thread said | What actually happened |
+|---|---|---|
+| **#1689** | five consecutive rounds `Completed`, text narrating *"Confirmed — the body is now saved correctly with all nine bullets"* | `toolCalls: []` — nothing was ever written to the calendar |
+| **#1689 (side note)** | `ToolCallEntry` with `isSuccess: true, status: Success`, result `"CreateEvent failed: were unable to deserialize"` | the tool FAILED, four times |
+| **#1715** | `Completed`, "is ready" notification, answer ending mid-word at `` `ClientE `` | the closing model turn produced **zero tokens** for 8¼ minutes and the stream ended empty |
+
+In every row the terminal state is a lie about what happened. That is a **correctness** defect, not
+a reliability one — a user is told work happened that did not.
+
+**Where the rule lives.** `RoundOutcome.Classify(finalText, toolCalls, producedClosingText)` — pure,
+deterministic, no hub and no clock, so it unit-tests without a mesh and cannot drift between the
+streaming path and whatever reads the persisted cell. It returns a `RoundConclusion` carrying the
+verdict, the tool-call log with unfinished calls re-stamped, and the one-line diagnosis:
+
+| Verdict | Fires when | Cell status |
+|---|---|---|
+| `Answered` | every call returned and the model closed | `Completed` |
+| `ToolCallUnfinished` | a call was dispatched and the stream ended before its result | `Error` |
+| `NoOutput` | no text and no tool calls at all | `Error` |
+| `NoFinalAnswer` | tools ran, then the closing turn produced nothing | `Error` |
+
+Three details are load-bearing:
+
+- **"Unfinished" reuses `ToolCallVisibility.IsPending`** (default status + null `Result`) — the
+  predicate the live UI *already* uses for "dispatched, result not back yet". Inventing a second
+  notion of pending is how the two views drift apart; a mid-flight delegation carrying a live
+  progress projection stays out of the set because it has a `Result`.
+- **The re-stamp writes `Status` and `IsSuccess` only, never a synthetic `Result`.** The cell write
+  merges this log with the cell's current `ToolCalls` and that merge prefers whichever side carries
+  a `Result`, so a placeholder would CLOBBER a real terminal result that reached the cell through
+  the delegation stamp but not the in-memory log.
+- **A failed tool does NOT by itself fail the round.** Tools fail; agents recover and answer. What
+  must never happen is the failure being *recorded as a success* — so the failure lands on the
+  entry, and the round still completes honestly.
+
+**`IsSuccess = false` was unserializable** until this was fixed, which is why #1689 saw
+`isSuccess: true` on the persisted node even where the round had computed `false`. The hub
+serializer runs `DefaultIgnoreCondition = WhenWritingDefault`, and `false` IS the CLR default for a
+`bool`, so an explicit `false` on a property whose initializer declares `true` is dropped on the
+wire and rebuilt as `true` by the reader. `[JsonIgnore(Condition = Never)]` on
+`ToolCallEntry.IsSuccess` is what lets the `false` survive the hop — the same declared-`true`-bool
+trap, and the same fix, as `ImportDeleteRequest.Mirror`. **Any bool whose initializer is not the CLR
+default needs it.**
+
+**What this deliberately does NOT do.** It does not try to detect a model that simply *lies* in
+prose while calling no tools — a round that produced text and dispatched nothing is, from the
+harness's side, an ordinary answer, and there is no server-side signal to fail on. Nor does it add a
+liveness bound below `MaxStreamingDuration` for a zero-output stream; a silent provider is a
+provider fault, and a new timer would be a second mechanism papering over it rather than making the
+outcome honest. The invariant here is about what the round is allowed to CLAIM.
+
 ## Anti-patterns
 
 | ❌ Don't | Why it's wrong | ✅ Do instead |
@@ -205,6 +271,10 @@ Key shape:
 
 ## Cross-references
 
+- `src/MeshWeaver.AI/RoundOutcome.cs` + `test/MeshWeaver.AI.Test/RoundOutcomeTest.cs` — the round-completion
+  invariant as a pure table; `RoundCompletionHonestyTest` pins it end to end through a real round.
+- [Controlled I/O Pooling](/Doc/Architecture/ControlledIoPooling) — the sibling invariant for the other way a
+  round ends wrongly: a tool call whose `Task` never observes the token, so the round never ends at all.
 - [Asynchronous Calls](/Doc/Architecture/AsynchronousCalls) — the actor-model rules this page applies.
 - [Per-Hub TaskScheduler](/Doc/Architecture/OrleansTaskScheduler) — the threading model that keeps writer, reader, and per-node hub on independent schedulers.
 - [CQRS — Queries vs. Content Access](/Doc/Architecture/CqrsAndContentAccess) — the decision matrix listing `GetMeshNodeStream(path).Update(...)` as the streaming-write primitive.
