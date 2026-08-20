@@ -136,6 +136,21 @@
   <ItemGroup>
     <PackageReference Include="Aspire.Azure.Npgsql" />
     <PackageReference Include="Aspire.Azure.Storage.Blobs" />
+    <!-- 🚨 THE /app VERSION FLOOR for module-shared assemblies. Any assembly shipped BOTH in
+         /app and inside a module bundle binds to /app's copy in the default load context
+         ("diamonds ride") — which is only safe while /app's version is ≥ every module's
+         reference. Post-shed, these four resolved from TRANSITIVE graphs (Aspire, KeyVault)
+         BELOW the central pins the modules compile against, and the mismatch is boot-fatal:
+         memex-cloud crashlooped on Azure.Storage.Blobs 12.28 (app) vs 12.29.1 (module), then on
+         Azure.Core 1.55 vs 1.60 (2026-08-20). A DIRECT reference makes the central pin apply.
+         The full conflict sweep: Azure.Core, Azure.Storage.Blobs (+Common), the Msal extension,
+         System.ClientModel. When a module bumps an Azure-family package, bump the central pin
+         here FIRST — the platform floor moves before the module's reference does. -->
+    <PackageReference Include="Azure.Core" />
+    <PackageReference Include="Azure.Storage.Blobs" />
+    <PackageReference Include="Azure.Storage.Common" />
+    <PackageReference Include="Microsoft.Identity.Client.Extensions.Msal" />
+    <PackageReference Include="System.ClientModel" />
     <PackageReference Include="Aspire.Azure.Data.Tables" />
     <PackageReference Include="Aspire.Npgsql" />
     <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" />
