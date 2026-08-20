@@ -167,3 +167,22 @@ def test_music_commands_play_and_are_honest_about_songs():
         assert await bare.handle_command("Spiel Musik") is None
 
     asyncio.run(scenario())
+
+
+def test_station_name_alone_plays_despite_lost_first_word():
+    class FakeBrainOnly:
+        async def ask(self, text): return "h"
+        async def await_reply(self, handle, budget_s): return None
+        async def close(self): pass
+
+    async def scenario():
+        played = []
+        router = BrainRouter({"lokal": FakeBrainOnly()}, "lokal",
+                             phrases={"radio_on": "Hier kommt {station}."})
+        async def player(url): played.append(url)
+        router.player = player
+        # The device loses the first word after wake: "Spiel Radio SRF 3" arrives mangled.
+        out = await router.handle_command("Die Radio-SRF 3.")
+        assert out == "Hier kommt Radio SRF 3." and played[-1].endswith("drs3/mp3_128")
+
+    asyncio.run(scenario())

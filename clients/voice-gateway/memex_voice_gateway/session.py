@@ -30,10 +30,11 @@ class SpokenSession:
             return {}
         return state
 
-    def save(self, *, portal: str, context: dict | None, threads: list[dict]) -> None:
-        """Persist and re-arm the expiry — every interaction extends the session."""
-        state = {"portal": portal, "context": context, "threads": threads,
-                 "expires_at": time.time() + self._ttl_s}
+    def save(self, **state) -> None:
+        """Persist and re-arm the expiry — every interaction extends the session. Accepts
+        whatever the router's session_state carries (portal, context, threads, inbox, …);
+        a keyword-frozen signature once crashed every state change when the state grew."""
+        state["expires_at"] = time.time() + self._ttl_s
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._path.write_text(json.dumps(state, indent=2))
