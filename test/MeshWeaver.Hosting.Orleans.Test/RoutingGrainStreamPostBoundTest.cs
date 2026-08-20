@@ -30,6 +30,18 @@ public class RoutingGrainStreamPostBoundTest
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
     private static readonly Address Sender = new("client", "sender-1");
 
+    /// <summary>
+    /// A routed delivery of the shape the router actually sees: the payload is already
+    /// <see cref="RawJson"/> (MeshBuilder packages it before <c>DeliverMessage</c>). Small, so the
+    /// size guard added for #1890 is a no-op on these cases and they still test what they were
+    /// written for.
+    /// </summary>
+    private static IMessageDelivery Delivery(string id) =>
+        new MessageDelivery<RawJson>(
+            Sender, new Address("portal", "user"), new RawJson("{\"$type\":\"Ping\"}"),
+            System.Text.Json.JsonSerializerOptions.Default) with
+        { Id = id };
+
     [Fact]
     public void PostThatNeverCompletes_TerminatesOnTimeout_AndNacksSender()
     {
@@ -40,9 +52,9 @@ public class RoutingGrainStreamPostBoundTest
         var terminated = false;
 
         RoutingGrain.PostToStream(
+                delivery: Delivery("d1"),
                 post: () => never.Task,
                 addressPath: "portal/user-1",
-                deliveryId: "d1",
                 sender: Sender,
                 postFailureToSender: (m, t) => nacks.Add((m, t)),
                 logger: NullLogger.Instance,
@@ -75,9 +87,9 @@ public class RoutingGrainStreamPostBoundTest
         var nacks = new List<(string Message, ErrorType Type)>();
 
         await RoutingGrain.PostToStream(
+                delivery: Delivery("d2"),
                 post: () => Task.FromException(new InvalidOperationException("stream provider down")),
                 addressPath: "portal/user-2",
-                deliveryId: "d2",
                 sender: Sender,
                 postFailureToSender: (m, t) => nacks.Add((m, t)),
                 logger: NullLogger.Instance,
@@ -95,9 +107,9 @@ public class RoutingGrainStreamPostBoundTest
         var nacks = new List<(string Message, ErrorType Type)>();
 
         var result = await RoutingGrain.PostToStream(
+                delivery: Delivery("d3"),
                 post: () => Task.CompletedTask,
                 addressPath: "portal/user-3",
-                deliveryId: "d3",
                 sender: Sender,
                 postFailureToSender: (m, t) => nacks.Add((m, t)),
                 logger: NullLogger.Instance,
