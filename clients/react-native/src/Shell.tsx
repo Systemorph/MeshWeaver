@@ -247,6 +247,10 @@ function InstanceSwitcher({ isMobile, onReconnect, onManage }: { isMobile: boole
 // the Blazor breadcrumb shows) and cached per instance+path; the raw path segment is only the
 // not-yet-resolved fallback. Without this the crumb reads like an id ("device-user"), not a name.
 const crumbNameCache = new Map<string, string>();
+// Prefixes already looked up (in flight, or resolved to no node/name) — each instance+path is
+// queried at most once; only a THROWN search (transient network fault) clears the mark so a later
+// navigation retries. Without this, a nameless prefix re-queried on every navigation.
+const crumbNameRequested = new Set<string>();
 function useCrumbNames(address: string): (prefix: string) => string | undefined {
   const ops = useMeshOps();
   const [, tick] = useState(0);
@@ -257,13 +261,15 @@ function useCrumbNames(address: string): (prefix: string) => string | undefined 
     const segs = address.split("/").filter(Boolean);
     for (let i = 0; i < segs.length; i++) {
       const prefix = segs.slice(0, i + 1).join("/");
-      if (crumbNameCache.has(keyFor(prefix))) continue;
+      const key = keyFor(prefix);
+      if (crumbNameCache.has(key) || crumbNameRequested.has(key)) continue;
+      crumbNameRequested.add(key);
       void ops.search(`path:${prefix}`, undefined, 1)
         .then((rows) => {
           const name = rows?.[0] && typeof (rows[0] as any).name === "string" ? String((rows[0] as any).name) : null;
-          if (name) { crumbNameCache.set(keyFor(prefix), name); tick((n) => n + 1); }
+          if (name) { crumbNameCache.set(key, name); tick((n) => n + 1); }
         })
-        .catch(() => {});
+        .catch(() => crumbNameRequested.delete(key));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, ops, instanceUrl]);
