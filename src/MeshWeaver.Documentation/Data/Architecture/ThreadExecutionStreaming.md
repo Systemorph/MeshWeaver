@@ -220,7 +220,11 @@ a reliability one — a user is told work happened that did not.
 **Where the rule lives.** `RoundOutcome.Classify(finalText, toolCalls, producedClosingText)` — pure,
 deterministic, no hub and no clock, so it unit-tests without a mesh and cannot drift between the
 streaming path and whatever reads the persisted cell. It returns a `RoundConclusion` carrying the
-verdict, the tool-call log with unfinished calls re-stamped, and the one-line diagnosis:
+verdict, the tool-call log with unfinished calls re-stamped, and the ingredients for the diagnosis —
+a `LocalizationKey` plus the unfinished tool NAMES. 🌍 The classifier decides and names; the
+**sentence** is rendered by the caller from the round's own `AccessContext.Locale`, the same
+explicit-locale rule the other terminal-error branches follow (never ambient `CultureInfo` — a round
+hops schedulers):
 
 | Verdict | Fires when | Cell status |
 |---|---|---|
@@ -231,14 +235,27 @@ verdict, the tool-call log with unfinished calls re-stamped, and the one-line di
 
 Three details are load-bearing:
 
-- **"Unfinished" reuses `ToolCallVisibility.IsPending`** (default status + null `Result`) — the
-  predicate the live UI *already* uses for "dispatched, result not back yet". Inventing a second
-  notion of pending is how the two views drift apart; a mid-flight delegation carrying a live
-  progress projection stays out of the set because it has a `Result`.
-- **The re-stamp writes `Status` and `IsSuccess` only, never a synthetic `Result`.** The cell write
-  merges this log with the cell's current `ToolCalls` and that merge prefers whichever side carries
-  a `Result`, so a placeholder would CLOBBER a real terminal result that reached the cell through
-  the delegation stamp but not the in-memory log.
+- **"Unfinished" is the exact complement of `ToolCallVisibility.IsCompleted`** — the predicate the
+  live UI *already* uses — so *pending* (dispatched, no result) and *running* (a delegation
+  mid-flight) both block `Answered`. Expressing it as the complement rather than as a fresh notion
+  of "pending" is what stops the verdict and the chat UI disagreeing about which calls are still
+  outstanding.
+- 🚨 **The verdict and the re-stamp are SPLIT, and only an `IsPending` entry is re-stamped —
+  `Status` + `IsSuccess`, never `Result`, never a `Streaming` entry.** The cell write merges this
+  log with the cell's current `ToolCalls`, and that merge protects a late terminal stamp two ways:
+  it prefers whichever side carries a `Result`, *and* it keeps the cell's status precisely when the
+  incoming one is `Streaming`. Writing a placeholder `Result`, or converting `Streaming` to
+  `Failed`, defeats one guard each and clobbers a terminal result that reached the cell but not this
+  log. Counting the call unfinished needs neither write.
+- **The `Summary` of an unanswered round carries an `Error: ` prefix**, because that string is what
+  a DELEGATING PARENT consumes: `DelegationTool.WaitForDelegationResult` returns the child's
+  `Summary` verbatim, the round resets to `Idle` either way, and `ExtractToolResult` classifies a
+  bare string by that prefix — the same convention `WaitForDelegationResult` itself emits for a
+  cancelled or faulted child. Without it, the parent records a silent child as a *successful* tool
+  result: this bug, one level up.
+- **The completion notification says what happened.** `EmitCompletionNotification` takes
+  `succeeded`; a round that did not answer titles `"…" did not complete` instead of `"…" is ready`.
+  It is still SENT — silence on a backgrounded thread reads as "still working".
 - **A failed tool does NOT by itself fail the round.** Tools fail; agents recover and answer. What
   must never happen is the failure being *recorded as a success* — so the failure lands on the
   entry, and the round still completes honestly.
