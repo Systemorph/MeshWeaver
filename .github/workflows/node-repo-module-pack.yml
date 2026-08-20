@@ -77,14 +77,9 @@ jobs:
           echo "packing $MODULE as $PACKAGE@$version, platform floor $floor"
 
       - name: Build the module (Release, warnings-as-errors)
-        # CopyLocalLockFileAssemblies puts the module's PACKAGE dependencies into the output
-        # folder, where the pack step's --deps-closure derivation expects to find them — a module
-        # bundle must carry its own private closure (the platform does not: those packages left
-        # /app with the module's source, and an entry-DLL-only bundle faults at first use).
         run: >
           dotnet build "${{ matrix.entry.project }}" -c Release -warnaserror
           -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
-          -p:CopyLocalLockFileAssemblies=true
           -p:Version=${{ steps.identity.outputs.version }}
 
       - name: Run the module's tests, when it ships any
@@ -102,6 +97,18 @@ jobs:
             echo "no test project at $tests — nothing to run"
           fi
 
+      # Publish materializes the module's PACKAGE dependencies beside the entry DLL — the SDK's
+      # own answer to the runtime closure (framework-trimmed packages excluded, everything else
+      # included), which the pack step's --deps-closure derivation selects from. A
+      # -p:CopyLocalLockFileAssemblies=true build was tried first and copied NOTHING on the CI
+      # SDK while copying everything on a dev machine (2026-08-20, 12/14 jobs) — publish does not
+      # depend on that flag at all.
+      - name: Publish the module (the closure the pack selects from)
+        run: >
+          dotnet publish "${{ matrix.entry.project }}" -c Release --no-build
+          -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver
+          -p:Version=${{ steps.identity.outputs.version }}
+
       - name: Build the module-pack tool
         run: dotnet build meshweaver/src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release
 
@@ -110,7 +117,7 @@ jobs:
           PROJECT: ${{ matrix.entry.project }}
         run: >
           dotnet run --project meshweaver/src/MeshWeaver.Plugin.Build -c Release --no-build --
-          module-pack "$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0"
+          module-pack "$GITHUB_WORKSPACE/$(dirname "$PROJECT")/bin/Release/net10.0/publish"
           --deps-closure
           --module-name "${{ matrix.entry.module }}"
           --plugin "${{ matrix.entry.package }}"
