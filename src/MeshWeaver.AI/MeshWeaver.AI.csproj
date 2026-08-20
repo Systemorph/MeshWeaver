@@ -27,7 +27,6 @@
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="YamlDotNet" />
-        <PackageReference Include="Azure.Core" />
         <PackageReference Include="HtmlAgilityPack" />
         <!-- DateTime.Humanize() in ThreadMessageLayoutAreas. Declared explicitly: it used to ride
              in as a transitive of JsonPointer.Net (removed in #1231). -->
@@ -39,8 +38,6 @@
         <PackageReference Include="Microsoft.Extensions.AI" />
         <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
         <PackageReference Include="Microsoft.Agents.AI" />
-        <PackageReference Include="Microsoft.Agents.AI.Workflows" />
-        <PackageReference Include="Microsoft.Agents.AI.AzureAI" />
     </ItemGroup>
     <ItemGroup>
       <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
