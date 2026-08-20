@@ -43,9 +43,10 @@ internal static class StreamMessageSizeGuard
     /// Orleans' memory-stream block size, and therefore the hard ceiling on one memory-stream
     /// message: <c>1 &lt;&lt; 20</c> = 1,048,576 bytes. Hard-coded in
     /// <c>MemoryAdapterFactory</c> (Microsoft.Orleans.Streaming 10.2.x) with no configuration
-    /// surface — <c>MemoryStreamBlockSizeTest</c> pins this constant against the real
-    /// <c>FixedSizeBuffer</c> so an Orleans upgrade that moved it fails a test instead of silently
-    /// mis-tuning the guard.
+    /// surface — <c>OversizedStreamMessageRefusedTest
+    /// .The_orleans_block_size_is_what_the_guard_is_calibrated_against</c> pins this constant
+    /// against the real <c>FixedSizeBuffer</c>, so an Orleans upgrade that moved the block size
+    /// fails a test instead of silently mis-tuning the guard.
     /// </summary>
     internal const int MemoryStreamBlockBytes = 1 << 20;
 
@@ -99,7 +100,7 @@ internal static class StreamMessageSizeGuard
             + "memory-stream limit (one fixed 1 MiB pooled-cache block per message), so the "
             + "stream's pulling agent would reject it with 'Message size is too big' and retry "
             + "forever while the message was silently never delivered. Sender "
-            + $"'{delivery.Sender}'. Payload head: {Preview(delivery)}";
+            + $"'{delivery.Sender}'. Payload head: {Quote(Preview(delivery))}";
     }
 
     /// <summary>
@@ -125,6 +126,13 @@ internal static class StreamMessageSizeGuard
             + $"attached\",\"bytes\":{payloadBytes},\"head\":{Quote(Head(delivery))}}}"));
     }
 
+    /// <summary>
+    /// The head of the payload, for identification. 🚨 The CALLER JSON-quotes it before it reaches
+    /// a log line: this is attacker-influenced content (it is a message payload), and a raw
+    /// newline or quote in it would break the burst apart in the log pipeline — a red burst is
+    /// re-assembled from its indented continuation lines, so an embedded newline can forge a new
+    /// log record. Quoting also keeps the refusal a single parseable line.
+    /// </summary>
     private static string Preview(IMessageDelivery delivery) =>
         delivery.Message is RawJson { Content: { } content }
             ? Head(content) is var head && head.Length < content.Length ? head + "…" : head

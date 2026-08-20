@@ -129,6 +129,37 @@ public class OversizedStreamMessageRefusedTest
         error.Message.Should().Contain("BigAnalyticsPayload",
             "…and enough of the payload head to recognise WHAT was too big — the $type sits at the "
             + "front of the JSON, and identifying the producer is the question #1890 could not answer");
+
+        // 🚨 The payload is attacker-influenced content going into a log line, and a red burst is
+        // re-assembled from its indented continuation lines — an embedded newline in the preview
+        // would forge a second log record and split one incident into two.
+        error.Message.Split('\n').Should().HaveCount(1,
+            "the refusal must stay ONE log record: the payload head is JSON-quoted, so a newline "
+            + "inside it cannot break the burst apart");
+    }
+
+    /// <summary>
+    /// The preview is quoted, so a payload carrying newlines and quotes cannot forge log records
+    /// or break the refusal into pieces the watcher would parse as separate faults.
+    /// </summary>
+    [Fact]
+    public void A_payload_carrying_newlines_cannot_break_the_refusal_into_two_log_records()
+    {
+        var hostile = "{\"$type\":\"Evil\",\"x\":\"\nfail: Forged.Category[0]\n      forged\n"
+            + new string('y', StreamMessageSizeGuard.MemoryStreamBlockBytes) + "\"}";
+        var delivery = new MessageDelivery<RawJson>(
+            Sender, new Address("portal", "user-1"), new RawJson(hostile),
+            JsonSerializerOptions.Default) with
+        { Id = "d-hostile" };
+
+        var refusal = StreamMessageSizeGuard.Describe(
+            delivery, Target,
+            Encoding.UTF8.GetByteCount(hostile), StreamMessageSizeGuard.MemoryStreamBlockBytes);
+
+        refusal.Split('\n').Should().HaveCount(1,
+            "an unescaped newline in the payload would open what reads as a fresh `fail:` burst");
+        refusal.Should().Contain("\\n", "the newline is escaped, not dropped — the head stays legible");
+        refusal.Should().Contain("Evil", "…and the $type is still identifiable");
     }
 
     /// <summary>
