@@ -14,6 +14,7 @@ import { useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { Recorder } from "./speech/recorder";
 import { PushToTalkController, type SpeechFlowState, type ThreadSubmitter, type Transcriber } from "./speech/pushToTalk";
+import { useStyles, useTheme, type Palette } from "./theme";
 
 export interface ChatComposerProps {
   /** The mesh thread surface (Mesh.from(connection)); undefined = dictation-only (send disabled). */
@@ -28,6 +29,10 @@ export interface ChatComposerProps {
 }
 
 export function ChatComposer({ submitter, namespacePath, recorder, transcriber, language }: ChatComposerProps) {
+  // Themed like every other screen — a static light stylesheet here left the composer glaring
+  // white (and its typed text near-invisible) in dark mode.
+  const styles = useStyles(makeStyles);
+  const { palette } = useTheme();
   const [draft, setDraft] = useState("");
   const [speechState, setSpeechState] = useState<SpeechFlowState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -118,7 +123,7 @@ export function ChatComposer({ submitter, namespacePath, recorder, transcriber, 
       )}
       {transcribing && (
         <View style={styles.stateRow}>
-          <ActivityIndicator size="small" color="#0f6cbd" />
+          <ActivityIndicator size="small" color={palette.accent} />
           <Text style={styles.transcribingText}>Transcribing…</Text>
         </View>
       )}
@@ -130,6 +135,7 @@ export function ChatComposer({ submitter, namespacePath, recorder, transcriber, 
           value={draft}
           onChangeText={setDraft}
           placeholder={submitter ? "Message the mesh…" : "Dictate a note… (offline — no mesh connection)"}
+          placeholderTextColor={palette.textMuted}
           multiline
         />
         {controller && (
@@ -157,30 +163,32 @@ export function ChatComposer({ submitter, namespacePath, recorder, transcriber, 
   );
 }
 
-const styles = StyleSheet.create({
-  bar: { borderTopWidth: 1, borderTopColor: "#e1dfdd", padding: 8, gap: 6, backgroundColor: "#faf9f8" },
+// Palette-driven (light + dark); only the semantic recording/error red stays fixed in both themes.
+const makeStyles = (p: Palette) => StyleSheet.create({
+  bar: { borderTopWidth: 1, borderTopColor: p.border, padding: 8, gap: 6, backgroundColor: p.topbarBg },
   stateRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   recordingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#d13438" },
   recordingText: { color: "#d13438", fontWeight: "600" },
-  transcribingText: { color: "#0f6cbd" },
+  transcribingText: { color: p.accent },
   errorText: { color: "#d13438" },
-  threadText: { color: "#605e5c", fontSize: 12 },
+  threadText: { color: p.textMuted, fontSize: 12 },
   inputRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
   input: {
     flex: 1,
     minHeight: 40,
     maxHeight: 120,
     borderWidth: 1,
-    borderColor: "#c8c6c4",
+    borderColor: p.border,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    backgroundColor: "white",
+    backgroundColor: p.inputBg,
+    color: p.text,
   },
   roundBtn: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-  mic: { backgroundColor: "#edebe9" },
+  mic: { backgroundColor: p.navHover },
   micRecording: { backgroundColor: "#d13438" },
-  send: { backgroundColor: "#0f6cbd" },
+  send: { backgroundColor: p.accent },
   disabled: { opacity: 0.4 },
-  btnText: { color: "white", fontSize: 16 },
+  btnText: { color: p.onAccent, fontSize: 16 },
 });

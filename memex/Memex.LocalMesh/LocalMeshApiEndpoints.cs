@@ -90,6 +90,24 @@ public static class LocalMeshApiEndpoints
         // host has no antiforgery pipeline and no session to forge against.
         group.MapPost("/upload", HandleUpload).DisableAntiforgery();
 
+        // Interactive device onboarding — SIDECAR-ONLY (a portal onboards through its own signed-in
+        // flow, so this verb deliberately has no portal twin). The shell's first-launch dialog posts
+        // the profile; DeviceSeed.Onboard creates the partition-root User + the global-admin grant
+        // through the framework path. Idempotent: an already-onboarded mesh answers created=false.
+        group.MapPost("/onboard", async (OnboardBody body, IServiceProvider services, CancellationToken ct) =>
+        {
+            var created = await DeviceSeed.Onboard(RootHub(services), body.FullName, body.Bio, body.Role)
+                .FirstAsync().Timeout(TimeSpan.FromSeconds(30)).ToTask(ct);
+            return Results.Json(new { ok = true, created });
+        });
+
+        // First-launch detection for the shells: {"onboarded": bool}.
+        group.MapGet("/onboard", async (IServiceProvider services, CancellationToken ct) =>
+        {
+            var onboarded = await DeviceSeed.IsOnboarded(RootHub(services)).FirstAsync().ToTask(ct);
+            return Results.Json(new { onboarded });
+        });
+
         return endpoints;
     }
 
@@ -181,4 +199,7 @@ public static class LocalMeshApiEndpoints
 
     /// <summary>POST body for /api/mesh/content/list — mirrors MeshApiEndpoints.PathBody.</summary>
     public record PathBody(string Path);
+
+    /// <summary>POST body for /api/mesh/onboard — the first-launch profile (DeviceSeed.Onboard).</summary>
+    public record OnboardBody(string? FullName, string? Bio = null, string? Role = null);
 }
