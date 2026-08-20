@@ -136,3 +136,34 @@ def test_delegate_routes_agent_to_its_home_portal():
         assert handle.startswith("memex::") and cloud.delegated
 
     asyncio.run(scenario())
+
+
+def test_music_commands_play_and_are_honest_about_songs():
+    class FakeBrainOnly:
+        async def ask(self, text): return "h"
+        async def await_reply(self, handle, budget_s): return None
+        async def close(self): pass
+
+    async def scenario():
+        played = []
+        router = BrainRouter({"lokal": FakeBrainOnly()}, "lokal",
+                             phrases={"radio_on": "Hier kommt {station}.",
+                                      "song_hint": "Einzelne Lieder kann ich noch nicht — dafür kommt {station}."})
+        async def player(url): played.append(url)
+        router.player = player
+        # A generic music wish plays the default station.
+        out = await router.handle_command("Kannst du für mich Musik spielen?")
+        assert out == "Hier kommt Energy Zürich." and len(played) == 1
+        # A NAMED song gets radio plus the honest sentence — never an invented promise.
+        out = await router.handle_command("Ich möchte, dass du mir ein Lied spielst und es sollte Komet heißen.")
+        assert "noch nicht" in out and len(played) == 2
+        # A named station is honored.
+        out = await router.handle_command("Spiel Radio SRF 3")
+        assert "SRF 3" in out and played[-1].endswith("drs3/mp3_128")
+        # "Musik aus" ends quietly through the interrupt path.
+        assert await router.handle_command("Musik aus") == ""
+        # Without a player wired, music requests fall through to the brain.
+        bare = BrainRouter({"lokal": FakeBrainOnly()}, "lokal")
+        assert await bare.handle_command("Spiel Musik") is None
+
+    asyncio.run(scenario())
