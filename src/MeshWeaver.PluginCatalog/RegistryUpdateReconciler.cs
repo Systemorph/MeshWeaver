@@ -140,7 +140,7 @@ public sealed class RegistryUpdateReconciler(
         if (tokenResolver is null)
             return Observable.Return(Unit.Default);
 
-        return options.EffectiveRegistries
+        return RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
             .Select(registry => ReconcileOne(registry, tokenResolver))
             .ToObservable()
             .Concat()
