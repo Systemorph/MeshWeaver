@@ -189,6 +189,11 @@ async def run() -> None:
         deliver=router.deliver_answer if cfg.announce_mode == "signal" else None,
     )
     link = SatelliteLink(cfg, pipeline)
+    router.player = link.play_media   # deterministic music: "spiel Musik/Radio …"
+    # Pre-warm the local model so the FIRST question after a quiet hour answers instantly.
+    for brain in getattr(router, "_brains", {}).values():
+        if isinstance(brain, OllamaBrain):
+            asyncio.ensure_future(brain.warmup())
 
     async def barge_in() -> None:
         await server.interrupt_streams()
