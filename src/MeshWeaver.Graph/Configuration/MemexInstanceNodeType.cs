@@ -30,6 +30,15 @@ public record MemexInstanceContent
     /// <summary>Last time the client connected to this mesh (stamped on connect).</summary>
     public DateTime? LastConnected { get; init; }
 
+    /// <summary>OAuth refresh token from a browser sign-in; null for pasted API tokens.</summary>
+    public string? RefreshToken { get; init; }
+
+    /// <summary>OAuth client id the client registered at this portal (dynamic client registration).</summary>
+    public string? ClientId { get; init; }
+
+    /// <summary>When the OAuth access token expires; null for pasted API tokens.</summary>
+    public DateTime? TokenExpiresAt { get; init; }
+
     /// <summary>True when a token is present, so the client should join this mesh.</summary>
     public bool IsAuthenticated => !string.IsNullOrEmpty(Token);
 }
