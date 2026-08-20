@@ -41,10 +41,12 @@ async def test_stream_endpoint_plays_chunks_as_they_arrive():
         assert body[:4] == b"RIFF"
         assert body[44:] == b"AA" * 100 + b"BB" * 100
 
-        # a stream id is single-use
+        # a stream is REPLAYABLE: the device's player sniffs the URL and re-requests it
+        # for playback, so the second fetch must serve the full buffered audio again
         async with aiohttp.ClientSession() as http:
             async with http.get(url) as response:
-                assert response.status == 404
+                assert response.status == 200
+                assert (await response.read())[44:] == b"AA" * 100 + b"BB" * 100
     finally:
         await server.stop()
 
