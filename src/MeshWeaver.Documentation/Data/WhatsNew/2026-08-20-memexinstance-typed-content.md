@@ -1,7 +1,7 @@
 ---
 Name: Saved mesh connections resolve reliably
 Category: Fix
-Description: A saved mesh connection's details now materialize on every hub, so clients reading them typed no longer see them as empty.
+Description: A saved mesh connection's details now resolve on every hub, so clients that read them as typed content no longer see them as empty.
 Icon: Sparkle
 Order: -20260820
 ---

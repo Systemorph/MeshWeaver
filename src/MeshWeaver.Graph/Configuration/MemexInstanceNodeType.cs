@@ -71,8 +71,9 @@ public static class MemexInstanceNodeType
         // The content type must resolve on EVERY hub that materializes these nodes — the per-node
         // hub gets it via WithContentType below, but node-stream/query hubs (MeshNodeStreamCache)
         // otherwise degrade the content to an untyped JsonElement ("stayed an untyped JsonElement"
-        // boot warning; typed ContentAs<MemexInstanceContent> consumers then read null).
-        builder.ConfigureHub(hub => hub.WithType(typeof(MemexInstanceContent), nameof(MemexInstanceContent)));
+        // boot warning; typed ContentAs<MemexInstanceContent> consumers then read null). Mesh-level
+        // registry, so all hubs inherit it (the UiContributionNodeType pattern).
+        builder.WithMeshType(typeof(MemexInstanceContent), nameof(MemexInstanceContent));
         builder.AddMeshNodes(CreateMeshNode());
         return builder;
     }
