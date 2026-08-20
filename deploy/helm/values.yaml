@@ -363,6 +363,16 @@ secrets:
     # HMAC secret for INBOUND GitHub webhooks (/webhooks/github). Only an install that registers
     # its own hooks on the plugin repos needs it; a registry CONSUMER does not.
     GitHub__Webhook__Secret: ""
+# ---- In-cluster Postgres ----------------------------------------------------
+# enabled: true renders the memex-postgres StatefulSet/Service/Config/Secret (the self-host
+# default). Set false on environments that run an EXTERNAL Postgres (the AKS namespaces use the
+# Azure flexible server): the in-cluster resources are not rendered, and the portal's
+# wait-for-postgres init probes the EXTERNAL host from config.memex_portal.MEMEX_HOST instead —
+# a probe against the unrendered in-cluster service would wait forever (memex, 2026-08-20:
+# every new pod stuck Init:0/1 while the old one kept serving).
+postgres:
+  enabled: true
+
 config:
   memex_postgres:
     POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
