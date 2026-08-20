@@ -3,6 +3,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -166,6 +167,21 @@ public sealed class UserIdentityCache : IDisposable
     private string? _subscriptionFailure;
 
     /// <summary>
+    /// The directory read this index is built from — exposed so its two non-negotiable properties
+    /// are assertable without a mesh (see the 🚨 note in the constructor for what each one costs).
+    ///
+    /// <list type="bullet">
+    ///   <item><b>Complete</b> — an ENUMERATION, not a search page. The query is unpinned, so on
+    ///     Postgres a request that states no limit is answered with the 50 most recently modified
+    ///     matches and the caller cannot tell.</item>
+    ///   <item><b>System</b> — a process-wide directory, resolved once, used to answer "who is the
+    ///     caller"; it must not inherit the permissions of whoever happened to construct it.</item>
+    /// </list>
+    /// </summary>
+    public static MeshQueryRequest DirectoryQuery { get; } =
+        MeshQueryRequest.FromQuery("nodeType:User").AsSystem().Complete();
+
+    /// <summary>
     /// Subscribes to the live <c>nodeType:User</c> query and builds the email-to-node index.
     /// The index is ready as soon as the first query emission arrives.
     /// </summary>
@@ -187,8 +203,39 @@ public sealed class UserIdentityCache : IDisposable
         // (see IndexChanged). Publish + Connect, not Publish().RefCount(): the cache's connection
         // is unconditional and lives for the object's lifetime, so the index keeps filling even
         // while nobody is waiting on it — a RefCount that dropped to zero would tear the query down.
+        //
+        // 🚨 Complete() + AsSystem() are BOTH load-bearing, and each on its own is the whole bug
+        // (#1936). This query is the portal's USER DIRECTORY: a row that is missing from it does
+        // not shorten a list, it changes who the portal thinks you are.
+        //
+        //   • Complete() — the query is UNPINNED (no path:/namespace:), so on Postgres it is
+        //     served by the cross-schema fan-out, which answers a request that states no limit
+        //     with a PAGE: the 50 most recently modified matches, ordered last_modified DESC
+        //     (PostgreSqlCrossSchemaQueryProvider.DefaultFanOutLimit). Every user outside that
+        //     page fell out of the index. And because a User node's last_modified only moves when
+        //     the PROFILE is written, the omission is self-reinforcing: the longer you go without
+        //     editing your profile, the more certainly you are missing — the identical shape as
+        //     #1216 (baked 237 NodeTypes against 50 Code nodes) and #1326 (9 of 43 Spaces
+        //     permanently stale). This is an ENUMERATION, so it says so.
+        //   • AsSystem() — the directory is process-wide and is consumed to resolve the CALLING
+        //     user's own identity, so it must not be scoped to whichever caller happened to
+        //     resolve this singleton first. MeshService.StampViewer pins the viewer from the
+        //     ambient AccessContext at CALL time; on a portal that is whoever hit it first after a
+        //     restart, and off a circuit's own call tree it is nobody at all — an index built as
+        //     Anonymous hydrates EMPTY and answers "no such user" about everyone, forever. Reading
+        //     it as System is the framework-plumbing case AsSystem() exists for; it discloses
+        //     nothing, because every consumer looks up the AUTHENTICATED caller's OWN email
+        //     (UserContextMiddleware, ResolveHttpCaller, CircuitAccessHandler) and reads only
+        //     Id / Name / TimeZoneId / Locale off the result.
+        //
+        // What either omission COSTS, and why it was invisible: a missing row makes Lookup answer
+        // a DETERMINATE Unknown — the index is hydrated, so "not here" reads as "no such user".
+        // Both context builders then keep the claims SEED, which carries no TimeZoneId and no
+        // Locale, so every timestamp renders UTC and every string English; CircuitAccessHandler
+        // does not even start its identity repair, because that runs only on Unavailable. Nothing
+        // is logged, and ObjectId / Email / IsVirtual all still look correct.
         var applied = mesh
-            .Query<MeshNode>(MeshQueryRequest.FromQuery("nodeType:User"))
+            .Query<MeshNode>(DirectoryQuery)
             .Select(change =>
             {
                 Apply(change);
@@ -282,26 +329,25 @@ public sealed class UserIdentityCache : IDisposable
     /// </summary>
     public MeshNode? TryGetByEmail(string email) => Lookup(email).Node;
 
+    /// <summary>
+    /// The node's profile email — the index KEY.
+    ///
+    /// <para>🚨 Read through <see cref="MeshNodeContentExtensions.ContentAs{T}"/>, never a bare
+    /// <c>is JsonElement</c> probe plus reflection. Content arrives typed on the hub that owns the
+    /// type, as a <see cref="JsonElement"/> when it degraded at a query seam, and as a
+    /// <c>JsonNode</c> from the node builders — and the old shape test handled only the first two,
+    /// so any other shape silently dropped the user from the directory. A dropped user is not a
+    /// shorter list here: <see cref="Lookup"/> then answers a DETERMINATE "no such user", both
+    /// context builders keep the claims seed, and that seed has no TimeZoneId and no Locale
+    /// (#1936). Same rule, same failure mode, as the <c>_Policy</c> write storm and #189.</para>
+    /// </summary>
     private bool TryGetEmail(MeshNode node, out string email)
     {
         email = "";
         if (node.Content is null) return false;
         try
         {
-            string? value = null;
-            if (node.Content is JsonElement je)
-            {
-                if (je.ValueKind == JsonValueKind.Object
-                    && je.TryGetProperty("email", out var emailProp)
-                    && emailProp.ValueKind == JsonValueKind.String)
-                    value = emailProp.GetString();
-            }
-            else
-            {
-                var prop = node.Content.GetType().GetProperty("Email")
-                           ?? node.Content.GetType().GetProperty("email");
-                value = prop?.GetValue(node.Content) as string;
-            }
+            var value = node.ContentAs<User>(_jsonOptions, _logger)?.Email;
             if (!string.IsNullOrEmpty(value))
             {
                 email = value;

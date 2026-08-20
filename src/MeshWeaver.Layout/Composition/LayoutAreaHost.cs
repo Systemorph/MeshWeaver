@@ -119,13 +119,20 @@ public record LayoutAreaHost : IDisposable
         var capturedAccessContext = accessService?.Context;
         var ctorLogger = workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Layout.LayoutAreaHost");
+        // 🚨 TimeZoneId and Locale are logged BECAUSE they are the fields that differ between a
+        // context resolved from the mesh User profile and one left as the claims SEED — ObjectId,
+        // Email and IsVirtual are identical on both, so a line without them shows a healthy
+        // identity while every timestamp on the page renders UTC and every string English. That is
+        // exactly what made #1936 undiagnosable from logs: the capture "looked correct" for days.
         ctorLogger?.LogDebug(
-            "[LayoutAreaHost.ctor] hub={Hub} area={Area} captured AccessContext: ObjectId={ObjectId} Email={Email} IsVirtual={IsVirtual} (Context={HasContext}, CircuitContext={HasCircuit})",
+            "[LayoutAreaHost.ctor] hub={Hub} area={Area} captured AccessContext: ObjectId={ObjectId} Email={Email} IsVirtual={IsVirtual} TimeZoneId={TimeZoneId} Locale={Locale} (Context={HasContext}, CircuitContext={HasCircuit})",
             workspace.Hub.Address,
             reference.Area ?? "(default)",
             capturedAccessContext?.ObjectId ?? "(null)",
             capturedAccessContext?.Email ?? "(null)",
             capturedAccessContext?.IsVirtual ?? false,
+            capturedAccessContext?.TimeZoneId ?? "(null)",
+            capturedAccessContext?.Locale ?? "(null)",
             accessService?.Context != null,
             accessService?.CircuitContext != null);
 
