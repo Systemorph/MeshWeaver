@@ -441,9 +441,11 @@ public static class ContentCollectionsExtensions
             services
                 .AddScoped<IContentService, ContentService>()
                 .AddScoped<Data.IFileContentProvider, FileContentProvider>()
-                .AddSingleton<IContentTransformer, DocSharpContentTransformer>()
-                .AddSingleton<IContentTransformer, PdfPigContentTransformer>()
-                .AddSingleton<IContentTransformer, ClosedXmlContentTransformer>()
+                // The document transformers (docx/xlsx/pdf → text) RELOCATED to the
+                // MeshWeaver.Markdown.Export module, which registers them as additional
+                // IContentTransformer singletons — a deployment that never transforms office
+                // documents carries neither ClosedXML, DocSharp nor PdfPig. The collection is
+                // additive, so hosts and modules compose.
                 .AddKeyedScoped<IStreamProviderFactory, FileSystemStreamProviderFactory>(FileSystemStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, EmbeddedResourceStreamProviderFactory>(EmbeddedResourceStreamProvider.SourceType)
                 .AddKeyedScoped<IStreamProviderFactory, HubStreamProviderFactory>(HubStreamProviderFactory.SourceType);
