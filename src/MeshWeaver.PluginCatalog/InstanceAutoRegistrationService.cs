@@ -81,18 +81,6 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
         if (!string.IsNullOrWhiteSpace(registry.Token))
             return Observable.Return(registry.Token.Trim());
 
-        // Resolved as the BARE type — that is how this codebase registers it (see line ~173);
-        // an IOptions<> ask silently returns null and the fallback never fires (found live:
-        // the first fallback build still 401'd).
-        if (hub.ServiceProvider.GetService<PluginCatalogOptions>() is { } options
-            && LegacyTokenFallback(options, registry) is { } legacy)
-        {
-            logger.LogInformation(
-                "Registry {Url}: using the legacy PluginCatalog:RegistryToken (no per-registry token configured)",
-                registry.Url);
-            return Observable.Return(legacy);
-        }
-
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         return Observable.Using(
                 () => accessService.ImpersonateAsSystem(),
@@ -127,6 +115,23 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
     /// 2026-08-20); without the ambiguity guard, a token could be sent to a host it was not
     /// issued for. Null → no fallback, resolve the stored credential.
     /// </summary>
+    /// <summary>
+    /// Applies <see cref="LegacyTokenFallback"/> to every registry reference: each one that
+    /// qualifies gets a COPY carrying the legacy token, so the resolver's ordinary
+    /// registry-token fast path serves it — no service lookup inside the resolver (the
+    /// in-resolver lookup hung the install lane silently on ci.4679). Pure.
+    /// </summary>
+    public static IReadOnlyList<PluginRegistryReference> WithLegacyTokens(
+        PluginCatalogOptions options, IReadOnlyList<PluginRegistryReference> registries) =>
+        registries
+            .Select(r => LegacyTokenFallback(options, r) is { } legacy
+                ? new PluginRegistryReference
+                {
+                    Name = r.Name, Url = r.Url, Ref = r.Ref, Token = legacy,
+                }
+                : r)
+            .ToList();
+
     public static string? LegacyTokenFallback(
         PluginCatalogOptions options, PluginRegistryReference registry)
     {
@@ -205,7 +210,8 @@ public sealed class InstanceAutoRegistrationService(
     private void Start()
     {
         var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
-        var registry = options.EffectiveRegistries.FirstOrDefault();
+        var registry = RegistryTokenResolver
+            .WithLegacyTokens(options, options.EffectiveRegistries).FirstOrDefault();
 
         // Two independent phases, sequenced: first make sure this installation HAS an instance key
         // (auto-registering when a bootstrap key is configured), then install the packages this
@@ -657,7 +663,7 @@ public sealed class InstanceAutoRegistrationService(
             : [];
 
         var tokenResolver = services.GetService<RegistryTokenResolver>();
-        var registries = options.EffectiveRegistries;
+        var registries = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries);
         var remote = registries.Count == 0 || tokenResolver is null
             ? Observable.Return<IReadOnlyList<ConfiguredPackageSource>>([])
             : registries

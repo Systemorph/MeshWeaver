@@ -61,6 +61,18 @@ public class RegistryTokenFallbackTest
     }
 
     [Fact]
+    public void WithLegacyTokens_StampsOnlyTheQualifyingReferences()
+    {
+        var plugins = new PluginRegistryReference { Name = "Plugins", Url = "https://reg.example" };
+        var options = Options(registries: plugins);
+        var stamped = RegistryTokenResolver.WithLegacyTokens(options, options.Registries);
+        Assert.Equal("mwi_legacy", stamped[0].Token);
+        Assert.Equal("Plugins", stamped[0].Name);
+        // The original reference is never mutated — the stamp is a copy.
+        Assert.Equal("", plugins.Token);
+    }
+
+    [Fact]
     public void NoLegacyToken_NoFallback()
     {
         var reg = new PluginRegistryReference { Name = "Plugins", Url = "https://reg.example" };
