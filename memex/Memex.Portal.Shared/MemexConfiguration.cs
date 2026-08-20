@@ -549,11 +549,16 @@ public static class MemexConfiguration
                 // The ONE module platform gate (ModulePlatformFloor) — never a second notion of
                 // the module platform requirement.
                 ModulePlatformFloor.DeclineReason,
-                // 🚨 modules/<name>/<name>.dll SPECIFICALLY — never ResolveModulePath, whose
-                // BaseDirectory fallback would let a sidecar entry with a lost modules/ folder
-                // silently bind a same-named app-closure DLL instead of being skipped. Baseline
-                // entries below keep ResolveModulePath (both locations are legitimate for them).
-                name => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, name),
+                // 🚨 The entry's OWN landed directory SPECIFICALLY — modules/<Directory ?? name>/
+                // <name>.dll — never ResolveModulePath, whose BaseDirectory fallback would let a
+                // sidecar entry with a lost modules/ folder silently bind a same-named app-closure
+                // DLL instead of being skipped. Baseline entries below keep ResolveModulePath (both
+                // locations are legitimate for them). Passing the ENTRY rather than the name is
+                // what makes this gate agree with the resolver below: landing writes generations
+                // (modules/<name>@<gen>/) and moves the entry pointer, so a name-only check found
+                // nothing for ANY generation-landed module and boot skipped every store module on
+                // the deployment while its bytes sat correctly on disk (#1949).
+                entry => ModuleActivationBoot.LandedModuleDllExists(moduleRoot, entry),
                 (module, reason) => Console.Error.WriteLine(
                     $"[ModuleActivation] SKIPPED store-installed module '{module}': {reason}"));
             // 🚨 A LISTED-BUT-ABSENT module must never crash boot. `InstallAssemblies` does
@@ -570,23 +575,15 @@ public static class MemexConfiguration
             // itself known as a missing FEATURE, which is diagnosable — a portal that will not
             // start is not.
             var resolvedModules = effectiveModules
-                // A store-landed entry with a GENERATION directory resolves THERE (the landing
-                // pointer — see ModuleActivationEntry.Directory); everything else keeps
-                // ResolveModulePath's probes (modules/<name>/ first, then the classic
-                // BaseDirectory-relative location).
-                .Select(entry =>
-                {
-                    var landed = persistedActivation.Entries.FirstOrDefault(e =>
-                        string.Equals(e.Name, Path.GetFileNameWithoutExtension(entry),
-                            StringComparison.OrdinalIgnoreCase));
-                    var path = !string.IsNullOrWhiteSpace(landed?.Directory)
-                        ? Path.Combine(
-                            ModuleLandingService.ModuleDirectoryFor(
-                                moduleRoot, landed!.Name, landed),
-                            landed.Name + ".dll")
-                        : MeshBuilder.ResolveModulePath(entry, moduleRoot);
-                    return (Entry: entry, Path: path);
-                })
+                // 🚨 ONE resolution, shared with the existence gate above
+                // (ModuleActivationBoot.ResolveLoadPath): a store-landed module resolves to the
+                // directory ITS activation entry points at — the generation the landing wrote —
+                // and a baseline entry keeps ResolveModulePath's probes. The provenance comes from
+                // the union itself rather than being re-derived here; the gate and the resolver
+                // each deciding for themselves where a module's bytes live is exactly #1949.
+                .Select(module => (
+                    module.Entry,
+                    Path: ModuleActivationBoot.ResolveLoadPath(moduleRoot, module)))
                 .Where(candidate =>
                 {
                     if (File.Exists(candidate.Path))

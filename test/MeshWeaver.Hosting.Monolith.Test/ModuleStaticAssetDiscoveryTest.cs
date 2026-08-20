@@ -197,6 +197,55 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
         manifest.Stylesheets.Should().BeEmpty();
     }
 
+    // ---- #1949: the asset folder comes from the LOADED ASSEMBLY, not from a name-built path ----
+
+    /// <summary>
+    /// A module landed the way landing lands today — into a GENERATION directory
+    /// (<c>modules/&lt;Name&gt;@&lt;id&gt;/</c>) on the deployment's writable module ROOT, which is
+    /// not the app directory — must have its assets found there. A path built from
+    /// <c>AppContext.BaseDirectory</c> + the module NAME misses on both counts, and misses
+    /// SILENTLY: the module loads, its components render, and every asset they request 404s.
+    /// </summary>
+    [Fact]
+    public void GenerationLandedModule_TakesItsAssetsFromTheLoadedAssemblysOwnFolder()
+    {
+        // A landed module on a shared volume: /data/modules/<Name>@<gen>/<Name>.dll — a different
+        // ROOT and a different DIRECTORY SHAPE from the legacy modules/<Name>/ under the app.
+        var landed = Path.Combine("/data", "modules", $"{ModuleName}@a1b2c3d4e");
+
+        MeshModuleStaticAssetExtensions.ModuleWwwrootPath(
+                Path.Combine(landed, $"{ModuleName}.dll"),
+                AppContext.BaseDirectory,
+                ModuleName)
+            .Should().Be(Path.Combine(landed, "wwwroot"));
+
+        // The legacy fixed folder still works — same rule, it is simply the directory the
+        // assembly happens to sit in.
+        var legacy = Path.Combine("/data", "modules", ModuleName);
+        MeshModuleStaticAssetExtensions.ModuleWwwrootPath(
+                Path.Combine(legacy, $"{ModuleName}.dll"), AppContext.BaseDirectory, ModuleName)
+            .Should().Be(Path.Combine(legacy, "wwwroot"));
+    }
+
+    /// <summary>
+    /// 🚨 A module still riding the APP CLOSURE must contribute NOTHING. Its assembly sits in the
+    /// app folder, whose <c>wwwroot</c> is the HOST's — mounting that under
+    /// <c>_content/&lt;Name&gt;</c> would serve the entire host web root through a module
+    /// namespace. Only an assembly sitting directly inside a <c>modules/</c> tree supplies its own
+    /// folder; everything else falls back to the (absent) legacy name-based path.
+    /// </summary>
+    [Fact]
+    public void AppClosureModule_NeverMountsTheHostsOwnWwwroot()
+    {
+        MeshModuleStaticAssetExtensions.ModuleWwwrootPath(
+                Path.Combine("/app", $"{ModuleName}.dll"), "/app", ModuleName)
+            .Should().Be(Path.Combine("/app", "modules", ModuleName, "wwwroot"));
+
+        // No file backing at all (a dynamic assembly) degrades the same way.
+        MeshModuleStaticAssetExtensions.ModuleWwwrootPath("", "/app", ModuleName)
+            .Should().Be(Path.Combine("/app", "modules", ModuleName, "wwwroot"));
+    }
+
     /// <summary>
     /// Two modules carrying the SAME private dependency is ordinary composition, not a fault: the
     /// first mount wins and the second is skipped, rather than the loud refusal a genuine route

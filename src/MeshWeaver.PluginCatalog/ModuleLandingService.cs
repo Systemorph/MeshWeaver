@@ -279,10 +279,10 @@ public sealed class ModuleLandingService : IDisposable
         });
 
         logger?.LogInformation(
-            "Module '{Name}' LANDED into modules/{Name}/ ({Count} assemblies, floor "
+            "Module '{Name}' LANDED into modules/{Generation}/ ({Count} assemblies, floor "
             + "{MinMeshVersion}, platform {Running}; built against framework MVID "
             + "{FrameworkMvid} — diagnostic) — activation recorded, RESTART REQUIRED to load it",
-            name, name, assemblies.Count, minMeshVersion ?? "(none)",
+            name, generation, assemblies.Count, minMeshVersion ?? "(none)",
             ModulePlatformFloor.RunningVersion ?? "(unknown)", frameworkMvid ?? "(unrecorded)");
     }
 
