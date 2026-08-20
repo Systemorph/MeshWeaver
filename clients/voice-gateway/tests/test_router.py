@@ -80,3 +80,59 @@ def test_delegation_to_a_standard_agent():
         assert router.describe_hold("lokal::x") == "Let me check. One moment please."
 
     asyncio.run(scenario())
+
+
+def test_run_tool_dispatches_to_mesh_and_home():
+    class FakeMesh:
+        def __init__(self):
+            self.calls = []
+        async def ask(self, text): return "h"
+        async def await_reply(self, handle, budget_s): return None
+        async def delegate(self, text, agent=None): return "u/_Thread/t1"
+        async def call(self, tool, arguments):
+            self.calls.append((tool, arguments))
+            return f"{tool}-result"
+        async def close(self): pass
+
+    class FakeHome:
+        async def run(self, args): return f"home:{args['action']}"
+        async def close(self): pass
+
+    async def scenario():
+        mesh = FakeMesh()
+        router = BrainRouter({"memex": mesh}, "memex", home=FakeHome())
+        assert await router.run_tool("search_mesh", {"query": "kantone"}) == "search-result"
+        assert await router.run_tool("get_node", {"path": "@Edu/Guide"}) == "get-result"
+        assert await router.run_tool("home_assistant", {"action": "get_state"}) == "home:get_state"
+        assert mesh.calls == [("search", {"query": "kantone", "limit": 8}),
+                              ("get", {"path": "@Edu/Guide"})]
+        bare = BrainRouter({"memex": mesh}, "memex")
+        assert "not configured" in await bare.run_tool("home_assistant", {"action": "get_state"})
+        await router.close()
+
+    asyncio.run(scenario())
+
+
+def test_delegate_routes_agent_to_its_home_portal():
+    class FakeMesh:
+        def __init__(self):
+            self.delegated = []
+        async def ask(self, text): return "h"
+        async def await_reply(self, handle, budget_s): return None
+        async def delegate(self, text, agent=None):
+            self.delegated.append((text, agent))
+            return "u/_Thread/t1"
+        async def close(self): pass
+
+    async def scenario():
+        cloud, mac = FakeMesh(), FakeMesh()
+        router = BrainRouter({"memex": cloud, "mac": mac}, "memex",
+                             agent_homes={"ExecutiveAssistant": "mac"})
+        # Email agent goes HOME to the local mesh, even while the cloud is active.
+        handle = await router.delegate_task("Check my inbox", "ExecutiveAssistant")
+        assert handle.startswith("mac::") and mac.delegated and not cloud.delegated
+        # Unpinned agents keep going to the active mesh.
+        handle = await router.delegate_task("Research quantum", "Researcher")
+        assert handle.startswith("memex::") and cloud.delegated
+
+    asyncio.run(scenario())

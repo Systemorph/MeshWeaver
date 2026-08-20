@@ -41,12 +41,29 @@ class SayTts:
     its bytes; the temp file is removed immediately.
     """
 
-    def __init__(self, voice: str = "Anna") -> None:
+    def __init__(self, voice: str = "Anna", english_voice: str = "Samantha") -> None:
         self.voice = voice
+        self.english_voice = english_voice
+
+    @staticmethod
+    def _looks_german(text: str) -> bool:
+        """Cheap language guess: a German voice reading English sounds awful (and vice
+        versa), so the voice follows the reply's language."""
+        lowered = f" {text.lower()} "
+        german_markers = (" der ", " die ", " das ", " und ", " ist ", " nicht ", " ich ",
+                          " sie ", " mit ", " ein ", " eine ", " zu ", " haben ", " wie ",
+                          "ä", "ö", "ü", "ß")
+        english_markers = (" the ", " is ", " are ", " you ", " and ", " to ", " of ",
+                           " have ", " what ", " it ")
+        g = sum(m in lowered for m in german_markers)
+        e = sum(m in lowered for m in english_markers)
+        return g >= e
 
     @staticmethod
     def build_args(voice: str, out_path: str) -> list[str]:
-        return ["say", "-v", voice, "-o", out_path, "--data-format=LEI16@22050", "-f", "-"]
+        # 16 kHz: the satellite firmware micro_decoder rejects 22050 Hz ('Decode finished'
+        # after ~300ms, silent playback — the reason no reply was ever HEARD on it).
+        return ["say", "-v", voice, "-o", out_path, "--data-format=LEI16@16000", "-f", "-"]
 
     async def synthesize(self, text: str) -> bytes:
         import os
@@ -54,8 +71,9 @@ class SayTts:
         fd, path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
         try:
+            voice = self.voice if self._looks_german(text) else self.english_voice
             process = await asyncio.create_subprocess_exec(
-                *self.build_args(self.voice, path),
+                *self.build_args(voice, path),
                 stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             _, err = await process.communicate(text.encode())
             if process.returncode != 0:
@@ -96,18 +114,34 @@ def streaming_wav_header(sample_rate: int, channels: int = 1) -> bytes:
 
 
 class StreamingWav:
-    """One in-flight streamed utterance: PCM sentences arrive on a queue while the device
-    is already playing the URL. `close()` ends the stream (and the playback)."""
+    """One in-flight streamed utterance. PCM sentences are BUFFERED as they arrive, and any
+    number of readers replay the buffer then follow the live tail — the device's player
+    sniffs the URL (a short first request) and then re-requests it for actual playback, so
+    a single-use stream plays as silence (observed: 200-byte fetches, then nothing)."""
 
     def __init__(self, sample_rate: int) -> None:
         self.sample_rate = sample_rate
-        self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.chunks: list[bytes] = []
+        self.closed = False
+        self._changed = asyncio.Condition()
 
     async def push(self, pcm: bytes) -> None:
-        await self.queue.put(pcm)
+        async with self._changed:
+            self.chunks.append(pcm)
+            self._changed.notify_all()
 
     async def close(self) -> None:
-        await self.queue.put(None)
+        async with self._changed:
+            self.closed = True
+            self._changed.notify_all()
+
+    async def read_from(self, index: int) -> bytes | None:
+        """The chunk at `index`, waiting for it if the stream is still being fed;
+        None once the stream is closed and fully consumed."""
+        async with self._changed:
+            while index >= len(self.chunks) and not self.closed:
+                await self._changed.wait()
+            return self.chunks[index] if index < len(self.chunks) else None
 
 
 class TtsFileServer:
@@ -124,9 +158,15 @@ class TtsFileServer:
         self._runner: web.AppRunner | None = None
 
     def open_stream(self, sample_rate: int) -> tuple[StreamingWav, str]:
+        # Expire finished streams by TTL (they stay addressable for the player's re-request).
+        now = time.monotonic()
+        self._stream_born = getattr(self, "_stream_born", {})
+        for sid in [sid for sid, born in self._stream_born.items() if now - born > self.ttl_s]:
+            self._streams.pop(sid, None); self._stream_born.pop(sid, None)
         stream = StreamingWav(sample_rate)
         stream_id = secrets.token_urlsafe(8)
         self._streams[stream_id] = stream
+        self._stream_born[stream_id] = now
         self._live.add(stream)
         return stream, f"http://{self.host}:{self.port}/tts-stream/{stream_id}.wav"
 
@@ -137,37 +177,53 @@ class TtsFileServer:
         self._live.clear()
 
     async def _handle_stream(self, request: web.Request) -> web.StreamResponse:
-        stream = self._streams.pop(request.match_info["id"], None)
+        stream = self._streams.get(request.match_info["id"])
         if stream is None:
             return web.Response(status=404)
         response = web.StreamResponse(headers={"Content-Type": "audio/wav"})
         response.enable_chunked_encoding()
         await response.prepare(request)
         await response.write(streaming_wav_header(stream.sample_rate))
+        index = 0
         try:
-            while (pcm := await stream.queue.get()) is not None:
+            while (pcm := await stream.read_from(index)) is not None:
+                index += 1
                 await response.write(pcm)
             await response.write_eof()
         finally:
-            self._live.discard(stream)
+            if stream.closed:
+                self._live.discard(stream)
         return response
+
+    @staticmethod
+    def _wav_to_flac(wav: bytes) -> bytes:
+        """The satellite's micro_decoder ships WITHOUT the WAV codec (its own config:
+        'FLAC is the least processor intensive') — Home Assistant transcodes announcements
+        to the device's announced format, and so must we."""
+        import subprocess
+        r = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
+                            "-f", "flac", "-compression_level", "0", "pipe:1"],
+                           input=wav, capture_output=True)
+        if r.returncode != 0 or not r.stdout:
+            raise RuntimeError(f"flac transcode failed: {r.stderr.decode()[:200]}")
+        return r.stdout
 
     def add(self, wav: bytes) -> str:
         now = time.monotonic()
         self._files = {k: v for k, v in self._files.items() if now - v[0] < self.ttl_s}
         file_id = secrets.token_urlsafe(8)
-        self._files[file_id] = (now, wav)
-        return f"http://{self.host}:{self.port}/tts/{file_id}.wav"
+        self._files[file_id] = (now, self._wav_to_flac(wav))
+        return f"http://{self.host}:{self.port}/tts/{file_id}.flac"
 
     async def _handle(self, request: web.Request) -> web.Response:
         entry = self._files.get(request.match_info["id"])
         if entry is None:
             return web.Response(status=404)
-        return web.Response(body=entry[1], content_type="audio/wav")
+        return web.Response(body=entry[1], content_type="audio/flac")
 
     async def start(self) -> None:
         app = web.Application()
-        app.router.add_get("/tts/{id}.wav", self._handle)
+        app.router.add_get("/tts/{id}.flac", self._handle)
         app.router.add_get("/tts-stream/{id}.wav", self._handle_stream)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
