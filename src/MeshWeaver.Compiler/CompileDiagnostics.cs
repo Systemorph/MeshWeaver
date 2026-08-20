@@ -149,4 +149,108 @@ public static class CompileDiagnostics
                 sb.AppendLine($"  - {p}");
         return sb.ToString();
     }
+
+    /// <summary>
+    /// How many diagnostic lines of <c>compileError</c> the LOGGED report carries. The complete
+    /// set still travels on the exception (printed after the message by the console formatter)
+    /// and is written to <c>NodeTypeDefinition.CompilationDiagnostics</c>; this bounds only the
+    /// copy that has to survive a fixed-size evidence capture.
+    /// </summary>
+    internal const int MaxLoggedDiagnosticLines = 12;
+
+    /// <summary>
+    /// How many matched Code paths the LOGGED report lists. The full list is in the compile's own
+    /// ActivityLog (<c>get @{Type}/_Activity/compile-…</c>), which has no size cap.
+    /// </summary>
+    internal const int MaxLoggedMatchedPaths = 8;
+
+    /// <summary>
+    /// 🚨 THE failure report the compile pipeline's single reporting funnel LOGS — and the order of
+    /// its sections is the whole point (issue #1840).
+    ///
+    /// <para><b>What went wrong.</b> The funnel logged
+    /// <c>LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}", path,
+    /// sourceDiscoveryReport)</c>. The compiler diagnostics were never discarded — they ride on
+    /// <c>CompilationException.Message</c> (pinned by
+    /// <c>CompileFailureReportedOnceTest.Failed_emit_throws_the_full_diagnostics_and_logs_nothing</c>)
+    /// and the console formatter prints the exception AFTER the message. But the message it printed
+    /// first was the source-discovery report, whose length scales with the number of matched Code
+    /// nodes — 26 of them for <c>…/Northwind/AnalyticsCatalog</c>, about 2.4 kB. The red-log watcher
+    /// keeps <c>LogWatcherOptions.MaxSampleLength</c> (2000) characters of a burst
+    /// (<c>BurstAggregator.Truncate</c>), so the evidence attached to the incident ended
+    /// <c>…[truncated]</c> partway down the node listing and the exception — the only actionable
+    /// part — never made it into the ticket. An operator reading the incident could see 26 file
+    /// names and not one compiler error.</para>
+    ///
+    /// <para><b>The rule this encodes.</b> A failure report is ordered by ACTIONABILITY, because
+    /// everything downstream of the logger truncates from the END: the node, then the compiler's
+    /// own verdict, then the source-discovery context. The listing that scales with the input is
+    /// bounded here and kept in full where nothing truncates it (the ActivityLog and
+    /// <c>CompilationDiagnostics</c>), so a big source set can never crowd out the diagnostics
+    /// again.</para>
+    ///
+    /// <para>Pure — no hub, no logger, no I/O — so the ordering invariant is asserted directly.</para>
+    /// </summary>
+    /// <param name="nodePath">The NodeType whose compile failed.</param>
+    /// <param name="compileError">The compiler's verdict — <c>CompilationException.Message</c>,
+    /// i.e. the output of <see cref="FormatCompileFailure"/> for a Roslyn failure.</param>
+    /// <param name="executedQueries">Every source query the compile ran.</param>
+    /// <param name="matchedCodePaths">Every Code node those queries matched.</param>
+    internal static string FormatCompileFailureReport(
+        string nodePath,
+        string? compileError,
+        IReadOnlyList<string> executedQueries,
+        IReadOnlyList<string> matchedCodePaths)
+    {
+        var sb = new System.Text.StringBuilder();
+
+        // 1. WHAT failed. One short line, so the two facts below always start inside any budget.
+        sb.Append("Failed to compile assembly for node '").Append(nodePath).AppendLine("'.");
+
+        // 2. WHY — the compiler's own verdict, FIRST, because it is the only part that says what to
+        //    change. Bounded by line count, never by a character cut that could slice a CS id in half.
+        sb.AppendLine("--- Compiler diagnostics ---");
+        if (string.IsNullOrWhiteSpace(compileError))
+            sb.AppendLine("  (the failure carried no message — see the exception below)");
+        else
+        {
+            var lines = compileError.Replace("\r\n", "\n").Split('\n');
+            for (var i = 0; i < lines.Length && i < MaxLoggedDiagnosticLines; i++)
+                sb.AppendLine(lines[i]);
+            if (lines.Length > MaxLoggedDiagnosticLines)
+                sb.AppendLine(
+                    $"  … and {lines.Length - MaxLoggedDiagnosticLines} more diagnostic line(s) — "
+                    + "the complete set is on the exception below and in the NodeType's "
+                    + "CompilationDiagnostics.");
+        }
+
+        // 3. WHERE the compile looked. Queries first (there are a handful and they explain an empty
+        //    or surprising source set), then a BOUNDED sample of what they matched.
+        sb.AppendLine("--- Source discovery ---");
+        sb.AppendLine($"Executed source queries ({executedQueries.Count}):");
+        foreach (var q in executedQueries)
+            sb.AppendLine($"  - {q}");
+
+        if (matchedCodePaths.Count == 0)
+        {
+            sb.AppendLine("Matched Code nodes (0):");
+            sb.AppendLine(
+                "  (none) — the configuration lambda cannot reference types because no source files "
+                + "were included. Check that your Source Code nodes exist and that the NodeType's "
+                + "`sources` list points at them.");
+            return sb.ToString();
+        }
+
+        var listed = Math.Min(matchedCodePaths.Count, MaxLoggedMatchedPaths);
+        sb.AppendLine(matchedCodePaths.Count > listed
+            ? $"Matched Code nodes ({matchedCodePaths.Count}, first {listed} listed):"
+            : $"Matched Code nodes ({matchedCodePaths.Count}):");
+        for (var i = 0; i < listed; i++)
+            sb.AppendLine($"  - {matchedCodePaths[i]}");
+        if (matchedCodePaths.Count > listed)
+            sb.AppendLine(
+                $"  … and {matchedCodePaths.Count - listed} more — the full list is in the compile's "
+                + "ActivityLog, which is not size-capped.");
+        return sb.ToString();
+    }
 }
