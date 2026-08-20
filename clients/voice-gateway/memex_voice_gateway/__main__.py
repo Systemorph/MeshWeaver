@@ -55,15 +55,44 @@ def make_router(cfg: Config) -> BrainRouter:
                             thread_idle_minutes=cfg.thread_idle_minutes,
                             verify_tls=not entry.get("insecure", False))
 
+    home = None
+    if cfg.ha_url and cfg.ha_token:
+        from .homeassistant import HomeAssistant
+        home = HomeAssistant(cfg.ha_url, cfg.ha_token)
+
     if cfg.portals:
         brains = {e["name"]: (ollama(e) if e.get("kind") == "ollama" else memex(e))
                   for e in cfg.portals}
         active = next((e["name"] for e in cfg.portals if e.get("default")), cfg.portals[0]["name"])
-        return BrainRouter(brains, active, phrases=phrases)
+        # A portal entry's "agents" pins agents to the portal that HOSTS them (list of
+        # names, or name → spoken-roster description) — e.g. the ExecutiveAssistant on the
+        # local mesh: {"name":"mac", …, "agents": {"ExecutiveAssistant": "email"}}.
+        from .ollama import DEFAULT_AGENTS, HOME_TOOL, MESH_TOOLS
+        roster = dict(DEFAULT_AGENTS)
+        agent_homes: dict[str, str] = {}
+        for entry in cfg.portals:
+            declared = entry.get("agents") or {}
+            if isinstance(declared, list):
+                declared = {name: roster.get(name, "specialist work") for name in declared}
+            for name, description in declared.items():
+                roster[name] = description
+                agent_homes[name] = entry["name"]
+        router = BrainRouter(brains, active, phrases=phrases, home=home,
+                             agent_homes=agent_homes)
+        # The local brain TRIAGES: quick lookups through the normal tools (search_mesh,
+        # get_node, home_assistant), real work through delegate_to_memex — a mesh thread.
+        for brain in brains.values():
+            if isinstance(brain, OllamaBrain):
+                brain.delegator = router.delegate_task
+                brain.tool_runner = router.run_tool
+                brain.tools = list(MESH_TOOLS) + ([HOME_TOOL] if home is not None else [])
+                brain.agents = roster
+        return router
     if cfg.brain == "ollama":
-        return BrainRouter({"lokal": ollama({})}, "lokal", phrases=phrases)
+        return BrainRouter({"lokal": ollama({})}, "lokal", phrases=phrases, home=home)
     return BrainRouter({"memex": memex({"url": cfg.memex_url, "token": cfg.memex_token,
-                                        "namespace": cfg.namespace})}, "memex", phrases=phrases)
+                                        "namespace": cfg.namespace})}, "memex",
+                       phrases=phrases, home=home)
 
 
 def make_tts(cfg: Config):
@@ -87,7 +116,7 @@ async def run() -> None:
         """Speak a live text stream: open a chunked-WAV session (the device starts playing
         the URL immediately), synthesize sentence-by-sentence as pieces arrive, close on end.
         Both `say` (forced LEI16@22050) and the piper medium voices emit 22.05 kHz."""
-        stream, url = server.open_stream(sample_rate=22050)
+        stream, url = server.open_stream(sample_rate=16000)
 
         async def feed() -> None:
             buffer = ""
@@ -131,10 +160,11 @@ async def run() -> None:
         hold_phrase=cfg.hold_phrase,
         error_phrase=cfg.error_phrase,
         command_handler=router.handle_command,
-        stream_text=router.stream_text,
-        stream_speak=stream_speak,
+        stream_text=router.stream_text if cfg.stream_tts else None,
+        stream_speak=stream_speak if cfg.stream_tts else None,
         hold_phrase_for=router.describe_hold,
         answer_to_template=phrases_for(cfg.stt_language)["answer_to"],
+        drain_delegations=router.drain_delegations,
     )
     link = SatelliteLink(cfg, pipeline)
 

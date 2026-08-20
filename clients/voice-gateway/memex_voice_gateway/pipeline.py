@@ -71,7 +71,9 @@ class VoicePipeline:
         stream_speak: Callable[[object], Awaitable[str]] | None = None,
         hold_phrase_for: Callable[[str], str] | None = None,
         answer_to_template: str | None = None,
+        drain_delegations: Callable[[], list] | None = None,
     ) -> None:
+        self._drain_delegations = drain_delegations
         self._command_handler = command_handler
         self._stream_text = stream_text
         self._stream_speak = stream_speak
@@ -128,6 +130,14 @@ class VoicePipeline:
             return RoundResult(transcript, self._error_phrase,
                                await self._try_speak(self._error_phrase))
         logger.info("round: %r → %r", transcript, (reply or "")[:120])
+
+        # The local brain may have TRIAGED work to the mesh mid-round: schedule the
+        # announcement of each delegated thread's answer, attributed to its task.
+        if self._drain_delegations is not None:
+            for handle, task in self._drain_delegations():
+                delegated = asyncio.create_task(self._announce_when_ready(handle, task))
+                self._background.add(delegated)
+                delegated.add_done_callback(self._background.discard)
 
         if reply is not None:
             return RoundResult(transcript, reply, await self._try_speak(reply))
