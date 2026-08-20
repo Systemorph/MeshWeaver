@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Distributed;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Xunit;
@@ -64,6 +66,53 @@ public class DbVersionGateTest
         lifetime.StopRequested.Should().BeFalse(
             "an aborted startup is not a failed migration — the gate must not flag a critical "
             + "database failure and StopApplication for a host that is already tearing down");
+    }
+
+    private sealed record Entry(LogLevel Level, string Message);
+
+    /// <summary>Captures what the gate said on the way out — for an aborted startup that is the
+    /// only thing distinguishing it from a gate that genuinely failed.</summary>
+    private sealed class CapturingLogger : ILogger<DbVersionGate>
+    {
+        public List<Entry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add(new Entry(logLevel, formatter(state, exception)));
+    }
+
+    /// <summary>
+    /// 🚨 The rethrow above is correct, but it must not be SILENT (#1897). Rethrowing with no line
+    /// of its own leaves the framework's <c>Hosting failed to start</c> as the only record, and
+    /// that is indistinguishable from a gate that genuinely failed — which is exactly how one
+    /// rollout-during-startup was triaged as "medium confidence: race or defect?". The gate knows;
+    /// it has to say so.
+    /// </summary>
+    [Fact]
+    public async Task AStartupAbortedByShutdown_SaysTheCheckDidNotRun_RatherThanLookingLikeAFailure()
+    {
+        await using var dataSource = UnreachableDataSource();
+        var lifetime = new RecordingLifetime();
+        var logger = new CapturingLogger();
+        var gate = new DbVersionGate(dataSource, lifetime, logger);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => gate.StartAsync(cts.Token));
+
+        logger.Entries.Should().Contain(
+            e => e.Level == LogLevel.Warning
+                 && e.Message.Contains("did NOT run", StringComparison.Ordinal)
+                 && e.Message.Contains("shutdown raced startup", StringComparison.Ordinal),
+            "a check that did not run must not look like one that passed — nor like one that failed");
+        logger.Entries.Should().NotContain(
+            e => e.Level == LogLevel.Critical,
+            "nothing about the schema was learned, so nothing may be reported as a migration verdict");
     }
 
     /// <summary>
