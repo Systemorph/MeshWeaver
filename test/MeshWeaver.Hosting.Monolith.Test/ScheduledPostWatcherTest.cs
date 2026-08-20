@@ -203,6 +203,38 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
         Assert.Contains("lastModifiedBy", query!, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 🚨 A post marked Scheduled but naming NO author profile gets no timer.
+    ///
+    /// <para>It cannot publish — the credential is chosen by the post's own <c>authorPath</c>, so
+    /// <c>LinkedInPublishService</c> refuses it with <c>profile-path-missing</c>. Arming a timer
+    /// anyway buys nothing and costs the worst failure mode available: the calendar shows the post
+    /// as scheduled, the slot passes, and nothing happens or is said. Posts/RobertHaircuts sat in
+    /// exactly that shape (Approved, no author, slot already past) — written straight onto the
+    /// content field, which is the only way to reach it, since the workflow button refuses to
+    /// approve a post with no profile.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task APostWithNoAuthorProfile_IsNotArmed()
+    {
+        var postPath = $"TestData/sched_{Guid.NewGuid():N}/post1";
+        await SeedPostAsync(postPath, status: "Scheduled",
+            scheduledAt: DateTimeOffset.UtcNow.AddHours(6).ToString("o"),
+            authorPath: null);
+
+        // A well-formed post beside it gives the watcher something it MUST arm, so this proves the
+        // authorless one was SKIPPED rather than that the watcher simply never ran.
+        var controlPath = $"TestData/sched_{Guid.NewGuid():N}/post1";
+        await SeedPostAsync(controlPath, status: "Scheduled",
+            scheduledAt: DateTimeOffset.UtcNow.AddHours(6).ToString("o"));
+
+        using var watcher = StartWatcher();
+
+        await AwaitSubscription(controlPath);   // the watcher has demonstrably done a pass
+
+        Assert.Null(await ReadSubscription(postPath));
+    }
+
     // ---- helpers ----
 
     private ScheduledPostWatcher StartWatcher()
@@ -223,16 +255,19 @@ public class ScheduledPostWatcherTest(ITestOutputHelper output) : MonolithMeshTe
     private static readonly string SeededBy = TestUsers.Admin.Name!;
 
     private Task SeedPostAsync(
-        string postPath, string status, string scheduledAt, string? publishedUrn = null)
+        string postPath, string status, string scheduledAt, string? publishedUrn = null,
+        string? authorPath = "TestData/profile")
     {
         var (id, ns) = LinkedInPublishServiceTest.SplitPath(postPath);
         var content = new Dictionary<string, object?>
         {
             ["body"] = "Scheduled body",
-            ["authorPath"] = "TestData/profile",
             ["status"] = status,
             ["scheduledAt"] = scheduledAt,
         };
+        // Omitted entirely, not set to null — an absent key is the shape a real authorless post has.
+        if (authorPath is not null)
+            content["authorPath"] = authorPath;
         if (publishedUrn is not null)
             content["publishedUrn"] = publishedUrn;
         return NodeFactory.CreateNode(new MeshNode(id, ns)
