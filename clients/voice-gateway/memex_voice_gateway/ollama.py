@@ -27,8 +27,9 @@ SYSTEM_PROMPT = (
     "wall-clock time in brackets — use it to judge gaps in the conversation.\n\n"
     "TRIAGE — decide per request: answer DIRECTLY yourself for time, dates, general "
     "knowledge, conversions, and small talk (you run on-device; speed is your virtue). "
-    "For a QUICK lookup use your read-only tools: search_mesh finds nodes in the user's "
-    "mesh, get_node reads one, home_assistant controls the smart home. DELEGATE by calling "
+    "For a QUICK lookup use your tools: search_mesh finds nodes in the user's mesh, "
+    "get_node reads one, mesh_tool calls any other portal tool by name, home_assistant "
+    "controls the smart home. DELEGATE by calling "
     "delegate_to_memex — it opens a thread in the mesh where a full agent with its own "
     "tools works the task — for anything that needs current information from the web, "
     "documents, writing or changing data, or multi-step work. Anything about EMAIL — "
@@ -118,6 +119,23 @@ MESH_TOOLS = [
             "required": ["path"]},
     }},
 ]
+
+# FULL MCP: any tool on the connected portal, by name — the same surface an MCP client
+# has. Destructive tools are filtered router-side unless explicitly enabled.
+MESH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "mesh_tool",
+        "description": "Call ANY tool on the user's mesh portal by its MCP name — e.g. "
+                       "autocomplete, render_area, navigate_to, create, update, "
+                       "execute_script. Use search_mesh/get_node for plain lookups; use "
+                       "this for everything else the portal offers.",
+        "parameters": {"type": "object", "properties": {
+            "tool": {"type": "string", "description": "The MCP tool name, e.g. render_area."},
+            "arguments": {"type": "object", "description": "The tool's arguments object."},
+        }, "required": ["tool"]},
+    },
+}
 
 HOME_TOOL = {
     "type": "function",
