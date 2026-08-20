@@ -57,6 +57,12 @@ class SatelliteLink:
         except Exception:
             logger.debug("media stop failed", exc_info=True)
 
+    async def play_media(self, url: str) -> None:
+        """Start a media stream (radio, music) on the device's player."""
+        if self._media_player_key is None:
+            raise RuntimeError("no media player entity on the device")
+        self.client.media_player_command(self._media_player_key, media_url=url)
+
     # --- lifecycle -------------------------------------------------------------------
 
     async def run_forever(self) -> None:

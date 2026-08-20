@@ -40,7 +40,10 @@ SYSTEM_PROMPT = (
     "answer.\n\n"
     "You never lack capability: whatever you cannot do on-device, the mesh can. Whenever "
     "you think 'I cannot do that', that is EXACTLY when to call delegate_to_memex — never "
-    "refuse, never apologize for missing abilities, never send the user to another app."
+    "refuse, never apologize for missing abilities, never send the user to another app.\n\n"
+    "Small talk, greetings, and questions about yourself or the speaker get a DIRECT "
+    "answer — never a tool call. Children talk to you too: stay warm, simple, and honest — "
+    "never invent an agent, a capability, or a promise you cannot keep this instant."
 )
 
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -221,11 +224,14 @@ class OllamaBrain:
         offered = list(self.tools) + (
             [delegate_tool(self.agents)] if self.delegator is not None else [])
         try:
-            for _round in range(4):   # model → (tool) → … → model, bounded (search+get+answer)
+            for _round in range(3):   # tools on rounds 0-1; the LAST round must SPEAK —
+                # a child's "Wie heisse ich?" once sent the model tool-calling in circles
+                # until the cap killed the turn, and the spoken reply was the one word
+                # that dribbled out before the first call ("Du").
                 payload = {"model": self.model, "messages": working, "stream": True,
                            "think": False, "keep_alive": "60m",
                            "options": {"num_predict": self.num_predict}}
-                if offered:
+                if offered and _round < 2:
                     payload["tools"] = offered
                 tool_calls: list = []
                 async with self._http.post(f"{self.base_url}/api/chat", json=payload,
@@ -337,6 +343,21 @@ class OllamaBrain:
         self._tasks.pop(handle, None)
         self._chunks.pop(handle, None)   # nobody streamed this round — drop the piece queue
         return reply
+
+    async def warmup(self) -> None:
+        """Load the model into RAM before the first question — a cold 23GB MoE load reads
+        as the assistant ignoring you (measured: ~15-30s cold vs sub-second warm)."""
+        if self._http is None:
+            self._http = aiohttp.ClientSession()
+        try:
+            payload = {"model": self.model, "messages": [{"role": "user", "content": "hi"}],
+                       "stream": False, "think": False, "keep_alive": "60m",
+                       "options": {"num_predict": 1}}
+            async with self._http.post(f"{self.base_url}/api/chat", json=payload,
+                                       timeout=aiohttp.ClientTimeout(total=180)) as response:
+                await response.read()
+        except Exception:
+            pass   # warmup is best-effort; the first real question pays the load instead
 
     async def close(self) -> None:
         for task in self._tasks.values():

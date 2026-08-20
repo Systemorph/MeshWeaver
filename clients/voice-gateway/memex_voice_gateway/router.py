@@ -87,6 +87,7 @@ KNOWN_AGENTS = {"assistant": "Assistant", "researcher": "Researcher", "worker": 
                 "tutor": "Tutor", "voice": "Voice"}
 
 _DEFAULT_PHRASES = {
+    "error": "Sorry, that did not work.",
     "hold": "Let me check. One moment please.",
     "connected": "Connected to {name}.",
     "unknown": "I don't know {target}. Available: {names}.",
@@ -102,6 +103,8 @@ _DEFAULT_PHRASES = {
     "ready": "The answer about {topic} is ready. Say: read it.",
     "nothing_new": "No new answers.",
     "answer_to": "Answering your question: {question} —",
+    "radio_on": "Here comes {station}. Say stop to end it.",
+    "song_hint": "I cannot play single songs yet — but here comes {station}.",
 }
 
 _READ = re.compile(
@@ -112,6 +115,24 @@ _READ = re.compile(
 # "delegate email" still answers "open your mail program" often enough that the rule
 # cannot live in its prompt alone (observed 2026-08-20).
 _EMAIL = re.compile(r"\b(?:e-?mails?|mails?|inbox|posteingang|mailbox)\b", re.IGNORECASE)
+
+# MUSIC is deterministic too — the model answered a child's eight requests for a song
+# with invented promises about music agents that do not exist (observed 2026-08-20).
+# Radio streams play NOW; a named song gets radio plus an honest sentence until a music
+# library (Apple Music via Music Assistant) is connected.
+_MUSIC = re.compile(
+    r"^(?=.*\b(?:ab)?spiel\w*\b|.*\bplay\b)(?=.*\b(?:lied\w*|musik|songs?|radio)\b)|"
+    r"^\s*(?:musik|radio)\s*(?:an|bitte)?[.!]?\s*$", re.IGNORECASE | re.DOTALL)
+_MUSIC_OFF = re.compile(r"\b(?:musik|radio)\s+(?:aus|stopp?|off)\b|"
+                        r"\b(?:stopp?|stop)\s+(?:die\s+)?(?:musik|radio)\b", re.IGNORECASE)
+STATIONS = {
+    "energy": ("Energy Zürich", "https://energyzuerich.ice.infomaniak.ch/energyzuerich-high.mp3"),
+    "srf 3": ("Radio SRF 3", "http://stream.srg-ssr.ch/m/drs3/mp3_128"),
+    "srf drei": ("Radio SRF 3", "http://stream.srg-ssr.ch/m/drs3/mp3_128"),
+    "srf 1": ("Radio SRF 1", "http://stream.srg-ssr.ch/m/drs1/mp3_128"),
+    "virus": ("Radio SRF Virus", "http://stream.srg-ssr.ch/m/drsvirus/mp3_128"),
+}
+_DEFAULT_STATION = "energy"
 
 
 class BrainRouter:
@@ -128,6 +149,7 @@ class BrainRouter:
         self._mesh = mesh_brains if mesh_brains is not None else {
             n for n, b in brains.items() if hasattr(b, "delegate")}
         self._home = home     # HomeAssistant client, when configured
+        self.player: object = None   # async url -> None; the satellite's media player
         # Agent name → the portal that HOSTS it (a portal entry's "agents" list): the
         # ExecutiveAssistant may live on the local mesh while Researcher lives in the cloud.
         self._agent_homes = agent_homes or {}
@@ -378,6 +400,21 @@ class BrainRouter:
             self._remember(entry["portal"], entry["path"], entry["task"], entry["agent"] or None)
             self._pending.append((f"{entry['portal']}::{entry['path']}", message))
             return self._phrases["posted"].format(topic=posted.group("topic").strip())
+        if _MUSIC_OFF.search(stripped) and self.player is not None:
+            return ""    # the interrupt path stops the player quietly
+        if _MUSIC.search(stripped) and self.player is not None:
+            lowered = stripped.lower()
+            key = next((k for k in STATIONS if k in lowered), None)
+            named_song = key is None and re.search(
+                r"\b(?:lied|song)\b", lowered) and len(stripped) > 25
+            name, url = STATIONS[key or _DEFAULT_STATION]
+            try:
+                await self.player(url)  # type: ignore[operator]
+            except Exception:
+                return self._phrases["error"]
+            if named_song:
+                return self._phrases["song_hint"].format(station=name)
+            return self._phrases["radio_on"].format(station=name)
         if _EMAIL.search(stripped) and self._mesh_target() is not None:
             handle = await self.delegate_task(stripped, "ExecutiveAssistant")
             self._pending.append((handle, stripped))
