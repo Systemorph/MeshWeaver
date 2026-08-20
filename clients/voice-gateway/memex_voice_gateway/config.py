@@ -38,7 +38,9 @@ PHRASES: dict[str, dict[str, str]] = {
            "posted": "Posted to the thread about {topic}. I will announce the answer.",
            "no_thread": "I have no open thread about {topic}.",
            "threads_open": "Open threads: {list}.",
-           "no_threads": "No open threads."},
+           "no_threads": "No open threads.",
+           "ready": "The answer about {topic} is ready. Say: read it.",
+           "nothing_new": "No new answers."},
     "de": {"hold": "Ich schaue nach. Einen Moment bitte.",
            "error": "Entschuldigung, das hat gerade nicht geklappt.",
            "connected": "Verbunden mit {name}.",
@@ -50,7 +52,9 @@ PHRASES: dict[str, dict[str, str]] = {
            "posted": "An den Thread über {topic} geschickt. Ich melde mich mit der Antwort.",
            "no_thread": "Ich habe keinen offenen Thread über {topic}.",
            "threads_open": "Offene Threads: {list}.",
-           "no_threads": "Keine offenen Threads."},
+           "no_threads": "Keine offenen Threads.",
+           "ready": "Die Antwort zu {topic} ist bereit. Sag: vorlesen.",
+           "nothing_new": "Keine neuen Antworten."},
 }
 PHRASES["en"]["answer_to"] = "Answering your question: {question} —"
 PHRASES["de"]["answer_to"] = "Antwort auf deine Frage: {question} —"
@@ -85,7 +89,10 @@ class Config:
 
     # --- conversation pacing ---
     reply_budget_s: float = 10.0            # wait this long for the answer before acking
-    announce_budget_s: float = 240.0        # keep polling this long, then announce the answer
+    announce_budget_s: float = 1800.0       # keep polling this long — memex is ASYNC, real
+                                            # work takes minutes; the poll backs off to 10s
+    announce_mode: str = "signal"           # "signal": chime + mailbox, answer on "vorlesen";
+                                            # "full": speak the whole answer unprompted
     thread_idle_minutes: float = 5.0        # reuse the conversation within this window
     hold_phrase: str = ""                   # default: PHRASES[stt_language]["hold"]
     error_phrase: str = ""                  # default: PHRASES[stt_language]["error"]
@@ -155,7 +162,8 @@ class Config:
             stt_token=stt_token,
             stt_language=_env("STT_LANGUAGE", "de") or "de",
             reply_budget_s=float(_env("REPLY_BUDGET_S", "10")),
-            announce_budget_s=float(_env("ANNOUNCE_BUDGET_S", "240")),
+            announce_budget_s=float(_env("ANNOUNCE_BUDGET_S", "1800")),
+            announce_mode=(_env("ANNOUNCE_MODE", "signal") or "signal").lower(),
             thread_idle_minutes=float(_env("THREAD_IDLE_MINUTES", "5")),
             hold_phrase=_env("HOLD_PHRASE") or phrases_for(_env("STT_LANGUAGE", "de") or "de")["hold"],
             error_phrase=_env("ERROR_PHRASE") or phrases_for(_env("STT_LANGUAGE", "de") or "de")["error"],

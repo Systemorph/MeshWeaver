@@ -164,6 +164,7 @@ class MemexThreads:
         """Poll until an assistant reply (or a dispatch failure) lands; None on budget miss."""
         deadline = time.monotonic() + budget_s
         known = self._known.setdefault(thread_path, set())
+        interval = poll_interval_s
         while time.monotonic() < deadline:
             thread_json = await self.call("get", {"path": f"@{thread_path}"})
             new_ids, failure = extract_reply(thread_json, known)
@@ -189,7 +190,11 @@ class MemexThreads:
                     known.add(message_id)
             if failure:
                 return failure
-            await asyncio.sleep(poll_interval_s)
+            # Memex is ASYNC: the announce path may wait many minutes, so the poll backs
+            # off gently (up to 10s) instead of hammering the portal every 1.5s for half
+            # an hour. The first polls stay tight so a fast answer arrives fast.
+            await asyncio.sleep(interval)
+            interval = min(interval * 1.3, 10.0)
         return None
 
     async def close(self) -> None:
