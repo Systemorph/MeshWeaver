@@ -15,7 +15,6 @@
         <PackageReference Include="BlazorMonaco" />
         <PackageReference Include="HtmlAgilityPack" />
         <PackageReference Include="Microsoft.AspNetCore.Components.Web" />
-        <PackageReference Include="Microsoft.EntityFrameworkCore" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components" />
         <PackageReference Include="Microsoft.FluentUI.AspNetCore.Components.Icons" />
         <PackageReference Include="Microsoft.Identity.Web" />
