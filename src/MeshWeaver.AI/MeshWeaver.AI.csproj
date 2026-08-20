@@ -39,6 +39,15 @@
         <PackageReference Include="Microsoft.Extensions.Http" />
         <PackageReference Include="Microsoft.Extensions.AI" />
         <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+        <!-- 🚨 Referenced DIRECTLY so the app closure carries the version this repo PINS (10.8.3),
+             not the older one it would otherwise inherit transitively. Central package management
+             governs DIRECT references only, so with no reference here the app shipped 10.6.0 while
+             MeshWeaver.AI.OpenAI — which does reference it directly — resolved 10.8.3. The provider
+             pack then bound Microsoft.Extensions.AI.OpenAI 10.8.0.0 against an app that had only
+             10.6.x, and EVERY agent creation through the OpenAI factory failed at run time with
+             "Could not load file or assembly". The platform carrying its own declared version is
+             what keeps a provider pack and its host on one graph. -->
+        <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
         <PackageReference Include="Microsoft.Agents.AI" />
         <PackageReference Include="Microsoft.Agents.AI.OpenAI" />
         <PackageReference Include="Microsoft.Agents.AI.Workflows" />
