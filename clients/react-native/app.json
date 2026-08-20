@@ -12,7 +12,8 @@
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
-        }
+        },
+        "NSLocalNetworkUsageDescription": "Memex connects to your local mesh on this network."
       }
     },
     "android": {
