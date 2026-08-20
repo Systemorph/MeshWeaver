@@ -299,19 +299,38 @@ public sealed class ModuleLandingService : IDisposable
                 $"Module '{name}' was not landed by the store lane (no activation entry) — "
                 + "publish-laid-out module folders are managed by the deployment, not uninstall.");
 
+        // The generation pointer is CLEARED on uninstall — a disabled entry must not keep its
+        // directory 'referenced', or boot GC could never reclaim it.
         ModuleActivationSidecar.Write(baseDirectory, list with
         {
-            Entries = list.Entries.Replace(existing, existing with { Enabled = false }),
+            Entries = list.Entries.Replace(existing,
+                existing with { Enabled = false, Directory = null }),
             PendingRestart = true,
         });
 
-        var target = Path.Combine(baseDirectory, "modules", name);
-        if (Directory.Exists(target))
-            Directory.Delete(target, recursive: true);
+        // Best-effort immediate delete: on a shared volume the files of a LOADED module refuse
+        // deletion (SMB keeps them open) — that is fine, the cleared pointer above makes the
+        // next boot's CollectGarbage reclaim the generation once no pod holds it.
+        var targets = new List<string> { Path.Combine(baseDirectory, "modules", name) };
+        if (!string.IsNullOrWhiteSpace(existing.Directory))
+            targets.Add(Path.Combine(baseDirectory, "modules", existing.Directory!));
+        foreach (var target in targets.Where(Directory.Exists))
+        {
+            try
+            {
+                Directory.Delete(target, recursive: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                logger?.LogDebug(
+                    "Uninstall of '{Name}': {Dir} is in use, boot GC reclaims it ({Reason})",
+                    name, Path.GetFileName(target), e.Message);
+            }
+        }
 
         logger?.LogInformation(
-            "Module '{Name}' UNINSTALLED: activation disabled, modules/{Name}/ deleted — "
-            + "takes effect at the next restart", name, name);
+            "Module '{Name}' UNINSTALLED: activation disabled — takes effect at the next restart",
+            name);
     }
 
     private static void ValidateFileName(string? value, string what)
