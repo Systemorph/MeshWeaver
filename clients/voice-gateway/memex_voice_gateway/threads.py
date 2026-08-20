@@ -170,9 +170,23 @@ class MemexThreads:
             for message_id in new_ids:
                 child = json.loads(await self.call("get", {"path": f"@{thread_path}/{message_id}"}))
                 content = child.get("content") or {}
-                known.add(message_id)
-                if content.get("role") == "assistant" and content.get("text"):
-                    return content["text"]
+                text = (content.get("text") or "").strip()
+                status = content.get("status")
+                # An assistant child can materialize MID-round as a placeholder
+                # ("Generating response...", status InProgress) whose text is later
+                # replaced by the real answer. Reading it aloud IS the bug (observed
+                # 2026-08-20) — and marking it seen would silence the real answer, so an
+                # in-progress child stays un-known and is re-read on the next poll.
+                if content.get("role") == "assistant":
+                    in_progress = (status not in (None, "Completed")
+                                   or text.lower().startswith("generating"))
+                    if in_progress:
+                        continue
+                    known.add(message_id)
+                    if text:
+                        return content["text"]
+                else:
+                    known.add(message_id)
             if failure:
                 return failure
             await asyncio.sleep(poll_interval_s)
