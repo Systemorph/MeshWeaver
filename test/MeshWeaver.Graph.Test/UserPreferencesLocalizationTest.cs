@@ -16,8 +16,10 @@ namespace MeshWeaver.Graph.Test;
 /// "Display time zone (IANA)" under a heading that was correctly "Einstellungen".</para>
 ///
 /// <para>The builder takes its localizer as a <c>Func&lt;string,string&gt;</c> for exactly the reason
-/// <see cref="Memex.Portal.Shared.SelfUpdate.PlatformUpdateChip.Describe"/> does — so the WORDING is
-/// assertable without a hub, a circuit or a rendered layout area. Here that matters twice over: the
+/// <c>PlatformUpdateChip.Describe</c> does (named, not <c>cref</c>'d — it lives in
+/// Memex.Portal.Shared, which this project does not reference, so a cref here would be a link that
+/// resolves nowhere) — so the WORDING is assertable without a hub, a circuit or a rendered layout
+/// area. Here that matters twice over: the
 /// bug is invisible to <c>LocalizationTest</c> (which only checks that shipped languages cover the
 /// English key list — a string that never became a key is not a missing key, it is an absent one)
 /// and invisible to any render test that happens to run under an English viewer.</para>
