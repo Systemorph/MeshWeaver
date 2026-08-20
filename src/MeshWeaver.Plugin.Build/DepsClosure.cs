@@ -43,11 +43,17 @@ public static class DepsClosure
     /// <summary>The derived closure: runtime file names to bundle beside the entry DLL, plus the
     /// MeshWeaver.* nodes the walk stopped at (diagnostic — printed so a pack log shows the
     /// split), plus warnings for nodes with native <c>runtimeTargets</c> the bundle does not
-    /// carry.</summary>
+    /// carry, plus the PACKAGE UNIVERSE — every runtime file of every non-MeshWeaver package node
+    /// in the whole graph. The universe is the packer's lane witness: a folder that materializes
+    /// package assets at all (a publish folder, a CopyLocalLockFileAssemblies build) contains SOME
+    /// of it, however framework-trimmed the module's own dependencies are — so "none of the
+    /// universe present" cleanly means "this folder never had package assets", never "everything
+    /// was framework-resolved".</summary>
     public sealed record Result(
         IReadOnlyList<string> Files,
         IReadOnlyList<string> ExcludedPlatformCarried,
-        IReadOnlyList<string> Warnings);
+        IReadOnlyList<string> Warnings,
+        IReadOnlyList<string> PackageUniverse);
 
     private sealed record Node(
         string Name,
@@ -141,10 +147,19 @@ public static class DepsClosure
         }
         var excluded = platformStops.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
+        var universe = nodes.Values
+            .Where(n => !IsPlatform(n.Name)
+                        && string.Equals(n.LibraryType, "package", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(n => n.RuntimeFiles)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         return new Result(
             files.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             excluded,
-            warnings);
+            warnings,
+            universe);
     }
 
     private static bool IsPlatform(string name) =>
