@@ -40,7 +40,9 @@ PHRASES: dict[str, dict[str, str]] = {
            "threads_open": "Open threads: {list}.",
            "no_threads": "No open threads.",
            "ready": "The answer about {topic} is ready. Say: read it.",
-           "nothing_new": "No new answers."},
+           "nothing_new": "No new answers.",
+           "radio_on": "Here comes {station}. Say stop to end it.",
+           "song_hint": "I cannot play single songs yet — but here comes {station}."},
     "de": {"hold": "Ich schaue nach. Einen Moment bitte.",
            "error": "Entschuldigung, das hat gerade nicht geklappt.",
            "connected": "Verbunden mit {name}.",
@@ -54,7 +56,9 @@ PHRASES: dict[str, dict[str, str]] = {
            "threads_open": "Offene Threads: {list}.",
            "no_threads": "Keine offenen Threads.",
            "ready": "Die Antwort zu {topic} ist bereit. Sag: vorlesen.",
-           "nothing_new": "Keine neuen Antworten."},
+           "nothing_new": "Keine neuen Antworten.",
+           "radio_on": "Hier kommt {station}. Sag Stopp, wenn es reicht.",
+           "song_hint": "Einzelne Lieder kann ich noch nicht spielen — dafür kommt {station}."},
 }
 PHRASES["en"]["answer_to"] = "Answering your question: {question} —"
 PHRASES["de"]["answer_to"] = "Antwort auf deine Frage: {question} —"
