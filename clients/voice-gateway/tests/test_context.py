@@ -194,3 +194,9 @@ def test_system_prompt_syncs_from_mesh_or_deposits():
         assert deposited["content"]["body"] == "BUILTIN"
 
     asyncio.run(scenario())
+
+
+def test_session_cookie_accepts_growing_state(tmp_path):
+    store = SpokenSession(str(tmp_path / "s.json"), ttl_hours=8)
+    store.save(portal="memex", context=None, threads=[], inbox=[{"task": "t", "reply": "r"}])
+    assert store.load()["inbox"][0]["reply"] == "r"

@@ -402,9 +402,12 @@ class BrainRouter:
             return self._phrases["posted"].format(topic=posted.group("topic").strip())
         if _MUSIC_OFF.search(stripped) and self.player is not None:
             return ""    # the interrupt path stops the player quietly
-        if _MUSIC.search(stripped) and self.player is not None:
-            lowered = stripped.lower()
-            key = next((k for k in STATIONS if k in lowered), None)
+        lowered = stripped.lower()
+        # A KNOWN station name anywhere is a play request by itself — the device loses
+        # the first ~half second after the wake word, so "Spiel Radio SRF 3" routinely
+        # arrives as "Die Radio-SRF 3." (observed): never require the verb.
+        key = next((k for k in STATIONS if k in lowered), None)
+        if (key or _MUSIC.search(stripped)) and self.player is not None:
             named_song = key is None and re.search(
                 r"\b(?:lied|song)\b", lowered) and len(stripped) > 25
             name, url = STATIONS[key or _DEFAULT_STATION]
