@@ -587,6 +587,185 @@ When the sync source has two-way enabled, `update` never overwrites a node chang
     }
 
     /// <summary>
+    /// Files, comments on, and mirrors GitHub <b>issues</b> for a Space — the MCP reach of
+    /// <see cref="IssueService"/>, which the browser already exposed and MCP did not.
+    ///
+    /// <para>🚨 <b>Why this exists.</b> An agent working through MCP could read and write the mesh
+    /// but had no way to report a defect anywhere a human triages. It could only leave a mesh
+    /// thread, which nothing routes. The capability was fully built (<c>IssueService</c>: create,
+    /// comment, sync) and simply unreachable from this transport.</para>
+    ///
+    /// <para>🚨 <b>The caller's OWN GitHub token is the only authority.</b> Like every other verb on
+    /// <see cref="IssueService"/>, this runs through the caller's stored OAuth credential — so it can
+    /// reach exactly the repositories that account can reach, and nothing the mesh grants widens
+    /// that. An agent whose machine account holds Triage on one repo can file there and nowhere
+    /// else. There is deliberately no system-identity path: an issue filed by "the platform" names
+    /// nobody to ask about it.</para>
+    /// </summary>
+    [McpServerTool(Title = "File, comment on, or sync GitHub issues", Destructive = false, Idempotent = false, OpenWorld = true)]
+    [Description(@"Files an issue on the Space's configured GitHub repository, comments on one, or mirrors the repo's issues into the mesh — the same issue actions the browser's GitHub tab runs.
+
+Operations (`op`):
+  • create (default) — open a NEW issue. Needs `title`; `body` is markdown; `labels` is comma-separated.
+  • comment          — add a comment to issue `number`. Needs `number` and `body`.
+  • sync             — mirror the repo's issues into `{space}/_Issue/{number}` nodes (NodeType `GitHubIssue`), then read them with the ordinary tools: `search 'nodeType:GitHubIssue namespace:{space}/_Issue'` or `get @{space}/_Issue/{number}`. `state` filters: 'open' (default), 'closed', or 'all'.
+
+Runs as YOU, through your own connected GitHub account — it can reach exactly the repositories that account can, and no mesh permission widens that. Connect the account first in the Space's GitHub Sync settings → Connect; without it this returns a 'connect your GitHub account' error. Requires the Space's `{space}/_GitSync` config to name the repository.
+
+BEFORE FILING: run `op: 'sync'` and search the mirrored issues for the same defect. A duplicate issue costs a human the triage time this tool was meant to save.")]
+    public Task<string> GitHubIssue(
+        [Description("The Space whose configured repository the issue belongs to (e.g. 'SocialMedia'). Acts on the containing top-level Space.")] string space,
+        [Description("Operation: 'create' (default), 'comment', or 'sync'.")] string op = "create",
+        [Description("Issue title — required for 'create'.")] string? title = null,
+        [Description("Markdown body: the issue text for 'create', the comment text for 'comment'.")] string? body = null,
+        [Description("Issue number — required for 'comment'.")] int number = 0,
+        [Description("Comma-separated labels to apply on 'create' (e.g. 'bug,scheduler'). Labels must already exist on the repo.")] string? labels = null,
+        [Description("For 'sync': which issues to mirror — 'open' (default), 'closed', or 'all'.")] string? state = null)
+    {
+        space = space?.Trim().Trim('/') ?? "";
+        if (space.Length == 0)
+            return Task.FromResult("Error: 'space' is required — the Space whose GitHub repository the issue belongs to.");
+        // Issues act on the containing Space (the top path segment), mirroring GitHubSync above.
+        var spacePath = space.Split('/', 2)[0];
+
+        var operation = op?.Trim().ToLowerInvariant();
+        if (operation is not ("create" or "comment" or "sync"))
+            return Task.FromResult($"Error: 'op' must be 'create', 'comment', or 'sync'; got '{op}'.");
+
+        // The GitSync feature must be installed on this host (services registered via AddGitHubSyncServices).
+        var issues = rootHub.ServiceProvider.GetService<IssueService>();
+        if (issues is null)
+            return Task.FromResult("Error: GitHub issues are not enabled on this instance (the GitSync feature is not installed).");
+
+        // Resolve the caller the way git_hub_sync does: `Context ?? CircuitContext`. An MCP call with
+        // no resolvable identity must FAIL here rather than fall through — a write that cannot name
+        // its author would otherwise be attributed to whatever ambient identity the next hop holds.
+        var accessService = rootHub.ServiceProvider.GetService<AccessService>();
+        var user = accessService?.Context ?? accessService?.CircuitContext;
+        var userId = user?.ObjectId ?? "";
+        if (accessService is null || string.IsNullOrEmpty(userId))
+            return Task.FromResult("Error: sign-in required — could not resolve your identity for the GitHub issue operation.");
+
+        // Validate per-op BEFORE the round trip, so a missing title is a sentence rather than a 422
+        // from GitHub relayed through three layers.
+        if (operation == "create" && string.IsNullOrWhiteSpace(title))
+            return Task.FromResult("Error: 'title' is required to create an issue.");
+        if (operation == "comment")
+        {
+            if (number <= 0)
+                return Task.FromResult("Error: 'number' (the issue number) is required to comment.");
+            if (string.IsNullOrWhiteSpace(body))
+                return Task.FromResult("Error: 'body' is required to comment.");
+        }
+
+        GitHubIssueState? issueState = null;
+        if (operation == "sync" && !string.IsNullOrWhiteSpace(state))
+        {
+            var wanted = state.Trim().ToLowerInvariant();
+            if (wanted == "open") issueState = GitHubIssueState.Open;
+            else if (wanted == "closed") issueState = GitHubIssueState.Closed;
+            else if (wanted != "all")
+                return Task.FromResult($"Error: 'state' must be 'open', 'closed', or 'all'; got '{state}'.");
+        }
+        else if (operation == "sync")
+        {
+            issueState = GitHubIssueState.Open;
+        }
+
+        var labelList = labels?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        // 🚨 AccessContext is an AsyncLocal wiped across hops: re-establish the caller for the call,
+        // exactly as AsCaller/git_hub_sync do. IssueService itself reads the credential at
+        // `{userId}/_Provider/GitHub`, so the switch is what makes it read the RIGHT user's token.
+        using (accessService.SwitchAccessContext(user))
+        {
+            try
+            {
+                return operation switch
+                {
+                    "create" => issues
+                        .CreateIssue(spacePath, title!, body, labelList, userId)
+                        .FirstAsync().ToTask()
+                        .ContinueWith(t => Describe(t, "created", spacePath), TaskScheduler.Default),
+                    "comment" => issues
+                        .CommentIssue(spacePath, number, body!, userId)
+                        .FirstAsync().ToTask()
+                        .ContinueWith(t => Describe(t, "commented", spacePath), TaskScheduler.Default),
+                    _ => issues
+                        .SyncIssues(spacePath, userId, issueState)
+                        .FirstAsync().ToTask()
+                        .ContinueWith(t => t.IsFaulted
+                            ? $"Error: GitHub issue sync failed for {spacePath}: {Unwrap(t.Exception)}"
+                            : JsonSerializer.Serialize(new
+                            {
+                                status = "Synced",
+                                space = spacePath,
+                                synced = t.Result,
+                                hint = $"Read them with: search 'nodeType:{IssueService.NodeType} namespace:{IssueService.IssueNamespace(spacePath)}'",
+                            }), TaskScheduler.Default),
+                };
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "MCP github_issue {Op} failed for {Space}", operation, spacePath);
+                return Task.FromResult($"Error: GitHub issue {operation} failed for {spacePath}: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Renders the outcome of a create/comment into the tool's JSON envelope, or into an
+    /// <c>Error: …</c> sentence. The issue NUMBER and URL are the two things a caller needs next
+    /// (to comment, or to hand a human a link), so both are lifted out of the node.
+    /// </summary>
+    private string Describe(Task<MeshNode> result, string verb, string spacePath)
+    {
+        if (result.IsFaulted)
+        {
+            logger.LogWarning(result.Exception, "MCP github_issue {Verb} failed for {Space}", verb, spacePath);
+            return $"Error: GitHub issue {verb.TrimEnd('d')} failed for {spacePath}: {Unwrap(result.Exception)}";
+        }
+
+        // IssueService returns the upserted MeshNode as JSON; surface number + url when readable,
+        // but never fail the call over a shape we did not expect — the issue IS filed by this point,
+        // and reporting an error for a successful write would send the caller to file it twice.
+        var nodeJson = JsonSerializer.Serialize(result.Result, rootHub.JsonSerializerOptions);
+        int? issueNumber = null;
+        string? url = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(nodeJson);
+            if (doc.RootElement.TryGetProperty("content", out var content))
+            {
+                if (content.TryGetProperty("number", out var n) && n.TryGetInt32(out var parsed))
+                    issueNumber = parsed;
+                if (content.TryGetProperty("url", out var u))
+                    url = u.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            // Shape-tolerant by design: the node is authoritative, this envelope is a convenience.
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            status = verb == "created" ? "Created" : "Commented",
+            space = spacePath,
+            path = result.Result?.Path,
+            number = issueNumber,
+            url,
+        });
+    }
+
+    /// <summary>The innermost message of a faulted task — the GitHub/Octokit reason, not "One or more errors occurred".</summary>
+    private static string Unwrap(AggregateException? ex)
+    {
+        var inner = ex?.GetBaseException();
+        return inner?.Message ?? "unknown error";
+    }
+
+    /// <summary>
     /// Copies a node and all its descendants to a target namespace, preserving
     /// source ids and rewriting paths under the target.
     /// </summary>
