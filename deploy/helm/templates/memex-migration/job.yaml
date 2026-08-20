@@ -38,7 +38,9 @@ spec:
           command:
             - "sh"
             - "-c"
-            - "until nc -z memex-postgres-service 5432; do echo 'waiting for postgres'; sleep 2; done"
+            {{- $pgHost := .Values.postgres.enabled | ternary "memex-postgres-service" (.Values.config.memex_migration.MEMEX_HOST | default "memex-postgres-service") }}
+            {{- $pgPort := .Values.postgres.enabled | ternary "5432" (.Values.config.memex_migration.MEMEX_PORT | default "5432") }}
+            - "until nc -z {{ $pgHost }} {{ $pgPort }}; do echo 'waiting for postgres'; sleep 2; done"
       containers:
         - image: "{{ .Values.migration.image }}"
           name: "memex-migration"
