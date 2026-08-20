@@ -25,7 +25,7 @@ public class EmbeddingOptions
     private int? _dimensions;
 
     /// <summary>
-    /// Backend selector. "AzureFoundry" (default) → <see cref="AzureFoundryEmbeddingProvider"/>;
+    /// Backend selector. "AzureFoundry" (default) → the Azure Foundry provider (the MeshWeaver.AI.AzureFoundry module);
     /// "Ollama" / "OpenAICompatible" → <see cref="OllamaEmbeddingProvider"/> against
     /// <see cref="Endpoint"/>'s <c>/v1/embeddings</c>.
     /// </summary>

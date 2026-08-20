@@ -24,7 +24,6 @@ using MeshWeaver.Graph;
 using MeshWeaver.PluginCatalog;
 using MeshWeaver.InstanceSync;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.AspNetCore;
 using MeshWeaver.Hosting.Blazor;
@@ -804,13 +803,44 @@ public static class MemexConfiguration
                 // Markdown export (PDF/DOCX/HTML + share-by-email) rides the
                 // MeshWeaver.Markdown.Export MODULE (MarkdownExportProviderAttribute →
                 // AddMarkdownExport(); node seeding is IfAbsent so the lane switch is idempotent).
-                // Register Azure Blob support for content collections.
-                .ConfigureServices(services => services.AddAzureBlob())
-                // Shared NodeType assembly cache (versioned, cross-replica consistent).
-                // Requires `AddKeyedAzureBlobServiceClient("nodetype-cache")` to have
-                // registered a keyed BlobServiceClient — Aspire wires this via the
-                // `nodetype-cache` container reference on the portal resource.
-                .ConfigureServices(services => services.AddBlobAssemblyStore())
+                // Azure Blob support (the stream-provider factory, the blob assembly cache, the
+                // blob NuGet cache) RELOCATED to the MeshWeaver.Azure.Blob MODULE — its assembly
+                // attribute registers the stream-provider factory when landed, and the
+                // Azure-backend branches reach the store types by probe-and-delegate. Nothing to
+                // register here: a filesystem deployment carries no Azure SDK at all now.
+                // Shared NodeType assembly cache (versioned, cross-replica consistent): the
+                // TryAdd below yields to the Distributed app's filesystem store on the
+                // self-host branch, exactly as the compiled-in registration always did.
+                .ConfigureServices(services =>
+                {
+                    Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions
+                        .TryAddSingleton<MeshWeaver.Mesh.Services.IAssemblyStore>(services, sp =>
+                    {
+                        var type = Type.GetType(
+                            "MeshWeaver.Azure.Blob.BlobAssemblyStore, MeshWeaver.Azure.Blob",
+                            throwOnError: false)
+                            ?? throw new InvalidOperationException(
+                                "No IAssemblyStore is registered and the MeshWeaver.Azure.Blob "
+                                + "module is not landed — register AddFileSystemAssemblyStore "
+                                + "(self-host) or land the AzureBlob package (Azure backend).");
+                        var cacheDir = System.IO.Path.Combine(
+                            System.IO.Path.GetTempPath(), "meshweaver-assembly-cache");
+                        // The client type reflects too — this project no longer references the
+                        // Azure SDK; the module's assembly (already probed above) carries it.
+                        var clientType = Type.GetType(
+                            "Azure.Storage.Blobs.BlobServiceClient, Azure.Storage.Blobs",
+                            throwOnError: true)!;
+                        return (MeshWeaver.Mesh.Services.IAssemblyStore)Activator.CreateInstance(
+                            type,
+                            Microsoft.Extensions.DependencyInjection.ServiceProviderKeyedServiceExtensions
+                                .GetRequiredKeyedService(sp, clientType, "nodetype-cache"),
+                            "nodetype-cache",
+                            cacheDir,
+                            sp.GetRequiredService(
+                                typeof(Microsoft.Extensions.Logging.ILogger<>).MakeGenericType(type)))!;
+                    });
+                    return services;
+                })
                 // Register the mesh catalog and its public interfaces
                 .ConfigureServices(services => services.AddMeshCatalog())
                 // Configure default views and content collections for each node hub

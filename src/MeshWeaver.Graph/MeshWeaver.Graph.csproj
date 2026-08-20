@@ -41,6 +41,10 @@
     <!-- DateTime.Humanize() in CodeLayoutAreas. Declared explicitly: it used to ride in as a
          transitive of JsonPointer.Net (removed in #1231). -->
     <PackageReference Include="Humanizer.Core" />
+    <!-- IHostedService consumers (AccessGrantNotifier, EventSubscriptionRunner,
+         StartupErrorNotifier) reached this via a TRANSITIVE ref that left with the Azure
+         shed — declared explicitly, as a direct use always should be. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Features" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />
