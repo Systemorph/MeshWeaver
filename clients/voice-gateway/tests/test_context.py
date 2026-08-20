@@ -122,3 +122,75 @@ def test_mesh_tool_passthrough_gates_destructive():
                                                    "arguments": {"path": "@X"}}) == "ok"
 
     asyncio.run(scenario())
+
+
+def test_mailbox_signal_then_read_aloud():
+    async def scenario():
+        mesh = FakeMesh()
+        router = BrainRouter({"memex": mesh}, "memex")
+        handle = await router.delegate_task("Wetter morgen in Zürich")
+        await router.handle_command("Neues Thema")
+        # The answer lands: only a short READY signal is spoken; the text waits.
+        signal = router.deliver_answer(handle, "Wetter morgen in Zürich",
+                                       "Morgen wird es sonnig bei 24 Grad.")
+        assert "ready" in signal.lower() or "bereit" in signal.lower()
+        # …and the answered thread is pinned back as the context for follow-ups.
+        assert (await router.delegate_task("Und übermorgen?")) == handle
+        # "vorlesen" plays the stored answer, attributed to its question.
+        out = await router.handle_command("Vorlesen")
+        assert "sonnig" in out and "Wetter morgen" in out
+        # The mailbox is empty afterwards.
+        assert await router.handle_command("Lies vor") == router._phrases["nothing_new"]
+
+    asyncio.run(scenario())
+
+
+def test_email_routes_deterministically_to_executive_assistant():
+    async def scenario():
+        mesh = FakeMesh()
+        router = BrainRouter({"memex": mesh}, "memex",
+                             agent_homes={"ExecutiveAssistant": "memex"})
+        out = await router.handle_command("Kannst du meine Mails checken?")
+        assert out is not None and "memex" in out
+        assert mesh.started == [("Kannst du meine Mails checken?", "ExecutiveAssistant")]
+        # The answer is queued for the mailbox/announce path.
+        assert router.drain_delegations()
+        # Unrelated sentences pass through to the brain untouched.
+        assert await router.handle_command("Wie spät ist es?") is None
+
+    asyncio.run(scenario())
+
+
+def test_system_prompt_syncs_from_mesh_or_deposits():
+    import json as _json
+
+    class PromptMesh(FakeMesh):
+        def __init__(self, body=None):
+            super().__init__()
+            self.namespace = "rbuergi"
+            self.body = body
+            self.created = []
+        async def call(self, tool, arguments):
+            if tool == "get":
+                if self.body is None:
+                    raise RuntimeError("not found")
+                return _json.dumps({"content": {"$type": "MarkdownContent", "body": self.body}})
+            if tool == "create":
+                self.created.append(_json.loads(arguments["node"]))
+                return "{}"
+            raise AssertionError(tool)
+
+    async def scenario():
+        # A prompt node in the mesh WINS over the built-in.
+        mesh = PromptMesh(body="Du bist Memex, kurz und knapp.")
+        router = BrainRouter({"memex": mesh}, "memex")
+        assert await router.sync_system_prompt("BUILTIN") == "Du bist Memex, kurz und knapp."
+        # No node → the built-in is DEPOSITED for the user to edit, and used as-is.
+        mesh2 = PromptMesh(body=None)
+        router2 = BrainRouter({"memex": mesh2}, "memex")
+        assert await router2.sync_system_prompt("BUILTIN") == "BUILTIN"
+        deposited = mesh2.created[0]
+        assert deposited["namespace"] == "rbuergi/Voice" and deposited["id"] == "Prompt"
+        assert deposited["content"]["body"] == "BUILTIN"
+
+    asyncio.run(scenario())

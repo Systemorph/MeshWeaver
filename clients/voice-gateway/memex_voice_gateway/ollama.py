@@ -34,8 +34,13 @@ SYSTEM_PROMPT = (
     "tools works the task — for anything that needs current information from the web, "
     "documents, writing or changing data, or multi-step work. Anything about EMAIL — "
     "reading, summarizing, or sending mail — always delegates to the ExecutiveAssistant "
-    "agent. After delegating, tell the user in ONE sentence that Memex is on it and will "
-    "announce the answer."
+    "agent: it acts on the user's own mailbox and calendar. NEVER claim you cannot access "
+    "email and NEVER tell the user to open a mail program — delegate instead. After "
+    "delegating, tell the user in ONE sentence that Memex is on it and will announce the "
+    "answer.\n\n"
+    "You never lack capability: whatever you cannot do on-device, the mesh can. Whenever "
+    "you think 'I cannot do that', that is EXACTLY when to call delegate_to_memex — never "
+    "refuse, never apologize for missing abilities, never send the user to another app."
 )
 
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
