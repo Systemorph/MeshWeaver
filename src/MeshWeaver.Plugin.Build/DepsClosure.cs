@@ -15,23 +15,23 @@ namespace MeshWeaver.Plugin.Build;
 /// Graph/Kiota to deployments that send no mail — the exact cost the module split exists to avoid.
 /// The bundle must carry the module's OWN dependencies, derived, not remembered.</para>
 ///
-/// <para><b>The rule.</b> The deps.json target graph is walked twice from the module's direct
-/// dependencies:</para>
-/// <list type="bullet">
-/// <item><b>Platform-reachable</b>: everything transitively reachable from the module's
-/// MeshWeaver.* references (project references to the framework checkout, or MeshWeaver.*
-/// packages). Those assemblies ship in the consumer's <c>/app</c> by construction — bundling them
-/// would ship the platform inside the module, and the default load context resolves the app's copy
-/// first anyway.</item>
-/// <item><b>Own</b>: everything transitively reachable from the module's NON-MeshWeaver package
-/// references, MINUS the platform-reachable set. These are exactly the assemblies present nowhere
-/// but beside the module — the private closure the bundle must carry.</item>
-/// </list>
+/// <para><b>The rule.</b> The bundle carries the transitive closure of the module's OWN package
+/// references — walked over the deps.json graph, stopping at (and never bundling) MeshWeaver.*
+/// nodes: those are the platform, they ship in the consumer's <c>/app</c> by construction, and
+/// landing one beside the module would shadow the platform's own binary.</para>
+///
+/// <para><b>A diamond RIDES — deliberately.</b> A package reachable from the module's own
+/// references AND from its MeshWeaver.* references (Azure.Identity, Microsoft.Extensions.Options)
+/// is bundled anyway: the default load context resolves <c>/app</c>'s copy first whenever the
+/// platform carries one (same behaviour as today, at the cost of bundle bytes), and the module's
+/// copy takes over the moment the platform stops carrying it. Excluding diamonds instead would
+/// couple every landed bundle to the platform's transitive dependency whims — shedding a
+/// dependency from the platform (the very point of the module split) would silently break every
+/// landed module that relied on it until re-packed. Versions agree while both carry one, because
+/// platform and modules restore from the same central package pins.</para>
 ///
 /// <para>Shared-framework assemblies (<c>FrameworkReference</c>) never appear as package nodes in
-/// deps.json, so they are excluded by construction. A diamond (a package reachable from both
-/// sides) is platform-carried and excluded — the versions agree because platform and modules
-/// restore from the same central package pins.</para>
+/// deps.json, so they are excluded by construction.</para>
 ///
 /// <para>Pure text-in/data-out so the derivation is unit-testable with no build output on disk;
 /// <see cref="ModulePackCommand"/> resolves the derived file names against the module folder and
@@ -41,8 +41,9 @@ namespace MeshWeaver.Plugin.Build;
 public static class DepsClosure
 {
     /// <summary>The derived closure: runtime file names to bundle beside the entry DLL, plus the
-    /// platform-carried names excluded (diagnostic — printed so a pack log shows the split), plus
-    /// warnings for nodes with native <c>runtimeTargets</c> the bundle does not carry.</summary>
+    /// MeshWeaver.* nodes the walk stopped at (diagnostic — printed so a pack log shows the
+    /// split), plus warnings for nodes with native <c>runtimeTargets</c> the bundle does not
+    /// carry.</summary>
     public sealed record Result(
         IReadOnlyList<string> Files,
         IReadOnlyList<string> ExcludedPlatformCarried,
@@ -119,36 +120,26 @@ public static class DepsClosure
                 $"deps.json carries no node for '{moduleName}' — wrong file, or the module was "
                 + "renamed after the build");
 
-        // The split at the module's DIRECT references. A MeshWeaver.* reference — project or
-        // package — roots the platform side; everything else roots the module's own side.
-        var platformRoots = module.Dependencies.Where(IsPlatform).ToList();
+        // The walk from the module's OWN direct references — MeshWeaver.* references root the
+        // platform side and are not walked: their transitives are /app's business, and dragging
+        // them in would ship the platform inside the module.
         var ownRoots = module.Dependencies.Where(d => !IsPlatform(d)).ToList();
-
-        var platformReachable = Reach(nodes, platformRoots);
-        var ownReachable = Reach(nodes, ownRoots);
+        var (ownReachable, platformStops) = ReachStoppingAtPlatform(nodes, ownRoots);
+        platformStops.UnionWith(module.Dependencies.Where(IsPlatform));
 
         var files = new List<string>();
-        var excluded = new List<string>();
         var warnings = new List<string>();
         foreach (var name in ownReachable.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
         {
             if (!nodes.TryGetValue(name, out var node) || node.RuntimeFiles.Count == 0)
                 continue;
-            // Safety net: a MeshWeaver.* assembly must never ride in a module bundle, whatever
-            // path reached it — landing beside the module would shadow the platform's own binary.
-            if (IsPlatform(name))
-                continue;
-            if (platformReachable.Contains(name))
-            {
-                excluded.Add(name);
-                continue;
-            }
             files.AddRange(node.RuntimeFiles);
             if (node.HasNativeAssets)
                 warnings.Add(
                     $"'{name}' declares native runtimeTargets the bundle does not carry — "
                     + "if the module needs them at runtime, they must ship another way");
         }
+        var excluded = platformStops.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
         return new Result(
             files.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
@@ -161,22 +152,30 @@ public static class DepsClosure
         || string.Equals(name, "MeshWeaver", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Transitive reachability over the dependency edges, from <paramref name="roots"/>
-    /// inclusive. Missing nodes (framework-supplied names deps.json lists as dependencies but
-    /// carries no entry for) are simply absent — nothing to bundle, nothing to walk.</summary>
-    private static HashSet<string> Reach(
+    /// inclusive — STOPPING at MeshWeaver.* nodes (collected separately, never walked: their
+    /// transitives are the platform's). Missing nodes (framework-supplied names deps.json lists as
+    /// dependencies but carries no entry for) are simply absent — nothing to bundle, nothing to
+    /// walk.</summary>
+    private static (HashSet<string> Reached, HashSet<string> PlatformStops) ReachStoppingAtPlatform(
         IReadOnlyDictionary<string, Node> nodes, IEnumerable<string> roots)
     {
         var reached = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stops = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var queue = new Queue<string>(roots);
         while (queue.Count > 0)
         {
             var name = queue.Dequeue();
+            if (IsPlatform(name))
+            {
+                stops.Add(name);
+                continue;
+            }
             if (!reached.Add(name) || !nodes.TryGetValue(name, out var node))
                 continue;
             foreach (var dependency in node.Dependencies)
                 queue.Enqueue(dependency);
         }
-        return reached;
+        return (reached, stops);
     }
 
     /// <summary>"Name/version" → "Name" (deps.json keys carry the resolved version).</summary>
