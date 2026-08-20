@@ -16,7 +16,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace MeshWeaver.PluginCatalog;
 
@@ -82,7 +81,10 @@ public sealed class RegistryTokenResolver(IMessageHub hub, ILogger<RegistryToken
         if (!string.IsNullOrWhiteSpace(registry.Token))
             return Observable.Return(registry.Token.Trim());
 
-        if (hub.ServiceProvider.GetService<IOptions<PluginCatalogOptions>>()?.Value is { } options
+        // Resolved as the BARE type — that is how this codebase registers it (see line ~173);
+        // an IOptions<> ask silently returns null and the fallback never fires (found live:
+        // the first fallback build still 401'd).
+        if (hub.ServiceProvider.GetService<PluginCatalogOptions>() is { } options
             && LegacyTokenFallback(options, registry) is { } legacy)
         {
             logger.LogInformation(
