@@ -24,6 +24,21 @@ def wav_from_pcm(pcm: bytes, sample_rate: int = 16000, channels: int = 1) -> byt
     return header + pcm
 
 
+def resample_to_16k(pcm: bytes, rate: int) -> bytes:
+    """Integer-factor downsample to 16 kHz (pairwise mean then decimate) — whisper.cpp's
+    server assumes 16 kHz and reads anything else at the wrong speed (chipmunk noise that
+    transcribes as *Klopfen*/*Musik* hallucinations; bitten live with the 32 kHz firmware)."""
+    if rate == 16000 or rate % 16000:
+        return pcm
+    factor = rate // 16000
+    import array
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) - (len(pcm) % (2 * factor))])
+    out = array.array("h", (sum(samples[i:i + factor]) // factor
+                            for i in range(0, len(samples) - factor + 1, factor)))
+    return out.tobytes()
+
+
 async def transcribe(
     session: aiohttp.ClientSession,
     url: str,
@@ -34,6 +49,8 @@ async def transcribe(
     sample_rate: int = 16000,
 ) -> str:
     """Returns the transcript text; raises on transport errors, empty text on silence."""
+    pcm = resample_to_16k(pcm, sample_rate)
+    sample_rate = 16000
     form = aiohttp.FormData()
     form.add_field("file", wav_from_pcm(pcm, sample_rate), filename="utterance.wav",
                    content_type="audio/wav")

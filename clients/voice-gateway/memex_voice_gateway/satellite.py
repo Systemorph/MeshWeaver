@@ -115,11 +115,14 @@ class SatelliteLink:
             logger.warning("WAKE_WORD %r not on the device; using %r", wanted, chosen)
         # The CONFIGURED wake word must actually be active — a reflash or NVS can leave an
         # old selection in place, and "available but inactive" hears nothing.
-        if chosen not in active:
-            limit = getattr(conf, "max_active_wake_words", 1) or 1
-            desired = ([chosen] + [w for w in active if w != chosen])[:limit]
+        limit = getattr(conf, "max_active_wake_words", 1) or 1
+        # Prefer the configured word; keep a proven fallback model active beside it when the
+        # device allows more than one (a young custom model should not be the only ear).
+        fallback = [w for w in ("hey_jarvis", *active) if w in available and w != chosen]
+        desired = ([chosen] + fallback)[:limit]
+        if set(desired) != set(active):
             await self.client.set_voice_assistant_configuration(active_wake_words=desired)
-            logger.info("activated wake words %s", desired)
+            logger.info("activated wake words %s (max %s)", desired, limit)
 
     # --- voice assistant callbacks ----------------------------------------------------
 
@@ -149,8 +152,12 @@ class SatelliteLink:
             silence_ms=self.cfg.silence_ms,
             max_utterance_s=self.cfg.max_utterance_s,
             min_utterance_s=self.cfg.min_utterance_s,
-            calibrate_ms=400 if follow_up else 0,
-            onset_timeout_s=5.0 if follow_up else 0,
+            # EVERY round ignores its first moments: a wake round starts with the wake
+            # word's own tail (which must not count as the utterance — it made rounds close
+            # ~1s after wake, before the question was asked), a follow-up starts with room
+            # ambience. The lead-in calibrates the noise floor instead of listening.
+            calibrate_ms=400 if follow_up else 600,
+            onset_timeout_s=5.0 if follow_up else 8.0,
         )
         self._utterance_done.clear()
         self._round_task = asyncio.create_task(self._run_round())
@@ -180,6 +187,19 @@ class SatelliteLink:
             pass
         endpointer, self._endpointer = self._endpointer, None
         pcm = endpointer.audio if endpointer else b""
+        # Retain the raw utterance locally when configured: real-voice recordings are the
+        # retraining corpus that fixes what synthetic TTS samples cannot (the owner's accent).
+        if self.cfg.record_dir and pcm:
+            try:
+                import os as _os
+                import time as _t
+                from .stt import wav_from_pcm as _wav
+                _os.makedirs(self.cfg.record_dir, exist_ok=True)
+                name = f"round_{_t.strftime('%Y%m%d_%H%M%S')}_{'fu' if self._follow_up else 'wake'}.wav"
+                with open(_os.path.join(self.cfg.record_dir, name), "wb") as f:
+                    f.write(_wav(pcm, self.cfg.sample_rate))
+            except Exception:
+                logger.debug("recording save failed", exc_info=True)
         # A follow-up that never paused (TV, music) or never started (silence) is not
         # addressed to the assistant: end the conversation quietly instead of answering it.
         if self._follow_up and endpointer is not None and endpointer.ended_by_cap:

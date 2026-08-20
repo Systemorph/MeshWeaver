@@ -29,6 +29,13 @@ class Brain(Protocol):
 
 _STOP = re.compile(r"^\s*(?:stop|stopp|halt|sei still|ruhe|schweig|genug)[.!]?\s*$", re.IGNORECASE)
 
+# Courteous closure is the END of an exchange, not a prompt: answering "Vielen Dank" with
+# "Gerne geschehen!" made the device hear its own reply (or the TV's politeness) and wake
+# again — a self-thanking loop, five rounds in 90 seconds, observed live.
+_CLOSURE = re.compile(r"^\s*(?:vielen dank|danke(?:\s*(?:dir|sch(?:ö|oe)n|vielmals))?|merci(?:\s*vielmal)?|"
+                      r"thank(?:s| you)|ok(?:ay)?|gut|super|perfekt|alles klar|tsch(?:ü|ue)ss|"
+                      r"bis sp(?:ä|ae)ter|gute nacht)[.!,\s]*$", re.IGNORECASE)
+
 _SWITCH = re.compile(
     r"^\s*(?:switch to|connect to|go to|wechsle zu|wechsel zu|verbinde mit|verbinde dich mit|"
     r"gang uf|verbind mit|geh zu)\s+(?P<target>[\wäöüéè .-]+?)[.!?]?\s*$",
@@ -105,8 +112,8 @@ class BrainRouter:
     async def handle_command(self, transcript: str) -> str | None:
         """Returns the spoken confirmation when the transcript was a command;
         empty string = handled silently (say nothing)."""
-        if _STOP.match(transcript.strip()):
-            return ""     # barge-in already stopped playback at wake; just end quietly
+        if _STOP.match(transcript.strip()) or _CLOSURE.match(transcript.strip()):
+            return ""     # stop or courteous closure: end quietly, never reply to a reply
 
         # Delegation: launch a real thread for a STANDARD agent on the mesh and leave the
         # work to be evaluated THERE — the speaker only confirms the submission.
