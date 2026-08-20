@@ -63,6 +63,12 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 });
 builder.Services.AddSpeechTranscription(builder.Configuration);
 
+// Single-user device mesh: every token-less connection acts as the device user (the shells this
+// host serves connect anonymously), so layout areas render the OWNER view and writes are
+// attributed — see GrpcOptions.AnonymousUser and the LAN-listen warning above.
+builder.Services.PostConfigure<MeshWeaver.Hosting.Grpc.GrpcOptions>(
+    o => o.AnonymousUser = DeviceSeed.DeviceUser);
+
 var app = builder.Build();
 
 // Device identity + first-boot seeds (device user, own instance, public memex) — see DeviceSeed.
