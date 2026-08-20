@@ -72,7 +72,12 @@ class VoicePipeline:
         hold_phrase_for: Callable[[str], str] | None = None,
         answer_to_template: str | None = None,
         drain_delegations: Callable[[], list] | None = None,
+        deliver: Callable[[str, str, str], str] | None = None,
     ) -> None:
+        # deliver(handle, task, reply) -> the text to SPEAK when an async answer lands
+        # (signal mode: a short ready-chime; the full text waits for a spoken "vorlesen").
+        # None keeps the original behavior: announce the full answer immediately.
+        self._deliver = deliver
         self._drain_delegations = drain_delegations
         self._command_handler = command_handler
         self._stream_text = stream_text
@@ -162,10 +167,20 @@ class VoicePipeline:
         try:
             reply = await self._await_reply(thread_path, self._announce_budget_s)
             if reply is None:
+                logger.warning("no answer within %.0fs for %r (%s)",
+                               self._announce_budget_s, transcript[:60], thread_path)
                 reply = self._error_phrase
+            elif self._deliver is not None:
+                # Mailbox mode: store the answer, speak only the short READY signal.
+                signal = self._deliver(thread_path, transcript, reply)
+                logger.info("answer ready for %r (%s) — signalling", transcript[:60], thread_path)
+                url = await self._speak(signal)
+                await self._announce(url, signal)
+                return
             if self._answer_to_template:
                 question = transcript if len(transcript) <= 60 else transcript[:57] + "…"
                 reply = f"{self._answer_to_template.format(question=question)} {reply}"
+            logger.info("announcing answer for %r (%s)", transcript[:60], thread_path)
             url = await self._speak(reply)
             await self._announce(url, reply)
         except Exception:
