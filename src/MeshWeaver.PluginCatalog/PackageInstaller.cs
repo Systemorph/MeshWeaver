@@ -143,7 +143,7 @@ public static class PackageInstaller
         // the permission fold correctly denies because the grants are simply not there yet.
         var ownAccess = nodes.Where(n => IsPartitionAccessSatellite(n.Path, partition)).ToArray();
         var content = nodes.Where(n => !IsPartitionAccessSatellite(n.Path, partition)).ToArray();
-        return EnsurePartitionsProvisioned(hub, partition, InstalledPartition)
+        return EnsureInstallPartitions(hub, partition, logger)
             .SelectMany(_ => ownAccess
                 .Select(n => UpsertIfChanged(hub, persistence, n, options))
                 .ToObservable().Concat().ToList())
@@ -260,6 +260,120 @@ public static class PackageInstaller
             ? Observable.Return(System.Reactive.Unit.Default)
             : Observable.Merge(leaves).ToList().Select(_ => System.Reactive.Unit.Default);
     }
+
+    /// <summary>
+    /// What every install path opens with: provision the target partition AND the install-RECORDS
+    /// partition, then make the records partition READABLE (<see cref="EnsureRecordsPartitionReadable"/>).
+    ///
+    /// <para>🚨 The two belong together. Provisioning creates the schema the records land in;
+    /// without the durable policy beside it that schema is filtered out of every query and the
+    /// records are written into the dark (#1950). Pairing them here means a future install path
+    /// cannot provision the records partition and forget its read surface — which is exactly how
+    /// the records partition ended up the one partition the installer never published.</para>
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> EnsureInstallPartitions(
+        IMessageHub hub, string? targetPartition, ILogger? logger) =>
+        EnsurePartitionsProvisioned(hub, targetPartition, InstalledPartition)
+            .SelectMany(_ => EnsureRecordsPartitionReadable(hub, logger));
+
+    /// <summary>
+    /// 🚨 Makes the install-RECORDS partition (<see cref="InstalledPartition"/>) readable by
+    /// writing its <c>PartitionAccessPolicy</c> DURABLY — provisioning the partition first, so the
+    /// row has somewhere to land.
+    ///
+    /// <para><b>Why a durable node and not the static one it replaces (#1950).</b> The policy used
+    /// to be an <c>AddMeshNodes</c> registration on <c>AddPluginCatalog</c> — an in-memory node
+    /// with no row anywhere. The LIVE evaluator reads that happily, which is why every in-memory
+    /// test passed. Postgres does not: a partition-scoped query is pre-filtered by
+    /// <c>public.partition_access</c>, and those rows come from
+    /// <c>rebuild_user_effective_permissions()</c> folding <c>mesh_nodes</c> for
+    /// <c>node_type='PartitionAccessPolicy' AND id='_Policy'</c>. No row → nothing to project → no
+    /// <c>partition_access</c> row for <c>plugins</c> → the whole schema drops out of EVERY
+    /// partition query, for EVERY principal, platform admins included — while
+    /// <c>get Plugins/&lt;id&gt;</c> by exact path still works, which is what made it read as a
+    /// data bug. Measured on both production databases on 2026-08-20: the registry's
+    /// <c>/api/plugins/bundles/index.json</c> served <c>{"bundles": []}</c> to a correctly-granted
+    /// consumer, every module decided <c>SkipNoBundle</c>, and nothing logged anything. The live
+    /// heal was this exact row plus a rebuild.</para>
+    ///
+    /// <para>The comment on the fold's PublicRead projection already says <i>"PackageInstaller
+    /// writes exactly this"</i>. It did — for every partition it INSTALLS INTO, via
+    /// <see cref="EnsureDeclaredAccess"/>. Its own records partition was the one that never got the
+    /// same treatment.</para>
+    ///
+    /// <para><b>Create-only.</b> An existing policy is left completely alone — the platform must
+    /// never widen or narrow a shape someone deliberately chose. One that withholds public read is
+    /// reported, not overwritten: the records partition would then be invisible on purpose, which
+    /// is worth a line in the log rather than a silent correction.</para>
+    /// </summary>
+    /// <param name="hub">The hub to provision and write through (the write runs as System).</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <returns>Completes once the policy is present (or was already).</returns>
+    public static IObservable<Unit> EnsureRecordsPartitionReadable(IMessageHub hub, ILogger? logger)
+    {
+        var policyPath = $"{InstalledPartition}/{PartitionPolicyId}";
+        var persistence = hub.ServiceProvider.GetService<IStorageAdapter>();
+        return EnsurePartitionsProvisioned(hub, InstalledPartition)
+            .SelectMany(_ => persistence is not null
+                ? persistence.Read(policyPath, hub.JsonSerializerOptions).Take(1)
+                : Observable.Return<MeshNode?>(null))
+            .SelectMany(current =>
+            {
+                if (current is null)
+                    return Upsert(hub, InstalledPartitionPolicy())
+                        .Do(_ => logger?.LogInformation(
+                            "[PackageInstaller] published the install-records partition read-only "
+                            + "to everyone via {Path} — without a DURABLE policy node the SQL "
+                            + "permission fold has nothing to project and {Partition} is invisible "
+                            + "to every query (#1950)", policyPath, InstalledPartition))
+                        .Select(_ => Unit.Default);
+
+                if (!DeclaresPublicRead(current, hub))
+                    logger?.LogWarning(
+                        "[PackageInstaller] {Path} exists but does not declare PublicRead — the "
+                        + "install records are readable only to identities holding an explicit "
+                        + "grant on {Partition}, so catalog surfaces and the registry's bundle "
+                        + "index will come up empty. Left as authored.",
+                        policyPath, InstalledPartition);
+                return Observable.Return(Unit.Default);
+            });
+    }
+
+    /// <summary>
+    /// The read-only, world-readable policy of the install-RECORDS partition — the same shape every
+    /// built-in catalog ships. The records are written exclusively as System, so no creator grant is
+    /// ever minted, and a platform admin's <c>Admin/_Access</c> grant is scoped to the <c>Admin</c>
+    /// partition: without this policy NO real signed-in principal holds Read on
+    /// <see cref="InstalledPartition"/> and the installed-state query every catalog surface issues
+    /// is denied for all of them, platform admins included (#811).
+    ///
+    /// <para><c>PublicRead</c> is safe — a <see cref="PackageManifest"/> carries no secrets — and the
+    /// write caps keep the partition non-writable for every non-System identity (System bypasses the
+    /// evaluator, so the installer's own record writes are unaffected).</para>
+    ///
+    /// <para>🚨 <b>ONE definition, two homes.</b> <c>AddPluginCatalog</c> registers this same node
+    /// statically (for the live evaluator, and for the window before the durable write lands) and
+    /// <see cref="EnsureRecordsPartitionReadable"/> writes it durably (for the SQL fold, which can
+    /// only see rows). Sharing the definition is what keeps the two from ever disagreeing about the
+    /// partition's access — a static node and a durable node at one path that said different things
+    /// would be a worse bug than the one they exist to fix.</para>
+    /// </summary>
+    internal static MeshNode InstalledPartitionPolicy() =>
+        new(PartitionPolicyId, InstalledPartition)
+        {
+            NodeType = PartitionAccessPolicyNodeType.NodeType,
+            Name = "Access Policy",
+            State = MeshNodeState.Active,
+            Content = new PartitionAccessPolicy
+            {
+                PublicRead = true,
+                Create = false,
+                Update = false,
+                Delete = false,
+                Comment = false,
+                Thread = false,
+            },
+        };
 
     /// <summary>
     /// The install record's <c>AutoUpdate</c> on a (re-)stamp. An EXISTING record's choice is
@@ -1607,7 +1721,7 @@ public static class PackageInstaller
 
         // NodeType first (so its Source nodes attach under a present type), then the Source nodes;
         // each is skipped when unchanged.
-        return EnsurePartitionsProvisioned(hub, partition, InstalledPartition)
+        return EnsureInstallPartitions(hub, partition, logger)
             .SelectMany(_ => UpsertIfChanged(hub, persistence, nodeTypeNode, options))
             .SelectMany(typeWritten => sourceNodes
                 .Select(n => UpsertIfChanged(hub, persistence, n, options))
@@ -2171,7 +2285,7 @@ public static class PackageInstaller
                 && (!current.TryGetValue(root.Path, out var curRoot)
                     || !string.Equals(curRoot.NodeType, root.NodeType, StringComparison.Ordinal));
 
-        return EnsurePartitionsProvisioned(hub, manifest.TargetPartition ?? manifest.Id, InstalledPartition)
+        return EnsureInstallPartitions(hub, manifest.TargetPartition ?? manifest.Id, logger)
             .SelectMany(_ => ReadCurrent(persistence, nodes.Select(n => n.Path).ToArray(), options))
             .SelectMany(maybeCurrent =>
             {
@@ -2527,7 +2641,7 @@ public static class PackageInstaller
         // governs land. A delta presupposes a prior install, so the partition root already exists
         // and there is no bootstrap race to order around. Create-only, so this is free on the
         // common path.
-        return EnsurePartitionsProvisioned(hub, manifest.TargetPartition ?? manifest.Id, InstalledPartition)
+        return EnsureInstallPartitions(hub, manifest.TargetPartition ?? manifest.Id, logger)
             .SelectMany(_ => EnsureDeclaredAccess(hub, manifest, manifest.TargetPartition ?? manifest.Id,
                 logger, nodes.Select(n => n.Path)))
             .SelectMany(_ => WriteAll(head))

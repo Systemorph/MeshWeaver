@@ -240,28 +240,24 @@ public static class PluginCatalogConfigurationExtensions
 
     // Read-only, world-readable policy for the install-records partition — the same shape every
     // other built-in catalog ships (BuiltInAgentProvider / BuiltInSkillProvider / the model
-    // catalog). The records are written exclusively under ImpersonateAsSystem (PackageInstaller),
-    // so no creator grant is ever minted, and a platform admin's Admin/_Access grant is scoped to
-    // the Admin partition — without this policy NO real signed-in principal holds Read on
-    // "Plugins", and the installed-state query every catalog surface issues
-    // (CatalogLayoutAreas.ObserveInstalled, `path:Plugins scope:children`) is denied for every
-    // real principal, platform admins included (#811).
-    // PublicRead is safe: PackageManifest carries no secrets. The write caps keep the partition
-    // non-writable for every non-System identity (System bypasses the evaluator, so the
+    // catalog). The records are written exclusively as System (PackageInstaller), so no creator
+    // grant is ever minted, and a platform admin's Admin/_Access grant is scoped to the Admin
+    // partition — without this policy NO real signed-in principal holds Read on "Plugins", and the
+    // installed-state query every catalog surface issues (CatalogLayoutAreas.ObserveInstalled,
+    // `path:Plugins scope:children`) is denied for every real principal, platform admins included
+    // (#811). PublicRead is safe: PackageManifest carries no secrets. The write caps keep the
+    // partition non-writable for every non-System identity (System bypasses the evaluator, so the
     // installer's own record writes are unaffected).
+    //
+    // 🚨 THIS STATIC NODE IS NOT ENOUGH ON ITS OWN, and that is the whole of #1950. It covers the
+    // LIVE evaluator — which reads it happily, so every in-memory test passed — but it has no row
+    // anywhere, and Postgres pre-filters partition-scoped queries by public.partition_access, whose
+    // rows come from rebuild_user_effective_permissions() folding mesh_nodes for
+    // node_type='PartitionAccessPolicy' AND id='_Policy'. So on a PG mesh the partition was
+    // invisible to every query for every principal. PackageInstaller.EnsureRecordsPartitionReadable
+    // writes the DURABLE twin (at boot and on every install); this stays because it covers the
+    // window before that write lands and the hosts with no SQL side at all. Both come from ONE
+    // definition below so the two can never drift into disagreeing about the partition's access.
     private static MeshNode CreateInstalledPartitionPolicy() =>
-        new("_Policy", PackageInstaller.InstalledPartition)
-        {
-            NodeType = "PartitionAccessPolicy",
-            Name = "Access Policy",
-            Content = new PartitionAccessPolicy
-            {
-                PublicRead = true,
-                Create = false,
-                Update = false,
-                Delete = false,
-                Comment = false,
-                Thread = false
-            }
-        };
+        PackageInstaller.InstalledPartitionPolicy();
 }
