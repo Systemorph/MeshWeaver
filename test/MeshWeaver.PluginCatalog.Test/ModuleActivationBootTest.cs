@@ -19,7 +19,7 @@ namespace MeshWeaver.PluginCatalog.Test;
 public class ModuleActivationBootTest
 {
     private static readonly Func<string?, string?> AcceptAll = _ => null;
-    private static readonly Func<string, bool> AllDllsExist = _ => true;
+    private static readonly Func<ModuleActivationEntry, bool> AllDllsExist = _ => true;
 
     private static ModuleActivationList List(params ModuleActivationEntry[] entries) =>
         new() { Entries = [.. entries] };
@@ -36,9 +36,12 @@ public class ModuleActivationBootTest
             List(Store("Acme.Widgets"), Store("Acme.Reports")),
             AcceptAll, AllDllsExist);
 
-        effective.Should().Equal(
+        effective.Select(m => m.Entry).Should().Equal(
             "MeshWeaver.OgCard.dll", "MeshWeaver.Speech.dll",
             "Acme.Widgets.dll", "Acme.Reports.dll");
+        // The union carries each module's LANE, so the loader never re-derives it.
+        effective.Where(m => m.Landed is not null).Select(m => m.Landed!.Name)
+            .Should().Equal("Acme.Widgets", "Acme.Reports");
     }
 
     [Fact]
@@ -50,7 +53,9 @@ public class ModuleActivationBootTest
             AcceptAll, AllDllsExist);
 
         // A store install of an already-baseline module (any casing) must not double-load it.
-        effective.Should().Equal("MeshWeaver.OgCard.dll", "Acme.Widgets.dll");
+        effective.Select(m => m.Entry).Should().Equal("MeshWeaver.OgCard.dll", "Acme.Widgets.dll");
+        effective[0].Landed.Should().BeNull("the BASELINE entry won the dedupe, so it stays baseline "
+            + "— resolving it through the shadowed sidecar entry's folder would be a different file");
     }
 
     [Fact]
@@ -82,7 +87,7 @@ public class ModuleActivationBootTest
             AllDllsExist,
             (m, r) => skips.Add((m, r)));
 
-        effective.Should().Equal("MeshWeaver.OgCard.dll", "Acme.Reports.dll");
+        effective.Select(m => m.Entry).Should().Equal("MeshWeaver.OgCard.dll", "Acme.Reports.dll");
         var skip = skips.Should().ContainSingle().Subject;
         skip.Module.Should().Be("Acme.Widgets");
         skip.Reason.Should().Contain("9.0.0").And.Contain("3.2.0",
@@ -102,7 +107,7 @@ public class ModuleActivationBootTest
             floor => ModulePlatformFloor.DeclineReason(floor, "3.2.0"),
             AllDllsExist);
 
-        effective.Should().Equal("Acme.Widgets.dll");
+        effective.Select(m => m.Entry).Should().Equal("Acme.Widgets.dll");
     }
 
     [Fact]
@@ -113,10 +118,10 @@ public class ModuleActivationBootTest
             ["MeshWeaver.OgCard.dll"],
             List(Store("Acme.Widgets"), Store("Acme.Reports")),
             AcceptAll,
-            name => name != "Acme.Widgets",
+            entry => entry.Name != "Acme.Widgets",
             (m, r) => skips.Add((m, r)));
 
-        effective.Should().Equal("MeshWeaver.OgCard.dll", "Acme.Reports.dll");
+        effective.Select(m => m.Entry).Should().Equal("MeshWeaver.OgCard.dll", "Acme.Reports.dll");
         var skip = skips.Should().ContainSingle().Subject;
         skip.Module.Should().Be("Acme.Widgets");
         skip.Reason.Should().Contain("Acme.Widgets.dll");
@@ -137,15 +142,15 @@ public class ModuleActivationBootTest
         {
             Directory.CreateDirectory(Path.Combine(dir, "modules", "Acme.Widgets"));
             File.WriteAllBytes(
-                ModuleActivationBoot.LandedDllPath(dir, "Acme.Widgets"), [1]);
+                ModuleActivationBoot.LandedDllPath(dir, Store("Acme.Widgets")), [1]);
 
             var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
                 [],
                 List(Store("Acme.Widgets")),
                 AcceptAll,
-                name => ModuleActivationBoot.LandedModuleDllExists(dir, name));
+                entry => ModuleActivationBoot.LandedModuleDllExists(dir, entry));
 
-            effective.Should().Equal("Acme.Widgets.dll");
+            effective.Select(m => m.Entry).Should().Equal("Acme.Widgets.dll");
         }
         finally
         {
@@ -170,7 +175,7 @@ public class ModuleActivationBootTest
                 [],
                 List(Store("Acme.Orphan")),
                 AcceptAll,
-                name => ModuleActivationBoot.LandedModuleDllExists(dir, name),
+                entry => ModuleActivationBoot.LandedModuleDllExists(dir, entry),
                 (m, r) => skips.Add((m, r)));
 
             effective.Should().BeEmpty("a same-named app-closure DLL must never satisfy a store-installed entry");
@@ -182,6 +187,105 @@ public class ModuleActivationBootTest
         {
             Directory.Delete(dir, recursive: true);
         }
+    }
+
+    // ---- #1949: the gate must follow the entry's GENERATION pointer, not the legacy folder -----
+    //
+    // Landing writes every version into a FRESH modules/<name>@<gen>/ directory and moves
+    // ModuleActivationEntry.Directory; the legacy fixed modules/<name>/ folder is not written at
+    // all any more. A gate that looked there found NOTHING for any generation-landed module, so
+    // every store module on the deployment was SKIPPED at boot while its bytes sat correctly on
+    // disk — and the reconciler, whose lookup DID follow the pointer, re-landed them into fresh
+    // generations on every boot. Landing and activation never converged.
+
+    /// <summary>A module landed the way landing lands today — bytes only in the generation
+    /// directory, the entry pointing at it — must LOAD, and must resolve to that directory's
+    /// DLL. Fails against the legacy-folder gate: the entry is skipped and never resolved.</summary>
+    [Fact]
+    public void GenerationLandedEntry_LoadsAtBoot_AndResolvesToItsGenerationDll()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mw-landed-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            // Exactly what ModuleLandingService leaves behind: ONE generation directory, no
+            // legacy modules/Acme.Widgets/ folder anywhere.
+            var entry = Store("Acme.Widgets") with { Directory = "Acme.Widgets@a1b2c3d4e" };
+            var generationDir = Path.Combine(dir, "modules", entry.Directory!);
+            Directory.CreateDirectory(generationDir);
+            var generationDll = Path.Combine(generationDir, "Acme.Widgets.dll");
+            File.WriteAllBytes(generationDll, [1]);
+            Directory.Exists(Path.Combine(dir, "modules", "Acme.Widgets")).Should().BeFalse(
+                "the legacy fixed folder is deliberately NOT written — that is the whole premise");
+
+            var skips = new List<(string Module, string Reason)>();
+            var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+                [],
+                List(entry),
+                AcceptAll,
+                e => ModuleActivationBoot.LandedModuleDllExists(dir, e),
+                (m, r) => skips.Add((m, r)));
+
+            skips.Should().BeEmpty("a module landed into its generation directory is PRESENT");
+            var module = effective.Should().ContainSingle().Subject;
+            module.Entry.Should().Be("Acme.Widgets.dll");
+
+            // …and the loader resolves the very file the gate just proved exists. Gate and
+            // resolver naming one path is the invariant; #1949 was them naming two.
+            ModuleActivationBoot.ResolveLoadPath(dir, module).Should().Be(generationDll);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>The POINTER is authoritative, not the folder that happens to exist: an entry whose
+    /// generation directory is gone is skipped even when a stale legacy modules/&lt;name&gt;/ copy
+    /// sits beside it (the live stopgap shape). Otherwise boot would silently load bytes the
+    /// activation record does not point at.</summary>
+    [Fact]
+    public void EntryWhoseGenerationIsGone_IsSkipped_EvenWithAStaleLegacyCopy()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mw-landed-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "modules", "Acme.Widgets"));
+            File.WriteAllBytes(
+                Path.Combine(dir, "modules", "Acme.Widgets", "Acme.Widgets.dll"), [1]);
+
+            var skips = new List<(string Module, string Reason)>();
+            var effective = ModuleActivationBoot.ComputeEffectiveModuleEntries(
+                [],
+                List(Store("Acme.Widgets") with { Directory = "Acme.Widgets@deadbeef" }),
+                AcceptAll,
+                e => ModuleActivationBoot.LandedModuleDllExists(dir, e),
+                (m, r) => skips.Add((m, r)));
+
+            effective.Should().BeEmpty();
+            var skip = skips.Should().ContainSingle().Subject;
+            skip.Reason.Should().Contain("modules/Acme.Widgets@deadbeef/Acme.Widgets.dll",
+                "the skip must name the directory the ENTRY points at, or it sends the reader "
+                + "looking in a folder nothing writes any more");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>A BASELINE entry keeps <c>ResolveModulePath</c>'s probes — including the app-closure
+    /// fallback, which is legitimate for the image's own closure and forbidden for a sidecar
+    /// entry.</summary>
+    [Fact]
+    public void BaselineModule_ResolvesThroughResolveModulePath_NotTheLandedRule()
+    {
+        var module = new EffectiveModule("MeshWeaver.OgCard.dll", Landed: null);
+        var root = Path.Combine(Path.GetTempPath(), "mw-noroot-" + Guid.NewGuid().ToString("N"));
+
+        ModuleActivationBoot.ResolveLoadPath(root, module).Should().Be(
+            Path.Combine(AppContext.BaseDirectory, "MeshWeaver.OgCard.dll"),
+            "nothing is laid out under the module root, so the baseline entry falls back to the "
+            + "app closure exactly as ResolveModulePath does");
     }
 
     [Fact]
@@ -200,9 +304,9 @@ public class ModuleActivationBootTest
                 ["MeshWeaver.OgCard.dll"],
                 new ModuleActivationList(),
                 AcceptAll,
-                name => ModuleActivationBoot.LandedModuleDllExists(dir, name));
+                entry => ModuleActivationBoot.LandedModuleDllExists(dir, entry));
 
-            effective.Should().Equal("MeshWeaver.OgCard.dll");
+            effective.Select(m => m.Entry).Should().Equal("MeshWeaver.OgCard.dll");
         }
         finally
         {
