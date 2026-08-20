@@ -19,13 +19,18 @@ from dataclasses import dataclass, field
 import aiohttp
 
 SYSTEM_PROMPT = (
-    "You are a voice assistant on a smart speaker. Everything you write is read aloud by "
-    "text-to-speech: answer in at most two short sentences — no markdown, lists, code, or "
-    "links. Reply in the language you were addressed in; Swiss German arrives transcribed "
-    "as Standard German — reply in Standard German. Give the answer directly, not the "
-    "process; ask a follow-up question only when the request is genuinely ambiguous. Each "
-    "user message starts with its wall-clock time in brackets — use it to judge the time "
-    "gaps in the conversation."
+    "You are Memex, the on-device voice of the user's personal mesh — when asked who you "
+    "are, your name is Memex. Everything you write is read aloud by text-to-speech: at most "
+    "two short sentences, no markdown, lists, code, or links. Reply in the language you were "
+    "addressed in; Swiss German arrives transcribed as Standard German — reply in Standard "
+    "German. Say numbers and dates in speakable words. Each user message starts with its "
+    "wall-clock time in brackets — use it to judge gaps in the conversation.\n\n"
+    "TRIAGE — decide per request: answer DIRECTLY yourself for time, dates, general "
+    "knowledge, conversions, and small talk (you run on-device; speed is your virtue). "
+    "DELEGATE by calling delegate_to_memex for anything that needs the user's own data, "
+    "current information from the web, documents, or multi-step work — the mesh runs full "
+    "agents with tools there. After delegating, tell the user in ONE sentence that Memex is "
+    "on it and will announce the answer."
 )
 
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -53,6 +58,26 @@ def build_messages(history: list[dict], text: str, system_prompt: str = SYSTEM_P
             {"role": "user", "content": text}]
 
 
+DELEGATE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "delegate_to_memex",
+        "description": "Hand a task to the user's mesh, where full agents with tools "
+                       "(their data, web search, documents) run it in a thread. The answer "
+                       "is announced to the user when ready.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "The task, self-contained, in the user's language."},
+                "agent": {"type": "string", "enum": ["Voice", "Assistant", "Researcher"],
+                          "description": "Voice: quick data lookups. Assistant: general work. Researcher: deep research."},
+            },
+            "required": ["task"],
+        },
+    },
+}
+
+
 @dataclass
 class OllamaBrain:
     base_url: str
@@ -61,6 +86,10 @@ class OllamaBrain:
     num_predict: int = 200
     system_prompt: str = SYSTEM_PROMPT
     location: str | None = None    # anchors 'here'/weather questions to a real place
+    # The triage seam: set by the router — called as delegator(task, agent) -> stamped
+    # handle; the pipeline drains pending delegations and announces their answers.
+    delegator: object = None
+    _pending: list = field(default_factory=list, init=False)
 
     _history: list[dict] = field(default_factory=list, init=False)
     _last_used: float = field(default=0.0, init=False)
@@ -99,29 +128,61 @@ class OllamaBrain:
     async def _chat_streaming(self, messages: list[dict], handle: str) -> str:
         if self._http is None:
             self._http = aiohttp.ClientSession()
-        payload = {"model": self.model, "messages": messages, "stream": True,
-                   "think": False, "keep_alive": "60m",
-                   "options": {"num_predict": self.num_predict}}
         queue = self._chunks[handle]
         pieces: list[str] = []
         import json as _json
+        working = list(messages)
         try:
-            async with self._http.post(f"{self.base_url}/api/chat", json=payload,
-                                       timeout=aiohttp.ClientTimeout(total=300)) as response:
-                response.raise_for_status()
-                async for line in response.content:
-                    if not line.strip():
-                        continue
-                    data = _json.loads(line)
-                    piece = (data.get("message") or {}).get("content", "")
-                    if piece:
-                        pieces.append(piece)
-                        await queue.put(piece)
-                    if data.get("done"):
-                        break
+            for _round in range(3):   # model → (tool) → model, bounded
+                payload = {"model": self.model, "messages": working, "stream": True,
+                           "think": False, "keep_alive": "60m",
+                           "options": {"num_predict": self.num_predict}}
+                if self.delegator is not None:
+                    payload["tools"] = [DELEGATE_TOOL]
+                tool_calls: list = []
+                async with self._http.post(f"{self.base_url}/api/chat", json=payload,
+                                           timeout=aiohttp.ClientTimeout(total=300)) as response:
+                    response.raise_for_status()
+                    async for line in response.content:
+                        if not line.strip():
+                            continue
+                        data = _json.loads(line)
+                        message = data.get("message") or {}
+                        piece = message.get("content", "")
+                        if piece:
+                            pieces.append(piece)
+                            await queue.put(piece)
+                        if message.get("tool_calls"):
+                            tool_calls.extend(message["tool_calls"])
+                        if data.get("done"):
+                            break
+                if not tool_calls:
+                    break
+                # TRIAGE chose the mesh: open the thread(s), tell the model, let it hand off.
+                working.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
+                for call in tool_calls:
+                    fn = (call.get("function") or {})
+                    args = fn.get("arguments") or {}
+                    if isinstance(args, str):
+                        try: args = _json.loads(args)
+                        except Exception: args = {"task": args}
+                    task = str(args.get("task", "")).strip()
+                    agent = args.get("agent") or None
+                    try:
+                        stamped = await self.delegator(task, agent)
+                        self._pending.append((stamped, task))
+                        result = "Delegated to memex. The answer will be announced when ready."
+                    except Exception as e:
+                        result = f"Delegation failed: {e}"
+                    working.append({"role": "tool", "content": result})
         finally:
             await queue.put(None)
         return "".join(pieces).strip()
+
+    def drain_delegations(self) -> list:
+        """(stamped_handle, task) pairs the pipeline should announce answers for."""
+        pending, self._pending = self._pending, []
+        return pending
 
     async def ask(self, text: str) -> str:
         """Start generating; returns a handle usable with await_reply (pipeline contract)."""

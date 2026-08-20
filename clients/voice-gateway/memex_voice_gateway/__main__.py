@@ -59,7 +59,12 @@ def make_router(cfg: Config) -> BrainRouter:
         brains = {e["name"]: (ollama(e) if e.get("kind") == "ollama" else memex(e))
                   for e in cfg.portals}
         active = next((e["name"] for e in cfg.portals if e.get("default")), cfg.portals[0]["name"])
-        return BrainRouter(brains, active, phrases=phrases)
+        router = BrainRouter(brains, active, phrases=phrases)
+        # The local brain triages: it can hand any request to a mesh thread by itself.
+        for brain in brains.values():
+            if isinstance(brain, OllamaBrain):
+                brain.delegator = router.delegate_task
+        return router
     if cfg.brain == "ollama":
         return BrainRouter({"lokal": ollama({})}, "lokal", phrases=phrases)
     return BrainRouter({"memex": memex({"url": cfg.memex_url, "token": cfg.memex_token,
@@ -135,6 +140,7 @@ async def run() -> None:
         stream_speak=stream_speak if cfg.stream_tts else None,
         hold_phrase_for=router.describe_hold,
         answer_to_template=phrases_for(cfg.stt_language)["answer_to"],
+        drain_delegations=router.drain_delegations,
     )
     link = SatelliteLink(cfg, pipeline)
 

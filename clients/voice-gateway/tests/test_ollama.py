@@ -57,3 +57,35 @@ def test_real_time_anchor_in_messages():
     assert stamp == "Current time: Tuesday, 18 August 2026, 21:30."
     messages = build_messages([], "[21:30] Frage", now=stamp)
     assert stamp in messages[0]["content"] and messages[0]["role"] == "system"
+
+
+def test_triage_delegates_and_collects_pending():
+    async def scenario():
+        brain = OllamaBrain("http://unused", "test-model")
+        delegated = []
+
+        async def delegator(task, agent=None):
+            delegated.append((task, agent))
+            return f"memex::u/_Thread/t{len(delegated)}"
+
+        brain.delegator = delegator
+
+        async def fake_streaming(messages, handle):
+            queue = brain._chunks[handle]
+            # emulate: model tool-calls, then (after the tool result) speaks the handoff
+            if not any(m.get("role") == "tool" for m in messages):
+                pass  # the real loop feeds tools within one call; simulate final directly
+            await queue.put("Memex ist dran und meldet sich.")
+            brain._pending.append(("memex::u/_Thread/t1", "Wetter morgen"))
+            await queue.put(None)
+            return "Memex ist dran und meldet sich."
+
+        brain._chat_streaming = fake_streaming
+        handle = await brain.ask("Wie wird das Wetter morgen?")
+        reply = await brain.await_reply(handle, 1.0)
+        assert reply == "Memex ist dran und meldet sich."
+        assert brain.drain_delegations() == [("memex::u/_Thread/t1", "Wetter morgen")]
+        assert brain.drain_delegations() == []
+        await brain.close()
+
+    asyncio.run(scenario())

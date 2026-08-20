@@ -41,8 +41,23 @@ class SayTts:
     its bytes; the temp file is removed immediately.
     """
 
-    def __init__(self, voice: str = "Anna") -> None:
+    def __init__(self, voice: str = "Anna", english_voice: str = "Samantha") -> None:
         self.voice = voice
+        self.english_voice = english_voice
+
+    @staticmethod
+    def _looks_german(text: str) -> bool:
+        """Cheap language guess: a German voice reading English sounds awful (and vice
+        versa), so the voice follows the reply's language."""
+        lowered = f" {text.lower()} "
+        german_markers = (" der ", " die ", " das ", " und ", " ist ", " nicht ", " ich ",
+                          " sie ", " mit ", " ein ", " eine ", " zu ", " haben ", " wie ",
+                          "ä", "ö", "ü", "ß")
+        english_markers = (" the ", " is ", " are ", " you ", " and ", " to ", " of ",
+                           " have ", " what ", " it ")
+        g = sum(m in lowered for m in german_markers)
+        e = sum(m in lowered for m in english_markers)
+        return g >= e
 
     @staticmethod
     def build_args(voice: str, out_path: str) -> list[str]:
@@ -56,8 +71,9 @@ class SayTts:
         fd, path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
         try:
+            voice = self.voice if self._looks_german(text) else self.english_voice
             process = await asyncio.create_subprocess_exec(
-                *self.build_args(self.voice, path),
+                *self.build_args(voice, path),
                 stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             _, err = await process.communicate(text.encode())
             if process.returncode != 0:
