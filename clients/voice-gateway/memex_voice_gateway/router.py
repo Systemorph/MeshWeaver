@@ -125,12 +125,14 @@ _MUSIC = re.compile(
     r"^\s*(?:musik|radio)\s*(?:an|bitte)?[.!]?\s*$", re.IGNORECASE | re.DOTALL)
 _MUSIC_OFF = re.compile(r"\b(?:musik|radio)\s+(?:aus|stopp?|off)\b|"
                         r"\b(?:stopp?|stop)\s+(?:die\s+)?(?:musik|radio)\b", re.IGNORECASE)
+# Direct stream URLs — the SRG entry URLs answer with a 302 the device's HTTP client may
+# not follow (resolved 2026-08-20; the .m/... form redirects to livestreaming-node hosts).
 STATIONS = {
     "energy": ("Energy Zürich", "https://energyzuerich.ice.infomaniak.ch/energyzuerich-high.mp3"),
-    "srf 3": ("Radio SRF 3", "http://stream.srg-ssr.ch/m/drs3/mp3_128"),
-    "srf drei": ("Radio SRF 3", "http://stream.srg-ssr.ch/m/drs3/mp3_128"),
-    "srf 1": ("Radio SRF 1", "http://stream.srg-ssr.ch/m/drs1/mp3_128"),
-    "virus": ("Radio SRF Virus", "http://stream.srg-ssr.ch/m/drsvirus/mp3_128"),
+    "srf 3": ("Radio SRF 3", "http://livestreaming-node-1.srg-ssr.ch/srgssr/srf3/mp3/128"),
+    "srf drei": ("Radio SRF 3", "http://livestreaming-node-1.srg-ssr.ch/srgssr/srf3/mp3/128"),
+    "srf 1": ("Radio SRF 1", "http://livestreaming-node-1.srg-ssr.ch/srgssr/srf1/mp3/128"),
+    "virus": ("Radio SRF Virus", "http://livestreaming-node-1.srg-ssr.ch/srgssr/drsvirus/mp3/128"),
 }
 _DEFAULT_STATION = "energy"
 
@@ -403,11 +405,14 @@ class BrainRouter:
         if _MUSIC_OFF.search(stripped) and self.player is not None:
             return ""    # the interrupt path stops the player quietly
         lowered = stripped.lower()
-        # A KNOWN station name anywhere is a play request by itself — the device loses
-        # the first ~half second after the wake word, so "Spiel Radio SRF 3" routinely
-        # arrives as "Die Radio-SRF 3." (observed): never require the verb.
+        # Radio matching survives what STT does to the words: the device loses the first
+        # ~half second after the wake word AND mangles station names ("Spiel Radio SRF 3"
+        # arrived as "Die Radio-SRF 3." then "Spielradio SR-Fans." — observed). So: a
+        # known station name plays it; ANY mention of radio — substring, because
+        # "Spielradio" fuses — plays the default; the verb is never required.
         key = next((k for k in STATIONS if k in lowered), None)
-        if (key or _MUSIC.search(stripped)) and self.player is not None:
+        if (key or "radio" in lowered or _MUSIC.search(stripped)) \
+                and self.player is not None:
             named_song = key is None and re.search(
                 r"\b(?:lied|song)\b", lowered) and len(stripped) > 25
             name, url = STATIONS[key or _DEFAULT_STATION]
