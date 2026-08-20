@@ -47,15 +47,16 @@ public static class DeviceSeed
             .GetQuery("seed-device-user", $"nodeType:User content.email:{DeviceUserId}@local limit:1")
             .Take(1).Timeout(TimeSpan.FromSeconds(15))
             .Where(existing => !existing.Any())
-            .SelectMany(_ => Observable.Using(
-                () => accessService.ImpersonateAsSystem(),   // a brand-new partition root is owned by nobody yet
-                _ => meshService.CreateNode(new MeshNode(DeviceUserId)   // partition root → provisions schema + self-Admin
-                    {
-                        NodeType = "User",
-                        Name = name,
-                        State = MeshNodeState.Active,
-                        Content = new User { FullName = name, Email = $"{DeviceUserId}@local" },
-                    })))
+            // RunAsSystem, never Observable.Using(ImpersonateAsSystem…) — the latter latches the
+            // system identity on the subscribing thread (ImpersonationScopeSiteRatchetGuard, #1790).
+            .SelectMany(_ => accessService.RunAsSystem(   // a brand-new partition root is owned by nobody yet
+                () => meshService.CreateNode(new MeshNode(DeviceUserId)   // partition root → provisions schema + self-Admin
+                {
+                    NodeType = "User",
+                    Name = name,
+                    State = MeshNodeState.Active,
+                    Content = new User { FullName = name, Email = $"{DeviceUserId}@local" },
+                })))
             .Subscribe(
                 _ => logger?.LogInformation("Seeded device user {Name}", name),
                 ex => logger?.LogWarning(ex, "Device-user seed failed"));
@@ -68,9 +69,8 @@ public static class DeviceSeed
             .GetQuery("seed-admin-grant", $"path:Admin/_Access/{DeviceUserId}_Access limit:1")
             .Take(1).Timeout(TimeSpan.FromSeconds(15))
             .Where(existing => !existing.Any())
-            .SelectMany(_ => Observable.Using(
-                () => accessService.ImpersonateAsSystem(),
-                _ => meshService.CreateNode(new MeshNode($"{DeviceUserId}_Access", "Admin/_Access")
+            .SelectMany(_ => accessService.RunAsSystem(
+                () => meshService.CreateNode(new MeshNode($"{DeviceUserId}_Access", "Admin/_Access")
                 {
                     NodeType = "AccessAssignment",
                     Name = $"{name} — Admin",
