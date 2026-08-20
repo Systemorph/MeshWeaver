@@ -19,16 +19,16 @@ import { RenderArea, type AreaSource, type AreaTree } from "@meshweaver/react/co
 import { areaErrorMessage } from "./areaError";
 import { type NavTarget } from "./nav";
 import { CLIENT_MENUS, ClientScreen, type ClientDestination } from "./screens";
-import { loadInstances, currentInstance, setCurrentInstance, instanceIdentity, type InstanceIdentity } from "./connection";
+import { loadInstances, currentInstance, setCurrentInstance, instanceIdentity, onInstancesChanged, type InstanceIdentity } from "./connection";
 import { useStyles, useTheme, type Palette } from "./theme";
 import { LeftMenuView } from "./leftMenu";
 
 const useSheet = () => useStyles(makeStyles);
 
 const CONTENT_AREA = "Overview";
-// The startup / home landing. On an anonymous local mesh there is no personal user page, so we land on
-// the documentation home; connected to a portal with a signed-in identity this is where the user's own
-// node/area would go (the MAUI app lands on device-user/Activity).
+// The default home landing — the documentation home, used on the web (a same-origin viewer's own
+// partition is unknown to this app). On the native LOCAL mesh App.tsx passes the device user's
+// activities instead (device-user/Activity, the MAUI shell's landing) via the `home` prop.
 export const HOME: NavTarget = { address: "Doc/Architecture", area: CONTENT_AREA };
 
 // The mesh menu contexts streamed as $Menu:{context}, in display order, with a glyph like MAUI's.
@@ -57,6 +57,7 @@ export function Shell({
   onNavigate,
   onClientScreen,
   onReconnect,
+  home = HOME,
 }: {
   source: AreaSource;
   nav: NavTarget;
@@ -64,6 +65,7 @@ export function Shell({
   onNavigate: (t: NavTarget) => void;
   onClientScreen: (d: ClientDestination | null) => void;
   onReconnect: () => void;
+  home?: NavTarget;
 }): ReactNode {
   const tree = useTree(source);
   const styles = useSheet();
@@ -77,7 +79,7 @@ export function Shell({
   const clientNav = (d: ClientDestination | null) => { setMenuOpen(false); onClientScreen(d); };
 
   const menu = (
-    <LeftMenu tree={tree} nav={nav} clientScreen={clientScreen} onNavigate={navigate} onClientScreen={clientNav} />
+    <LeftMenu tree={tree} nav={nav} home={home} clientScreen={clientScreen} onNavigate={navigate} onClientScreen={clientNav} />
   );
   const main = clientScreen ? (
     <View style={styles.content}>
@@ -91,12 +93,13 @@ export function Shell({
     <View style={styles.root}>
       <TopBar
         onNavigate={onNavigate}
+        home={home}
         isMobile={isMobile}
         onToggleMenu={() => setMenuOpen((o) => !o)}
         onReconnect={onReconnect}
         onManageInstances={() => onClientScreen("instances")}
       />
-      <Breadcrumb nav={nav} clientScreen={clientScreen} onNavigate={onNavigate} />
+      <Breadcrumb nav={nav} home={home} clientScreen={clientScreen} onNavigate={onNavigate} />
       <View style={styles.body}>
         {isMobile ? (
           <>
@@ -121,7 +124,7 @@ export function Shell({
 }
 
 // ── top bar ───────────────────────────────────────────────────────────────────
-function TopBar({ onNavigate, isMobile, onToggleMenu, onReconnect, onManageInstances }: { onNavigate: (t: NavTarget) => void; isMobile: boolean; onToggleMenu: () => void; onReconnect: () => void; onManageInstances: () => void }): ReactNode {
+function TopBar({ onNavigate, home, isMobile, onToggleMenu, onReconnect, onManageInstances }: { onNavigate: (t: NavTarget) => void; home: NavTarget; isMobile: boolean; onToggleMenu: () => void; onReconnect: () => void; onManageInstances: () => void }): ReactNode {
   const [q, setQ] = useState("");
   const styles = useSheet();
   const { mode, toggle, palette } = useTheme();
@@ -134,7 +137,7 @@ function TopBar({ onNavigate, isMobile, onToggleMenu, onReconnect, onManageInsta
           <Text style={styles.hamburgerText}>☰</Text>
         </Pressable>
       ) : null}
-      <Pressable style={isMobile ? styles.brandMobile : styles.brand} onPress={() => onNavigate(HOME)}>
+      <Pressable style={isMobile ? styles.brandMobile : styles.brand} onPress={() => onNavigate(home)}>
         <View style={styles.logo}><Text style={styles.logoMark}>◆</Text></View>
         {isMobile ? null : <Text style={styles.brandText}>MeshWeaver</Text>}
       </Pressable>
@@ -171,6 +174,10 @@ function InstanceSwitcher({ isMobile, onReconnect, onManage }: { isMobile: boole
   const styles = useSheet();
   const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState(() => currentInstance().name);
+  // The list is hydrated ASYNCHRONOUSLY from the local mesh's MemexInstance nodes — re-read it
+  // (and the current name, whose Local display name comes from the own-instance node) on change.
+  const [, listTick] = useState(0);
+  useEffect(() => onInstancesChanged(() => { listTick((n) => n + 1); setCurrent(currentInstance().name); }), []);
   const instances = loadInstances();
   const cur = instances.find((i) => i.name === current) ?? instances[0];
   const id = instanceIdentity(cur);
@@ -232,10 +239,12 @@ function InstanceSwitcher({ isMobile, onReconnect, onManage }: { isMobile: boole
 // ── breadcrumb toolbar ──────────────────────────────────────────────────────────
 function Breadcrumb({
   nav,
+  home,
   clientScreen,
   onNavigate,
 }: {
   nav: NavTarget;
+  home: NavTarget;
   clientScreen: ClientDestination | null;
   onNavigate: (t: NavTarget) => void;
 }): ReactNode {
@@ -243,7 +252,7 @@ function Breadcrumb({
   const styles = useSheet();
   return (
     <View style={styles.crumbs}>
-      <Pressable style={({ hovered }: any) => [styles.crumbBtn, hovered && styles.crumbHover]} onPress={() => onNavigate(HOME)}>
+      <Pressable style={({ hovered }: any) => [styles.crumbBtn, hovered && styles.crumbHover]} onPress={() => onNavigate(home)}>
         <Text style={styles.crumbHome}>⌂ Home</Text>
       </Pressable>
       {!clientScreen &&
@@ -270,12 +279,14 @@ function Breadcrumb({
 function LeftMenu({
   tree,
   nav,
+  home,
   clientScreen,
   onNavigate,
   onClientScreen,
 }: {
   tree: AreaTree;
   nav: NavTarget;
+  home: NavTarget;
   clientScreen: ClientDestination | null;
   onNavigate: (t: NavTarget) => void;
   onClientScreen: (d: ClientDestination | null) => void;
@@ -284,7 +295,7 @@ function LeftMenu({
     <LeftMenuView
       tree={tree}
       nav={nav}
-      home={HOME}
+      home={home}
       contexts={MESH_CONTEXTS}
       clientMenus={CLIENT_MENUS}
       clientScreen={clientScreen}

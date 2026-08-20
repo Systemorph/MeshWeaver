@@ -3,7 +3,7 @@
 // mesh): Voice (speech), Connect (remote instances), Profile, Settings.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, StyleSheet } from "react-native";
-import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, discoverInstances, mergeDiscovered, getConnectStatus, onConnectStatus, type MeshInstance } from "./connection";
+import { loadInstances, saveInstance, removeInstance, setCurrentInstance, currentInstance, defaultPortalUrl, instanceIdentity, discoverInstances, mergeDiscovered, getConnectStatus, onConnectStatus, onInstancesChanged, type MeshInstance } from "./connection";
 import { refreshOAuth, signInWithOAuth } from "./oauth";
 import { useStyles, useTheme, type Palette } from "./theme";
 
@@ -140,6 +140,9 @@ function ConnectScreen({ onConnected }: { onConnected: () => void }): ReactNode 
   // failed connect must be readable where the user is looking.
   const [connectStatus, setConnectStatus_] = useState(getConnectStatus());
   useEffect(() => onConnectStatus(() => setConnectStatus_(getConnectStatus())), []);
+  // The list lives in the LOCAL MESH (MemexInstance nodes) and hydrates asynchronously once the
+  // Local connect acks — re-read it here so the onboarding fills in without a manual refresh.
+  useEffect(() => onInstancesChanged(() => { setInstances(loadInstances()); setCurrent(currentInstance().name); }), []);
   const [showForm, setShowForm] = useState(false);
   const [tokenFor, setTokenFor] = useState<string | null>(null);
   const [rowToken, setRowToken] = useState("");
