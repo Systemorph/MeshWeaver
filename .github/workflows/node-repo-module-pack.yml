@@ -28,6 +28,14 @@ on:
         description: Hand the packed bundles to the registry. Trunk only — a PR packs and inspects, never publishes.
         type: boolean
         default: false
+      registry-source:
+        description: >
+          The registry SOURCE these packages belong to ("Plugins", "Education", …) — it stamps the
+          landed entry's packagePath, which is the key every PluginGrant and the bundle index match
+          on. An unstamped landing is servable to nobody.
+        type: string
+        required: false
+        default: Plugins
       registry-url:
         description: The registry that will serve these bundles onward.
         type: string
@@ -175,6 +183,7 @@ jobs:
         env:
           TOKEN: ${{ secrets.publish-token }}
           REGISTRY: ${{ inputs.registry-url }}
+          REGISTRY_SOURCE: ${{ inputs.registry-source }}
           PACKAGE: ${{ matrix.entry.package }}
           MODULE: ${{ matrix.entry.module }}
           VERSION: ${{ steps.identity.outputs.version }}
@@ -186,7 +195,7 @@ jobs:
             exit 1
           fi
           code=$(curl -sS -o "$RUNNER_TEMP/publish-$MODULE.json" -w '%{http_code}' \
-            -X POST "$REGISTRY/api/plugins/bundles/$PACKAGE?version=$VERSION" \
+            -X POST "$REGISTRY/api/plugins/bundles/$PACKAGE?version=$VERSION&packagePath=$REGISTRY_SOURCE/$PACKAGE" \
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/octet-stream" \
             --data-binary "@$BUNDLE")

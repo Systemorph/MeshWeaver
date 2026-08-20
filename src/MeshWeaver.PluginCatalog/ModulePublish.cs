@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.Plugin.Packaging;
@@ -42,7 +43,8 @@ public static class ModulePublish
         string? Version,
         string? MinMeshVersion,
         string? FrameworkMvid,
-        IReadOnlyList<(string FileName, byte[] Bytes)> Files);
+        IReadOnlyList<(string FileName, byte[] Bytes)> Files,
+        string? PackagePath = null);
 
     /// <summary>
     /// Why <paramref name="authorizationHeader"/> may not publish, or null when it may.
@@ -84,8 +86,24 @@ public static class ModulePublish
         string plugin,
         BundleReader.Manifest? manifest,
         IReadOnlyList<BundleReader.ModuleFile> files,
-        string? version = null)
+        string? version = null,
+        string? packagePath = null)
     {
+        // The package path ("Plugins/AzureBlob") is what stamps the landed entry's SOURCE — the
+        // key every PluginGrant and serve-side filter matches on. Optional (an older publisher
+        // simply lands an unstamped entry, servable to nobody until re-published), but when
+        // given it must be a two-segment source/plugin path whose plugin half matches the URL.
+        if (!string.IsNullOrWhiteSpace(packagePath))
+        {
+            var segments = packagePath.Split('/');
+            if (segments.Length != 2
+                || segments.Any(seg => string.IsNullOrWhiteSpace(seg)
+                    || seg is "." or ".."
+                    || seg.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                || !string.Equals(segments[1], plugin, StringComparison.OrdinalIgnoreCase))
+                return (null,
+                    $"'{packagePath}' is not a valid package path (expected <source>/{plugin})");
+        }
         if (string.IsNullOrWhiteSpace(plugin))
             return (null, "no package id was named");
         if (manifest is null)
@@ -130,6 +148,7 @@ public static class ModulePublish
             string.IsNullOrWhiteSpace(version) ? manifest.Version : version,
             manifest.Module.MinMeshVersion,
             manifest.FrameworkMvid,
-            [.. files.Select(f => (f.FileName, f.Bytes))]), null);
+            [.. files.Select(f => (f.FileName, f.Bytes))],
+            string.IsNullOrWhiteSpace(packagePath) ? null : packagePath), null);
     }
 }

@@ -156,6 +156,32 @@ public class ModulePublishTest
     }
 
     [Fact]
+    public void APackagePathStampsTheAcceptedUpload()
+    {
+        // The path is what stamps the landed entry's SOURCE — the key grants and the bundle
+        // index match on. Its plugin half must agree with the URL, and traversal shapes are
+        // refused before anything reaches disk.
+        var manifest = Manifest(plugin: "SocialMedia", module: "MeshWeaver.Social");
+        var files = Files("MeshWeaver.Social.dll");
+
+        var (accepted, _) = ModulePublish.Validate(
+            "SocialMedia", manifest, files, packagePath: "Plugins/SocialMedia");
+        Assert.Equal("Plugins/SocialMedia", accepted!.PackagePath);
+
+        // Absent → accepted unstamped (an older publisher), never refused.
+        var (unstamped, _) = ModulePublish.Validate("SocialMedia", manifest, files);
+        Assert.NotNull(unstamped);
+        Assert.Null(unstamped!.PackagePath);
+
+        Assert.NotNull(ModulePublish.Validate(
+            "SocialMedia", manifest, files, packagePath: "Plugins/Other").DeclineReason);
+        Assert.NotNull(ModulePublish.Validate(
+            "SocialMedia", manifest, files, packagePath: "../SocialMedia").DeclineReason);
+        Assert.NotNull(ModulePublish.Validate(
+            "SocialMedia", manifest, files, packagePath: "Plugins/x/SocialMedia").DeclineReason);
+    }
+
+    [Fact]
     public void AnEmptyOrUnreadableUploadIsRefused()
     {
         Assert.NotNull(ModulePublish.Validate("SocialMedia", Manifest(), []).DeclineReason);

@@ -190,7 +190,8 @@ public static class PluginBundleEndpoints
                 }
 
                 var (accepted, decline) = ModulePublish.Validate(
-                    plugin, manifest, files, http.Request.Query["version"]);
+                    plugin, manifest, files, http.Request.Query["version"],
+                    http.Request.Query["packagePath"]);
                 if (accepted is null)
                 {
                     logger?.LogWarning("Module publish for {Plugin} REFUSED: {Reason}", plugin, decline);
@@ -204,6 +205,7 @@ public static class PluginBundleEndpoints
                     await landing.LandModule(
                         accepted.Module, accepted.Files,
                         frameworkMvid: accepted.FrameworkMvid,
+                        packagePath: accepted.PackagePath,
                         version: accepted.Version,
                         minMeshVersion: accepted.MinMeshVersion)
                         .FirstAsync().ToTask(ct);
@@ -316,8 +318,7 @@ public static class PluginBundleEndpoints
     {
         var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}";
 
-        return InstalledPackages(rootHub, ct)
-            .Do(packages => WarnAboutUnstampedRecords(rootHub, packages))
+        return ServableEntries(rootHub, ct)
             .Select(packages => (IReadOnlyList<BundleEntry>)packages
                 .Where(p => IsGranted(caller, p)).ToArray())
             .SelectMany(packages => ServableModules(rootHub, packages)
@@ -363,6 +364,47 @@ public static class PluginBundleEndpoints
     /// like a healthy day. Normally this logs nothing, since a record installed through any registry
     /// lane carries its source.</para>
     /// </summary>
+    /// <summary>
+    /// Everything this registry can serve: its own INSTALL RECORDS (the catalog lane) UNIONED
+    /// with the modules PUBLISHED onto it (the activation sidecar — entries whose
+    /// <c>PackagePath</c> stamps the source a <c>PluginGrant</c> matches on). The union is what
+    /// makes a GitSync-native registry serve at all: memex-cloud provisions its packages as
+    /// Spaces and never runs the catalog install, so it has NO install records — with a
+    /// record-only index its bundle feed was permanently empty and every consumer read
+    /// SkipNoBundle (found live, 2026-08-20, the first real remote consumer). Records win on a
+    /// PluginId collision — a deliberate install is more intentional than a publish.
+    /// </summary>
+    private static IObservable<IReadOnlyList<BundleEntry>> ServableEntries(
+        IMessageHub rootHub, CancellationToken ct) =>
+        InstalledPackages(rootHub, ct)
+            .Do(packages => WarnAboutUnstampedRecords(rootHub, packages))
+            .SelectMany(records =>
+            {
+                var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
+                if (landing is null)
+                    return Observable.Return(records);
+                return landing.GetActivation().Take(1).Select(activation =>
+                {
+                    var recorded = records.Select(r => r.PluginId)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var published = activation.Entries
+                        .Where(e => e.Enabled
+                            && !string.IsNullOrWhiteSpace(e.Version)
+                            && e.PackagePath?.Split('/') is { Length: 2 } segments
+                            && !recorded.Contains(segments[1]))
+                        .Select(e =>
+                        {
+                            var segments = e.PackagePath!.Split('/');
+                            return new BundleEntry(
+                                segments[1], e.Version!, segments[1],
+                                Module: e.Name,
+                                MinMeshVersion: e.MinMeshVersion,
+                                Source: segments[0]);
+                        });
+                    return (IReadOnlyList<BundleEntry>)records.Concat(published).ToArray();
+                });
+            });
+
     private static void WarnAboutUnstampedRecords(
         IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
     {
@@ -427,7 +469,7 @@ public static class PluginBundleEndpoints
     private static Task<IResult> Bundle(
         IMessageHub rootHub, string plugin, string version, string identity, string architecture,
         AuthenticatedInstance? caller, CancellationToken ct) =>
-        InstalledPackages(rootHub, ct)
+        ServableEntries(rootHub, ct)
             .SelectMany(packages =>
             {
                 // Named apart from the query-string reader Requested(HttpContext, …) above — one
