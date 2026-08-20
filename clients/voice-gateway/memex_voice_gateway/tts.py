@@ -46,7 +46,9 @@ class SayTts:
 
     @staticmethod
     def build_args(voice: str, out_path: str) -> list[str]:
-        return ["say", "-v", voice, "-o", out_path, "--data-format=LEI16@22050", "-f", "-"]
+        # 16 kHz: the satellite firmware micro_decoder rejects 22050 Hz ('Decode finished'
+        # after ~300ms, silent playback — the reason no reply was ever HEARD on it).
+        return ["say", "-v", voice, "-o", out_path, "--data-format=LEI16@16000", "-f", "-"]
 
     async def synthesize(self, text: str) -> bytes:
         import os
@@ -96,18 +98,34 @@ def streaming_wav_header(sample_rate: int, channels: int = 1) -> bytes:
 
 
 class StreamingWav:
-    """One in-flight streamed utterance: PCM sentences arrive on a queue while the device
-    is already playing the URL. `close()` ends the stream (and the playback)."""
+    """One in-flight streamed utterance. PCM sentences are BUFFERED as they arrive, and any
+    number of readers replay the buffer then follow the live tail — the device's player
+    sniffs the URL (a short first request) and then re-requests it for actual playback, so
+    a single-use stream plays as silence (observed: 200-byte fetches, then nothing)."""
 
     def __init__(self, sample_rate: int) -> None:
         self.sample_rate = sample_rate
-        self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.chunks: list[bytes] = []
+        self.closed = False
+        self._changed = asyncio.Condition()
 
     async def push(self, pcm: bytes) -> None:
-        await self.queue.put(pcm)
+        async with self._changed:
+            self.chunks.append(pcm)
+            self._changed.notify_all()
 
     async def close(self) -> None:
-        await self.queue.put(None)
+        async with self._changed:
+            self.closed = True
+            self._changed.notify_all()
+
+    async def read_from(self, index: int) -> bytes | None:
+        """The chunk at `index`, waiting for it if the stream is still being fed;
+        None once the stream is closed and fully consumed."""
+        async with self._changed:
+            while index >= len(self.chunks) and not self.closed:
+                await self._changed.wait()
+            return self.chunks[index] if index < len(self.chunks) else None
 
 
 class TtsFileServer:
@@ -124,9 +142,15 @@ class TtsFileServer:
         self._runner: web.AppRunner | None = None
 
     def open_stream(self, sample_rate: int) -> tuple[StreamingWav, str]:
+        # Expire finished streams by TTL (they stay addressable for the player's re-request).
+        now = time.monotonic()
+        self._stream_born = getattr(self, "_stream_born", {})
+        for sid in [sid for sid, born in self._stream_born.items() if now - born > self.ttl_s]:
+            self._streams.pop(sid, None); self._stream_born.pop(sid, None)
         stream = StreamingWav(sample_rate)
         stream_id = secrets.token_urlsafe(8)
         self._streams[stream_id] = stream
+        self._stream_born[stream_id] = now
         self._live.add(stream)
         return stream, f"http://{self.host}:{self.port}/tts-stream/{stream_id}.wav"
 
@@ -137,19 +161,22 @@ class TtsFileServer:
         self._live.clear()
 
     async def _handle_stream(self, request: web.Request) -> web.StreamResponse:
-        stream = self._streams.pop(request.match_info["id"], None)
+        stream = self._streams.get(request.match_info["id"])
         if stream is None:
             return web.Response(status=404)
         response = web.StreamResponse(headers={"Content-Type": "audio/wav"})
         response.enable_chunked_encoding()
         await response.prepare(request)
         await response.write(streaming_wav_header(stream.sample_rate))
+        index = 0
         try:
-            while (pcm := await stream.queue.get()) is not None:
+            while (pcm := await stream.read_from(index)) is not None:
+                index += 1
                 await response.write(pcm)
             await response.write_eof()
         finally:
-            self._live.discard(stream)
+            if stream.closed:
+                self._live.discard(stream)
         return response
 
     def add(self, wav: bytes) -> str:

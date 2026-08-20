@@ -87,7 +87,7 @@ async def run() -> None:
         """Speak a live text stream: open a chunked-WAV session (the device starts playing
         the URL immediately), synthesize sentence-by-sentence as pieces arrive, close on end.
         Both `say` (forced LEI16@22050) and the piper medium voices emit 22.05 kHz."""
-        stream, url = server.open_stream(sample_rate=22050)
+        stream, url = server.open_stream(sample_rate=16000)
 
         async def feed() -> None:
             buffer = ""
@@ -131,8 +131,8 @@ async def run() -> None:
         hold_phrase=cfg.hold_phrase,
         error_phrase=cfg.error_phrase,
         command_handler=router.handle_command,
-        stream_text=router.stream_text,
-        stream_speak=stream_speak,
+        stream_text=router.stream_text if cfg.stream_tts else None,
+        stream_speak=stream_speak if cfg.stream_tts else None,
         hold_phrase_for=router.describe_hold,
         answer_to_template=phrases_for(cfg.stt_language)["answer_to"],
     )
