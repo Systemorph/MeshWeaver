@@ -82,7 +82,19 @@ public class DepsClosureTest
     }
 
     [Fact]
-    public void PlatformSide_IsNeverBundled_IncludingTheDiamond()
+    public void TheDiamond_Rides_SoSheddingAPlatformDependencyCannotBreakLandedBundles()
+    {
+        var result = DepsClosure.Derive(Graph, "MeshWeaver.Mail.MicrosoftGraph");
+
+        // 🚨 Microsoft.Extensions.Options is reachable from BOTH sides. It rides anyway: /app's
+        // copy wins in the default load context while the platform carries one, and the module's
+        // copy takes over the moment the platform stops — excluding it would couple every landed
+        // bundle to the platform's transitive dependency whims (the #1912-revert trap).
+        Assert.Contains("Microsoft.Extensions.Options.dll", result.Files);
+    }
+
+    [Fact]
+    public void PlatformNodes_AreNeverBundled_AndNeverWalked()
     {
         var result = DepsClosure.Derive(Graph, "MeshWeaver.Mail.MicrosoftGraph");
 
@@ -90,11 +102,8 @@ public class DepsClosureTest
         Assert.DoesNotContain("MeshWeaver.AI.dll", result.Files);
         // The module's OWN entry is the packer's business, not the derivation's.
         Assert.DoesNotContain("MeshWeaver.Mail.MicrosoftGraph.dll", result.Files);
-        // 🚨 The diamond: Microsoft.Extensions.Options is reachable from BOTH sides. The platform
-        // carries it, so the bundle must not — and it is reported as excluded, not dropped
-        // silently.
-        Assert.DoesNotContain("Microsoft.Extensions.Options.dll", result.Files);
-        Assert.Contains("Microsoft.Extensions.Options", result.ExcludedPlatformCarried);
+        // The stop is reported, not silent.
+        Assert.Contains("MeshWeaver.AI", result.ExcludedPlatformCarried);
     }
 
     [Fact]
