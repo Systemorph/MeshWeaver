@@ -59,3 +59,35 @@ def test_pending_round_suppresses_stale_summary():
     node = thread_node(["u1"], pending=pending, summary="an old digest")
     _, failure = extract_reply(node, known_ids={"u1"})
     assert failure is None
+
+
+def test_await_reply_skips_in_progress_placeholder():
+    """The platform materializes an assistant child MID-round ('Generating response...',
+    InProgress) whose text later becomes the real answer — it must be neither read aloud
+    nor marked seen."""
+    import asyncio
+
+    from memex_voice_gateway.threads import MemexThreads
+
+    async def scenario():
+        client = MemexThreads("http://unused", "t", "ns")
+        phase = {"n": 0}
+
+        async def fake_call(tool, arguments):
+            path = arguments.get("path", "")
+            if path == "@ns/_Thread/t1":
+                return json.dumps({"content": {"messages": ["m1"]}})
+            phase["n"] += 1
+            if phase["n"] == 1:
+                return json.dumps({"content": {"role": "assistant",
+                                               "text": "Generating response...",
+                                               "status": "InProgress"}})
+            return json.dumps({"content": {"role": "assistant",
+                                           "text": "Es sind 26 Kantone.",
+                                           "status": "Completed"}})
+
+        client.call = fake_call
+        reply = await client.await_reply("ns/_Thread/t1", budget_s=5, poll_interval_s=0.01)
+        assert reply == "Es sind 26 Kantone."
+
+    asyncio.run(scenario())
