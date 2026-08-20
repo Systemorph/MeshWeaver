@@ -32,13 +32,25 @@ PHRASES: dict[str, dict[str, str]] = {
            "connected": "Connected to {name}.",
            "unknown": "I don't know {target}. Available: {names}.",
            "delegated": "Started a {agent} thread on {portal}. You can review it there.",
-           "no_mesh": "No mesh portal is configured for threads."},
+           "no_mesh": "No mesh portal is configured for threads.",
+           "new_topic": "Okay, new topic.",
+           "switched": "Now in the thread about {topic}.",
+           "posted": "Posted to the thread about {topic}. I will announce the answer.",
+           "no_thread": "I have no open thread about {topic}.",
+           "threads_open": "Open threads: {list}.",
+           "no_threads": "No open threads."},
     "de": {"hold": "Ich schaue nach. Einen Moment bitte.",
            "error": "Entschuldigung, das hat gerade nicht geklappt.",
            "connected": "Verbunden mit {name}.",
            "unknown": "Ich kenne {target} nicht. Verfügbar: {names}.",
            "delegated": "Thread mit {agent} auf {portal} gestartet. Du kannst ihn dort anschauen.",
-           "no_mesh": "Es ist kein Portal für Threads konfiguriert."},
+           "no_mesh": "Es ist kein Portal für Threads konfiguriert.",
+           "new_topic": "Okay, neues Thema.",
+           "switched": "Wir sind jetzt im Thread über {topic}.",
+           "posted": "An den Thread über {topic} geschickt. Ich melde mich mit der Antwort.",
+           "no_thread": "Ich habe keinen offenen Thread über {topic}.",
+           "threads_open": "Offene Threads: {list}.",
+           "no_threads": "Keine offenen Threads."},
 }
 PHRASES["en"]["answer_to"] = "Answering your question: {question} —"
 PHRASES["de"]["answer_to"] = "Antwort auf deine Frage: {question} —"
@@ -91,6 +103,11 @@ class Config:
     # --- Home Assistant (optional) — a tool for the local brain, not a voice owner ---
     ha_url: str | None = None               # e.g. http://homeassistant.local:8123
     ha_token: str | None = None             # long-lived access token
+
+    # --- the spoken session (context cookie) + tool reach ---
+    session_file: str = "~/.memex-voice/session.json"   # persisted context, per speaker
+    session_ttl_h: float = 8.0              # like an MCP session id: resumes within, expires after
+    allow_destructive: bool = False         # let mesh_tool reach delete/restore (default: never)
 
     # --- endpointing (energy VAD) ---
     silence_ms: int = 800
@@ -149,6 +166,9 @@ class Config:
             system_prompt_file=_env("SYSTEM_PROMPT_FILE"),
             ha_url=(_env("HA_URL") or "").rstrip("/") or None,
             ha_token=_env("HA_TOKEN"),
+            session_file=_env("SESSION_FILE", Config.session_file) or Config.session_file,
+            session_ttl_h=float(_env("SESSION_TTL_H", "8")),
+            allow_destructive=(_env("ALLOW_DESTRUCTIVE", "false") or "false").lower() == "true",
             silence_ms=int(_env("SILENCE_MS", "800")),
             tts_engine=(_env("TTS_ENGINE", "piper") or "piper").lower(),
             stream_tts=(_env("STREAM_TTS", "false") or "false").lower() == "true",

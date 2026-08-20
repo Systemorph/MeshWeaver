@@ -53,6 +53,24 @@ def parse_switch_command(transcript: str) -> str | None:
     return match.group("target").strip() if match else None
 
 
+# The spoken CONTEXT commands — the side-panel model, by voice: one current thread is the
+# context; switch to another by topic, post into one by topic, or start fresh.
+_NEW_TOPIC = re.compile(
+    r"^\s*(?:neues thema|themawechsel|thema wechseln|new topic|"
+    r"(?:schliesse?|beende)\s+(?:das|den|dieses)?\s*(?:thema|thread|kontext)|"
+    r"close (?:the )?(?:topic|thread|context))[.!]?\s*$", re.IGNORECASE)
+_LIST_THREADS = re.compile(
+    r"^\s*(?:welche threads?\s+(?:sind|haben wir)\s+offen|liste\s+(?:der|die)\s+threads?|"
+    r"what threads?\s+(?:are|do we have)\s+open|list\s+(?:the\s+)?(?:open\s+)?threads?)"
+    r"\s*\??[.!]?\s*$", re.IGNORECASE)
+_SWITCH_THREAD = re.compile(
+    r"^\s*(?:wechsle|wechsel|geh|gehe|switch|go)\s+(?:zum|zu dem|to the|to)\s+thread\s*"
+    r"(?:über|ueber|about|on|zu)?\s+(?P<topic>[\wäöüéè .-]{2,50}?)[.!?]?\s*$", re.IGNORECASE)
+_POST_TO = re.compile(
+    r"^\s*(?:im|in dem|in den|an den|in the|to the|post to the|poste an den)\s+thread\s*"
+    r"(?:über|ueber|about|on|zu)?\s+(?P<topic>[^:,]{2,50}?)\s*[:,]\s+(?P<message>.{4,})$",
+    re.IGNORECASE)
+
 _DELEGATE = re.compile(
     r"^\s*(?:frag|frage|ask)\s+(?:den|die|das|the)?\s*(?P<agent>[a-zA-Zäöü]+)[:,]?\s+"
     r"(?:nach\s+|about\s+|to\s+)?(?P<task>.{4,})$",
@@ -75,6 +93,12 @@ _DEFAULT_PHRASES = {
     "delegated": "Started a {agent} thread on {portal}. You can review it there.",
     "no_mesh": "No mesh portal is configured for threads.",
     "submitted": "Submitted to {portal}. I will tell you when the answer arrives.",
+    "new_topic": "Okay, new topic.",
+    "switched": "Now in the thread about {topic}.",
+    "posted": "Posted to the thread about {topic}. I will announce the answer.",
+    "no_thread": "I have no open thread about {topic}.",
+    "threads_open": "Open threads: {list}.",
+    "no_threads": "No open threads.",
 }
 
 
@@ -95,6 +119,60 @@ class BrainRouter:
         # Agent name → the portal that HOSTS it (a portal entry's "agents" list): the
         # ExecutiveAssistant may live on the local mesh while Researcher lives in the cloud.
         self._agent_homes = agent_homes or {}
+        # The SPOKEN CONTEXT — side-panel semantics: `_context` is THE current thread
+        # (delegations post into it until switched or closed), `_threads` lists everything
+        # opened this session, `_pending` carries spoken posts awaiting their announcement,
+        # `on_change` persists the session cookie after every mutation.
+        self._context: dict | None = None
+        self._threads: list[dict] = []
+        self._pending: list = []
+        self.on_change: Callable[[], None] | None = None
+
+    # ----- the spoken context (session state) -----
+
+    def session_state(self) -> dict:
+        return {"portal": self.active, "context": self._context, "threads": self._threads}
+
+    def restore(self, state: dict) -> None:
+        """Resume a persisted session: active portal, context, open threads."""
+        if state.get("portal") in self._brains:
+            self.active = state["portal"]
+        context = state.get("context")
+        if context and context.get("portal") in self._mesh:
+            self._context = context
+        self._threads = [t for t in state.get("threads", [])
+                         if t.get("portal") in self._mesh]
+
+    def _changed(self) -> None:
+        if self.on_change is not None:
+            self.on_change()
+
+    def _remember(self, portal: str, path: str, task: str, agent: str | None) -> dict:
+        import time
+        entry = next((t for t in self._threads if t["path"] == path), None)
+        if entry is None:
+            entry = {"portal": portal, "path": path,
+                     "task": task if len(task) <= 80 else task[:77] + "…",
+                     "agent": agent or ""}
+            self._threads.append(entry)
+        entry["last"] = time.time()
+        self._context = entry
+        self._changed()
+        return entry
+
+    def _find_thread(self, topic: str) -> dict | None:
+        """Fuzzy topic → open thread: substring or word overlap on task/agent, most
+        recently used first."""
+        wanted = topic.lower().strip()
+        words = {w for w in re.split(r"\W+", wanted) if len(w) > 2}
+        best = None
+        for entry in sorted(self._threads, key=lambda t: t.get("last", 0), reverse=True):
+            haystack = f"{entry['task']} {entry['agent']}".lower()
+            if wanted in haystack or (words and words <= set(re.split(r"\W+", haystack))):
+                return entry
+            if best is None and words and words & set(re.split(r"\W+", haystack)):
+                best = entry
+        return best
 
     def _mesh_target(self) -> str | None:
         """The portal delegations go to: the active brain when it is a mesh, else the first mesh."""
@@ -103,9 +181,19 @@ class BrainRouter:
         return next(iter(self._mesh), None)
 
     async def delegate_task(self, task: str, agent: str | None = None) -> str:
-        """The local brain's triage seam: open a mesh thread, return the STAMPED handle so
-        await_reply later polls the right brain. An agent with a declared HOME portal goes
-        there; anything else goes to the active/first mesh. Raises when no mesh is configured."""
+        """The local brain's triage seam, with CONTEXT: while a context thread is open,
+        follow-ups post INTO it (the mesh agent keeps the whole conversation); a different
+        explicit agent reuses/opens that agent's own thread and the context switches to it —
+        the side-panel model. Returns the STAMPED handle so await_reply later polls the
+        right brain. Raises when no mesh is configured."""
+        context = self._context
+        if context is not None and agent and agent != (context.get("agent") or None):
+            context = next((t for t in self._threads if t["agent"] == agent), None)
+        if context is not None:
+            portal, path = context["portal"], context["path"]
+            await self._brains[portal].submit(path, task, agent or context["agent"] or None)  # type: ignore[attr-defined]
+            self._remember(portal, path, context["task"], context["agent"] or None)
+            return f"{portal}::{path}"
         target = None
         if agent and (housed := self._agent_homes.get(agent)) in self._mesh:
             target = housed
@@ -113,12 +201,19 @@ class BrainRouter:
         if target is None:
             raise RuntimeError("no mesh portal configured")
         path = await self._brains[target].delegate(task, agent)  # type: ignore[attr-defined]
+        self._remember(target, path, task, agent)
         return f"{target}::{path}"
 
+    # Irreversible mesh tools stay behind an explicit opt-in — one mis-heard word must
+    # never delete a node. Everything else on the portal's MCP surface passes through.
+    _DESTRUCTIVE = {"delete", "restore_version", "restore_from_point_in_time"}
+    allow_destructive: bool = False
+
     async def run_tool(self, name: str, args: dict) -> str:
-        """The local brain's quick tools, run in-round: mesh reads go to the same portal
+        """The local brain's quick tools, run in-round: mesh calls go to the same portal
         delegations would (the active brain when it is a mesh, else the first mesh);
-        home_assistant goes to the configured HA instance."""
+        home_assistant goes to the configured HA instance. mesh_tool is the FULL MCP
+        passthrough — any tool on the portal, by name."""
         if name == "home_assistant":
             if self._home is None:
                 return "Home Assistant is not configured."
@@ -132,11 +227,22 @@ class BrainRouter:
                                                 "limit": 8})  # type: ignore[attr-defined]
         if name == "get_node":
             return await client.call("get", {"path": str(args.get("path", "")).strip()})  # type: ignore[attr-defined]
+        if name == "mesh_tool":
+            import json as _json
+            tool = str(args.get("tool", "")).strip()
+            if tool in self._DESTRUCTIVE and not self.allow_destructive:
+                return f"The tool {tool} is destructive and disabled for voice."
+            raw = args.get("arguments") or {}
+            if isinstance(raw, str):
+                try: raw = _json.loads(raw)
+                except Exception: return "arguments must be a JSON object."
+            return await client.call(tool, raw)  # type: ignore[attr-defined]
         return f"Unknown tool: {name}"
 
     def drain_delegations(self) -> list:
-        """Pending (handle, task) pairs from ANY brain that collects them (the local one)."""
-        pending: list = []
+        """Pending (handle, task) pairs from ANY brain that collects them (the local one),
+        plus spoken posts routed by handle_command."""
+        pending, self._pending = self._pending, []
         for brain in self._brains.values():
             drain = getattr(brain, "drain_delegations", None)
             if drain:
@@ -167,6 +273,39 @@ class BrainRouter:
                 or _CHANT.match(transcript.strip())):
             return ""     # stop or courteous closure: end quietly, never reply to a reply
 
+        # The spoken CONTEXT commands come BEFORE the portal switch — "wechsle zum Thread
+        # über X" must never be eaten by "wechsle zu {portal}".
+        stripped = transcript.strip()
+        if _NEW_TOPIC.match(stripped):
+            self._context = None
+            self._changed()
+            return self._phrases["new_topic"]
+        if _LIST_THREADS.match(stripped):
+            if not self._threads:
+                return self._phrases["no_threads"]
+            names = ", ".join(t["task"] if len(t["task"]) <= 40 else t["task"][:37] + "…"
+                              for t in self._threads[-6:])
+            return self._phrases["threads_open"].format(list=names)
+        posted = _POST_TO.match(stripped)
+        if posted is not None:
+            entry = self._find_thread(posted.group("topic"))
+            if entry is None:
+                return self._phrases["no_thread"].format(topic=posted.group("topic").strip())
+            message = posted.group("message").strip()
+            await self._brains[entry["portal"]].submit(entry["path"], message,
+                                                       entry["agent"] or None)  # type: ignore[attr-defined]
+            self._remember(entry["portal"], entry["path"], entry["task"], entry["agent"] or None)
+            self._pending.append((f"{entry['portal']}::{entry['path']}", message))
+            return self._phrases["posted"].format(topic=posted.group("topic").strip())
+        switched = _SWITCH_THREAD.match(stripped)
+        if switched is not None:
+            entry = self._find_thread(switched.group("topic"))
+            if entry is None:
+                return self._phrases["no_thread"].format(topic=switched.group("topic").strip())
+            self._context = entry
+            self._changed()
+            return self._phrases["switched"].format(topic=switched.group("topic").strip())
+
         # Delegation: launch a real thread for a STANDARD agent on the mesh and leave the
         # work to be evaluated THERE — the speaker only confirms the submission.
         delegated = _DELEGATE_THREAD.match(transcript.strip())
@@ -177,12 +316,13 @@ class BrainRouter:
                 delegated = match
                 agent_name = KNOWN_AGENTS[match.group("agent").lower()]
         if delegated is not None:
-            target = self._mesh_target()
-            if target is None:
+            if self._mesh_target() is None:
                 return self._phrases["no_mesh"]
-            await self._brains[target].delegate(delegated.group("task").strip(), agent_name)  # type: ignore[attr-defined]
+            if _DELEGATE_THREAD.match(transcript.strip()):
+                self._context = None   # "start a thread" is EXPLICITLY a fresh one
+            handle = await self.delegate_task(delegated.group("task").strip(), agent_name)
             return self._phrases["delegated"].format(agent=agent_name or "Assistant",
-                                                     portal=target)
+                                                     portal=handle.partition("::")[0])
 
         spoken = parse_switch_command(transcript)
         if spoken is None:
@@ -192,6 +332,7 @@ class BrainRouter:
             return self._phrases["unknown"].format(target=spoken,
                                                    names=", ".join(self._brains))
         self.active = name
+        self._changed()   # the active portal is part of the persisted session
         return self._phrases["connected"].format(name=name)
 
     async def ask(self, text: str) -> str:
