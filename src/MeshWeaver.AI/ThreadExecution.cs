@@ -1867,7 +1867,8 @@ internal static class ThreadExecution
                         });
                     NotifyParentCompletion(parentHub, threadPath, noModelError, false,
                         ImmutableList<NodeChangeEntry>.Empty);
-                    EmitCompletionNotification(parentHub, threadPath, noModelError, request.AgentName);
+                    EmitCompletionNotification(parentHub, threadPath, noModelError, request.AgentName,
+                        succeeded: false);
                     return noModelDone;
                 }
 
@@ -2474,16 +2475,25 @@ internal static class ThreadExecution
                     // Unfinished tool calls come back stamped Failed instead of the record's
                     // default Success — the log must stop claiming calls that never returned.
                     finalToolCalls = conclusion.ToolCalls;
-                    if (conclusion.Diagnosis is { } roundDiagnosis)
+                    // 🌍 The classifier decided; the SENTENCE is built here, off the round's own
+                    // AccessContext locale — explicit, never ambient CultureInfo (a round hops
+                    // schedulers). Same rule as the NO_USABLE_MODEL and provider-refusal paths.
+                    string? roundDiagnosis = conclusion.LocalizationKey is { } diagnosisKey
+                        ? LocalizationCatalog.Get(diagnosisKey, userAccessContext?.Locale,
+                            conclusion.LocalizationArgs)
+                        : null;
+                    if (roundDiagnosis is not null)
                     {
                         logger.LogWarning(
                             "[ThreadExec] ROUND_NOT_ANSWERED: threadPath={ThreadPath} responseId={ResponseId} "
-                            + "verdict={Verdict} toolCalls={ToolCalls} textLen={TextLen} — {Diagnosis}",
+                            + "verdict={Verdict} toolCalls={ToolCalls} unfinished=[{Unfinished}] textLen={TextLen}",
                             threadPath, responseMsgId, conclusion.Verdict, finalToolCalls.Count,
-                            finalTextLen, roundDiagnosis);
+                            string.Join(", ", conclusion.UnfinishedToolNames), finalTextLen);
+                        // Same shape the provider-failure branch writes: a trailing italic
+                        // "*Error: …*" line under whatever the round did manage to produce.
                         finalText = string.IsNullOrEmpty(finalText)
-                            ? $"*{roundDiagnosis}*"
-                            : finalText.TrimEnd() + $"\n\n*{roundDiagnosis}*";
+                            ? $"*Error: {roundDiagnosis}*"
+                            : finalText.TrimEnd() + $"\n\n*Error: {roundDiagnosis}*";
                         finalTextLen = finalText.Length;
                     }
 
@@ -2498,10 +2508,17 @@ internal static class ThreadExecution
                     // streaming foreach drives both. Streaming-time pushes
                     // already strip the in-flight <summary> block via
                     // StripSummaryBlock so the user never sees the markers.
-                    // An unanswered round's Summary must name the failure — it is what a
-                    // delegating parent relays and what the thread list shows, so leaving the
-                    // abandoned fragment there re-tells the same lie one level up.
-                    var summaryText = conclusion.Diagnosis ?? finalText;
+                    // 🚨 An unanswered round's Summary must name the failure AND read as one.
+                    // This string is what a DELEGATING PARENT consumes: DelegationTool.
+                    // WaitForDelegationResult returns the child's Summary verbatim, the round
+                    // resets to Idle either way, and ExtractToolResult classifies a bare string
+                    // by its "Error" prefix — the same convention WaitForDelegationResult itself
+                    // emits for a cancelled or faulted child. So a plain diagnostic sentence here
+                    // would make the parent record a silent/unfinished child as a SUCCESSFUL tool
+                    // result — this bug, re-told one level up.
+                    var summaryText = roundDiagnosis is not null
+                        ? $"Error: {roundDiagnosis}"
+                        : finalText;
                     var summaryMatch = System.Text.RegularExpressions.Regex.Match(
                         finalText,
                         @"<summary>(?<inner>[\s\S]*?)</summary>",
@@ -2588,7 +2605,8 @@ internal static class ThreadExecution
                     // or never finished its tool calls — as a successful delegation.
                     NotifyParentCompletion(parentHub, threadPath, finalText,
                         conclusion.IsHonestCompletion, aggregatedChanges);
-                    EmitCompletionNotification(parentHub, threadPath, finalText, request.AgentName);
+                    EmitCompletionNotification(parentHub, threadPath, finalText, request.AgentName,
+                        succeeded: conclusion.IsHonestCompletion);
                     }
                     // Only a REQUESTED cancel (Stop button via RequestedStatus=Cancelled, delegation
                     // cancel, hub disposal — everything that fires executionCts) is a graceful
@@ -2690,7 +2708,9 @@ internal static class ThreadExecution
                                 roundCompletion.OnCompleted();
                             });
                         NotifyParentCompletion(parentHub, threadPath, cancelText, false, cancelNodeChanges);
-                        EmitCompletionNotification(parentHub, threadPath, "Cancelled", request.AgentName);
+                        // A stopped round did not answer either — same honest title.
+                        EmitCompletionNotification(parentHub, threadPath, "Cancelled", request.AgentName,
+                            succeeded: false);
                     }
                     catch (Exception exRaw)
                     {
@@ -2867,7 +2887,10 @@ internal static class ThreadExecution
                                     () =>
                                     {
                                         NotifyParentCompletion(parentHub, threadPath, errorTextLocal, false, errorNodeChangesLocal);
-                                        EmitCompletionNotification(parentHub, threadPath, errorTextLocal, request.AgentName);
+                                        // Pre-existing sibling of the same defect: a FAULTED round
+                                        // also pushed a "…is ready" notification.
+                                        EmitCompletionNotification(parentHub, threadPath, errorTextLocal,
+                                            request.AgentName, succeeded: false);
                                         roundCompletion.OnNext(System.Reactive.Unit.Default);
                                         roundCompletion.OnCompleted();
                                     });
@@ -3083,8 +3106,15 @@ internal static class ThreadExecution
     /// in the user's bell — clicking it navigates to the thread.
     /// Fire-and-forget; failures are logged but don't fail the round.
     /// </summary>
+    /// <param name="succeeded">Whether the round actually answered. 🚨 A round that lost a tool
+    /// call, produced nothing, or never wrote a closing answer must NOT push a success-shaped
+    /// "is ready" notification — that is the same lie as the Completed status, delivered to the
+    /// bell and to email. Named explicitly by #1715 ("completion notification emitted"). The
+    /// notification is still SENT on a failed round: a background thread the user has navigated
+    /// away from needs to be told it stopped, and silence would read as "still working".</param>
     private static void EmitCompletionNotification(
-        IMessageHub hub, string threadPath, string responseText, string? agentName)
+        IMessageHub hub, string threadPath, string responseText, string? agentName,
+        bool succeeded = true)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.AI.ThreadExecution");
@@ -3106,7 +3136,9 @@ internal static class ThreadExecution
             hub,
             recipient: owner,
             mainNodePath: threadPath,
-            title: $"\"{threadName}\" is ready",
+            title: succeeded
+                ? $"\"{threadName}\" is ready"
+                : $"\"{threadName}\" did not complete",
             message: preview,
             type: NotificationType.ChatReady,
             targetNodePath: threadPath,

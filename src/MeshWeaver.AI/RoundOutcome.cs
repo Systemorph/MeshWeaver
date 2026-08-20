@@ -28,9 +28,9 @@ public enum RoundVerdict
     /// The only verdict that may persist as <see cref="ThreadMessageStatus.Completed"/>.</summary>
     Answered,
 
-    /// <summary>At least one tool call was dispatched and never returned a result: the
-    /// stream ended while the call was still pending. The round's text may narrate work
-    /// that never happened (#1689).</summary>
+    /// <summary>At least one tool call was still un-terminated when the stream ended: it was
+    /// dispatched and never returned, or a delegation was still mid-flight. The round's text may
+    /// narrate work that never happened (#1689).</summary>
     ToolCallUnfinished,
 
     /// <summary>The round produced no content at all — no text, no tool calls. The model
@@ -45,21 +45,20 @@ public enum RoundVerdict
 
 /// <summary>
 /// The evidence-derived conclusion of one agent round: what it may claim, the tool-call log
-/// with unfinished calls stamped honestly, and a one-line diagnosis when it may not claim
-/// success.
+/// with unfinished calls stamped honestly, and the ingredients for a localized diagnosis when it
+/// may not claim success.
 /// </summary>
 /// <param name="Verdict">What the round actually produced.</param>
-/// <param name="ToolCalls">The round's tool calls, with any call that never returned
-/// re-stamped <see cref="ToolCallStatus.Failed"/> / <c>IsSuccess = false</c> instead of the
-/// record's default <see cref="ToolCallStatus.Success"/>. <see cref="ToolCallEntry.Result"/> is
-/// deliberately left untouched — see the remark in <see cref="RoundOutcome.Classify"/>.</param>
-/// <param name="Diagnosis">Null when <see cref="Verdict"/> is
-/// <see cref="RoundVerdict.Answered"/>; otherwise the sentence that names what happened,
-/// used for both the response cell's text and the thread Summary.</param>
+/// <param name="ToolCalls">The round's tool calls, with any call that was DISPATCHED AND NEVER
+/// RETURNED re-stamped <see cref="ToolCallStatus.Failed"/> / <c>IsSuccess = false</c> instead of
+/// the record's default <see cref="ToolCallStatus.Success"/>. See
+/// <see cref="RoundOutcome.Classify"/> for what is deliberately NOT re-stamped.</param>
+/// <param name="UnfinishedToolNames">Distinct names of the tool calls that had not terminated
+/// when the stream ended — the argument the diagnosis is built from, so it is actionable.</param>
 public sealed record RoundConclusion(
     RoundVerdict Verdict,
     ImmutableList<ToolCallEntry> ToolCalls,
-    string? Diagnosis)
+    ImmutableList<string> UnfinishedToolNames)
 {
     /// <summary>True only for <see cref="RoundVerdict.Answered"/> — the single case in
     /// which the round genuinely did what a completed round asserts. Also what a delegating
@@ -71,6 +70,31 @@ public sealed record RoundConclusion(
     /// <see cref="ThreadMessageStatus.Error"/> for everything else.</summary>
     public ThreadMessageStatus Status =>
         IsHonestCompletion ? ThreadMessageStatus.Completed : ThreadMessageStatus.Error;
+
+    /// <summary>
+    /// The string-catalog key for the user-facing diagnosis, or null when the round answered.
+    /// </summary>
+    /// <remarks>
+    /// 🌍 The classifier stays LANGUAGE-NEUTRAL: it decides, and names the arguments; the caller
+    /// renders the sentence off the round's own <c>AccessContext.Locale</c> — the same explicit-locale
+    /// rule the other terminal-error paths follow (never ambient <c>CultureInfo</c>: a round hops
+    /// schedulers). Hard-coding English here would have handed a German viewer an English error on
+    /// exactly the paths this PR adds.
+    /// </remarks>
+    public string? LocalizationKey => Verdict switch
+    {
+        RoundVerdict.ToolCallUnfinished => "chat.roundToolCallUnfinished",
+        RoundVerdict.NoOutput => "chat.roundNoOutput",
+        RoundVerdict.NoFinalAnswer => "chat.roundNoFinalAnswer",
+        _ => null
+    };
+
+    /// <summary>Arguments for <see cref="LocalizationKey"/>'s placeholders: the unfinished-call
+    /// count and their comma-joined names.</summary>
+    public object?[] LocalizationArgs =>
+        Verdict == RoundVerdict.ToolCallUnfinished
+            ? [UnfinishedToolNames.Count, string.Join(", ", UnfinishedToolNames)]
+            : [];
 }
 
 /// <summary>
@@ -81,18 +105,18 @@ public sealed record RoundConclusion(
 public static class RoundOutcome
 {
     /// <summary>
-    /// A tool call the round DISPATCHED but never got a result for.
+    /// A tool call that had NOT terminated when the stream ended — the exact complement of the
+    /// live UI's <see cref="ToolCallVisibility.IsCompleted"/>, i.e. still <i>pending</i>
+    /// (dispatched, no result) or still <i>running</i> (a delegation mid-flight).
     /// </summary>
     /// <remarks>
-    /// Deliberately the same predicate the live UI already uses for "dispatched, result not
-    /// back yet" (<see cref="ToolCallVisibility.IsPending"/>): default status + null result.
-    /// Reusing it rather than inventing a second notion of "pending" is what keeps a
-    /// mid-flight delegation (<see cref="ToolCallStatus.Streaming"/>, carrying a live progress
-    /// projection in <see cref="ToolCallEntry.Result"/>) and an already-terminal
-    /// <see cref="ToolCallStatus.Failed"/>/<see cref="ToolCallStatus.Cancelled"/> call out of
-    /// the unfinished set.
+    /// Expressed as the complement of the framework's own predicate rather than as a fresh notion
+    /// of "pending", so the round's verdict and the chat UI can never disagree about which calls
+    /// are outstanding. A terminal <see cref="ToolCallStatus.Failed"/> or
+    /// <see cref="ToolCallStatus.Cancelled"/> call is finished — it failed, which is a recorded
+    /// outcome, not an outstanding one.
     /// </remarks>
-    public static bool IsUnfinished(ToolCallEntry call) => ToolCallVisibility.IsPending(call);
+    public static bool IsUnfinished(ToolCallEntry call) => !ToolCallVisibility.IsCompleted(call);
 
     /// <summary>
     /// Derives what the round may claim.
@@ -105,9 +129,23 @@ public static class RoundOutcome
     /// <see cref="RoundVerdict.NoFinalAnswer"/> rule only ever fires on a round that actually
     /// ran tools and then went silent.</param>
     /// <remarks>
-    /// Rule order matters and is itself the diagnosis: an unfinished tool call is reported
-    /// ahead of a missing answer, because a round that lost a tool call has no answer to
-    /// miss and the tool call is the actionable fact.
+    /// <para>Rule order matters and is itself the diagnosis: an unfinished tool call is reported
+    /// ahead of a missing answer, because a round that lost a tool call has no answer to miss and
+    /// the tool call is the actionable fact.</para>
+    ///
+    /// <para>🚨 <b>What the re-stamp deliberately does NOT touch.</b> Only a
+    /// <see cref="ToolCallVisibility.IsPending"/> entry (default status + null
+    /// <see cref="ToolCallEntry.Result"/>) is re-stamped, and only its
+    /// <see cref="ToolCallEntry.Status"/> / <see cref="ToolCallEntry.IsSuccess"/> — never its
+    /// <c>Result</c>, and never a <see cref="ToolCallStatus.Streaming"/> entry. Both exclusions
+    /// exist because the cell write MERGES this log with the cell's current <c>ToolCalls</c>
+    /// (<c>ThreadExecution.MergeToolCallEntries</c>), and that merge protects a late terminal
+    /// stamp two ways: it prefers whichever side carries a <c>Result</c>, and it keeps the cell's
+    /// status when the incoming one is <c>Streaming</c>. Writing a placeholder <c>Result</c>, or
+    /// converting <c>Streaming</c> to <c>Failed</c> here, would defeat one guard each and CLOBBER
+    /// a real terminal result that reached the cell through the delegation stamp but not this
+    /// in-memory log. The VERDICT still counts those calls as unfinished — the round genuinely
+    /// does not know they finished — so the invariant holds without the destructive write.</para>
     /// </remarks>
     public static RoundConclusion Classify(
         string? finalText,
@@ -119,42 +157,21 @@ public static class RoundOutcome
         var unfinished = toolCalls.Where(IsUnfinished).ToList();
         if (unfinished.Count > 0)
         {
-            // Stamp the unfinished calls Failed so the persisted record stops asserting a
-            // success that never happened. Without this the entry keeps the type's default
-            // Status = Success with a null Result — indistinguishable, to the UI and to any
-            // monitoring reading the thread, from a tool call that ran fine.
-            //
-            // 🚨 Status and IsSuccess ONLY — never a synthetic Result. The cell write merges
-            // this log with the cell's current ToolCalls, and that merge prefers whichever
-            // side carries a Result (ThreadExecution.MergeToolCallEntries). A placeholder
-            // string here would therefore CLOBBER a real terminal result that reached the
-            // cell through the delegation stamp but not this in-memory log. Leaving Result
-            // null keeps the merge's "cur wins" branch reachable, so the honest signal is
-            // added without ever overwriting evidence. The WHY is carried by the round's
-            // diagnosis line, which names the tools.
             var stamped = toolCalls
-                .Select(c => IsUnfinished(c)
+                .Select(c => ToolCallVisibility.IsPending(c)
                     ? c with { Status = ToolCallStatus.Failed, IsSuccess = false }
                     : c)
                 .ToImmutableList();
-            var names = string.Join(", ", unfinished.Select(c => c.Name).Distinct());
-            return new RoundConclusion(
-                RoundVerdict.ToolCallUnfinished, stamped,
-                $"Round ended with {unfinished.Count} tool call(s) still unfinished ({names}). "
-                + "The response above may describe work that was never carried out — re-run it.");
+            var names = unfinished.Select(c => c.Name).Distinct().ToImmutableList();
+            return new RoundConclusion(RoundVerdict.ToolCallUnfinished, stamped, names);
         }
 
         if (string.IsNullOrEmpty(finalText) && toolCalls.IsEmpty)
-            return new RoundConclusion(
-                RoundVerdict.NoOutput, toolCalls,
-                "The model returned no response — the stream completed with zero tokens.");
+            return new RoundConclusion(RoundVerdict.NoOutput, toolCalls, []);
 
         if (!producedClosingText)
-            return new RoundConclusion(
-                RoundVerdict.NoFinalAnswer, toolCalls,
-                "The model ran its tools but never wrote a closing answer — the final turn "
-                + "produced no content. The text above is the unfinished mid-round fragment.");
+            return new RoundConclusion(RoundVerdict.NoFinalAnswer, toolCalls, []);
 
-        return new RoundConclusion(RoundVerdict.Answered, toolCalls, null);
+        return new RoundConclusion(RoundVerdict.Answered, toolCalls, []);
     }
 }

@@ -34,7 +34,7 @@ public class RoundOutcomeTest
         conclusion.Verdict.Should().Be(RoundVerdict.Answered);
         conclusion.Status.Should().Be(ThreadMessageStatus.Completed);
         conclusion.IsHonestCompletion.Should().BeTrue();
-        conclusion.Diagnosis.Should().BeNull();
+        conclusion.LocalizationKey.Should().BeNull("an answered round has nothing to diagnose");
     }
 
     [Fact]
@@ -58,7 +58,9 @@ public class RoundOutcomeTest
         conclusion.Verdict.Should().Be(RoundVerdict.ToolCallUnfinished);
         conclusion.Status.Should().Be(ThreadMessageStatus.Error);
         conclusion.IsHonestCompletion.Should().BeFalse();
-        conclusion.Diagnosis.Should().Contain("CreateEvent", "the diagnosis must be actionable");
+        conclusion.LocalizationKey.Should().Be("chat.roundToolCallUnfinished");
+        conclusion.UnfinishedToolNames.Should().Equal("CreateEvent");   // named, so the diagnosis is actionable
+        conclusion.LocalizationArgs.Should().Equal(1, "CreateEvent");
 
         var entry = conclusion.ToolCalls.Should().ContainSingle().Subject;
         entry.Status.Should().Be(ToolCallStatus.Failed);
@@ -67,6 +69,7 @@ public class RoundOutcomeTest
             "Result is deliberately left untouched — the cell merge prefers whichever side carries "
             + "one, so a placeholder here would clobber a real terminal result that reached the "
             + "cell through the delegation stamp but not this log");
+        conclusion.UnfinishedToolNames.Should().Equal("CreateEvent");
     }
 
     [Fact]
@@ -90,15 +93,15 @@ public class RoundOutcomeTest
         conclusion.ToolCalls[0].Status.Should().Be(ToolCallStatus.Success, "it returned");
         conclusion.ToolCalls[1].Status.Should().Be(ToolCallStatus.Failed, "it never returned");
         conclusion.ToolCalls[2].Status.Should().Be(ToolCallStatus.Failed, "it returned a failure");
-        conclusion.Diagnosis.Should().Contain("CreateEvent").And.NotContain("Search");
+        // A returned call — successful OR failed — is finished; only the outstanding one is named.
+        conclusion.UnfinishedToolNames.Should().Equal("CreateEvent");
     }
 
     [Fact]
-    public void MidFlightDelegationCarryingProgress_IsNotCountedUnfinished()
+    public void MidFlightDelegation_CountsAsUnfinished_ButIsNotRestamped()
     {
-        // A Streaming delegation carries a live progress projection in Result; it is neither
-        // "pending" to the UI nor unfinished here. Reusing ToolCallVisibility.IsPending rather than
-        // inventing a second notion of pending is what keeps these two views in agreement.
+        // A delegation still Streaming when the stream ended has NOT terminated, so the round
+        // cannot claim it finished — "unfinished" is the exact complement of the UI's IsCompleted.
         var delegation = new ToolCallEntry
         {
             Name = "delegate_to_agent",
@@ -107,9 +110,19 @@ public class RoundOutcomeTest
             DelegationPath = "x/_Thread/y"
         };
 
-        RoundOutcome.IsUnfinished(delegation).Should().BeFalse();
-        RoundOutcome.Classify("text", [delegation], producedClosingText: true)
-            .Verdict.Should().Be(RoundVerdict.Answered);
+        RoundOutcome.IsUnfinished(delegation).Should().BeTrue();
+
+        var conclusion = RoundOutcome.Classify("text", [delegation], producedClosingText: true);
+        conclusion.Verdict.Should().Be(RoundVerdict.ToolCallUnfinished);
+        conclusion.UnfinishedToolNames.Should().Equal("delegate_to_agent");
+
+        // …but the ENTRY is left exactly as it was. The cell merge keeps the cell's terminal
+        // status precisely when the incoming one is Streaming, and prefers whichever side carries
+        // a Result — converting it to Failed here, or overwriting the live progress projection,
+        // would defeat one guard each and clobber a terminal stamp that reached the cell first.
+        var entry = conclusion.ToolCalls.Should().ContainSingle().Subject;
+        entry.Status.Should().Be(ToolCallStatus.Streaming);
+        entry.Result.Should().Be("…sub-thread output so far…");
     }
 
     [Fact]
@@ -131,7 +144,7 @@ public class RoundOutcomeTest
         conclusion.Status.Should().Be(ThreadMessageStatus.Error,
             "an agent that streamed zero tokens produced nothing — a placeholder sentence stamped "
             + "Completed told the user the round had succeeded");
-        conclusion.Diagnosis.Should().Contain("zero tokens");
+        conclusion.LocalizationKey.Should().Be("chat.roundNoOutput");
     }
 
     [Fact]
@@ -143,7 +156,7 @@ public class RoundOutcomeTest
 
         conclusion.Verdict.Should().Be(RoundVerdict.NoFinalAnswer);
         conclusion.Status.Should().Be(ThreadMessageStatus.Error);
-        conclusion.Diagnosis.Should().Contain("closing answer");
+        conclusion.LocalizationKey.Should().Be("chat.roundNoFinalAnswer");
         conclusion.ToolCalls.Should().ContainSingle().Which.Status.Should().Be(ToolCallStatus.Success,
             "the tools DID return — only the final turn is missing");
     }

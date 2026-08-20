@@ -84,8 +84,9 @@ public class RoundCompletionHonestyTest(ITestOutputHelper output) : AITestBase(o
         cell.Status.Should().Be(ThreadMessageStatus.Error,
             "a round that dispatched a tool call and never got a result did NOT do what Completed "
             + "asserts — reporting Completed is the fabricated success of #1689");
-        cell.Text.Should().Contain("unfinished",
-            "the terminal state must NAME what happened, not just fail silently");
+        cell.Text.Should().Contain("Error:",
+            "the terminal state must NAME what happened, not just fail silently — same "
+            + "'*Error: …*' shape the provider-failure path writes");
         cell.Text.Should().Contain("CreateEvent",
             "the diagnosis must name the tool call that never returned, so it is actionable");
 
@@ -126,7 +127,7 @@ public class RoundCompletionHonestyTest(ITestOutputHelper output) : AITestBase(o
         cell.Status.Should().Be(ThreadMessageStatus.Error,
             "the closing model turn produced zero content, so the round has no final answer — "
             + "Completed asserts one (#1715)");
-        cell.Text.Should().Contain("closing answer",
+        cell.Text.Should().Contain("never wrote a closing answer",
             "the user must be told the model never concluded instead of being handed the "
             + "mid-round fragment as if it were the answer");
         cell.Text.Should().Contain("Creating the space",
@@ -134,6 +135,21 @@ public class RoundCompletionHonestyTest(ITestOutputHelper output) : AITestBase(o
 
         cell.ToolCalls.Should().ContainSingle().Which.Status.Should().Be(ToolCallStatus.Success,
             "the tool call itself DID return — only the closing turn is missing");
+    }
+
+    [Fact]
+    public async Task UnansweredRound_SummaryReadsAsAnError_SoADelegatingParentCannotMisreadIt()
+    {
+        var (_, thread) = await RunRound(UnfinishedToolCallPrompt);
+
+        // DelegationTool.WaitForDelegationResult hands the child's Summary to the parent
+        // VERBATIM, the round resets to Idle either way, and ExtractToolResult classifies a bare
+        // string by its "Error" prefix — the convention WaitForDelegationResult itself emits for a
+        // cancelled or faulted child. A plain diagnostic sentence here would make the parent
+        // record a silent child as a SUCCESSFUL tool result: this bug, one level up.
+        thread.Summary.Should().StartWith("Error:",
+            "the summary is the delegation seam's failure signal, not just display text");
+        thread.Summary.Should().Contain("CreateEvent");
     }
 
     // ─────────────────────────── the control ───────────────────────────
