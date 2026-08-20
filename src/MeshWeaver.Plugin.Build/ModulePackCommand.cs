@@ -138,6 +138,14 @@ public static class ModulePackCommand
                   --with <fileName>           an additional closure file from <moduleOutputDir>
                                               (repeatable). <name>.dll is always included, and its
                                               .pdb rides along when present.
+                  --deps-closure              derive the module's PRIVATE dependency closure from
+                                              <name>.deps.json beside the entry DLL and bundle it:
+                                              assemblies reachable from the module's own package
+                                              references and NOT from its MeshWeaver.* references
+                                              (those ship in the consumer's /app). Requires the
+                                              module to be built with
+                                              CopyLocalLockFileAssemblies=true so the files are in
+                                              the output folder.
                   --out <dir>                 where to write the bundle (default: current directory)
                 """);
             return 0;
@@ -156,6 +164,7 @@ public static class ModulePackCommand
         string? minMeshVersion = null;
         string? graphDll = null;
         var extras = new List<string>();
+        var depsClosure = false;
         var outputDirectory = Environment.CurrentDirectory;
 
         string? contentDirectory = null;
@@ -182,6 +191,9 @@ public static class ModulePackCommand
                     break;
                 case "--with" when i + 1 < args.Length:
                     extras.Add(args[++i]);
+                    break;
+                case "--deps-closure":
+                    depsClosure = true;
                     break;
                 case "--out" when i + 1 < args.Length:
                     outputDirectory = Path.GetFullPath(args[++i]);
@@ -262,11 +274,59 @@ public static class ModulePackCommand
                 + "bundle records no built-against framework MVID (diagnostic metadata only; the "
                 + "landing gate is --min-mesh-version).");
 
-        // The closure: entry DLL (+ symbols when present) + exactly the files the caller named.
+        // The closure: entry DLL (+ symbols when present) + the derived private dependency
+        // closure when asked for + exactly the files the caller named.
         var closure = new List<string> { moduleName + ".dll" };
         var entryPdb = moduleName + ".pdb";
         if (File.Exists(Path.Combine(moduleDirectory, entryPdb)))
             closure.Add(entryPdb);
+
+        // 🚨 --deps-closure: the module's own package dependencies ride WITH it. Entry-DLL-only
+        // bundles landed modules that faulted at first use on their first private dependency
+        // (Microsoft.Extensions.AI.OpenAI, Microsoft.Graph — the 2026-08-19/20 memex outage);
+        // hand-naming them with --with is whack-a-mole across every module. Derived from the
+        // build's own deps.json — see DepsClosure for the platform/own split.
+        if (depsClosure)
+        {
+            var depsPath = Path.Combine(moduleDirectory, moduleName + ".deps.json");
+            if (!File.Exists(depsPath))
+            {
+                Console.Error.WriteLine(
+                    $"error: --deps-closure needs {depsPath} — build the module project (the SDK "
+                    + "emits it beside the entry DLL)");
+                return 2;
+            }
+            DepsClosure.Result derived;
+            try
+            {
+                derived = DepsClosure.Derive(File.ReadAllText(depsPath), moduleName);
+            }
+            catch (Exception e) when (e is InvalidDataException or JsonException)
+            {
+                Console.Error.WriteLine($"error: --deps-closure could not read {depsPath}: {e.Message}");
+                return 2;
+            }
+            foreach (var warning in derived.Warnings)
+                Console.Error.WriteLine($"warning: {warning}");
+            var missing = derived.Files
+                .Where(f => !File.Exists(Path.Combine(moduleDirectory, f)))
+                .ToList();
+            if (missing.Count > 0)
+            {
+                Console.Error.WriteLine(
+                    "error: --deps-closure derived files that are not in the module output — build "
+                    + "with -p:CopyLocalLockFileAssemblies=true so package assemblies are copied. "
+                    + $"Missing: {string.Join(", ", missing)}");
+                return 2;
+            }
+            foreach (var file in derived.Files)
+                if (!closure.Contains(file, StringComparer.OrdinalIgnoreCase))
+                    closure.Add(file);
+            Console.WriteLine(
+                $"deps-closure: bundling {derived.Files.Count} private dependency file(s); "
+                + $"excluded {derived.ExcludedPlatformCarried.Count} platform-carried");
+        }
+
         foreach (var extra in extras)
         {
             if (Path.GetFileName(extra) != extra)
