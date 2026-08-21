@@ -1059,7 +1059,7 @@ public static class UserActivityLayoutAreas
             .WithHiddenQuery(sortOptions[0].Query)
             .WithSortOptions(sortOptions)
             // No embedded search box: every shell already carries the top-bar search, and a second
-            // input on the home read as a duplicate (maintainer, 2026-08-21). Sort/view stay.
+            // input on the home reads as a duplicate (maintainer, 2026-08-21). Sort/view stay.
             .WithShowSearchBox(false)
             .WithViewOptions(true)
             .WithShowEmptyMessage(true)
