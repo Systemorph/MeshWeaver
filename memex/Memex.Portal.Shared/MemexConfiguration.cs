@@ -1128,6 +1128,11 @@ public static class MemexConfiguration
         // fetch directive is defined, object-src 'none', base-uri 'self', frame-ancestors
         // 'self'). Tightening it further (per-response nonces, dropping 'unsafe-inline') is
         // a separate hardening pass, not this change.
+        //
+        // The CSP ships as Content-Security-Policy-Report-Only FIRST: it cannot block a
+        // single request, so it is safe to enforce on the production registry immediately
+        // while any would-be violations surface in the browser console. A one-line follow-up
+        // renames the header to Content-Security-Policy to enforce it once it is proven quiet.
         app.Use((ctx, next) =>
         {
             var headers = ctx.Response.Headers;
@@ -1138,8 +1143,8 @@ public static class MemexConfiguration
                 headers["Permissions-Policy"] =
                     "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
                     "magnetometer=(), microphone=(), payment=(), usb=()";
-                if (!headers.ContainsKey("Content-Security-Policy"))
-                    headers["Content-Security-Policy"] =
+                if (!headers.ContainsKey("Content-Security-Policy-Report-Only"))
+                    headers["Content-Security-Policy-Report-Only"] =
                         "default-src 'self'; " +
                         "base-uri 'self'; " +
                         "object-src 'none'; " +
