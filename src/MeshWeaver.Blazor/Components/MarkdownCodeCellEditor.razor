@@ -42,7 +42,12 @@
     //     keystroke and re-mount Monaco under the cursor.
     //  3. PERSIST ONLY THE FENCE. The write is pure source surgery (MarkdownFenceEditing) through
     //     the circuit-side IMeshNodeStreamCache — the same seam CodeEditorView's auto-save uses, so
-    //     it carries the viewer's own identity and every reader on the path observes it in order.
+    //     every reader on the path observes it in order through the shared upstream handle. The
+    //     write runs from the debounce callback on Scheduler.Default, which queues through the
+    //     thread pool WITH ExecutionContext capture — so the AsyncLocal AccessService.Context live
+    //     on the emitting (renderer) thread is still live there; see HubPermissionExtensions
+    //     .HopOffGate. That is a property of the shared seam, identical in CodeEditorView and
+    //     MarkdownEditorView, not something this component establishes on its own.
     //
     // 🚨 This component is rendered ONLY where the hosting view has already established that the
     // viewer holds Update on the node (MarkdownHtmlRenderer's cellEditing argument). It does not
