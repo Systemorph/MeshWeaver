@@ -1152,6 +1152,17 @@ public partial class MeshSearchView
         }
     }
 
+    private int? BoundMinItemWidth
+    {
+        get
+        {
+            if (ViewModel?.MinItemWidth is int i) return i;
+            if (ViewModel?.MinItemWidth is JsonElement je && je.ValueKind == JsonValueKind.Number)
+                return je.GetInt32();
+            return null;
+        }
+    }
+
     private string CardGridStyle
     {
         get
@@ -1159,9 +1170,13 @@ public partial class MeshSearchView
             var maxCols = BoundMaxColumns;
             if (!maxCols.HasValue || maxCols.Value <= 0) return "";
             if (maxCols.Value == 1) return "grid-template-columns: 1fr;";
-            // Container-responsive: auto-fill capped at maxCols via percentage minimum
+            // Container-responsive: auto-fill capped at maxCols via percentage minimum. The px
+            // FLOOR is the cell's minimum width — 200 by default; MinItemWidth lowers it for
+            // compact tile bands (the home's Apps dock), raising the real per-row count.
             var pct = 100.0 / maxCols.Value;
-            return $"grid-template-columns: repeat(auto-fill, minmax(max({pct:F1}% - 8px, 200px), 1fr));";
+            var floor = BoundMinItemWidth.GetValueOrDefault(200);
+            if (floor <= 0) floor = 200;
+            return $"grid-template-columns: repeat(auto-fill, minmax(max({pct:F1}% - 8px, {floor}px), 1fr));";
         }
     }
 
