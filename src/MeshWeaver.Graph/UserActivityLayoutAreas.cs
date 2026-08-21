@@ -464,12 +464,18 @@ public static class UserActivityLayoutAreas
     // Each is embedded by the home page via @@("area/<Name>"). They are registered on the User hub in
     // AddUserActivityLayoutAreas. A null control collapses the region (e.g. Pinned with no pins).
 
-    /// <summary>The pinned-items region — reacts to the owner node so pins appear/disappear live.</summary>
+    /// <summary>The pinned-items region — reacts to the owner node so pins appear/disappear live,
+    /// and to the VIEWER's presentation screen (#1803) so the quick toggle takes effect with no
+    /// reload. The screen is resolved ONCE here, on the render turn, and combined in as a value —
+    /// never re-read from an ambient context inside the projection below, which would resolve to
+    /// "nobody" (and therefore hide nothing) on a later emission.</summary>
     internal static IObservable<UiControl?> PinnedAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var options = host.Hub.JsonSerializerOptions;
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
-        return syncStream!.Select(change => BuildPinnedItems(change.Value.ContentAs<User>(options)));
+        var screen = host.ViewerScreen();
+        return syncStream!.CombineLatest(screen,
+            (change, viewerScreen) => BuildPinnedItems(change.Value.ContentAs<User>(options), viewerScreen));
     }
 
     /// <summary>The open-threads region — the owner's own threads that aren't Done yet, newest first.</summary>
@@ -486,14 +492,17 @@ public static class UserActivityLayoutAreas
     {
         var ownerId = OwnerIdOf(host.Hub.Address.ToString());
         var options = host.Hub.JsonSerializerOptions;
+        // The viewer's presentation screen (#1803), resolved ONCE on the render turn.
+        var screen = host.ViewerScreen();
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
         // LIVE — no code change, no image roll. Combined with the caller's cross-partition grants
         // (#385, the one thing a first-level query can't reach). Both start with a value so the home
         // paints instantly.
         return HomeConfigNodeType.Observe(host.Workspace, options)
-            .CombineLatest(ObserveSharedTargets(host, ownerId),
-                (config, shared) => (UiControl?)BuildCatalog(ownerId, config, shared));
+            .CombineLatest(ObserveSharedTargets(host, ownerId), screen,
+                (config, shared, viewerScreen) =>
+                    (UiControl?)BuildCatalog(ownerId, config, shared, viewerScreen));
     }
 
     /// <summary>
@@ -667,9 +676,11 @@ public static class UserActivityLayoutAreas
     /// <para>Pure (no hub) so the catalog shape is unit-testable without standing up a hub.</para>
     /// </summary>
     internal static UiControl BuildCatalog(
-        string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null)
+        string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
+        PresentationScreen? screen = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
+        var privacy = screen ?? PresentationScreen.Off;
 
         // Sort options, DEFAULT first (so the dropdown's default selection == HiddenQuery). Each option
         // carries its full catalog query (first-level union or subtree, per cfg.Scope); the query itself
@@ -698,17 +709,36 @@ public static class UserActivityLayoutAreas
         if (cfg.Render == HomeCatalogRender.Grouped)
             everything = everything.WithSectionCounts(true).WithCollapsibleSections(true);
 
+        // 🚨 The presentation screen (#1803) is applied to the shared band's targets HERE, before the
+        // query is built — not only where the results are painted. These paths are INTERPOLATED INTO
+        // THE QUERY STRING, which the view exposes in its search-options editor and carries in the
+        // `hq=` parameter of "open in search". A marked name reaching the address bar mid-presentation
+        // is the leak, whether or not a card for it is ever drawn.
+        var visibleShared = privacy.Retain(sharedTargets);
+
         // No cross-partition invitations → the catalog IS the single list.
-        if (sharedTargets is not { Count: > 0 })
+        if (visibleShared.Count == 0)
             return everything;
 
-        // Additive #385 band: modules in OTHER partitions the caller was invited into, which the broad
-        // is:main query can't reach (readable by URL but invisible to a scope search). The `path:a|b|c`
-        // alternation resolves each target node, access-filtered by the mesh.
-        var pathList = string.Join("|", sharedTargets);
-        var shared = Controls.MeshSearch
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; width: 100%;")
+            .WithView(everything)
+            .WithView(BuildSharedBand(visibleShared));
+    }
+
+    /// <summary>
+    /// The additive #385 "Shared with me" band: modules in OTHER partitions the caller was invited
+    /// into, which the broad <c>is:main</c> query can't reach (readable by URL but invisible to a
+    /// scope search). The <c>path:a|b|c</c> alternation resolves each target node, access-filtered
+    /// by the mesh. Pure, and separate from <see cref="BuildCatalog"/> so its query — which carries
+    /// the caller's target PATHS verbatim — is assertable without standing up a layout host.
+    /// </summary>
+    /// <param name="targets">The scopes to list, already screened by the caller.</param>
+    internal static MeshSearchControl BuildSharedBand(IReadOnlyList<string> targets)
+        => Controls.MeshSearch
             .WithTitle(SharedWithMeTitle)
-            .WithHiddenQuery($"path:{pathList} is:main sort:LastModified-desc")
+            .WithHiddenQuery($"path:{string.Join("|", targets)} is:main sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Flat)
@@ -718,13 +748,6 @@ public static class UserActivityLayoutAreas
             .WithItemLimit(50)
             .WithMaxRows(3)
             .WithReactiveMode(true);
-
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("gap: 24px; width: 100%;")
-            .WithView(everything)
-            .WithView(shared);
-    }
 
     // ── Public profile + owner-editable showcase ───────────────────────────────────────────────────
 
@@ -1107,10 +1130,15 @@ public static class UserActivityLayoutAreas
     /// typed↔JsonElement frames, and <c>as</c> → null on JsonElement frames flips the band in/out,
     /// the render storm that vanished the home on chat launch).</para>
     /// </summary>
-    internal static UiControl? BuildPinnedItems(User? user)
+    internal static UiControl? BuildPinnedItems(User? user, PresentationScreen? screen = null)
     {
-        var pinnedPaths = user?.PinnedPaths;
-        if (pinnedPaths == null || pinnedPaths.Count == 0)
+        // 🚨 Same reason as the shared band in BuildCatalog: a pinned path is INTERPOLATED INTO THE
+        // QUERY STRING this control carries, so it must be dropped here rather than only where the
+        // resulting card would be painted — otherwise the marked name still travels into the search
+        // box's options editor and the `hq=` URL. Display-only: the pin itself is untouched and comes
+        // straight back when the mode is turned off.
+        var pinnedPaths = (screen ?? PresentationScreen.Off).Retain(user?.PinnedPaths);
+        if (pinnedPaths.Count == 0)
             return null;
 
         var pathsClause = string.Join(" OR ", pinnedPaths);
