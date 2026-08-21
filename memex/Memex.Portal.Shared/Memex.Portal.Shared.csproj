@@ -21,8 +21,14 @@
     <!-- MeshWeaver.OgCard is deliberately NOT referenced (#1644 step 2): it ships via the
          modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
          Modules:Assemblies -> OgCardModuleAttribute. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.OpenStreetMap\MeshWeaver.Blazor.OpenStreetMap.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AppleMaps\MeshWeaver.Blazor.AppleMaps.csproj" />
+    <!-- MeshWeaver.Blazor.OpenStreetMap and .AppleMaps are deliberately NOT referenced (#1974):
+         they ship via the modules/<Name>/ closure layout in MeshModulesPublish.targets. Both were
+         ships-the-bits references that shipped bits nothing could reach — no portal code names
+         their types AND neither DLL is listed under Modules:Assemblies, so until now they rode
+         the app closure permanently inert. On the closure lane the bits sit in modules/ and a
+         deployment turns each on by listing its DLL, which is what that switch is for. Their
+         collocated JS and OpenStreetMap's vendored wwwroot/leaflet/ are already addressed as
+         ./_content/<Pack>/... — exactly what the module static-asset provider serves (#1724). -->
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Graph\MeshWeaver.Blazor.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
