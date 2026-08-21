@@ -83,6 +83,10 @@ public record MeshBuilder
     /// <returns>The builder for method chaining.</returns>
     public MeshBuilder InstallAssemblies(params string[] assemblyLocations)
     {
+        // A module's NATIVE payload is unreachable without this (#1728): Assembly.LoadFrom never
+        // consults the module's deps.json, so nothing probes modules/<Name>/runtimes/<rid>/native/.
+        // Subscribed here — before anything from a module folder is loaded — and idempotent.
+        ModuleNativeAssets.EnsureRegistered();
         var assemblies = assemblyLocations
             .Select(Assembly.LoadFrom)
             .ToArray();
