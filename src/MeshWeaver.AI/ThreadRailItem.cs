@@ -4,6 +4,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.AI;
 
@@ -23,8 +24,9 @@ public static class ThreadRailItem
     public static IObservable<UiControl?> View(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var locale = host.ViewerLocale();
         return host.StreamView<MeshNode>(
-            (nodes, _) => BuildRow(nodes.FirstOrDefault(n => n.Path == hubPath), hubPath),
+            (nodes, _) => BuildRow(nodes.FirstOrDefault(n => n.Path == hubPath), hubPath, locale),
             BuildSkeleton(hubPath));
     }
 
@@ -38,7 +40,7 @@ public static class ThreadRailItem
             .WithView(Controls.Markdown($"_{shortName}…_"));
     }
 
-    private static UiControl BuildRow(MeshNode? node, string hubPath)
+    private static UiControl BuildRow(MeshNode? node, string hubPath, string? locale)
     {
         var title = node?.Name ?? (hubPath.Contains('/') ? hubPath[(hubPath.LastIndexOf('/') + 1)..] : hubPath);
 
@@ -59,6 +61,9 @@ public static class ThreadRailItem
             .WithStyle("position: absolute; top: 6px; right: 6px; z-index: 5;")
             .WithView(Controls.Button("")
                 .WithIconStart(FluentIcons.Dismiss())
+                // Label = the button's aria-label/tooltip (ButtonView): the icon-only ✕ still
+                // needs an accessible, localized name for screen readers (Copilot review).
+                .WithLabel(LocalizationCatalog.Get("thread.close", locale))
                 .WithAppearance(Appearance.Stealth)
                 .WithStyle("min-width: 24px; width: 24px; height: 24px; padding: 0; border-radius: 50%;")
                 .WithClickAction(ctx =>

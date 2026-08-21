@@ -88,10 +88,12 @@ public class HomeTabsTest
             .Areas.Should().HaveCount(2, "system-tile dock + the node-card grid");
     }
 
-    [Fact]
-    public void Apps_SystemTile_ThreadsDockTile_TargetsTheViewersChatArea()
+    [Theory]
+    [InlineData("~/Chat")]
+    [InlineData("~/Chat/")]   // extra slashes normalize — the known-tile lookup keys on the TRIMMED segment
+    public void Apps_SystemTile_ThreadsDockTile_TargetsTheViewersChatArea(string entry)
     {
-        var tile = UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "~/Chat");
+        var tile = UserActivityLayoutAreas.BuildSystemAppTile(NodePath, entry);
 
         tile.Should().NotBeNull();
         tile!.NodePath.Should().Be($"{NodePath}/Chat", "the tile opens the viewer's own Threads app");
