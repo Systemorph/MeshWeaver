@@ -34,7 +34,7 @@ public class PresentationSurfacesTest
     {
         var user = new User { PinnedPaths = ["Acme", "Northwind", "Doc/Guide"] };
 
-        var query = QueryOf(UserActivityLayoutAreas.BuildPinnedItems(user, Active("Acme")));
+        var query = QueryOf(UserActivityLayoutAreas.BuildPinnedItems(user, screen: Active("Acme")));
 
         query.Should().NotContain("Acme", "the marked name must not even reach the query string");
         query.Should().Contain("Northwind");
@@ -46,7 +46,7 @@ public class PresentationSurfacesTest
     {
         var user = new User { PinnedPaths = ["Acme/Q3-Renewal", "Northwind"] };
 
-        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(user, Active("Acme")))
+        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(user, screen: Active("Acme")))
             .Should().NotContain("Q3-Renewal").And.Contain("Northwind");
     }
 
@@ -55,7 +55,7 @@ public class PresentationSurfacesTest
     {
         var user = new User { PinnedPaths = ["Acme", "Acme/Q3-Renewal"] };
 
-        UserActivityLayoutAreas.BuildPinnedItems(user, Active("Acme"))
+        UserActivityLayoutAreas.BuildPinnedItems(user, screen: Active("Acme"))
             .Should().BeNull("an empty Pinned region collapses rather than rendering a bare title");
     }
 
@@ -65,7 +65,8 @@ public class PresentationSurfacesTest
         var user = new User { PinnedPaths = ["Acme", "Northwind"] };
 
         // Marked, but presentation mode is off — the whole undo story.
-        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(user, PresentationScreen.For(false, ["Acme"])))
+        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(
+                user, screen: PresentationScreen.For(false, ["Acme"])))
             .Should().Contain("Acme").And.Contain("Northwind");
         // And with no screen supplied at all, which is every existing caller.
         QueryOf(UserActivityLayoutAreas.BuildPinnedItems(user))
@@ -78,43 +79,103 @@ public class PresentationSurfacesTest
         var bob = new User { PinnedPaths = ["Acme", "Northwind"] };
 
         // Bob is presenting too — with his OWN marks, which say nothing about Acme.
-        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(bob, Active("Contoso")))
+        QueryOf(UserActivityLayoutAreas.BuildPinnedItems(bob, screen: Active("Contoso")))
             .Should().Contain("Acme");
     }
 
-    // ── The home catalog + the "Shared with me" band ───────────────────────────────────────────
+    // ── The tabbed home: Shared with me, Pinned, Apps ──────────────────────────────────────────
+
+    private static string[] TabLabels(UiControl home) =>
+        home.Should().BeOfType<TabsControl>().Subject.Areas
+            .Select(a => a.Skins.OfType<TabSkin>().Single().Label!.ToString()!)
+            .ToArray();
+
+    [Fact]
+    public void Home_ATabWhoseWholeContentIsMarked_Disappears()
+    {
+        var user = new User { PinnedPaths = ["Acme/Q3-Renewal"] };
+
+        // Off: both viewer-scoped tabs are there.
+        TabLabels(UserActivityLayoutAreas.BuildHome(
+                Owner, sharedTargets: ["Acme/Deals"], user: user))
+            .Should().Equal("Shared with me", "Pinned", "Apps", "Spaces");
+
+        // On, with Acme marked: everything in both of them is inside the marked space, so both tabs
+        // go — an empty tab labelled "Pinned" would itself say something.
+        TabLabels(UserActivityLayoutAreas.BuildHome(
+                Owner, sharedTargets: ["Acme/Deals"], user: user, screen: Active("Acme")))
+            .Should().Equal("Apps", "Spaces");
+    }
+
+    [Fact]
+    public void Home_ATabKeepsItsUnmarkedContent()
+    {
+        var home = UserActivityLayoutAreas.BuildHome(
+            Owner,
+            sharedTargets: ["Acme/Deals", "Northwind/Sales"],
+            user: new User { PinnedPaths = ["Acme", "Doc/Guide"] },
+            screen: Active("Acme"));
+
+        TabLabels(home).Should().Equal("Shared with me", "Pinned", "Apps", "Spaces");
+    }
 
     [Fact]
     public void SharedBand_DropsAMarkedTarget()
     {
-        var screen = Active("Acme");
-        var painted = screen.Retain(["Acme/Deals", "Northwind/Sales"]);
+        var painted = Active("Acme").Retain(["Acme/Deals", "Northwind/Sales"]);
 
         painted.Should().Equal("Northwind/Sales");
-        UserActivityLayoutAreas.BuildSharedBand(painted).HiddenQuery!.ToString()
+        QueryOf(UserActivityLayoutAreas.BuildSharedWithMe(painted))
             .Should().NotContain("Acme").And.Contain("Northwind/Sales");
-
-        // …and the catalog still renders the band, because something survived.
-        UserActivityLayoutAreas.BuildCatalog(
-                Owner, config: null, sharedTargets: ["Acme/Deals", "Northwind/Sales"], screen: screen)
-            .Should().BeOfType<StackControl>();
     }
 
     [Fact]
-    public void SharedBand_DisappearsWhenEveryTargetIsMarked()
+    public void AppsTab_DropsAMarkedApp_BeforeItReachesTheQuery()
+    {
+        // An installed app's path is interpolated into `path:(…)`, so a marked one must never get
+        // that far.
+        var apps = UserActivityLayoutAreas.BuildApps(
+                new HomeConfig { DefaultApps = ["Store"] },
+                installedApps: ["Chess", "Acme"],
+                locale: null,
+                screen: Active("Acme"))
+            .Should().BeOfType<MeshSearchControl>().Subject;
+
+        var query = apps.HiddenQuery!.ToString()!;
+        query.Should().Contain("Store").And.Contain("Chess");
+        query.Should().NotContain("Acme");
+    }
+
+    [Fact]
+    public void AppsTab_IsUnchangedWhenTheModeIsOff()
+    {
+        var apps = UserActivityLayoutAreas.BuildApps(
+                new HomeConfig { DefaultApps = ["Store"] },
+                installedApps: ["Acme"],
+                locale: null,
+                screen: PresentationScreen.For(false, ["Acme"]))
+            .Should().BeOfType<MeshSearchControl>().Subject;
+
+        apps.HiddenQuery!.ToString().Should().Contain("Acme");
+    }
+
+    // ── The legacy single-list catalog ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void LegacyCatalog_SharedBand_DisappearsWhenEveryTargetIsMarked()
     {
         var catalog = UserActivityLayoutAreas.BuildCatalog(
-            Owner, config: null, sharedTargets: ["Acme/Deals"], screen: Active("Acme"));
+            Owner, config: null, sharedTargets: ["Acme/Deals"], locale: null, screen: Active("Acme"));
 
         // No band at all — the catalog is the single list again, exactly as with no grants.
         catalog.Should().BeOfType<MeshSearchControl>();
     }
 
     [Fact]
-    public void SharedBand_IsUnchangedWhenTheModeIsOff()
+    public void LegacyCatalog_SharedBand_IsUnchangedWhenTheModeIsOff()
     {
         var catalog = UserActivityLayoutAreas.BuildCatalog(
-            Owner, config: null, sharedTargets: ["Acme/Deals"],
+            Owner, config: null, sharedTargets: ["Acme/Deals"], locale: null,
             screen: PresentationScreen.For(false, ["Acme"]));
 
         catalog.Should().BeOfType<StackControl>();
@@ -123,7 +184,7 @@ public class PresentationSurfacesTest
     [Fact]
     public void TheCatalogQueryItselfIsNeverRewritten()
     {
-        // 🚨 The main catalog list is filtered where its results are PAINTED, never by narrowing the
+        // 🚨 The Spaces list is filtered where its results are PAINTED, never by narrowing the
         // query: a `-path:Acme` clause would put the marked name straight into the `hq=` URL, and
         // would make the privacy screen a query-engine concern — the first step towards it becoming
         // a second access-control system.
@@ -132,6 +193,8 @@ public class PresentationSurfacesTest
 
         QueryOf(marked).Should().Be(QueryOf(plain));
         QueryOf(marked).Should().NotContain("Acme");
+
+        QueryOf(UserActivityLayoutAreas.BuildSpaces(Owner)).Should().NotContain("Acme");
     }
 
     // ── OG cards ───────────────────────────────────────────────────────────────────────────────
