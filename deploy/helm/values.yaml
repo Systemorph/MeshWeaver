@@ -160,6 +160,24 @@ replicas:
 #     - secretRef:
 #         name: memexcloud-portal-ai-secrets
 extraEnvFrom: []
+# ---- Extra volumes/mounts for the portal (verbatim Volume/VolumeMount) ----
+# The volume-shaped twin of extraEnvFrom, for resources the chart does not
+# own — typically the secrets-store CSI volume behind a SecretProviderClass:
+# the MOUNT is what makes the CSI driver sync (and keep rotating) the k8s
+# Secret that extraEnvFrom then reads. Example:
+#   extraVolumes:
+#     - name: kv-ai-secrets
+#       csi:
+#         driver: secrets-store.csi.k8s.io
+#         readOnly: true
+#         volumeAttributes:
+#           secretProviderClass: memexcloud-portal-ai-secrets
+#   extraVolumeMounts:
+#     - name: kv-ai-secrets
+#       mountPath: /mnt/secrets-store
+#       readOnly: true
+extraVolumes: []
+extraVolumeMounts: []
 # ---- KEDA autoscaling (portal) --------------------------------------------
 # HA deployments autoscale the portal via a KEDA ScaledObject (templates/
 # memex-portal/scaledobject.yaml) instead of a fixed replica count. Off by

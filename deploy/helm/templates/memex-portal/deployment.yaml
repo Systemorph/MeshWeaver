@@ -177,6 +177,12 @@ spec:
               mountPath: "{{ $spec.mountPath }}"
 {{- end }}
 {{- end }}
+{{- /* Extra mounts the chart does not own — the mount half of .Values.extraVolumes (typically a
+       secrets-store CSI volume, whose mount is what makes the driver sync its k8s Secret and keep
+       rotating it). Verbatim VolumeMount objects. */}}
+{{- range .Values.extraVolumeMounts }}
+            - {{ toYaml . | nindent 14 | trim }}
+{{- end }}
             - name: "memex-dumps"
               mountPath: "/data/dumps"
           imagePullPolicy: "IfNotPresent"
@@ -292,6 +298,14 @@ spec:
           persistentVolumeClaim:
             claimName: "{{ $spec.claimName }}"
 {{- end }}
+{{- end }}
+{{- /* 🚨 Extra volumes the chart does not own — typically the secrets-store CSI volume behind a
+       SecretProviderClass: without the chart rendering it, the volume exists only as a live
+       kubectl patch, the next `helm upgrade` drops it, the CSI driver stops syncing/rotating its
+       k8s Secret, and every key it feeds goes stale (the memex-cloud AI-keys shape, paired with
+       .Values.extraEnvFrom). Verbatim Volume objects; mount them via .Values.extraVolumeMounts. */}}
+{{- range .Values.extraVolumes }}
+        - {{ toYaml . | nindent 10 | trim }}
 {{- end }}
         # 🩺 Crash-dump target (DOTNET_DbgMiniDumpName=/data/dumps/…). createdump does NOT create
         # directories — without this mount every crash failed with "Could not create output file …:
