@@ -117,6 +117,58 @@ public class FrameworkBuildIdentityTest
             "the closure is sorted so the hash text is deterministic");
     }
 
+    /// <summary>
+    /// 🚨 THE REBAKE BOUNDARY IS PINNED, because widening it is silent and expensive.
+    ///
+    /// <para>Every member here contributes its FULL implementation MVID to the framework identity,
+    /// so a body-only commit to ANY of them mints a new identity, empties the assembly share's
+    /// key-space and rebakes every NodeType on every deployment. The set is COMPUTED (the closure
+    /// walk above), which is what keeps a new toolchain dependency from being silently OUTSIDE the
+    /// identity — and is also why one added <c>ProjectReference</c> anywhere in the closure can pull
+    /// a whole subtree INSIDE it without a line of this file changing.</para>
+    ///
+    /// <para>That already happened. #1712 moved the boundary off <c>MeshWeaver.Graph</c> (311
+    /// commits/30d, the single highest-churn assembly) and the walk pulled in <c>Mesh.Contract</c>
+    /// (190), <c>Messaging.Hub</c> (135), <c>Data</c> (59) and <c>Layout</c> (40) behind it — 383
+    /// commits/30d for the union, so the identity now moves MORE often than before, while #1707's
+    /// stated acceptance ("a body-only edit in MeshWeaver.Graph rebakes nothing") reads as passed.
+    /// See #1976.</para>
+    ///
+    /// <para><b>When this fails, do not just update the list.</b> Ask which reference widened the
+    /// closure and whether the toolchain actually needs it; a member added here is a member every
+    /// deployment now rebakes on.</para>
+    /// </summary>
+    [Fact]
+    public void FullMvidClosure_IsExactly_TheKnownSet()
+    {
+        string[] expected =
+        [
+            "MeshWeaver.Compiler",              // root — shapes generated compile input
+            "MeshWeaver.NuGet",                 // root — the #r directive parser/resolver
+            "MeshWeaver.ContentCollections",    // ↓ pulled in transitively from the roots
+            "MeshWeaver.Data",
+            "MeshWeaver.Data.Contract",
+            "MeshWeaver.Domain",
+            "MeshWeaver.Kernel",
+            "MeshWeaver.Layout",
+            "MeshWeaver.Markdown",
+            "MeshWeaver.Mesh.Contract",
+            "MeshWeaver.Messaging.Contract",
+            "MeshWeaver.Messaging.Hub",
+            "MeshWeaver.Reflection",
+            "MeshWeaver.ServiceProvider",
+            "MeshWeaver.ShortGuid",
+            "MeshWeaver.Utils",
+        ];
+
+        FrameworkBuildIdentity.FullMvidAssemblies.Should().Equal(
+            expected.OrderBy(n => n, StringComparer.Ordinal),
+            "the full-MVID closure is the set whose every commit rebakes the world — a change here "
+            + "means a ProjectReference widened (or narrowed) the toolchain's dependency graph. "
+            + "Widening: find the reference and ask whether the toolchain needs it (#1976). "
+            + "Narrowing: that is the goal — delete the line and say so in the PR.");
+    }
+
     [Fact]
     public void ToolchainClosure_WalksTransitivesAndFiltersNonMeshWeaver()
     {
@@ -445,9 +497,13 @@ public class FrameworkBuildIdentityTest
         // #1814 in miniature: same binaries, one manifest missing a canonical name. The two hosts
         // MUST resolve different identities (that is the mechanism working correctly) and the
         // absence must be REPORTABLE by name — "the hashes differ" is not an actionable failure.
+        // Any ONE canonical assembly; the point is that dropping a single member forks the
+        // identity and is reportable BY NAME. (It named MeshWeaver.Import until that module left
+        // the platform — one constant now, so the two assertions cannot drift apart.)
+        const string dropped = "MeshWeaver.Graph";
         var complete = StageAppDirectory(FrameworkBuildIdentity.ContentSurfaceAssemblies);
         var reduced = StageAppDirectory(
-            FrameworkBuildIdentity.ContentSurfaceAssemblies.Where(n => n != "MeshWeaver.Import"));
+            FrameworkBuildIdentity.ContentSurfaceAssemblies.Where(n => n != dropped));
         try
         {
             var (whole, _) = FrameworkBuildIdentity.ResolveIdentityForDirectory(complete);
@@ -460,7 +516,7 @@ public class FrameworkBuildIdentityTest
             var pairs = FrameworkBuildIdentity.ParseSurfaceManifest(
                 File.ReadAllText(Path.Combine(reduced, FrameworkBuildIdentity.SurfaceManifestFileName)));
             FrameworkBuildIdentity.CanonicalAssembliesAbsentFrom(pairs)
-                .Should().Equal("MeshWeaver.Import");
+                .Should().Equal(dropped);
             FrameworkBuildIdentity.CanonicalAssembliesAbsentFrom(
                     FrameworkBuildIdentity.ParseSurfaceManifest(
                         File.ReadAllText(Path.Combine(complete, FrameworkBuildIdentity.SurfaceManifestFileName))))

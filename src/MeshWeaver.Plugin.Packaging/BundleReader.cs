@@ -72,12 +72,24 @@ public static class BundleReader
     /// semver floor). Null = no constraint. The manifest-level <see cref="Manifest.FrameworkMvid"/>
     /// stays the NodeType lane's strict gate and, for the module, DIAGNOSTIC metadata only.</param>
     public sealed record ModuleRef(
-        string? AssemblyName, IReadOnlyList<string>? Assemblies, string? MinMeshVersion = null);
+        string? AssemblyName, IReadOnlyList<string>? Assemblies, string? MinMeshVersion = null,
+        IReadOnlyList<string>? StaticAssets = null);
 
     /// <summary>One landed-to-be module file: its name and bytes.</summary>
     /// <param name="FileName">File name as the manifest declared it.</param>
     /// <param name="Bytes">The file's bytes.</param>
     public sealed record ModuleFile(string FileName, byte[] Bytes);
+
+    /// <summary>
+    /// One static web asset travelling with a compiled module — a view pack's <c>wwwroot</c>.
+    /// Kept apart from <see cref="ModuleFile"/> because the two are placed differently: an
+    /// assembly is a FLAT file beside the entry DLL, while an asset keeps its relative path so
+    /// <c>modules/&lt;name&gt;/wwwroot/leaflet/leaflet.js</c> survives the trip.
+    /// </summary>
+    /// <param name="RelativePath">Path under the module folder, forward slashes, e.g.
+    /// <c>wwwroot/leaflet/leaflet.css</c>.</param>
+    /// <param name="Bytes">The file's bytes, verbatim.</param>
+    public sealed record ModuleAsset(string RelativePath, byte[] Bytes);
 
     /// <summary>One node-definition file recovered from the bundle.</summary>
     /// <param name="RelativePath">Path within the package tree, exactly as the manifest declared
@@ -315,6 +327,36 @@ public static class BundleReader
     /// <param name="bundle">The archive bytes.</param>
     /// <returns>The manifest (null when the archive carries none) and the module's files — empty
     /// when the bundle declares no module or the declared closure is incomplete.</returns>
+    /// <summary>
+    /// The module's STATIC WEB ASSETS, read by the same all-or-nothing rule as its assemblies: a
+    /// declared asset the archive does not carry means an incomplete bundle, and half a view pack
+    /// renders unstyled rather than failing.
+    /// </summary>
+    public static IReadOnlyList<ModuleAsset> ReadModuleAssets(byte[] bundle)
+    {
+        using var buffer = new MemoryStream(bundle, writable: false);
+        using var archive = new ZipArchive(buffer, ZipArchiveMode.Read);
+
+        var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
+        if (manifestEntry is null)
+            return [];
+        Manifest? manifest;
+        using (var stream = manifestEntry.Open())
+            manifest = JsonSerializer.Deserialize<Manifest>(stream, Json);
+        if (manifest?.Module?.StaticAssets is not { Count: > 0 } declared)
+            return [];
+
+        var assets = new List<ModuleAsset>();
+        foreach (var relative in declared)
+        {
+            var entry = archive.GetEntry(NuGetPackageWriter.ModuleAssetEntryPathFor(relative));
+            if (entry is null)
+                return [];
+            assets.Add(new ModuleAsset(relative, ReadAll(entry)));
+        }
+        return assets;
+    }
+
     public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModule(byte[] bundle)
     {
         using var buffer = new MemoryStream(bundle, writable: false);

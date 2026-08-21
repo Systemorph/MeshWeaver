@@ -13,11 +13,17 @@ name: Node repo publish-bake (reusable)
 # `<base>/prebuilt-bundles/<framework-identity>/<bake-source>/`. A portal whose own framework
 # identity matches seeds them at boot and compiles nothing the repo ships.
 #
-# The bake is ALWAYS the FULL repo — never a PR-style affected narrowing. The publication is
-# atomic per identity: the `_complete` sentinel (written LAST) lists the whole bundle set and the
-# portal seeds only what the sentinel lists, so a partial publish would SHRINK what portals
-# adopt. Callers gate this job to main pushes + `repository_dispatch` (framework releases) via
-# the job-level `if:`/`needs:` on the `uses:` job.
+# The PUBLICATION is always the FULL set; the COMPILE need not be. The publication is atomic per
+# identity — the `_complete` sentinel (written LAST) lists the whole bundle set and the portal
+# seeds only what the sentinel lists, so a partial publish would SHRINK what portals adopt — and
+# that is a constraint on what is UPLOADED, not on what is recompiled. With
+# `narrow-by-affected: true` the job diffs the caller's content against the commit its own sealed
+# publication records (`source-commit.txt`), rebuilds only the modules that diff AFFECTS
+# (`scripts/affected-modules.py`: changed modules + every transitive DEPENDENT + their
+# dependencies), and carries every other bundle forward from the publication before sealing — so
+# the sentinel still lists everything and no portal adopts less than it does today. Every
+# uncertainty falls back to a FULL bake, out loud. Callers gate this job to main pushes +
+# `repository_dispatch` (framework releases) via the job-level `if:`/`needs:` on the `uses:` job.
 #
 # Caller contract (see the SocialMedia/Plugins ci.yml for a worked example):
 #
@@ -44,6 +50,7 @@ name: Node repo publish-bake (reusable)
 # "Node repos run the same lane" -> "The workflow ref is PINNED".
 #     with:
 #       bake-source: socialmedia
+#       narrow-by-affected: true      # rebuild only the modules a push actually affects
 #       test-image: ${{ vars.MW_TEST_IMAGE }}
 #       image-digest: ${{ vars.MW_IMAGE_DIGEST }}     # or a workflow env / literal pin
 #       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
@@ -103,6 +110,24 @@ on:
           Explicitly accept an empty image-digest and bake against the tag verbatim (a repo
           that tracks :main accepts that its runs are not reproducible). Never a silent
           fallback: an empty digest WITHOUT this flag fails red.
+        required: false
+        type: boolean
+        default: false
+      narrow-by-affected:
+        description: >-
+          Rebuild only the modules the content diff AFFECTS, instead of every module on every
+          run. The baseline is the commit the repo's own sealed publication records
+          (source-commit.txt), NOT github.event.before — so a run that lost a race, was
+          cancelled, or followed a red gate still diffs against what is actually published. The
+          modules NOT rebuilt keep their published bundles, carried forward before the seal, so
+          the publication stays complete.
+
+          OPT-IN, and biased to full: no selector in the caller repo, no sealed publication yet,
+          publish targets that disagree, an unreachable baseline, a rewritten history, a diff the
+          selector refuses, or any change to scripts/ .github/ a repo-root file or a DELETED
+          module ⇒ a FULL bake, logged with the reason. Requires the caller to ship
+          scripts/affected-modules.py, and is mutually exclusive with pre-bake-script (a hook that
+          builds its own mount owns its composition).
         required: false
         type: boolean
         default: false
@@ -239,6 +264,8 @@ jobs:
           STAGE_MODULES: ${{ inputs.stage-modules }}
           DEPENDENT_REPOS: ${{ inputs.dependent-repos }}
           DEPENDENT_TOKEN: ${{ secrets.dependent-dispatch-token }}
+          NARROW: ${{ inputs.narrow-by-affected }}
+          PRE_BAKE: ${{ inputs.pre-bake-script }}
         run: |
           set -euo pipefail
           missing=()
@@ -259,14 +286,28 @@ jobs:
           if [ -n "${DEPENDENT_REPOS:-}" ] && [ -z "${DEPENDENT_TOKEN:-}" ]; then
             missing+=("dependent-dispatch-token (secret) — token with repo scope on ${DEPENDENT_REPOS}; without it this repo's publication cannot wake its dependents and they never rebuild for the release")
           fi
+          # 🚨 A DECLARED-INPUT contradiction, asserted here rather than resolved silently at run
+          # time. A pre-bake hook that writes BAKE_MOUNT_DIR OWNS the mount's composition (it can
+          # filter, snapshot or synthesise packages), so "the affected closure" is not a set this
+          # job may substitute for it. Picking one and carrying on would mean a caller reading its
+          # own workflow could not tell which mount ran.
+          if [ "${NARROW:-false}" = "true" ] && [ -n "${PRE_BAKE:-}" ]; then
+            missing+=("narrow-by-affected and pre-bake-script are mutually exclusive — a hook that builds its own bake mount owns its composition, so the affected closure cannot also decide it. Drop one.")
+          fi
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::The bake publication cannot reach any portal — required credentials are not provisioned. This job fails RED rather than skipping: a grey skip is indistinguishable from a pass and would silently leave every portal re-compiling this repo's content at boot."
             for m in "${missing[@]}"; do echo "::error::missing: ${m}"; done
             exit 1
           fi
           echo "All publish credentials are provisioned."
+      # 🚨 fetch-depth 0 when narrowing: the baseline is a commit the PUBLICATION names, which can
+      # be any distance back (as far as the last successful publish), and a shallow clone cannot
+      # resolve it. bake-scope.sh falls back to a full bake rather than guessing when it cannot —
+      # correct, but it would narrow NOTHING, ever. The string forms are deliberate: GitHub
+      # expressions treat the NUMBER 0 as falsy, so `inputs.x && 0 || 1` yields 1 in both branches.
       - uses: actions/checkout@v7
-        with: { fetch-depth: 1 }
+        with:
+          fetch-depth: ${{ inputs.narrow-by-affected && '0' || '1' }}
       - name: Resolve the bake image
         id: image
         env:
@@ -340,8 +381,8 @@ jobs:
       # bake runs at all. Same sparse checkout as the publish-side fetch further down, into its own
       # path: it carries no root index.json, so the tester never treats it as a module (identical
       # reasoning to `cross-repo-stage/`).
-      - name: Fetch the canonical gate script (platform repo)
-        if: inputs.upstream-sources != ''
+      - name: Fetch the canonical gate + bake-scope scripts (platform repo)
+        if: inputs.upstream-sources != '' || inputs.narrow-by-affected
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
@@ -351,15 +392,18 @@ jobs:
       # A SECOND login, deliberately: the gate must authenticate before a bake that can run 40
       # minutes, and the publish side re-logs in afterwards rather than relying on a token minted
       # before it. Two cheap OIDC exchanges beat one that can expire mid-job.
-      - name: Azure login for the gate (OIDC)
-        if: inputs.upstream-sources != ''
+      - name: Azure login for the gate / scope decision (OIDC)
+        if: inputs.upstream-sources != '' || inputs.narrow-by-affected
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.azure-client-id }}
           tenant-id: ${{ secrets.azure-tenant-id }}
           subscription-id: ${{ secrets.azure-subscription-id }}
+      # Needed by BOTH the upstream gate and the scope decision: a publication is keyed by
+      # framework identity, so "what is already published" is unanswerable without it — and the
+      # identity is a property of the shipped BINARIES, so only the image can report it.
       - name: "Resolve the framework identity this bake will target"
-        if: inputs.upstream-sources != ''
+        if: inputs.upstream-sources != '' || inputs.narrow-by-affected
         id: identity
         run: |
           set -euo pipefail
@@ -401,6 +445,31 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::error title=Upstreams not ready — did not build::at least one upstream of this repo has no published artifact for framework identity ${{ steps.identity.outputs.identity }}; exiting without building. The upstream's own publication re-triggers this run."
           exit 1
+      # ───────────────────── WHAT MUST ACTUALLY BE REBUILT (#1707) ─────────────────────
+      # "When updating plugins, we should check from git history which modules are affected, and
+      # we should rebuild only these."
+      #
+      # 🚨 IT RUNS BEFORE STAGING, and that ordering is load-bearing: the staged cross-repo module
+      # dirs are copied INTO the caller's checkout, and scripts/affected-modules.py discovers
+      # modules as "top-level dirs carrying an index.json". Deciding after staging would have the
+      # selector treat another repo's packages as this repo's, changing the dependency graph it
+      # derives the closure from.
+      #
+      # The decision is biased to FULL — see bake-scope.sh, where every fallback names itself in
+      # the log and the job summary. Narrowing is the shape that produces a silent under-build, so
+      # "cannot answer safely" and "nothing to do" must never be the same answer.
+      - name: Decide the bake scope (affected modules since the published baseline)
+        if: inputs.narrow-by-affected
+        id: scope
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          SOURCE: ${{ inputs.bake-source }}
+          HEAD_SHA: ${{ github.sha }}
+          REPO_DIR: ${{ github.workspace }}
+          EVENT_NAME: ${{ github.event_name }}
+          STATE_DIR: ${{ runner.temp }}/bake-scope
+        run: mw-platform-gate/.github/scripts/bake-scope.sh
       # Same staging the caller's gate does, for the same reason: cross-repo `requires` must
       # resolve for the package roots to bind.
       - name: Stage cross-repo modules
@@ -419,10 +488,16 @@ jobs:
       - name: Pre-bake hook
         if: inputs.pre-bake-script != ''
         run: ${{ inputs.pre-bake-script }}
-      - name: Bake the full repo (import + compile + render + tests, --bake-output)
+      - name: Bake (import + compile + render + tests, --bake-output)
+        # scope=none means the decision above VERIFIED that this exact content is already sealed
+        # for this framework identity at every target — a positive finding, logged with both
+        # shas, not an input-shaped skip. Everything downstream is skipped with it.
+        if: steps.scope.outputs.scope != 'none'
         env:
           STAGE_MODULES: ${{ inputs.stage-modules }}
           ALLOW_FILE: ${{ inputs.allow-file }}
+          BAKE_SCOPE: ${{ steps.scope.outputs.scope || 'full' }}
+          BAKE_MODULES: ${{ steps.scope.outputs.mount }}
         run: |
           set -euo pipefail
           # The mount the tester sees: the checkout, unless the pre-bake hook built its own
@@ -435,6 +510,33 @@ jobs:
             for m in ${STAGE_MODULES:-}; do
               cp -R "$GITHUB_WORKSPACE/cross-repo-stage/$m" "$GITHUB_WORKSPACE/"
             done
+          fi
+          # 🎯 THE MOUNT IS THE FILTER. mw-plugin-test gates and bakes every package it discovers
+          # under /repo and takes no module list, so a narrowed bake is a narrowed MOUNT — exactly
+          # the seam the PR gate already uses (ci.yml `test-repos`). The set is
+          # affected + transitive dependents + THEIR dependencies, dependencies-first, because the
+          # tester's mesh installs what it mounts and a package whose `requires` is absent never
+          # activates. (narrow-by-affected and pre-bake-script are mutually exclusive — asserted in
+          # preflight — so BAKE_MOUNT_DIR and a narrowed stage can never both be in play.)
+          if [ "$BAKE_SCOPE" = "narrowed" ]; then
+            NARROW="${RUNNER_TEMP:-/tmp}/bake-stage"
+            mkdir -p "$NARROW"
+            for m in $BAKE_MODULES; do cp -R "$GITHUB_WORKSPACE/$m" "$NARROW/"; done
+            for m in ${STAGE_MODULES:-}; do
+              # An `A && B` list whose test fails would abort the step under `set -e`.
+              name=$(basename "$m")
+              if [ -d "$GITHUB_WORKSPACE/$name" ]; then
+                cp -R "$GITHUB_WORKSPACE/$name" "$NARROW/"
+              fi
+            done
+            if [ -n "${ALLOW_FILE:-}" ] && [ -f "$GITHUB_WORKSPACE/$ALLOW_FILE" ]; then
+              mkdir -p "$NARROW/$(dirname "$ALLOW_FILE")"
+              cp "$GITHUB_WORKSPACE/$ALLOW_FILE" "$NARROW/$ALLOW_FILE"
+            fi
+            REPO_MOUNT="$NARROW"
+            echo "narrowed bake: $BAKE_MODULES"
+          else
+            echo "full bake: every module in the checkout"
           fi
           BAKE="${RUNNER_TEMP:-/tmp}/bake"
           mkdir -p "$BAKE"
@@ -471,6 +573,7 @@ jobs:
           echo "baked identity: $(cat "$BAKE/framework-mvid.txt")"
           echo "baked bundles:"; ls -l "$BAKE"/*.zip
       - name: Azure login (OIDC)
+        if: steps.scope.outputs.scope != 'none'
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.azure-client-id }}
@@ -480,13 +583,37 @@ jobs:
       # `_complete` sentinel must keep matching. Checked out after the bake so it never sits in
       # the tester's /repo mount. Public repo: the default token reads it from any caller.
       - name: Fetch the canonical publish script (platform repo)
+        if: steps.scope.outputs.scope != 'none'
         uses: actions/checkout@v7
         with:
           repository: Systemorph/MeshWeaver
           ref: ${{ inputs.platform-ref }}
           path: mw-platform
           sparse-checkout: .github/scripts
+      # ───────────── KEEP THE PUBLICATION COMPLETE (the reason the bake used to be full) ─────────────
+      # A narrowed bake wrote bundles only for what it rebuilt. The publish below uploads exactly
+      # the local bundle set and seals a `_complete` listing exactly it — and a portal seeds only
+      # what that sentinel lists. So publishing the delta would not ADD bundles, it would REPLACE
+      # the sentinel and shrink what every portal adopts, silently putting every other module back
+      # to compiling at boot.
+      #
+      # This step re-hydrates every bundle the sealed publication lists that this bake did not
+      # produce, so the publish script runs COMPLETELY UNCHANGED over a full set and the resulting
+      # publication is indistinguishable from a full bake's. A bundle that can neither be rebuilt
+      # nor fetched is FATAL here — the alternative is publishing less than is published today,
+      # which is the silent failure this whole lane exists to remove. Nothing has been written at
+      # that point, so the existing publication stays sealed and intact.
+      - name: Carry forward the bundles this bake did not rebuild
+        if: steps.scope.outputs.scope == 'narrowed'
+        run: >
+          mw-platform/.github/scripts/carry-forward-bundles.sh
+          "$BAKE_DIR"
+          "${{ runner.temp }}/bake-scope/published-bundles.txt"
+          "$BAKE_CARRY_TARGET"
+          "${{ steps.identity.outputs.identity }}"
+          "${{ inputs.bake-source }}"
       - name: Publish bundles to every portal target
+        if: steps.scope.outputs.scope != 'none'
         env:
           BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
         # Contract: layout <base>/prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip,
@@ -516,8 +643,12 @@ jobs:
       # payload carries the framework identity so a receiver can gate on the exact generation, and
       # the platform version when this run was itself woken by one (the receiver needs it to resolve
       # the released image).
+      # …and only when there WAS a publication to announce. scope=none means the artefact the
+      # dependents gate on is already sealed — a dependent that exited waiting for it did so
+      # before it existed, and the run that created it fired this event then. Waking them for a
+      # no-op would put every downstream repo through a full build on every scheduled poll.
       - name: Notify dependent repos
-        if: inputs.dependent-repos != ''
+        if: inputs.dependent-repos != '' && steps.scope.outputs.scope != 'none'
         env:
           TOKEN: ${{ secrets.dependent-dispatch-token }}
           REPOS: ${{ inputs.dependent-repos }}
@@ -547,3 +678,18 @@ jobs:
           done
           echo "### 📣 Dependents woken: $REPOS" >> "$GITHUB_STEP_SUMMARY"
           exit "$failed"
+      # 🚨 An explicit, GREEN step rather than a tail of grey skips. "Already published" and "the
+      # job silently did nothing" render identically in the UI otherwise, and AGENTS.md's rule is
+      # that a gate which did not run must never look like one that passed. This one says which
+      # verdict was reached, on what evidence, and names both shas.
+      - name: Nothing to bake (this content is already sealed for this identity)
+        if: steps.scope.outputs.scope == 'none'
+        env:
+          REASON: ${{ steps.scope.outputs.reason }}
+          BASELINE: ${{ steps.scope.outputs.baseline }}
+        run: |
+          set -euo pipefail
+          echo "no bake, no publish: $REASON"
+          echo "published baseline: $BASELINE   head: $GITHUB_SHA   identity: ${{ steps.identity.outputs.identity }}"
+          echo "This is a VERIFIED outcome, not a skipped gate: the sealed publication was read from"
+          echo "every target in BAKE_PUBLISH_TARGETS and compared against this commit's content."

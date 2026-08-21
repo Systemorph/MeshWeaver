@@ -35,7 +35,6 @@
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <!-- Direct on purpose (#1644 step 2): these modules left Memex.Portal.Shared's closure
          (they ship via modules/), so the module-fold tests anchor the real DLLs themselves. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.OgCard\MeshWeaver.OgCard.csproj" />
     <!-- MigrationRegistryTest runs the migration runner's own start-up guard (VerifyComplete) in
          `dotnet test`. It only ever ran INSIDE the migration container before, so a registry/
          DbVersion.Latest drift shipped a dead image while main stayed green (V53, 2026-08-14). -->

@@ -191,19 +191,88 @@ same retry / NACK / failure signal the forward leg already has. Sketch of what t
   address one specific process.
 - `RoutingGrain.BuildStreamRoute` replaced by that call, reusing the existing
   `DeliverToGrainWithRetry` → `PostFailureToSender` machinery verbatim.
-- and then `OrleansStreamingReadiness`, the `subscriptionReady` attach gate (#1081), the
-  `SubscribeWhenStreamingReadyAsync` retry surface and `RootMeshHubReplyStreamService` all become
-  **deletable** — the memory stream provider is only kept alive by this one use.
+- and then `OrleansStreamingReadiness` — 97 lines with exactly one consumer — becomes **deletable**.
+
+> 🚨 **The cleanup dividend is smaller than this page used to claim.** It said the memory stream
+> provider "is only kept alive by this one use". It is not: `PathCacheInvalidatorGrain`
+> (`[ImplicitStreamSubscription("mesh-created"/"mesh-deleted")]`) and
+> `OrleansMeshChangeFeed.BroadcastAsync` both publish on `StreamProviders.Memory`, so
+> `AddMemoryStreams` and its `PubSubStore` stay whatever happens to the routing leg. The
+> `subscriptionReady` attach gate (#1081) and `SubscribeWhenStreamingReadyAsync` likewise survive
+> as long as any hub subscribes a stream at all. Budget the rewrite on its own merits, not on a
+> deletion that is not there.
 
 It is a real change (new placement strategy, a directory with its own lifecycle, and a two-PROCESS
 test to prove it), which is why it is written down here rather than done alongside the durability
 fix. Tracked in [#1742](https://github.com/Systemorph/MeshWeaver/issues/1742).
 
-## 🚨 An in-process `TestCluster` cannot reproduce this
+## The subscriber check — what it buys, and the measurement that put it there
+
+Ahead of that rewrite the router now **asks whether anyone is listening** before it publishes
+(`RoutingGrain.HasLiveSubscriber`). The stream provider exposes its own subscription registry —
+`IStreamProvider.TryGetStreamSubscriptionManager(out …)`, since `PersistentStreamProvider` implements
+`IStreamSubscriptionManagerRetriever` — so this is derived from the provider the routing turn already
+captured: no DI lookup, no new grain, no new dependency. Zero subscribers ⇒ the delivery is refused
+with a `DeliveryFailure{ErrorType=NotFound}` to its sender instead of being published into a
+discard.
+
+**This page previously rejected that check on hot-path cost. That rejection did not survive
+measurement** (in-process cluster, 2026-08-21):
+
+| | measured |
+|---|---|
+| subscriber lookup, warm | **0.010 ms** |
+| the memory-stream publish it guards | **0.053 ms** |
+| a hub registered on a SILO through `RegisterStream` | 1 subscription — **visible** |
+| the same hub registered in a CLIENT process | 2 — **visible** |
+| the root `mesh/{id}` hub (`RootMeshHubReplyStreamService`) | 1 — **visible** |
+| an address nothing ever registered | 0 |
+| after its registration is disposed | back to 0 within ~250 ms |
+
+A fifth of the cost of the leg it protects is not a hot path argument, so the check is applied to
+**every** stream-routed delivery rather than confined to replies — which it had to be anyway: a
+forward request to an absent pod-process hub is dropped by exactly the same publish, and confining
+the check to replies would have left that half silent.
+
+Two properties are deliberate and must not be "tidied":
+
+- **It fails OPEN.** An unavailable, faulting or slow registry returns *"assume someone is
+  listening"* and the delivery is published exactly as before. A detector that cannot run must
+  never become a refusal — that trade turns one silent drop into a cluster-wide outage.
+- **It is check-then-act, and says so.** A subscriber can vanish between the answer and the publish,
+  and `MemoryStreamQueueGrain` — still RAM — can die with its silo holding a message the check
+  called deliverable. The check narrows the silent window; only the transport change below closes
+  it.
+
+The same question is asked before the **NACK** leg publishes (`RoutingGrain.PostFailure`). It cannot
+be answered with a NACK — you cannot NACK a NACK — so an unreachable sender is now an **error log
+naming the sender, the request and the original failure**, where before it was an env-var-gated
+trace line whose own tag admitted the gap (`FAILURE_DELIVER_OK_UNCONFIRMED`) and which production
+never emitted at all.
+
+### The gate
+
+`StreamRoutedSilenceGateTest` (test/MeshWeaver.Hosting.Orleans.Test) pins the invariant, and it does
+so **in process** — see the correction below. It posts to a `client/…` address nothing has
+registered (asserting first, through the same registry, that the stream really has no subscriber, so
+a green cannot come from a hub that happened to exist) and requires a `DeliveryFailureException`
+inside a bounded wait. Against the unfixed router it fails with the defect's own symptom: nothing
+answers, and the bound converts the hang into a `TimeoutException` at 30 s. A sibling fact posts
+between two REGISTERED pod-process hubs, so a check that refused everything cannot pass.
+
+## 🚨 An in-process `TestCluster` cannot reproduce THE REGISTRY LOSS — but it does reproduce the silence
 
 Every silo in an `Orleans.TestingHost.TestCluster` shares **one process, one heap, and therefore one
 memory grain store**. "Silo A departs" never destroys the state silo B's subscription lives in, so
-the defect is unrepresentable there. A two-silo `TestCluster` assertion for this bug was written and
+*that* defect is unrepresentable there.
+
+🚨 **Read the scope of that sentence carefully — it was over-read for months, and it cost the gate
+this page said was missing.** It is about the pub-sub REGISTRY dying with a silo. The *invariant* —
+an undeliverable delivery surfaces as a `DeliveryFailure`, never as silence — needs no silo
+departure and no second process: **a stream nobody has subscribed to is subscriber-less on any
+cluster**, including one silo in one process. Same publish, same branch of
+`RoutingGrain.RouteMessage`, same silence. `StreamRoutedSilenceGateTest` is that test, it is
+deterministic, and it was writable before the fix rather than after. A two-silo `TestCluster` assertion for this bug was written and
 **passed identically with and without the fix** — worse than no test, and it was deleted rather than
 shipped as false assurance.
 

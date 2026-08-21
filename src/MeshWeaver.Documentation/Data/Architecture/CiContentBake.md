@@ -472,7 +472,7 @@ deliberately deferred.
 | `.github/workflows/node-repo-validate.yml` | JSON/manifest shape gate (`scripts/validate-repos.py`, `gen-manifests.py --check`, main-only `--check-versions`) |
 | `.github/workflows/node-repo-compile-check.yml` | the compile gate — every NodeType's resolved Source vs the assemblies of the digest-pinned platform image |
 | `.github/workflows/node-repo-gate.yml` | the tester gate — `mw-plugin-test` over the (optionally affected-narrowed) mount, cross-repo `requires` staged in |
-| `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — full-repo `--bake-output`, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh` |
+| `.github/workflows/node-repo-publish-bake.yml` | the main-only bake + publication — `--bake-output` over the full repo or (opt-in) the affected closure, staged-module exclusion, OIDC publish via the canonical `publish-bake-bundles.sh` |
 | `.github/workflows/node-repo-tag-modules.yml` | the `<Module>/vX.Y.Z` tag publisher (`scripts/tag-modules.py`) |
 
 The design rules the extraction preserves:
@@ -509,6 +509,84 @@ The design rules the extraction preserves:
   seals independently, which is also why no cross-repo bake ORDERING is needed: a dependent
   repo's publication never contains its dependency's bundles, so there is nothing to wait for.
   The framework-release dispatch fans out to all satellites concurrently.
+
+### Rebuild only what a change AFFECTS — `narrow-by-affected`
+
+> *"When updating plugins, we should check from git history which modules are affected, and we
+> should rebuild only these."*
+
+The bake used to be the whole repo, every time — every main push and every scheduled release
+poll ran ~40 minutes of Roslyn over every package to republish bundles that, for all but a
+handful of them, were the ones already sealed in storage. The stated reason was the atomicity of
+the publication, and it was a real constraint applied to the wrong half of the job:
+
+> the `_complete` sentinel is written LAST and lists the whole bundle set, and a portal seeds
+> **only what the sentinel lists** — so publishing a delta would not ADD bundles, it would
+> REPLACE the sentinel and shrink what every portal adopts.
+
+That constrains what is **uploaded**. It says nothing about what must be **recompiled**. With
+`narrow-by-affected: true` the two are separated:
+
+| | |
+|---|---|
+| **compile** | only the modules the diff affects (+ their dependencies, because the tester's fresh mesh installs what it mounts) |
+| **publish** | still the complete set — every bundle not rebuilt is carried forward from the current publication before the seal |
+
+Three pieces, in order:
+
+1. **`bake-scope.sh`** decides. 🚨 **Its baseline is the PUBLICATION, not `github.event.before`** —
+   the sealed directory carries `source-commit.txt`, and that is the only commit that answers
+   "what changed since the bundles that are actually out there". Diffing the push instead would
+   silently under-build after any run that did not publish: a cancelled run, a superseded push, a
+   red gate, a re-run of an older commit. Reading the baseline off the publication is
+   self-correcting — whatever was published is what we diff against, however many runs it took.
+2. **The caller's `scripts/affected-modules.py`** answers. It is the caller's file because the
+   dependency edges are the caller's content, and it mirrors the runtime's own resolution 1:1
+   (`LocalNodeRepo.CollectDependencies`): changed modules → transitive **dependents** → their
+   dependencies, emitted dependencies-first. It ships its own `--self-test`.
+3. **`carry-forward-bundles.sh`** keeps the publication whole: every bundle the sealed listing
+   names that this bake did not produce is downloaded into the bake directory, so
+   `publish-bake-bundles.sh` runs **completely unchanged** over a full set and the resulting
+   publication is indistinguishable from a full bake's.
+
+**The bias is toward a full bake, always, and out loud.** Narrowing a build is the shape that
+produces a *silent* under-build — a module that should have been recompiled and was not becomes a
+stale assembly every portal seeds at boot, and the evidence of the miss is the absence of
+evidence. So each of these resolves to a FULL bake, naming itself in the log and the job summary:
+
+- the caller ships no `scripts/affected-modules.py`;
+- a `repository_dispatch` (a framework release mints a NEW identity — everything is recompiled
+  against it), or any event with no meaningful content diff;
+- no sealed publication yet for this identity, a malformed target, or an unreadable sentinel;
+- **publish targets that disagree** on the published source or bundle set (one narrowed bake
+  carries forward one publication, so it cannot serve two);
+- a baseline commit this checkout cannot resolve, or one that is not an ancestor of HEAD
+  (history rewritten);
+- the selector refusing — an **empty diff** is a broken range, never "nothing to do";
+- the selector answering ALL modules: a change under `scripts/`, `.github/`, a repo-root file, or
+  **a module directory that no longer exists**. That last one is why a DELETED module still
+  shrinks the publication correctly.
+
+And one verdict that is neither: **`scope=none`**, when the sealed publication already records
+*this* commit for *this* identity. It is a positive finding — read from every target, logged with
+both shas and an explicit green step, never a grey skip — and it is what the every-30-minutes
+release poll hits almost every time it runs. `publish-bake-bundles.sh` already skipped the upload
+in that case; nothing had ever gated the 40-minute build in front of it.
+
+A **missing** carried-forward bundle is fatal: the only alternatives are "publish less than is
+published today" and "stop", and shrinking is the one that fails silently. The job goes red with
+the bundle named, and the existing publication stays sealed and intact because nothing has been
+written yet.
+
+`narrow-by-affected` is mutually exclusive with `pre-bake-script` (a hook that builds its own
+mount owns its composition) — asserted in preflight, not resolved silently at run time. Both
+scripts carry `--self-test`, run on every platform PR from `dotnet-test.yml`'s preflight job, and
+both are proven non-vacuous by mutation: delete any single fallback and the step goes red.
+
+**Still full, deliberately:** a framework release. A new identity has no publication to carry
+forward and every module must be compiled against the new binaries — which is also what makes
+that bake the gate that catches an API removal (the 2026-08-09 `AddTracking` outage) before every
+portal parks at its next restart.
 
 ### 🔒 The workflow ref is PINNED — and bumping it is a deliberate act
 
@@ -634,6 +712,24 @@ types. The satellites escape it precisely because they bake INSIDE the image.
   `MeshWeaver/samples/Graph/Data/ACME/…` while a bundle from that tree is keyed `ACME/…`. If a
   deployment ever wants them prebuilt, the fix is to agree one canonical path per shipped tree — a
   content-layout question, not an identity one.
+- **A narrowed bake still recompiles the affected closure's DEPENDENCIES.** `mw-plugin-test`
+  takes no module list — the mount IS the filter — and it has no seed-from-directory seam: it
+  compiles every package it discovers under `/repo`. A dependency is mounted because the fresh
+  gate mesh must install it for the affected package to activate and for `shared=@…` to resolve,
+  and it is then compiled too. Almost every package requires `Store`, so `Store` is recompiled on
+  nearly every narrowed run. The win is still large (3–5 packages instead of ~40); closing the
+  rest needs the tester to ADOPT a published bundle for a mounted-but-unaffected package — the
+  same `PrebuiltAssemblySeeder` path a portal takes at boot, which is #1707 item 5 ("at install,
+  check whether a pre-built lib exists and consume it") pointed at the gate.
+- **The platform's OWN content bake (`main-cd.yml`'s `publish-bake`) is not narrowed.** It bakes
+  `src/MeshWeaver.Documentation/Data` inside the shipped image and fuses gate and bake in one
+  `mw-plugin-test` run; its content moves with the platform commit it is baking, so a
+  content-diff baseline is a different question from the node repos' one.
+- **The cross-repo rebuild cascade is a separate axis.** `narrow-by-affected` answers "which of
+  THIS repo's modules changed". "Which repos must rebuild, in what order, when an upstream
+  publishes" is the `upstream-sources` gate plus `dependent-repos`, and it is still dormant in
+  practice for this repo's dependents: `DEPENDENT_DISPATCH_TOKEN` is unprovisioned, so Plugins
+  declares no `dependent-repos` and Education/Reinsurance are woken only by their own schedule.
 - **An arm64 install adopts nothing the amd64 lane publishes** — the two architectures of one image
   resolve different identities (see the identity rule above). Local arm64 installs compile at boot
   as they always have; nothing may paper over this by publishing the same bundles twice.
