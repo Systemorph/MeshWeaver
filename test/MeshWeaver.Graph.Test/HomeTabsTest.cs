@@ -169,7 +169,10 @@ public class HomeTabsTest
         query.Should().Contain("nodeType:Thread");
         query.Should().Contain("-content.status:Done", "closing a thread (✕ → MarkThreadDone) must remove it from the rail");
         query.Should().Contain("sort:LastModified-desc");
-        rail.RenderMode.Should().Be(MeshSearchRenderMode.List, "the rail is a vertical menu");
+        // Flat + one column, NOT List: the List renderer ignores ItemArea, so the ✕ overlay would
+        // never render there — Flat is the ItemArea path the pinned grid proves.
+        rail.RenderMode.Should().Be(MeshSearchRenderMode.Flat);
+        rail.MaxColumns.Should().Be(1, "the rail is a vertical menu");
         rail.ItemArea.Should().Be("RailItem", "each row renders via the thread hub's RailItem area (title + ✕)");
         rail.ShowSearchBox.Should().Be(false);
     }
