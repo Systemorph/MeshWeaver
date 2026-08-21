@@ -393,6 +393,17 @@ builder.Services.AddHostedService<Memex.Portal.Distributed.DbVersionGate>();
 builder.Services.AddHealthChecks()
     .AddCheck<Memex.Portal.Distributed.DbVersionHealthCheck>("db_version");
 
+// Modules that LANDED but have not LOADED (#1979). Loading is restart-as-activation, which makes
+// the restart part of the install — so an install whose last step is invisible reads as a broken
+// install. DEGRADED, never Unhealthy: the pod serves correctly with what it loaded, and failing
+// readiness would stall a rollout over work the rollout itself performs. Reads the PERSISTED
+// sidecar, because the process that landed the module is not the process being asked.
+builder.Services.AddHealthChecks()
+    .AddCheck(
+        "pending_module_activation",
+        new Memex.Portal.Distributed.PendingModuleActivationHealthCheck(
+            MeshWeaver.PluginCatalog.ModuleRoot.Resolve(builder.Configuration)));
+
 // The same shape, one dependency further out: DbVersionGate proves the MESH database is
 // migrated; this proves the ORLEANS database is provisioned. They are different databases,
 // provisioned by different phases, and #1798 is what happens when only the first is checked —
