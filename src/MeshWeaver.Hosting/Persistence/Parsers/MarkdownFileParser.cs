@@ -241,6 +241,16 @@ public partial class MarkdownFileParser : IFileFormatParser
     /// Notes/Background: matching only the bare constant let a namespaced slide degrade to
     /// MarkdownContent on import, and the next mesh→repo export then dropped its
     /// Notes/Background frontmatter entirely. Delegates to the ONE suffix-aware predicate.
+    ///
+    /// <para>🚨 <b>This is the LAST compiled type branch in the export/import programme</b>
+    /// (#1580 phase 3; the export side is done, #1576). It is not deleted yet, and the obvious
+    /// replacement is refused for a measured reason: a CONTENT-SHAPE rule — "frontmatter has
+    /// Notes or Background ⇒ slide" — silently empties the 3 of 235 real slide files that carry
+    /// neither key, because the slide views read <c>SlideContent</c> and <c>ContentAs&lt;T&gt;</c>
+    /// recovers only a same-short-named type. Before touching this, read
+    /// <c>Doc/Architecture/DeclarativeImportExport</c> → "What blocks the import half", which
+    /// records the count, why the shape rule fails, and the two conditions the registry route has
+    /// to settle first.</para>
     /// </summary>
     private static bool IsSlideNodeType(string? nodeType) => SlideNodeType.Matches(nodeType);
 
