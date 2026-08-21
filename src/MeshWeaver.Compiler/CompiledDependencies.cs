@@ -54,6 +54,31 @@ public static class CompiledDependencies
     public const string ToolchainKey = "!toolchain";
 
     /// <summary>
+    /// The reserved record key carrying the build's CONTENT KEY (#1707 slice 4) — the hash of the
+    /// FULLY GENERATED compilation input folded with the pruned reference surfaces
+    /// (<see cref="GeneratedInputIdentity"/>). Same '!' prefix convention as
+    /// <see cref="ToolchainKey"/>.
+    ///
+    /// <para><b>What it is FOR, and what it is not.</b> <see cref="ToolchainKey"/> is a PROXY —
+    /// "the toolchain moved, so the bytes MIGHT be stale". This is the direct observation: "the
+    /// input that produced these bytes hashed to X". A consumer that has REGENERATED the input can
+    /// therefore answer exactly, and a toolchain change that did not move a type's generated input
+    /// is provably not a reason to rebuild it.</para>
+    ///
+    /// <para>🚨 It is consequently validated ONLY against a live value the caller computed by
+    /// regenerating (<see cref="FindMismatch"/>'s <c>liveContentKey</c>). There is no cheap live
+    /// counterpart: the key is a function of the toolchain AND the source text, and no metadata-only
+    /// check can evaluate it. That is precisely why the toolchain entry cannot simply be deleted in
+    /// favour of this one — see the note on <see cref="ComputeToolchainId"/>.</para>
+    ///
+    /// <para>OPTIONAL: a record produced where the generated input was not available (an adopted
+    /// prebuilt, the disk-cache hit path, the hydration shortcut) carries no entry, and
+    /// <see cref="FindMismatch"/> then simply has nothing to compare — the toolchain entry still
+    /// governs, exactly as before this key existed.</para>
+    /// </summary>
+    public const string ContentKey = "!input";
+
+    /// <summary>
     /// The toolchain id for <see cref="ToolchainKey"/>: SHA-256 over the
     /// <see cref="FrameworkBuildIdentity.FullMvidAssemblies"/> closure members' implementation
     /// MVIDs (name=mvid lines, in the closure's sorted order), 32 hex chars. Moves exactly when
@@ -82,10 +107,17 @@ public static class CompiledDependencies
     /// null = out of scope (System/TPA), excluded from the record.</param>
     /// <param name="toolchainId">The producing process's toolchain id
     /// (<see cref="ComputeToolchainId"/>).</param>
+    /// <param name="generatedInputDigest">The stage-1 generated-input digest
+    /// (<see cref="GeneratedInputIdentity.OfGeneratedInput"/>) of the compile that produced these
+    /// bytes, or null when the caller did not compile (an adopted prebuilt, a cache hit, the
+    /// hydration shortcut). Non-null folds the pruned reference surfaces in and writes the
+    /// <see cref="ContentKey"/> entry — the record's own assembly entries ARE that set, so the two
+    /// cannot drift apart.</param>
     public static ImmutableSortedDictionary<string, string> Compute(
         IEnumerable<string?> referencedSimpleNames,
         Func<string, string?> idOf,
-        string toolchainId)
+        string toolchainId,
+        string? generatedInputDigest = null)
     {
         var builder = ImmutableSortedDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
         builder[ToolchainKey] = toolchainId;
@@ -96,6 +128,13 @@ public static class CompiledDependencies
             if (idOf(name) is { } id)
                 builder[name] = id;
         }
+        if (!string.IsNullOrEmpty(generatedInputDigest))
+            // The reference surfaces are the record's ASSEMBLY entries — the reserved '!' entries
+            // are deliberately excluded. Folding the toolchain MVID into the content key would
+            // make the key move on every toolchain commit, which is the exact proxy this key
+            // exists to replace.
+            builder[ContentKey] = GeneratedInputIdentity.Combine(
+                generatedInputDigest, builder.Where(pair => !IsReservedKey(pair.Key)));
         return builder.ToImmutable();
     }
 
@@ -106,10 +145,17 @@ public static class CompiledDependencies
     /// mismatch — a build that binds something this environment cannot even classify is not
     /// provably compatible.
     /// </summary>
+    /// <param name="record">The stamped record.</param>
+    /// <param name="liveIdOf">The live surface-id resolver (<see cref="CreateIdResolver"/>).</param>
+    /// <param name="liveToolchainId">The live toolchain id (<see cref="ComputeToolchainId"/>).</param>
+    /// <param name="liveContentKey">The content key the caller computed by REGENERATING this
+    /// type's compile input (<see cref="GeneratedInputIdentity"/>), or null when it did not — see
+    /// <see cref="ContentKey"/>.</param>
     public static string? FindMismatch(
         IReadOnlyDictionary<string, string> record,
         Func<string, string?> liveIdOf,
-        string liveToolchainId)
+        string liveToolchainId,
+        string? liveContentKey = null)
     {
         // 🚨 A record WITHOUT the reserved toolchain entry is never trusted: FindMismatch only
         // compares entries that are PRESENT, so such a record would validate forever across
@@ -122,14 +168,32 @@ public static class CompiledDependencies
 
         foreach (var (name, stamped) in record)
         {
-            var live = string.Equals(name, ToolchainKey, StringComparison.Ordinal)
-                ? liveToolchainId
-                : liveIdOf(name) ?? AbsentId;
+            string live;
+            if (string.Equals(name, ToolchainKey, StringComparison.Ordinal))
+                live = liveToolchainId;
+            else if (string.Equals(name, ContentKey, StringComparison.Ordinal))
+            {
+                // The content key has NO cheap live counterpart — evaluating it means regenerating
+                // the compile input. A caller that did so passes it and gets an EXACT verdict; a
+                // caller that did not skips the entry rather than inventing a live value, and the
+                // toolchain entry above still governs. Skipping is not fail-open here for exactly
+                // that reason: the record is refused outright if it carries no toolchain entry.
+                if (string.IsNullOrEmpty(liveContentKey))
+                    continue;
+                live = liveContentKey;
+            }
+            else
+                live = liveIdOf(name) ?? AbsentId;
             if (!string.Equals(stamped, live, StringComparison.Ordinal))
                 return $"'{name}' built against {stamped}, live is {live}";
         }
         return null;
     }
+
+    /// <summary>True for the reserved '!'-prefixed record keys, which name compile FACTS rather
+    /// than referenced assemblies.</summary>
+    public static bool IsReservedKey(string key) =>
+        key.StartsWith('!');
 
     /// <summary>
     /// The surface-id resolver over one environment: installed modules FIRST (exact-build MVID —
