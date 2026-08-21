@@ -149,19 +149,29 @@ def test_music_commands_play_and_are_honest_about_songs():
         router = BrainRouter({"lokal": FakeBrainOnly()}, "lokal",
                              phrases={"radio_on": "Hier kommt {station}.",
                                       "song_hint": "Einzelne Lieder kann ich noch nicht — dafür kommt {station}."})
+        # Stations are USER DATA loaded from {user}/Voice/Station nodes, never code.
+        router.stations = {
+            "energy zürich": ("Energy Zürich", "https://example.test/energy.mp3"),
+            "radio srf 3": ("Radio SRF 3", "https://example.test/srf3/mp3/128"),
+            "radio srf 1": ("Radio SRF 1", "https://example.test/srf1/mp3/128"),
+        }
         async def player(url): played.append(url)
         router.player = player
-        # A generic music wish plays the default station.
+        # A generic music wish plays the FIRST configured station.
         out = await router.handle_command("Kannst du für mich Musik spielen?")
         assert out == "Hier kommt Energy Zürich." and len(played) == 1
         # A NAMED song gets radio plus the honest sentence — never an invented promise.
         out = await router.handle_command("Ich möchte, dass du mir ein Lied spielst und es sollte Komet heißen.")
         assert "noch nicht" in out and len(played) == 2
-        # A named station is honored.
+        # A named station is honored — the digit separates SRF 3 from SRF 1.
         out = await router.handle_command("Spiel Radio SRF 3")
         assert "SRF 3" in out and played[-1].endswith("srf3/mp3/128")
         # "Musik aus" ends quietly through the interrupt path.
         assert await router.handle_command("Musik aus") == ""
+        # No stations configured → the honest phrase, never a crash.
+        router.stations = {}
+        out = await router.handle_command("Spiel Musik")
+        assert out == router._phrases["no_stations"]
         # Without a player wired, music requests fall through to the brain.
         bare = BrainRouter({"lokal": FakeBrainOnly()}, "lokal")
         assert await bare.handle_command("Spiel Musik") is None
@@ -179,6 +189,10 @@ def test_station_name_alone_plays_despite_lost_first_word():
         played = []
         router = BrainRouter({"lokal": FakeBrainOnly()}, "lokal",
                              phrases={"radio_on": "Hier kommt {station}."})
+        router.stations = {
+            "radio srf 3": ("Radio SRF 3", "https://example.test/srf3/mp3/128"),
+            "radio srf 1": ("Radio SRF 1", "https://example.test/srf1/mp3/128"),
+        }
         async def player(url): played.append(url)
         router.player = player
         # The device loses the first word after wake: "Spiel Radio SRF 3" arrives mangled.
