@@ -114,18 +114,31 @@ async def run() -> None:
     cfg = Config.from_env()
     http = aiohttp.ClientSession()
     router = make_router(cfg)
-    # The STANDARD voice prompt lives in the mesh (@{user}/Voice/Prompt — deposited on
-    # first start, editable in the portal); an explicit SYSTEM_PROMPT_FILE stays the
-    # strongest override for local experiments.
+    # The prompt comes FROM THE PLATFORM: @Voice/Prompt (the package's standard) seeds
+    # @{user}/Voice/Prompt (the user's editable copy), which wins; SYSTEM_PROMPT_FILE
+    # stays the strongest override for local experiments. CAPABILITIES are then injected
+    # by what is actually installed — radio stations, smart home — never hard-coded.
+    from .ollama import SYSTEM_PROMPT
+    prompt_text = SYSTEM_PROMPT
     if not cfg.system_prompt_file:
-        from .ollama import SYSTEM_PROMPT
         try:
-            remote = await router.sync_system_prompt(SYSTEM_PROMPT)
+            prompt_text = (await router.sync_system_prompt(SYSTEM_PROMPT)).strip() or SYSTEM_PROMPT
         except Exception:
-            remote = SYSTEM_PROMPT
-        if remote.strip():
-            router.apply_system_prompt(remote.strip()
-                                       + (DIALECT_SUFFIX if cfg.speak_dialect else ""))
+            pass
+    try:
+        await router.refresh_stations()
+    except Exception:
+        logging.getLogger(__name__).warning("station refresh failed", exc_info=True)
+    capabilities = []
+    if router.stations:
+        names = ", ".join(name for name, _ in router.stations.values())
+        capabilities.append(f"Radio is available ({names}) and handled for you "
+                            "automatically — never claim you cannot play radio.")
+    if cfg.ha_url and cfg.ha_token:
+        capabilities.append("The smart home is reachable through the home_assistant tool.")
+    router.apply_system_prompt(prompt_text
+                               + (DIALECT_SUFFIX if cfg.speak_dialect else "")
+                               + ("\n\n" + " ".join(capabilities) if capabilities else ""))
     tts = make_tts(cfg)
     server = TtsFileServer(cfg.gateway_host, cfg.gateway_port)
     await server.start()

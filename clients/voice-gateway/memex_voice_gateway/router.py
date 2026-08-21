@@ -105,7 +105,31 @@ _DEFAULT_PHRASES = {
     "answer_to": "Answering your question: {question} —",
     "radio_on": "Here comes {station}. Say stop to end it.",
     "song_hint": "I cannot play single songs yet — but here comes {station}.",
+    "no_stations": "No radio stations are set up yet — add them under Voice, Station in the portal.",
 }
+
+async def load_stations(client, namespace: str) -> dict[str, tuple[str, str]]:
+    """Read {user}/Voice/Station/* nodes from the mesh: node NAME is the spoken/display
+    name, the markdown BODY's first http(s) line is the stream URL. User data — the Voice
+    package installs editable defaults; nothing is hard-coded here."""
+    import json as _json
+    stations: dict[str, tuple[str, str]] = {}
+    try:
+        listing = _json.loads(await client.call(
+            "search", {"query": f"namespace:{namespace}/Voice/Station", "limit": 30}))
+        for row in listing.get("results", []):
+            node = _json.loads(await client.call("get", {"path": f"@{row['path']}"}))
+            content = node.get("content") or {}
+            body = content.get("body") or content.get("content") or ""
+            url = next((line.strip() for line in str(body).splitlines()
+                        if line.strip().startswith(("http://", "https://"))), None)
+            name = node.get("name") or row.get("name") or row["path"].rsplit("/", 1)[-1]
+            if url:
+                stations[name.lower()] = (name, url)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("could not load stations from the mesh", exc_info=True)
+    return stations
 
 _READ = re.compile(
     r"^\s*(?:vorlesen|lies\s+(?:es|sie|mir|die antwort)?\s*vor|antwort(?:en)? vorlesen|"
@@ -125,16 +149,9 @@ _MUSIC = re.compile(
     r"^\s*(?:musik|radio)\s*(?:an|bitte)?[.!]?\s*$", re.IGNORECASE | re.DOTALL)
 _MUSIC_OFF = re.compile(r"\b(?:musik|radio)\s+(?:aus|stopp?|off)\b|"
                         r"\b(?:stopp?|stop)\s+(?:die\s+)?(?:musik|radio)\b", re.IGNORECASE)
-# Direct stream URLs — the SRG entry URLs answer with a 302 the device's HTTP client may
-# not follow (resolved 2026-08-20; the .m/... form redirects to livestreaming-node hosts).
-STATIONS = {
-    "energy": ("Energy Zürich", "https://energyzuerich.ice.infomaniak.ch/energyzuerich-high.mp3"),
-    "srf 3": ("Radio SRF 3", "http://livestreaming-node-1.srg-ssr.ch/srgssr/srf3/mp3/128"),
-    "srf drei": ("Radio SRF 3", "http://livestreaming-node-1.srg-ssr.ch/srgssr/srf3/mp3/128"),
-    "srf 1": ("Radio SRF 1", "http://livestreaming-node-1.srg-ssr.ch/srgssr/srf1/mp3/128"),
-    "virus": ("Radio SRF Virus", "http://livestreaming-node-1.srg-ssr.ch/srgssr/drsvirus/mp3/128"),
-}
-_DEFAULT_STATION = "energy"
+# Stations are USER DATA, never code: {user}/Voice/Station/* nodes in the mesh (the Voice
+# package installs editable defaults; the portal edits them). The router only ever sees
+# the loaded dict — spoken key → (display name, stream url) — via set_stations().
 
 
 class BrainRouter:
@@ -152,6 +169,8 @@ class BrainRouter:
             n for n, b in brains.items() if hasattr(b, "delegate")}
         self._home = home     # HomeAssistant client, when configured
         self.player: object = None   # async url -> None; the satellite's media player
+        # Spoken key → (display name, stream url), loaded from {user}/Voice/Station nodes.
+        self.stations: dict[str, tuple[str, str]] = {}
         # Agent name → the portal that HOSTS it (a portal entry's "agents" list): the
         # ExecutiveAssistant may live on the local mesh while Researcher lives in the cloud.
         self._agent_homes = agent_homes or {}
@@ -225,6 +244,17 @@ class BrainRouter:
                 return body
         except Exception as e:
             logging.getLogger(__name__).info("no prompt node at @%s (%r) — depositing", path, e)
+        # THE PLATFORM owns the standard: the Voice package's @Voice/Prompt node is the
+        # source the per-user copy is seeded from; the code constant is only the fallback
+        # for a mesh that has no Voice package at all.
+        try:
+            node = _json.loads(await client.call("get", {"path": "@Voice/Prompt"}))  # type: ignore[attr-defined]
+            body = ((node.get("content") or {}).get("body") or "").strip()
+            if body:
+                default_text = body
+                logging.getLogger(__name__).info("standard prompt taken from @Voice/Prompt")
+        except Exception:
+            pass
         try:
             await client.call("create", {"node": _json.dumps({  # type: ignore[attr-defined]
                 "id": "Prompt", "namespace": f"{ns}/Voice",
@@ -252,6 +282,17 @@ class BrainRouter:
         self._context = entry
         self._changed()
         return entry
+
+    def _match_station(self, lowered: str) -> str | None:
+        """Best station for an utterance by token overlap — 'radio' itself never decides."""
+        heard = set(re.findall(r"[a-z0-9äöüéè]+", lowered)) - {"radio"}
+        best, best_score = None, 0
+        for station_key in self.stations:
+            tokens = set(re.findall(r"[a-z0-9äöüéè]+", station_key)) - {"radio"}
+            score = len(tokens & heard)
+            if score > best_score:
+                best, best_score = station_key, score
+        return best
 
     def _find_thread(self, topic: str) -> dict | None:
         """Fuzzy topic → open thread: substring or word overlap on task/agent, most
@@ -306,6 +347,14 @@ class BrainRouter:
     # never delete a node. Everything else on the portal's MCP surface passes through.
     _DESTRUCTIVE = {"delete", "restore_version", "restore_from_point_in_time"}
     allow_destructive: bool = False
+
+    async def refresh_stations(self) -> None:
+        """Load the user's stations from the mesh (the delegation portal's namespace)."""
+        target = self._mesh_target()
+        client = self._brains.get(target) if target else None
+        ns = getattr(client, "namespace", None)
+        if client is not None and ns:
+            self.stations = await load_stations(client, ns)
 
     async def run_tool(self, name: str, args: dict) -> str:
         """The local brain's quick tools, run in-round: mesh calls go to the same portal
@@ -407,15 +456,18 @@ class BrainRouter:
         lowered = stripped.lower()
         # Radio matching survives what STT does to the words: the device loses the first
         # ~half second after the wake word AND mangles station names ("Spiel Radio SRF 3"
-        # arrived as "Die Radio-SRF 3." then "Spielradio SR-Fans." — observed). So: a
-        # known station name plays it; ANY mention of radio — substring, because
-        # "Spielradio" fuses — plays the default; the verb is never required.
-        key = next((k for k in STATIONS if k in lowered), None)
+        # arrived as "Die Radio-SRF 3." then "Spielradio SR-Fans." — observed). Stations
+        # are USER-NAMED nodes, so matching scores token overlap ("Energy" finds "Energy
+        # Zürich", the digit separates SRF 3 from SRF 1); any mention of radio — substring,
+        # because "Spielradio" fuses — plays the first configured one; no verb required.
+        key = self._match_station(lowered)
         if (key or "radio" in lowered or _MUSIC.search(stripped)) \
                 and self.player is not None:
+            if not self.stations:
+                return self._phrases["no_stations"]
             named_song = key is None and re.search(
                 r"\b(?:lied|song)\b", lowered) and len(stripped) > 25
-            name, url = STATIONS[key or _DEFAULT_STATION]
+            name, url = self.stations[key or next(iter(self.stations))]
             try:
                 await self.player(url)  # type: ignore[operator]
             except Exception:
