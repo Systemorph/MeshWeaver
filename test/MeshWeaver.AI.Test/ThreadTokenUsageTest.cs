@@ -39,6 +39,34 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class ThreadTokenUsageTest : AITestBase
 {
+    /// <summary>
+    /// The one wait budget in this class, and it is a HANG-STOPPER — not an assertion.
+    ///
+    /// <para>Every wait here is observable-driven and asserts a VALUE (<c>InputTokens == …</c>,
+    /// <c>Status == Cancelled</c>); the millisecond figure only stops a broken run from hanging
+    /// forever. That is the whole reason it may be generous: unlike the bounds in
+    /// <see cref="ConcurrencyStressCollection"/>, which ARE the assertion (deadlock and
+    /// lost-write detectors), padding this one weakens nothing — it cannot turn a wrong value
+    /// into a right one.</para>
+    ///
+    /// <para>It exists because the file used to carry two budgets, 10 s and 20 s, split by no
+    /// stated rule: thread-state waits got 20 s and satellite waits 10 s, on the assumption that a
+    /// satellite lands promptly once the thread has settled. On a shared 4-vCPU CI runner it does
+    /// not always, and #2001 is the resulting failure — a cancel that had already landed
+    /// (<c>WaitForThread(Cancelled)</c> passed) followed by a usage satellite that had not
+    /// appeared inside its tighter 10 s.</para>
+    ///
+    /// <para><b>This class deliberately does NOT join <see cref="ConcurrencyStressCollection"/>,</b>
+    /// which was the other candidate fix. That collection's membership rule is structural and
+    /// requires BOTH a test that creates concurrency of its own AND a verdict that is a wall-clock
+    /// bound on the burst. This one does neither: it is a strictly sequential flow — seed, submit,
+    /// wait, cancel, wait — and its verdicts are value comparisons. Adding it would turn a rule
+    /// the collection's own documentation defends as "structural, not whatever failed last time"
+    /// into exactly that, and would cost the shard wall clock for a test that does not need the
+    /// box.</para>
+    /// </summary>
+    private const int SettleBudgetMs = 20_000;
+
     // Distinct in/out so a test can tell which field a value landed in (catches an in/out swap).
     private const int InTokens = 137;
     private const int OutTokens = 89;
@@ -96,12 +124,12 @@ public class ThreadTokenUsageTest : AITestBase
         // Usage is recorded on the per-model TokenUsage satellite ({threadPath}/_Usage/{model}),
         // NOT on the thread node. Model id "usage-model" → key "usage_model".
         var usage = await WaitForUsage(threadPath, "usage_model",
-            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, SettleBudgetMs);
         usage.Model.Should().Be("usage-model");
         usage.ThreadId.Should().Be(threadPath);
 
         var cell = await WaitForCell(threadPath, thread.Messages[^1],
-            m => m.Status == ThreadMessageStatus.Completed, 10_000);
+            m => m.Status == ThreadMessageStatus.Completed, SettleBudgetMs);
         cell.InputTokens.Should().Be(InTokens);
         cell.OutputTokens.Should().Be(OutTokens);
         cell.TotalTokens.Should().Be(TotalTokens);
@@ -137,7 +165,7 @@ public class ThreadTokenUsageTest : AITestBase
         // Open the observation FIRST — at this point the thread has no _Usage namespace at all, so
         // this is the "watcher was already there" ordering, deterministically.
         var watching = WaitForUsage(threadPath, "usage_model",
-            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 20_000);
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, SettleBudgetMs);
 
         client.SubmitMessage(threadPath, "hello", modelName: "usage-model", createdBy: TestUser);
 
@@ -217,18 +245,18 @@ public class ThreadTokenUsageTest : AITestBase
 
         client.SubmitMessage(threadPath, "round one", modelName: "usage-model", createdBy: TestUser);
         await WaitForThread(threadPath,
-            t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, 20_000);
+            t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, SettleBudgetMs);
         await WaitForUsage(threadPath, "usage_model",
-            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, SettleBudgetMs);
 
         client.SubmitMessage(threadPath, "round two", modelName: "usage-model", createdBy: TestUser);
         await WaitForThread(threadPath,
-            t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 4, 20_000);
+            t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 4, SettleBudgetMs);
 
         // The per-model TokenUsage satellite ACCUMULATES across rounds — a second round adds onto
         // the first (each terminal RecordUsage reads the current satellite value and adds).
         await WaitForUsage(threadPath, "usage_model",
-            u => u.InputTokens == InTokens * 2 && u.OutputTokens == OutTokens * 2, 10_000);
+            u => u.InputTokens == InTokens * 2 && u.OutputTokens == OutTokens * 2, SettleBudgetMs);
     }
 
     // ─── Cancelled round (pins the dropped-usage hole on cancel) ───
@@ -242,12 +270,12 @@ public class ThreadTokenUsageTest : AITestBase
 
         // Round started and the active response cell exists.
         var executing = await WaitForThread(threadPath,
-            t => t.IsExecuting && t.ActiveMessageId != null, 20_000);
+            t => t.IsExecuting && t.ActiveMessageId != null, SettleBudgetMs);
         var cellId = executing.ActiveMessageId!;
 
         // Wait until the post-usage marker lands on the cell — proves the usage update (yielded
         // BEFORE the marker) was already aggregated by the streaming loop. THEN request cancel.
-        await WaitForCell(threadPath, cellId, m => (m.Text ?? "").Contains(UsageMarker), 20_000);
+        await WaitForCell(threadPath, cellId, m => (m.Text ?? "").Contains(UsageMarker), SettleBudgetMs);
 
         // Cancel via the canonical control-plane write (RequestedStatus on the node).
         await client.GetWorkspace().GetMeshNodeStream(threadPath)
@@ -257,13 +285,13 @@ public class ThreadTokenUsageTest : AITestBase
             .FirstAsync().ToTask();
 
         await WaitForThread(threadPath,
-            t => t.Status == ThreadExecutionStatus.Cancelled, 20_000);
+            t => t.Status == ThreadExecutionStatus.Cancelled, SettleBudgetMs);
 
         await WaitForUsage(threadPath, "usage_cancel_model",
-            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, SettleBudgetMs);
 
         var cell = await WaitForCell(threadPath, cellId,
-            m => m.Status == ThreadMessageStatus.Cancelled, 10_000);
+            m => m.Status == ThreadMessageStatus.Cancelled, SettleBudgetMs);
         cell.InputTokens.Should().Be(InTokens,
             "the cancelled cell records the tokens consumed before the cancel");
         cell.OutputTokens.Should().Be(OutTokens);
@@ -286,10 +314,10 @@ public class ThreadTokenUsageTest : AITestBase
             20_000);
 
         await WaitForUsage(threadPath, "usage_error_model",
-            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, SettleBudgetMs);
 
         var cell = await WaitForCell(threadPath, terminal.Messages[^1],
-            m => m.Status == ThreadMessageStatus.Error, 10_000);
+            m => m.Status == ThreadMessageStatus.Error, SettleBudgetMs);
         cell.InputTokens.Should().Be(InTokens,
             "the errored cell records the tokens consumed before the fault");
         cell.OutputTokens.Should().Be(OutTokens);
@@ -313,13 +341,13 @@ public class ThreadTokenUsageTest : AITestBase
         client.SubmitMessage(threadPath, "cancel me resolved", modelName: "usage-cancel-alias", createdBy: TestUser);
 
         var executing = await WaitForThread(threadPath,
-            t => t.IsExecuting && t.ActiveMessageId != null, 20_000);
+            t => t.IsExecuting && t.ActiveMessageId != null, SettleBudgetMs);
         var cellId = executing.ActiveMessageId!;
 
         // Marker on the cell proves the usage update (and the ModelId-stamped chunks) were
         // aggregated before we request the cancel — same deterministic gate as the plain
         // Cancelled test, no sleep.
-        await WaitForCell(threadPath, cellId, m => (m.Text ?? "").Contains(UsageMarker), 20_000);
+        await WaitForCell(threadPath, cellId, m => (m.Text ?? "").Contains(UsageMarker), SettleBudgetMs);
 
         await client.GetWorkspace().GetMeshNodeStream(threadPath)
             .Update(curr => curr?.Content is MeshThread t
@@ -328,17 +356,17 @@ public class ThreadTokenUsageTest : AITestBase
             .FirstAsync().ToTask();
 
         await WaitForThread(threadPath,
-            t => t.Status == ThreadExecutionStatus.Cancelled, 20_000);
+            t => t.Status == ThreadExecutionStatus.Cancelled, SettleBudgetMs);
 
         // Satellite keyed by the RESOLVED model — if the code regressed to request.ModelName
         // this wait times out (the satellite would sit at usage_cancel_alias instead).
         var usage = await WaitForUsage(threadPath, "usage_cancel_resolved",
-            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, SettleBudgetMs);
         usage.Model.Should().Be("usage-cancel-resolved",
             "the satellite records the model that actually ran, not the requested alias");
 
         var cell = await WaitForCell(threadPath, cellId,
-            m => m.Status == ThreadMessageStatus.Cancelled, 10_000);
+            m => m.Status == ThreadMessageStatus.Cancelled, SettleBudgetMs);
         cell.ModelName.Should().Be("usage-cancel-resolved",
             "the cancelled cell shows the resolved model, matching the Completed path");
     }
@@ -357,12 +385,12 @@ public class ThreadTokenUsageTest : AITestBase
             20_000);
 
         var usage = await WaitForUsage(threadPath, "usage_error_resolved",
-            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, SettleBudgetMs);
         usage.Model.Should().Be("usage-error-resolved",
             "the satellite records the model that actually ran, not the requested alias");
 
         var cell = await WaitForCell(threadPath, terminal.Messages[^1],
-            m => m.Status == ThreadMessageStatus.Error, 10_000);
+            m => m.Status == ThreadMessageStatus.Error, SettleBudgetMs);
         cell.ModelName.Should().Be("usage-error-resolved",
             "the errored cell shows the resolved model, matching the Completed path");
         cell.InputTokens.Should().Be(InTokens);
@@ -379,14 +407,14 @@ public class ThreadTokenUsageTest : AITestBase
         client.SubmitMessage(threadPath, "no total reported", modelName: "usage-nototal-model", createdBy: TestUser);
 
         var thread = await WaitForThread(threadPath,
-            t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, 20_000);
+            t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, SettleBudgetMs);
 
         // The satellite stores in/out; the total is derived on the cell when the provider omits it.
         await WaitForUsage(threadPath, "usage_nototal_model",
-            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, 10_000);
+            u => u.InputTokens == InTokens && u.OutputTokens == OutTokens, SettleBudgetMs);
 
         var cell = await WaitForCell(threadPath, thread.Messages[^1],
-            m => m.Status == ThreadMessageStatus.Completed, 10_000);
+            m => m.Status == ThreadMessageStatus.Completed, SettleBudgetMs);
         cell.InputTokens.Should().Be(InTokens);
         cell.OutputTokens.Should().Be(OutTokens);
         cell.TotalTokens.Should().Be(TotalTokens, "derived total = in + out");
@@ -402,17 +430,17 @@ public class ThreadTokenUsageTest : AITestBase
         client.SubmitMessage(threadPath, "cache me", modelName: "usage-cache-model", createdBy: TestUser);
 
         var thread = await WaitForThread(threadPath,
-            t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, 20_000);
+            t => t.Status == ThreadExecutionStatus.Idle && t.Messages.Count >= 2, SettleBudgetMs);
 
         // The cache read/write counts must survive from UsageDetails.AdditionalCounts (mixed provider
         // keys) all the way onto the per-model satellite — they used to be dropped entirely.
         var usage = await WaitForUsage(threadPath, "usage_cache_model",
-            u => u.CacheReadTokens == CacheReadTokens && u.CacheWriteTokens == CacheWriteTokens, 10_000);
+            u => u.CacheReadTokens == CacheReadTokens && u.CacheWriteTokens == CacheWriteTokens, SettleBudgetMs);
         usage.InputTokens.Should().Be(InTokens, "input is the full prompt total; cache is a subset");
         usage.OutputTokens.Should().Be(OutTokens);
 
         var cell = await WaitForCell(threadPath, thread.Messages[^1],
-            m => m.Status == ThreadMessageStatus.Completed, 10_000);
+            m => m.Status == ThreadMessageStatus.Completed, SettleBudgetMs);
         cell.CacheReadTokens.Should().Be(CacheReadTokens);
         cell.CacheWriteTokens.Should().Be(CacheWriteTokens);
         cell.InputTokens.Should().Be(InTokens);
