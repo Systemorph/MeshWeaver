@@ -35,7 +35,6 @@
          references no sample. -->
     <ProjectReference Include="..\aspire\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
     <ProjectReference Include="..\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
-    <ProjectReference Include="..\..\samples\Northwind\MeshWeaver.Northwind.Application\MeshWeaver.Northwind.Application.csproj" />
   </ItemGroup>
 
   <Import Project="..\MeshModulesPublish.targets" />

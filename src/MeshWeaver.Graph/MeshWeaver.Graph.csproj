@@ -26,6 +26,19 @@
          or it does not register as a node provider at all. Reproducing that generation in the
          tool would be a second implementation free to drift from the one that matters. -->
     <InternalsVisibleTo Include="MeshWeaver.Plugin.Build" />
+    <!-- 🚨 THIS ONE LIVES IN ANOTHER REPO. MeshWeaver.OgCard and its tests moved to
+         MeshWeaver.Plugins/src when the module left the platform; OpenGraphPreviewService did
+         NOT, because GraphConfigurationExtensions registers it and Memex.Portal.Shared's
+         OgCardRenderer consumes it. So the test still needs the internal seam constructor — the
+         one that takes `allowLoopback: true`, without which it cannot point the service at its
+         own local listener, because the production SSRF guard refuses loopback by design.
+         Dropping this grant does not fail here: it fails in the OTHER repo, as CS1729 "does not
+         contain a constructor that takes 3 arguments", which reads as a signature change rather
+         than as lost visibility. That is exactly how it reddened MeshWeaver.Plugins' main on
+         2026-08-21 — the test moved out and the grant did not follow it. The
+         `landed-modules-gate` job now compiles that repo's projects against this one, so the
+         coupling is checked here rather than discovered there. -->
+    <InternalsVisibleTo Include="MeshWeaver.OgCard.Test" />
   </ItemGroup>
 
   <ItemGroup>

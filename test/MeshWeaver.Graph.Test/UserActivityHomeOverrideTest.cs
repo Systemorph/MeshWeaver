@@ -42,27 +42,26 @@ public class UserActivityHomeOverrideTest
 
         md.Should().Contain("### Welcome back, Roland");
         md.Should().Contain("@@(\"area/Composer\")");
-        md.Should().Contain("@@(\"area/Pinned\")");
         md.Should().Contain("@@(\"area/Threads\")");
         md.Should().Contain("@@(\"area/Catalog\")");
+        // Pinned is a TAB of the Catalog region now (BuildHome) — no separate bottom band, or the
+        // pins would render twice on the default home.
+        md.Should().NotContain("@@(\"area/Pinned\")");
 
         var welcome = md.IndexOf("Welcome back", StringComparison.Ordinal);
         var composer = md.IndexOf("area/Composer", StringComparison.Ordinal);
         var threads = md.IndexOf("area/Threads", StringComparison.Ordinal);
         var catalog = md.IndexOf("area/Catalog", StringComparison.Ordinal);
-        var pinned = md.IndexOf("area/Pinned", StringComparison.Ordinal);
         var configurable = md.IndexOf("configurable", StringComparison.Ordinal);
 
         // The welcome heading is back at the very top — above the chat composer.
         welcome.Should().BeLessThan(composer, "the welcome heading must be at the top of the home page");
         // Chat composer above the regions.
         composer.Should().BeLessThan(catalog, "the chat composer sits above the regions");
-        // My items (Catalog) sits ABOVE Open threads.
-        catalog.Should().BeLessThan(threads, "my items come before open threads");
-        // Pinned is at the END of the regions — after Catalog and Threads.
-        threads.Should().BeLessThan(pinned, "pinned items sit at the end of the regions");
+        // The tabbed catalog sits ABOVE Open threads.
+        catalog.Should().BeLessThan(threads, "the tabbed catalog comes before open threads");
         // The configurable note sits at the BOTTOM — after the regions (the only "configurable" text).
-        configurable.Should().BeGreaterThan(pinned, "the configurable text must be at the bottom of the page");
+        configurable.Should().BeGreaterThan(threads, "the configurable text must be at the bottom of the page");
     }
 
     [Fact]

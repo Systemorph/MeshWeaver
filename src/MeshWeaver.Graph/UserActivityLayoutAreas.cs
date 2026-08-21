@@ -72,14 +72,17 @@ public static class UserActivityLayoutAreas
     /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
     internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
 
+    /// <summary>
+    /// The per-thread rail-row item area consumed by the Threads app's vertical rail — registered
+    /// on every THREAD hub (MeshWeaver.AI, <c>ThreadNodeType.RailItemArea</c> /
+    /// <c>ThreadRailItem.View</c>: title + ✕-close overlay). Referenced here by NAME only: item
+    /// areas resolve on the result node's own hub at render time, so Graph carries no AI
+    /// dependency for it.
+    /// </summary>
+    internal const string ThreadRailItemArea = "RailItem";
+
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
-    /// <summary>
-    /// Section title for the additive "Shared with me" band (#385) — the cross-partition modules the
-    /// caller was specifically invited into, which the unified <c>is:main</c> catalog query can't
-    /// reach on its own (they're readable by URL but invisible to a scope search). See BuildCatalog.
-    /// </summary>
-    private const string SharedWithMeTitle = "Shared with me";
 
     /// <summary>
     /// Adds the Activity view (the owner home / visitor profile) to the User node's layout, plus the
@@ -97,13 +100,14 @@ public static class UserActivityLayoutAreas
             .WithView(CatalogArea, CatalogAreaView)
             .WithView(ComposerArea, ComposerAreaView)
             // "/{user}/Chat" (ChatArea) is a well-known URL (thread-catalog Create-New, chat menu
-            // links). Since ChatNodeType was removed there is NO {user}/Chat node any more: the URL
-            // resolves to prefix={user} + remainder="Chat", which AreaPage renders as area "Chat"
-            // on this hub. Without this registration that's "no renderer for area Chat", and a
-            // LEGACY {user}/Chat node from an older deployment resolves as invalid-NodeType
-            // ("No node found at '{user}/Chat'… remainder='Chat'" — the prod memex report,
-            // 2026-07-02). The composer is node-less — serve it directly.
-            .WithView(ChatArea, ComposerAreaView)
+            // links, the Threads app tile). Since ChatNodeType was removed there is NO {user}/Chat
+            // node any more: the URL resolves to prefix={user} + remainder="Chat", which AreaPage
+            // renders as area "Chat" on this hub. Without this registration that's "no renderer
+            // for area Chat", and a LEGACY {user}/Chat node from an older deployment resolves as
+            // invalid-NodeType ("No node found at '{user}/Chat'… remainder='Chat'" — the prod
+            // memex report, 2026-07-02). The page is the node-less THREADS APP (vertical rail of
+            // open threads with ✕-close + the composer) — see ThreadsAppView.
+            .WithView(ChatArea, ThreadsAppView)
             // Override the generic Edit area with the SAFE per-field Body editor. Editing a
             // partition-root node generically is suppressed in the default node menu (it could
             // rewrite the whole partition); this edits THIS page only — User.Body — 1:1 with the
@@ -274,8 +278,6 @@ public static class UserActivityLayoutAreas
         @@("area/Catalog")
 
         @@("area/Threads")
-
-        @@("area/Pinned")
 
         _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
@@ -479,22 +481,55 @@ public static class UserActivityLayoutAreas
         return Observable.Return<UiControl?>(BuildOpenThreads(nodePath, OwnerIdOf(nodePath)));
     }
 
-    /// <summary>The catalog region — ONE unified, grouped "everything" <see cref="MeshSearchControl"/>
-    /// (see <see cref="BuildCatalog"/>), plus an additive "Shared with me" band for the caller's
-    /// cross-partition grants (#385) that a broad query can't reach — see <see cref="ObserveSharedTargets"/>.</summary>
+    /// <summary>The catalog region — the TABBED home surface (see <see cref="BuildHome"/>):
+    /// <b>Shared with me</b> (the caller's cross-partition grants, #385 — see
+    /// <see cref="ObserveSharedTargets"/>) · <b>Pinned</b> · <b>Apps</b> (the config-declared
+    /// default apps ∪ the owner's installed <c>App</c> records — see
+    /// <see cref="ObserveInstalledApps"/>) · <b>Spaces</b> (the deduplicated catalog). The
+    /// admin-editable <c>Admin/HomeConfig</c> node drives the shape and can switch back to the
+    /// legacy single-list catalog (<see cref="HomeStyle.Catalog"/>).</summary>
     internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var ownerId = OwnerIdOf(host.Hub.Address.ToString());
         var options = host.Hub.JsonSerializerOptions;
+        var locale = host.ViewerLocale();
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
         // LIVE — no code change, no image roll. Combined with the caller's cross-partition grants
-        // (#385, the one thing a first-level query can't reach). Both start with a value so the home
-        // paints instantly.
+        // (#385), the owner's installed-app records, and the owner node (pins). Every leg starts
+        // with a value so the home paints instantly.
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
         return HomeConfigNodeType.Observe(host.Workspace, options)
-            .CombineLatest(ObserveSharedTargets(host, ownerId),
-                (config, shared) => (UiControl?)BuildCatalog(ownerId, config, shared));
+            .CombineLatest(
+                ObserveSharedTargets(host, ownerId),
+                ObserveInstalledApps(host, ownerId, options),
+                syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
+                (config, shared, installedApps, user) =>
+                    (UiControl?)BuildHome(ownerId, config, shared, installedApps, user, locale));
     }
+
+    /// <summary>
+    /// The owner's installed-app records — the <c>{owner}/_App/{appId}</c> nodes (see
+    /// <see cref="AppNodeType"/>), projected to their <see cref="App.Plugin"/> paths, ordered by
+    /// <see cref="App.Order"/>. Read via the shared, per-user-RLS, empty-on-absent <c>GetQuery</c>
+    /// cache (never a point-read that could NotFound-storm), starting empty so the home paints
+    /// instantly and installs land reactively.
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>> ObserveInstalledApps(
+        LayoutAreaHost host, string ownerId, JsonSerializerOptions options) =>
+        host.Workspace
+            .GetQuery($"home-apps:{ownerId}",
+                $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType} " +
+                "select:path,id,namespace,name,nodeType,content")
+            .Select(nodes => (IReadOnlyList<string>)nodes
+                .Select(n => n.ContentAs<App>(options))
+                .Where(app => !string.IsNullOrWhiteSpace(app?.Plugin))
+                .OrderBy(app => app!.Order)
+                .Select(app => app!.Plugin.Trim('/'))
+                .Where(p => p.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList())
+            .StartWith((IReadOnlyList<string>)[]);
 
     /// <summary>
     /// The cross-partition scopes the owner has been granted access to — an invited module living in
@@ -583,6 +618,62 @@ public static class UserActivityLayoutAreas
         => Observable.Return<UiControl?>(new ThreadChatControl().WithHideEmptyState(true));
 
     /// <summary>
+    /// The THREADS APP page (<c>/{user}/Chat</c>, the ChatArea) — the GitHub-Copilot-style shape:
+    /// a vertical RAIL of the owner's open threads on the left (each row rendered by the thread
+    /// hub's <see cref="ThreadRailItemArea"/>: title + ✕ that closes the thread via the canonical
+    /// <c>MarkThreadDone</c>, so it leaves the rail but stays searchable), and the node-less chat
+    /// composer on the right — sending starts a proper thread via <c>StartThread</c> and opens it
+    /// full-screen. Pure composition of existing pieces; see <see cref="BuildThreadsApp"/>.
+    /// </summary>
+    internal static IObservable<UiControl?> ThreadsAppView(LayoutAreaHost host, RenderingContext _)
+        => Observable.Return<UiControl?>(BuildThreadsApp(OwnerIdOf(host.Hub.Address.ToString())));
+
+    /// <summary>
+    /// The Threads-app composition — pure (no hub) so the shape is unit-testable: a horizontal
+    /// stack of (rail, composer). The rail is the SAME open-threads query as the home band
+    /// (<c>-content.status:Done</c>, newest first) rendered as a single-column list whose rows
+    /// delegate to <see cref="ThreadRailItemArea"/>; closing a thread removes it reactively (the
+    /// query excludes Done). <c>flex-wrap</c> lets the composer drop below the rail on narrow
+    /// (mobile) widths.
+    /// </summary>
+    internal static UiControl BuildThreadsApp(string nodeOwnerId)
+    {
+        var rail = Controls.Stack
+            .WithStyle("flex: 0 1 320px; min-width: 240px; box-sizing: border-box;")
+            .WithView(BuildThreadsRail(nodeOwnerId));
+
+        var composer = Controls.Stack
+            .WithStyle("flex: 1 1 480px; min-width: 320px;")
+            .WithView(new ThreadChatControl().WithHideEmptyState(true));
+
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithStyle("gap: 16px; width: 100%; align-items: stretch; flex-wrap: wrap;")
+            .WithView(rail)
+            .WithView(composer);
+    }
+
+    /// <summary>The Threads-app rail list: the owner's open threads (never Done, newest first) as a
+    /// single-column list whose rows delegate to the thread hub's <see cref="ThreadRailItemArea"/>.
+    /// Flat render + MaxColumns(1), NOT <see cref="MeshSearchRenderMode.List"/>: the List renderer
+    /// draws its own icon·title·description rows and IGNORES <c>ItemArea</c>, so the ✕ overlay
+    /// would never render there — Flat is the ItemArea path the pinned grid already proves.</summary>
+    internal static MeshSearchControl BuildThreadsRail(string nodeOwnerId) =>
+        Controls.MeshSearch
+            .WithHiddenQuery(
+                $"namespace:{nodeOwnerId}/*_Thread nodeType:Thread -content.status:Done sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithMaxColumns(1)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemArea(ThreadRailItemArea)
+            .WithItemLimit(50)
+            .WithReactiveMode(true);
+
+    /// <summary>
     /// The owner's OPEN threads — their own partition only (<c>{owner}/*_Thread</c>, no cross-partition
     /// fan-out), excluding finished ones (<c>-content.status:Done</c>), newest first; "New thread"
     /// creates under the user node. Mirrors what used to be the catalog's first tab, promoted to its own
@@ -619,19 +710,20 @@ public static class UserActivityLayoutAreas
     // Neither spans a subtree, so no deep `…/Introduction/Exercise/…` nodes leak in.
     /// <summary>Builds the two-query first-level UNION for a given sort suffix (newline-joined).
     /// The root leg excludes User nodes: the viewer's OWN home root has namespace "" and would
-    /// otherwise list itself on its own home page.</summary>
-    private static string FirstLevelUnion(string ownerId, string sortSuffix) =>
-        $"namespace: is:main context:search -nodeType:User {sortSuffix}\n" +
-        $"namespace:{ownerId} is:main context:search {sortSuffix}";
+    /// otherwise list itself on its own home page. <paramref name="exclusions"/> (leading-space
+    /// <c>-nodeType:…</c> clauses) applies to BOTH legs — the Spaces tab's dedup.</summary>
+    private static string FirstLevelUnion(string ownerId, string sortSuffix, string exclusions = "") =>
+        $"namespace: is:main context:search -nodeType:User{exclusions} {sortSuffix}\n" +
+        $"namespace:{ownerId} is:main context:search{exclusions} {sortSuffix}";
 
     /// <summary>The catalog query for a scope + sort suffix: the first-level union (partition roots + the
     /// user's home children), or a cross-partition SUBTREE query (everything the viewer can read at every
     /// depth) when <see cref="HomeConfig.Scope"/> selects <see cref="HomeCatalogScope.Subtree"/>. User
     /// nodes are excluded in both shapes — a home page never lists the user's own root.</summary>
-    private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix) =>
+    private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix, string exclusions = "") =>
         scope == HomeCatalogScope.Subtree
-            ? $"is:main context:search -nodeType:User {sortSuffix}"
-            : FirstLevelUnion(ownerId, sortSuffix);
+            ? $"is:main context:search -nodeType:User{exclusions} {sortSuffix}"
+            : FirstLevelUnion(ownerId, sortSuffix, exclusions);
 
     // The three user-selectable sort orders (the view-options "Sort by" dropdown). LAST ACCESSED:
     // source:accessed JOINs the user's UserActivity satellite and projects its timestamp into
@@ -639,44 +731,289 @@ public static class UserActivityLayoutAreas
     // still apply to accessed queries — the empty-namespace roots leg pushes `namespace = ''`
     // (the 2026-07-21 fix; previously the fan-out dropped it and the "list" became the user's
     // whole access history) and `namespace:X` never matches the node at path X. LAST MODIFIED /
-    // ALPHABETICAL are pure order-bys. Immutable constant lookup — enum · label · query suffix.
+    // ALPHABETICAL are pure order-bys. Immutable constant lookup — enum · label key · query suffix
+    // (labels resolve through the localization catalog; null locale = English, which is what the
+    // pure-builder unit tests exercise).
     private const string SortSuffixLastAccessed = "source:accessed sort:LastModified-desc";
     private const string SortSuffixLastModified = "sort:LastModified-desc";
     private const string SortSuffixAlphabetical = "sort:Name-asc";
-    private static readonly (HomeCatalogSort Sort, string Label, string Suffix)[] CatalogSorts =
+    private static readonly (HomeCatalogSort Sort, string LabelKey, string Suffix)[] CatalogSorts =
     {
-        (HomeCatalogSort.LastAccessed, "Last accessed", SortSuffixLastAccessed),
-        (HomeCatalogSort.LastModified, "Last modified", SortSuffixLastModified),
-        (HomeCatalogSort.Alphabetical, "Alphabetical", SortSuffixAlphabetical),
+        (HomeCatalogSort.LastAccessed, "home.sortLastAccessed", SortSuffixLastAccessed),
+        (HomeCatalogSort.LastModified, "home.sortLastModified", SortSuffixLastModified),
+        (HomeCatalogSort.Alphabetical, "home.sortAlphabetical", SortSuffixAlphabetical),
     };
 
     /// <summary>
-    /// The catalog region — ONE tab-less list, whose shape is DATA-DRIVEN by <paramref name="config"/>
-    /// (the admin-editable <c>Admin/HomeConfig</c> platform node; <c>null</c> ⇒
-    /// <see cref="HomeConfigNodeType.Defaults"/> = <b>FirstLevel + Flat + LastAccessed</b>). The config
-    /// drives the depth (first-level top-level entries vs the full subtree), the render (flat list vs
-    /// grouped-by-type sections), and the default sort — and a view-options "Sort by" control still lets
-    /// the user pick <b>Last accessed</b> / <b>Last modified</b> / <b>Alphabetical</b> at will. FIRST-LEVEL
-    /// shows only the partition roots (spaces, courses, plugins) the viewer can read plus their own
-    /// top-level home items — NOT the whole tree. This REPLACES the former Spaces / My Items / Last Read /
-    /// Last Edited tab row AND the data-driven extension tabs.
-    /// <para>The one thing a first-level query can't reach is a module in ANOTHER partition the caller was
-    /// specifically invited into (#385): those are resolved from the caller's own readable
-    /// <c>AccessAssignment</c> grants (<paramref name="sharedTargets"/>) and appended as an additive
-    /// "Shared with me" band, present ONLY when the caller actually has such grants.</para>
+    /// The home surface — a TABBED page (the phone-home model): <b>Shared with me</b> first (only
+    /// when the caller has cross-partition grants; last-accessed ranking), then <b>Pinned</b> (the
+    /// owner's content shortcuts, only when any), then <b>Apps</b> (the platform default apps ∪ the
+    /// owner's installed apps — every app EXACTLY ONCE), then <b>Spaces</b> (the catalog WITHOUT
+    /// store items, so nothing is listed twice). <see cref="HomeStyle.Catalog"/> switches back to
+    /// the legacy single-list <see cref="BuildCatalog"/>. Pure (no hub) so the shape is
+    /// unit-testable without standing up a hub.
+    /// </summary>
+    internal static UiControl BuildHome(
+        string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
+        IReadOnlyList<string>? installedApps = null, User? user = null, string? locale = null)
+    {
+        var cfg = config ?? HomeConfigNodeType.Defaults;
+        if (cfg.Style == HomeStyle.Catalog)
+            return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale);
+
+        var tabs = Controls.Tabs.WithSkin(skin => skin.WithWidth("100%"));
+        if (sharedTargets is { Count: > 0 })
+            tabs = tabs.WithView(BuildSharedWithMe(sharedTargets, locale),
+                skin => skin.WithLabel(LocalizationCatalog.Get("home.sharedWithMe", locale)));
+        var pinned = BuildPinnedItems(user, withTitle: false);
+        if (pinned is not null)
+            tabs = tabs.WithView(pinned,
+                skin => skin.WithLabel(LocalizationCatalog.Get("home.pinned", locale)));
+        tabs = tabs.WithView(BuildApps(nodeOwnerId, cfg, installedApps, locale),
+            skin => skin.WithLabel(LocalizationCatalog.Get("home.apps", locale)));
+        tabs = tabs.WithView(BuildSpaces(nodeOwnerId, cfg, locale),
+            skin => skin.WithLabel(LocalizationCatalog.Get("home.spaces", locale)));
+        return tabs;
+    }
+
+    /// <summary>
+    /// The "Shared with me" tab — modules in OTHER partitions the caller was specifically invited
+    /// into (#385), which a scope query can't reach. Default order = last accessed. Because
+    /// <c>source:accessed</c> is an INNER join on the caller's access log, that leg alone would
+    /// HIDE a share the caller never opened — the exact fresh-invitation case this tab exists for —
+    /// so the last-accessed option is a path-keyed UNION (newline-joined, deduped by the engine):
+    /// the accessed-ranked leg first, then the plain list as completeness fallback. Nothing is ever
+    /// hidden; the other sorts are single-leg.
+    /// </summary>
+    internal static UiControl BuildSharedWithMe(IReadOnlyList<string> sharedTargets, string? locale = null)
+    {
+        var pathList = string.Join("|", sharedTargets);
+        var baseQuery = $"path:{pathList} is:main";
+        string Query(HomeCatalogSort sort, string suffix) =>
+            sort == HomeCatalogSort.LastAccessed
+                ? $"{baseQuery} {suffix}\n{baseQuery} {SortSuffixLastModified}"
+                : $"{baseQuery} {suffix}";
+        var sortOptions = CatalogSorts
+            .OrderByDescending(s => s.Sort == HomeCatalogSort.LastAccessed)
+            .Select(s => new MeshSearchSortOption(
+                LocalizationCatalog.Get(s.LabelKey, locale), Query(s.Sort, s.Suffix)))
+            .ToArray();
+        return Controls.MeshSearch
+            .WithHiddenQuery(sortOptions[0].Query)
+            .WithSortOptions(sortOptions)
+            .WithShowSearchBox(false)
+            .WithViewOptions(true)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithItemLimit(50)
+            .WithMaxRows(6)
+            .WithReactiveMode(true);
+    }
+
+    /// <summary>
+    /// System-app declarations: a <see cref="HomeConfig.DefaultApps"/> entry starting with
+    /// <c>~/</c> is not a node path but an AREA on the viewer's own hub (<c>~/Chat</c> →
+    /// <c>/{owner}/Chat</c>), rendered as a fixed "dock" tile ahead of the node grid. The map
+    /// gives known areas their product name + icon; an unknown <c>~/X</c> falls back to the
+    /// segment name and the generic app icon. Labels here are deliberately GLOSSARY terms
+    /// (Thread/Threads stay English in every locale), so no localization key is involved.
+    /// Immutable constant lookup, never written at runtime.
+    /// </summary>
+    private static readonly ImmutableDictionary<string, (string Label, string Icon)> SystemAppTiles =
+        new Dictionary<string, (string Label, string Icon)>
+        {
+            ["~/" + ChatArea] = ("Threads", "/static/NodeTypeIcons/chat.svg"),
+        }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The Apps tab — one icon per app, each app EXACTLY ONCE: the platform's config-declared
+    /// default apps (<see cref="HomeConfig.DefaultApps"/> — e.g. <c>Store</c>, which replaces the
+    /// old hard-coded header entry, <c>Doc</c>, and the <c>~/Chat</c> Threads app) unioned with
+    /// the owner's installed-app records (<c>{owner}/_App</c>, written by the Store's install
+    /// flow), deduped. <c>~/</c>-prefixed entries render as fixed system tiles (a phone's dock)
+    /// ahead of the reactive node-card grid, whose icons' name/image resolve live from each node.
+    /// Default order alphabetical; the last-accessed option uses the same union-with-fallback
+    /// shape as <see cref="BuildSharedWithMe"/> so a never-opened app still shows.
+    /// </summary>
+    internal static UiControl BuildApps(
+        string nodeOwnerId, HomeConfig? config, IReadOnlyList<string>? installedApps, string? locale = null)
+    {
+        var cfg = config ?? HomeConfigNodeType.Defaults;
+        var entries = (cfg.DefaultApps ?? [])
+            .Concat(installedApps ?? [])
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.StartsWith("~/", StringComparison.Ordinal) ? p : p.Trim('/'))
+            .Where(p => p.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var systemAreas = entries.Where(p => p.StartsWith("~/", StringComparison.Ordinal)).ToList();
+        var paths = entries.Where(p => !p.StartsWith("~/", StringComparison.Ordinal)).ToList();
+        if (systemAreas.Count == 0 && paths.Count == 0)
+            return Controls.Markdown(LocalizationCatalog.Get("home.noApps", locale));
+
+        UiControl? dock = null;
+        if (systemAreas.Count > 0)
+        {
+            var tiles = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithWidth("100%")
+                .WithStyle("gap: 20px; width: 100%; flex-wrap: wrap;");
+            foreach (var area in systemAreas)
+            {
+                var tile = BuildSystemAppTile(nodeOwnerId, area);
+                if (tile is null)
+                    continue;
+                tiles = tiles.WithView(Controls.Stack
+                    .WithStyle("flex: 0 1 240px; min-width: 200px;")
+                    .WithView(tile));
+            }
+            dock = tiles;
+        }
+
+        if (paths.Count == 0)
+            return dock ?? Controls.Markdown(LocalizationCatalog.Get("home.noApps", locale));
+
+        var baseQuery = BuildAppsBaseQuery(paths);
+        string Query(HomeCatalogSort sort, string suffix) =>
+            sort == HomeCatalogSort.LastAccessed
+                ? $"{baseQuery} {suffix}\n{baseQuery} {SortSuffixAlphabetical}"
+                : $"{baseQuery} {suffix}";
+        var sortOptions = CatalogSorts
+            .OrderByDescending(s => s.Sort == HomeCatalogSort.Alphabetical)
+            .Select(s => new MeshSearchSortOption(
+                LocalizationCatalog.Get(s.LabelKey, locale), Query(s.Sort, s.Suffix)))
+            .ToArray();
+        var grid = Controls.MeshSearch
+            .WithHiddenQuery(sortOptions[0].Query)
+            .WithSortOptions(sortOptions)
+            .WithShowSearchBox(false)
+            .WithViewOptions(true)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithGridSpacing(20)
+            .WithItemLimit(48)
+            .WithMaxRows(4)
+            .WithReactiveMode(true);
+
+        if (dock is null)
+            return grid;
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 20px; width: 100%;")
+            .WithView(dock)
+            .WithView(grid);
+    }
+
+    /// <summary>Pure query core of the Apps grid, exposed for tests.</summary>
+    internal static string BuildAppsBaseQuery(IReadOnlyList<string> paths) =>
+        $"path:({string.Join(" OR ", paths)})";
+
+    /// <summary>
+    /// One system-app "dock" tile for a <c>~/</c> entry (<see cref="SystemAppTiles"/>): a static
+    /// card whose identity is an AREA on the viewer's own hub, not a node — no hub resolves it, so
+    /// the title/icon are baked here and the click navigates to <c>/{owner}/{area}</c>. Returns
+    /// null for a malformed entry (<c>~/</c> with no segment).
+    /// </summary>
+    internal static MeshNodeCardControl? BuildSystemAppTile(string nodeOwnerId, string entry)
+    {
+        if (!entry.StartsWith("~/", StringComparison.Ordinal))
+            return null;
+        var segment = entry[2..].Trim('/');
+        if (segment.Length == 0)
+            return null;
+        // Look up by the NORMALIZED key, not the raw entry: a config value like "~/Chat/" must
+        // still resolve the known Threads tile instead of silently falling back to the generic
+        // icon/label (Copilot review, PR #1993).
+        var (label, icon) = SystemAppTiles.TryGetValue("~/" + segment, out var known)
+            ? known
+            : (segment, "/static/NodeTypeIcons/puzzlepiece.svg");
+        return new MeshNodeCardControl($"{nodeOwnerId}/{segment}", Title: label, ImageUrl: icon);
+    }
+
+    /// <summary>Dedup for the Spaces tab: anything living in the Store (and therefore representable
+    /// as an installed app — plugin covers, the store root) is EXCLUDED, so an app appears exactly
+    /// once, on the Apps tab. Only non-redundant items survive: the user's own spaces, shared
+    /// workspaces, and their top-level home items.</summary>
+    private const string SpacesDedupExclusions = " -nodeType:Store/Plugin -nodeType:Store/Catalog";
+
+    /// <summary>The Spaces tab — the catalog list WITHOUT store items
+    /// (<see cref="SpacesDedupExclusions"/>) and WITHOUT an embedded search box: every client
+    /// already carries a global search in its chrome, and doubling it inside the tab is exactly the
+    /// two-search-bars problem on the mobile clients.</summary>
+    internal static UiControl BuildSpaces(string nodeOwnerId, HomeConfig? config = null, string? locale = null)
+        => BuildCatalogList(nodeOwnerId, config ?? HomeConfigNodeType.Defaults, SpacesDedupExclusions, locale)
+            .WithShowSearchBox(false);
+
+    /// <summary>
+    /// The LEGACY catalog region (<see cref="HomeStyle.Catalog"/>) — ONE tab-less list, whose shape
+    /// is DATA-DRIVEN by <paramref name="config"/> (the admin-editable <c>Admin/HomeConfig</c>
+    /// platform node; <c>null</c> ⇒ <see cref="HomeConfigNodeType.Defaults"/>). The config drives
+    /// the depth (first-level top-level entries vs the full subtree), the render (flat list vs
+    /// grouped-by-type sections), and the default sort — and a view-options "Sort by" control still
+    /// lets the user pick <b>Last accessed</b> / <b>Last modified</b> / <b>Alphabetical</b> at will.
+    /// <para>The one thing a first-level query can't reach is a module in ANOTHER partition the
+    /// caller was specifically invited into (#385): those are resolved from the caller's own
+    /// readable <c>AccessAssignment</c> grants (<paramref name="sharedTargets"/>) and appended as an
+    /// additive "Shared with me" band, present ONLY when the caller actually has such grants.</para>
     /// <para>Pure (no hub) so the catalog shape is unit-testable without standing up a hub.</para>
     /// </summary>
     internal static UiControl BuildCatalog(
-        string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null)
+        string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
+        string? locale = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
+        var everything = BuildCatalogList(nodeOwnerId, cfg, exclusions: "", locale);
 
-        // Sort options, DEFAULT first (so the dropdown's default selection == HiddenQuery). Each option
-        // carries its full catalog query (first-level union or subtree, per cfg.Scope); the query itself
-        // carries the sort/source, so no client-side WithSortBy (that would override the query order).
+        // No cross-partition invitations → the catalog IS the single list.
+        if (sharedTargets is not { Count: > 0 })
+            return everything;
+
+        // Additive #385 band: modules in OTHER partitions the caller was invited into, which the broad
+        // is:main query can't reach (readable by URL but invisible to a scope search). The `path:a|b|c`
+        // alternation resolves each target node, access-filtered by the mesh.
+        var pathList = string.Join("|", sharedTargets);
+        var shared = Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.sharedWithMe", locale))
+            .WithHiddenQuery($"path:{pathList} is:main sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithItemLimit(50)
+            .WithMaxRows(3)
+            .WithReactiveMode(true);
+
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; width: 100%;")
+            .WithView(everything)
+            .WithView(shared);
+    }
+
+    /// <summary>
+    /// The shared catalog-list core (the "everything" search) used by both the legacy
+    /// <see cref="BuildCatalog"/> (no exclusions) and the Spaces tab
+    /// (<see cref="SpacesDedupExclusions"/>). Sort options DEFAULT first (so the dropdown's default
+    /// selection == HiddenQuery); each option carries its full catalog query (first-level union or
+    /// subtree, per <see cref="HomeConfig.Scope"/>) — the query itself carries the sort/source, so
+    /// no client-side WithSortBy (that would override the query order).
+    /// </summary>
+    private static MeshSearchControl BuildCatalogList(
+        string nodeOwnerId, HomeConfig cfg, string exclusions, string? locale)
+    {
         var sortOptions = CatalogSorts
             .OrderByDescending(s => s.Sort == cfg.DefaultSort)
-            .Select(s => new MeshSearchSortOption(s.Label, CatalogQuery(cfg.Scope, nodeOwnerId, s.Suffix)))
+            .Select(s => new MeshSearchSortOption(
+                LocalizationCatalog.Get(s.LabelKey, locale),
+                CatalogQuery(cfg.Scope, nodeOwnerId, s.Suffix, exclusions)))
             .ToArray();
 
         var everything = Controls.MeshSearch
@@ -698,32 +1035,7 @@ public static class UserActivityLayoutAreas
         if (cfg.Render == HomeCatalogRender.Grouped)
             everything = everything.WithSectionCounts(true).WithCollapsibleSections(true);
 
-        // No cross-partition invitations → the catalog IS the single list.
-        if (sharedTargets is not { Count: > 0 })
-            return everything;
-
-        // Additive #385 band: modules in OTHER partitions the caller was invited into, which the broad
-        // is:main query can't reach (readable by URL but invisible to a scope search). The `path:a|b|c`
-        // alternation resolves each target node, access-filtered by the mesh.
-        var pathList = string.Join("|", sharedTargets);
-        var shared = Controls.MeshSearch
-            .WithTitle(SharedWithMeTitle)
-            .WithHiddenQuery($"path:{pathList} is:main sort:LastModified-desc")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(4)
-            .WithItemLimit(50)
-            .WithMaxRows(3)
-            .WithReactiveMode(true);
-
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("gap: 24px; width: 100%;")
-            .WithView(everything)
-            .WithView(shared);
+        return everything;
     }
 
     // ── Public profile + owner-editable showcase ───────────────────────────────────────────────────
@@ -1107,15 +1419,14 @@ public static class UserActivityLayoutAreas
     /// typed↔JsonElement frames, and <c>as</c> → null on JsonElement frames flips the band in/out,
     /// the render storm that vanished the home on chat launch).</para>
     /// </summary>
-    internal static UiControl? BuildPinnedItems(User? user)
+    internal static UiControl? BuildPinnedItems(User? user, bool withTitle = true)
     {
         var pinnedPaths = user?.PinnedPaths;
         if (pinnedPaths == null || pinnedPaths.Count == 0)
             return null;
 
         var pathsClause = string.Join(" OR ", pinnedPaths);
-        return Controls.MeshSearch
-            .WithTitle("Pinned")
+        var search = Controls.MeshSearch
             .WithHiddenQuery($"path:({pathsClause}) sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(false)
@@ -1128,6 +1439,7 @@ public static class UserActivityLayoutAreas
             .WithItemLimit(24)
             .WithMaxRows(2)
             .WithReactiveMode(true);
+        return withTitle ? search.WithTitle("Pinned") : search;
     }
 
 }

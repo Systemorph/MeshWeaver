@@ -610,6 +610,78 @@ public class IoPoolTest
             "the drain cancels before the permit is granted, so leg B's source must never be subscribed");
     }
 
+    /// <summary>
+    /// 🚨 A leg the drain cancels AFTER its subscribe completed must ALSO terminate — issue #1789,
+    /// the other half of <see cref="Drain_terminates_a_SubscribeThroughPool_leg_it_cancels"/>.
+    ///
+    /// <para>That test covers a leg cancelled BEFORE or DURING <c>source.Subscribe(observer)</c>:
+    /// its gate wait throws <see cref="OperationCanceledException"/> and the error arm turns it into
+    /// <c>OnCompleted</c>. A leg whose subscribe already RETURNED never reaches that arm. It is torn
+    /// down by the drain's cancellation registration, which disposed the inner subscription and
+    /// nothing else — and <b>disposing a subscription emits nothing</b>. No <c>OnCompleted</c>, no
+    /// <c>OnError</c>, so the observable terminated in neither direction and every
+    /// <c>.Finally(...)</c> hung off it never ran.</para>
+    ///
+    /// <para>That bookkeeping is <c>RoutingGrain.Dispatch</c>'s in-flight decrement and
+    /// <c>OrderedRouteDispatcher.DrainNext</c>'s FIFO advance. Leaking it strands a destination's
+    /// queue permanently and makes the <c>cleared after</c> line structurally impossible to emit
+    /// (it requires in-flight to fall back below half the saturation threshold) — which is exactly
+    /// what prod showed on 2026-08-17: two saturation Criticals ten minutes apart at identical
+    /// depth, both deep inside the termination grace period, with no clear line in the window.</para>
+    ///
+    /// <para>Deterministic and bounded: the source's subscribe returns immediately, and the test
+    /// waits for the pool's permit to be released before draining — so the leg is provably PAST the
+    /// window the sibling test covers. Disposal of the inner subscription is asserted first, so a
+    /// failure on termination cannot be confused with a drain that never ran.</para>
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task Drain_terminates_a_SubscribeThroughPool_leg_that_already_subscribed()
+    {
+        using var pool = new IoPool(2);
+        var subscribed = new ManualResetEventSlim();
+        var innerDisposed = new ManualResetEventSlim();
+        var terminated = new ManualResetEventSlim();
+
+        // A LONG-LIVED source, the shape every real SubscribeThroughPool caller has: the subscribe
+        // returns promptly (releasing the pool permit) and the subscription then stays open,
+        // emitting on its own schedule. Nothing here emits — the leg is simply alive when the pool
+        // drains, which is what host shutdown does to every live route.
+        var source = Observable.Create<int>(obs =>
+        {
+            subscribed.Set();
+            return System.Reactive.Disposables.Disposable.Create(innerDisposed.Set);
+        });
+
+        using var sub = pool.SubscribeThroughPool(source)
+            .Finally(terminated.Set)
+            .Subscribe(_ => { }, _ => { });
+
+        Assert.True(subscribed.Wait(Timeout5),
+            "the source must have been subscribed before the drain — this test is about the window "
+            + "AFTER the subscribe completed");
+        Assert.True(SpinWait.SpinUntil(() => pool.CurrentInFlight == 0, Timeout5),
+            "the setup leaf must have released its permit, so the leg is provably past the subscribe "
+            + "window the sibling test covers (otherwise this would re-test that one)");
+
+        var drainDone = Task.Run(pool.Drain, TestContext.Current.CancellationToken);
+
+        Assert.True(innerDisposed.Wait(Timeout5),
+            "the drain must tear the live inner subscription down — asserted FIRST so a failure on "
+            + "termination below is attributable to the missing terminal, not to a drain that never ran");
+        // 🚨 THE REGRESSION GUARD. Before the fix this never fired: the drain disposed the inner
+        // subscription and emitted nothing, so `.Finally` never ran and this waited out its budget.
+        Assert.True(terminated.Wait(Timeout5),
+            "a leg the drain tears down AFTER its subscribe completed MUST terminate (OnCompleted) so "
+            + "its .Finally runs — that callback releases RoutingGrain's in-flight route slot and "
+            + "advances OrderedRouteDispatcher's per-destination FIFO; disposing the subscription "
+            + "emits nothing, so without an explicit terminal both leak permanently (#1789)");
+
+        var residual = await drainDone.WaitAsync(Timeout10, TestContext.Current.CancellationToken);
+        residual.Should().Be(0,
+            "a leg past its subscribe holds no gate permit, so terminating it must not change what "
+            + "Drain joins or reports");
+    }
+
     [Fact]
     public void Unbounded_fallback_runs_the_leaf_on_the_threadpool()
     {

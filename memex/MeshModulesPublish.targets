@@ -71,7 +71,6 @@
     <!-- Social: flipped once the portal stopped compiling against it for the ApiCredential
          type (the module registers that itself now). Its closure ships here. -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
     <!-- Import + its PRIVATE closure: the SIX MeshWeaver.DataSetReader* projects (the base, Csv,
          Excel, Excel.BinaryFormat, Excel.OpenXmlFormat, Excel.Utils) and MeshWeaver.DataStructures
          beneath them — nothing outside their own test project references any of them.
@@ -80,7 +79,6 @@
          carries that surface instead (InstallAssemblies -> InstalledModuleAssembly ->
          CompileReferences.ComposeWithModules). NOT a dependency win: ClosedXML / OpenXml / CsvHelper
          stay in the image via MeshWeaver.Blazor + MeshWeaver.ContentCollections and prune out here. -->
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
 
     <!-- Alternative storage backends. These were BORN flipped: no host has ever referenced them
          (only their own test projects do), and both attributes state the intent verbatim —
