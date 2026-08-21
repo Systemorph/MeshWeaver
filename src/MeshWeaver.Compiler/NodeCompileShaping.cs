@@ -210,12 +210,29 @@ public static class NodeCompileShaping
 
     /// <summary>
     /// The emit path's source-set fold: dedup by path (case-insensitive), keep only
-    /// non-executable Code nodes with non-blank code, in the order the snapshot delivered them.
+    /// non-executable Code nodes with non-blank code, ORDERED BY PATH (ordinal).
     /// Executable scripts run via the kernel (ExecuteScriptRequest), never folded into the parent
     /// NodeType's Roslyn unit — top-level statements would collide with class declarations from
     /// Source/ siblings; Test/ commonly mixes both shapes, and this filter lets them coexist.
     /// Returns the matched configurations together with the matched paths (activity-log
     /// material for the caller).
+    ///
+    /// <para>🚨 <b>The order is a function of the SOURCE SET, never of how it was delivered</b>
+    /// (#1707 slice 4). It used to be "the order the snapshot delivered them", and on the mesh path
+    /// that delivery is <c>ImmutableDictionary.Values</c> — hash-bucket order over string hashes
+    /// that .NET RANDOMISES PER PROCESS. The join order is part of the emitted bytes, so the mesh
+    /// compile emitted a different assembly for identical content on every process: not
+    /// reproducible against another producer, and not reproducible against ITSELF. That is why the
+    /// assembly store's digest-of-the-emitted-bytes could never dedupe, and it made the
+    /// generated-input CONTENT KEY move on every compile — an identity that invalidates everything
+    /// on every build, which is strictly worse than the proxy it replaces.</para>
+    ///
+    /// <para>Measured on <c>BakeEquivalenceTest</c> before the sort: the compiler-driven bake
+    /// produced <c>i3494e62e…</c> on three consecutive runs while the mesh-driven bake produced
+    /// <c>ic920384a…</c>, <c>iead1b585…</c>, <c>i70db762d…</c>. Ordinal path order is what the
+    /// tree bake already effectively had, it is stable across processes, hosts and architectures,
+    /// and C# does not care: top-level declarations in a concatenated unit are order-independent,
+    /// which is exactly what that test's type-and-member SURFACE comparison proves.</para>
     /// </summary>
     internal static (List<CodeConfiguration> Sources, List<string> MatchedPaths)
         CollectCompileSources(IEnumerable<MeshNode> matches, string nodePath, ILogger logger)
@@ -223,7 +240,7 @@ public static class NodeCompileShaping
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var acc = new List<CodeConfiguration>();
         var matchedPaths = new List<string>();
-        foreach (var n in matches)
+        foreach (var n in matches.OrderBy(n => n.Path, StringComparer.Ordinal))
         {
             if (string.IsNullOrEmpty(n.Path) || !seen.Add(n.Path))
                 continue;
