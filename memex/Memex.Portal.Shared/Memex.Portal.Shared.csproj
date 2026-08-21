@@ -10,19 +10,42 @@
   <ItemGroup>
     <!-- Core MeshWeaver -->
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Radzen\MeshWeaver.Blazor.Radzen.csproj" />
     <!-- MeshWeaver.Blazor.Analysis is deliberately NOT referenced (#1974): it ships via the
          modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
          Modules:Assemblies. Its static web assets reach the browser through the module
          static-asset provider (#1724 + the bundle-carried wwwroot), not through this
          reference's build-time static-web-assets graph. No portal code referenced its types —
          this was a ships-the-bits reference and nothing else. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.GoogleMaps\MeshWeaver.Blazor.GoogleMaps.csproj" />
+    <!-- MeshWeaver.Blazor.Radzen and .GoogleMaps are deliberately NOT referenced (#1974): with
+         these two the whole view-pack set ships via the modules/<Name>/ closure layout. Radzen
+         matters most here — dropping this reference is what stops the HOST serving
+         _content/Radzen.Blazor/, so the copy under the module's own wwwroot/_content/ answers the
+         theme stylesheet and Radzen.Blazor.js that RadzenViewBase self-loads on first render.
+         App.razor carries no pack tags for exactly that reason. -->
     <!-- MeshWeaver.OgCard is deliberately NOT referenced (#1644 step 2): it ships via the
          modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
          Modules:Assemblies -> OgCardModuleAttribute. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.OpenStreetMap\MeshWeaver.Blazor.OpenStreetMap.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.AppleMaps\MeshWeaver.Blazor.AppleMaps.csproj" />
+    <!-- MeshWeaver.Blazor.OpenStreetMap and .AppleMaps are deliberately NOT referenced (#1974):
+         they ship via the modules/<Name>/ closure layout in MeshModulesPublish.targets. Both were
+         ships-the-bits references that shipped bits nothing could reach — no portal code names
+         their types AND neither DLL is listed under Modules:Assemblies, so until now they rode
+         the app closure permanently inert. On the closure lane the bits sit in modules/ and a
+         deployment turns each on by listing its DLL, which is what that switch is for. Their
+         collocated JS and OpenStreetMap's vendored wwwroot/leaflet/ are already addressed as
+         ./_content/<Pack>/... — exactly what the module static-asset provider serves (#1724). -->
+    <!-- 🚨 DIRECT ON PURPOSE, and it must not be "tidied away" as unused. MeshWeaver.Maps is a
+         CANONICAL CONTENT-SURFACE assembly (FrameworkBuildIdentity.ContentSurfaceAssemblies), and
+         until the view packs flipped (#1974) this host reached it only through them — every map
+         pack references it. Losing it from the COMPILE closure does not fail a build: the surface
+         manifest is written from @(ReferencePathWithRefAssemblies), so the line simply vanishes,
+         this host hashes Maps as 'absent' while mw-plugin-test still hashes a real surface id, and
+         the two hosts of ONE commit resolve DIFFERENT framework identities. Every bake then lands
+         at an address no portal reads — publication green, pods compiling everything at boot, every
+         cover serving a compilation-fallback card. That is the 2026-08-17 outage (#1814); it
+         recurred here the moment the map packs left, and
+         FrameworkBuildIdentityTest.CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost
+         is what caught it. No portal code uses these types — the reference IS the point. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Graph\MeshWeaver.Blazor.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
