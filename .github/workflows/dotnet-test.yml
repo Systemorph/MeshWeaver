@@ -343,6 +343,20 @@ jobs:
           exit 1
         fi
         echo "All required CI inputs are present."
+    # ── The CI-logic scripts that decide what CI DOES NOT DO ──────────────────────────────────
+    # Both of these narrow work, and narrowing is the shape that produces a silent under-build:
+    # bake-scope.sh decides which modules a node repo's bake rebuilds, and carry-forward-bundles.sh
+    # is the only thing stopping a narrowed bake from replacing the `_complete` sentinel with a
+    # SHORTER one — which no portal would report, it would just quietly recompile at boot again.
+    # Neither is reachable from any .NET test, and they run only on a satellite repo's main, so
+    # without this step their first execution is in production. Seconds; no secrets; no image.
+    # Both are proven non-vacuous by mutation: remove any single fallback and the step goes red.
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+    - name: "The bake-scope decision can say 'full' (self-test)"
+      run: .github/scripts/bake-scope.sh --self-test
+    - name: "The bundle carry-forward refuses to shrink a publication (self-test)"
+      run: .github/scripts/carry-forward-bundles.sh --self-test
 
   # ───────────────────────────── BUILD ─────────────────────────────
   # Compile the whole solution exactly once and package every TEST project's

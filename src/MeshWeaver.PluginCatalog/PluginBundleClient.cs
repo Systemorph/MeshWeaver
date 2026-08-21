@@ -311,7 +311,13 @@ public sealed class PluginBundleClient
                         manifest!.FrameworkMvid,
                         packagePath,
                         version,
-                        manifest.Module?.MinMeshVersion)
+                        manifest.Module?.MinMeshVersion,
+                        // A view pack's wwwroot rides the bundle (#1724's provider serves it from
+                        // the module folder); without this the pack lands unstyled and its
+                        // collocated JS 404s.
+                        BundleReader.ReadModuleAssets(bundleBytes) is { Count: > 0 } assets
+                            ? [.. assets.Select(a => (a.RelativePath, a.Bytes))]
+                            : null)
                     .Select(_ => files.Count)
                     .Do(count => _logger?.LogInformation(
                         "Module '{Module}' of {Plugin} landed ({Count} file(s), version {Version}) "

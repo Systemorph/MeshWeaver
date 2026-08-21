@@ -70,6 +70,18 @@ public static class NuGetPackageWriter
     public static string ModuleEntryPathFor(string fileName) =>
         $"{ModuleFolder}/{fileName}";
 
+    /// <summary>
+    /// Where a module's STATIC WEB ASSETS ride. Separate from <see cref="ModuleFolder"/> because
+    /// module files are flat while assets keep their relative path: a view pack's
+    /// <c>wwwroot/leaflet/leaflet.js</c> has to land under the same relative path or the URLs its
+    /// own components request (<c>_content/&lt;pack&gt;/…</c>) resolve to nothing.
+    /// </summary>
+    public const string ModuleAssetFolder = "meshweaver/moduleassets";
+
+    /// <summary>The bundle entry path for one static asset, by its module-relative path.</summary>
+    public static string ModuleAssetEntryPathFor(string relativePath) =>
+        $"{ModuleAssetFolder}/{relativePath}";
+
     /// <summary>One file destined for the package.</summary>
     /// <param name="PathInPackage">Full entry path, e.g. <c>meshweaver/content/index.json</c>.</param>
     /// <param name="OpenRead">Opens the bytes. A factory rather than a byte[] so a large assembly
