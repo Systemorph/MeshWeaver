@@ -112,11 +112,19 @@ on real front matter rather than on fenced examples in prose:
 | 396 | `Edu/Exercise` | **`MarkdownContent`** | ✅ native |
 | 232 | `Publish/Slide` | `SlideContent` | ✅ `Content` — this IS the case to convert |
 | 79 | *(no front matter)* | `MarkdownContent` | ✅ native |
-| 38 | `Agent` / `Skill` | *a different parser* (`AgentFileParser`) | n/a |
+| 27 | `Agent` | *a different parser* — `AgentFileParser` claims `nodeType: Agent` and nothing else | n/a |
 | **12** | **`Edu/Module`** | **`ModuleContent` — `Summary` only** | ❌ **no `content` member** |
+| **11** | **`Skill`** | **`SkillDefinition` — its body member is `Instructions`** | ❌ **no `content` member** |
 
-So the whole risk surface for condition 2 is **twelve files**, not an unbounded set: the two big
-non-native types turn out to declare the native `MarkdownContent` anyway.
+So the whole risk surface for condition 2 is **twenty-three files**, not an unbounded set: the two
+big non-native types turn out to declare the native `MarkdownContent` anyway.
+
+⚠️ Note `Skill` is NOT claimed by `AgentFileParser` — that parser returns null for anything whose
+front matter is not `nodeType: Agent` — so a markdown-authored skill goes through
+`MarkdownFileParser` like any other document. Its content type's body member is `Instructions`,
+which puts it in the same bucket as `Edu/Module` for this analysis. (Whether a `.md`-authored skill
+round-trips correctly TODAY is a separate question this note does not answer; most skills in the
+repos are authored as `.json`.)
 
 1. **A miss must not lose the extra frontmatter.** A cold-boot import (bake, first git-sync) can
    run before the type registers. Falling back to `MarkdownContent` drops `Notes`/`Background`
@@ -132,8 +140,9 @@ non-native types turn out to declare the native `MarkdownContent` anyway.
    `content` member loses the markdown for every node of that type. This one is closable **by
    construction** rather than by audit: use the resolved type only when it can actually carry the
    body (a reflection check for the member), else keep the native shape. `Edu/Module`'s twelve
-   files then land exactly as they do today — which is also correct for that type, whose page is
-   H1 + Summary + `Theory/` children and never renders a body of its own.
+   files — and `Skill`'s eleven — then land exactly as they do today. For `Edu/Module` that is also
+   the correct outcome on its own terms: its page is H1 + Summary + `Theory/` children and never
+   renders a body.
 
 Sequencing: export phase 2 is **done**; phase 3 (the import split) still owns the deletion of
 `MarkdownFileParser.IsSlideNodeType`. The suffix-aware `Matches` predicates on
