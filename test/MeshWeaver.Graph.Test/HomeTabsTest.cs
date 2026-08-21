@@ -82,10 +82,27 @@ public class HomeTabsTest
     [Fact]
     public void Apps_ShippedDefaults_ComposeDockPlusGrid()
     {
-        // Shipped DefaultApps include the ~/Chat Threads tile → a dock row above the node grid.
+        // Shipped DefaultApps include the ~/Chat Threads tile → dock tiles INLINE with the node
+        // grid, one horizontal band.
         UserActivityLayoutAreas.BuildApps(NodePath, new HomeConfig(), installedApps: null)
             .Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(2, "system-tile dock + the node-card grid");
+            .Areas.Should().HaveCount(2, "system-tile dock + the node-card grid, inline");
+    }
+
+    [Fact]
+    public void Apps_IsOneCompactBand_CappedAt24()
+    {
+        // The Apps tab is a phone-dock band, not a grid of full-size cards: a 140px cell floor
+        // (below the control's 200px default) so a typical app set fits ONE row, and a hard
+        // 24-item cap — MaxRows(1) × MaxColumns(24) caps the visible count, ItemLimit the query.
+        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
+        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
+            .Should().BeOfType<MeshSearchControl>().Subject;
+
+        apps.MinItemWidth.Should().Be(140);
+        apps.Sections!.ItemLimit.Should().Be(24);
+        apps.Sections!.MaxRows.Should().Be(1);
+        apps.MaxColumns.Should().Be(24);
     }
 
     [Theory]

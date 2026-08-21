@@ -863,6 +863,10 @@ public static class UserActivityLayoutAreas
     /// ahead of the reactive node-card grid, whose icons' name/image resolve live from each node.
     /// Default order alphabetical; the last-accessed option uses the same union-with-fallback
     /// shape as <see cref="BuildSharedWithMe"/> so a never-opened app still shows.
+    /// <para>Rendered as ONE COMPACT BAND, not a grid of full-size cards: dock tiles and the node
+    /// grid sit inline (horizontal, wrapping) with a 140px cell floor
+    /// (<see cref="MeshSearchControl.MinItemWidth"/>), so a typical app set fits a single row —
+    /// and the tab is capped at 24 items (the phone-home scale, per design).</para>
     /// </summary>
     internal static UiControl BuildApps(
         string nodeOwnerId, HomeConfig? config, IReadOnlyList<string>? installedApps,
@@ -891,17 +895,18 @@ public static class UserActivityLayoutAreas
         UiControl? dock = null;
         if (systemAreas.Count > 0)
         {
+            // Compact dock tiles sized to match the grid's 140px cell floor, so system and node
+            // tiles read as ONE row.
             var tiles = Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
-                .WithWidth("100%")
-                .WithStyle("gap: 20px; width: 100%; flex-wrap: wrap;");
+                .WithStyle("gap: 12px; flex-wrap: wrap; flex: 0 1 auto;");
             foreach (var area in systemAreas)
             {
                 var tile = BuildSystemAppTile(nodeOwnerId, area);
                 if (tile is null)
                     continue;
                 tiles = tiles.WithView(Controls.Stack
-                    .WithStyle("flex: 0 1 240px; min-width: 200px;")
+                    .WithStyle("flex: 0 1 170px; min-width: 140px;")
                     .WithView(tile));
             }
             dock = tiles;
@@ -929,19 +934,28 @@ public static class UserActivityLayoutAreas
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
-            .WithMaxColumns(4)
-            .WithGridSpacing(20)
-            .WithItemLimit(48)
-            .WithMaxRows(4)
+            // ONE compact band: 140px cell floor (instead of the default 200) so a typical app set
+            // fits a single row, and a hard 24-item cap — the phone-home scale. MaxRows(1) ×
+            // MaxColumns(24) is the visible-count cap; ItemLimit caps the query itself.
+            .WithMaxColumns(24)
+            .WithMinItemWidth(140)
+            .WithGridSpacing(12)
+            .WithItemLimit(24)
+            .WithMaxRows(1)
             .WithReactiveMode(true);
 
         if (dock is null)
             return grid;
+        // Dock tiles INLINE with the grid — one continuous row (wrapping only when it must),
+        // never a dock row stacked above a card grid.
         return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
-            .WithStyle("gap: 20px; width: 100%;")
+            .WithStyle("gap: 12px; width: 100%; flex-wrap: wrap; align-items: flex-start;")
             .WithView(dock)
-            .WithView(grid);
+            .WithView(Controls.Stack
+                .WithStyle("flex: 1 1 420px; min-width: 320px;")
+                .WithView(grid));
     }
 
     /// <summary>Pure query core of the Apps grid, exposed for tests.</summary>
