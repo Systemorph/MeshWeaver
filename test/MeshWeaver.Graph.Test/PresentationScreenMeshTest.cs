@@ -190,6 +190,20 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
     }
 
     [Fact(Timeout = 60000)]
+    public async Task AViewerWithNoProfileYetStillGetsAScreen()
+    {
+        // 🚨 The screen is now joined into the NODE MENU's reactive stream, so a viewer whose User
+        // node does not exist yet must still resolve — promptly, and to the neutral screen. If this
+        // ever stopped emitting, the menu would simply never render, with nothing in any log to say
+        // why: a CombineLatest stalls silently when one leg never produces a value.
+        var screen = await ScreenOf("nobody-here")
+            .FirstAsync().Timeout(20.Seconds());
+
+        screen.Active.Should().BeFalse();
+        screen.Hides(Space).Should().BeFalse();
+    }
+
+    [Fact(Timeout = 60000)]
     public async Task AnAnonymousViewerHasNoScreen_AndCostsNoProfileRead()
     {
         var anonymous = await PresentationScreenExtensions
