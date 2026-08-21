@@ -54,8 +54,6 @@
          the module static-asset provider (path-convention mapping + fingerprint/precompressed
          endpoint variants; see UiExtensibility.md "Razor assets from a runtime-loaded
          assembly"), not just this list. -->
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <!-- Service modules NOT flippable for compile-time coupling (reasons: PR #1681) — Speech
          (ISpeechTranscriber lives in the module; no contract split), Social (ApiCredentialNodeType
          compiles against PlatformCredential; registration deliberately host-side; RELOCATING to
@@ -85,6 +83,17 @@
          shape the module static-asset provider serves out of modules/<Name>/wwwroot (#1724). -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.AppleMaps/MeshWeaver.Blazor.AppleMaps.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.OpenStreetMap/MeshWeaver.Blazor.OpenStreetMap.csproj" />
+    <!-- The last two packs off the thin lane, which completes the set (#1974). Both were already
+         modules — listed under Modules:Assemblies and activated there — so this moves only where
+         their bits ship, not whether they run. GoogleMaps carries scoped CSS plus collocated JS.
+         Radzen is the one that needed the provider's dependency mount rather than its own: it
+         self-loads _content/Radzen.Blazor/... from RadzenViewBase and its two views link a theme
+         stylesheet from the same namespace — PACKAGE assets, not the pack's own. Dropping the
+         portal's reference means the host stops serving that namespace, so the copy under the
+         module's wwwroot/_content/ becomes the one that answers, which is exactly the case the
+         same-identity prune is written around. -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <!-- Import + its PRIVATE closure: the SIX MeshWeaver.DataSetReader* projects (the base, Csv,
          Excel, Excel.BinaryFormat, Excel.OpenXmlFormat, Excel.Utils) and MeshWeaver.DataStructures
