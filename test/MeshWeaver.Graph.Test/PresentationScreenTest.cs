@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -404,9 +405,16 @@ public class PresentationScreenTest
                      PresentationScreen.For(true, []),
                  })
         {
-            var painted = ChatCompletionOrchestrator
-                .Screened(batches.ToObservable(), screen)
-                .ToEnumerable().ToArray();
+            // 🚨 Subscribe + collect, NEVER .ToEnumerable(). That bridge BLOCKS the calling thread
+            // on a semaphore until the source produces, so if the source ever schedules its own
+            // work onto that same thread the test self-deadlocks — and xUnit's methodTimeout
+            // cannot abort a thread parked in a native wait, so the whole HOST wedges with no
+            // failing test to point at. That is how this file once cost a CI shard 8 minutes and
+            // an exit=124. ImmediateScheduler makes delivery synchronous and scheduler-independent.
+            var painted = new List<CompletionBatch>();
+            using (ChatCompletionOrchestrator
+                       .Screened(batches.ToObservable(ImmediateScheduler.Instance), screen)
+                       .Subscribe(painted.Add)) { }
 
             painted.Select(b => b.Category).Should().Equal("Nearby", "Partitions");
             painted[1].Items.Should().BeEmpty(
@@ -425,9 +433,11 @@ public class PresentationScreenTest
             new CompletionBatch("Elsewhere", 10, [new AutocompleteItem("NW", "@Northwind/", Path: "Northwind")]),
         };
 
-        var painted = ChatCompletionOrchestrator
-            .Screened(batches.ToObservable(), Active("Acme"))
-            .ToEnumerable().ToArray();
+        // Subscribe + collect, never the blocking .ToEnumerable() bridge — see the note above.
+        var painted = new List<CompletionBatch>();
+        using (ChatCompletionOrchestrator
+                   .Screened(batches.ToObservable(ImmediateScheduler.Instance), Active("Acme"))
+                   .Subscribe(painted.Add)) { }
 
         painted.Select(b => b.Category).Should().Equal("Elsewhere");
     }

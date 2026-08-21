@@ -474,6 +474,10 @@ public static class UserActivityLayoutAreas
         // The VIEWER's presentation screen (#1803), resolved ONCE here on the render turn and
         // combined in as a value — never re-read from an ambient context inside the projection
         // below, which would resolve to "nobody" (and therefore hide nothing) on a later emission.
+        // 🚨 NOT .Seeded() — deliberately. This is a tile surface: painting a pinned card before
+        // the screen is known is the flash the mode exists to prevent, so it GATES. The node menu
+        // seeds instead because there the screen only picks a label. See Doc/GUI/PresentationMode
+        // rule 2 before "fixing" this to match the menu.
         var screen = host.ViewerScreen();
         return syncStream!.CombineLatest(screen,
             (change, viewerScreen) => BuildPinnedItems(change.Value.ContentAs<User>(options), screen: viewerScreen));
@@ -499,6 +503,10 @@ public static class UserActivityLayoutAreas
         var options = host.Hub.JsonSerializerOptions;
         var locale = host.ViewerLocale();
         // The viewer's presentation screen (#1803), resolved ONCE on the render turn.
+        // 🚨 NOT .Seeded() — deliberately. This is a tile surface: painting a pinned card before
+        // the screen is known is the flash the mode exists to prevent, so it GATES. The node menu
+        // seeds instead because there the screen only picks a label. See Doc/GUI/PresentationMode
+        // rule 2 before "fixing" this to match the menu.
         var screen = host.ViewerScreen();
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
