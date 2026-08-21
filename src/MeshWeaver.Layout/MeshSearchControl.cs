@@ -110,6 +110,14 @@ public record MeshSearchControl()
     public object? MaxColumns { get; init; }
 
     /// <summary>
+    /// Minimum width of one result cell in px (default 200). The card grid never shrinks a cell
+    /// below this, so lowering it is what makes a COMPACT, many-per-row tile band possible — the
+    /// home's Apps dock uses it to fit its icons on one row instead of four giant cards. Clients
+    /// that don't know the property keep the default cell size.
+    /// </summary>
+    public object? MinItemWidth { get; init; }
+
+    /// <summary>
     /// Whether to show the search box (default true).
     /// Set to false to just show results without search input.
     /// </summary>
@@ -261,6 +269,9 @@ public record MeshSearchControl()
     /// <summary>Returns a copy with <paramref name="columns"/> as the maximum grid column count.</summary>
     /// <param name="columns">Maximum number of grid columns; default 3.</param>
     public MeshSearchControl WithMaxColumns(int columns) => this with { MaxColumns = columns };
+
+    /// <summary>Sets the minimum width of one result cell in px (see <see cref="MinItemWidth"/>).</summary>
+    public MeshSearchControl WithMinItemWidth(int px) => this with { MinItemWidth = px };
     /// <summary>Returns a copy with the search-box visibility set to <paramref name="show"/>.</summary>
     /// <param name="show"><c>false</c> hides the search box, showing only results.</param>
     public MeshSearchControl WithShowSearchBox(bool show) => this with { ShowSearchBox = show };
