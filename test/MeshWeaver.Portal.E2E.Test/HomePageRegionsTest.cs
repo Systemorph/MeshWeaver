@@ -43,8 +43,10 @@ public class HomePageRegionsTest(PortalFixture fixture)
         // <fluent-tabs>, whose active panel holds a MeshSearch (<div class="mesh-search-container">).
         // The default e2e user has the onboarding-seeded pins and no shares, so the active first
         // tab is Pinned — a MeshSearch either way.
-        (await page.Locator("fluent-tabs").CountAsync()).Should().BeGreaterThan(0,
-            "the home catalog region is the tabbed home surface");
+        // Wait (don't count): CountAsync doesn't wait, so a transient 0 before the tabs render
+        // would flake this assertion.
+        await page.Locator("fluent-tabs").First
+            .WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
         var catalog = page.Locator(".mesh-search-container").First;
         await catalog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
         await page.ScreenshotAsync(new PageScreenshotOptions { Path = "/tmp/home-regions.png", FullPage = true });
