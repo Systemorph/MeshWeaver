@@ -10,14 +10,16 @@
             @onkeydown="HandleSearchKeyDown" Style="width: 100%;" />
     </div>
     <FluentDivider />
-    @* Store — anonymous-visible: the storefront is the public sales surface. *@
-    <FluentMenuItem OnClick="@HandleStoreClick">
-        <FluentIcon Value="@(new Icons.Regular.Size20.BuildingShop())" Slot="start" />
-        Store
-    </FluentMenuItem>
+    @* Store — ANONYMOUS-only: visitors have no home grid, so the storefront keeps a menu entry.
+       Signed-in users reach the Store as an app icon on their home's Apps tab instead. *@
     <AuthorizeView>
+        <NotAuthorized>
+            <FluentMenuItem OnClick="@HandleStoreClick">
+                <FluentIcon Value="@(new Icons.Regular.Size20.BuildingShop())" Slot="start" />
+                @Access.Localize("menu.store")
+            </FluentMenuItem>
+        </NotAuthorized>
         <Authorized>
-            <FluentDivider />
             <FluentMenuItem OnClick="@HandleCreateClick">
                 <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Slot="start" />
                 @Access.Localize("menu.createNew")

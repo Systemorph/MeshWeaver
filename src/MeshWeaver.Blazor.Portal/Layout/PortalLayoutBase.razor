@@ -43,14 +43,10 @@
                 MESHWEAVER
             </FluentAnchor>
             <div class="links">
-                @* Store — the app store (plugins + courses). Sits right after the logo with
-                   modest padding — no spacer pushing the menu away from the logo; the search
-                   fills the rest. Anonymous-visible: the storefront is the public sales surface. *@
-                <FluentAnchor Appearance="Appearance.Stealth" Href="/Store" Class="store-link"
-                              title="@Access.Localize("menu.storeTooltip")" aria-label="@Access.Localize("menu.storeTooltip")">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.BuildingShop())" Slot="start" />
-                    Store
-                </FluentAnchor>
+                @* No Store entry for signed-in users: the Store is an APP — the 🏪 icon on the
+                   home's Apps tab (a config-declared default app, Admin/HomeConfig.DefaultApps).
+                   The anonymous header above keeps its Store anchor: visitors have no home grid
+                   and the storefront is the public sales surface. *@
                 <div class="search-container">
                     <SearchBar />
                 </div>

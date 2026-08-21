@@ -10,15 +10,16 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The user home's catalog is ONE tab-less, FLAT, FIRST-LEVEL list — a single reactive
-/// <see cref="MeshSearchControl"/> (NOT a tab control, NOT grouped-by-type) showing only the TOP-LEVEL
-/// entries the viewer can see: the partition roots (spaces, courses, plugins) plus the user's own
-/// top-level home items — NOT the whole tree, and never the user's own root node. It DEFAULTS to
-/// last-accessed order and exposes a view-options "Sort by" control — Last accessed (default),
-/// Last modified, Alphabetical. The one gap
-/// this can't reach — a module in ANOTHER partition the caller was invited into (#385) — is resolved
-/// from the caller's own <c>AccessAssignment</c> grants (<see cref="UserActivityLayoutAreas.SharedTargetPaths"/>)
-/// and appended as an additive "Shared with me" band, present only when such grants exist.
+/// The LEGACY catalog list (<see cref="HomeStyle.Catalog"/> — the escape hatch from the default
+/// tabbed home, see <see cref="HomeTabsTest"/>): ONE tab-less, FLAT, FIRST-LEVEL
+/// <see cref="MeshSearchControl"/> showing only the TOP-LEVEL entries the viewer can see: the
+/// partition roots (spaces, courses, plugins) plus the user's own top-level home items — NOT the
+/// whole tree, and never the user's own root node. It DEFAULTS to last-accessed order and exposes a
+/// view-options "Sort by" control — Last accessed (default), Last modified, Alphabetical. The one
+/// gap this can't reach — a module in ANOTHER partition the caller was invited into (#385) — is
+/// resolved from the caller's own <c>AccessAssignment</c> grants
+/// (<see cref="UserActivityLayoutAreas.SharedTargetPaths"/>) and appended as an additive "Shared
+/// with me" band, present only when such grants exist.
 /// </summary>
 public class HomeCatalogTest
 {
@@ -166,6 +167,7 @@ public class HomeCatalogTest
     [Fact]
     public void HomeConfig_ShippedDefaults_AreFirstLevelFlatLastAccessed()
     {
+        HomeConfigNodeType.Defaults.Style.Should().Be(HomeStyle.Tabs);
         HomeConfigNodeType.Defaults.Scope.Should().Be(HomeCatalogScope.FirstLevel);
         HomeConfigNodeType.Defaults.Render.Should().Be(HomeCatalogRender.Flat);
         HomeConfigNodeType.Defaults.DefaultSort.Should().Be(HomeCatalogSort.LastAccessed);
