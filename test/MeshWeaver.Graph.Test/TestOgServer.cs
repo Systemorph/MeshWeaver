@@ -38,13 +38,6 @@ internal sealed class TestOgServer : IDisposable
     /// restarting.</summary>
     public volatile bool OmitOgTags;
 
-    /// <summary>
-    /// Declare each page's <c>og:title</c> as its own last path segment instead of the fixed
-    /// <see cref="Title"/>. Lets a MULTI-target grid assert that every card carries ITS target's
-    /// data — a fixed title would pass even if two cards swapped or one never resolved.
-    /// </summary>
-    public volatile bool TitleFromPath;
-
     public TestOgServer()
     {
         // HttpListener cannot bind port 0; reserve a free port via TcpListener first.
@@ -77,9 +70,9 @@ internal sealed class TestOgServer : IDisposable
             Interlocked.Increment(ref requestCount);
             var iconHref = IconHref;
             var iconLink = iconHref is null ? string.Empty : $"<link rel=\"icon\" href=\"{iconHref}\">";
-            var title = TitleFromPath
-                ? (context.Request.Url?.AbsolutePath ?? "").Trim('/')
-                : Title;
+            // The per-path title mode moved with the OgCard MULTI-target test that used it
+            // (the module left the platform); this copy serves the fixed title only.
+            var title = Title;
             var head = OmitOgTags
                 // The SPA catch-all shell a portal serves mid-restart: HTTP 200, a plain
                 // <title>, and NO og:* tags whatsoever.
