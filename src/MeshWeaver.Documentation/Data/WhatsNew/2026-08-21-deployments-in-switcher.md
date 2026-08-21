@@ -10,8 +10,8 @@ Order: -20260821
 
 The installations you operate — recorded as Deployment nodes on your mesh — now feed the phone
 app's mesh switcher: connect to your local mesh and every recorded deployment shows up as a
-connectable instance, honoring each record's own address (a local sidecar keeps its http port, a
-public portal gets https). The local sidecar also gained the portal's search, get and create verbs,
+connectable instance, honoring each record's own address (a local sidecar keeps its HTTP port, a
+public portal gets HTTPS). The local sidecar also gained the portal's search, get and create verbs,
 so discovery and record management work against it exactly as against a portal.
 
 The home page also keeps a single search bar now: the catalog section no longer embeds its own —
