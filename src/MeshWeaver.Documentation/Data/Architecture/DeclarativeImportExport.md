@@ -99,7 +99,24 @@ That leaves the registry route: resolve the node type's content CLR type at pars
 `IMeshContentTypeRegistry.TryResolveByNodeType` (a dictionary lookup — it executes no
 configuration lambda, so it does NOT recreate the compile-order problem the design rejected). Two
 things must be settled before that is safe, and both are about what happens when the lookup MISSES
-or resolves to a type that cannot carry the body:
+or resolves to a type that cannot carry the body.
+
+**First, the actual exposure**, so neither condition is argued in the abstract. Every markdown node
+file across the four plugin repos (MeshWeaver.Plugins, Education, Reinsurance, SocialMedia), keyed
+on real front matter rather than on fenced examples in prose:
+
+| files | `NodeType` | declared content type | carries the body? |
+|---:|---|---|---|
+| 621 | `Markdown` (599 implicit + 22 explicit) | `MarkdownContent` | ✅ the format's native shape |
+| 506 | `Edu/Lesson` | **`MarkdownContent`** | ✅ native |
+| 396 | `Edu/Exercise` | **`MarkdownContent`** | ✅ native |
+| 232 | `Publish/Slide` | `SlideContent` | ✅ `Content` — this IS the case to convert |
+| 79 | *(no front matter)* | `MarkdownContent` | ✅ native |
+| 38 | `Agent` / `Skill` | *a different parser* (`AgentFileParser`) | n/a |
+| **12** | **`Edu/Module`** | **`ModuleContent` — `Summary` only** | ❌ **no `content` member** |
+
+So the whole risk surface for condition 2 is **twelve files**, not an unbounded set: the two big
+non-native types turn out to declare the native `MarkdownContent` anyway.
 
 1. **A miss must not lose the extra frontmatter.** A cold-boot import (bake, first git-sync) can
    run before the type registers. Falling back to `MarkdownContent` drops `Notes`/`Background`
@@ -107,10 +124,16 @@ or resolves to a type that cannot carry the body:
    and letting the read seam re-materialize it (`TryRecoverForNodeType`, whose
    `DiscriminatorAdmits` guard refuses content whose own `$type` contradicts the node type — an
    absent discriminator is admitted, which is exactly why the fallback must omit it).
-2. **A hit must not drop the body.** Deserializing `{content, …extras}` into a content record with
-   no `content` member (`Edu/Module`'s `ModuleContent` carries only `Summary`) would silently lose
-   the markdown for every node of that type. The rule needs to be "the format's native shape, or a
-   type that can carry it", verified against the installed types on a real mesh — not assumed.
+   🚨 **This is the stubborn one.** It closes the *extras* hole but not the empty one: a slide with
+   NEITHER key has no extras to preserve, so a miss still yields `MarkdownContent` and an empty
+   stage. Same three files as above. A miss has to be made impossible (prove the type is registered
+   before any `.md` of it is parsed) rather than merely lossless.
+2. **A hit must not drop the body.** Deserializing `{content, …extras}` into a record with no
+   `content` member loses the markdown for every node of that type. This one is closable **by
+   construction** rather than by audit: use the resolved type only when it can actually carry the
+   body (a reflection check for the member), else keep the native shape. `Edu/Module`'s twelve
+   files then land exactly as they do today — which is also correct for that type, whose page is
+   H1 + Summary + `Theory/` children and never renders a body of its own.
 
 Sequencing: export phase 2 is **done**; phase 3 (the import split) still owns the deletion of
 `MarkdownFileParser.IsSlideNodeType`. The suffix-aware `Matches` predicates on
