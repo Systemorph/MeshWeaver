@@ -117,6 +117,58 @@ public class FrameworkBuildIdentityTest
             "the closure is sorted so the hash text is deterministic");
     }
 
+    /// <summary>
+    /// 🚨 THE REBAKE BOUNDARY IS PINNED, because widening it is silent and expensive.
+    ///
+    /// <para>Every member here contributes its FULL implementation MVID to the framework identity,
+    /// so a body-only commit to ANY of them mints a new identity, empties the assembly share's
+    /// key-space and rebakes every NodeType on every deployment. The set is COMPUTED (the closure
+    /// walk above), which is what keeps a new toolchain dependency from being silently OUTSIDE the
+    /// identity — and is also why one added <c>ProjectReference</c> anywhere in the closure can pull
+    /// a whole subtree INSIDE it without a line of this file changing.</para>
+    ///
+    /// <para>That already happened. #1712 moved the boundary off <c>MeshWeaver.Graph</c> (311
+    /// commits/30d, the single highest-churn assembly) and the walk pulled in <c>Mesh.Contract</c>
+    /// (190), <c>Messaging.Hub</c> (135), <c>Data</c> (59) and <c>Layout</c> (40) behind it — 383
+    /// commits/30d for the union, so the identity now moves MORE often than before, while #1707's
+    /// stated acceptance ("a body-only edit in MeshWeaver.Graph rebakes nothing") reads as passed.
+    /// See #1976.</para>
+    ///
+    /// <para><b>When this fails, do not just update the list.</b> Ask which reference widened the
+    /// closure and whether the toolchain actually needs it; a member added here is a member every
+    /// deployment now rebakes on.</para>
+    /// </summary>
+    [Fact]
+    public void FullMvidClosure_IsExactly_TheKnownSet()
+    {
+        string[] expected =
+        [
+            "MeshWeaver.Compiler",              // root — shapes generated compile input
+            "MeshWeaver.NuGet",                 // root — the #r directive parser/resolver
+            "MeshWeaver.ContentCollections",    // ↓ pulled in transitively from the roots
+            "MeshWeaver.Data",
+            "MeshWeaver.Data.Contract",
+            "MeshWeaver.Domain",
+            "MeshWeaver.Kernel",
+            "MeshWeaver.Layout",
+            "MeshWeaver.Markdown",
+            "MeshWeaver.Mesh.Contract",
+            "MeshWeaver.Messaging.Contract",
+            "MeshWeaver.Messaging.Hub",
+            "MeshWeaver.Reflection",
+            "MeshWeaver.ServiceProvider",
+            "MeshWeaver.ShortGuid",
+            "MeshWeaver.Utils",
+        ];
+
+        FrameworkBuildIdentity.FullMvidAssemblies.Should().Equal(
+            expected.OrderBy(n => n, StringComparer.Ordinal),
+            "the full-MVID closure is the set whose every commit rebakes the world — a change here "
+            + "means a ProjectReference widened (or narrowed) the toolchain's dependency graph. "
+            + "Widening: find the reference and ask whether the toolchain needs it (#1976). "
+            + "Narrowing: that is the goal — delete the line and say so in the PR.");
+    }
+
     [Fact]
     public void ToolchainClosure_WalksTransitivesAndFiltersNonMeshWeaver()
     {
