@@ -138,6 +138,12 @@ public static class ModulePackCommand
                   --with <fileName>           an additional closure file from <moduleOutputDir>
                                               (repeatable). <name>.dll is always included, and its
                                               .pdb rides along when present.
+                  --own-platform <names>      semicolon-separated MeshWeaver.* assemblies that are
+                                              MODULE-OWNED (their source lives in the module's own
+                                              repo, not the platform) — the deps-closure walk
+                                              bundles them instead of stopping: they are nowhere
+                                              in /app, so a stop would ship a module that faults
+                                              on its first sibling (Import's DataSetReader family)
                   --deps-closure              derive the module's PRIVATE dependency closure from
                                               <name>.deps.json beside the entry DLL and bundle it:
                                               assemblies reachable from the module's own package
@@ -164,6 +170,7 @@ public static class ModulePackCommand
         string? minMeshVersion = null;
         string? graphDll = null;
         var extras = new List<string>();
+        var ownPlatform = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var depsClosure = false;
         var outputDirectory = Environment.CurrentDirectory;
 
@@ -191,6 +198,10 @@ public static class ModulePackCommand
                     break;
                 case "--with" when i + 1 < args.Length:
                     extras.Add(args[++i]);
+                    break;
+                case "--own-platform" when i + 1 < args.Length:
+                    ownPlatform.UnionWith(args[++i]
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
                     break;
                 case "--deps-closure":
                     depsClosure = true;
@@ -299,7 +310,7 @@ public static class ModulePackCommand
             DepsClosure.Result derived;
             try
             {
-                derived = DepsClosure.Derive(File.ReadAllText(depsPath), moduleName);
+                derived = DepsClosure.Derive(File.ReadAllText(depsPath), moduleName, ownPlatform);
             }
             catch (Exception e) when (e is InvalidDataException or JsonException)
             {

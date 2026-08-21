@@ -68,7 +68,8 @@ public static class DepsClosure
     /// a derivation from the wrong file must be a refusal, never an empty closure that packs a
     /// module which faults at first use.
     /// </summary>
-    public static Result Derive(string depsJsonText, string moduleName)
+    public static Result Derive(
+        string depsJsonText, string moduleName, ISet<string>? ownedPlatformNames = null)
     {
         using var document = JsonDocument.Parse(depsJsonText);
         var root = document.RootElement;
@@ -128,10 +129,15 @@ public static class DepsClosure
 
         // The walk from the module's OWN direct references — MeshWeaver.* references root the
         // platform side and are not walked: their transitives are /app's business, and dragging
-        // them in would ship the platform inside the module.
-        var ownRoots = module.Dependencies.Where(d => !IsPlatform(d)).ToList();
-        var (ownReachable, platformStops) = ReachStoppingAtPlatform(nodes, ownRoots);
-        platformStops.UnionWith(module.Dependencies.Where(IsPlatform));
+        // them in would ship the platform inside the module. EXCEPT the module-OWNED ones
+        // (<paramref name="ownedPlatformNames"/> — MeshWeaver.* projects that moved out of the
+        // platform and live in the module's own repo, e.g. Import's DataSetReader family): those
+        // are nowhere in /app, so stopping at them ships a module that faults on its first
+        // sibling — they ride the bundle and their subtrees are walked like any private dep.
+        bool IsStop(string d) => IsPlatform(d) && !(ownedPlatformNames?.Contains(NameOf(d)) ?? false);
+        var ownRoots = module.Dependencies.Where(d => !IsStop(d)).ToList();
+        var (ownReachable, platformStops) = ReachStoppingAtPlatform(nodes, ownRoots, IsStop);
+        platformStops.UnionWith(module.Dependencies.Where(IsStop));
 
         var files = new List<string>();
         var warnings = new List<string>();
@@ -172,7 +178,8 @@ public static class DepsClosure
     /// dependencies but carries no entry for) are simply absent — nothing to bundle, nothing to
     /// walk.</summary>
     private static (HashSet<string> Reached, HashSet<string> PlatformStops) ReachStoppingAtPlatform(
-        IReadOnlyDictionary<string, Node> nodes, IEnumerable<string> roots)
+        IReadOnlyDictionary<string, Node> nodes, IEnumerable<string> roots,
+        Func<string, bool> isStop)
     {
         var reached = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var stops = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -180,7 +187,7 @@ public static class DepsClosure
         while (queue.Count > 0)
         {
             var name = queue.Dequeue();
-            if (IsPlatform(name))
+            if (isStop(name))
             {
                 stops.Add(name);
                 continue;

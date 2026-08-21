@@ -114,6 +114,74 @@ public class DepsClosureTest
         Assert.Contains(result.Warnings, w => w.Contains("Microsoft.Identity.Client"));
     }
 
+    /// <summary>An Import-shaped graph: the module references a MODULE-OWNED MeshWeaver.*
+    /// sibling (its source lives in the module's repo, so it is nowhere in /app) which itself
+    /// references a package and a genuine platform project.</summary>
+    private const string OwnedGraph = """
+        {
+          "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
+          "targets": {
+            ".NETCoreApp,Version=v10.0": {
+              "MeshWeaver.Import/1.0.0": {
+                "dependencies": { "MeshWeaver.DataSetReader.Csv": "1.0.0", "MeshWeaver.Data": "3.0.0" },
+                "runtime": { "MeshWeaver.Import.dll": {} }
+              },
+              "MeshWeaver.DataSetReader.Csv/1.0.0": {
+                "dependencies": { "MeshWeaver.DataSetReader": "1.0.0", "CsvHelper": "33.0.1" },
+                "runtime": { "MeshWeaver.DataSetReader.Csv.dll": {} }
+              },
+              "MeshWeaver.DataSetReader/1.0.0": {
+                "dependencies": { "MeshWeaver.DataStructures": "1.0.0", "MeshWeaver.Domain": "3.0.0" },
+                "runtime": { "MeshWeaver.DataSetReader.dll": {} }
+              },
+              "MeshWeaver.DataStructures/1.0.0": { "runtime": { "MeshWeaver.DataStructures.dll": {} } },
+              "MeshWeaver.Domain/3.0.0": { "runtime": { "MeshWeaver.Domain.dll": {} } },
+              "MeshWeaver.Data/3.0.0": { "runtime": { "MeshWeaver.Data.dll": {} } },
+              "CsvHelper/33.0.1": { "runtime": { "lib/net8.0/CsvHelper.dll": {} } }
+            }
+          },
+          "libraries": {
+            "MeshWeaver.Import/1.0.0": { "type": "project" },
+            "MeshWeaver.DataSetReader.Csv/1.0.0": { "type": "project" },
+            "MeshWeaver.DataSetReader/1.0.0": { "type": "project" },
+            "MeshWeaver.DataStructures/1.0.0": { "type": "project" },
+            "MeshWeaver.Domain/3.0.0": { "type": "project" },
+            "MeshWeaver.Data/3.0.0": { "type": "project" },
+            "CsvHelper/33.0.1": { "type": "package" }
+          }
+        }
+        """;
+
+    [Fact]
+    public void OwnedPlatformSiblings_Ride_AndAreWalked_WhilePlatformStillStops()
+    {
+        // Without the owned set: every MeshWeaver.* stops, the family is dropped — the bundle
+        // would fault on its first sibling at the consumer.
+        var bare = DepsClosure.Derive(OwnedGraph, "MeshWeaver.Import");
+        Assert.DoesNotContain("MeshWeaver.DataSetReader.Csv.dll", bare.Files);
+        Assert.DoesNotContain("CsvHelper.dll", bare.Files.Select(Path.GetFileName));
+
+        var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "MeshWeaver.DataSetReader.Csv", "MeshWeaver.DataSetReader", "MeshWeaver.DataStructures",
+        };
+        var result = DepsClosure.Derive(OwnedGraph, "MeshWeaver.Import", owned);
+
+        // The whole owned family rides, and the walk CONTINUES through it: Csv's package
+        // dependency is reached, and DataSetReader's own owned sibling too.
+        Assert.Contains("MeshWeaver.DataSetReader.Csv.dll", result.Files);
+        Assert.Contains("MeshWeaver.DataSetReader.dll", result.Files);
+        Assert.Contains("MeshWeaver.DataStructures.dll", result.Files);
+        Assert.Contains("CsvHelper.dll", result.Files.Select(Path.GetFileName));
+
+        // Genuine platform projects still stop — reached through the module AND through an owned
+        // sibling alike.
+        Assert.DoesNotContain("MeshWeaver.Data.dll", result.Files);
+        Assert.DoesNotContain("MeshWeaver.Domain.dll", result.Files);
+        Assert.Contains("MeshWeaver.Data", result.ExcludedPlatformCarried);
+        Assert.Contains("MeshWeaver.Domain", result.ExcludedPlatformCarried);
+    }
+
     [Fact]
     public void WrongModuleName_IsARefusal_NeverAnEmptyClosure()
     {
