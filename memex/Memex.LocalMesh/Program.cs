@@ -5,6 +5,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
+using MeshWeaver.Mesh;
 using MeshWeaver.Hosting.Grpc;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Sqlite;
@@ -50,6 +51,7 @@ builder.UseMeshWeaver(
         .AddKernel()         // C# kernel (Roslyn, MeshWeaver.Kernel.Hub) — lets doc code samples Run on the sidecar
         .AddDocumentation()  // the embedded "Doc" partition — real layout areas the client can render
         .AddGrpcHub()        // py/node stream-routed address types + the gRPC services
+        .InstallConfiguredModules(builder.Configuration)  // Modules:Assemblies — voice lands here
         .UseMonolithMesh()); // in-process single-silo runtime (NOT Orleans)
 
 // Bake speech-to-text into the sidecar: default the Whisper endpoint to a local whisper.cpp server
@@ -61,7 +63,8 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
     ["Speech:Endpoint"] = builder.Configuration["Speech:Endpoint"] ?? "http://localhost:8080",
     ["Speech:Enabled"] = builder.Configuration["Speech:Enabled"] ?? "true",
 });
-builder.Services.AddSpeechTranscription(builder.Configuration);
+// (No AddSpeechTranscription here: MeshWeaver.Speech registers the transcriber itself when the
+// module is installed. These defaults still apply — the module binds the same Speech section.)
 
 // Single-user device mesh: every token-less connection acts as the device user (the shells this
 // host serves connect anonymously), so layout areas render the OWNER view and writes are
@@ -128,9 +131,14 @@ app.MapLocalMeshApi();
 // this backend (RN, the macOS/Windows desktop apps, the web app) POSTs multipart { file, language? } and
 // gets back {"text","language"}. The transcriber forwards to the configured whisper.cpp server on the HTTP
 // IIoPool; a missing/disabled endpoint returns 503 (mic UI stays hidden), a Whisper fault surfaces as 502.
-app.MapPost("/api/speech/transcribe", async (HttpContext http, ISpeechTranscriber transcriber, CancellationToken ct) =>
+app.MapPost("/api/speech/transcribe", async (HttpContext http, CancellationToken ct) =>
 {
-    if (!transcriber.IsConfigured)
+    // OPTIONAL, like the portal's SpeechEndpoints: voice is a MODULE, so a sidecar built without it
+    // has no ISpeechTranscriber registered at all. Taking it as a required parameter would turn
+    // "voice not installed" into a DI failure on the request path — a 500 on a route that has a
+    // perfectly good 503 for exactly this. Absent and not-configured are the same answer here.
+    var transcriber = http.RequestServices.GetService(typeof(ISpeechTranscriber)) as ISpeechTranscriber;
+    if (transcriber is null || !transcriber.IsConfigured)
         return Results.Json(new { error = "Speech transcription is not configured (no Whisper endpoint, or disabled)." },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     if (!http.Request.HasFormContentType)

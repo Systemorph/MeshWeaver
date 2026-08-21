@@ -8,6 +8,9 @@
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The seam this implements. Compiled surfaces reference the CONTRACT and resolve
+         ISpeechTranscriber optionally, so this assembly can arrive as a module (or not at all). -->
+    <ProjectReference Include="..\MeshWeaver.Speech.Contract\MeshWeaver.Speech.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
 </Project>
