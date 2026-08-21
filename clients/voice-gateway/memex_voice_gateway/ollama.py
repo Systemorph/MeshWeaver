@@ -78,6 +78,8 @@ DEFAULT_AGENTS = {
     "Assistant": "general work",
     "Researcher": "deep research",
     "ExecutiveAssistant": "EMAIL — reading, summarizing, and sending mail",
+    "Music": "playing specific songs, artists and playlists via the connected music "
+             "services (Spotify, Apple Music)",
 }
 
 
