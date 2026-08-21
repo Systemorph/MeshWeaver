@@ -75,7 +75,6 @@ public static class CompilationEnvironment
         "MeshWeaver.AI",
         "MeshWeaver.ContentCollections.Indexing",
         "MeshWeaver.Graph",
-        "MeshWeaver.Import",
         "MeshWeaver.PluginCatalog",
     ];
 }

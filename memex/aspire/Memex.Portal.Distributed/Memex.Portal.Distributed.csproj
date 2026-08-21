@@ -87,14 +87,6 @@
          root — where the closure lane's prune then dropped it from modules/MeshWeaver.Import/ as a
          same-relative-path duplicate. Eight ImportModuleLayoutTest cases went red on exactly that.
          A surface declaration is this host's business; nothing downstream should inherit it. -->
-    <ProjectReference Include="..\..\..\src\MeshWeaver.Import\MeshWeaver.Import.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader\MeshWeaver.DataSetReader.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Csv\MeshWeaver.DataSetReader.Csv.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Excel\MeshWeaver.DataSetReader.Excel.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Excel.BinaryFormat\MeshWeaver.DataSetReader.Excel.BinaryFormat.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Excel.OpenXmlFormat\MeshWeaver.DataSetReader.Excel.OpenXmlFormat.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.DataSetReader.Excel.Utils\MeshWeaver.DataSetReader.Excel.Utils.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
-    <ProjectReference Include="..\..\..\src\MeshWeaver.DataStructures\MeshWeaver.DataStructures.csproj" Private="false" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- Ship nuget.config into the image so the runtime `#r "nuget:..."` resolver can
