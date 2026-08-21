@@ -202,7 +202,31 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         {
             foreach (var pluginRef in config.Plugins)
             {
-                var pluginTools = ResolvePluginTools(pluginRef, chat);
+                // 🚨 A plugin that cannot RESOLVE must cost the agent that plugin, never the agent.
+                // The concrete case: a module-contributed IAgentPlugin whose constructor dependency
+                // the host registers conditionally (ExecutiveAssistantPlugin needs IEaGraphAuth,
+                // registered only when Email:Enabled) — GetServices<IAgentPlugin>() activates EVERY
+                // registered implementation, so one unresolvable plugin threw for every agent that
+                // referenced ANY custom plugin and took the whole chat down ("Selected agent
+                // 'Agent/Assistant' was found, but creating it failed…", memex 2026-08-21). The
+                // agent still builds with its remaining tools; the skip is loud and names both
+                // sides so an operator can see exactly which capability is missing and why.
+                IReadOnlyList<AITool>? pluginTools;
+                try
+                {
+                    // Materialized HERE so a lazily-throwing tool enumeration (the method-filter
+                    // branch returns a deferred Where) still lands in THIS catch instead of
+                    // resurfacing at the later ToList and killing the agent after all.
+                    pluginTools = ResolvePluginTools(pluginRef, chat)?.ToList();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex,
+                        "Plugin '{PluginName}' failed to resolve for agent {AgentName} — the agent "
+                        + "runs WITHOUT this plugin's tools: {Message}",
+                        pluginRef.Name, config.Id, ex.Message);
+                    continue;
+                }
                 if (pluginTools != null)
                     tools = tools.Concat(pluginTools);
                 else
