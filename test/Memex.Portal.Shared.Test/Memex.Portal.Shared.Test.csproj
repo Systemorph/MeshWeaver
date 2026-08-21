@@ -1,19 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- ═════════ The module-layout contract gate (#1752) ═════════
-       StorageModuleLayoutTest and ImportModuleLayoutTest load their modules the way a PORTAL does —
-       off disk, from modules/<Name>/, with NO compiled reference — so the layout has to exist in
-       THIS project's own bin. Reuse the real lane (MeshModulesClosureSubset narrows it to the
-       modules named below) rather than hand-copying a publish+prune here: a copy would be a second
-       detector, free to agree with itself while the shipped layout is broken.
+       StorageModuleLayoutTest loads its modules the way a PORTAL does — off disk, from
+       modules/<Name>/, with NO compiled reference — so the layout has to exist in THIS project's
+       own bin. Reuse the real lane (MeshModulesClosureSubset narrows it to the modules named
+       below) rather than hand-copying a publish+prune here: a copy would be a second detector,
+       free to agree with itself while the shipped layout is broken.
 
-       🚨 Deliberately NO ProjectReference to any of them. One would put the module's own DLL in
-       this bin's root, where prune (a) deletes it from modules/ as a same-identity duplicate — the
-       gate would then load the app-root copy and assert nothing about the shipped layout. That is
-       exactly why MeshWeaver.Import is gated HERE and not in Memex.Portal.Monolith's own tests: the
-       dev portal still carries Import in its app closure through the Northwind sample, so it is a
-       false green for the module-only path every other deployment runs. -->
+       🚨 Deliberately NO ProjectReference to a module named in the SUBSET below. One would put
+       that module's own DLL in this bin's root, where prune deletes it from modules/ as a
+       same-identity duplicate — the gate would then load the app-root copy and assert nothing
+       about the shipped layout. (A pack that is NOT in the subset has no modules/ folder staged
+       here at all, so referencing it is safe; see MeshWeaver.Blazor.Analysis below.) -->
   <PropertyGroup>
-    <MeshModulesClosureSubset>MeshWeaver.Hosting.Cosmos;MeshWeaver.Hosting.Snowflake;MeshWeaver.Import</MeshModulesClosureSubset>
+    <MeshModulesClosureSubset>MeshWeaver.Hosting.Cosmos;MeshWeaver.Hosting.Snowflake</MeshModulesClosureSubset>
   </PropertyGroup>
   <Import Project="..\..\memex\MeshModulesPublish.targets" />
 
@@ -33,6 +32,12 @@
          shells call — an unmapped one there answers the SPA fallback with a 200, not a 404 (#1474). -->
     <ProjectReference Include="..\..\memex\Memex.LocalMesh\Memex.LocalMesh.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- ViewPackModuleTest asserts on MeshWeaver.Blazor.Analysis's module attribute, and Analysis
+         left Memex.Portal.Shared's closure when it flipped to modules/ (#1974) — so the test
+         anchors the pack itself rather than riding a portal reference that no longer exists. Safe
+         here precisely because Analysis is NOT in MeshModulesClosureSubset above: nothing stages a
+         modules/MeshWeaver.Blazor.Analysis/ in this bin for a bin-root copy to shadow. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Analysis\MeshWeaver.Blazor.Analysis.csproj" />
     <!-- Direct on purpose (#1644 step 2): these modules left Memex.Portal.Shared's closure
          (they ship via modules/), so the module-fold tests anchor the real DLLs themselves. -->
     <!-- MigrationRegistryTest runs the migration runner's own start-up guard (VerifyComplete) in
