@@ -202,9 +202,12 @@ same retry / NACK / failure signal the forward leg already has. Sketch of what t
 > as long as any hub subscribes a stream at all. Budget the rewrite on its own merits, not on a
 > deletion that is not there.
 
-It is a real change (new placement strategy, a directory with its own lifecycle, and a two-PROCESS
-test to prove it), which is why it is written down here rather than done alongside the durability
-fix. Tracked in [#1742](https://github.com/Systemorph/MeshWeaver/issues/1742).
+**That change is now written down in full, with the roll it must ship under:
+[Pod-Hub Delivery — the Transport Swap and its Roll Plan](/Doc/Architecture/PodHubDeliveryRollPlan).**
+It turned out to need no custom placement director and no directory of ours at all: the address's
+grain is created BY THE OWNING PROCESS under `[PreferLocalPlacement]`, so Orleans' own grain
+directory is the address→silo map. Tracked in
+[#1742](https://github.com/Systemorph/MeshWeaver/issues/1742).
 
 ## The subscriber check — what it buys, and the measurement that put it there
 
@@ -306,6 +309,8 @@ whether it still holds after the *next* roll.
 
 ## Related
 
+- [Pod-Hub Delivery — the Transport Swap and its Roll Plan](/Doc/Architecture/PodHubDeliveryRollPlan)
+  — what replaces the stream leg, and the two-release roll it needs.
 - [Error Propagation & Wedges](/Doc/Architecture/ErrorPropagationAndWedges) — a silence is a wedge;
   every error must reach a graceful sink.
 - [Message-Based Communication](/Doc/Architecture/MessageBasedCommunication) — the routing legs this

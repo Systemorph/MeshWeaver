@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -481,6 +482,19 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         streams[address] = callback;
         OrleansRouteTrace.Write($"OrleansRoutingService.RegisterStream addr={address} streamName={address}");
 
+        // 🚨 CLAIM THE ADDRESS FOR THIS PROCESS so cross-silo deliveries can be a directed grain
+        // CALL rather than a stream publish — issue #1742. The local route written on the line above
+        // is the authority for "this process hosts that hub"; the pod-hub grain is what makes that
+        // authority visible to the rest of the cluster, using Orleans' own grain directory as the
+        // address→silo map. Everything below (the stream subscription) stays exactly as it was: the
+        // two transports run side by side for one release, and a hub the grain cannot reach still
+        // falls back to the stream. See Doc/Architecture/PodHubDeliveryRollPlan.
+        //
+        // This is a NO-OP outside a silo: an Orleans CLIENT process cannot host a grain, so Attach
+        // never lands locally, the retries give up, and that hub keeps the stream permanently. That
+        // is correct rather than degraded — and it is why the fallback is not a temporary scaffold.
+        var podHub = AttachPodHub(address);
+
         // 🚨 Attach the Orleans memory-stream subscription once Orleans streaming is READY — never
         // before. GetStream on a PersistentStreamProvider whose lifecycle Init has not yet run throws
         // an NRE from deep inside the Orleans stream runtime (issue #1129): the process-wide cache/mesh
@@ -521,6 +535,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         {
             streams.TryRemove(address, out _);
             subscriptionReady.TryRemove(address, out _);
+            // Release the cluster-wide claim FIRST: a hub that MOVES pods (a portal/{user} circuit
+            // reconnecting is the everyday case) must not leave a pinned activation behind on the
+            // pod it left, or the new owner's Attach lands on the old one and has to bounce off it.
+            podHub.Dispose();
             cts.Cancel();
             ioPool.Invoke(async _ =>
                 {
@@ -537,6 +555,95 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                     _ => { },
                     ex => logger.LogDebug(ex, "Failed to unsubscribe Orleans stream for {Address}", address));
             cts.Dispose();
+        });
+    }
+
+    /// <summary>
+    /// How many times an <see cref="IPodHubGrain.Attach"/> that landed on the WRONG silo is retried.
+    /// This is not a poll and not a health retry: <c>false</c> means one specific, transient thing —
+    /// the previous owner's activation has not gone yet, which happens exactly while an address
+    /// MOVES between pods. Bounded, because "the owner is not a silo at all" (an Orleans client
+    /// process, which cannot host a grain) must terminate rather than spin: that hub keeps the
+    /// stream, permanently and correctly.
+    /// </summary>
+    private const int PodHubAttachRetries = 5;
+
+    /// <summary>
+    /// Claims <paramref name="address"/> for THIS process, so the rest of the cluster can deliver to
+    /// it with a directed grain call instead of a stream publish (#1742).
+    ///
+    /// <para>Synchronous to the caller and best-effort by construction: <c>RegisterStream</c>'s local
+    /// route is already live, and a claim that never lands simply leaves this hub on the stream —
+    /// the transport it has always used. So a failure here degrades, it never blocks; the returned
+    /// disposable releases the claim.</para>
+    /// </summary>
+    private IDisposable AttachPodHub(Address address)
+    {
+        // 🚨 NO GRAIN FACTORY, NO GRAIN TRANSPORT — and that is a supported host, not a broken one.
+        // A routing service can legitimately be constructed without one (the shutdown-classification
+        // and local-route fixtures do exactly that), and the answer must be the same as for an
+        // Orleans client: this hub keeps the stream. Degrade, never throw — RegisterStream's local
+        // route is already live and the caller is holding a disposable it will dispose later, so an
+        // exception here would surface at TEARDOWN, arbitrarily far from its cause.
+        if (grainFactory is null || disposed)
+            return Disposable.Empty;
+
+        var addressPath = address.ToString();
+        var attach = new SingleAssignmentDisposable();
+        inFlight.Add(attach);
+        attach.Disposable = Observable
+            .Defer(() => grainFactory.GetGrain<IPodHubGrain>(addressPath).Attach().ToObservable())
+            // `false` is "landed on a silo that is not the owner". Turning it into an error is what
+            // lets the retry policy below express "bounce off the old activation and try again"
+            // without a hand-rolled loop.
+            .SelectMany(claimed => claimed
+                ? Observable.Return(true)
+                : Observable.Throw<bool>(new PodHubNotHereException(addressPath)))
+            .RetryWhen(errors => errors
+                .Select((ex, i) => (Exception: ex, Attempt: i))
+                .SelectMany(t => t.Attempt >= PodHubAttachRetries
+                    ? Observable.Throw<long>(t.Exception)
+                    : Observable.Timer(
+                        TimeSpan.FromMilliseconds(Math.Min(100 * Math.Pow(2, t.Attempt), 2_000)),
+                        Scheduler.Default)))
+            .Subscribe(
+                _ =>
+                {
+                    OrleansRouteTrace.Write($"OrleansRoutingService.AttachPodHub OK addr={addressPath}");
+                    logger.LogDebug("Pod-hub claim for {Address} landed on this process", addressPath);
+                },
+                ex =>
+                {
+                    // Debug, not Warning: on an Orleans CLIENT this is the expected, permanent
+                    // outcome for every hub, and a per-hub warning there would be pure noise. The
+                    // signal that matters lives on the ROUTER side — the fallback line — because
+                    // that is where "a silo-hosted hub was not reachable by call" is observable.
+                    OrleansRouteTrace.Write($"OrleansRoutingService.AttachPodHub GAVE_UP addr={addressPath} ex={ex.Message}");
+                    logger.LogDebug(ex,
+                        "Pod-hub claim for {Address} did not land in this process — it keeps the Orleans "
+                        + "stream transport. Expected on an Orleans client, which cannot host a grain.",
+                        addressPath);
+                });
+
+        return Disposable.Create(() =>
+        {
+            inFlight.Remove(attach);
+            attach.Dispose();
+            // Fire-and-forget: teardown is best-effort, and an activation that outlives its owner is
+            // recovered anyway — Deliver on a silo with no local route steps aside (see PodHubGrain).
+            // Wrapped because this runs during teardown, where the cluster client may already be
+            // gone: releasing a claim that nobody can hear is a no-op, never a throw out of Dispose.
+            try
+            {
+                grainFactory.GetGrain<IPodHubGrain>(addressPath).Detach().ToObservable()
+                    .Subscribe(
+                        _ => { },
+                        ex => logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath));
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Failed to release the pod-hub claim for {Address}", addressPath);
+            }
         });
     }
 
