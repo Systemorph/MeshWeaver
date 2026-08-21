@@ -74,12 +74,6 @@ public static class UserActivityLayoutAreas
 
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
-    /// <summary>
-    /// Section title for the additive "Shared with me" band (#385) — the cross-partition modules the
-    /// caller was specifically invited into, which the unified <c>is:main</c> catalog query can't
-    /// reach on its own (they're readable by URL but invisible to a scope search). See BuildCatalog.
-    /// </summary>
-    private const string SharedWithMeTitle = "Shared with me";
 
     /// <summary>
     /// Adds the Activity view (the owner home / visitor profile) to the User node's layout, plus the
@@ -275,8 +269,6 @@ public static class UserActivityLayoutAreas
 
         @@("area/Threads")
 
-        @@("area/Pinned")
-
         _This home is yours to shape. [It's fully configurable]({{ConfigGuideLink}}): tell the assistant in the chat above what you'd like to see, or edit this page's **Body** directly._
         """;
 
@@ -464,18 +456,17 @@ public static class UserActivityLayoutAreas
     // Each is embedded by the home page via @@("area/<Name>"). They are registered on the User hub in
     // AddUserActivityLayoutAreas. A null control collapses the region (e.g. Pinned with no pins).
 
-    /// <summary>The pinned-items region — reacts to the owner node so pins appear/disappear live,
-    /// and to the VIEWER's presentation screen (#1803) so the quick toggle takes effect with no
-    /// reload. The screen is resolved ONCE here, on the render turn, and combined in as a value —
-    /// never re-read from an ambient context inside the projection below, which would resolve to
-    /// "nobody" (and therefore hide nothing) on a later emission.</summary>
+    /// <summary>The pinned-items region — reacts to the owner node so pins appear/disappear live.</summary>
     internal static IObservable<UiControl?> PinnedAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var options = host.Hub.JsonSerializerOptions;
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+        // The VIEWER's presentation screen (#1803), resolved ONCE here on the render turn and
+        // combined in as a value — never re-read from an ambient context inside the projection
+        // below, which would resolve to "nobody" (and therefore hide nothing) on a later emission.
         var screen = host.ViewerScreen();
         return syncStream!.CombineLatest(screen,
-            (change, viewerScreen) => BuildPinnedItems(change.Value.ContentAs<User>(options), viewerScreen));
+            (change, viewerScreen) => BuildPinnedItems(change.Value.ContentAs<User>(options), screen: viewerScreen));
     }
 
     /// <summary>The open-threads region — the owner's own threads that aren't Done yet, newest first.</summary>
@@ -485,25 +476,58 @@ public static class UserActivityLayoutAreas
         return Observable.Return<UiControl?>(BuildOpenThreads(nodePath, OwnerIdOf(nodePath)));
     }
 
-    /// <summary>The catalog region — ONE unified, grouped "everything" <see cref="MeshSearchControl"/>
-    /// (see <see cref="BuildCatalog"/>), plus an additive "Shared with me" band for the caller's
-    /// cross-partition grants (#385) that a broad query can't reach — see <see cref="ObserveSharedTargets"/>.</summary>
+    /// <summary>The catalog region — the TABBED home surface (see <see cref="BuildHome"/>):
+    /// <b>Shared with me</b> (the caller's cross-partition grants, #385 — see
+    /// <see cref="ObserveSharedTargets"/>) · <b>Pinned</b> · <b>Apps</b> (the config-declared
+    /// default apps ∪ the owner's installed <c>App</c> records — see
+    /// <see cref="ObserveInstalledApps"/>) · <b>Spaces</b> (the deduplicated catalog). The
+    /// admin-editable <c>Admin/HomeConfig</c> node drives the shape and can switch back to the
+    /// legacy single-list catalog (<see cref="HomeStyle.Catalog"/>).</summary>
     internal static IObservable<UiControl?> CatalogAreaView(LayoutAreaHost host, RenderingContext _)
     {
         var ownerId = OwnerIdOf(host.Hub.Address.ToString());
         var options = host.Hub.JsonSerializerOptions;
+        var locale = host.ViewerLocale();
         // The viewer's presentation screen (#1803), resolved ONCE on the render turn.
         var screen = host.ViewerScreen();
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
         // LIVE — no code change, no image roll. Combined with the caller's cross-partition grants
-        // (#385, the one thing a first-level query can't reach). Both start with a value so the home
-        // paints instantly.
+        // (#385), the owner's installed-app records, and the owner node (pins). Every leg starts
+        // with a value so the home paints instantly.
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
         return HomeConfigNodeType.Observe(host.Workspace, options)
-            .CombineLatest(ObserveSharedTargets(host, ownerId), screen,
-                (config, shared, viewerScreen) =>
-                    (UiControl?)BuildCatalog(ownerId, config, shared, viewerScreen));
+            .CombineLatest(
+                ObserveSharedTargets(host, ownerId),
+                ObserveInstalledApps(host, ownerId, options),
+                syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
+                screen,
+                (config, shared, installedApps, user, viewerScreen) =>
+                    (UiControl?)BuildHome(ownerId, config, shared, installedApps, user, locale, viewerScreen));
     }
+
+    /// <summary>
+    /// The owner's installed-app records — the <c>{owner}/_App/{appId}</c> nodes (see
+    /// <see cref="AppNodeType"/>), projected to their <see cref="App.Plugin"/> paths, ordered by
+    /// <see cref="App.Order"/>. Read via the shared, per-user-RLS, empty-on-absent <c>GetQuery</c>
+    /// cache (never a point-read that could NotFound-storm), starting empty so the home paints
+    /// instantly and installs land reactively.
+    /// </summary>
+    private static IObservable<IReadOnlyList<string>> ObserveInstalledApps(
+        LayoutAreaHost host, string ownerId, JsonSerializerOptions options) =>
+        host.Workspace
+            .GetQuery($"home-apps:{ownerId}",
+                $"path:{ownerId}/{AppNodeType.UserNamespace} scope:children nodeType:{AppNodeType.NodeType} " +
+                "select:path,id,namespace,name,nodeType,content")
+            .Select(nodes => (IReadOnlyList<string>)nodes
+                .Select(n => n.ContentAs<App>(options))
+                .Where(app => !string.IsNullOrWhiteSpace(app?.Plugin))
+                .OrderBy(app => app!.Order)
+                .Select(app => app!.Plugin.Trim('/'))
+                .Where(p => p.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList())
+            .StartWith((IReadOnlyList<string>)[]);
 
     /// <summary>
     /// The cross-partition scopes the owner has been granted access to — an invited module living in
@@ -628,19 +652,20 @@ public static class UserActivityLayoutAreas
     // Neither spans a subtree, so no deep `…/Introduction/Exercise/…` nodes leak in.
     /// <summary>Builds the two-query first-level UNION for a given sort suffix (newline-joined).
     /// The root leg excludes User nodes: the viewer's OWN home root has namespace "" and would
-    /// otherwise list itself on its own home page.</summary>
-    private static string FirstLevelUnion(string ownerId, string sortSuffix) =>
-        $"namespace: is:main context:search -nodeType:User {sortSuffix}\n" +
-        $"namespace:{ownerId} is:main context:search {sortSuffix}";
+    /// otherwise list itself on its own home page. <paramref name="exclusions"/> (leading-space
+    /// <c>-nodeType:…</c> clauses) applies to BOTH legs — the Spaces tab's dedup.</summary>
+    private static string FirstLevelUnion(string ownerId, string sortSuffix, string exclusions = "") =>
+        $"namespace: is:main context:search -nodeType:User{exclusions} {sortSuffix}\n" +
+        $"namespace:{ownerId} is:main context:search{exclusions} {sortSuffix}";
 
     /// <summary>The catalog query for a scope + sort suffix: the first-level union (partition roots + the
     /// user's home children), or a cross-partition SUBTREE query (everything the viewer can read at every
     /// depth) when <see cref="HomeConfig.Scope"/> selects <see cref="HomeCatalogScope.Subtree"/>. User
     /// nodes are excluded in both shapes — a home page never lists the user's own root.</summary>
-    private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix) =>
+    private static string CatalogQuery(HomeCatalogScope scope, string ownerId, string sortSuffix, string exclusions = "") =>
         scope == HomeCatalogScope.Subtree
-            ? $"is:main context:search -nodeType:User {sortSuffix}"
-            : FirstLevelUnion(ownerId, sortSuffix);
+            ? $"is:main context:search -nodeType:User{exclusions} {sortSuffix}"
+            : FirstLevelUnion(ownerId, sortSuffix, exclusions);
 
     // The three user-selectable sort orders (the view-options "Sort by" dropdown). LAST ACCESSED:
     // source:accessed JOINs the user's UserActivity satellite and projects its timestamp into
@@ -648,46 +673,234 @@ public static class UserActivityLayoutAreas
     // still apply to accessed queries — the empty-namespace roots leg pushes `namespace = ''`
     // (the 2026-07-21 fix; previously the fan-out dropped it and the "list" became the user's
     // whole access history) and `namespace:X` never matches the node at path X. LAST MODIFIED /
-    // ALPHABETICAL are pure order-bys. Immutable constant lookup — enum · label · query suffix.
+    // ALPHABETICAL are pure order-bys. Immutable constant lookup — enum · label key · query suffix
+    // (labels resolve through the localization catalog; null locale = English, which is what the
+    // pure-builder unit tests exercise).
     private const string SortSuffixLastAccessed = "source:accessed sort:LastModified-desc";
     private const string SortSuffixLastModified = "sort:LastModified-desc";
     private const string SortSuffixAlphabetical = "sort:Name-asc";
-    private static readonly (HomeCatalogSort Sort, string Label, string Suffix)[] CatalogSorts =
+    private static readonly (HomeCatalogSort Sort, string LabelKey, string Suffix)[] CatalogSorts =
     {
-        (HomeCatalogSort.LastAccessed, "Last accessed", SortSuffixLastAccessed),
-        (HomeCatalogSort.LastModified, "Last modified", SortSuffixLastModified),
-        (HomeCatalogSort.Alphabetical, "Alphabetical", SortSuffixAlphabetical),
+        (HomeCatalogSort.LastAccessed, "home.sortLastAccessed", SortSuffixLastAccessed),
+        (HomeCatalogSort.LastModified, "home.sortLastModified", SortSuffixLastModified),
+        (HomeCatalogSort.Alphabetical, "home.sortAlphabetical", SortSuffixAlphabetical),
     };
 
     /// <summary>
-    /// The catalog region — ONE tab-less list, whose shape is DATA-DRIVEN by <paramref name="config"/>
-    /// (the admin-editable <c>Admin/HomeConfig</c> platform node; <c>null</c> ⇒
-    /// <see cref="HomeConfigNodeType.Defaults"/> = <b>FirstLevel + Flat + LastAccessed</b>). The config
-    /// drives the depth (first-level top-level entries vs the full subtree), the render (flat list vs
-    /// grouped-by-type sections), and the default sort — and a view-options "Sort by" control still lets
-    /// the user pick <b>Last accessed</b> / <b>Last modified</b> / <b>Alphabetical</b> at will. FIRST-LEVEL
-    /// shows only the partition roots (spaces, courses, plugins) the viewer can read plus their own
-    /// top-level home items — NOT the whole tree. This REPLACES the former Spaces / My Items / Last Read /
-    /// Last Edited tab row AND the data-driven extension tabs.
-    /// <para>The one thing a first-level query can't reach is a module in ANOTHER partition the caller was
-    /// specifically invited into (#385): those are resolved from the caller's own readable
-    /// <c>AccessAssignment</c> grants (<paramref name="sharedTargets"/>) and appended as an additive
-    /// "Shared with me" band, present ONLY when the caller actually has such grants.</para>
+    /// The home surface — a TABBED page (the phone-home model): <b>Shared with me</b> first (only
+    /// when the caller has cross-partition grants; last-accessed ranking), then <b>Pinned</b> (the
+    /// owner's content shortcuts, only when any), then <b>Apps</b> (the platform default apps ∪ the
+    /// owner's installed apps — every app EXACTLY ONCE), then <b>Spaces</b> (the catalog WITHOUT
+    /// store items, so nothing is listed twice). <see cref="HomeStyle.Catalog"/> switches back to
+    /// the legacy single-list <see cref="BuildCatalog"/>. Pure (no hub) so the shape is
+    /// unit-testable without standing up a hub.
+    /// </summary>
+    internal static UiControl BuildHome(
+        string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
+        IReadOnlyList<string>? installedApps = null, User? user = null, string? locale = null,
+        PresentationScreen? screen = null)
+    {
+        var cfg = config ?? HomeConfigNodeType.Defaults;
+        // 🚨 The viewer's presentation screen (#1803) is applied to the Shared-with-me, Pinned and
+        // Apps tabs HERE, before their queries are built — not only where the resulting cards are
+        // painted. Each of those three interpolates the viewer's PATHS into the control's query
+        // string, which the search view exposes in its options editor and carries in the `hq=`
+        // parameter of "open in search". A marked name reaching the address bar mid-presentation is
+        // the leak, whether or not a card for it is ever drawn. The Spaces tab's query is generic,
+        // so it is filtered where its results are painted and left untouched here.
+        var privacy = screen ?? PresentationScreen.Off;
+        if (cfg.Style == HomeStyle.Catalog)
+            return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy);
+
+        var visibleShared = privacy.Retain(sharedTargets);
+        var tabs = Controls.Tabs.WithSkin(skin => skin.WithWidth("100%"));
+        if (visibleShared.Count > 0)
+            tabs = tabs.WithView(BuildSharedWithMe(visibleShared, locale),
+                skin => skin.WithLabel(LocalizationCatalog.Get("home.sharedWithMe", locale)));
+        var pinned = BuildPinnedItems(user, withTitle: false, screen: privacy);
+        if (pinned is not null)
+            tabs = tabs.WithView(pinned,
+                skin => skin.WithLabel(LocalizationCatalog.Get("home.pinned", locale)));
+        tabs = tabs.WithView(BuildApps(cfg, installedApps, locale, privacy),
+            skin => skin.WithLabel(LocalizationCatalog.Get("home.apps", locale)));
+        tabs = tabs.WithView(BuildSpaces(nodeOwnerId, cfg, locale),
+            skin => skin.WithLabel(LocalizationCatalog.Get("home.spaces", locale)));
+        return tabs;
+    }
+
+    /// <summary>
+    /// The "Shared with me" tab — modules in OTHER partitions the caller was specifically invited
+    /// into (#385), which a scope query can't reach. Default order = last accessed. Because
+    /// <c>source:accessed</c> is an INNER join on the caller's access log, that leg alone would
+    /// HIDE a share the caller never opened — the exact fresh-invitation case this tab exists for —
+    /// so the last-accessed option is a path-keyed UNION (newline-joined, deduped by the engine):
+    /// the accessed-ranked leg first, then the plain list as completeness fallback. Nothing is ever
+    /// hidden; the other sorts are single-leg.
+    /// </summary>
+    internal static UiControl BuildSharedWithMe(IReadOnlyList<string> sharedTargets, string? locale = null)
+    {
+        var pathList = string.Join("|", sharedTargets);
+        var baseQuery = $"path:{pathList} is:main";
+        string Query(HomeCatalogSort sort, string suffix) =>
+            sort == HomeCatalogSort.LastAccessed
+                ? $"{baseQuery} {suffix}\n{baseQuery} {SortSuffixLastModified}"
+                : $"{baseQuery} {suffix}";
+        var sortOptions = CatalogSorts
+            .OrderByDescending(s => s.Sort == HomeCatalogSort.LastAccessed)
+            .Select(s => new MeshSearchSortOption(
+                LocalizationCatalog.Get(s.LabelKey, locale), Query(s.Sort, s.Suffix)))
+            .ToArray();
+        return Controls.MeshSearch
+            .WithHiddenQuery(sortOptions[0].Query)
+            .WithSortOptions(sortOptions)
+            .WithShowSearchBox(false)
+            .WithViewOptions(true)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithItemLimit(50)
+            .WithMaxRows(6)
+            .WithReactiveMode(true);
+    }
+
+    /// <summary>
+    /// The Apps tab — one icon per app, each app EXACTLY ONCE: the platform's config-declared
+    /// default apps (<see cref="HomeConfig.DefaultApps"/> — e.g. <c>Store</c>, which replaces the
+    /// old hard-coded header entry, and <c>Doc</c>) unioned with the owner's installed-app records
+    /// (<c>{owner}/_App</c>, written by the Store's install flow), deduped by path. Rendered as a
+    /// reactive card grid over the app root nodes THEMSELVES, so each icon's name/image resolve
+    /// live from its node. Default order alphabetical; the last-accessed option uses the same
+    /// union-with-fallback shape as <see cref="BuildSharedWithMe"/> so a never-opened app still
+    /// shows.
+    /// </summary>
+    internal static UiControl BuildApps(
+        HomeConfig? config, IReadOnlyList<string>? installedApps, string? locale = null,
+        PresentationScreen? screen = null)
+    {
+        var cfg = config ?? HomeConfigNodeType.Defaults;
+        // An installed app's path goes straight into the `path:(…)` query below, so a marked one is
+        // dropped HERE — see the note in BuildHome for why the query string is itself a surface.
+        var paths = (screen ?? PresentationScreen.Off)
+            .Filter((cfg.DefaultApps ?? []).Concat(installedApps ?? []), p => p?.Trim('/'))
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p.Trim('/'))
+            .Where(p => p.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (paths.Count == 0)
+            return Controls.Markdown(LocalizationCatalog.Get("home.noApps", locale));
+
+        var baseQuery = $"path:({string.Join(" OR ", paths)})";
+        string Query(HomeCatalogSort sort, string suffix) =>
+            sort == HomeCatalogSort.LastAccessed
+                ? $"{baseQuery} {suffix}\n{baseQuery} {SortSuffixAlphabetical}"
+                : $"{baseQuery} {suffix}";
+        var sortOptions = CatalogSorts
+            .OrderByDescending(s => s.Sort == HomeCatalogSort.Alphabetical)
+            .Select(s => new MeshSearchSortOption(
+                LocalizationCatalog.Get(s.LabelKey, locale), Query(s.Sort, s.Suffix)))
+            .ToArray();
+        return Controls.MeshSearch
+            .WithHiddenQuery(sortOptions[0].Query)
+            .WithSortOptions(sortOptions)
+            .WithShowSearchBox(false)
+            .WithViewOptions(true)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithGridSpacing(20)
+            .WithItemLimit(48)
+            .WithMaxRows(4)
+            .WithReactiveMode(true);
+    }
+
+    /// <summary>Dedup for the Spaces tab: anything living in the Store (and therefore representable
+    /// as an installed app — plugin covers, the store root) is EXCLUDED, so an app appears exactly
+    /// once, on the Apps tab. Only non-redundant items survive: the user's own spaces, shared
+    /// workspaces, and their top-level home items.</summary>
+    private const string SpacesDedupExclusions = " -nodeType:Store/Plugin -nodeType:Store/Catalog";
+
+    /// <summary>The Spaces tab — the catalog list WITHOUT store items
+    /// (<see cref="SpacesDedupExclusions"/>) and WITHOUT an embedded search box: every client
+    /// already carries a global search in its chrome, and doubling it inside the tab is exactly the
+    /// two-search-bars problem on the mobile clients.</summary>
+    internal static UiControl BuildSpaces(string nodeOwnerId, HomeConfig? config = null, string? locale = null)
+        => BuildCatalogList(nodeOwnerId, config ?? HomeConfigNodeType.Defaults, SpacesDedupExclusions, locale)
+            .WithShowSearchBox(false);
+
+    /// <summary>
+    /// The LEGACY catalog region (<see cref="HomeStyle.Catalog"/>) — ONE tab-less list, whose shape
+    /// is DATA-DRIVEN by <paramref name="config"/> (the admin-editable <c>Admin/HomeConfig</c>
+    /// platform node; <c>null</c> ⇒ <see cref="HomeConfigNodeType.Defaults"/>). The config drives
+    /// the depth (first-level top-level entries vs the full subtree), the render (flat list vs
+    /// grouped-by-type sections), and the default sort — and a view-options "Sort by" control still
+    /// lets the user pick <b>Last accessed</b> / <b>Last modified</b> / <b>Alphabetical</b> at will.
+    /// <para>The one thing a first-level query can't reach is a module in ANOTHER partition the
+    /// caller was specifically invited into (#385): those are resolved from the caller's own
+    /// readable <c>AccessAssignment</c> grants (<paramref name="sharedTargets"/>) and appended as an
+    /// additive "Shared with me" band, present ONLY when the caller actually has such grants.</para>
     /// <para>Pure (no hub) so the catalog shape is unit-testable without standing up a hub.</para>
     /// </summary>
     internal static UiControl BuildCatalog(
         string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
-        PresentationScreen? screen = null)
+        string? locale = null, PresentationScreen? screen = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
-        var privacy = screen ?? PresentationScreen.Off;
+        var everything = BuildCatalogList(nodeOwnerId, cfg, exclusions: "", locale);
+        // Same rule as BuildHome: the shared band's targets are query-string content, so the
+        // presentation screen (#1803) applies before the query is built. The catalog list itself is
+        // a generic query and is deliberately NOT narrowed — a `-path:` clause would put the marked
+        // name in the same URL and start turning the screen into a second permission system.
+        sharedTargets = (screen ?? PresentationScreen.Off).Retain(sharedTargets);
 
-        // Sort options, DEFAULT first (so the dropdown's default selection == HiddenQuery). Each option
-        // carries its full catalog query (first-level union or subtree, per cfg.Scope); the query itself
-        // carries the sort/source, so no client-side WithSortBy (that would override the query order).
+        // No cross-partition invitations → the catalog IS the single list.
+        if (sharedTargets is not { Count: > 0 })
+            return everything;
+
+        // Additive #385 band: modules in OTHER partitions the caller was invited into, which the broad
+        // is:main query can't reach (readable by URL but invisible to a scope search). The `path:a|b|c`
+        // alternation resolves each target node, access-filtered by the mesh.
+        var pathList = string.Join("|", sharedTargets);
+        var shared = Controls.MeshSearch
+            .WithTitle(LocalizationCatalog.Get("home.sharedWithMe", locale))
+            .WithHiddenQuery($"path:{pathList} is:main sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithItemLimit(50)
+            .WithMaxRows(3)
+            .WithReactiveMode(true);
+
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 24px; width: 100%;")
+            .WithView(everything)
+            .WithView(shared);
+    }
+
+    /// <summary>
+    /// The shared catalog-list core (the "everything" search) used by both the legacy
+    /// <see cref="BuildCatalog"/> (no exclusions) and the Spaces tab
+    /// (<see cref="SpacesDedupExclusions"/>). Sort options DEFAULT first (so the dropdown's default
+    /// selection == HiddenQuery); each option carries its full catalog query (first-level union or
+    /// subtree, per <see cref="HomeConfig.Scope"/>) — the query itself carries the sort/source, so
+    /// no client-side WithSortBy (that would override the query order).
+    /// </summary>
+    private static MeshSearchControl BuildCatalogList(
+        string nodeOwnerId, HomeConfig cfg, string exclusions, string? locale)
+    {
         var sortOptions = CatalogSorts
             .OrderByDescending(s => s.Sort == cfg.DefaultSort)
-            .Select(s => new MeshSearchSortOption(s.Label, CatalogQuery(cfg.Scope, nodeOwnerId, s.Suffix)))
+            .Select(s => new MeshSearchSortOption(
+                LocalizationCatalog.Get(s.LabelKey, locale),
+                CatalogQuery(cfg.Scope, nodeOwnerId, s.Suffix, exclusions)))
             .ToArray();
 
         var everything = Controls.MeshSearch
@@ -709,45 +922,8 @@ public static class UserActivityLayoutAreas
         if (cfg.Render == HomeCatalogRender.Grouped)
             everything = everything.WithSectionCounts(true).WithCollapsibleSections(true);
 
-        // 🚨 The presentation screen (#1803) is applied to the shared band's targets HERE, before the
-        // query is built — not only where the results are painted. These paths are INTERPOLATED INTO
-        // THE QUERY STRING, which the view exposes in its search-options editor and carries in the
-        // `hq=` parameter of "open in search". A marked name reaching the address bar mid-presentation
-        // is the leak, whether or not a card for it is ever drawn.
-        var visibleShared = privacy.Retain(sharedTargets);
-
-        // No cross-partition invitations → the catalog IS the single list.
-        if (visibleShared.Count == 0)
-            return everything;
-
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("gap: 24px; width: 100%;")
-            .WithView(everything)
-            .WithView(BuildSharedBand(visibleShared));
+        return everything;
     }
-
-    /// <summary>
-    /// The additive #385 "Shared with me" band: modules in OTHER partitions the caller was invited
-    /// into, which the broad <c>is:main</c> query can't reach (readable by URL but invisible to a
-    /// scope search). The <c>path:a|b|c</c> alternation resolves each target node, access-filtered
-    /// by the mesh. Pure, and separate from <see cref="BuildCatalog"/> so its query — which carries
-    /// the caller's target PATHS verbatim — is assertable without standing up a layout host.
-    /// </summary>
-    /// <param name="targets">The scopes to list, already screened by the caller.</param>
-    internal static MeshSearchControl BuildSharedBand(IReadOnlyList<string> targets)
-        => Controls.MeshSearch
-            .WithTitle(SharedWithMeTitle)
-            .WithHiddenQuery($"path:{string.Join("|", targets)} is:main sort:LastModified-desc")
-            .WithShowSearchBox(false)
-            .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false)
-            .WithMaxColumns(4)
-            .WithItemLimit(50)
-            .WithMaxRows(3)
-            .WithReactiveMode(true);
 
     // ── Public profile + owner-editable showcase ───────────────────────────────────────────────────
 
@@ -1130,20 +1306,20 @@ public static class UserActivityLayoutAreas
     /// typed↔JsonElement frames, and <c>as</c> → null on JsonElement frames flips the band in/out,
     /// the render storm that vanished the home on chat launch).</para>
     /// </summary>
-    internal static UiControl? BuildPinnedItems(User? user, PresentationScreen? screen = null)
+    internal static UiControl? BuildPinnedItems(
+        User? user, bool withTitle = true, PresentationScreen? screen = null)
     {
-        // 🚨 Same reason as the shared band in BuildCatalog: a pinned path is INTERPOLATED INTO THE
-        // QUERY STRING this control carries, so it must be dropped here rather than only where the
-        // resulting card would be painted — otherwise the marked name still travels into the search
-        // box's options editor and the `hq=` URL. Display-only: the pin itself is untouched and comes
-        // straight back when the mode is turned off.
+        // 🚨 Same reason as the shared band and the Apps tab: a pinned path is INTERPOLATED INTO THE
+        // QUERY STRING this control carries, so a marked one is dropped here rather than only where
+        // its card would be painted — otherwise the marked name still travels into the search box's
+        // options editor and the `hq=` URL. Display-only: the pin itself is untouched and comes
+        // straight back when presentation mode is turned off (#1803).
         var pinnedPaths = (screen ?? PresentationScreen.Off).Retain(user?.PinnedPaths);
         if (pinnedPaths.Count == 0)
             return null;
 
         var pathsClause = string.Join(" OR ", pinnedPaths);
-        return Controls.MeshSearch
-            .WithTitle("Pinned")
+        var search = Controls.MeshSearch
             .WithHiddenQuery($"path:({pathsClause}) sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(false)
@@ -1156,6 +1332,7 @@ public static class UserActivityLayoutAreas
             .WithItemLimit(24)
             .WithMaxRows(2)
             .WithReactiveMode(true);
+        return withTitle ? search.WithTitle("Pinned") : search;
     }
 
 }
