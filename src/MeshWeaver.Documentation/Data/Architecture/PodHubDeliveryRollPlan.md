@@ -102,9 +102,14 @@ Two lifecycle details that are the whole correctness argument:
 
 `OrderedRouteDispatcher` is unchanged and stays: the per-destination FIFO is a correctness
 requirement of the delta protocol, and a call into a `[Reentrant]` grain does not restore ordering.
-`StreamMessageSizeGuard` (#1890) does not disappear either — it **retargets**, from Orleans'
-1 MiB memory-stream block to Orleans' `MaxMessageBodySize`. #1890 was itself "the NACK died at the
-wall it was describing"; reproducing that one layer over would be the same bug at a new address.
+`StreamMessageSizeGuard` (#1890) does not disappear either — it **retargets**. It still guards the
+stream fallback, where the wall is Orleans' 1 MiB memory-stream block and crossing it is *silent*
+(the publish succeeds and the pulling agent rejects the message forever, naming a queue id and
+nothing else). On the directed call the wall is Orleans' own `MaxMessageBodySize`, and crossing it
+**throws** — so the router NACKs instead of dropping, which is the outcome the guard exists to
+produce. #1890 was itself "the NACK died at the wall it was describing"; reproducing that one layer
+over would be the same bug at a new address, so when the fallback goes the guard moves to the call's
+wall rather than being deleted with it.
 
 ## What this finally delivers
 
