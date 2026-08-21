@@ -43,6 +43,7 @@ public class MarkdownHtmlRenderer
     private readonly ISynchronizationStream? _stream;
     private readonly Action<string>? _runSubmission;
     private readonly Func<string, CodeCellRunState>? _runState;
+    private readonly MarkdownCellEditing? _cellEditing;
 
     /// <summary>
     /// Initialises the renderer with the current UI theme and an optional synchronization stream
@@ -56,16 +57,23 @@ public class MarkdownHtmlRenderer
     /// <param name="runState">Answers, per submission id, whether the cell's displayed output still belongs to
     /// the code shown (the hosting view's <c>CodeCellRunTracker</c>). Null → every cell renders as
     /// <see cref="CodeCellRunState.NeverRun"/>, i.e. no staleness claim at all.</param>
+    /// <param name="cellEditing">Supplied by the hosting view ONLY when the viewer may write the node —
+    /// the cells' code segments then hydrate into inline editors instead of static <c>&lt;pre&gt;</c>
+    /// blocks (#1636). Null (the default) is the read-only rendering, unchanged. 🚨 This renderer makes
+    /// NO permission decision of its own: passing this argument IS the decision, taken server-side by
+    /// the layout area that produced the control, exactly as the Code-node cell decides it.</param>
     public MarkdownHtmlRenderer(
         DesignThemeModes mode,
         ISynchronizationStream? stream,
         Action<string>? runSubmission = null,
-        Func<string, CodeCellRunState>? runState = null)
+        Func<string, CodeCellRunState>? runState = null,
+        MarkdownCellEditing? cellEditing = null)
     {
         _mode = mode;
         _stream = stream;
         _runSubmission = runSubmission;
         _runState = runState;
+        _cellEditing = cellEditing;
     }
 
     /// <summary>
@@ -128,6 +136,19 @@ public class MarkdownHtmlRenderer
                     break;
                 case { Name: "a" } when node.GetAttributeValue("class", "").Contains(LayoutAreaMarkdownRenderer.UcrLink):
                     RenderUcrLink(builder, node);
+                    break;
+                // The cell's CODE segment, when the hosting view says this viewer may write the node:
+                // hydrate the static <pre> into an inline editor, exactly as the toolbar marker below
+                // is hydrated into the Run bar. A read-only viewer — and every client that does not
+                // implement this — falls through to the default case and keeps the <pre>.
+                //
+                // 🚨 Ordered BEFORE the toolbar case only for readability; the two classes are
+                // disjoint. It must stay ahead of the `default:` arm, which is what renders the div
+                // and its children today.
+                case { Name: "div" } when _cellEditing is not null
+                                          && node.GetAttributeValue("class", "").Contains(ExecutableCodeBlockRenderer.CellCodeClass)
+                                          && node.GetAttributeValue(ExecutableCodeBlockRenderer.SubmissionIdAttribute, "") is { Length: > 0 } cellId:
+                    RenderCellEditor(builder, node, cellId);
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains(ExecutableCodeBlockRenderer.CellToolbarClass):
                     var submissionId = node.GetAttributeValue(ExecutableCodeBlockRenderer.SubmissionIdAttribute, "");
@@ -245,6 +266,31 @@ public class MarkdownHtmlRenderer
                 || c is '=' or '"' or '\'' or '>' or '/' or '<')
                 return false;
         return true;
+    }
+
+    /// <summary>
+    /// Emits the inline editor for one executable cell. The seed is the code the fence holds NOW —
+    /// taken from the hosting view's current parse when it can answer, else read back out of the
+    /// rendered <c>&lt;pre&gt;</c>. <c>DeEntitize</c> is not optional on that fallback: the fence body
+    /// is HTML-escaped on the way in, so <c>&amp;lt;</c> would otherwise reach Monaco literally and a
+    /// generic type argument would arrive as mojibake.
+    /// <para>Keyed on the submission id so a re-render diffs the SAME editor rather than tearing one
+    /// down and mounting another under the viewer's cursor.</para>
+    /// </summary>
+    private void RenderCellEditor(RenderTreeBuilder builder, HtmlNode node, string submissionId)
+    {
+        var editing = _cellEditing!;
+        var seed = editing.CodeOf?.Invoke(submissionId)
+                   ?? MarkdownFenceEditing.StripFenceHeader(HtmlEntity.DeEntitize(node.InnerText));
+        builder.OpenComponent<MarkdownCodeCellEditor>(1);
+        builder.SetKey(submissionId);
+        builder.AddAttribute(2, nameof(MarkdownCodeCellEditor.SubmissionId), submissionId);
+        builder.AddAttribute(3, nameof(MarkdownCodeCellEditor.Language),
+            node.GetAttributeValue(ExecutableCodeBlockRenderer.LanguageAttribute, "csharp"));
+        builder.AddAttribute(4, nameof(MarkdownCodeCellEditor.NodePath), editing.NodePath);
+        builder.AddAttribute(5, nameof(MarkdownCodeCellEditor.InitialCode), seed);
+        builder.AddAttribute(6, nameof(MarkdownCodeCellEditor.OnBufferChanged), editing.OnBufferChanged);
+        builder.CloseComponent();
     }
 
     private void RenderUcrLink(RenderTreeBuilder builder, HtmlNode node)

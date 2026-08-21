@@ -105,6 +105,21 @@ public partial class CollaborativeMarkdownView
     // code routinely changes under a result pane still showing the previous run.
     private readonly CodeCellRunTracker _runTracker = new();
 
+    // What each editable cell currently HOLDS, keyed by submission id — written on every keystroke
+    // by MarkdownCodeCellEditor, read by ResubmitBlock. Auto-save is debounced by design, so the
+    // stored document lags the buffer by up to half a second: without this, Run pressed immediately
+    // after typing executes the code the learner just replaced. Same reason
+    // CodeLayoutAreas.RunFromBuffer exists for the Code-node cell. Per-view, renderer-thread only,
+    // so a plain dictionary — like _runTracker beside it.
+    private readonly Dictionary<string, string> _cellBuffers = new(StringComparer.OrdinalIgnoreCase);
+
+    // Cached once: a method group allocates a NEW delegate on every evaluation, and these travel to
+    // the editor component as PARAMETERS. A parameter that changes identity every render marks the
+    // child dirty on every render — for a live Monaco that is exactly the churn the
+    // "the control must be identical across re-renders" rule exists to avoid.
+    private Func<string, string?>? _cellCode;
+    private Action<string, string>? _recordCellBuffer;
+
     private Address ResolveActivityAddress()
     {
         var ownerPath = KernelOwnerPath();
@@ -564,11 +579,32 @@ public partial class CollaborativeMarkdownView
         // Cell toolbars' Run buttons are enabled only once the kernel activity is routable —
         // the same gate as the live result-area embed above. The run state is computed against the
         // CURRENT parse, so a cell the author just edited renders as stale until it is re-run.
+        // 🚨 The cells are editable exactly when the viewer may WRITE this node — BoundCanEdit,
+        // which the layout area folded out of hub.GetEffectivePermissions server-side (and which a
+        // pinned historical comparison already forces false: there is no live text to edit there).
+        // Passing null is the read-only rendering. No client-side permission re-derivation.
+        var editing = BoundCanEdit
+            ? new MarkdownCellEditing(BoundNodePath, _cellCode ??= CellCode, _recordCellBuffer ??= RecordCellBuffer)
+            : null;
+
         var renderer = new MarkdownHtmlRenderer(Mode, Stream,
             _kernelReady ? ResubmitBlock : null,
-            id => _runTracker.StateOf(id, _codeSubmissions));
+            id => _runTracker.StateOf(id, _codeSubmissions),
+            editing);
         renderer.ShowReferencesSection = true;
         renderer.RenderHtml(builder, html);
+    }
+
+    // The code the CURRENT parse holds for a cell — the editor's seed, so it starts from the same
+    // text the kernel would run rather than from re-decoded HTML.
+    private string? CellCode(string submissionId) =>
+        _codeSubmissions?.FirstOrDefault(
+            s => string.Equals(s.Id, submissionId, StringComparison.OrdinalIgnoreCase))?.Code;
+
+    private void RecordCellBuffer(string submissionId, string text)
+    {
+        if (!string.IsNullOrEmpty(submissionId))
+            _cellBuffers[submissionId] = text;
     }
 
     // Re-posts one executable block's submission to the per-view kernel activity — the cell
@@ -580,6 +616,10 @@ public partial class CollaborativeMarkdownView
             .FirstOrDefault(s => string.Equals(s.Id, submissionId, StringComparison.OrdinalIgnoreCase));
         if (submission is null || !_kernelReady)
             return;
+        // Run the BUFFER, not the file. The document is re-parsed only after the debounced auto-save
+        // lands, so posting `submission` verbatim would execute code the learner has already
+        // replaced — and hand back a confidently-rendered result for source nobody is looking at.
+        submission = ApplyCellBuffer(submission);
         _runTracker.Record(submission);
         Hub.Post(submission, o => o.WithTarget(KernelAddress));
         // The toolbar's OnRun is a plain Action, not an EventCallback, so nothing re-renders THIS
@@ -587,6 +627,17 @@ public partial class CollaborativeMarkdownView
         // so without this the "stale cell" chip survives the very re-run that cleared it.
         StateHasChanged();
     }
+
+    /// <summary>
+    /// The submission as the viewer's editor currently reads, when an editable cell has typed text
+    /// that has not been persisted yet. Unedited cells return the parsed submission unchanged.
+    /// </summary>
+    private SubmitCodeRequest ApplyCellBuffer(SubmitCodeRequest submission) =>
+        submission.Id is { Length: > 0 } id
+        && _cellBuffers.TryGetValue(id, out var buffer)
+        && buffer != submission.Code
+            ? submission with { Code = buffer }
+            : submission;
 
     private string RenderMarkdown(string content)
     {
