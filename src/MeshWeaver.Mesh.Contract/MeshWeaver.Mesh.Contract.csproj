@@ -12,6 +12,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- PresentationScreenExtensions.LastKnownOnFault is observable-in / observable-out precisely so
+         the faulting-profile leg (which a live mesh cannot arrange on demand) is directly testable. -->
+    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Data.Contract\MeshWeaver.Data.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\MeshWeaver.Messaging.Contract\MeshWeaver.Messaging.Contract.csproj" />

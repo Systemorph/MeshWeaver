@@ -1,4 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- ChatCompletionOrchestrator's presentation-screen projection (#1803) is pinned in
+         PresentationScreenTest, next to the rest of the screen's behaviour, so the completion
+         surface's rule cannot drift from the one the tile surfaces apply. -->
+    <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
+  </ItemGroup>
   <PropertyGroup>
     <ProjectGuid>{93595120-3ccf-45c6-8783-4829a1120166}</ProjectGuid>
   </PropertyGroup>

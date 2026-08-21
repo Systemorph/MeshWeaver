@@ -192,6 +192,10 @@ public static class MeshNodeLayoutAreas
             .WithView(PinLayoutArea.PinArea, PinLayoutArea.Pin)
             .WithView(PinLayoutArea.UnpinArea, PinLayoutArea.Unpin)
             .WithView(PinLayoutArea.PinnedThumbnailArea, PinLayoutArea.PinnedThumbnail)
+            // Presentation mode (#1803): the per-node mark lives beside Pin because it is the same
+            // shape — a viewer-scoped list of paths on the viewer's OWN profile, never on the node.
+            .WithView(PresentationLayoutArea.HideArea, PresentationLayoutArea.Hide)
+            .WithView(PresentationLayoutArea.ShowArea, PresentationLayoutArea.Show)
             // The OgCard link-preview area rides the MeshWeaver.OgCard MODULE (its attribute
             // registers on every per-node hub) — delisting it drops the server-side external
             // URL-fetch surface.

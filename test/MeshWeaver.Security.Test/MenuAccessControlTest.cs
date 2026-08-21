@@ -118,6 +118,15 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             .Should().Within(20.Seconds()).Match(until);
     }
 
+    /// <summary>
+    /// The presentation-mode mark (#1803), which appears for EVERY signed-in viewer — Viewer role
+    /// included — because it is not gated on any permission of the node being marked. It writes the
+    /// viewer's OWN profile (<c>User.HiddenPaths</c>), exactly like Pin; the node is untouched, and
+    /// the mark grants and denies nothing. If this ever starts depending on a role, that is the
+    /// feature turning into a second access-control system and the bug is in the product.
+    /// </summary>
+    private const string PresentationItem = "Hide in presentation mode";
+
     /// <summary>Predicate: the menu's label set equals <paramref name="expected"/> exactly.</summary>
     private static Func<IReadOnlyList<NodeMenuItemDefinition>, bool> LabelsAre(params string[] expected)
         => items => items.Select(i => i.Label).ToHashSet().SetEquals(expected);
@@ -181,19 +190,21 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Wait until the reactive menu settles on exactly the Viewer set.
         var items = await FetchAllMenuItems(client, nodeAddress,
-            LabelsAre("Files", "Data", "Versions", "Pin"));
+            LabelsAre("Files", "Data", "Versions", "Pin", PresentationItem));
 
         Output.WriteLine($"Menu items for Viewer: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            new[] { "Files", "Data", "Versions", "Pin" },
+            new[] { "Files", "Data", "Versions", "Pin", PresentationItem },
             JsonSerializerOptions.Default,
             because: "Viewer has only Read — no Create, Update, Delete, or Export items, but DATA is "
                      + "read-gated by design: the underlying record stays visible even when a type's "
                      + "Overview is a designed page (Pin requires no permission; Settings is a dedicated "
-                     + "header button; Threads moved to the AI menu slot)");
+                     + "header button; Threads moved to the AI menu slot). 'Hide in presentation mode' "
+                     + "belongs here for the same reason Pin does: it writes the VIEWER's own profile, "
+                     + "so it is not gated on any permission of this node (#1803)");
     }
 
     [Fact(Timeout = 30000)]
@@ -214,7 +225,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var expected = new[]
         {
             "Edit", "Create MeshNode", "Copy", "Import MeshNode", "Files", "Data", "Export MeshNode", "Versions", "Pin", "Recycle",
-            "Stop synchronization"
+            "Stop synchronization", PresentationItem
         };
         var items = await FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
 
@@ -242,7 +253,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var expected = new[]
         {
             "Edit", "Create MeshNode", "Copy", "Move", "Import MeshNode", "Files", "Data", "Export MeshNode", "Versions", "Delete", "Pin", "Recycle",
-            "Stop synchronization"
+            "Stop synchronization", PresentationItem
         };
         var items = await FetchAllMenuItems(client, nodeAddress, LabelsAre(expected));
 
@@ -250,7 +261,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(13, "Admin should see all default menu items across Node and Mesh contexts plus Stop synchronization (Settings is a dedicated header button; Threads moved to the AI menu slot)");
+        items.Should().HaveCount(14, "Admin should see all default menu items across Node and Mesh contexts plus Stop synchronization and the presentation-mode mark (Settings is a dedicated header button; Threads moved to the AI menu slot)");
         items.Select(i => i.Label).Should().BeEquivalentTo(expected, JsonSerializerOptions.Default);
     }
 
