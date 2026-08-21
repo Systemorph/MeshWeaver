@@ -252,9 +252,21 @@ public partial class NamedAreaView
                         // report, rather than spin forever (the inexistent-address storm) or
                         // silently keep a stale render that never updates. The earlier
                         // "keep previous, no retry" behaviour is now the retry's job.
-                        Logger.LogWarning(error,
-                            "Area {Area} unavailable after {Retries} reactive retries — reporting failure. Hub={Message}",
-                            AreaToBeRendered, AreaStreamRetry.DefaultMaxRetries, error.Message);
+                        // A RECYCLE that never came back is a different report from an address
+                        // that never became addressable, and the retry above already treated the
+                        // two differently (AreaStreamRetry: the recycle keeps probing under
+                        // DefaultRecycleRecoveryBudget instead of spending five attempts). Say
+                        // which one happened — "it may still be initialising … Reload to retry"
+                        // asked the user to fix the app's own transient, and named the wrong one.
+                        var recycled = AreaErrorClassifier.IsHubRecycling(error);
+                        if (recycled)
+                            Logger.LogWarning(error,
+                                "Area {Area} was served by a RECYCLING hub that did not come back within {Budget} — reporting failure. Hub={Message}",
+                                AreaToBeRendered, AreaStreamRetry.DefaultRecycleRecoveryBudget, error.Message);
+                        else
+                            Logger.LogWarning(error,
+                                "Area {Area} unavailable after {Retries} reactive retries — reporting failure. Hub={Message}",
+                                AreaToBeRendered, AreaStreamRetry.DefaultMaxRetries, error.Message);
                         try
                         {
                             InvokeAsync(() =>
@@ -262,10 +274,14 @@ public partial class NamedAreaView
                                 if (IsViewDisposed) return;
                                 try
                                 {
-                                    RootControl = new MarkdownControl(
-                                        $"**Area unavailable.** The view at `{AreaToBeRendered}` did not become "
-                                        + $"addressable after {AreaStreamRetry.DefaultMaxRetries} retries — it may still be "
-                                        + "initialising or its NodeType may be compiling. Reload to retry.");
+                                    RootControl = new MarkdownControl(recycled
+                                        ? $"**Area unavailable.** The hub serving `{AreaToBeRendered}` was being "
+                                          + $"recycled and did not come back within "
+                                          + $"{AreaStreamRetry.DefaultRecycleRecoveryBudget.TotalSeconds:0}s. "
+                                          + "Reload to retry."
+                                        : $"**Area unavailable.** The view at `{AreaToBeRendered}` did not become "
+                                          + $"addressable after {AreaStreamRetry.DefaultMaxRetries} retries — it may still be "
+                                          + "initialising or its NodeType may be compiling. Reload to retry.");
                                     RequestStateChange();
                                 }
                                 catch (ObjectDisposedException) { /* renderer gone */ }
