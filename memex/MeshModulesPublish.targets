@@ -55,7 +55,6 @@
          endpoint variants; see UiExtensibility.md "Razor assets from a runtime-loaded
          assembly"), not just this list. -->
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <!-- Service modules NOT flippable for compile-time coupling (reasons: PR #1681) — Speech
          (ISpeechTranscriber lives in the module; no contract split), Social (ApiCredentialNodeType
@@ -70,6 +69,13 @@
     <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2). -->
     <!-- Social: flipped once the portal stopped compiling against it for the ApiCredential
          type (the module registers that itself now). Its closure ships here. -->
+    <!-- The FIRST view pack on the closure lane (#1974). It was blocked on static web assets
+         until two things shipped: the host-side provider that serves modules/<Name>/wwwroot at
+         _content/<Name>/ (#1724), and the bundle actually CARRYING that wwwroot (#1987) — before
+         which a landed pack rendered unstyled with its collocated JS 404ing. Analysis leads
+         because it is the simplest: six scoped .razor.css files, no collocated JS, no package
+         references of its own. -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <!-- Import + its PRIVATE closure: the SIX MeshWeaver.DataSetReader* projects (the base, Csv,
          Excel, Excel.BinaryFormat, Excel.OpenXmlFormat, Excel.Utils) and MeshWeaver.DataStructures
