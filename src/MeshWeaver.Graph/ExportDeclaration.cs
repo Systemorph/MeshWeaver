@@ -69,7 +69,6 @@ public sealed record ExportDeclaration
         Formats = ExportFormats.Pdf | ExportFormats.Send,
         Composition = ExportComposition.SlideDeck,
     };
-
 }
 
 /// <summary>Chains an <see cref="ExportDeclaration"/> onto a node type's hub configuration.</summary>
