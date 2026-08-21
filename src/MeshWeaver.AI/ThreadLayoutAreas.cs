@@ -58,7 +58,10 @@ public static class ThreadLayoutAreas
                 // copied onto the thread at creation), same wiring as the composer node's area.
                 .WithView(ThreadComposerView.SelectorsArea, ThreadComposerView.ComposerSelectors)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
-                .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
+                .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog)
+                // One compact row of the Threads-app vertical rail (title + ✕ close overlay);
+                // consumed as MeshSearch.ItemArea by the user hub's Threads app page.
+                .WithView(ThreadNodeType.RailItemArea, ThreadRailItem.View));
 
     /// <summary>
     /// Side panel menu items (New Chat, History, Full Screen). Static set — emitted once.
