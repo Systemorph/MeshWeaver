@@ -86,6 +86,70 @@ public class StorageModuleLayoutTest
     }
 
     /// <summary>
+    /// module name · the RID · the LOADABLE native the backend calls into. Issue #1728: the closure
+    /// lane's prune used to delete <c>runtimes/</c> outright, on the reasoning that
+    /// <c>Assembly.LoadFrom</c> never consults a module's deps.json — true, and the reason nothing
+    /// could ever find the payload. Both backends on this lane genuinely ship natives, so that prune
+    /// shipped two storage backends that fault at their first native call, in exactly the two
+    /// suites that green-SKIP when their emulator is unreachable.
+    /// </summary>
+    public static TheoryData<string, string, string> Natives() => new()
+    {
+        // Snowflake.Data P/Invokes its own mini-core; Mono.Unix rides with it.
+        { "MeshWeaver.Hosting.Snowflake", "linux-x64", "libsf_mini_core.so" },
+        { "MeshWeaver.Hosting.Snowflake", "linux-arm64", "libMono.Unix.so" },
+        // Cosmos' ServiceInterop is a native win-x64 DLL (query plan evaluation).
+        { "MeshWeaver.Hosting.Cosmos", "win-x64", "Microsoft.Azure.Cosmos.ServiceInterop.dll" },
+    };
+
+    /// <summary>
+    /// The native payload rides the closure, under the RID tree the host resolves at load time
+    /// (<c>ModuleNativeAssets</c>). Asserted per (module, RID, file) rather than by counting the
+    /// tree: a count would pass on any surviving RID, and the RID a deployment needs is the one
+    /// that must be there.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Natives))]
+    public void ClosureLane_KeepsTheBackendsLoadableNatives(
+        string moduleName, string runtimeIdentifier, string nativeFile)
+    {
+        var expected = Path.Combine(
+            AppContext.BaseDirectory, "modules", moduleName,
+            "runtimes", runtimeIdentifier, "native", nativeFile);
+        Assert.True(
+            File.Exists(expected),
+            $"{moduleName}: '{nativeFile}' is missing from runtimes/{runtimeIdentifier}/native. A module's "
+            + "native payload exists nowhere else, and ModuleNativeAssets resolves it from exactly this "
+            + "path — so a deployment selecting this backend would fault at its first P/Invoke. Check "
+            + "prune (0) in memex/MeshModulesPublish.targets (#1728).");
+    }
+
+    /// <summary>
+    /// The directory the host probes is the directory the lane wrote. Pins the two halves of #1728
+    /// to each other: a prune that keeps a tree the resolver never looks in, or a resolver that
+    /// looks where the prune does not keep, would each pass its own test alone.
+    ///
+    /// <para>Compared as a DIRECTORY, not a file name: the decorated file forms are per-platform
+    /// (<c>libX.so</c> / <c>libX.dylib</c> / <c>X.dll</c>, covered by <c>ModuleNativeAssetTest</c>),
+    /// and a win-x64 payload is correctly unresolvable on Linux. The layout claim is not.</para>
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Natives))]
+    public void TheResolverProbesExactlyWhereTheLaneWrote(
+        string moduleName, string runtimeIdentifier, string nativeFile)
+    {
+        var moduleDirectory = Path.Combine(AppContext.BaseDirectory, "modules", moduleName);
+        var laidOut = Path.GetDirectoryName(Path.Combine(
+            moduleDirectory, "runtimes", runtimeIdentifier, "native", nativeFile));
+
+        var probed = ModuleNativeAssets
+            .CandidatePaths(moduleDirectory, "probe", runtimeIdentifier)
+            .Select(Path.GetDirectoryName)
+            .ToList();
+        Assert.Contains(laidOut, probed);
+    }
+
+    /// <summary>
     /// The seam binds: loading the module the way <c>Modules:Assemblies</c> does registers the keyed
     /// factory <c>Graph:Storage:Type</c> resolves, and the registration comes from the module folder
     /// DLL. Then <c>Create</c> runs far enough to JIT against the platform's contract types and its

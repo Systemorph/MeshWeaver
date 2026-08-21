@@ -237,6 +237,31 @@ none; the engine's package closure still rides the app via other references). Be
 DLL exists nowhere else, the closure lane also lays it into a plain build's output
 (`bin/…/modules/`), keeping `dotnet run` on a host working without a publish step.
 
+### Native assets — `runtimes/<rid>/native/` (#1728)
+
+A module is loaded with `Assembly.LoadFrom`, which never consults the module's own `deps.json`, so
+the runtime's fallback probe is the module's FLAT folder and nothing else. That is why the closure
+lane's first prune used to delete `runtimes/` outright — and why a module could not ship a native
+library at all.
+
+It can now. The publish keeps `runtimes/<rid>/native/**` (dropping the managed `runtimes/<rid>/lib`
+trees, which genuinely need the deps.json, and `.a`/`.lib` link-time artifacts, which nothing can
+open), and the host resolves them at load time: `ModuleNativeAssets` subscribes
+`AssemblyLoadContext.Default.ResolvingUnmanagedDll`, derives the module folder from the REQUESTING
+assembly's own location — so a dependency such as `SkiaSharp.dll`, which declares the P/Invokes
+rather than the module assembly, resolves too — and probes
+`modules/<Name>/runtimes/<current-rid>/native/`, then the flat folder.
+
+Resolution rather than placement, because every module MSBuild invocation strips RID globals by
+design (#1675/#1676): a module publish is always portable, so the RID is unknown when the bits are
+laid out and only the host knows its own. The RID probe is the running RID plus its portable form
+(`osx.14-arm64` → `osx-arm64`); it deliberately does NOT walk a wider graph, because
+`linux-musl-x64` and `linux-x64` are different C libraries and loading one for the other crashes
+instead of failing cleanly.
+
+Two modules already needed this: Snowflake P/Invokes `libsf_mini_core.*` (and Mono.Unix), and
+Cosmos' query-plan `ServiceInterop` is native. Both were shipping with those files pruned away.
+
 ## The bundle lane — modules as Store packages (#1664)
 
 A compiled module reaches a deployment one of two ways: shipped in the image (the baseline above),
