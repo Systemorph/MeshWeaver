@@ -183,6 +183,31 @@ public class ModuleStaticAssetDiscoveryTest : IDisposable
             .Which.Should().Be($"_content/{ModuleName}/{ModuleName}.styles.css");
     }
 
+
+    /// <summary>
+    /// A pack with collocated JS but no <c>.razor.css</c> of its own still emits an aggregate — one
+    /// made of NOTHING but the dependency imports (211 bytes, measured for AppleMaps and
+    /// OpenStreetMap when they flipped, #1974). Once the host-provided ones are stripped there is
+    /// nothing left, so the host must not link it: every page render would fetch an empty file.
+    ///
+    /// <para>The emptiness is only knowable AFTER stripping — the file on disk is 211 bytes — which
+    /// is why the decision cannot be a test on the landed bytes.</para>
+    /// </summary>
+    [Fact]
+    public void AggregateOfNothingButHostProvidedImports_IsNotLinked()
+    {
+        // The host provides this dependency, so the module's import of it is the strippable kind.
+        File.WriteAllText(
+            Path.Combine(ModuleWwwroot, $"{ModuleName}.styles.css"),
+            "@import '_content/SharedDep/SharedDep.abc123.bundle.scp.css';\n");
+
+        var manifest = Discover(WithAssets);
+
+        manifest.Stylesheets.Should().BeEmpty();
+        // …and the module still contributes its ordinary asset mounts: the stylesheet decision
+        // must not short-circuit the dependency walk that follows it.
+        manifest.Mounts.Should().NotBeEmpty();
+    }
     /// <summary>
     /// A module with no <c>modules/&lt;Name&gt;/wwwroot</c> contributes nothing and does not throw.
     /// That is every module today — the step-1 double-ship prunes the folder empty — so this is
