@@ -383,6 +383,21 @@ public static class ModulePackCommand
         // The package tree, walked in a stable order so two packs of the same tree produce
         // byte-identical manifests. obj/bin are a developer's build residue, never package content
         // — the same exclusions PluginPacker applies.
+        // 🚨 STATIC WEB ASSETS ride the bundle. A view pack's CSS/JS reaches the browser through
+        // the host's build-time static-web-assets graph — i.e. through the ProjectReference the
+        // module lane removes — so without this a landed view pack renders unstyled and its
+        // collocated JS 404s. A standalone RCL publish lays them under wwwroot/ (its own assets at
+        // the root, dependencies' already namespaced under wwwroot/_content/<Dep>/), which is the
+        // exact shape MeshModuleStaticAssetExtensions serves from modules/<Name>/wwwroot.
+        var assetRoot = Path.Combine(moduleDirectory, "wwwroot");
+        var staticAssets = Directory.Exists(assetRoot)
+            ? Directory.EnumerateFiles(assetRoot, "*", SearchOption.AllDirectories)
+                .Select(f => "wwwroot/" + Path.GetRelativePath(assetRoot, f)
+                    .Replace(Path.DirectorySeparatorChar, '/'))
+                .OrderBy(r => r, StringComparer.Ordinal)
+                .ToList()
+            : [];
+
         var contentFiles = new List<string>();
         var includeSource = false;
         if (contentDirectory is not null)
@@ -430,7 +445,9 @@ public static class ModulePackCommand
                 // Diagnostic: the exact platform build behind these bytes. The consumer's GATE is
                 // the module section's minMeshVersion floor below.
                 frameworkMvid,
-                module = new { assemblyName = moduleName, assemblies = closure, minMeshVersion },
+                module = new { assemblyName = moduleName, assemblies = closure, minMeshVersion,
+                    staticAssets = staticAssets.Count > 0 ? staticAssets : null,
+                },
                 // DECLARED, so BundleReader.ReadContent stays manifest-driven — these files are
                 // written into a consumer's working tree, and a glob would recreate anything a
                 // future producer happens to drop in the folder.
@@ -454,6 +471,13 @@ public static class ModulePackCommand
                     NuGetPackageWriter.ModuleEntryPathFor(fileName), () => File.OpenRead(path));
             })
             .ToList();
+
+        entries.AddRange(staticAssets.Select(relative =>
+        {
+            var path = Path.Combine(moduleDirectory, relative.Replace('/', Path.DirectorySeparatorChar));
+            return new NuGetPackageWriter.Entry(
+                NuGetPackageWriter.ModuleAssetEntryPathFor(relative), () => File.OpenRead(path));
+        }));
 
         entries.AddRange(contentFiles.Select(relative =>
         {

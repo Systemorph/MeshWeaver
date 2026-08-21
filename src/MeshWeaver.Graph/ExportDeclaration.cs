@@ -1,4 +1,3 @@
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph;
@@ -31,13 +30,21 @@ public enum ExportComposition
 /// and how the export templates compose the document. Set on the type's hub configuration via
 /// <see cref="ExportDeclarationExtensions.WithExport"/> (the same
 /// <c>MessageHubConfiguration.Set</c> idiom as <see cref="PageLayoutOptions"/>) and read by the
-/// ONE generic export menu provider and the export layout area — replacing the per-type compiled
-/// providers that each hard-coded a NodeType comparison (#1576).
+/// ONE generic export menu provider, the export layout area and the export TEMPLATES — replacing
+/// the per-type compiled providers and template branches that each hard-coded a NodeType
+/// comparison (#1576).
 /// <para>Because the declaration travels on the hub configuration, a PLUGIN node type declares
-/// its exports in its own configuration lambda — no compiled code needs to know the type. Until
-/// every plugin build compiles against a platform that ships this API,
-/// <see cref="Resolve"/> carries the ONE transition fallback (a suffix-aware Deck check) — the
-/// bridge #1576 deletes.</para>
+/// its exports in its own configuration lambda — <b>no compiled code needs to know the type, and
+/// since #1576 none does</b>. Readers ask the configuration directly
+/// (<c>Configuration.Get&lt;ExportDeclaration&gt;()</c>); the transition fallback that briefly
+/// bridged plugin decks compiled against an older platform — a suffix-aware
+/// <c>DeckNodeType.Matches</c> check — is deleted, because <c>Publish/Deck</c> now declares
+/// (MeshWeaver.Plugins#553). A type that declares nothing exports nothing, which is the honest
+/// answer rather than a guess made from its name.</para>
+/// <para>The export TEMPLATES cannot read a hub configuration — they run from a script request
+/// carrying only a source path — so <c>ExportDocumentHandler</c>, which runs on the source node's
+/// own hub, stamps <see cref="Composition"/> into the script inputs and the templates dispatch on
+/// that. Same declaration, carried to where it is needed.</para>
 /// </summary>
 public sealed record ExportDeclaration
 {
@@ -62,17 +69,6 @@ public sealed record ExportDeclaration
         Formats = ExportFormats.Pdf | ExportFormats.Send,
         Composition = ExportComposition.SlideDeck,
     };
-
-    /// <summary>
-    /// Resolves the effective declaration for a node: the hub configuration's own declaration
-    /// when the type declared one, else the ONE transition fallback — a suffix-aware Deck check
-    /// covering plugin deck types (e.g. <c>Publish/Deck</c>) whose in-mesh configuration lambdas
-    /// compile against a platform build that predates this API. Null when the node exports
-    /// nothing. The fallback is deleted with #1576 once every install's packs declare.
-    /// </summary>
-    public static ExportDeclaration? Resolve(MessageHubConfiguration configuration, string? nodeType)
-        => configuration.Get<ExportDeclaration>()
-           ?? (DeckNodeType.Matches(nodeType) ? SlideDeck : null);
 }
 
 /// <summary>Chains an <see cref="ExportDeclaration"/> onto a node type's hub configuration.</summary>

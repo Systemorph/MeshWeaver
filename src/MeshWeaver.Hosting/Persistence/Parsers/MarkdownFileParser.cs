@@ -21,7 +21,22 @@ public partial class MarkdownFileParser : IFileFormatParser
         .UseYamlFrontMatter()
         .Build();
 
+    /// <summary>
+    /// 🚨 CASE-INSENSITIVE on purpose (#1984). Two parsers claim <c>.md</c> and configured YAML
+    /// differently: <c>AgentFileParser</c> binds camelCase but claims only <c>nodeType: Agent</c>,
+    /// so everything else falls through here — where a PascalCase-only deserializer never bound
+    /// <c>nodeType:</c>, <see cref="DeserializerBuilder.IgnoreUnmatchedProperties"/> swallowed the
+    /// miss, and the node defaulted to <c>Markdown</c>. Eleven skills authored exactly as this
+    /// repo's own guidance says imported as plain Markdown pages, silently, and so never reached
+    /// the slash-command list.
+    ///
+    /// <para>Adding a camelCase CONVENTION would have been the wrong fix: it swaps which casing
+    /// binds rather than accepting both, and 1146 files in the plugin repos author the same keys
+    /// PascalCase (<c>NodeType: Edu/Lesson</c>). Case-insensitive matching binds BOTH, which is
+    /// why the regression test pins the two spellings of the same key.</para>
+    /// </summary>
     private static readonly IDeserializer YamlDeserializer = new DeserializerBuilder()
+        .WithCaseInsensitivePropertyMatching()
         .IgnoreUnmatchedProperties()
         .Build();
 
@@ -241,6 +256,16 @@ public partial class MarkdownFileParser : IFileFormatParser
     /// Notes/Background: matching only the bare constant let a namespaced slide degrade to
     /// MarkdownContent on import, and the next mesh→repo export then dropped its
     /// Notes/Background frontmatter entirely. Delegates to the ONE suffix-aware predicate.
+    ///
+    /// <para>🚨 <b>This is the LAST compiled type branch in the export/import programme</b>
+    /// (#1580 phase 3; the export side is done, #1576). It is not deleted yet, and the obvious
+    /// replacement is refused for a measured reason: a CONTENT-SHAPE rule — "frontmatter has
+    /// Notes or Background ⇒ slide" — silently empties the 3 of 235 real slide files that carry
+    /// neither key, because the slide views read <c>SlideContent</c> and <c>ContentAs&lt;T&gt;</c>
+    /// recovers only a same-short-named type. Before touching this, read
+    /// <c>Doc/Architecture/DeclarativeImportExport</c> → "What blocks the import half", which
+    /// records the count, why the shape rule fails, and the two conditions the registry route has
+    /// to settle first.</para>
     /// </summary>
     private static bool IsSlideNodeType(string? nodeType) => SlideNodeType.Matches(nodeType);
 
