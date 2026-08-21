@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -111,6 +112,91 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     // (recycle churn). NEVER retried: silence (a busy owner still applies the original
     // patch) and every other NACK code (validation/RLS/NotFound are terminal verdicts).
     private const int MaxOwnerDisposingReenqueues = 2;
+
+    // 🚨 How long a CONFLICT re-attempt waits for this hub's mirror to carry state the owner has
+    // not already refused. Not a retry interval and not a backoff — it is the bound on ONE wait
+    // for a fact that is already on its way: the owner committed the winning write BEFORE it
+    // NACK'd us, so the newer state is in flight to the mirror we are about to read. The wait is
+    // for the arrival, not for a repeat. Generous against a sub-second propagation, and short
+    // enough to sit well inside the caller's own budget.
+    private static readonly TimeSpan ConflictRebaseBound = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// 🚨 The emission a (re)attempt rebuilds its patch from — and the whole of the #1910 fix.
+    ///
+    /// <para><b>The defect.</b> A cross-hub <c>stream.Update</c> reads this hub's MIRROR, runs the
+    /// lambda against it, and ships a merge patch carrying the base values it diffed against. The
+    /// owner three-way-merges: any key whose live value has moved since that base is REFUSED, and
+    /// when nothing lands it answers <c>Conflict</c> — "re-read and re-apply". <c>UpdateRemote</c>
+    /// does re-enqueue on that verdict, and it does re-run the lambda rather than re-post the
+    /// patch. But it re-ran the lambda against <c>mirror.Take(1)</c>, i.e. against whatever the
+    /// mirror holds AT THAT INSTANT — which, immediately after a NACK, is very often still the
+    /// version the owner just refused. The lambda then recomputes the same values from the same
+    /// base, <c>ExtractBaseValues</c> produces the same base, and the owner refuses identically.
+    /// Three attempts, three identical patches, then a terminal <c>MeshNodeStreamException</c> and
+    /// the caller's write is gone. A retry whose input cannot change is not a retry.</para>
+    ///
+    /// <para><b>The rule.</b> A Conflict means the owner is provably AHEAD of
+    /// <paramref name="refusedBaseVersion"/> — it minted a version for the write that beat us
+    /// before it answered us — so the state that makes the re-attempt converge already exists and
+    /// is on its way here. Wait for it, then rebase on it.</para>
+    ///
+    /// <para><b>Conflict only.</b> <c>OwnerDisposing</c> / <c>OwnerNotReady</c> re-enqueues pass
+    /// <c>0</c> and are unaffected: those say the patch never reached a merge at all, so no newer
+    /// version exists and waiting for one would burn the bound for nothing.</para>
+    ///
+    /// <para><b>Never parks.</b> If the mirror does not advance within
+    /// <see cref="ConflictRebaseBound"/> the re-attempt proceeds against what it has — exactly the
+    /// previous behaviour — and <paramref name="onStaleMirror"/> says so, so "the write was
+    /// refused AND the mirror never caught up" is a reported fact rather than a silent
+    /// re-refusal. This is why the change can only improve on the old behaviour: it converges
+    /// where the old shape could not, and degrades to the old shape where it cannot.</para>
+    ///
+    /// <para>Static, with the mirror and the scheduler as seams, so the re-read rule is asserted
+    /// deterministically — no hub, no cluster, no wall clock.</para>
+    /// </summary>
+    /// <param name="mirror">This hub's view of the node — replays its current state to a new
+    /// subscriber and emits again as the owner's commits arrive.</param>
+    /// <param name="refusedBaseVersion">The version the owner refused, or <c>0</c> for a first
+    /// attempt (and for the non-staleness re-enqueue codes), which reads the mirror as before.</param>
+    /// <param name="onStaleMirror">Called with <paramref name="refusedBaseVersion"/> when the
+    /// bound elapsed and the re-attempt fell back to un-advanced state.</param>
+    /// <param name="scheduler">Timer seam for tests.</param>
+    internal static IObservable<MeshNode> RebaseSource(
+        IObservable<MeshNode> mirror,
+        long refusedBaseVersion,
+        Action<long> onStaleMirror,
+        IScheduler? scheduler = null)
+        => refusedBaseVersion <= 0
+            // A first attempt reads the mirror exactly as it always did — the ordinary write path
+            // gains no filter, no timer and no second subscription.
+            ? mirror.Take(1)
+            : mirror
+                .Where(node => node.Version > refusedBaseVersion)
+                .Take(1)
+                .Timeout(
+                    ConflictRebaseBound,
+                    Observable.Defer(() =>
+                    {
+                        onStaleMirror(refusedBaseVersion);
+                        return mirror.Take(1);
+                    }),
+                    scheduler ?? Scheduler.Default)
+                // 🚨 An EMPTY completion must not reach the caller. Filtering introduces a
+                // completion the un-filtered shape could not produce: a mirror that ends (its hub
+                // torn down) while holding only the refused version completes this source with no
+                // value, the write's observer is never called, and the caller waits on a pipeline
+                // that has already finished. A source that cannot answer must SAY so — the same
+                // rule the compile pipeline's DefaultIfEmpty totality guard applies.
+                .Select(node => (MeshNode?)node)
+                .DefaultIfEmpty(null)
+                .SelectMany(node => node is null
+                    ? Observable.Throw<MeshNode>(new InvalidOperationException(
+                        $"Update aborted: the owner refused this write as stale at version "
+                        + $"{refusedBaseVersion} and the mirror ended before carrying anything "
+                        + "newer, so there is no state to re-apply against. The write did NOT "
+                        + "land; re-issue it."))
+                    : Observable.Return(node));
 
     internal MeshNodeStreamHandle(IWorkspace workspace, string? path = null,
         IMeshNodeStreamCache? cache = null, bool bypassCache = false)
@@ -1086,7 +1172,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// <param name="attempt">Re-enqueue depth: 0 for a caller write, incremented by the
     /// late OwnerDisposing-NACK re-enqueue, capped at <see cref="MaxOwnerDisposingReenqueues"/>.
     /// Carried as a parameter — never static state.</param>
-    private IObservable<MeshNode> UpdateRemote(Func<MeshNode, MeshNode> update, int attempt = 0)
+    /// <param name="refusedBaseVersion">On a CONFLICT re-enqueue, the node version the owner
+    /// refused this write against, so the re-attempt rebases on something newer
+    /// (<see cref="RebaseSource"/>). 0 for a caller write and for the re-enqueue codes that never
+    /// reached a merge.</param>
+    private IObservable<MeshNode> UpdateRemote(
+        Func<MeshNode, MeshNode> update, int attempt = 0, long refusedBaseVersion = 0)
         => Observable.Create<MeshNode>(observer =>
         {
             var diagLogger = _workspace.Hub.ServiceProvider
@@ -1130,14 +1221,26 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             // running the user lambda — the lambda needs a non-null current
             // to diff against. A 30 s outer timeout bounds the wait so a
             // missing per-node hub surfaces with a precise TimeoutException.
-            var initialSub = remoteStream
-                .Timeout(TimeSpan.FromSeconds(30))
-                .Where(change => change.Value is not null)
-                .Take(1)
+            //
+            // 🚨 …and on a CONFLICT re-attempt, wait for state the owner has not already
+            // refused. See RebaseSource: re-running the lambda against the SAME mirror emission
+            // recomputes the same values from the same base and is refused identically, so the
+            // re-enqueue cannot converge (#1910).
+            var initialSub = RebaseSource(
+                    remoteStream
+                        .Timeout(TimeSpan.FromSeconds(30))
+                        .Where(change => change.Value is not null)
+                        .Select(change => change.Value!),
+                    refusedBaseVersion,
+                    staleVersion => diagLogger?.LogWarning(
+                        "[UpdateRemote] STALE_MIRROR hub={Hub} target={Path} attempt={Attempt} — the "
+                        + "owner refused this write as stale at version {Version}, but this hub's "
+                        + "mirror did not advance past it within {Bound}; rebuilding the patch "
+                        + "against the state it has. The re-attempt may be refused again",
+                        _workspace.Hub.Address, _path, attempt, staleVersion, ConflictRebaseBound))
                 .Subscribe(
-                    change =>
+                    current =>
                     {
-                        var current = change.Value!;
                         try
                         {
                             var updated = update(current);
@@ -1353,9 +1456,16 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         or MeshNodeErrorCode.Conflict
                                     && attempt < MaxOwnerDisposingReenqueues)
                                 {
+                                    // 🚨 Conflict alone carries a stale BASE — see RebaseSource.
+                                    // OwnerDisposing / OwnerNotReady mean the patch never reached
+                                    // a merge, so there is no newer version to wait for and
+                                    // waiting would only burn the bound.
+                                    var lateRebaseFrom = lateErr.Code == MeshNodeErrorCode.Conflict
+                                        ? current.Version
+                                        : 0;
                                     diagLogger?.LogWarning(
-                                        "[UpdateRemote] LATE_NACK_REENQUEUE hub={Hub} target={Path} attempt={Attempt} — owner disposed before the merge turn; re-enqueueing the original update against the fresh activation",
-                                        _workspace.Hub.Address, _path, attempt + 1);
+                                        "[UpdateRemote] LATE_NACK_REENQUEUE hub={Hub} target={Path} attempt={Attempt} code={Code} — the patch was never applied; re-enqueueing the original update, rebased on state newer than {RebaseFrom}",
+                                        _workspace.Hub.Address, _path, attempt + 1, lateErr.Code, lateRebaseFrom);
                                     // Restore the writer's identity: this callback runs on the
                                     // cache hub's action block where the AsyncLocal context is
                                     // the hub's own, and the re-posted patch must carry the
@@ -1365,7 +1475,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
                                         : null)
                                     {
-                                        UpdateRemote(update, attempt + 1).Subscribe(
+                                        UpdateRemote(update, attempt + 1, lateRebaseFrom).Subscribe(
                                             _ => { },
                                             ex2 => diagLogger?.LogWarning(ex2,
                                                 "[UpdateRemote] LATE_NACK_REENQUEUE failed hub={Hub} target={Path} attempt={Attempt}",
@@ -1450,14 +1560,28 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                                     or MeshNodeErrorCode.Conflict
                                                 && attempt < MaxOwnerDisposingReenqueues)
                                             {
+                                                // 🚨 A Conflict says the owner is provably PAST
+                                                // the base we diffed against — it committed the
+                                                // winning write before answering us. Re-running
+                                                // the lambda against the mirror as it stands
+                                                // recomputes the same patch from the same base
+                                                // and is refused identically, which is why the
+                                                // re-enqueue could not converge (#1910). Carry
+                                                // the refused version so the re-attempt rebases
+                                                // on state newer than it. OwnerDisposing /
+                                                // OwnerNotReady never reached a merge, so there
+                                                // is nothing newer to wait for — they pass 0.
+                                                var rebaseFrom = err.Code == MeshNodeErrorCode.Conflict
+                                                    ? current.Version
+                                                    : 0;
                                                 diagLogger?.LogWarning(
-                                                    "[UpdateRemote] OWNER_NACK_REENQUEUE hub={Hub} target={Path} code={Code} attempt={Attempt} — the patch was never applied; re-enqueueing against the fresh activation",
-                                                    _workspace.Hub.Address, _path, err.Code, attempt + 1);
+                                                    "[UpdateRemote] OWNER_NACK_REENQUEUE hub={Hub} target={Path} code={Code} attempt={Attempt} — the patch was never applied; re-enqueueing rebased on state newer than {RebaseFrom}",
+                                                    _workspace.Hub.Address, _path, err.Code, attempt + 1, rebaseFrom);
                                                 using (accessServiceAtEntry is not null && capturedContextAtEntry is not null
                                                     ? accessServiceAtEntry.SwitchAccessContext(capturedContextAtEntry)
                                                     : null)
                                                 {
-                                                    composite.Add(UpdateRemote(update, attempt + 1)
+                                                    composite.Add(UpdateRemote(update, attempt + 1, rebaseFrom)
                                                         .Subscribe(observer.OnNext, observer.OnError, observer.OnCompleted));
                                                 }
                                                 return;
