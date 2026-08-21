@@ -148,6 +148,30 @@ public static class PresentationScreenExtensions
     }
 
     /// <summary>
+    /// The viewer's screen SEEDED with <see cref="PresentationScreen.Off"/> — for a surface that
+    /// must render whether or not the viewer has a profile to read.
+    ///
+    /// <para>🚨 Use this wherever the screen decides only how something is LABELLED, and the plain
+    /// <see cref="ViewerScreen(LayoutAreaHost)"/> wherever painting early would LEAK. The
+    /// difference is not stylistic. A surface that joins the unseeded screen into a
+    /// <c>CombineLatest</c> renders nothing until that leg produces, and the leg is a subscription
+    /// to the VIEWER's own <c>User</c> node — a node that need not exist (a test identity, a caller
+    /// mid-onboarding, a virtual user). When it errors, <see cref="LastKnownOnFault"/> answers; when
+    /// it merely never produces, the join stalls silently and forever, outside any test's
+    /// method timeout, and the symptom is a wall-clock hang with no failing test to point at.</para>
+    ///
+    /// <para>"This viewer has no profile" is a defined, screened-safe answer — a viewer with no
+    /// profile has marked nothing — so it belongs in the stream as a VALUE rather than as something
+    /// to wait for. That is what the seed says.</para>
+    /// </summary>
+    /// <param name="screen">The viewer's screen stream.</param>
+    public static IObservable<PresentationScreen> Seeded(this IObservable<PresentationScreen> screen)
+    {
+        ArgumentNullException.ThrowIfNull(screen);
+        return screen.StartWith(PresentationScreen.Off);
+    }
+
+    /// <summary>
     /// The live screen of the viewer this layout area is rendering for. Resolve it ONCE at handler
     /// entry and combine it into the area's stream; do not call it again from inside a projection.
     /// </summary>

@@ -176,7 +176,18 @@ public static class NodeMenuItemsExtensions
         // The viewer's presentation screen (#1803) joins the node + permission streams so the
         // hide/show entry flips the instant the mark is written — the same reason this provider is
         // reactive at all. Resolved ONCE here, outside the projection.
-        => GetMenuContext(host).CombineLatest(host.ViewerScreen(), (menuCtx, screen) =>
+        //
+        // 🚨 SEEDED, never awaited. The tile surfaces gate their first paint on the screen because
+        // painting early there LEAKS; this menu must not, because the screen decides only WHICH OF
+        // TWO LABELS the presentation entry carries (Hide vs Show) for the node the viewer is
+        // already looking at. A briefly wrong label is cosmetic; a menu that never renders is not.
+        // Without the seed, every node-menu render in the process awaits a subscription to the
+        // VIEWER's own User node — a node that need not exist (a test identity, a caller mid-
+        // onboarding) — and a CombineLatest whose leg never produces stalls silently and forever,
+        // outside any test's methodTimeout. "No such user node" is a defined, screened-safe value
+        // (PresentationScreen.Off); it must arrive as a VALUE, not as something to wait for.
+        => GetMenuContext(host).CombineLatest(
+            host.ViewerScreen().Seeded(), (menuCtx, screen) =>
         {
             var (menuPath, _, menuNode, perms) = menuCtx;
             var items = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
