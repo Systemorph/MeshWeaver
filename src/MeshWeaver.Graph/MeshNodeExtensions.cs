@@ -467,6 +467,11 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(TrackedChangeStatus), nameof(TrackedChangeStatus));
         typeRegistry.WithType(typeof(Notification), nameof(Notification));
         typeRegistry.WithType(typeof(NotificationType), nameof(NotificationType));
+        // App — the per-user installed-app record ({user}/_App/{appId}, AppNodeType). Read by the
+        // home's Apps grid on the USER hub (a cross-hub GetQuery), so without this registration the
+        // content degrades to an untyped JsonElement and every installed app silently vanishes
+        // from the grid.
+        typeRegistry.WithType(typeof(App), nameof(App));
         // Email — the content of the built-in "Email" NodeType (EmailNodeType). It was the ONE
         // built-in content type missing from this list, and the omission was invisible until a
         // CROSS-HUB writer produced one: an in-process writer (EmailInboundProcessor) carries the

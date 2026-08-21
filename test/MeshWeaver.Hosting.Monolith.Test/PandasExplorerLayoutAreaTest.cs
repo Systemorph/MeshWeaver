@@ -96,9 +96,14 @@ public class PandasExplorerLayoutAreaTest : MonolithMeshTestBase
                 address, new LayoutAreaReference(ExplorerArea));
 
         // 1. The Explorer area renders a Stack composing title + intro + toolbar + grid sub-areas.
+        //    The composition is INCREMENTAL: the root Stack can emit with only the first children
+        //    attached (title + intro + toolbar) and the grid landing a frame later — a loaded CI
+        //    runner sampled exactly that 3-child intermediate frame (PR #1970's run). So the wait
+        //    matches the COMPLETE composition, never the first Stack-shaped emission; the Within
+        //    budget still guards the hang this test exists for.
         var root = await stream.GetControlStream(ExplorerArea)
             .Where(c => c is not null)
-            .Should().Within(RenderBudget).Match(c => c is StackControl);
+            .Should().Within(RenderBudget).Match(c => c is StackControl s && s.Areas.Count >= 4);
 
         Output.WriteLine($"Explorer root control: {root!.GetType().Name}");
         var stack = root.Should().BeOfType<StackControl>().Subject;
