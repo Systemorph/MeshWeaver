@@ -1118,6 +1118,46 @@ public static class MemexConfiguration
             return next();
         });
 
+        // Security response headers — set once, early, for every real response (health
+        // probes already short-circuited above, so they stay header-free and minimal).
+        // These harden the browser surface WITHOUT changing what the app may load: the CSP
+        // is deliberately permissive — it keeps 'unsafe-inline'/'unsafe-eval', blob:/data:
+        // and https:/wss:, so the Blazor Server circuit, the Monaco editor (eval + blob
+        // workers) and embedded https content keep working. It only adds the structural
+        // directives an OWASP ZAP scan flagged as missing (a default-src fallback so every
+        // fetch directive is defined, object-src 'none', base-uri 'self', frame-ancestors
+        // 'self'). Tightening it further (per-response nonces, dropping 'unsafe-inline') is
+        // a separate hardening pass, not this change.
+        app.Use((ctx, next) =>
+        {
+            var headers = ctx.Response.Headers;
+            ctx.Response.OnStarting(() =>
+            {
+                headers["X-Content-Type-Options"] = "nosniff";
+                headers["Cross-Origin-Resource-Policy"] = "same-site";
+                headers["Permissions-Policy"] =
+                    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
+                    "magnetometer=(), microphone=(), payment=(), usb=()";
+                if (!headers.ContainsKey("Content-Security-Policy"))
+                    headers["Content-Security-Policy"] =
+                        "default-src 'self'; " +
+                        "base-uri 'self'; " +
+                        "object-src 'none'; " +
+                        "frame-ancestors 'self'; " +
+                        "img-src 'self' data: blob: https:; " +
+                        "media-src 'self' data: blob: https:; " +
+                        "font-src 'self' data: https:; " +
+                        "style-src 'self' 'unsafe-inline' https:; " +
+                        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; " +
+                        "worker-src 'self' blob:; " +
+                        "connect-src 'self' https: wss:; " +
+                        "frame-src 'self' https:; " +
+                        "form-action 'self' https:";
+                return Task.CompletedTask;
+            });
+            return next();
+        });
+
         // `@/` is a markdown-authoring / autocomplete prefix — not a URL segment.
         // Authors occasionally leak `@/` into raw HTML hrefs or users paste broken links.
         // Permanent-redirect `/@/X` → `/X` so those never 404.
