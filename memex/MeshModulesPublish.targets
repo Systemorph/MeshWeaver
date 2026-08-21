@@ -244,8 +244,11 @@
          trees (the prune below deletes them), and a flipped module is OUTSIDE the host's restore
          graph, so a RID flowing in from CD's per-arch container publish fails NETSDK1047 (no
          linux-x64/arm64 target in the module's portable assets file) — the 2026-08-16 CD outage.
-         A module with genuinely RID-specific native deps (Speech) ships them via runtimes/*
-         inside its folder, which a PORTABLE publish lays out correctly.
+         A module with genuinely RID-specific NATIVE deps ships them via runtimes/<rid>/native/
+         inside its folder, which a PORTABLE publish lays out for every RID and prune (0) below now
+         KEEPS; the host picks its own RID at load time (ModuleNativeAssets, #1728). No module ships
+         one today — MeshWeaver.Speech, long cited here as the exception, is an HTTP client to a
+         Whisper container and carries no native package at all.
 
          Restore explicitly: post-flip the module is OUTSIDE the host's project graph, so the
          host's implicit restore never touches it and a clean machine has no assets file. A
@@ -282,14 +285,55 @@
              Properties="Configuration=$(Configuration);NoBuild=true;SatelliteResourceLanguages=en;PublishDir=$(_AppDir)modules/%(Filename)/"
              RemoveProperties="MeshModulesAppDir;MeshModulesTargetFramework;MeshModulesHostName;MeshModulesGuardAppRoot;MeshModulesClosureSubset;NetCoreTargetingPackRoot;PublishMeshModules;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;ContainerRuntimeIdentifier;ContainerRuntimeIdentifiers;PublishReadyToRun;PublishSingleFile;PublishTrimmed" />
 
-    <!-- Prune (0): RID trees. A module loads via Assembly.LoadFrom, which never consults the
-         module's deps.json — the fallback probe is the module's FLAT folder only — so a
-         runtimes/<rid>/ tree under a module folder is unreachable dead weight by construction
-         (today: a net8.0-flavoured Pkcs copy and the Windows EventLog message table). A module
-         that truly needs native/RID assets (Speech is the known exception, per the #1644 design)
-         needs explicit flat placement or NativeLibrary resolution in ITS flip, not a RID tree. -->
-    <RemoveDir Directories="$(_AppDir)modules/%(MeshModuleClosure.Filename)/runtimes"
-               Condition="Exists('$(_AppDir)modules/%(MeshModuleClosure.Filename)/runtimes')" />
+    <!-- Prune (0): the UNREACHABLE half of the RID tree — everything except runtimes/<rid>/native.
+
+         A module loads via Assembly.LoadFrom, which never consults the module's deps.json, so the
+         MANAGED RID assets (runtimes/<rid>/lib/<tfm>/*.dll — today a net8.0-flavoured Pkcs copy and
+         the Windows EventLog message table) are dead weight by construction: nothing can ever bind
+         them. They still go.
+
+         🚨 NATIVE assets are a different case since #1728, and this used to delete them too. The
+         runtime's own fallback probe is the module's FLAT folder only, which is why a
+         runtimes/<rid>/native/ tree WAS unreachable — but ModuleNativeAssets (MeshWeaver.Mesh.Contract)
+         now resolves it: the host subscribes AssemblyLoadContext.Default.ResolvingUnmanagedDll,
+         derives the module folder from the REQUESTING assembly's own location (so a dependency such
+         as SkiaSharp.dll, which declares the P/Invokes, resolves too) and probes
+         runtimes/<current-rid>/native/ then the flat folder. Deleting the payload here would make
+         that resolver structurally unable to find anything.
+
+         Why the tree and not flat placement: every module invocation strips RID globals by design
+         (#1675/#1676 — the 2026-08-16 CD outage), so a module publish is ALWAYS portable and the RID
+         is unknown when the bits are laid out. Only the host knows its own RID, and it resolves at
+         load time.
+
+         🚨 This is NOT hypothetical for the modules already on this lane. Snowflake ships
+         libsf_mini_core.* and libMono.Unix.*, and Cosmos ships Microsoft.Azure.Cosmos.ServiceInterop
+         + the MSVC CRT — 23 loadable natives, 11 MB, ALL of which the RemoveDir this replaces was
+         deleting. `Graph:Storage:Type = Snowflake` on a shipped image would therefore have failed at
+         its first native call, in a backend whose emulator suites green-SKIP when unreachable. The
+         one lane that ships them is this one.
+
+         Empty RID directories are left behind (Delete removes files, as prunes (a) and (b) below
+         also do): removing a parent recursively could take a sibling native/ with it, and an empty
+         directory costs nothing in the image. Narrowing the kept RIDs to the publishing host's own
+         (which would cut the 11 MB to ~4) needs the outer publish's RuntimeIdentifier and is
+         deliberately NOT done here — mis-reading it is precisely the #1675/#1676 failure. -->
+    <ItemGroup>
+      <_ClosureRidFile Include="$(_AppDir)modules/%(MeshModuleClosure.Filename)/runtimes/**/*.*" />
+    </ItemGroup>
+    <ItemGroup>
+      <!-- LOADABLE natives only. A .a static archive and a .lib import library are LINK-time
+           artifacts — dlopen/LoadLibrary can never open either — so they are dead weight exactly
+           the way the managed RID tree is (Snowflake alone ships 5.4 MB of libMono.Unix.a). -->
+      <_ClosureRidNative Include="$(_AppDir)modules/%(MeshModuleClosure.Filename)/runtimes/*/native/**/*.*"
+                         Exclude="$(_AppDir)modules/%(MeshModuleClosure.Filename)/runtimes/*/native/**/*.a;$(_AppDir)modules/%(MeshModuleClosure.Filename)/runtimes/*/native/**/*.lib" />
+    </ItemGroup>
+    <ItemGroup>
+      <_ClosureRidUnreachable Include="@(_ClosureRidFile)" Exclude="@(_ClosureRidNative)" />
+    </ItemGroup>
+    <Delete Files="@(_ClosureRidUnreachable)" />
+    <Message Importance="high" Condition="'@(_ClosureRidNative)' != ''"
+             Text="LayoutMeshModuleClosures: KEPT @(_ClosureRidNative->Count()) native RID asset(s) under modules/*/runtimes — resolved at load time by ModuleNativeAssets (#1728): @(_ClosureRidNative->'%(Filename)%(Extension)')" />
 
     <!-- Prune (a): same-identity files the app publish already carries, compared by RELATIVE
          path (%(RecursiveDir)) so a nested duplicate matches the app's nested copy, not just
