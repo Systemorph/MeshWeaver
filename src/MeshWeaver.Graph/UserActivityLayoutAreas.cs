@@ -927,7 +927,10 @@ public static class UserActivityLayoutAreas
         var segment = entry[2..].Trim('/');
         if (segment.Length == 0)
             return null;
-        var (label, icon) = SystemAppTiles.TryGetValue(entry, out var known)
+        // Look up by the NORMALIZED key, not the raw entry: a config value like "~/Chat/" must
+        // still resolve the known Threads tile instead of silently falling back to the generic
+        // icon/label (Copilot review, PR #1993).
+        var (label, icon) = SystemAppTiles.TryGetValue("~/" + segment, out var known)
             ? known
             : (segment, "/static/NodeTypeIcons/puzzlepiece.svg");
         return new MeshNodeCardControl($"{nodeOwnerId}/{segment}", Title: label, ImageUrl: icon);
