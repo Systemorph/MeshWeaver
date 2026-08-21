@@ -1423,10 +1423,10 @@ jobs:
   # A module that does not build produces no bundle, and the capability simply vanishes from the
   # image — a failure with no error anywhere near the change that caused it.
   #
-  # ⏱️ ONE `dotnet build` over a generated solution, not thirty-one: the platform's project graph
+  # ⏱️ ONE `dotnet build` over a generated solution, not forty-seven: the platform's project graph
   # is then compiled once rather than per project, which is where nearly all of the cost is.
-  # Measured against a warm tree: **16 s for all 31** (sixteen modules + their test projects) in
-  # one build, versus 73 s for the sixteen modules built one invocation at a time. The timeout
+  # Measured against a warm tree: **~16 s for all 47** (the modules plus their test projects) in
+  # one build, versus 73 s for just the sixteen module projects built one invocation at a time. The timeout
   # below is far above either, and the step PRINTS its own elapsed time, so if this ever becomes
   # the long pole it is re-scoped from evidence rather than by guess.
   landed-modules-gate:
@@ -1459,6 +1459,16 @@ jobs:
         fetch-depth: 1
     - name: "Build every landed module against this PR"
       id: modules
+      env:
+        # 🚨 MeshWeaverRoot must be set for the WHOLE step, not just the build. Those projects
+        # reference the platform as `$(MeshWeaverRoot)/src/…`, and its default is a SIBLING
+        # checkout — which does not exist in this layout (the platform is $GITHUB_WORKSPACE and
+        # the repo is a subdirectory of it). `dotnet sln add` EVALUATES each project, so with the
+        # default it fails on the first unresolvable ProjectReference, and under GitHub's
+        # `bash -e` shell that ends the step in ~4 s with exit 2 — which looks nothing like the
+        # compile break this gate is for. Set here rather than passed with -p so `dotnet sln add`
+        # sees it too; MSBuild reads environment variables as properties.
+        MeshWeaverRoot: ${{ github.workspace }}
       run: |
         set -uo pipefail
         cd "$GITHUB_WORKSPACE/plugins-repo"
@@ -1491,12 +1501,18 @@ jobs:
           echo "failure=dotnet new sln produced no solution file" >> "$GITHUB_OUTPUT"
           exit 1
         fi
-        for p in "${projects[@]}"; do dotnet sln "$sln" add "$p" >/dev/null; done
+        for p in "${projects[@]}"; do
+          if ! dotnet sln "$sln" add "$p" >/dev/null 2>"${RUNNER_TEMP:-/tmp}/sln-add.err"; then
+            echo "::error::could not add $p to the build — $(head -1 "${RUNNER_TEMP:-/tmp}/sln-add.err" | cut -c1-200). A project this gate cannot even load is unverified, not passing."
+            echo "failure=could not add $p to the build" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+        done
         start=$SECONDS
         # -warnaserror matches how these modules are actually shipped (the plugins repo inherits
         # this repo's Directory.Build.props), so a warning introduced here fails here.
         if ! dotnet build "$sln" -c Release -warnaserror \
-               -p:MeshWeaverRoot="$GITHUB_WORKSPACE" 2>&1 | tee "${RUNNER_TEMP:-/tmp}/landed-modules.log"; then
+               2>&1 | tee "${RUNNER_TEMP:-/tmp}/landed-modules.log"; then
           # Report the FIRST real diagnostic, so the required check downstream can name the cause
           # instead of saying "see the job". NU1010 (a pin this repo deleted) and CS0117 (an API
           # this repo deleted) are the two shapes this gate was built for and both surface here.
