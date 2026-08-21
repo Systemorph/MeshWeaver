@@ -85,4 +85,30 @@ public class ModuleStylesheetImportTest
             ".x[b-abc] { color: red; }", HostProviding("MeshWeaver.Blazor"),
             "MeshWeaver.Blazor.Analysis", NullLogger.Instance));
     }
+
+    /// <summary>
+    /// A pack with collocated JS but NO <c>.razor.css</c> of its own still emits an aggregate —
+    /// one made of nothing but the dependency imports. Measured at 211 bytes for both
+    /// MeshWeaver.Blazor.AppleMaps and .OpenStreetMap on the publish that flipped them (#1974).
+    /// Stripping empties it, which is why the caller must decide whether to link the stylesheet
+    /// AFTER stripping: the file on disk is never empty, so a test on its bytes never fires.
+    /// </summary>
+    [Fact]
+    public void AnAggregateOfNothingButHostProvidedImports_StripsToEmpty()
+    {
+        const string importsOnly =
+            "@import '_content/MeshWeaver.Blazor/MeshWeaver.Blazor.vbmbh1xu9q.bundle.scp.css';\n"
+            + "@import '_content/Microsoft.FluentUI.AspNetCore.Components/"
+            + "Microsoft.FluentUI.AspNetCore.Components.lcdo7z9xd2.bundle.scp.css';\n";
+
+        var rewritten = MeshModuleStaticAssetExtensions.StripHostProvidedImports(
+            importsOnly,
+            HostProviding("MeshWeaver.Blazor", "Microsoft.FluentUI.AspNetCore.Components"),
+            "MeshWeaver.Blazor.AppleMaps",
+            NullLogger.Instance);
+
+        // Not null — something WAS dropped, so the landed bytes must not be served as they are.
+        Assert.NotNull(rewritten);
+        Assert.True(string.IsNullOrWhiteSpace(rewritten));
+    }
 }

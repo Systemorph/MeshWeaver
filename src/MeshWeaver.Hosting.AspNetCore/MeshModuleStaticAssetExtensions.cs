@@ -330,7 +330,6 @@ public static partial class MeshModuleStaticAssetExtensions
             if (File.Exists(bundlePath))
             {
                 var requestPath = $"{ContentRoot}/{name}/{name}.styles.css";
-                stylesheets.Add(requestPath);
 
                 // 🚨 The aggregate opens with @import lines for its DEPENDENCIES' bundles at
                 // FINGERPRINTED urls, computed at MODULE-build time
@@ -342,8 +341,25 @@ public static partial class MeshModuleStaticAssetExtensions
                 // mount the dependency, so the two can never disagree about who provides what.
                 var rewritten = StripHostProvidedImports(
                     File.ReadAllText(bundlePath), hostAssets, name, logger);
-                if (rewritten is not null)
-                    rewrites["/" + requestPath] = rewritten;
+
+                // A pack with NO .razor.css of its own still emits an aggregate — one made of
+                // nothing but those imports (211 bytes for AppleMaps and OpenStreetMap). Once they
+                // are stripped there is nothing left to serve, so linking it would cost every page
+                // render a request for an empty file. Drop it from the manifest instead. Note this
+                // is decided AFTER stripping: the pre-strip file is never empty, so a check on the
+                // file itself would never fire.
+                if (rewritten is not null && string.IsNullOrWhiteSpace(rewritten))
+                {
+                    logger.LogInformation(
+                        "Module {Module}: its scoped-CSS aggregate held only host-provided imports, "
+                        + "so it is not linked — the pack has no scoped CSS of its own.", name);
+                }
+                else
+                {
+                    stylesheets.Add(requestPath);
+                    if (rewritten is not null)
+                        rewrites["/" + requestPath] = rewritten;
+                }
             }
 
             // 2. The module's DEPENDENCIES, already namespaced under its wwwroot/_content.
