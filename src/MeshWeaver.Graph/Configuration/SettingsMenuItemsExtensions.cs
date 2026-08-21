@@ -45,16 +45,28 @@ public static class SettingsMenuItemsExtensions
     }
 
     /// <summary>
-    /// Evaluates all registered providers (subscribe-all-upfront via CombineLatest), filters by
-    /// permission, and returns items sorted by Order — reactive (<see cref="IObservable{T}"/>),
-    /// re-emitting whenever a provider's live check (e.g. global-admin) resolves.
+    /// The live, UNFILTERED settings-tab set: every registered provider subscribed once
+    /// (subscribe-all-upfront via <c>CombineLatest</c>), merged and sorted by <c>Order</c>,
+    /// re-emitting whenever any provider's live check (e.g. global-admin, a GitHub probe)
+    /// resolves.
+    ///
+    /// <para>🚨 <b>The permission filter is deliberately NOT applied here</b>, and that separation
+    /// is the whole point. This stream is long-lived and re-emits for reasons that have nothing to
+    /// do with the viewer; the viewer's effective permissions are a SECOND long-lived stream that
+    /// enriches on its own schedule (<c>PermissionEvaluator</c> emits a low static seed, then the
+    /// synced-assignment answer). Baking a permission SNAPSHOT into this stream produces one live
+    /// provider chain per permission value, each frozen on the value it was built with — so a late
+    /// provider emission re-renders the menu through a STALE, lower permission set and silently
+    /// removes every tab the viewer is entitled to. See
+    /// <see cref="FilterByPermission"/> and the composition in <c>SettingsLayoutArea.Settings</c>,
+    /// which combines the two streams so the LATEST permissions always win (#1962; the node menu
+    /// has always composed it that way — <c>NodeMenuItemsExtensions.GetMenuContext</c>).</para>
     /// </summary>
     internal static IObservable<IReadOnlyList<SettingsMenuItemDefinition>>
-        EvaluateSettingsMenuItems(
+        ObserveSettingsMenuItems(
             this MessageHubConfiguration config,
             LayoutAreaHost host,
-            RenderingContext ctx,
-            Permission userPermissions)
+            RenderingContext ctx)
     {
         var collection = config.Get<SettingsMenuProviderCollection>();
         if (collection == null || collection.Providers.Count == 0)
@@ -70,13 +82,37 @@ public static class SettingsMenuItemsExtensions
             {
                 var items = new List<SettingsMenuItemDefinition>();
                 foreach (var list in lists)
-                    foreach (var item in list)
-                        if (item.RequiredPermission == Permission.None
-                            || userPermissions.HasFlag(item.RequiredPermission))
-                            items.Add(item);
+                    if (list is not null)
+                        items.AddRange(list);
                 items.Sort((a, b) => a.Order.CompareTo(b.Order));
                 return (IReadOnlyList<SettingsMenuItemDefinition>)items;
             });
+    }
+
+    /// <summary>
+    /// The settings menu's permission gate — PURE, so both directions are assertable without a
+    /// hub, a circuit or a rendered area.
+    ///
+    /// <para>A tab declaring <see cref="Permission.None"/> is chrome every viewer sees; anything
+    /// else must be held by the viewer on the node whose settings page this is. That asymmetry is
+    /// the fingerprint of a lost/stale permission snapshot: when the fold hands this a
+    /// <see cref="Permission.None"/> viewer, the ONLY tabs left standing are the
+    /// <see cref="Permission.None"/> ones — which is exactly how #1962 was reported ("the
+    /// display-time-zone tab is absent; the Notifications entry beside it survives because it
+    /// requires <see cref="Permission.None"/>").</para>
+    /// </summary>
+    /// <param name="items">The unfiltered, already-sorted tab set.</param>
+    /// <param name="userPermissions">The viewer's effective permissions on the settings node.</param>
+    internal static IReadOnlyList<SettingsMenuItemDefinition> FilterByPermission(
+        IReadOnlyList<SettingsMenuItemDefinition> items,
+        Permission userPermissions)
+    {
+        var result = new List<SettingsMenuItemDefinition>(items.Count);
+        foreach (var item in items)
+            if (item.RequiredPermission == Permission.None
+                || userPermissions.HasFlag(item.RequiredPermission))
+                result.Add(item);
+        return result;
     }
 
     /// <summary>
