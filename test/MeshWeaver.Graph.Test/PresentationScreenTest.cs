@@ -149,8 +149,8 @@ public class PresentationScreenTest
     [Fact]
     public void Filter_KeepsItemsThatAreNotNodes()
     {
-        // An OG card for an external URL, a tag keyword, a slash command: no mesh path, nothing to
-        // hide. The screen hides paths, not vocabulary.
+        // A "~/" system area, a tag keyword, a slash command, an external URL: no mesh path, so
+        // nothing to hide. The screen hides paths, not vocabulary.
         var items = new[] { "Acme", null, "https://example.org/Page" };
 
         Active("Acme").Filter(items, p => p is null or "https://example.org/Page" ? null : p)
