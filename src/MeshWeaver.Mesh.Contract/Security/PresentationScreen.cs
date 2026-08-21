@@ -87,6 +87,19 @@ public sealed record PresentationScreen
         => profile is null ? Off : For(profile.PresentationMode, profile.HiddenPaths);
 
     /// <summary>
+    /// Whether this screen can hide ANYTHING at all — the mode is on AND something is marked.
+    ///
+    /// <para>🚨 This, not <c>== Off</c>, is the test a caller uses to skip its filtering work. The
+    /// two are not the same value: a viewer who has marked things but turned the mode OFF has a
+    /// screen that is not <see cref="Off"/> and yet hides nothing, and a caller that keyed its
+    /// fast-path on reference equality would take the filtering branch for them — harmless for the
+    /// items themselves (<see cref="Filter"/> is a no-op while inactive) but not for whatever else
+    /// that branch does, such as dropping a legitimately empty group. Ask the question you actually
+    /// mean.</para>
+    /// </summary>
+    public bool HidesAnything => Active && !MarkedPaths.IsEmpty;
+
+    /// <summary>
     /// Whether <paramref name="path"/> must be left off tile / card / completion surfaces for this
     /// viewer right now — the mode is on AND the path is marked or sits inside a marked subtree.
     ///
@@ -97,7 +110,7 @@ public sealed record PresentationScreen
     /// <param name="path">The mesh path of the item about to be rendered.</param>
     public bool Hides(string? path)
     {
-        if (!Active || MarkedPaths.IsEmpty || string.IsNullOrWhiteSpace(path))
+        if (!HidesAnything || string.IsNullOrWhiteSpace(path))
             return false;
         var normalized = NormalizeOne(path);
         if (normalized.Length == 0)
@@ -125,7 +138,7 @@ public sealed record PresentationScreen
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(pathOf);
-        return !Active || MarkedPaths.IsEmpty ? items : items.Where(item => !Hides(pathOf(item)));
+        return HidesAnything ? items.Where(item => !Hides(pathOf(item))) : items;
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text.Json;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Hosting.Completion;
 using MeshWeaver.Mesh;
@@ -322,6 +323,77 @@ public class PresentationScreenTest
             .ToArray();
 
         painted.Should().Equal("Northwind", "content/");
+    }
+
+    [Fact]
+    public void AScreenWithMarksButTheModeOff_HidesNothingAndIsNotOff()
+    {
+        // 🚨 The two are DIFFERENT values, and conflating them is a real defect (Copilot review on
+        // #1991): a viewer who marked things and then turned the mode off holds a screen that is
+        // not `Off` by reference and yet must hide nothing. A caller whose fast-path tests
+        // `== Off` sends them down the filtering branch — where Filter is correctly a no-op, but
+        // anything ELSE that branch does is not. In the completion pipeline that "anything else"
+        // was dropping a legitimately empty category for someone who is not presenting.
+        var marksOnly = PresentationScreen.For(false, ["Acme"]);
+
+        marksOnly.Should().NotBeSameAs(PresentationScreen.Off);
+        marksOnly.HidesAnything.Should().BeFalse();
+        marksOnly.Hides("Acme").Should().BeFalse();
+
+        // …and the other direction: the mode on with nothing marked also hides nothing, while
+        // staying observable so the header indicator can read Active.
+        var modeOnly = PresentationScreen.For(true, []);
+        modeOnly.Active.Should().BeTrue();
+        modeOnly.HidesAnything.Should().BeFalse();
+
+        Active("Acme").HidesAnything.Should().BeTrue();
+        PresentationScreen.Off.HidesAnything.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Completions_AreUntouchedWhenTheScreenHidesNothing()
+    {
+        // The batch list must come back byte-for-byte for a non-presenting viewer — INCLUDING an
+        // empty batch, which the presenting path deliberately drops.
+        var batches = new[]
+        {
+            new CompletionBatch("Nearby", 0, [new AutocompleteItem("Acme", "@Acme/", Path: "Acme")]),
+            new CompletionBatch("Partitions", 2000, []),
+        };
+
+        foreach (var screen in new[]
+                 {
+                     PresentationScreen.Off,
+                     PresentationScreen.For(false, ["Acme"]),
+                     PresentationScreen.For(true, []),
+                 })
+        {
+            var painted = ChatCompletionOrchestrator
+                .Screened(batches.ToObservable(), screen)
+                .ToEnumerable().ToArray();
+
+            painted.Select(b => b.Category).Should().Equal("Nearby", "Partitions");
+            painted[1].Items.Should().BeEmpty(
+                "an empty category is only dropped while the viewer is actually presenting");
+        }
+    }
+
+    [Fact]
+    public void Completions_DropAnEmptiedCategory_OnlyWhilePresenting()
+    {
+        // The other half of the same rule: with the screen genuinely up, a category the screen
+        // emptied is removed rather than left as a heading with nothing under it.
+        var batches = new[]
+        {
+            new CompletionBatch("Nearby", 0, [new AutocompleteItem("Acme", "@Acme/", Path: "Acme")]),
+            new CompletionBatch("Elsewhere", 10, [new AutocompleteItem("NW", "@Northwind/", Path: "Northwind")]),
+        };
+
+        var painted = ChatCompletionOrchestrator
+            .Screened(batches.ToObservable(), Active("Acme"))
+            .ToEnumerable().ToArray();
+
+        painted.Select(b => b.Category).Should().Equal("Elsewhere");
     }
 
     [Fact]
