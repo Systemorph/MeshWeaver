@@ -80,6 +80,25 @@ public static class LocalMeshApiEndpoints
             QueryNodesBody body, IServiceProvider services, CancellationToken ct) =>
             RunString(services, ct, ops => ops.QueryNodes(body.Query, body.Limit ?? 50)));
 
+        // The portal's /search + /get twins (MeshApiEndpoints) — the shells' instance DISCOVERY
+        // posts these (connection.ts discoverInstances); unmapped they fell into the SPA-fallback
+        // 200 trap (#1474's shape) and discovery silently yielded nothing against this host.
+        group.MapPost("/search", (
+            SearchBody body, IServiceProvider services, CancellationToken ct) =>
+            RunString(services, ct, ops => ops.Search(body.Query, body.BasePath)));
+
+        group.MapPost("/get", (
+            GetBody body, IServiceProvider services, CancellationToken ct) =>
+            RunString(services, ct, ops => ops.Get(body.Path)));
+
+        // The portal's /create twin — IMeshService.CreateNode via MeshOperations, the ONE path
+        // that persists top-level containers too (a wire CreateNodeRequest at the root mesh hub
+        // only REGISTERS in-memory). Anonymous like every verb here: this host authenticates
+        // nobody, and every delivery acts as the device user.
+        group.MapPost("/create", (
+            CreateBody body, IServiceProvider services, CancellationToken ct) =>
+            RunString(services, ct, ops => ops.Create(body.Node)));
+
         // Content-collection directory listing — the read half of the file browser. Path is
         // "{node}/{collection}[/{dir}]".
         group.MapPost("/content/list", (
@@ -202,4 +221,13 @@ public static class LocalMeshApiEndpoints
 
     /// <summary>POST body for /api/mesh/onboard — the first-launch profile (DeviceSeed.Onboard).</summary>
     public record OnboardBody(string? FullName, string? Bio = null, string? Role = null);
+
+    /// <summary>POST body for /api/mesh/search — mirrors MeshApiEndpoints.SearchBody.</summary>
+    public record SearchBody(string Query, string? BasePath = null);
+
+    /// <summary>POST body for /api/mesh/get — mirrors MeshApiEndpoints.GetBody.</summary>
+    public record GetBody(string Path);
+
+    /// <summary>POST body for /api/mesh/create — mirrors MeshApiEndpoints.CreateBody (node JSON as a string).</summary>
+    public record CreateBody(string Node);
 }

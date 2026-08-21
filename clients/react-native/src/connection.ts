@@ -247,9 +247,12 @@ export async function discoverInstances(from: MeshInstance): Promise<MeshInstanc
         method: "POST", headers, body: JSON.stringify({ path: `@${r.path}` }),
       });
       if (!got.ok) continue;
-      const host: string | undefined = ((await got.json()) as any)?.content?.host;
-      if (!host) continue;
-      found.push({ name: r.name ?? host, url: `https://${host}`, token: "", local: false, kind: "Prod" });
+      const content: any = ((await got.json()) as any)?.content ?? {};
+      // An explicit content.url wins (a record can name a non-https scheme/port — e.g. the local
+      // sidecar); otherwise the host is a public portal reached over https.
+      const url: string | undefined = content.url ?? (content.host ? `https://${content.host}` : undefined);
+      if (!url) continue;
+      found.push({ name: r.name ?? String(content.host ?? url), url: url.replace(/\/+$/, ""), token: "", local: false, kind: "Prod" });
     }
     return found;
   } catch {
@@ -257,13 +260,15 @@ export async function discoverInstances(from: MeshInstance): Promise<MeshInstanc
   }
 }
 
-/** Merge discovered instances into the list — an existing entry (its token, edits) always wins.
+/** Merge discovered instances into the list — an existing entry (its token, edits) always wins,
+ *  and a record describing THIS app's own local mesh never duplicates the Local entry.
  *  New ones are persisted to the local mesh (the store), best-effort. */
 export function mergeDiscovered(discovered: MeshInstance[]): MeshInstance[] {
   const byName = new Map(remotes.map((i) => [i.name, i]));
   const byUrl = new Set(remotes.map((i) => i.url));
+  const localUrl = localInstance().url;
   for (const d of discovered)
-    if (!byName.has(d.name) && !byUrl.has(d.url)) {
+    if (!byName.has(d.name) && !byUrl.has(d.url) && d.url !== localUrl) {
       byName.set(d.name, d);
       persist(d);
     }
