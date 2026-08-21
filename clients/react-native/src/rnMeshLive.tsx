@@ -116,20 +116,32 @@ function toNodeResult(r: Record<string, unknown>): NodeResult {
   };
 }
 
-function useMeshQuery(ops: MeshOps | null, query: string, basePath?: string): { results: NodeResult[]; loading: boolean } {
+// A hidden query can be a newline-joined UNION of sub-queries (the server declares the home
+// catalog that way; Blazor's MeshSearchView issues them as one MeshQueryRequest union, but the
+// REST verb takes ONE query per call — a newline-joined string parses to nothing server-side).
+// Run each line, concatenate in declaration order, dedupe by path.
+function useMeshQuery(ops: MeshOps | null, queries: string[], basePath?: string): { results: NodeResult[]; loading: boolean } {
   const [state, setState] = useState<{ results: NodeResult[]; loading: boolean }>({ results: [], loading: false });
+  const key = queries.join("\n");
   useEffect(() => {
-    if (!ops?.search || !query) {
+    if (!ops?.search || queries.length === 0) {
       setState({ results: [], loading: false });
       return;
     }
     let live = true;
     setState((st) => ({ ...st, loading: true }));
-    ops
-      .search(query, basePath || undefined)
-      .then((rs) => {
+    Promise.all(queries.map((q) => ops.search!(q, basePath || undefined)))
+      .then((batches) => {
         if (!live) return;
-        setState({ results: rs.map(toNodeResult).filter((n) => n.path.length > 0), loading: false });
+        const seen = new Set<string>();
+        const merged: NodeResult[] = [];
+        for (const rs of batches)
+          for (const n of rs.map(toNodeResult))
+            if (n.path.length > 0 && !seen.has(n.path)) {
+              seen.add(n.path);
+              merged.push(n);
+            }
+        setState({ results: merged, loading: false });
       })
       .catch(() => {
         if (live) setState({ results: [], loading: false });
@@ -137,7 +149,8 @@ function useMeshQuery(ops: MeshOps | null, query: string, basePath?: string): { 
     return () => {
       live = false;
     };
-  }, [ops, query, basePath]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ops, key, basePath]);
   return state;
 }
 
@@ -300,8 +313,12 @@ const MeshSearch: ControlComponent = ({ control }) => {
   const [visible, setVisible] = useState(initialVisible);
   const [submitted, setSubmitted] = useState(initialVisible);
   const term = useDebounced(liveSearch ? visible : submitted, 250);
-  const query = [hiddenQuery, term].map((t) => t.trim()).filter(Boolean).join(" ");
-  const { results, loading } = useMeshQuery(ops, query, ns);
+  // The hidden query's newline-separated sub-queries each get the visible term appended.
+  const hiddenLines = hiddenQuery.split("\n").map((l) => l.trim()).filter(Boolean);
+  const queries = (hiddenLines.length ? hiddenLines : [""])
+    .map((l) => [l, term.trim()].filter(Boolean).join(" "))
+    .filter(Boolean);
+  const { results, loading } = useMeshQuery(ops, queries, ns);
   const items = excludeBasePath && ns ? results.filter((n) => n.path !== ns) : results;
 
   return (

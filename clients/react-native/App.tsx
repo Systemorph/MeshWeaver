@@ -102,6 +102,9 @@ export default function App() {
 function AppInner() {
   const { palette } = useTheme();
   const [nav, setNav] = useState<NavTarget>(() => homeFor(currentInstance()));
+  // The CURRENT home: local → the device user's node; a signed-in remote → the viewer's OWN node
+  // (resolved from the portal via /api/mesh/whoami below); anonymous remote → the docs HOME.
+  const [home, setHome] = useState<NavTarget>(() => homeFor(currentInstance()));
   const [clientScreen, setClientScreen] = useState<ClientDestination | null>(null);
   const [instanceTick, setInstanceTick] = useState(0);
   const [source, setSource] = useState<AreaSource>(() => new StaticAreaSource(sampleArea));
@@ -133,6 +136,33 @@ function AppInner() {
       setClientScreen((c) => (c === "instances" || c === "onboarding" ? null : c));
     wasLive.current = liveConnected;
   }, [liveConnected, clientScreen]);
+  // A signed-in REMOTE lands on the viewer's own home, like Blazor's /{user} — the portal answers
+  // who the token belongs to (/api/mesh/whoami). Runs once per connection; the docs HOME stays the
+  // instant default and for anonymous viewers, and a user who already navigated is not yanked.
+  useEffect(() => {
+    const inst = currentInstance();
+    const base = homeFor(inst);
+    setHome(base);
+    if (inst.local || !inst.token) return;
+    let live = true;
+    void fetch(`${inst.url.replace(/\/+$/, "")}/api/mesh/whoami`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${inst.token}` },
+      body: "{}",
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { userId?: string | null } | null) => {
+        const userId = j?.userId ? String(j.userId).trim() : "";
+        if (!live || !userId) return;
+        const userHome: NavTarget = { address: userId, area: "" };
+        setHome(userHome);
+        setNav((n) => (n.address === base.address && n.area === base.area ? userHome : n));
+      })
+      .catch(() => {});
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceTick]);
+
   const reconnect = () => {
     // On a phone the onboarding stays visible until the mesh ACKS (the transition effect
     // closes it) — closing eagerly here made a tap read as "connect just closes".
@@ -232,7 +262,7 @@ function AppInner() {
                 <Shell
                   source={source}
                   nav={effNav}
-                  home={homeFor(currentInstance())}
+                  home={home}
                   clientScreen={clientScreen}
                   onNavigate={navigate}
                   onClientScreen={setClientScreen}

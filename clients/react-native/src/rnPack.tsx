@@ -32,6 +32,7 @@ import {
   type MarkdownKernelSession,
   type SkinComponent,
 } from "@meshweaver/react/core";
+import { parseHref, useNavigate } from "./nav";
 import { rnSkins } from "./rnSkins";
 import { rnContainerControls } from "./rnContainers";
 import { rnLiveControls } from "./rnMeshLive";
@@ -148,8 +149,18 @@ const Spinner: ControlComponent = ({ control }) => <ActivityIndicator />;
 const NavLink: ControlComponent = ({ control }) => {
   const emit = useEmit();
   const { area } = useScope();
+  const navigate = useNavigate();
+  const url = s(useResolve(control.url));
+  const onPress = () => {
+    // A nav link CARRIES its destination (`/Doc/Architecture/X`) — resolve it through the shell's
+    // navigation (the node's default area), exactly what the MAUI navigator bridge does. Only a
+    // url-less link falls back to the server click event.
+    const target = url ? parseHref(url, "") : null;
+    if (target) return navigate(target);
+    if (control.isClickable) emit({ kind: "click", area });
+  };
   return (
-    <Pressable onPress={() => control.isClickable && emit({ kind: "click", area })} style={{ paddingVertical: 6 }}>
+    <Pressable onPress={onPress} style={{ paddingVertical: 6 }}>
       <Text style={[styles.body, { color: "#0f6cbd" }]}>{s(useResolve(control.title))}</Text>
     </Pressable>
   );
@@ -292,10 +303,16 @@ const LayoutAreaEmbed: ControlComponent = ({ control }) => {
 };
 
 // Inside the NESTED source's scope: spin (unless progress is suppressed) until the embedded root area
-// arrives, then render its tree.
+// arrives, then render its tree. A PROCESSED snapshot withOUT the root area means the server rendered
+// NOTHING for this embed — e.g. the Pinned region emits null for a user with no pins — so render
+// nothing instead of spinning forever ("missing default if empty").
 function EmbeddedAreaBody({ rootArea, showProgress }: { rootArea: string; showProgress: boolean }) {
   const state = useAreaState();
-  if (state.areas?.[rootArea] == null) return showProgress ? <ActivityIndicator /> : null;
+  if (state.areas?.[rootArea] == null) {
+    const progress = (state.data as Record<string, { progress?: number }> | undefined)?.progress?.progress;
+    const settled = state.areas != null && Object.keys(state.areas).length > 0 && (progress == null || progress >= 100);
+    return settled || !showProgress ? null : <ActivityIndicator />;
+  }
   return <RenderArea areaKey={rootArea} />;
 }
 
