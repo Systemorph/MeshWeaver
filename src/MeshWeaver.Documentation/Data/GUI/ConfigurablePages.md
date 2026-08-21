@@ -61,10 +61,11 @@ Some areas exist on **every** node; others are specific to the home page.
 | Embed | Where | What it shows |
 |---|---|---|
 | `@@("area/Search")` | every node | The node's [search catalog](/Doc/GUI/MeshSearch) — group, filter, and drill down via query params |
-| `@@("area/Pinned")` | home page | The items you've pinned |
+| `@@("area/Pinned")` | home page | The items you've pinned (also the Pinned tab of the catalog — embed it separately only if you want it twice) |
 | `@@("area/Threads")` | home page | Your open (not-done) threads, newest first |
-| `@@("area/Catalog")` | home page | A tabbed catalog — Spaces, your items, recently read, recently edited |
+| `@@("area/Catalog")` | home page | The [tabbed home surface](/Doc/Architecture/AppsHome) — Shared with me, Pinned, **Apps** (your installed apps + the platform defaults, incl. the Store), and Spaces |
 | `@@("area/Composer")` | home page | The chat composer (start a new thread right from your home) |
+| `@@("area/Chat")` | home page | The [Threads app](/Doc/Architecture/AppsHome) — your open threads as a vertical rail (✕ closes) beside the composer; also a full page at `/{you}/Chat` |
 
 > Generic areas like `Search` are not special to the home — they come from the standard node layout,
 > so the same `@@("area/Search")` works on a Space, a folder, or any other node.
