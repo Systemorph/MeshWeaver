@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
@@ -42,7 +43,7 @@ namespace MeshWeaver.Hosting.AspNetCore;
 /// new static-asset endpoints after the <see cref="WebApplication"/> is built. Restart-as-activation
 /// is the contract; inventing a second, dynamic mechanism here would outrun the loader it serves.</para>
 /// </summary>
-public static class MeshModuleStaticAssetExtensions
+public static partial class MeshModuleStaticAssetExtensions
 {
     /// <summary>The request-path prefix every Razor Class Library's assets live under.</summary>
     internal const string ContentRoot = "_content";
@@ -116,6 +117,25 @@ public static class MeshModuleStaticAssetExtensions
                 RequestPath: new PathString(mount.RequestPath),
                 Provider: new PhysicalFileProvider(mount.PhysicalPath)))
             .ToArray();
+
+        // A module aggregate whose host-provided @imports were stripped is served from MEMORY,
+        // ahead of the mounts — the landed bytes stay exactly as published (a generation is
+        // immutable), and only the response differs. Also ahead of encoding negotiation: the
+        // rewritten body has no precompressed sibling to negotiate to.
+        var rewrites = manifest.RewrittenStylesheets;
+        if (rewrites is { Count: > 0 })
+            app.Use(async (context, next) =>
+            {
+                if (HttpMethods.IsGet(context.Request.Method)
+                    && rewrites.TryGetValue(context.Request.Path.Value ?? "", out var body))
+                {
+                    context.Response.ContentType = "text/css";
+                    context.Response.Headers.Vary = HeaderNames.AcceptEncoding;
+                    await context.Response.WriteAsync(body);
+                    return;
+                }
+                await next();
+            });
 
         // Encoding negotiation runs ONCE, in front of every mount: it only rewrites the path, so
         // the mounts below stay ordinary static-file middleware.
@@ -276,6 +296,7 @@ public static class MeshModuleStaticAssetExtensions
 
         var mounts = new List<ModuleStaticAssetMount>();
         var stylesheets = new List<string>();
+        var rewrites = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         // First mount wins per request path — two modules carrying the SAME dependency (a shared
         // RCL) is ordinary composition, not a fault, so the second is skipped quietly rather than
         // refused. Shadowing the HOST is the case that must never happen, and that is the
@@ -305,8 +326,25 @@ public static class MeshModuleStaticAssetExtensions
             // The scoped-CSS bundle a standalone publish emits for the module's own .razor.css
             // files. It EXISTS (contrary to the "scoped CSS is lost" reading) — it is simply not
             // linked, because App.razor links only the host's aggregate. Hand it to the host.
-            if (File.Exists(Path.Combine(moduleWwwroot, $"{name}.styles.css")))
-                stylesheets.Add($"{ContentRoot}/{name}/{name}.styles.css");
+            var bundlePath = Path.Combine(moduleWwwroot, $"{name}.styles.css");
+            if (File.Exists(bundlePath))
+            {
+                var requestPath = $"{ContentRoot}/{name}/{name}.styles.css";
+                stylesheets.Add(requestPath);
+
+                // 🚨 The aggregate opens with @import lines for its DEPENDENCIES' bundles at
+                // FINGERPRINTED urls, computed at MODULE-build time
+                // (@import '_content/MeshWeaver.Blazor/MeshWeaver.Blazor.4p29wy9ysg.bundle.scp.css').
+                // For a dependency the host provides, the host serves its own copy under ITS build's
+                // fingerprint — a different string — so the import 404s on every page load, silently.
+                // They are also redundant: the host already links its own aggregate, which contains
+                // those very bundles. Strip exactly those, by the SAME predicate that decides not to
+                // mount the dependency, so the two can never disagree about who provides what.
+                var rewritten = StripHostProvidedImports(
+                    File.ReadAllText(bundlePath), hostAssets, name, logger);
+                if (rewritten is not null)
+                    rewrites["/" + requestPath] = rewritten;
+            }
 
             // 2. The module's DEPENDENCIES, already namespaced under its wwwroot/_content.
             var moduleContentRoot = Path.Combine(moduleWwwroot, ContentRoot);
@@ -349,7 +387,7 @@ public static class MeshModuleStaticAssetExtensions
                 "Module static assets: {Count} root(s) mounted, {Stylesheets} stylesheet(s) to link",
                 mounts.Count, stylesheets.Count);
 
-        return new ModuleStaticAssetManifest(mounts, stylesheets);
+        return new ModuleStaticAssetManifest(mounts, stylesheets, rewrites);
     }
     /// <summary>
     /// Where a boot-installed module's published static web assets live: <c>wwwroot</c> BESIDE the
@@ -391,6 +429,54 @@ public static class MeshModuleStaticAssetExtensions
             : Path.Combine(baseDirectory, "modules", moduleName, "wwwroot");
     }
 
+    /// <summary>
+    /// Removes the <c>@import</c> lines of a module scoped-CSS aggregate that name a dependency the
+    /// HOST provides, returning the rewritten body — or <c>null</c> when nothing needed removing, so
+    /// the ordinary static-file path keeps serving the file untouched.
+    ///
+    /// <para>Those imports carry the fingerprint computed by the MODULE's build; the host serves its
+    /// own copy of the same dependency under ITS build's fingerprint, so the URL cannot resolve and
+    /// the browser 404s once per page load with nothing in any log. They are redundant besides — the
+    /// host links its own aggregate, which already contains those bundles. An import for a dependency
+    /// the host does NOT provide is KEPT: the module's own <c>wwwroot/_content/&lt;Dep&gt;/</c> carries
+    /// that bundle at the very fingerprint the import names, both produced by the same publish.</para>
+    /// </summary>
+    internal static string? StripHostProvidedImports(
+        string css, IFileProvider hostAssets, string moduleName, ILogger logger)
+    {
+        var lines = css.Split('\n');
+        var kept = new List<string>(lines.Length);
+        var dropped = new List<string>();
+        foreach (var line in lines)
+        {
+            var match = ImportedContentBundle().Match(line);
+            if (match.Success)
+            {
+                var dependency = match.Groups["dep"].Value;
+                if (hostAssets.GetDirectoryContents($"{ContentRoot}/{dependency}").Exists)
+                {
+                    dropped.Add(dependency);
+                    continue;
+                }
+            }
+            kept.Add(line);
+        }
+
+        if (dropped.Count == 0)
+            return null;
+
+        logger.LogInformation(
+            "Module {Module}: dropped {Count} fingerprinted @import(s) for host-provided "
+            + "dependencies ({Dependencies}) — the host links its own aggregate, and the module's "
+            + "fingerprints do not match the host's copies.",
+            moduleName, dropped.Count, string.Join(", ", dropped));
+        return string.Join('\n', kept);
+    }
+
+    /// <summary>Matches <c>@import '_content/&lt;Dep&gt;/…';</c> in a scoped-CSS aggregate.</summary>
+    [GeneratedRegex("""^\s*@import\s+['"]_content/(?<dep>[^/'"]+)/[^'"]*['"]\s*;""")]
+    private static partial Regex ImportedContentBundle();
+
 }
 
 /// <summary>One mounted asset root: everything under <paramref name="PhysicalPath"/> is served at
@@ -416,4 +502,5 @@ public sealed record ModuleStaticAssetMount(string RequestPath, string PhysicalP
 /// </param>
 public sealed record ModuleStaticAssetManifest(
     IReadOnlyList<ModuleStaticAssetMount> Mounts,
-    IReadOnlyList<string> Stylesheets);
+    IReadOnlyList<string> Stylesheets,
+    IReadOnlyDictionary<string, string>? RewrittenStylesheets = null);
