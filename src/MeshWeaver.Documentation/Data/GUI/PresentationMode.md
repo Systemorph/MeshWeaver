@@ -6,8 +6,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 ---
 
 The portal's home reveals everything the signed-in viewer can read: the catalog lists every space,
-"last accessed" names whatever they touched this morning, the Pinned tab sits right there, link-preview
-cards carry names and logos, and `@` completions offer node names as you type. Share that screen
+"last accessed" names whatever they touched this morning, the Pinned and Apps tabs carry names and
+icons, and `@` completions offer node names as you type. Share that screen
 with an external audience and you have shared your engagement list.
 
 **Presentation mode** is the privacy screen for that moment: a per-viewer, display-only mode that
@@ -84,11 +84,7 @@ second permission system above.
 | **Pinned** tab | `UserActivityLayoutAreas.BuildPinnedItems` — before the query string is built |
 | **Shared with me** tab | `UserActivityLayoutAreas.BuildHome` / `BuildCatalog` — same reason |
 | **Apps** tab | `UserActivityLayoutAreas.BuildApps` — same reason. A `~/` entry is a system AREA, not a mesh path: it names no node, so there is nothing to screen and it passes through |
-| OG / link-preview cards | `OgCardLayoutArea` — a screened target is dropped, not redacted |
 | `@` completions | `ChatCompletionOrchestrator.Screened` (one seam for every producer) and `MeshNodeAutocompleteProvider` |
-
-**A dropped card is dropped, not redacted.** A card whose title reads "hidden" still tells the room
-that something is being hidden.
 
 ---
 
@@ -118,6 +114,10 @@ that something is being hidden.
 
 The screen is a *portal* feature and covers the Blazor surfaces above. Still open:
 
+- **link-preview / OG cards** are no longer in this repo — `MeshWeaver.OgCard` left the platform
+  in #1975 — so screening them is a follow-up wherever it lives now. The rule to carry across is
+  that a screened target is **dropped, not redacted**: a card whose title reads "hidden" still tells
+  the room that something is being hidden;
 - the **React client's** `MeshSearch` renderer does not apply it yet;
 - the **strict variant** #1803 mentions — hiding all recent-activity regions wholesale, rather than
   the marked paths — is not built;

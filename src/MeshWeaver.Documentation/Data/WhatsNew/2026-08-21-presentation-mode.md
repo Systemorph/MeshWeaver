@@ -17,8 +17,8 @@ Presentation mode is a privacy screen for exactly that moment.
 
 Mark a space — **Hide in presentation mode**, in its node menu — and it joins your own personal
 list. Then flip **Presentation mode** on from your user menu before you share, and everything you
-marked disappears from your Spaces, Pinned and Apps tabs, your link-preview cards and your `@`
-suggestions, along with everything inside it. A pair of glasses in the header tells you the screen
+marked disappears from your Spaces, Pinned and Apps tabs and from your `@` suggestions, along with
+everything inside it. A pair of glasses in the header tells you the screen
 is up. Turn it off and everything is back exactly as it was: there is nothing to restore and
 nothing to undo.
 

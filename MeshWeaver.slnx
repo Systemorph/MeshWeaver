@@ -13,16 +13,6 @@
   <Folder Name="/samples/">
     <File Path="samples/Directory.Build.props" />
   </Folder>
-  <Folder Name="/samples/Insurance/">
-    <Project Path="samples/Insurance/MeshWeaver.Insurance.Domain/MeshWeaver.Insurance.Domain.csproj" />
-    <Project Path="samples/Insurance/MeshWeaver.Insurance.SampleData/MeshWeaver.Insurance.SampleData.csproj" />
-    <Project Path="samples/Insurance/MeshWeaver.Insurance.Test/MeshWeaver.Insurance.Test.csproj" />
-  </Folder>
-  <Folder Name="/samples/Northwind/">
-    <Project Path="samples/Northwind/MeshWeaver.Northwind.Application/MeshWeaver.Northwind.Application.csproj" />
-    <Project Path="samples/Northwind/MeshWeaver.Northwind.Domain/MeshWeaver.Northwind.Domain.csproj" />
-    <Project Path="samples/Northwind/MeshWeaver.Northwind.Model/MeshWeaver.Northwind.Model.csproj" />
-  </Folder>
   <Folder Name="/memex/">
     <Project Path="memex/Memex.Portal.Shared/Memex.Portal.Shared.csproj" />
     <Project Path="memex/Memex.Portal.Monolith/Memex.Portal.Monolith.csproj" />
@@ -65,20 +55,12 @@
     <Project Path="src/MeshWeaver.ContentCollections.Indexing.Graph/MeshWeaver.ContentCollections.Indexing.Graph.csproj" />
     <Project Path="src/MeshWeaver.Data.Contract/MeshWeaver.Data.Contract.csproj" />
     <Project Path="src/MeshWeaver.Data/MeshWeaver.Data.csproj" />
-    <Project Path="src/MeshWeaver.DataSetReader.Csv/MeshWeaver.DataSetReader.Csv.csproj" />
-    <Project Path="src/MeshWeaver.DataSetReader.Excel.BinaryFormat/MeshWeaver.DataSetReader.Excel.BinaryFormat.csproj" />
-    <Project Path="src/MeshWeaver.DataSetReader.Excel.OpenXmlFormat/MeshWeaver.DataSetReader.Excel.OpenXmlFormat.csproj" />
-    <Project Path="src/MeshWeaver.DataSetReader.Excel.Utils/MeshWeaver.DataSetReader.Excel.Utils.csproj" />
-    <Project Path="src/MeshWeaver.DataSetReader.Excel/MeshWeaver.DataSetReader.Excel.csproj" />
-    <Project Path="src/MeshWeaver.DataSetReader/MeshWeaver.DataSetReader.csproj" />
-    <Project Path="src/MeshWeaver.DataStructures/MeshWeaver.DataStructures.csproj" />
     <Project Path="src/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
     <Project Path="src/MeshWeaver.Domain/MeshWeaver.Domain.csproj" />
     <Project Path="src/MeshWeaver.Fixture/MeshWeaver.Fixture.csproj" />
     <Project Path="src/MeshWeaver.Reactive.Assertions/MeshWeaver.Reactive.Assertions.csproj" />
     <Project Path="src/MeshWeaver.Maps/MeshWeaver.Maps.csproj" />
     <Project Path="src/MeshWeaver.Hosting.AspNetCore/MeshWeaver.Hosting.AspNetCore.csproj" />
-    <Project Path="src/MeshWeaver.OgCard/MeshWeaver.OgCard.csproj" />
     <Project Path="src/MeshWeaver.Graph/MeshWeaver.Graph.csproj" />
     <Project Path="src/MeshWeaver.GitSync/MeshWeaver.GitSync.csproj" />
     <Project Path="src/MeshWeaver.InstanceSync/MeshWeaver.InstanceSync.csproj" />
@@ -93,7 +75,6 @@
     <Project Path="src/MeshWeaver.Hosting.Sqlite/MeshWeaver.Hosting.Sqlite.csproj" />
     <Project Path="src/MeshWeaver.Hosting.SignalR/MeshWeaver.Hosting.SignalR.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
-    <Project Path="src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
     <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />
     <Project Path="src/MeshWeaver.Kernel/MeshWeaver.Kernel.csproj" />
     <Project Path="src/MeshWeaver.Layout/MeshWeaver.Layout.csproj" />
@@ -130,11 +111,9 @@
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
     <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
-    <Project Path="test/MeshWeaver.DataSetReader.Test/MeshWeaver.DataSetReader.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Grpc.Test/MeshWeaver.Hosting.Grpc.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.Test/MeshWeaver.Hosting.Orleans.Test.csproj" />
-    <Project Path="test/MeshWeaver.Import.Test/MeshWeaver.Import.Test.csproj" />
     <Project Path="test/MeshWeaver.Json.Test/MeshWeaver.Json.Test.csproj" />
     <Project Path="test/MeshWeaver.Layout.Test/MeshWeaver.Layout.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Test/MeshWeaver.Markdown.Test.csproj" />
@@ -146,7 +125,6 @@
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
     <Project Path="test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj" />
     <Project Path="test/MeshWeaver.PluginCatalog.Test/MeshWeaver.PluginCatalog.Test.csproj" />
-    <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
     <Project Path="test/MeshWeaver.Social.Test/MeshWeaver.Social.Test.csproj" />

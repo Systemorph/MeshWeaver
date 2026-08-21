@@ -1,21 +1,24 @@
 using System.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.OgCard;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Presentation mode (issue #1803) on the SURFACES the issue names — the home catalog (which is
-/// where the former Spaces / Last Read / Last Edited tabs live), the pinned tiles, the "Shared with
-/// me" band, the OG cards, and the node menu that marks them.
+/// Presentation mode (issue #1803) on the SURFACES the issue names — the home's tabs (Shared with
+/// me, Pinned, Apps and the Spaces catalog, which is where the former Spaces / Last Read / Last
+/// Edited tabs live) and the node menu that marks them.
 ///
-/// <para>Two of these filter at the point the QUERY is built rather than only where a card is
-/// painted, and that is the interesting part: a pinned path and a shared-band target are
-/// INTERPOLATED INTO the control's query string, which the view exposes in its search-options
-/// editor and carries in the <c>hq=</c> parameter of "open in search". A marked name reaching the
-/// address bar mid-presentation is the leak, whether or not a card for it is ever drawn.</para>
+/// <para>Three of the tabs filter at the point the QUERY is built rather than only where a card is
+/// painted, and that is the interesting part: a pinned path, a shared-band target and an installed
+/// app path are all INTERPOLATED INTO the control's query string, which the view exposes in its
+/// search-options editor and carries in the <c>hq=</c> parameter of "open in search". A marked name
+/// reaching the address bar mid-presentation is the leak, whether or not a card for it is ever
+/// drawn.</para>
+///
+/// <para>The OG-card surface is NOT here: <c>MeshWeaver.OgCard</c> left the platform in #1975, so
+/// screening it is a follow-up in the repo that owns it now.</para>
 /// </summary>
 public class PresentationSurfacesTest
 {
@@ -219,26 +222,6 @@ public class PresentationSurfacesTest
         QueryOf(marked).Should().NotContain("Acme");
 
         QueryOf(UserActivityLayoutAreas.BuildSpaces(Owner)).Should().NotContain("Acme");
-    }
-
-    // ── OG cards ───────────────────────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void OgCards_DropAMarkedTarget_AndKeepExternalPages()
-    {
-        string[] targets = ["Acme/Q3-Renewal", "Northwind", "https://example.org/Page"];
-
-        OgCardLayoutArea.PaintedTargets(targets, Active("Acme"))
-            .Should().Equal("Northwind", "https://example.org/Page");
-    }
-
-    [Fact]
-    public void OgCards_AreUntouchedWhenTheModeIsOff()
-    {
-        string[] targets = ["Acme", "Northwind"];
-
-        OgCardLayoutArea.PaintedTargets(targets, PresentationScreen.For(false, ["Acme"]))
-            .Should().Equal("Acme", "Northwind");
     }
 
     // ── The marking affordance ─────────────────────────────────────────────────────────────────
