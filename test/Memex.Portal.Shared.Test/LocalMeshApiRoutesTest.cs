@@ -31,6 +31,9 @@ public class LocalMeshApiRoutesTest
         "/api/mesh/content/list",
         "/api/mesh/upload",
         "/api/mesh/onboard",
+        "/api/mesh/search",
+        "/api/mesh/get",
+        "/api/mesh/create",
     ];
 
     [Theory]

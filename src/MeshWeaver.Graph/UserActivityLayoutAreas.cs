@@ -1058,7 +1058,9 @@ public static class UserActivityLayoutAreas
         var everything = Controls.MeshSearch
             .WithHiddenQuery(sortOptions[0].Query)
             .WithSortOptions(sortOptions)
-            .WithShowSearchBox(true)
+            // No embedded search box: every shell already carries the top-bar search, and a second
+            // input on the home read as a duplicate (maintainer, 2026-08-21). Sort/view stay.
+            .WithShowSearchBox(false)
             .WithViewOptions(true)
             .WithShowEmptyMessage(true)
             .WithRenderMode(cfg.Render == HomeCatalogRender.Grouped
