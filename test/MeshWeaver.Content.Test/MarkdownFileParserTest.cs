@@ -854,4 +854,47 @@ public class MarkdownFileParserTest
     }
 
     #endregion
+
+    /// <summary>
+    /// 🚨 #1984: front matter binds a key in EITHER casing. Two parsers claim <c>.md</c> —
+    /// AgentFileParser binds camelCase but claims only <c>nodeType: Agent</c>, so everything else
+    /// lands here. A PascalCase-only deserializer never bound <c>nodeType:</c>, the miss was
+    /// swallowed by IgnoreUnmatchedProperties, and the node silently defaulted to Markdown:
+    /// eleven skills authored exactly as the plugin repos' guidance prescribes imported as plain
+    /// Markdown pages and never reached the slash-command list.
+    ///
+    /// <para>Both spellings are pinned because the tempting fix — swapping in a camelCase
+    /// convention — would merely move the breakage onto the 1146 files that author these keys
+    /// PascalCase.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("nodeType")]
+    [InlineData("NodeType")]
+    public void FrontMatter_BindsANodeTypeInEitherCasing(string key)
+    {
+        var markdown = $"""
+            ---
+            id: package-versions
+            {key}: Skill
+            name: /package-versions
+            ---
+
+            # The skill's body.
+            """;
+
+        var node = new MarkdownFileParser().Parse("Skill/package-versions.md", markdown, "Skill/package-versions.md");
+
+        Assert.NotNull(node);
+        Assert.Equal("Skill", node!.NodeType);
+        Assert.Equal("/package-versions", node.Name);
+    }
+
+    /// <summary>An unspecified node type still defaults to Markdown — the fallback is intact.</summary>
+    [Fact]
+    public void FrontMatter_WithNoNodeType_StillDefaultsToMarkdown()
+    {
+        var node = new MarkdownFileParser().Parse(
+            "Doc/page.md", "---\nid: page\n---\n\n# Body\n", "Doc/page.md");
+        Assert.Equal("Markdown", node!.NodeType);
+    }
 }
