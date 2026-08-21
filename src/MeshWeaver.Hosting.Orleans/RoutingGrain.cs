@@ -330,7 +330,7 @@ internal class RoutingGrain(
             logger.LogDebug("[ROUTE] {Address} type={Type} declared stream-routed → memory stream", addressPath, address.Type);
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM addr={addressPath} id={delivery.Id} streamName={addressPath}");
             var s = streamProvider.GetStream<IMessageDelivery>(addressPath);
-            return PostToStream(() => s.OnNextAsync(delivery), addressPath, delivery.Id,
+            return PostToStream(delivery, () => s.OnNextAsync(delivery), addressPath,
                 delivery.Sender, PostFailureToSender, logger, StreamPostTimeout);
         })
             // Composition-time faults must ALSO reach the sender — see BuildGrainRoute's trailing
@@ -460,8 +460,15 @@ internal class RoutingGrain(
         // CLR-type test this guard used to make could not match on any routed delivery (#1485).
         if (!delivery.MayAnswer())
             return;
+        // 🚨 The NACK must not BE the thing it is reporting. DeliveryFailure embeds the ORIGINAL
+        // delivery — payload included — and this NACK travels the SAME memory stream, so a failure
+        // report about an oversized message is itself an oversized message and dies at exactly the
+        // wall it is describing, silently (#1890). Strip an undeliverable payload down to a
+        // description of itself; the sender matches a DeliveryFailure on RequestId, never on the
+        // echoed payload. A payload that fits is echoed unchanged.
+        var echoedDelivery = StreamMessageSizeGuard.WithoutOversizedPayload(delivery);
         var failureDelivery = new MessageDelivery<DeliveryFailure>(
-            new DeliveryFailure(delivery, failureMessage) { ErrorType = errorType },
+            new DeliveryFailure(echoedDelivery, failureMessage) { ErrorType = errorType },
             new PostOptions(address)
                 .WithTarget(delivery.Sender)
                 .WithProperty(PostOptions.RequestId, delivery.Id),
@@ -531,6 +538,60 @@ internal class RoutingGrain(
     /// deterministically testable without a cluster.</para>
     /// </summary>
     internal static IObservable<Unit> PostToStream(
+        IMessageDelivery delivery,
+        Func<Task> post,
+        string addressPath,
+        Address? sender,
+        Action<string, ErrorType> postFailureToSender,
+        ILogger logger,
+        TimeSpan timeout,
+        IScheduler? scheduler = null,
+        int sizeLimitBytes = StreamMessageSizeGuard.MemoryStreamBlockBytes)
+        => Observable.Defer(() =>
+        {
+            var deliveryId = delivery.Id;
+
+            // 🚨 REFUSE, LOUDLY, WHAT PROVABLY CANNOT COME OFF THIS QUEUE — issue #1890.
+            //
+            // Orleans caches memory-stream messages in fixed 1 MiB blocks and a message must fit
+            // one whole block, so a bigger payload is undeliverable by construction. Posting it
+            // anyway SUCCEEDS right here and fails on the CONSUMING side, inside
+            // PersistentStreamPullingAgent's retry loop, as an ArgumentOutOfRangeException naming
+            // a queue id and nothing else — no target, no message type, no delivery id, no sender.
+            // That retry cannot converge (the size is a property of the message, not of the
+            // attempt), so the message is lost and the caller waits out its own timeout with
+            // nothing logged that could find the producer. This is the same class of non-delivery
+            // the bound below exists for, and it gets the same answer: terminate, say exactly what
+            // was dropped and how big it was, and NACK the sender.
+            //
+            // Refusing cannot break anything that works: the bound IS Orleans' own, so everything
+            // it rejects was already being dropped. It is deliberately not an exact admission test
+            // — see StreamMessageSizeGuard.
+            if (StreamMessageSizeGuard.IsOversized(delivery, sizeLimitBytes, out var payloadBytes))
+            {
+                var refusal = StreamMessageSizeGuard.Describe(
+                    delivery, addressPath, payloadBytes, sizeLimitBytes);
+                logger.LogError(
+                    "[ROUTE] REFUSED oversized stream-routed delivery to {Address}: {Bytes} bytes "
+                    + "against the {Limit}-byte Orleans memory-stream limit ({DeliveryId}, sender "
+                    + "{Sender}) — NOT posted, because the stream's pulling agent would reject and "
+                    + "retry it forever while it was never delivered. {Refusal}",
+                    addressPath, payloadBytes, sizeLimitBytes, deliveryId, sender, refusal);
+                RoutingGrainTrace.Write(
+                    $"RoutingGrain.RouteMessage MEMORY_STREAM_REFUSED_OVERSIZED addr={addressPath} id={deliveryId} bytes={payloadBytes}");
+                postFailureToSender(refusal, ErrorType.Rejected);
+                return Observable.Return(Unit.Default);
+            }
+
+            return PostToStreamCore(
+                post, addressPath, deliveryId, sender, postFailureToSender, logger, timeout, scheduler);
+        });
+
+    /// <summary>
+    /// The post itself, once <see cref="PostToStream"/> has established the delivery CAN be
+    /// carried: issue it, bound it, and turn a fault or a non-completion into a NACK'd terminal.
+    /// </summary>
+    private static IObservable<Unit> PostToStreamCore(
         Func<Task> post,
         string addressPath,
         string deliveryId,
@@ -538,7 +599,7 @@ internal class RoutingGrain(
         Action<string, ErrorType> postFailureToSender,
         ILogger logger,
         TimeSpan timeout,
-        IScheduler? scheduler = null)
+        IScheduler? scheduler)
         => Observable.Defer(() => post().ToObservable())
             .Timeout(timeout, scheduler ?? Scheduler.Default)
             .Do(_ => RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM_OK id={deliveryId}"))
