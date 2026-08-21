@@ -887,6 +887,12 @@ public static class UserActivityLayoutAreas
                     .Distinct(StringComparer.OrdinalIgnoreCase),
                 p => p.StartsWith("~/", StringComparison.Ordinal) ? null : p)
             .ToList();
+        // The phone-home budget: at most 24 tiles TOTAL — dock AND grid together — sliced BEFORE
+        // the dock/grid split, so dock tiles count against the budget and the path query itself is
+        // bounded (the grid's ItemLimit below is only a belt-and-braces render cap).
+        const int AppBudget = 24;
+        if (entries.Count > AppBudget)
+            entries = entries.Take(AppBudget).ToList();
         var systemAreas = entries.Where(p => p.StartsWith("~/", StringComparison.Ordinal)).ToList();
         var paths = entries.Where(p => !p.StartsWith("~/", StringComparison.Ordinal)).ToList();
         if (systemAreas.Count == 0 && paths.Count == 0)
@@ -934,27 +940,28 @@ public static class UserActivityLayoutAreas
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
-            // ONE compact band: 140px cell floor (instead of the default 200) so a typical app set
-            // fits a single row, and a hard 24-item cap — the phone-home scale. MaxRows(1) ×
-            // MaxColumns(24) is the visible-count cap; ItemLimit caps the query itself.
-            .WithMaxColumns(24)
+            // A compact band: 140px cell floor (instead of the default 200) so a typical app set
+            // fits a single row, wrapping only when it must. Deliberately NO MaxColumns — the
+            // React client renders MaxColumns as an EXACT column count (24 columns would squeeze
+            // cards to ~40px there), while no-MaxColumns keeps every client's own responsive
+            // default. The real 24-item bound is the AppBudget slice above.
             .WithMinItemWidth(140)
             .WithGridSpacing(12)
             .WithItemLimit(24)
-            .WithMaxRows(1)
             .WithReactiveMode(true);
 
         if (dock is null)
             return grid;
-        // Dock tiles INLINE with the grid — one continuous row (wrapping only when it must),
-        // never a dock row stacked above a card grid.
+        // Dock tiles INLINE with the grid — one continuous band. The grid wrapper shrinks to the
+        // 140px cell floor so a phone-width tab (~375px) still fits dock tile + grid side by side
+        // instead of wrapping the whole grid below the dock.
         return Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
             .WithStyle("gap: 12px; width: 100%; flex-wrap: wrap; align-items: flex-start;")
             .WithView(dock)
             .WithView(Controls.Stack
-                .WithStyle("flex: 1 1 420px; min-width: 320px;")
+                .WithStyle("flex: 1 1 280px; min-width: 140px;")
                 .WithView(grid));
     }
 
