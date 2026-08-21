@@ -2266,7 +2266,13 @@ public class AgentChatClient : IAgentChat
             // The floor model's factory has no bare chat client (persistent/server-side threads) —
             // routing has no engine here; the floor is the answer.
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The ROUND was cancelled — routing must not swallow that into "keep the floor and
+            // continue"; the caller's cancellation propagates.
+            throw;
+        }
+        catch (OperationCanceledException)
         {
             logger.LogDebug("[AutoRouter] selection timed out after {Timeout}s — keeping the floor model.",
                 AutoRouterTimeout.TotalSeconds);
