@@ -458,10 +458,22 @@ if (bakeMode)
 // registered on the flag, so a regression logged "REFUSING READINESS — the rollout will stall"
 // on a pod with nothing gating it, which then went Ready and served traffic. Deriving both from
 // this single parse is what keeps the log honest — see NodeTypeBakeGateState.GatesReadiness.
-var gateBake = bool.TryParse(builder.Configuration[NodeTypeBakeGateExtensions.EnabledConfigKey],
+var gateBakeConfigured = bool.TryParse(builder.Configuration[NodeTypeBakeGateExtensions.EnabledConfigKey],
     out var parsedGateBake) && parsedGateBake;
 var bakeSweepEnabled =
     bool.TryParse(builder.Configuration[DynamicTypePreWarmerHostedService.EnabledConfigKey], out var s) && s;
+
+// 🚨 A GATE THAT CANNOT MEASURE DOES NOT ARM (#1981). The gate reads bake state only the SWEEP
+// writes, so gate-without-sweep is registered, permanently green, and protects nothing — the exact
+// failure this gate exists to prevent, wearing the gate's own uniform. Logging it at Critical (just
+// below) was not enough: the log scrolls past while `GatesReadiness` keeps claiming enforcement
+// that is not there, and a live portal booted in precisely that state.
+//
+// Disarming loses NO protection — with the sweep off there was none to lose — and it makes the
+// reported state honest, so an UNARMED regression is reported as unarmed instead of as a stall
+// nothing enforces. Turning the gate ON therefore means turning the sweep on too, which is what
+// the configuration claimed all along.
+var gateBake = gateBakeConfigured && bakeSweepEnabled;
 
 // Operator escape hatch: serve even when the sweep ERRORED and therefore proved nothing
 // (BakePhase.Faulted). Default off — an unproven bake is not a passed bake, which is the guard the
@@ -488,16 +500,19 @@ var app = builder.Build();
 // DynamicTypes=false yields a gate that is registered, permanently green, and protects nothing.
 // That is precisely the failure this gate exists to prevent, so it must not be the quiet outcome:
 // say it at Critical, where a deployment that believes it is protected will actually see it.
-if (gateBake && !bakeSweepEnabled)
+if (gateBakeConfigured && !bakeSweepEnabled)
     app.Services.GetRequiredService<ILoggerFactory>()
         .CreateLogger("MeshWeaver.Hosting.NodeTypeBakeGate")
         .LogCritical(
-            "NodeType bake gate is ENABLED ({GateKey}=true) but the pre-warm sweep is OFF "
-            + "({SweepKey}!=true). The gate has nothing to measure, so it will report healthy on "
-            + "every rollout and protect NOTHING. Enable the sweep, or turn the gate off so the "
-            + "configuration stops claiming a protection that is not there.",
+            "NodeType bake gate is configured ON ({GateKey}=true) but the pre-warm sweep is OFF "
+            + "({SweepKey}!=true), so the gate has nothing to measure. It has been DISARMED rather "
+            + "than left registered and permanently green — a gate that reports healthy on every "
+            + "rollout protects nothing and hides that it protects nothing. Enable the sweep to arm "
+            + "it, or set {GateKeyToDisable}=false so the configuration stops claiming this "
+            + "protection.",
             NodeTypeBakeGateExtensions.EnabledConfigKey,
-            DynamicTypePreWarmerHostedService.EnabledConfigKey);
+            DynamicTypePreWarmerHostedService.EnabledConfigKey,
+            NodeTypeBakeGateExtensions.EnabledConfigKey);
 
 // The escape hatch is a HOLE in an armed gate — small and deliberate, but a hole. Say so at boot,
 // so "the gate is on" and "the gate still refuses an unproven bake" cannot drift apart silently in
