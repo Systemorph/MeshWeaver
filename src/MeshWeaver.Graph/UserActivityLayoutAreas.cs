@@ -655,14 +655,18 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>The Threads-app rail list: the owner's open threads (never Done, newest first) as a
-    /// single-column list whose rows delegate to the thread hub's <see cref="ThreadRailItemArea"/>.</summary>
+    /// single-column list whose rows delegate to the thread hub's <see cref="ThreadRailItemArea"/>.
+    /// Flat render + MaxColumns(1), NOT <see cref="MeshSearchRenderMode.List"/>: the List renderer
+    /// draws its own icon·title·description rows and IGNORES <c>ItemArea</c>, so the ✕ overlay
+    /// would never render there — Flat is the ItemArea path the pinned grid already proves.</summary>
     internal static MeshSearchControl BuildThreadsRail(string nodeOwnerId) =>
         Controls.MeshSearch
             .WithHiddenQuery(
                 $"namespace:{nodeOwnerId}/*_Thread nodeType:Thread -content.status:Done sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
-            .WithRenderMode(MeshSearchRenderMode.List)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithMaxColumns(1)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithItemArea(ThreadRailItemArea)
