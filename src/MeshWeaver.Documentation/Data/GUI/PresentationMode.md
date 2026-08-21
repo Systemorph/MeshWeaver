@@ -6,7 +6,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 ---
 
 The portal's home reveals everything the signed-in viewer can read: the catalog lists every space,
-"last accessed" names whatever they touched this morning, pinned tiles sit at the top, link-preview
+"last accessed" names whatever they touched this morning, the Pinned tab sits right there, link-preview
 cards carry names and logos, and `@` completions offer node names as you type. Share that screen
 with an external audience and you have shared your engagement list.
 
@@ -65,11 +65,14 @@ is by path segment, so `Acme` never hides `AcmeCorp`.
 
 **Filter where a surface PAINTS — never by narrowing a query.**
 
-Two surfaces are the exception that proves it, and they filter *earlier*, before the query is built:
-pinned tiles and the "Shared with me" band interpolate the viewer's paths straight INTO the control's
-query string, which the search view exposes in its options editor and carries in the `hq=` parameter
-of "open in search". A marked name reaching the address bar mid-presentation is the leak, whether or
-not a card for it is ever drawn.
+Three surfaces are the exception that proves it, and they filter *earlier*, before the query is
+built. The home's **Pinned**, **Shared with me** and **Apps** tabs each interpolate the viewer's own
+paths straight INTO their control's query string, which the search view exposes in its options
+editor and carries in the `hq=` parameter of "open in search". A marked name reaching the address
+bar mid-presentation is the leak, whether or not a card for it is ever drawn.
+
+A tab the screen empties is **dropped**, not shown empty: a tab labelled "Pinned" with nothing under
+it says something all by itself.
 
 Everywhere else the query is left alone. A `-path:Acme` clause would put the marked name into that
 same URL *and* would make the screen a query-engine concern — the first step towards it becoming the
@@ -77,11 +80,12 @@ second permission system above.
 
 | Surface | Where the screen is applied |
 |---|---|
-| home catalog, search results, node catalogs, tree levels, graph navigator | `MeshSearchView` — one filter over the results every `MeshSearchControl` renders |
-| pinned tiles | `UserActivityLayoutAreas.BuildPinnedItems` — before the query string is built |
-| "Shared with me" band | `UserActivityLayoutAreas.BuildCatalog` — same reason |
+| **Spaces** tab, search results, node catalogs, tree levels, graph navigator | `MeshSearchView` — one filter over the results every `MeshSearchControl` renders |
+| **Pinned** tab | `UserActivityLayoutAreas.BuildPinnedItems` — before the query string is built |
+| **Shared with me** tab | `UserActivityLayoutAreas.BuildHome` / `BuildCatalog` — same reason |
+| **Apps** tab | `UserActivityLayoutAreas.BuildApps` — same reason. A `~/` entry is a system AREA, not a mesh path: it names no node, so there is nothing to screen and it passes through |
 | OG / link-preview cards | `OgCardLayoutArea` — a screened target is dropped, not redacted |
-| `@` completions | `ChatCompletionOrchestrator` (one seam for every producer) and `MeshNodeAutocompleteProvider` |
+| `@` completions | `ChatCompletionOrchestrator.Screened` (one seam for every producer) and `MeshNodeAutocompleteProvider` |
 
 **A dropped card is dropped, not redacted.** A card whose title reads "hidden" still tells the room
 that something is being hidden.
@@ -90,6 +94,11 @@ that something is being hidden.
 
 # Rules for a new surface
 
+0. **Ask `HidesAnything`, never `== PresentationScreen.Off`.** They are different values: a viewer
+   who marked things and then turned the mode off holds a screen that is not `Off` and yet hides
+   nothing. `Filter` is a no-op for them either way — but anything ELSE your fast-path's other
+   branch does is not, and that is how an empty completion category came to be suppressed for
+   someone who was not presenting at all.
 1. **Resolve the screen ONCE, on the render turn**, and pass it down as a value —
    `host.ViewerScreen()` in a layout area, `Access.ViewerScreen(hub)` elsewhere. Reading the ambient
    `AccessContext` from inside a later emission lands after a scheduler hop with the `AsyncLocal`
