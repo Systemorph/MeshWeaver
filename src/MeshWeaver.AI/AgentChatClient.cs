@@ -2129,10 +2129,15 @@ public class AgentChatClient : IAgentChat
         if (string.IsNullOrEmpty(target)
             || string.Equals(target, currentModelName, StringComparison.OrdinalIgnoreCase))
         {
-            // Nothing usable to move TO. Not fatal on its own — a deployment can keep its keys in
-            // factory config where the resolver cannot see them — so the round still tries. The
-            // latch lets CreateAgentsSync turn "no usable model AND no agent could be built" into a
-            // speaking round failure instead of a raw provider error (#476).
+            // Nothing usable to move TO. Not fatal on its own — a factory may still bind a key this
+            // chain never saw (a provider with no registered catalog source, a driver reading its own
+            // config shape) — so the round still tries. The latch lets CreateAgentsSync turn "no
+            // usable model AND no agent could be built" into a speaking round failure instead of a
+            // raw provider error (#476).
+            //
+            // 🚨 The deployment's OWN configured keys are no longer in that blind spot: the resolver
+            // reads {Section}:ApiKey for the model's provider (MeshWeaver#1965), so a model served by
+            // Anthropic__ApiKey now takes the early return above instead of being swapped away.
             modelFallbackExhausted = true;
             if (isRouter)
                 logger.LogWarning(
