@@ -1285,6 +1285,48 @@ jobs:
         path: plugins-repo
         ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
         fetch-depth: 1
+    # 🚨 THE COMPILED HALF of every landed module (#1980). The step below drives mw-plugin-test
+    # over the NODE repos — the in-mesh Source/*.cs the mesh compiles at runtime. It never builds
+    # MeshWeaver.Plugins' src/, where fourteen compiled modules live since they left the platform
+    # and where they compile against THIS repo through $(MeshWeaverRoot). So a public-API deletion
+    # broke them with every gate here green, and the only thing standing in its way was a
+    # merge-order sentence in a PR body. A module that does not build produces no bundle, and the
+    # capability simply disappears from the image — it fails harder than the in-mesh half, which
+    # at least had a gate.
+    #
+    # ALL of them, not a vital subset: the set is ~14 projects, they build in parallel off one
+    # restore, and a "coverage per minute" trade only makes sense where the list is long enough to
+    # need one. The reverse direction already exists (the plugins repo pins MW_PLATFORM_REF and
+    # passes -p:MeshWeaverRoot); this is the other half of that pair.
+    - name: "Landed modules compile against this PR"
+      env:
+        PLUGINS: ${{ github.workspace }}/plugins-repo
+      run: |
+        set -euo pipefail
+        mapfile -t projects < <(find "$PLUGINS/src" -maxdepth 2 -name 'MeshWeaver.*.csproj' \
+          -not -name '*.Test.csproj' | sort)
+        if [ "${#projects[@]}" -eq 0 ]; then
+          echo "::error::no compiled modules found under $PLUGINS/src — the gate would pass by "\
+               "finding nothing, which is exactly the failure it exists to prevent."
+          exit 1
+        fi
+        echo "Building ${#projects[@]} landed module(s) against this PR:"
+        printf '  %s\n' "${projects[@]##*/}"
+        failed=()
+        for project in "${projects[@]}"; do
+          name="${project##*/}"; name="${name%.csproj}"
+          if ! dotnet build "$project" -c Release -warnaserror \
+               -p:MeshWeaverRoot="$GITHUB_WORKSPACE" --nologo -v q; then
+            failed+=("$name")
+          fi
+        done
+        if [ "${#failed[@]}" -gt 0 ]; then
+          echo "::error::${#failed[@]} landed module(s) do NOT compile against this PR: ${failed[*]}."\
+               " Land the plugins-repo change first, or keep the API these modules call."
+          exit 1
+        fi
+        echo "All ${#projects[@]} landed modules compile against this PR."
+
     - name: "Compile + run the VITAL plugins against this PR"
       id: gate
       env:
