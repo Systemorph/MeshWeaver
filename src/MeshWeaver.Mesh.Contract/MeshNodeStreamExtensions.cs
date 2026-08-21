@@ -2009,6 +2009,14 @@ public static class MeshNodeStreamExtensions
             // "indeterminate ⇒ treat as absent").
             var shuttingDownNacks = 0;
             Exception? lastRecyclingNack = null;
+            // 🚨 The DISTINCT owner activations seen across the re-probe loop — the datum that
+            // separates the two failures this loop can end in, which have opposite fixes:
+            // ONE hub wedged in teardown (every probe hits the same corpse; the address never
+            // reactivates) versus a RECYCLE STORM (each probe hits a fresh activation that dies
+            // before it can answer). "Still recycling after 110 probes" says nothing about which
+            // (#2025) and cost a full CI cycle to not answer. The NACK carries an activation id
+            // (MessageService), so counting distinct NACK texts counts activations.
+            var owners = new HashSet<string>(StringComparer.Ordinal);
             var reProbePacing = new SerialDisposable();
             // SerialDisposable, not a bare IDisposable: the ShuttingDown re-probe below REPLACES this
             // subscription, and assigning into a SerialDisposable that has already been disposed
@@ -2042,11 +2050,14 @@ public static class MeshNodeStreamExtensions
             // GetMeshNode); Throw callers get the error surfaced.
             void EmitRecyclingExhausted()
             {
+                int distinctOwners;
+                lock (owners) distinctOwners = owners.Count;
                 var error = new AddressRecyclingException(
                     $"GetMeshNode('{path}'): the owning hub was still recycling (ShuttingDown) after "
                     + $"{Volatile.Read(ref shuttingDownNacks)} probe(s) over {started.Elapsed.TotalSeconds:F1}s "
                     + $"(budget {budget.TotalSeconds:F0}s) — the address is recycling, NOT absent. "
-                    + "Surfacing rather than returning null, which the caller cannot tell apart from "
+                    + RecyclingShape(distinctOwners)
+                    + " Surfacing rather than returning null, which the caller cannot tell apart from "
                     + "'node not found'. Retry the read once the address has reactivated.",
                     lastRecyclingNack);
                 try
@@ -2275,6 +2286,7 @@ public static class MeshNodeStreamExtensions
                                 if (ex is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown })
                                 {
                                     lastRecyclingNack = ex;
+                                    lock (owners) owners.Add(ex.Message);
                                     var probes = Interlocked.Increment(ref shuttingDownNacks);
                                     if (!cts.IsCancellationRequested && Volatile.Read(ref emitted) == 0)
                                     {
@@ -2349,6 +2361,32 @@ public static class MeshNodeStreamExtensions
     /// never this constant — bounds the loop.
     /// </summary>
     private static readonly TimeSpan RecyclingReProbePace = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Names WHICH recycling failure this was, from the number of distinct owner activations that
+    /// NACKed — the one thing a probe count cannot tell you, and the thing that decides where to
+    /// look next (#2025).
+    ///
+    /// <para>One activation across every probe means the address never came back: a hub wedged in
+    /// teardown, so look at its disposal. Many means the address DID come back, repeatedly, and
+    /// each successor died before it could answer: a recycle storm, so look at whatever is asking
+    /// for the recycles — a NodeType republishing, an overlay self-heal watcher firing per
+    /// publication. Those have opposite fixes, and the previous message ("still recycling after
+    /// 110 probes") was consistent with both.</para>
+    /// </summary>
+    /// <param name="distinctOwners">Distinct owner activations observed across the re-probe loop.</param>
+    /// <returns>One sentence naming the shape, or an empty string when nothing was observed.</returns>
+    internal static string RecyclingShape(int distinctOwners) => distinctOwners switch
+    {
+        <= 0 => string.Empty,
+        1 => " Every probe was answered by the SAME owner activation, so the address never "
+             + "reactivated — look at that hub's DISPOSAL (a teardown that never completes), not "
+             + "at whoever asked for the recycle.",
+        _ => $" The probes were answered by {distinctOwners} DISTINCT owner activations, so the "
+             + "address did reactivate and each successor died before it could answer — a recycle "
+             + "STORM. Look at whatever is requesting the recycles (a NodeType republishing, a "
+             + "self-heal watcher firing per publication), not at any single hub's disposal.",
+    };
 }
 
 /// <summary>

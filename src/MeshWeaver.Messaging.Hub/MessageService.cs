@@ -826,9 +826,20 @@ public class MessageService : IMessageService
             // latch, MeshNodeStreamCache's shutdown-drop handling and PackageInstaller's retry all
             // ride out ShuttingDown and treat anything else as terminal. Same idiom as
             // AnswerUnreleasableDelivery above: honour the return value, and classify either way.
+            //
+            // 🚨 The ACTIVATION identity rides on the NACK too, and it is not decoration. A caller
+            // re-probing a ShuttingDown address (GetMeshNodeOutcome's paced loop) can otherwise
+            // not tell ONE hub wedged in teardown from a RECYCLE STORM — a hundred activations
+            // each dying before it can answer. Those have opposite fixes, and #2025 spent a full
+            // CI cycle on exactly that ambiguity: "still recycling after 110 probes" says nothing
+            // about whether it was 110 probes at one corpse or at 110 of them. The object hash is
+            // stable for an activation's lifetime and differs across activations, which is the
+            // whole question.
             var reason =
-                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}) — cannot process "
-                + $"{typeName}; the address may reactivate (recycle / restart). Rejecting now.";
+                $"Hub {Address} is shutting down (RunLevel={hub.RunLevel}, "
+                + $"activation #{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(hub):X8}) "
+                + $"— cannot process {typeName}; the address may reactivate (recycle / restart). "
+                + "Rejecting now.";
 
             return NackThroughParent(delivery, reason)
                 ? delivery.FailedAndNacked("Hub is shutting down")
