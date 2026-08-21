@@ -973,8 +973,27 @@ internal class MeshNodeCompilationService(
                     .Catch<(string?, ActivityLog), CompilationException>(ex =>
                     {
                         var diag = CompileDiagnostics.BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
-                        logger.LogError(ex, "Failed to compile assembly for node {NodePath}. {Diagnostics}",
-                            node.Path, diag);
+                        // 🚨 ORDER BY ACTIONABILITY — issue #1840. This report leads with the
+                        // COMPILER'S VERDICT and carries a BOUNDED source-discovery sample after
+                        // it. The old template put the (unbounded) discovery report first and left
+                        // the diagnostics to the exception the console formatter prints afterwards
+                        // — correct in a full pod log, useless in the incident ticket, because the
+                        // red-log watcher keeps only LogWatcherOptions.MaxSampleLength (2000)
+                        // characters of a burst. With 26 matched Code nodes the listing alone is
+                        // ~2.4 kB, so the capture ended "…[truncated]" mid-listing and the CS ids
+                        // never reached the ticket. Nothing was ever discarded — it was ordered
+                        // out of the budget. See CompileDiagnostics.FormatCompileFailureReport.
+                        //
+                        // The exception is still attached: the full diagnostic set stays available
+                        // in a complete pod log, and the parser reads the fault's own message off
+                        // the exception line (which is what the incident fingerprint keys on, so
+                        // this reordering cannot fork existing incidents).
+                        logger.LogError(ex, "{CompileFailure}",
+                            CompileDiagnostics.FormatCompileFailureReport(
+                                node.Path, ex.Message, executedQueries, matchedCodePaths));
+                        // The ActivityLog is NOT size-capped, so it keeps the complete diagnostics
+                        // AND the complete matched-node list — this is where the bounded sample
+                        // above tells the reader to look.
                         var failedLog = AppendError(discoveryLog,
                                 $"Compilation failed: {ex.Message}\n--- Source discovery ---\n{diag}")
                             .Finish((int)hub.Version, ActivityStatus.Failed);
