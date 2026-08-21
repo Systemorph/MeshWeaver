@@ -10,14 +10,18 @@
   <ItemGroup>
     <!-- Core MeshWeaver -->
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Radzen\MeshWeaver.Blazor.Radzen.csproj" />
     <!-- MeshWeaver.Blazor.Analysis is deliberately NOT referenced (#1974): it ships via the
          modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
          Modules:Assemblies. Its static web assets reach the browser through the module
          static-asset provider (#1724 + the bundle-carried wwwroot), not through this
          reference's build-time static-web-assets graph. No portal code referenced its types —
          this was a ships-the-bits reference and nothing else. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.GoogleMaps\MeshWeaver.Blazor.GoogleMaps.csproj" />
+    <!-- MeshWeaver.Blazor.Radzen and .GoogleMaps are deliberately NOT referenced (#1974): with
+         these two the whole view-pack set ships via the modules/<Name>/ closure layout. Radzen
+         matters most here — dropping this reference is what stops the HOST serving
+         _content/Radzen.Blazor/, so the copy under the module's own wwwroot/_content/ answers the
+         theme stylesheet and Radzen.Blazor.js that RadzenViewBase self-loads on first render.
+         App.razor carries no pack tags for exactly that reason. -->
     <!-- MeshWeaver.OgCard is deliberately NOT referenced (#1644 step 2): it ships via the
          modules/<Name>/ closure layout in MeshModulesPublish.targets and activates via
          Modules:Assemblies -> OgCardModuleAttribute. -->
