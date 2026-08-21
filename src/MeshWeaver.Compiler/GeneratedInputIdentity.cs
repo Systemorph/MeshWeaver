@@ -61,6 +61,20 @@ namespace MeshWeaver.Compiler;
 /// hit. It is a comment: it contributes no IL. (It does move the PDB's document hash, which is
 /// why the assembly-store's digest-of-the-emitted-bytes can never dedupe two compiles of
 /// identical content either — the observation that motivates this type.)</description></item>
+/// <item><description><b>The skeleton's <c>LastModified = DateTimeOffset.Parse("…")</c> line is
+/// replaced by a fixed marker</b> (<see cref="NormalizedLastModifiedLine"/>) — the SECOND wall
+/// clock, and the one that is not obvious. The generator emits the NodeType node's own
+/// <c>LastModified</c> into the provider's node, and <c>PackageInstaller.BulkSave</c> stamps that
+/// field with <c>DateTimeOffset.UtcNow</c> on EVERY import. So the same repo content imported
+/// twice generates different text: a key that discriminated on it would be unique per import,
+/// never hit, and — decisively — a CI bake and a portal import the same commit at different
+/// moments BY CONSTRUCTION, so a bundle could never match the input a portal would regenerate.
+/// <para>🚨 This one is a real trade, unlike the other three: the value IS a string literal in the
+/// emitted IL, so two assemblies differing only in it hash equal. What differs is one provenance
+/// timestamp on the provider's node — not a type, a member, a signature or a reference — and the
+/// alternative is a key that cannot work at all. The match is anchored to the generator's exact
+/// emitted shape, so a same-shaped line in USER code is the only false positive available, and its
+/// only consequence is that one timestamp literal stops discriminating.</para></description></item>
 /// </list>
 /// Nothing else is touched: no trimming, no whitespace collapsing, no comment stripping. Every
 /// other byte of the generated text is part of the key.</para>
@@ -82,6 +96,10 @@ public static class GeneratedInputIdentity
     /// <summary>The fixed text every <c>// Generated at: …</c> line normalises to.</summary>
     internal const string NormalizedGeneratedAtLine = "// Generated at: (normalized)";
 
+    /// <summary>The fixed text the skeleton's node-timestamp line normalises to.</summary>
+    internal const string NormalizedLastModifiedLine =
+        "                LastModified = DateTimeOffset.Parse(\"(normalized)\"),";
+
     /// <summary>
     /// Matches the skeleton's wall-clock header line. Anchored to a whole line (Multiline) and
     /// deliberately narrow — it must not touch a line of USER code that happens to mention the
@@ -90,6 +108,16 @@ public static class GeneratedInputIdentity
     /// </summary>
     private static readonly Regex GeneratedAtLinePattern = new(
         @"^//[ \t]*Generated at:.*$", RegexOptions.Multiline | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Matches the skeleton's node-timestamp line. Anchored to a whole line and to the generator's
+    /// exact emitted shape — the assignment, the <c>DateTimeOffset.Parse</c> call, a simple string
+    /// literal, the trailing comma — so it cannot swallow an arbitrary line of user code that
+    /// merely mentions <c>LastModified</c>.
+    /// </summary>
+    private static readonly Regex LastModifiedLinePattern = new(
+        @"^[ \t]*LastModified = DateTimeOffset\.Parse\(""[^""\\]*""\),[ \t]*$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
 
     /// <summary>
     /// The identity of the Roslyn that will do the compiling. A compiler upgrade can change the
@@ -123,7 +151,8 @@ public static class GeneratedInputIdentity
         var text = source[0] == '\uFEFF' ? source[1..] : source;
         text = text.Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n');
-        return GeneratedAtLinePattern.Replace(text, NormalizedGeneratedAtLine);
+        text = GeneratedAtLinePattern.Replace(text, NormalizedGeneratedAtLine);
+        return LastModifiedLinePattern.Replace(text, NormalizedLastModifiedLine);
     }
 
     /// <summary>

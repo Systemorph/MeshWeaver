@@ -120,6 +120,38 @@ public class GeneratedInputIdentityTest
         Digest(inUserCode).Should().NotBe(Digest(GeneratedSource));
     }
 
+    /// <summary>
+    /// 🚨 THE SECOND WALL CLOCK, and the one that is not obvious. The skeleton emits the NodeType
+    /// node's own <c>LastModified</c> into the provider's node, and <c>PackageInstaller.BulkSave</c>
+    /// stamps that field with <c>DateTimeOffset.UtcNow</c> on EVERY import — so the same repo
+    /// content imported twice generates different text. A CI bake and a portal import the same
+    /// commit at different moments by construction, so a key that discriminated on it could never
+    /// match a bundle against the input a portal regenerates.
+    ///
+    /// <para>Caught by <c>BakeEquivalenceTest</c>: with only the source order fixed, the mesh
+    /// producer still emitted a different key on every run (<c>iaa2ed0ef…</c>, <c>ib704fb17…</c>)
+    /// while the compiler producer sat on <c>i770851b4…</c>.</para>
+    /// </summary>
+    [Fact]
+    public void TheNodeTimestampStamp_IsNormalizedOut_ButOnlyInItsGeneratedShape()
+    {
+        const string WithStamp = "        [\n            new MeshNode(\"Demo/Thing\")\n"
+            + "            {\n"
+            + "                LastModified = DateTimeOffset.Parse(\"2026-08-21T09:14:02.1234567+00:00\"),\n"
+            + "                HubConfiguration = ConfigureHub\n            }\n        ];\n";
+        var reimported = WithStamp.Replace(
+            "2026-08-21T09:14:02.1234567+00:00", "2027-03-04T11:22:33.4455667+00:00",
+            StringComparison.Ordinal);
+        reimported.Should().NotBe(WithStamp);
+
+        Digest(GeneratedSource + reimported).Should().Be(Digest(GeneratedSource + WithStamp));
+
+        // …and it is anchored to the generator's emitted SHAPE: a user-code line that merely
+        // mentions the member, or a different call shape, is content and still moves the key.
+        Digest(GeneratedSource + "public string LastModified = \"2026-01-01\";\n")
+            .Should().NotBe(Digest(GeneratedSource + "public string LastModified = \"2027-01-01\";\n"));
+    }
+
     // ── 2. a generator body change that alters the generated input ⇒ the key MOVES ───────────
 
     /// <summary>
