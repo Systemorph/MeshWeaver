@@ -20,7 +20,7 @@ import { buildMeshOps } from "./src/liveOps";
 import { NavContext, CurrentAddressContext, type NavTarget } from "./src/nav";
 import { Shell, HOME } from "./src/Shell";
 import { ensureWebStyles } from "./src/webStyles";
-import { attachInstanceStore, currentInstance, setConnectStatus, type MeshInstance } from "./src/connection";
+import { attachInstanceStore, currentInstance, discoverInstances, mergeDiscovered, setConnectStatus, type MeshInstance } from "./src/connection";
 import { type ClientDestination } from "./src/screens";
 import { ThemeProvider, useTheme } from "./src/theme";
 import { ChatComposer } from "./src/chat";
@@ -171,6 +171,10 @@ function AppInner() {
         void attachInstanceStore(
           inst.local ? Mesh.from(l.connection, undefined, { url: inst.url, token: inst.token }) : null,
         );
+        // The local mesh is ALSO where the deployments you operate are recorded
+        // (nodeType:Hosting/Deployment) — fold them into the switcher, like remote fleets.
+        if (inst.local)
+          void discoverInstances(inst).then((d) => { if (d.length) mergeDiscovered(d); }).catch(() => {});
         // 📱 First launch on the device mesh: no device user yet → the app opens INTO the
         // onboarding dialog (the RN twin of MAUI's OnboardingPage). "Get started" posts the
         // profile (POST /api/mesh/onboard) and the following reconnect ack closes the screen.

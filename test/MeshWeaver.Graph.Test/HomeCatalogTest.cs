@@ -34,7 +34,9 @@ public class HomeCatalogTest
         var search = catalog.Should().BeOfType<MeshSearchControl>().Subject;
         catalog.Should().NotBeOfType<TabsControl>();
         search.RenderMode.Should().Be(MeshSearchRenderMode.Flat);
-        search.ShowSearchBox.Should().Be(true);
+        // NO embedded search box: every shell carries the top-bar search, and a second input on
+        // the home reads as a duplicate (maintainer, 2026-08-21).
+        search.ShowSearchBox.Should().Be(false);
         // View-options on → the user controls the order.
         search.ShowViewOptions.Should().Be(true);
         // Generic create (type picker), never a type-specific target.

@@ -232,9 +232,10 @@ export function localInstance(): MeshInstance {
  */
 export async function discoverInstances(from: MeshInstance): Promise<MeshInstance[]> {
   try {
+    const base = from.url.replace(/\/+$/, "");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (from.token) headers.Authorization = `Bearer ${from.token}`;
-    const search = await fetch(`${from.url}/api/mesh/search`, {
+    const search = await fetch(`${base}/api/mesh/search`, {
       method: "POST", headers,
       body: JSON.stringify({ query: "nodeType:Hosting/Deployment scope:subtree" }),
     });
@@ -243,13 +244,19 @@ export async function discoverInstances(from: MeshInstance): Promise<MeshInstanc
     const found: MeshInstance[] = [];
     for (const r of results.slice(0, 20)) {
       if (!r.path) continue;
-      const got = await fetch(`${from.url}/api/mesh/get`, {
+      const got = await fetch(`${base}/api/mesh/get`, {
         method: "POST", headers, body: JSON.stringify({ path: `@${r.path}` }),
       });
       if (!got.ok) continue;
-      const host: string | undefined = ((await got.json()) as any)?.content?.host;
-      if (!host) continue;
-      found.push({ name: r.name ?? host, url: `https://${host}`, token: "", local: false, kind: "Prod" });
+      const content: any = ((await got.json()) as any)?.content ?? {};
+      // An explicit content.url wins (a record can name a non-HTTPS scheme/port — e.g. the local
+      // sidecar); otherwise the host is a public portal reached over HTTPS. Records are hand-edited
+      // data — trim before building URLs and names from them.
+      const recordUrl = typeof content.url === "string" ? content.url.trim() : "";
+      const host = typeof content.host === "string" ? content.host.trim() : "";
+      const url = recordUrl || (host ? `https://${host}` : "");
+      if (!url) continue;
+      found.push({ name: (r.name ?? "").trim() || host || url, url: url.replace(/\/+$/, ""), token: "", local: false, kind: "Prod" });
     }
     return found;
   } catch {
@@ -257,13 +264,15 @@ export async function discoverInstances(from: MeshInstance): Promise<MeshInstanc
   }
 }
 
-/** Merge discovered instances into the list — an existing entry (its token, edits) always wins.
+/** Merge discovered instances into the list — an existing entry (its token, edits) always wins,
+ *  and a record describing THIS app's own local mesh never duplicates the Local entry.
  *  New ones are persisted to the local mesh (the store), best-effort. */
 export function mergeDiscovered(discovered: MeshInstance[]): MeshInstance[] {
   const byName = new Map(remotes.map((i) => [i.name, i]));
   const byUrl = new Set(remotes.map((i) => i.url));
+  const localUrl = localInstance().url;
   for (const d of discovered)
-    if (!byName.has(d.name) && !byUrl.has(d.url)) {
+    if (!byName.has(d.name) && !byUrl.has(d.url) && d.url !== localUrl) {
       byName.set(d.name, d);
       persist(d);
     }
