@@ -131,6 +131,7 @@ jobs:
           --plugin "${{ matrix.entry.package }}"
           --package-version "${{ steps.identity.outputs.version }}"
           --min-mesh-version "${{ steps.identity.outputs.floor }}"
+          --own-platform "$(ls "$GITHUB_WORKSPACE/src" 2>/dev/null | grep '^MeshWeaver\.' | paste -sd';' -)"
           --out "$RUNNER_TEMP/bundles"
 
       # A bundle that PACKED is not yet a bundle that LANDS: assert the closure and the manifest a
@@ -156,12 +157,20 @@ jobs:
             || { echo "::error::manifest module.assemblies misses the entry DLL"; exit 1; }
           jq -e --arg f "$FLOOR" '.module.minMeshVersion == $f' "$manifest" > /dev/null \
             || { echo "::error::manifest floor differs from content.minMeshVersion"; exit 1; }
-          # A module bundle must NEVER carry a platform assembly beside its entry — it would
+          # A module bundle must NEVER carry a PLATFORM assembly beside its entry — it would
           # shadow the platform's own binary at the consumer (the same trap-door landing refuses
-          # for the entry DLL). The deps-closure derivation excludes MeshWeaver.* by construction;
-          # this asserts that from the outside.
-          jq -e --arg m "$MODULE" \
-            '[.module.assemblies[] | select(startswith("MeshWeaver.") and (. != $m + ".dll") and (. != $m + ".pdb"))] | length == 0' \
+          # for the entry DLL). MODULE-OWNED MeshWeaver.* assemblies (their source lives in THIS
+          # repo's src/, so they exist nowhere in /app — Import's DataSetReader family) are the
+          # deliberate exception: for them, NOT riding is the fault. The jq mirrors the pack's
+          # --own-platform set exactly, so the two cannot disagree about what "platform" means.
+          own="$(ls "$GITHUB_WORKSPACE/src" 2>/dev/null | grep '^MeshWeaver\.' | paste -sd';' -)"
+          jq -e --arg m "$MODULE" --arg own "$own" \
+            '($own | split(";")) as $owned
+             | [.module.assemblies[]
+                | select(startswith("MeshWeaver.")
+                    and (. != $m + ".dll") and (. != $m + ".pdb")
+                    and ((rtrimstr(".dll") | rtrimstr(".pdb")) as $n | $owned | index($n) | not))]
+             | length == 0' \
             "$manifest" > /dev/null \
             || { echo "::error::bundle carries platform (MeshWeaver.*) assemblies beside the module"; exit 1; }
           echo "path=$bundle" >> "$GITHUB_OUTPUT"
