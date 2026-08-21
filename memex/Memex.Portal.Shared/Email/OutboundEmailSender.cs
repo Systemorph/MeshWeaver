@@ -17,9 +17,13 @@ namespace Memex.Portal.Shared.Email;
 /// Mesh-driven outbound sender — <b>no in-memory state</b>. The <c>Email Router</c> agent emits its
 /// reply as an outbound <see cref="MeshWeaver.Mesh.Email"/> node (<c>Direction=Outbound, Status=New</c>)
 /// in the parent email's namespace; this single hosted service watches for those via
-/// <see cref="IMeshQueryCore"/>, claims each (New → Sending, the optimistic guard against double-send),
-/// sends it through <see cref="IEmailSender"/>, and flips it to <see cref="EmailStatus.Sent"/> (or
-/// <see cref="EmailStatus.Failed"/>). Dedup + restart-safety live entirely in the node's status.
+/// <see cref="IMeshQueryCore"/> and hands each to its serialized <see cref="OutboundSendQueue"/>,
+/// which re-reads the mail's authoritative state, claims it (New → Sending), sends it through
+/// <see cref="IEmailSender"/>, and flips it to <see cref="EmailStatus.Sent"/> (or
+/// <see cref="EmailStatus.Failed"/>). Restart-safety lives in the node's status; DEDUP lives in
+/// the queue's serialize-then-re-read gate — the watch legitimately emits the same New snapshot
+/// more than once, and a plain status write is not a claim (the double-delivery this fixed is
+/// documented on the queue).
 ///
 /// <para>Reactive; the only Task boundary is the <see cref="IHostedService"/> contract. Self-skips
 /// unless <c>Email:Enabled</c>.</para>
@@ -43,8 +47,10 @@ public sealed class OutboundEmailSender(
     /// still returned the status-omitted email), so New-queued mail always matches, while
     /// explicitly stamped <c>Sending</c>/<c>Sent</c>/<c>Failed</c> mail drops out of the set as it
     /// is processed instead of accumulating forever (the Copilot review's growth concern on the
-    /// unfiltered form). Status is additionally re-checked IN CODE by <c>Send</c>, and the
-    /// New → Sending claim guards double-send. <c>content.direction:Outbound</c> is a safe
+    /// unfiltered form). Status is additionally re-checked IN CODE — serialized and against the
+    /// AUTHORITATIVE node stream — by <see cref="OutboundSendQueue"/>, which is what actually
+    /// guards double-send (duplicate emissions of the same New snapshot are a documented property
+    /// of the change feed). <c>content.direction:Outbound</c> is a safe
     /// positive match: Outbound is not the default, so it always serializes — see
     /// <c>OutboundEmailWatchQueryTest</c>.</para>
     /// </summary>
@@ -87,8 +93,26 @@ public sealed class OutboundEmailSender(
             var emailSender = sp.GetRequiredService<IEmailSender>();
             var jsonOptions = hub.JsonSerializerOptions;
 
-            // Live query: any outbound mail. Emits the current set on change; Send filters to
-            // New and claims (New → Sending) before dispatching, so already-sent nodes are no-ops.
+            // The serialized send queue: re-reads each mail's CURRENT state through the shared
+            // per-node stream handle (authoritative — never the eventually-consistent query) before
+            // claiming and sending, so duplicate emissions of the same New snapshot send ONCE.
+            var sendQueue = new OutboundSendQueue(
+                readCurrent: path => hub.GetMeshNodeStream(path)
+                    .Where(n => n is not null)
+                    .Select(n => EmailOf(n, jsonOptions)),
+                writeStatus: (node, current, status) =>
+                    SetStatus(node, current, status, meshService, accessService),
+                send: email =>
+                {
+                    var subject = email.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
+                        ? email.Subject : $"Re: {email.Subject}";
+                    return emailSender.SendEmail(email.To!, subject, email.Body);
+                },
+                logger: logger);
+            subscriptions.Add(sendQueue);
+
+            // Live query: any outbound mail. Emits the current set on change; the pre-screen keeps
+            // the queue to plausible candidates, the queue's own re-read gate decides the send.
             subscriptions.Add(query
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(WatchQuery), jsonOptions)
                 .Select(change => change.Items)
@@ -96,7 +120,23 @@ public sealed class OutboundEmailSender(
                     items =>
                     {
                         foreach (var node in items)
-                            Send(node, meshService, accessService, emailSender, jsonOptions);
+                        {
+                            var email = EmailOf(node, jsonOptions);
+                            if (email is null
+                                || email.Direction != EmailDirection.Outbound
+                                || email.Status != EmailStatus.New)
+                                continue;
+                            if (string.IsNullOrEmpty(email.To))
+                            {
+                                logger?.LogWarning(
+                                    "OutboundEmailSender: outbound {Path} has no recipient — marking Failed",
+                                    node.Path);
+                                SetStatus(node, email, EmailStatus.Failed, meshService, accessService)
+                                    .Subscribe(_ => { }, _ => { });
+                                continue;
+                            }
+                            sendQueue.Enqueue(node, email);
+                        }
                     },
                     ex => logger?.LogWarning(ex, "OutboundEmailSender: query failed")));
         }
@@ -104,43 +144,6 @@ public sealed class OutboundEmailSender(
         {
             logger?.LogWarning(ex, "OutboundEmailSender: failed to start watching outbound mail");
         }
-    }
-
-    private void Send(
-        MeshNode node, IMeshService meshService, AccessService accessService,
-        IEmailSender emailSender, JsonSerializerOptions jsonOptions)
-    {
-        var email = EmailOf(node, jsonOptions);
-        if (email is null || email.Direction != EmailDirection.Outbound || email.Status != EmailStatus.New)
-            return;
-        if (string.IsNullOrEmpty(email.To))
-        {
-            logger?.LogWarning("OutboundEmailSender: outbound {Path} has no recipient — marking Failed", node.Path);
-            SetStatus(node, email, EmailStatus.Failed, meshService, accessService).Subscribe(_ => { }, _ => { });
-            return;
-        }
-
-        // Claim: New → Sending (only if still New). The CAS lives in SetStatus's lambda, so a duplicate
-        // emission that already flipped it is a no-op.
-        SetStatus(node, email, EmailStatus.Sending, meshService, accessService)
-            .SelectMany(claimed =>
-            {
-                // SetStatus returns the unchanged node when the CAS failed (already claimed) — skip.
-                if ((EmailOf(claimed, jsonOptions)?.Status) != EmailStatus.Sending)
-                    return Observable.Empty<bool>();
-                var subject = email.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase)
-                    ? email.Subject : $"Re: {email.Subject}";
-                return emailSender.SendEmail(email.To!, subject, email.Body)
-                    .SelectMany(ok => SetStatus(claimed, EmailOf(claimed, jsonOptions)!,
-                        ok ? EmailStatus.Sent : EmailStatus.Failed, meshService, accessService).Select(_ => ok));
-            })
-            .Subscribe(
-                ok => logger?.LogInformation("OutboundEmailSender: {Path} → {To} sent={Sent}", node.Path, email.To, ok),
-                ex =>
-                {
-                    logger?.LogWarning(ex, "OutboundEmailSender: send failed for {Path}", node.Path);
-                    SetStatus(node, email, EmailStatus.Failed, meshService, accessService).Subscribe(_ => { }, _ => { });
-                });
     }
 
     private static IObservable<MeshNode> SetStatus(
