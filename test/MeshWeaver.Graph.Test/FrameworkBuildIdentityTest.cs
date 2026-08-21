@@ -497,9 +497,13 @@ public class FrameworkBuildIdentityTest
         // #1814 in miniature: same binaries, one manifest missing a canonical name. The two hosts
         // MUST resolve different identities (that is the mechanism working correctly) and the
         // absence must be REPORTABLE by name — "the hashes differ" is not an actionable failure.
+        // Any ONE canonical assembly; the point is that dropping a single member forks the
+        // identity and is reportable BY NAME. (It named MeshWeaver.Import until that module left
+        // the platform — one constant now, so the two assertions cannot drift apart.)
+        const string dropped = "MeshWeaver.Graph";
         var complete = StageAppDirectory(FrameworkBuildIdentity.ContentSurfaceAssemblies);
         var reduced = StageAppDirectory(
-            FrameworkBuildIdentity.ContentSurfaceAssemblies.Where(n => n != "MeshWeaver.Import"));
+            FrameworkBuildIdentity.ContentSurfaceAssemblies.Where(n => n != dropped));
         try
         {
             var (whole, _) = FrameworkBuildIdentity.ResolveIdentityForDirectory(complete);
@@ -512,7 +516,7 @@ public class FrameworkBuildIdentityTest
             var pairs = FrameworkBuildIdentity.ParseSurfaceManifest(
                 File.ReadAllText(Path.Combine(reduced, FrameworkBuildIdentity.SurfaceManifestFileName)));
             FrameworkBuildIdentity.CanonicalAssembliesAbsentFrom(pairs)
-                .Should().Equal("MeshWeaver.Import");
+                .Should().Equal(dropped);
             FrameworkBuildIdentity.CanonicalAssembliesAbsentFrom(
                     FrameworkBuildIdentity.ParseSurfaceManifest(
                         File.ReadAllText(Path.Combine(complete, FrameworkBuildIdentity.SurfaceManifestFileName))))
