@@ -300,9 +300,43 @@ public sealed class IoPool : IIoPool, IDisposable
                             observer.OnError(ex);
                     });
 
-            // If the pool drains AFTER the subscribe completed, tear the live subscription down too.
+            // If the pool drains AFTER the subscribe completed, tear the live subscription down too
+            // — and TERMINATE the observer, which disposing it does not do.
+            //
+            // 🚨 THE OTHER HALF OF THE SAME LEAK — issue #1789. The error arm above covers a leg the
+            // drain cancels BEFORE or DURING `source.Subscribe(observer)`: its gate wait throws
+            // OperationCanceledException and the arm turns that into OnCompleted. A leg cancelled
+            // AFTER the subscribe completed never goes near that arm — it arrives here, and this
+            // registration used to call `inner.Dispose()` and nothing else. Disposing a subscription
+            // EMITS NOTHING: no OnCompleted, no OnError. So the observable returned by
+            // SubscribeThroughPool terminated in neither direction and every `.Finally(...)` hung off
+            // it never ran — exactly the bookkeeping that decrements RoutingGrain's `inFlightRoutes`
+            // and advances OrderedRouteDispatcher's per-destination FIFO. The slot leaked and the
+            // destination's queue stranded PERMANENTLY, which is also why `cleared after` became
+            // structurally impossible to log (it needs in-flight to fall back below half the
+            // threshold). Prod, 2026-08-17: two saturation Criticals ten minutes apart at identical
+            // depth, both emitted deep inside the termination grace period — i.e. after
+            // IoPool.Drain() had cancelled `_poolCts` — with no clear line in the whole window.
+            //
+            // OnCompleted, not OnError, for the same reason the arm above chose it: a drain is
+            // expected teardown, not a fault. The latch makes the terminal exactly-once even if the
+            // drain races an unsubscribe (Rx's AutoDetachObserver would swallow a second one anyway;
+            // relying on that would leave the invariant implicit).
+            //
+            // This does NOT change IoPool.Drain()'s join reasoning: a leg past its subscribe holds
+            // no gate permit and is not counted in `_inFlight`, so terminating it moves neither the
+            // permit count Drain re-acquires nor the residual it reports.
+            var drainTerminated = 0;
             IDisposable drainReg;
-            try { drainReg = _poolCts.Token.Register(inner.Dispose); }
+            try
+            {
+                drainReg = _poolCts.Token.Register(() =>
+                {
+                    if (Interlocked.Exchange(ref drainTerminated, 1) != 0) return;
+                    inner.Dispose();
+                    observer.OnCompleted();
+                });
+            }
             catch (ObjectDisposedException) { drainReg = Disposable.Empty; }
 
             return new CompositeDisposable(setup, inner, drainReg);
