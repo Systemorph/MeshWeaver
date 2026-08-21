@@ -72,6 +72,15 @@ public static class UserActivityLayoutAreas
     /// <summary>Link to the doc page that explains the configurable Body-page + <c>@@</c>-region model.</summary>
     internal const string ConfigGuideLink = "/Doc/GUI/ConfigurablePages";
 
+    /// <summary>
+    /// The per-thread rail-row item area consumed by the Threads app's vertical rail — registered
+    /// on every THREAD hub (MeshWeaver.AI, <c>ThreadNodeType.RailItemArea</c> /
+    /// <c>ThreadRailItem.View</c>: title + ✕-close overlay). Referenced here by NAME only: item
+    /// areas resolve on the result node's own hub at render time, so Graph carries no AI
+    /// dependency for it.
+    /// </summary>
+    internal const string ThreadRailItemArea = "RailItem";
+
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
 
@@ -91,13 +100,14 @@ public static class UserActivityLayoutAreas
             .WithView(CatalogArea, CatalogAreaView)
             .WithView(ComposerArea, ComposerAreaView)
             // "/{user}/Chat" (ChatArea) is a well-known URL (thread-catalog Create-New, chat menu
-            // links). Since ChatNodeType was removed there is NO {user}/Chat node any more: the URL
-            // resolves to prefix={user} + remainder="Chat", which AreaPage renders as area "Chat"
-            // on this hub. Without this registration that's "no renderer for area Chat", and a
-            // LEGACY {user}/Chat node from an older deployment resolves as invalid-NodeType
-            // ("No node found at '{user}/Chat'… remainder='Chat'" — the prod memex report,
-            // 2026-07-02). The composer is node-less — serve it directly.
-            .WithView(ChatArea, ComposerAreaView)
+            // links, the Threads app tile). Since ChatNodeType was removed there is NO {user}/Chat
+            // node any more: the URL resolves to prefix={user} + remainder="Chat", which AreaPage
+            // renders as area "Chat" on this hub. Without this registration that's "no renderer
+            // for area Chat", and a LEGACY {user}/Chat node from an older deployment resolves as
+            // invalid-NodeType ("No node found at '{user}/Chat'… remainder='Chat'" — the prod
+            // memex report, 2026-07-02). The page is the node-less THREADS APP (vertical rail of
+            // open threads with ✕-close + the composer) — see ThreadsAppView.
+            .WithView(ChatArea, ThreadsAppView)
             // Override the generic Edit area with the SAFE per-field Body editor. Editing a
             // partition-root node generically is suppressed in the default node menu (it could
             // rewrite the whole partition); this edits THIS page only — User.Body — 1:1 with the
@@ -608,6 +618,62 @@ public static class UserActivityLayoutAreas
         => Observable.Return<UiControl?>(new ThreadChatControl().WithHideEmptyState(true));
 
     /// <summary>
+    /// The THREADS APP page (<c>/{user}/Chat</c>, the ChatArea) — the GitHub-Copilot-style shape:
+    /// a vertical RAIL of the owner's open threads on the left (each row rendered by the thread
+    /// hub's <see cref="ThreadRailItemArea"/>: title + ✕ that closes the thread via the canonical
+    /// <c>MarkThreadDone</c>, so it leaves the rail but stays searchable), and the node-less chat
+    /// composer on the right — sending starts a proper thread via <c>StartThread</c> and opens it
+    /// full-screen. Pure composition of existing pieces; see <see cref="BuildThreadsApp"/>.
+    /// </summary>
+    internal static IObservable<UiControl?> ThreadsAppView(LayoutAreaHost host, RenderingContext _)
+        => Observable.Return<UiControl?>(BuildThreadsApp(OwnerIdOf(host.Hub.Address.ToString())));
+
+    /// <summary>
+    /// The Threads-app composition — pure (no hub) so the shape is unit-testable: a horizontal
+    /// stack of (rail, composer). The rail is the SAME open-threads query as the home band
+    /// (<c>-content.status:Done</c>, newest first) rendered as a single-column list whose rows
+    /// delegate to <see cref="ThreadRailItemArea"/>; closing a thread removes it reactively (the
+    /// query excludes Done). <c>flex-wrap</c> lets the composer drop below the rail on narrow
+    /// (mobile) widths.
+    /// </summary>
+    internal static UiControl BuildThreadsApp(string nodeOwnerId)
+    {
+        var rail = Controls.Stack
+            .WithStyle("flex: 0 1 320px; min-width: 240px; box-sizing: border-box;")
+            .WithView(BuildThreadsRail(nodeOwnerId));
+
+        var composer = Controls.Stack
+            .WithStyle("flex: 1 1 480px; min-width: 320px;")
+            .WithView(new ThreadChatControl().WithHideEmptyState(true));
+
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithStyle("gap: 16px; width: 100%; align-items: stretch; flex-wrap: wrap;")
+            .WithView(rail)
+            .WithView(composer);
+    }
+
+    /// <summary>The Threads-app rail list: the owner's open threads (never Done, newest first) as a
+    /// single-column list whose rows delegate to the thread hub's <see cref="ThreadRailItemArea"/>.
+    /// Flat render + MaxColumns(1), NOT <see cref="MeshSearchRenderMode.List"/>: the List renderer
+    /// draws its own icon·title·description rows and IGNORES <c>ItemArea</c>, so the ✕ overlay
+    /// would never render there — Flat is the ItemArea path the pinned grid already proves.</summary>
+    internal static MeshSearchControl BuildThreadsRail(string nodeOwnerId) =>
+        Controls.MeshSearch
+            .WithHiddenQuery(
+                $"namespace:{nodeOwnerId}/*_Thread nodeType:Thread -content.status:Done sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithMaxColumns(1)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemArea(ThreadRailItemArea)
+            .WithItemLimit(50)
+            .WithReactiveMode(true);
+
+    /// <summary>
     /// The owner's OPEN threads — their own partition only (<c>{owner}/*_Thread</c>, no cross-partition
     /// fan-out), excluding finished ones (<c>-content.status:Done</c>), newest first; "New thread"
     /// creates under the user node. Mirrors what used to be the catalog's first tab, promoted to its own
@@ -703,7 +769,7 @@ public static class UserActivityLayoutAreas
         if (pinned is not null)
             tabs = tabs.WithView(pinned,
                 skin => skin.WithLabel(LocalizationCatalog.Get("home.pinned", locale)));
-        tabs = tabs.WithView(BuildApps(cfg, installedApps, locale),
+        tabs = tabs.WithView(BuildApps(nodeOwnerId, cfg, installedApps, locale),
             skin => skin.WithLabel(LocalizationCatalog.Get("home.apps", locale)));
         tabs = tabs.WithView(BuildSpaces(nodeOwnerId, cfg, locale),
             skin => skin.WithLabel(LocalizationCatalog.Get("home.spaces", locale)));
@@ -748,30 +814,69 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
+    /// System-app declarations: a <see cref="HomeConfig.DefaultApps"/> entry starting with
+    /// <c>~/</c> is not a node path but an AREA on the viewer's own hub (<c>~/Chat</c> →
+    /// <c>/{owner}/Chat</c>), rendered as a fixed "dock" tile ahead of the node grid. The map
+    /// gives known areas their product name + icon; an unknown <c>~/X</c> falls back to the
+    /// segment name and the generic app icon. Labels here are deliberately GLOSSARY terms
+    /// (Thread/Threads stay English in every locale), so no localization key is involved.
+    /// Immutable constant lookup, never written at runtime.
+    /// </summary>
+    private static readonly ImmutableDictionary<string, (string Label, string Icon)> SystemAppTiles =
+        new Dictionary<string, (string Label, string Icon)>
+        {
+            ["~/" + ChatArea] = ("Threads", "/static/NodeTypeIcons/chat.svg"),
+        }.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// The Apps tab — one icon per app, each app EXACTLY ONCE: the platform's config-declared
     /// default apps (<see cref="HomeConfig.DefaultApps"/> — e.g. <c>Store</c>, which replaces the
-    /// old hard-coded header entry, and <c>Doc</c>) unioned with the owner's installed-app records
-    /// (<c>{owner}/_App</c>, written by the Store's install flow), deduped by path. Rendered as a
-    /// reactive card grid over the app root nodes THEMSELVES, so each icon's name/image resolve
-    /// live from its node. Default order alphabetical; the last-accessed option uses the same
-    /// union-with-fallback shape as <see cref="BuildSharedWithMe"/> so a never-opened app still
-    /// shows.
+    /// old hard-coded header entry, <c>Doc</c>, and the <c>~/Chat</c> Threads app) unioned with
+    /// the owner's installed-app records (<c>{owner}/_App</c>, written by the Store's install
+    /// flow), deduped. <c>~/</c>-prefixed entries render as fixed system tiles (a phone's dock)
+    /// ahead of the reactive node-card grid, whose icons' name/image resolve live from each node.
+    /// Default order alphabetical; the last-accessed option uses the same union-with-fallback
+    /// shape as <see cref="BuildSharedWithMe"/> so a never-opened app still shows.
     /// </summary>
     internal static UiControl BuildApps(
-        HomeConfig? config, IReadOnlyList<string>? installedApps, string? locale = null)
+        string nodeOwnerId, HomeConfig? config, IReadOnlyList<string>? installedApps, string? locale = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
-        var paths = (cfg.DefaultApps ?? [])
+        var entries = (cfg.DefaultApps ?? [])
             .Concat(installedApps ?? [])
             .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Select(p => p.Trim('/'))
+            .Select(p => p.StartsWith("~/", StringComparison.Ordinal) ? p : p.Trim('/'))
             .Where(p => p.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        if (paths.Count == 0)
+        var systemAreas = entries.Where(p => p.StartsWith("~/", StringComparison.Ordinal)).ToList();
+        var paths = entries.Where(p => !p.StartsWith("~/", StringComparison.Ordinal)).ToList();
+        if (systemAreas.Count == 0 && paths.Count == 0)
             return Controls.Markdown(LocalizationCatalog.Get("home.noApps", locale));
 
-        var baseQuery = $"path:({string.Join(" OR ", paths)})";
+        UiControl? dock = null;
+        if (systemAreas.Count > 0)
+        {
+            var tiles = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithWidth("100%")
+                .WithStyle("gap: 20px; width: 100%; flex-wrap: wrap;");
+            foreach (var area in systemAreas)
+            {
+                var tile = BuildSystemAppTile(nodeOwnerId, area);
+                if (tile is null)
+                    continue;
+                tiles = tiles.WithView(Controls.Stack
+                    .WithStyle("flex: 0 1 240px; min-width: 200px;")
+                    .WithView(tile));
+            }
+            dock = tiles;
+        }
+
+        if (paths.Count == 0)
+            return dock ?? Controls.Markdown(LocalizationCatalog.Get("home.noApps", locale));
+
+        var baseQuery = BuildAppsBaseQuery(paths);
         string Query(HomeCatalogSort sort, string suffix) =>
             sort == HomeCatalogSort.LastAccessed
                 ? $"{baseQuery} {suffix}\n{baseQuery} {SortSuffixAlphabetical}"
@@ -781,7 +886,7 @@ public static class UserActivityLayoutAreas
             .Select(s => new MeshSearchSortOption(
                 LocalizationCatalog.Get(s.LabelKey, locale), Query(s.Sort, s.Suffix)))
             .ToArray();
-        return Controls.MeshSearch
+        var grid = Controls.MeshSearch
             .WithHiddenQuery(sortOptions[0].Query)
             .WithSortOptions(sortOptions)
             .WithShowSearchBox(false)
@@ -795,6 +900,37 @@ public static class UserActivityLayoutAreas
             .WithItemLimit(48)
             .WithMaxRows(4)
             .WithReactiveMode(true);
+
+        if (dock is null)
+            return grid;
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("gap: 20px; width: 100%;")
+            .WithView(dock)
+            .WithView(grid);
+    }
+
+    /// <summary>Pure query core of the Apps grid, exposed for tests.</summary>
+    internal static string BuildAppsBaseQuery(IReadOnlyList<string> paths) =>
+        $"path:({string.Join(" OR ", paths)})";
+
+    /// <summary>
+    /// One system-app "dock" tile for a <c>~/</c> entry (<see cref="SystemAppTiles"/>): a static
+    /// card whose identity is an AREA on the viewer's own hub, not a node — no hub resolves it, so
+    /// the title/icon are baked here and the click navigates to <c>/{owner}/{area}</c>. Returns
+    /// null for a malformed entry (<c>~/</c> with no segment).
+    /// </summary>
+    internal static MeshNodeCardControl? BuildSystemAppTile(string nodeOwnerId, string entry)
+    {
+        if (!entry.StartsWith("~/", StringComparison.Ordinal))
+            return null;
+        var segment = entry[2..].Trim('/');
+        if (segment.Length == 0)
+            return null;
+        var (label, icon) = SystemAppTiles.TryGetValue(entry, out var known)
+            ? known
+            : (segment, "/static/NodeTypeIcons/puzzlepiece.svg");
+        return new MeshNodeCardControl($"{nodeOwnerId}/{segment}", Title: label, ImageUrl: icon);
     }
 
     /// <summary>Dedup for the Spaces tab: anything living in the Store (and therefore representable
