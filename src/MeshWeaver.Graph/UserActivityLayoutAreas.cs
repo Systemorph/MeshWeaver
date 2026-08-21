@@ -74,12 +74,6 @@ public static class UserActivityLayoutAreas
 
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
-    /// <summary>
-    /// Section title for the additive "Shared with me" band (#385) — the cross-partition modules the
-    /// caller was specifically invited into, which the unified <c>is:main</c> catalog query can't
-    /// reach on its own (they're readable by URL but invisible to a scope search). See BuildCatalog.
-    /// </summary>
-    private const string SharedWithMeTitle = "Shared with me";
 
     /// <summary>
     /// Adds the Activity view (the owner home / visitor profile) to the User node's layout, plus the
@@ -699,7 +693,7 @@ public static class UserActivityLayoutAreas
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
         if (cfg.Style == HomeStyle.Catalog)
-            return BuildCatalog(nodeOwnerId, cfg, sharedTargets);
+            return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale);
 
         var tabs = Controls.Tabs.WithSkin(skin => skin.WithWidth("100%"));
         if (sharedTargets is { Count: > 0 })
@@ -831,10 +825,11 @@ public static class UserActivityLayoutAreas
     /// <para>Pure (no hub) so the catalog shape is unit-testable without standing up a hub.</para>
     /// </summary>
     internal static UiControl BuildCatalog(
-        string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null)
+        string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
+        string? locale = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
-        var everything = BuildCatalogList(nodeOwnerId, cfg, exclusions: "", locale: null);
+        var everything = BuildCatalogList(nodeOwnerId, cfg, exclusions: "", locale);
 
         // No cross-partition invitations → the catalog IS the single list.
         if (sharedTargets is not { Count: > 0 })
@@ -845,7 +840,7 @@ public static class UserActivityLayoutAreas
         // alternation resolves each target node, access-filtered by the mesh.
         var pathList = string.Join("|", sharedTargets);
         var shared = Controls.MeshSearch
-            .WithTitle(SharedWithMeTitle)
+            .WithTitle(LocalizationCatalog.Get("home.sharedWithMe", locale))
             .WithHiddenQuery($"path:{pathList} is:main sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
