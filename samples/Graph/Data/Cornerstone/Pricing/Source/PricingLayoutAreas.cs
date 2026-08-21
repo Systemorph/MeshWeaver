@@ -10,7 +10,6 @@ using System.Text.Json;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Maps;
-using MeshWeaver.Import.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
@@ -34,7 +33,6 @@ public static class PricingLayoutAreas
             .WithView("RiskMap", RiskMap)
             .WithView("Structure", Structure)
             .WithView("Submission", Submission)
-            .WithView("ImportConfigs", ImportConfigs)
             .WithView("Thumbnail", Thumbnail);
 
     /// <summary>
@@ -47,8 +45,7 @@ public static class PricingLayoutAreas
             .WithView(ToolbarButton("Submission", $"/{pricingPath}/Submission", activeView == "Submission"))
             .WithView(ToolbarButton("Property Risks", $"/{pricingPath}/PropertyRisks", activeView == "PropertyRisks"))
             .WithView(ToolbarButton("Risk Map", $"/{pricingPath}/RiskMap", activeView == "RiskMap"))
-            .WithView(ToolbarButton("Structure", $"/{pricingPath}/Structure", activeView == "Structure"))
-            .WithView(ToolbarButton("Import Configs", $"/{pricingPath}/ImportConfigs", activeView == "ImportConfigs"));
+            .WithView(ToolbarButton("Structure", $"/{pricingPath}/Structure", activeView == "Structure"));
     }
 
     private static ButtonControl ToolbarButton(string text, string href, bool isActive)
@@ -438,45 +435,9 @@ public static class PricingLayoutAreas
         });
     }
 
-    /// <summary>
-    /// ImportConfigs view showing Excel import configurations.
-    /// </summary>
-    [Display(GroupName = "Configuration", Order = 5)]
-    public static IObservable<UiControl?> ImportConfigs(LayoutAreaHost host, RenderingContext _)
-    {
-        var pricingPath = host.Hub.Address.ToString();
-        var pricingId = host.Hub.Address.Id;
-        var cfgStream = host.Workspace.GetStream<ExcelImportConfiguration>();
-
-        return cfgStream.Select(cfgs =>
-        {
-            var list = cfgs?.ToList() ?? new List<ExcelImportConfiguration>();
-
-            if (list.Count == 0)
-            {
-                return (UiControl?)Controls.Stack
-                    .WithView(BuildToolbar(pricingPath, "ImportConfigs"))
-                    .WithView(Controls.Markdown("# Import Configurations\n\n*No import configurations found for this pricing.*"));
-            }
-
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            var parts = new List<string> { "# Import Configurations" };
-            parts.Add($"\n**Pricing:** {pricingId}\n");
-
-            foreach (var cfg in list.OrderBy(x => x.Name))
-            {
-                parts.Add($"\n## {cfg.Name}");
-                var json = JsonSerializer.Serialize(cfg, options);
-                parts.Add($"```json\n{json}\n```");
-            }
-
-            var md = string.Join("\n", parts);
-
-            return (UiControl?)Controls.Stack
-                .WithView(BuildToolbar(pricingPath, "ImportConfigs"))
-                .WithView(Controls.Markdown(md));
-        });
-    }
+    // The ImportConfigs view moved out with MeshWeaver.Import: the import pipeline is an
+    // installable module now, so a sample that renders ExcelImportConfiguration cannot compile
+    // against the platform alone. The pricing views below are unaffected.
 
     /// <summary>
     /// Thumbnail view for catalog display.

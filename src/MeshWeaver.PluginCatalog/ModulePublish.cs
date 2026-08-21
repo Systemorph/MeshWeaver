@@ -44,7 +44,8 @@ public static class ModulePublish
         string? MinMeshVersion,
         string? FrameworkMvid,
         IReadOnlyList<(string FileName, byte[] Bytes)> Files,
-        string? PackagePath = null);
+        string? PackagePath = null,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? StaticAssets = null);
 
     /// <summary>
     /// Why <paramref name="authorizationHeader"/> may not publish, or null when it may.
@@ -87,7 +88,8 @@ public static class ModulePublish
         BundleReader.Manifest? manifest,
         IReadOnlyList<BundleReader.ModuleFile> files,
         string? version = null,
-        string? packagePath = null)
+        string? packagePath = null,
+        IReadOnlyList<BundleReader.ModuleAsset>? staticAssets = null)
     {
         // The package path ("Plugins/AzureBlob") is what stamps the landed entry's SOURCE — the
         // key every PluginGrant and serve-side filter matches on. Optional (an older publisher
@@ -149,6 +151,9 @@ public static class ModulePublish
             manifest.Module.MinMeshVersion,
             manifest.FrameworkMvid,
             [.. files.Select(f => (f.FileName, f.Bytes))],
-            string.IsNullOrWhiteSpace(packagePath) ? null : packagePath), null);
+            string.IsNullOrWhiteSpace(packagePath) ? null : packagePath,
+            staticAssets is { Count: > 0 }
+                ? [.. staticAssets.Select(a => (a.RelativePath, a.Bytes))]
+                : null), null);
     }
 }

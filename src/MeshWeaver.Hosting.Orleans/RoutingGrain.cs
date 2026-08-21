@@ -10,7 +10,10 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Concurrency;
+using Orleans.Runtime;
 using Orleans.Streams;
+using Orleans.Streams.Core;
+using Orleans.Streams.PubSub;
 
 namespace MeshWeaver.Hosting.Orleans;
 
@@ -141,6 +144,15 @@ internal class RoutingGrain(
     /// silence — the timeout surfaces through the fault branch, which NACKs the sender.
     /// </summary>
     internal static readonly TimeSpan ResolveTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Bound on the "is anyone subscribed to this stream?" lookup (issue #1742). The lookup is one
+    /// grain call to the stream's <c>PubSubRendezvousGrain</c>, which Orleans already bounds at its
+    /// 30 s <c>ResponseTimeout</c>; this exists so a registry that never answers degrades to
+    /// PUBLISHING ANYWAY rather than parking the delivery — see <see cref="HasLiveSubscriber"/>,
+    /// which fails OPEN by construction.
+    /// </summary>
+    internal static readonly TimeSpan SubscriberProbeTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// 🚨 THE TURN DOES O(1) WORK AND RETURNS — issue #1028.
@@ -330,8 +342,17 @@ internal class RoutingGrain(
             logger.LogDebug("[ROUTE] {Address} type={Type} declared stream-routed → memory stream", addressPath, address.Type);
             RoutingGrainTrace.Write($"RoutingGrain.RouteMessage MEMORY_STREAM addr={addressPath} id={delivery.Id} streamName={addressPath}");
             var s = streamProvider.GetStream<IMessageDelivery>(addressPath);
-            return PostToStream(delivery, () => s.OnNextAsync(delivery), addressPath,
-                delivery.Sender, PostFailureToSender, logger, StreamPostTimeout);
+            // 🚨 ASK WHETHER ANYONE IS LISTENING — issue #1742. A publish to a stream with NO live
+            // subscriber SUCCEEDS: nothing faults, the trace says MEMORY_STREAM_OK, and the message
+            // is discarded. That is the ONE non-delivery in the system with no failure signal of any
+            // kind, and it is what the sender experiences as a full 60 s reply budget spent on
+            // silence. See RefuseNoSubscriber for what the check does and does not buy.
+            return HasLiveSubscriber(
+                    TryGetSubscriptionManager(streamProvider), s.StreamId, addressPath, logger, SubscriberProbeTimeout)
+                .SelectMany(alive => alive
+                    ? PostToStream(delivery, () => s.OnNextAsync(delivery), addressPath,
+                        delivery.Sender, PostFailureToSender, logger, StreamPostTimeout)
+                    : RefuseNoSubscriber(delivery, addressPath, PostFailureToSender, logger));
         })
             // Composition-time faults must ALSO reach the sender — see BuildGrainRoute's trailing
             // Catch for the full rationale (the classic one: GetStream NRE'ing out of
@@ -343,6 +364,90 @@ internal class RoutingGrain(
                 PostFailureToSender($"Routing to '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
                 return Observable.Return(Unit.Default);
             });
+    }
+
+    /// <summary>
+    /// The stream's subscription registry, derived from the stream PROVIDER we already hold — no DI
+    /// lookup, no silo container, no new constructor dependency. Orleans' <c>PersistentStreamProvider</c>
+    /// (which every <c>AddMemoryStreams</c> provider is) implements <c>IStreamSubscriptionManagerRetriever</c>,
+    /// so this is a cast and a property read. Null on a provider that does not expose one, which
+    /// <see cref="HasLiveSubscriber"/> treats as "cannot tell" — i.e. today's behaviour, unchanged.
+    /// </summary>
+    private static IStreamSubscriptionManager? TryGetSubscriptionManager(IStreamProvider streamProvider) =>
+        streamProvider.TryGetStreamSubscriptionManager(out var manager) ? manager : null;
+
+    /// <summary>
+    /// Answers "does this stream have a live subscriber?" — the question a memory-stream publish
+    /// never asks and whose absence is the whole of issue #1742.
+    ///
+    /// <para>🚨 <b>FAILS OPEN, always.</b> A probe that cannot run must never become a blocker: if
+    /// the registry is unavailable, faults, or does not answer inside
+    /// <see cref="SubscriberProbeTimeout"/>, this returns <c>true</c> and the delivery is published
+    /// exactly as it is today. The check is a DETECTOR, and turning a detector outage into a
+    /// mesh-wide refusal would be strictly worse than the silence it is there to remove.</para>
+    ///
+    /// <para><b>What it is measured to see</b> (in-process cluster, 2026-08-21): a hub registered
+    /// through <c>OrleansRoutingService.RegisterStream</c> on a SILO (1 subscription), the same on a
+    /// CLIENT process (2), the root <c>mesh/{id}</c> hub (1), zero for an address never registered,
+    /// and back to zero within ~250 ms of a registration being disposed. Cost is 0.010 ms warm
+    /// against 0.053 ms for the publish it guards — roughly a fifth of the leg it protects, which is
+    /// why it is applied to EVERY stream-routed delivery rather than confined to replies.</para>
+    ///
+    /// <para><b>What it does NOT buy.</b> It is a check-then-act: a subscriber can vanish between
+    /// the answer and the publish, and a <c>MemoryStreamQueueGrain</c> that dies with its silo drops
+    /// a message this probe said was deliverable. Those residuals are closed only by taking replies
+    /// off streams entirely — see <c>Doc/Architecture/OrleansStreamPubSubDurability</c>.</para>
+    /// </summary>
+    internal static IObservable<bool> HasLiveSubscriber(
+        IStreamSubscriptionManager? subscriptions,
+        StreamId streamId,
+        string addressPath,
+        ILogger logger,
+        TimeSpan timeout,
+        IScheduler? scheduler = null)
+        => subscriptions is null
+            ? Observable.Return(true)
+            : Observable.Defer(() =>
+                    subscriptions.GetSubscriptions(StreamProviders.Memory, streamId).ToObservable())
+                .Select(subs => subs.Any())
+                .Timeout(timeout, scheduler ?? Scheduler.Default)
+                .Catch<bool, Exception>(ex =>
+                {
+                    logger.LogWarning(ex,
+                        "[ROUTE] Subscriber lookup for {Address} did not answer within {Timeout} — publishing anyway. "
+                        + "The check fails OPEN on purpose: an unavailable registry must not become a refusal.",
+                        addressPath, timeout);
+                    return Observable.Return(true);
+                });
+
+    /// <summary>
+    /// The terminal answer for a stream-routed delivery whose destination has no subscriber: say
+    /// exactly what could not be delivered, and NACK the sender so its <c>Observe(...)</c> fires
+    /// <c>OnError</c> now instead of waiting out its own budget.
+    ///
+    /// <para><see cref="ErrorType.NotFound"/>, not <see cref="ErrorType.Failed"/>: nothing failed —
+    /// the address simply names no hub that any silo in this cluster is currently serving. That is
+    /// the same classification an unresolvable node path gets from
+    /// <see cref="BuildGrainRoute"/>, and it is what lets a caller distinguish "gone" from "broke".</para>
+    /// </summary>
+    private static IObservable<Unit> RefuseNoSubscriber(
+        IMessageDelivery delivery,
+        string addressPath,
+        Action<string, ErrorType> postFailureToSender,
+        ILogger logger)
+    {
+        var reason =
+            $"Stream-routed delivery to '{addressPath}' has no live subscriber: no silo in this cluster "
+            + "is currently serving that hub, so the message could not be delivered.";
+        logger.LogError(
+            "[ROUTE] {Reason} Message {MessageType} ({DeliveryId}) from {Sender} was NOT posted — a publish "
+            + "to a subscriber-less stream succeeds and discards, which is why this had to be checked "
+            + "rather than observed. Surfacing DeliveryFailure to the sender.",
+            reason, delivery.Message?.GetType().Name ?? "(null)", delivery.Id, delivery.Sender);
+        RoutingGrainTrace.Write(
+            $"RoutingGrain.RouteMessage MEMORY_STREAM_NO_SUBSCRIBER addr={addressPath} id={delivery.Id} sender={delivery.Sender}");
+        postFailureToSender(reason, ErrorType.NotFound);
+        return Observable.Return(Unit.Default);
     }
 
     /// <summary>
@@ -502,23 +607,45 @@ internal class RoutingGrain(
             return;
         }
 
-        streamProvider.GetStream<IMessageDelivery>(delivery.Sender.ToString())
-            .OnNextAsync(failureDelivery)
-            .ContinueWith(t =>
+        // 🚨 THE NACK RIDES THE CHANNEL IT IS REPORTING ON — issue #1742, residual C. For a sender
+        // this silo does not host there is no other way to reach it, so the honest thing is not to
+        // pretend: ASK whether that sender's stream still has a subscriber, and when it does not,
+        // say so LOUDLY. The old trace tag admitted the gap in its own name
+        // (FAILURE_DELIVER_OK_UNCONFIRMED) and then only wrote it to an env-var-gated file, so in
+        // production an undeliverable NACK produced no signal at all. It still cannot be delivered
+        // — you cannot NACK a NACK — but "the sender was told" and "the sender is unreachable" are
+        // now different lines instead of the same one.
+        //
+        // The publish still happens either way: the probe is check-then-act, so a subscriber that
+        // attaches in the gap would otherwise lose an answer we could have delivered.
+        var senderPath = delivery.Sender.ToString();
+        var senderStream = streamProvider.GetStream<IMessageDelivery>(senderPath);
+        HasLiveSubscriber(
+                TryGetSubscriptionManager(streamProvider), senderStream.StreamId, senderPath, logger, SubscriberProbeTimeout)
+            .Do(alive =>
             {
-                if (t.IsFaulted)
-                {
-                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_FAIL id={delivery.Id} ex={t.Exception?.InnerException?.Message ?? t.Exception?.Message}");
-                    logger.LogWarning(t.Exception, "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender}", errorType, delivery.Sender);
-                }
-                else
+                if (alive) return;
+                RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_NO_SUBSCRIBER id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
+                logger.LogError(
+                    "[ROUTE] Cannot deliver the {ErrorType} DeliveryFailure for {DeliveryId} to sender {Sender}: "
+                    + "that hub has no live subscriber on its stream, and a NACK has no NACK of its own. "
+                    + "The sender will wait out its own request budget — the original failure was: {FailureMessage}",
+                    errorType, delivery.Id, delivery.Sender, failureMessage);
+            })
+            .SelectMany(_ => senderStream.OnNextAsync(failureDelivery).ToObservable())
+            .Subscribe(
+                _ =>
                     // 🚨 "OK" here means the PUBLISH did not fault — NOT that anything received it.
                     // A memory-stream publish with no subscriber succeeds, so this line cannot
-                    // distinguish delivered from discarded. It is only reached for a sender this
-                    // silo does not host; the co-hosted case took the local route above, where
-                    // delivery IS observable.
-                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_OK_UNCONFIRMED id={delivery.Id} sender={delivery.Sender} errorType={errorType}");
-            }, TaskScheduler.Default);
+                    // distinguish delivered from discarded; the probe above is what does. It is only
+                    // reached for a sender this silo does not host; the co-hosted case took the
+                    // local route above, where delivery IS observable.
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_OK_UNCONFIRMED id={delivery.Id} sender={delivery.Sender} errorType={errorType}"),
+                ex =>
+                {
+                    RoutingGrainTrace.Write($"RoutingGrain.RouteMessage FAILURE_DELIVER_FAIL id={delivery.Id} ex={ex.Message}");
+                    logger.LogWarning(ex, "[ROUTE] Failed to deliver {ErrorType} failure to sender {Sender}", errorType, delivery.Sender);
+                });
     }
 
     /// <summary>
