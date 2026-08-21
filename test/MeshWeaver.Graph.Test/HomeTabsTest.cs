@@ -67,20 +67,54 @@ public class HomeTabsTest
     [Fact]
     public void Apps_UnionsConfigDefaultsAndInstalled_EachAppExactlyOnce()
     {
+        // Node-path union tested through the pure query core — "store" dedupes case-insensitively
+        // against the shipped default "Store", "Chess" appears once.
+        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
         var apps = UserActivityLayoutAreas.BuildApps(
-                new HomeConfig(), installedApps: ["Chess", "store", "Chess"])
+                NodePath, noDock, installedApps: ["Chess", "store", "Chess"])
             .Should().BeOfType<MeshSearchControl>().Subject;
 
-        // Shipped defaults (Store, Doc) ∪ installed (Chess) — "store" dedupes case-insensitively.
         var query = apps.HiddenQuery!.ToString()!;
         query.Should().Contain("path:(Store OR Doc OR Chess)");
         query.Should().NotContain("store OR");
     }
 
     [Fact]
+    public void Apps_ShippedDefaults_ComposeDockPlusGrid()
+    {
+        // Shipped DefaultApps include the ~/Chat Threads tile → a dock row above the node grid.
+        UserActivityLayoutAreas.BuildApps(NodePath, new HomeConfig(), installedApps: null)
+            .Should().BeOfType<StackControl>().Subject
+            .Areas.Should().HaveCount(2, "system-tile dock + the node-card grid");
+    }
+
+    [Fact]
+    public void Apps_SystemTile_ThreadsDockTile_TargetsTheViewersChatArea()
+    {
+        var tile = UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "~/Chat");
+
+        tile.Should().NotBeNull();
+        tile!.NodePath.Should().Be($"{NodePath}/Chat", "the tile opens the viewer's own Threads app");
+        tile.Title.Should().Be("Threads");
+        tile.ImageUrl.Should().Be("/static/NodeTypeIcons/chat.svg");
+    }
+
+    [Fact]
+    public void Apps_SystemTile_UnknownAreaFallsBack_MalformedIsNull()
+    {
+        var unknown = UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "~/Foo");
+        unknown!.Title.Should().Be("Foo");
+        unknown.ImageUrl.Should().Be("/static/NodeTypeIcons/puzzlepiece.svg");
+
+        UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "~/").Should().BeNull();
+        UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "Store").Should().BeNull();
+    }
+
+    [Fact]
     public void Apps_DefaultOrderIsAlphabetical_AllThreeSortsOffered()
     {
-        var apps = UserActivityLayoutAreas.BuildApps(new HomeConfig(), installedApps: null)
+        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
+        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
             .Should().BeOfType<MeshSearchControl>().Subject;
 
         apps.SortOptions![0].Label.Should().Be("Alphabetical");
@@ -96,7 +130,8 @@ public class HomeTabsTest
         // source:accessed is an INNER join on the caller's access log — alone it would HIDE a
         // never-opened app. The last-accessed option must therefore be a two-leg path-keyed union:
         // accessed-ranked first, plain fallback second.
-        var apps = UserActivityLayoutAreas.BuildApps(new HomeConfig(), installedApps: null)
+        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
+        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
             .Should().BeOfType<MeshSearchControl>().Subject;
 
         var lastAccessed = apps.SortOptions!.Single(o => o.Label == "Last accessed").Query;
@@ -110,8 +145,33 @@ public class HomeTabsTest
     [Fact]
     public void Apps_NoAppsAnywhere_RendersAHint()
     {
-        UserActivityLayoutAreas.BuildApps(new HomeConfig { DefaultApps = [] }, installedApps: [])
+        UserActivityLayoutAreas.BuildApps(NodePath, new HomeConfig { DefaultApps = [] }, installedApps: [])
             .Should().BeOfType<MarkdownControl>("an empty Apps tab must explain itself, not render blank");
+    }
+
+    // ── Threads app (the /{user}/Chat page) ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void ThreadsApp_IsARailPlusComposer()
+    {
+        UserActivityLayoutAreas.BuildThreadsApp(NodePath)
+            .Should().BeOfType<StackControl>().Subject
+            .Areas.Should().HaveCount(2, "the vertical thread rail + the composer pane");
+    }
+
+    [Fact]
+    public void ThreadsRail_ListsOpenThreads_RowsDelegateToTheRailItemArea()
+    {
+        var rail = UserActivityLayoutAreas.BuildThreadsRail(NodePath);
+
+        var query = rail.HiddenQuery!.ToString()!;
+        query.Should().Contain($"namespace:{NodePath}/*_Thread");
+        query.Should().Contain("nodeType:Thread");
+        query.Should().Contain("-content.status:Done", "closing a thread (✕ → MarkThreadDone) must remove it from the rail");
+        query.Should().Contain("sort:LastModified-desc");
+        rail.RenderMode.Should().Be(MeshSearchRenderMode.List, "the rail is a vertical menu");
+        rail.ItemArea.Should().Be("RailItem", "each row renders via the thread hub's RailItem area (title + ✕)");
+        rail.ShowSearchBox.Should().Be(false);
     }
 
     // ── Spaces tab (dedup) ──────────────────────────────────────────────────────────────────────
@@ -161,9 +221,9 @@ public class HomeTabsTest
     // ── Config ──────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void HomeConfig_ShippedDefaults_TabbedWithStoreAndDoc()
+    public void HomeConfig_ShippedDefaults_TabbedWithStoreDocAndThreads()
     {
         HomeConfigNodeType.Defaults.Style.Should().Be(HomeStyle.Tabs);
-        HomeConfigNodeType.Defaults.DefaultApps.Should().Equal("Store", "Doc");
+        HomeConfigNodeType.Defaults.DefaultApps.Should().Equal("Store", "Doc", "~/Chat");
     }
 }
