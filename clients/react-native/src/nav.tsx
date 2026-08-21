@@ -29,6 +29,9 @@ export function parseHref(href: string, currentAddress: string): NavTarget | nul
     if (seg === "..") parts.pop();
     else if (seg && seg !== ".") parts.push(seg);
   }
-  if (parts.length === 0) return null;
+  // The ROOT link ("/" — e.g. the settings nav's Home entry) is a real target: the shell's home.
+  // An empty address is the "go home" sentinel App.navigate resolves; only a RELATIVE parse that
+  // dissolved to nothing is a miss.
+  if (parts.length === 0) return href.startsWith("/") ? { address: "", area: "" } : null;
   return { address: parts.join("/"), area: "" };
 }
