@@ -95,6 +95,7 @@
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
     <Project Path="src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <Project Path="src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
+    <Project Path="src/MeshWeaver.Speech.Contract/MeshWeaver.Speech.Contract.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
   </Folder>
   <Folder Name="/test/">
