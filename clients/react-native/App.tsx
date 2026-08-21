@@ -118,7 +118,9 @@ function AppInner() {
 
   const navigate = (t: NavTarget) => {
     setClientScreen(null);
-    setNav(t);
+    // An empty address is parseHref's "go home" sentinel (a root "/" link) — resolve it here,
+    // where the current home (device user / signed-in remote user / docs) is known.
+    setNav(t.address ? t : home);
   };
 
   // 📱 On a phone the app IS the onboarding until a mesh acks: the bundled sample

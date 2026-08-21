@@ -309,8 +309,11 @@ const LayoutAreaEmbed: ControlComponent = ({ control }) => {
 function EmbeddedAreaBody({ rootArea, showProgress }: { rootArea: string; showProgress: boolean }) {
   const state = useAreaState();
   if (state.areas?.[rootArea] == null) {
+    // The source starts as {} — `areas` only EXISTS once a snapshot frame arrived, so its presence
+    // (even as an empty object: PushRenderResult clears progress to 100 with areas {} when a view
+    // returns null) plus completed progress means the render finished with nothing to show.
     const progress = (state.data as Record<string, { progress?: number }> | undefined)?.progress?.progress;
-    const settled = state.areas != null && Object.keys(state.areas).length > 0 && (progress == null || progress >= 100);
+    const settled = state.areas != null && (progress == null || progress >= 100);
     return settled || !showProgress ? null : <ActivityIndicator />;
   }
   return <RenderArea areaKey={rootArea} />;

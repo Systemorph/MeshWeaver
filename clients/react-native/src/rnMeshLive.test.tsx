@@ -305,3 +305,50 @@ describe("Appearance", () => {
     expect(text).toContain(en("appearance.dark"));
   });
 });
+
+// ---- MeshSearch union queries -----------------------------------------------------------------
+
+describe("MeshSearch union queries", () => {
+  it("runs a newline-joined UNION as separate queries, appends the term, merges in order, dedupes by path", async () => {
+    // The production failure this pins: the home catalog's hidden query is a newline-joined UNION
+    // (FirstLevelUnion); sent as ONE string the server parses it to nothing and every home section
+    // said "No results". The leaf must issue each line separately.
+    const search = vi.fn(async (q: string) =>
+      q.startsWith("namespace: ")
+        ? [
+            { path: "Doc", name: "DocRoot", nodeType: "Group" },
+            { path: "Both", name: "BothFirst", nodeType: "Group" },
+          ]
+        : [
+            { path: "device-user/x", name: "OwnItem", nodeType: "Group" },
+            { path: "Both", name: "BothDup", nodeType: "Group" },
+          ]);
+    const ops = fakeOps({ search });
+    const j = await renderLive(
+      {
+        areas: {
+          main: {
+            $type: "MeshSearch",
+            hiddenQuery: "namespace: is:main\nnamespace:device-user is:main",
+            visibleQuery: "foo",
+            showSearchBox: false,
+          } as never,
+        },
+      },
+      ops,
+    );
+
+    // One call PER line — never the newline-joined union string — each with the visible term.
+    expect(search.mock.calls.map((c) => c[0])).toEqual([
+      "namespace: is:main foo",
+      "namespace:device-user is:main foo",
+    ]);
+
+    const text = allText(j).join("\n");
+    expect(text).toContain("DocRoot");
+    expect(text).toContain("OwnItem");
+    // Deduped by path in DECLARATION order: the first batch's "Both" wins, the duplicate is dropped.
+    expect(text).toContain("BothFirst");
+    expect(text).not.toContain("BothDup");
+  });
+});
