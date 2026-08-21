@@ -135,6 +135,7 @@ public class PresentationSurfacesTest
         // An installed app's path is interpolated into `path:(…)`, so a marked one must never get
         // that far.
         var apps = UserActivityLayoutAreas.BuildApps(
+                Owner,
                 new HomeConfig { DefaultApps = ["Store"] },
                 installedApps: ["Chess", "Acme"],
                 locale: null,
@@ -150,6 +151,7 @@ public class PresentationSurfacesTest
     public void AppsTab_IsUnchangedWhenTheModeIsOff()
     {
         var apps = UserActivityLayoutAreas.BuildApps(
+                Owner,
                 new HomeConfig { DefaultApps = ["Store"] },
                 installedApps: ["Acme"],
                 locale: null,

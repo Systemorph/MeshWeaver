@@ -66,18 +66,20 @@ public record HomeConfig
 
     /// <summary>
     /// The platform's default apps — node paths (usually Store plugin covers, e.g. <c>Store</c>,
-    /// <c>Doc</c>) every user's Apps tab starts with. Rendered live from config (no seeding), so an
-    /// admin's edit updates every home. Users add more apps by installing from the Store, which
-    /// writes <c>{user}/_App/{appId}</c> records.
+    /// <c>Doc</c>) every user's Apps tab starts with. An entry starting with <c>~/</c> is not a
+    /// node but an AREA on the viewer's own hub (<c>~/Chat</c> → the Threads app at
+    /// <c>/{owner}/Chat</c>), rendered as a fixed system tile. Rendered live from config (no
+    /// seeding), so an admin's edit updates every home. Users add more apps by installing from the
+    /// Store, which writes <c>{user}/_App/{appId}</c> records.
     /// </summary>
-    [Description("The default apps every user's Apps tab starts with — node paths such as Store or Doc. Users add more by installing from the Store.")]
-    [Translation("de", "Die Standard-Apps, mit denen der Apps-Tab jedes Benutzers startet — Knotenpfade wie Store oder Doc. Weitere Apps kommen über den Store hinzu.")]
+    [Description("The default apps every user's Apps tab starts with — node paths such as Store or Doc, or ~/-prefixed viewer areas such as ~/Chat (the Threads app). Users add more by installing from the Store.")]
+    [Translation("de", "Die Standard-Apps, mit denen der Apps-Tab jedes Benutzers startet — Knotenpfade wie Store oder Doc, oder ~/-Einträge für eigene Bereiche wie ~/Chat (die Threads-App). Weitere Apps kommen über den Store hinzu.")]
     // Browsable(false): the generic node-content edit form has no list-capable field kind yet — a
     // Text field would write a plain string into this list-typed slot and corrupt the config. Until
     // a list field ships, admins edit DefaultApps on the node content directly (MCP patch /
     // edit_content on Admin/HomeConfig).
     [Browsable(false)]
-    public IReadOnlyList<string> DefaultApps { get; init; } = ["Store", "Doc"];
+    public IReadOnlyList<string> DefaultApps { get; init; } = ["Store", "Doc", "~/Chat"];
 
     /// <summary>Depth of the home listing: FirstLevel (top-level entries only) or Subtree (the full tree).</summary>
     [Description("How deep the home lists content. FirstLevel shows only top-level entries (the spaces, courses and plugins you can see, plus your own top-level home items). Subtree shows everything you can read.")]
