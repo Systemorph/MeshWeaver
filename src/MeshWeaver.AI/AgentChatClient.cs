@@ -18,6 +18,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TextContent = Microsoft.Extensions.AI.TextContent;
@@ -814,6 +815,13 @@ public class AgentChatClient : IAgentChat
         // Detect agent @references in message text (for selection override)
         var lastMessageText = messages.LastOrDefault() is { } last ? ExtractTextFromMessage(last) : null;
         DetectMessageAgentReferences(lastMessageText);
+
+        // 🧭 Auto refinement (#1951). When THIS round asked for the Auto router, the sync dispatch
+        // in CreateAgentsSync has already parked it on the agent-tier/default model — the floor a
+        // round can always run on. Here, on the AI pool thread where a model call is legal, one
+        // cheap bounded call refines that floor using the round's actual content. Any failure
+        // keeps the floor; runs BEFORE SelectAgent so a changed model rebuilds agents first.
+        await ApplyAutoRouterSelectionAsync(lastMessageText, cancellationToken).ConfigureAwait(false);
 
         // Pure in-memory lookup against the synced agent cache.
         // 🚨 Callers MUST await `WhenInitialized` before calling here on a
@@ -2060,10 +2068,14 @@ public class AgentChatClient : IAgentChat
     /// <list type="number">
     /// <item><b>Auto (the router) was selected</b> — the DEFAULT for a new thread. Auto has no wire
     /// API of its own, so it is DISPATCHED to a real model here, before any factory sees it. The
-    /// dispatch rule is deliberately the simplest one that is explainable: <b>run the tier the
+    /// dispatch rule here is deliberately the simplest one that is explainable: <b>run the tier the
     /// selected agent declares</b> (<see cref="AgentConfiguration.ModelTier"/>), and the deployment
-    /// default when it declares none. No classification call, no guessing — a router nobody can
-    /// predict is worse than a fixed default.</item>
+    /// default when it declares none. No model call in THIS stage — it is synchronous and must
+    /// always produce a runnable floor. The content-aware refinement is a SECOND stage
+    /// (<see cref="ApplyAutoRouterSelectionAsync"/>, #1951): one bounded selection call on the AI
+    /// pool thread that may move the round off this floor, and keeps it on ANY failure — so the
+    /// old "a router nobody can predict is worse than a fixed default" stance survives as the
+    /// guaranteed fallback rather than the whole story.</item>
     /// <item><b>The selection is stale</b> — deleted / refactored out of the catalog, or its provider
     /// carries no key — so it is swapped for a working model on the same chain.</item>
     /// </list>
@@ -2164,6 +2176,105 @@ public class AgentChatClient : IAgentChat
             "[AgentChatClient] Selected model '{Stale}' is not usable (no resolvable key); "
             + "silently falling back to model '{Default}' (via {Source}).",
             string.IsNullOrEmpty(previous) ? "(none selected)" : previous, target, resolution.Source);
+    }
+
+    /// <summary>How long the Auto refinement call may take before the round proceeds on the floor —
+    /// the routing must stay a small fraction of the round it routes.</summary>
+    private static readonly TimeSpan AutoRouterTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Stage two of Auto (#1951): the CONTENT-AWARE selection. Runs only when this round's
+    /// REQUESTED model was the Auto router (<see cref="requestedModelName"/> — an explicit human
+    /// model pick, and every automation round that names its model, never reaches here), after
+    /// <see cref="ApplyStaleModelFallback"/> has already parked the round on the tier/default
+    /// floor. One bounded call on the floor model asks it to pick the best candidate for the
+    /// round's text; a valid answer moves <see cref="currentModelName"/> and rebuilds the agents,
+    /// anything else — timeout, refusal, an id outside the candidates, a factory with no bare
+    /// chat client — keeps the floor. So this can improve a round, and can never break one.
+    ///
+    /// <para>Deliberately NOT run for: rounds with fewer than two usable candidates (nothing to
+    /// choose), empty round text, or when the deployment opts out
+    /// (<c>Ai:Router:Selection = Tier</c>). The choice is logged with the engine's own stated
+    /// reason, so an operator can always answer "why did this round run on that model".</para>
+    /// </summary>
+    private async Task ApplyAutoRouterSelectionAsync(string? roundText, CancellationToken cancellationToken)
+    {
+        var resolver = hub.ServiceProvider.GetService<ChatClientCredentialResolver>();
+        if (resolver is null || string.IsNullOrWhiteSpace(roundText))
+            return;
+        if (!resolver.IsRouterSelection(requestedModelName))
+            return;
+        if (string.Equals(
+                hub.ServiceProvider.GetService<IConfiguration>()?["Ai:Router:Selection"],
+                "Tier", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var candidates = AutoModelRouter.UsableCandidates(loadedModels, resolver.HasUsableCredential);
+        if (candidates.Count < 2)
+            return;
+
+        // The engine is the FLOOR model the sync dispatch already selected — always usable when we
+        // get here, and the one model this deployment considers a sane default anyway.
+        var engine = currentModelName;
+        if (string.IsNullOrEmpty(engine))
+            return;
+        var factory = GetFactoryForModel(engine);
+        if (factory is null)
+            return;
+
+        try
+        {
+            using var client = factory.CreateChatClient(engine);
+            using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bounded.CancelAfter(AutoRouterTimeout);
+
+            var response = await client.GetResponseAsync(
+                    AutoModelRouter.BuildMessages(candidates, roundText),
+                    new ChatOptions { MaxOutputTokens = 120, Temperature = 0 },
+                    bounded.Token)
+                .ConfigureAwait(false);
+
+            var candidateIds = candidates.Select(c => c.Id).ToArray();
+            if (!AutoModelRouter.TryParseChoice(response.Text, candidateIds, out var chosen, out var reason))
+            {
+                logger.LogDebug(
+                    "[AutoRouter] engine '{Engine}' gave no usable choice — keeping the floor model.",
+                    engine);
+                return;
+            }
+
+            if (string.Equals(chosen, currentModelName, StringComparison.OrdinalIgnoreCase))
+            {
+                logger.LogDebug(
+                    "[AutoRouter] engine '{Engine}' confirmed the floor model '{Model}' ({Reason}).",
+                    engine, chosen, reason);
+                return;
+            }
+
+            currentModelName = chosen;
+            // Rebuild for the routed model. ApplyStaleModelFallback re-runs inside and early-returns
+            // (a usable non-router selection); substitutedFromModel keeps carrying the router id, so
+            // the requested→effective record stays truthful (#476).
+            agentsInitialized = false;
+            CreateAgentsSync();
+            logger.LogInformation(
+                "[AutoRouter] routed the round to '{Model}' ({Reason}); floor was '{Floor}'.",
+                chosen, string.IsNullOrEmpty(reason) ? "no reason stated" : reason, engine);
+        }
+        catch (NotSupportedException)
+        {
+            // The floor model's factory has no bare chat client (persistent/server-side threads) —
+            // routing has no engine here; the floor is the answer.
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogDebug("[AutoRouter] selection timed out after {Timeout}s — keeping the floor model.",
+                AutoRouterTimeout.TotalSeconds);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "[AutoRouter] selection failed — keeping the floor model.");
+        }
     }
 
     /// <summary>
