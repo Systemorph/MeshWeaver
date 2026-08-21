@@ -1484,7 +1484,11 @@ jobs:
         # sees it too; MSBuild reads environment variables as properties.
         MeshWeaverRoot: ${{ github.workspace }}
       run: |
-        set -uo pipefail
+        # `-e` is already in force (GitHub runs `run:` under `bash -e {0}`), and an earlier
+        # revision proved it by dying at `dotnet sln add` in four seconds. Stating it here anyway:
+        # a reader cannot see the runner's default shell, and a gate whose non-vacuity depends on
+        # an invisible flag is one edit away from silently building an empty solution and passing.
+        set -euo pipefail
         cd "$GITHUB_WORKSPACE/plugins-repo"
         # The module set is DISCOVERED, never listed here: a list in this repo would go stale the
         # first time the plugins repo adds a module, and it would go stale SILENTLY — the gate
@@ -2145,7 +2149,7 @@ jobs:
         set -uo pipefail
         verdict="$(printf '%s' "${MODULE_VERDICT}" | head -1)"
         echo "::error::A module in MeshWeaver.Plugins/src does not build against this PR. ${verdict:-See the 'Landed modules compile against this PR' job.}"
-        echo "These sixteen modules reference this repo by PROJECT path and take their NuGet pins"
+        echo "Those projects reference this repo by PROJECT path and take their NuGet pins"
         echo "from its central Directory.Packages.props, so removing a public API or a PackageVersion"
         echo "here breaks them. A module that does not build produces no bundle, and the capability"
         echo "disappears from the image with no error near the change that caused it."
