@@ -84,6 +84,25 @@ public partial class MeshSearchView
     private readonly CompositeDisposable _affordanceSubscriptions = new();
     // The card whose trash is armed for confirmation (two-step delete; null = none armed).
     private string? _pendingDeletePath;
+
+    // ----- The viewer's presentation screen (#1803) -----
+    // DISPLAY-ONLY. This drops marked paths out of what this view PAINTS; it never touches the
+    // query, the permission fold or the node. Every result here was returned by the mesh to a
+    // viewer who is allowed to read it, and a hidden node stays reachable by direct URL.
+    // Resolved off the viewer's own profile and refreshed LIVE, so flipping presentation mode
+    // re-renders every result surface with no reload (issue #1803's first acceptance criterion).
+    // `Access` (the AccessService injected by the .razor) resolves WHO is viewing — the same seam
+    // ViewerZoneId() / ViewerLocale() read the viewer's other display preferences from. Identity
+    // only: this view never asks it an access question.
+    private PresentationScreen _screen = PresentationScreen.Off;
+    // 🚨 The first paint is GATED on this. "Hidden items never appear or flash" is the second
+    // acceptance criterion, and a view that renders with the neutral screen and filters a beat
+    // later shows the audience exactly what the mode was turned on to hide.
+    private bool _screenResolved;
+    // Set once ApplyResults has actually projected a result set, so a screen change arriving before
+    // the first query lands does not clear the loading state over an empty accumulator.
+    private bool _resultsSeen;
+    private IDisposable? _screenSubscription;
     // The keyboard-highlighted result path (Arrow Up/Down). Distinct from the SelectedPath param.
     private string? _keyboardSelectedPath;
 
@@ -489,43 +508,59 @@ public partial class MeshSearchView
                 // Monaco editor may not be fully initialized yet
             }
 
-            // If we have pre-computed groups, no need to fetch
-            if (IsPrecomputedMode)
-            {
-                _isLoading = false;
-                StateHasChanged();
-                return;
-            }
-
-            // Namespace tree mode: lazily load the first level only.
-            if (IsNamespaceTreeMode)
-            {
-                InitializeTree();
-                return;
-            }
-
-            // Graph navigator: load the next level below + ancestors above. When the
-            // box already carries search text (e.g. ?q=), also run the semantic query
-            // so the initial render shows results instead of the browse view.
-            if (IsGraphNavigatorMode)
-            {
-                InitializeGraphNavigator();
-                if (!string.IsNullOrWhiteSpace(_currentValue))
-                    LoadResults();
-                return;
-            }
-
-            // Reactive mode: subscribe to Query for live updates
-            if (BoundReactiveMode)
-            {
-                SubscribeToReactiveUpdates();
-                return;
-            }
-
-            // Client-side query mode (one-shot)
-            LoadResults();
-            StateHasChanged();
+            // 🚨 The result source starts only once the viewer's presentation screen is known
+            // (#1803). "Hidden items never appear or flash" is the requirement, and a view that
+            // starts querying first and learns the screen a beat later shows the audience exactly
+            // what the mode was turned on to hide. An anonymous / system / hub caller resolves
+            // SYNCHRONOUSLY to PresentationScreen.Off, so those views start in the same turn they
+            // always did; a signed-in viewer waits on their own profile stream, which the portal
+            // chrome already holds open. The loading spinner covers the gap.
+            SubscribeToViewerScreen(StartResultSource);
         }
+    }
+
+    /// <summary>
+    /// Starts whichever result source this render mode uses. Called exactly once, on the first
+    /// emission of the viewer's presentation screen — see <see cref="SubscribeToViewerScreen"/>.
+    /// </summary>
+    private void StartResultSource()
+    {
+        // If we have pre-computed groups, no need to fetch
+        if (IsPrecomputedMode)
+        {
+            _isLoading = false;
+            StateHasChanged();
+            return;
+        }
+
+        // Namespace tree mode: lazily load the first level only.
+        if (IsNamespaceTreeMode)
+        {
+            InitializeTree();
+            return;
+        }
+
+        // Graph navigator: load the next level below + ancestors above. When the
+        // box already carries search text (e.g. ?q=), also run the semantic query
+        // so the initial render shows results instead of the browse view.
+        if (IsGraphNavigatorMode)
+        {
+            InitializeGraphNavigator();
+            if (!string.IsNullOrWhiteSpace(_currentValue))
+                LoadResults();
+            return;
+        }
+
+        // Reactive mode: subscribe to Query for live updates
+        if (BoundReactiveMode)
+        {
+            SubscribeToReactiveUpdates();
+            return;
+        }
+
+        // Client-side query mode (one-shot)
+        LoadResults();
+        StateHasChanged();
     }
 
     private Task OnValueChanged(string value)
@@ -593,6 +628,86 @@ public partial class MeshSearchView
     // subscription — the only difference was that the legacy LoadResults re-rendered on every
     // change emission (including content-only Updated) while this path re-renders only on
     // structural set changes. They are unified here so neither path can storm.
+    /// <summary>
+    /// Subscribes the viewer's live presentation screen (#1803) and re-projects whatever this view
+    /// is showing whenever it changes — that is what makes the quick toggle instant and
+    /// reload-free.
+    ///
+    /// <para>An anonymous / system / hub caller resolves synchronously to
+    /// <see cref="PresentationScreen.Off"/>, so the gate below costs those views nothing. For a
+    /// signed-in viewer the source is their own <c>User</c> node off the shared node-stream handle
+    /// the portal chrome already holds open, and it always emits (a missing node emits null and
+    /// projects to <see cref="PresentationScreen.Off"/>). A screen that never resolves therefore
+    /// means the viewer's own profile stream is dead — a portal-level outage the spinner correctly
+    /// reflects, and NOT something to paper over with a timeout that would fail open and leak.</para>
+    /// </summary>
+    private void SubscribeToViewerScreen(Action onFirstResolved)
+    {
+        _screenSubscription?.Dispose();
+        _screenSubscription = Access.ViewerScreen(MeshHub)
+            .Subscribe(
+                screen => InvokeAsync(() =>
+                {
+                    var first = !_screenResolved;
+                    if (!first && _screen == screen)
+                        return;
+                    _screen = screen;
+                    _screenResolved = true;
+                    // The FIRST emission unblocks the normal start-up path, which reads the screen
+                    // itself; only a later CHANGE — the viewer flipping the mode — has to
+                    // re-project what is already on screen.
+                    if (first)
+                        onFirstResolved();
+                    else
+                        ReprojectForScreen();
+                }),
+                ex =>
+                {
+                    // ViewerScreen already holds the last known screen across a faulting profile
+                    // stream and logs it; reaching here means the stream TERMINATED. Keep the
+                    // screen we have — never widen it — and unblock the view, which must not be
+                    // left spinning on a source that will never emit again.
+                    MeshHub.ServiceProvider.GetService<ILoggerFactory>()
+                        ?.CreateLogger("MeshWeaver.MeshSearchView")
+                        .LogWarning(ex, "Presentation screen stream ended; keeping the last known screen");
+                    InvokeAsync(() =>
+                    {
+                        if (_screenResolved)
+                            return;
+                        _screenResolved = true;
+                        onFirstResolved();
+                    });
+                });
+    }
+
+    /// <summary>
+    /// Re-renders this view under the current screen. Flat/grouped/list re-project from the results
+    /// already held; the two browse modes re-run their own level loads, which filter at their entry
+    /// funnel.
+    /// </summary>
+    private void ReprojectForScreen()
+    {
+        if (IsNamespaceTreeMode)
+        {
+            if (_initialized) ResetTree();
+            return;
+        }
+        if (IsGraphNavigatorMode)
+        {
+            if (_initialized) ResetGraphNavigator();
+            return;
+        }
+        if (IsPrecomputedMode)
+        {
+            StateHasChanged();
+            return;
+        }
+        // Nothing has been projected yet ⇒ nothing to re-project. Calling ApplyResults here would
+        // clear _isLoading over an empty accumulator and flash "no results" before the query lands.
+        if (_resultsSeen || !_isLoading)
+            ApplyResults();
+    }
+
     private void SubscribeToReactiveUpdates() => SubscribeToResultStream();
 
     /// <summary>
@@ -640,12 +755,23 @@ public partial class MeshSearchView
     /// </summary>
     private void ApplyResults()
     {
+        // 🚨 Do not paint before the viewer's presentation screen is known — see _screenResolved.
+        // The screen subscription calls back here the moment it resolves.
+        if (!_screenResolved)
+            return;
+        _resultsSeen = true;
+
         IEnumerable<MeshNode> visible = _resultAccumulator.Nodes;
         if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
         {
             var basePath = BoundNamespace.Trim('/');
             visible = visible.Where(n => n.Path != basePath);
         }
+
+        // The presentation screen (#1803): display-only, per-viewer, and applied to what is
+        // PAINTED — the query, the permissions and the nodes themselves are untouched, and this is
+        // a no-op for every viewer whose mode is off.
+        visible = _screen.Filter(visible, n => n.Path);
 
         _nodes = visible.ToList();
         ResolveDeletePermissions(_nodes);
@@ -1285,6 +1411,10 @@ public partial class MeshSearchView
     /// </summary>
     private void ProbeTreeChildCounts(string ns, ImmutableList<MeshNode> nodes)
     {
+        // The presentation screen (#1803) applies to the browse LEVEL — one funnel for every tree
+        // level, lazily loaded or not. Display-only: the query above is unchanged, and the child
+        // count of a folder that survives is still its real one.
+        nodes = _screen.Filter(nodes, n => n.Path).ToImmutableList();
         if (nodes.Count == 0)
         {
             InvokeAsync(() =>
@@ -1406,8 +1536,9 @@ public partial class MeshSearchView
                         default:
                             return;
                     }
-                    var items = NamespaceTreeBuilder.Build(root, resultNodes.Values.ToImmutableList());
-                    ResolveDeletePermissions(resultNodes.Values);
+                    var painted = _screen.Filter(resultNodes.Values, n => n.Path).ToImmutableList();
+                    var items = NamespaceTreeBuilder.Build(root, painted);
+                    ResolveDeletePermissions(painted);
                     InvokeAsync(() =>
                     {
                         _treeSearchItems = items;
@@ -1568,7 +1699,13 @@ public partial class MeshSearchView
                 t =>
                 {
                     var aboveList = (t.Above ?? Enumerable.Empty<MeshNode>()).ToList();
-                    var belowList = (t.Below ?? Enumerable.Empty<MeshNode>()).ToList();
+                    // The level BELOW is a browse list, so the presentation screen applies. The rail
+                    // ABOVE is the breadcrumb of where the viewer already IS — they navigated here
+                    // deliberately (direct navigation always resolves, by design), and blanking their
+                    // own location would remove the way back without hiding a name the page header is
+                    // already showing.
+                    var belowList = _screen
+                        .Filter(t.Below ?? Enumerable.Empty<MeshNode>(), n => n.Path).ToList();
                     var current = aboveList.FirstOrDefault(n =>
                         string.Equals(n.Path?.Trim('/'), root, StringComparison.OrdinalIgnoreCase));
                     var model = GraphNavigatorBuilder.Build(root, aboveList, belowList, current);
@@ -1903,6 +2040,7 @@ public partial class MeshSearchView
     /// </remarks>
     public override ValueTask DisposeAsync()
     {
+        _screenSubscription?.Dispose();
         _reactiveSubscription?.Dispose();
         DisposeTreeSubscriptions();
         _navSubscription?.Dispose();

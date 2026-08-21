@@ -1,8 +1,10 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -31,13 +33,24 @@ internal class MeshNodeAutocompleteProvider(
         if (!string.IsNullOrWhiteSpace(query))
             queryString += $" name:{query}";
 
+        // The caller's presentation screen (#1803): a completion list is a name list, so it is one
+        // of the surfaces the privacy screen covers. Resolved ONCE here, on the caller's turn,
+        // because by the time the query below emits the ambient AccessContext no longer flows —
+        // and a screen resolved as "nobody" hides nothing, which is the silent-leak shape.
+        // DISPLAY-ONLY: the query is unchanged and every filtered node is still readable, still
+        // reachable by typing its path, still there when the mode is off.
+        var screen = hub.ServiceProvider.GetService<AccessService>().ViewerScreen(hub);
+
         // Pure reactive: Query emits the initial snapshot; project the first N children to
         // AutocompleteItems. No await, no IAsyncEnumerable bridge — the old EnumerateAsync
         // round-tripped Observable → IAsyncEnumerable → Observable (via ToAsyncEnumerableSequence +
         // FromAsyncEnumerable) for nothing.
+        // The screen is combined with Take(1) on BOTH legs so this stays a one-shot snapshot.
         var items = meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(queryString))
             .Take(1)
-            .SelectMany(c => c.Items
+            .CombineLatest(screen.Take(1), (c, viewerScreen) => (c, viewerScreen))
+            .SelectMany(t => t.viewerScreen
+                .Filter(t.c.Items, node => node.Path)
                 .Take(DefaultMaxResults)
                 .Select(node => ToAutocompleteItem(node, contextPath)));
         return AutocompleteSnapshots.FromItems(items, 50);

@@ -973,5 +973,20 @@
   "versions.viewRedline": "Show the tracked changes",
   "settings.published": "Published to the web",
   "ui.mdPublishedIntro": "Every page a **logged-out visitor** can open — the same list `/sitemap.xml` gives crawlers, read from the same enumeration so the two cannot drift.\n\nA page is public because it carries an **Anonymous Read grant**. There is no separate switch and no separate location: its public URL is its ordinary path. Change it on the node's **Access** tab.",
-  "ui.mdPublishedNone": "**Nothing is published.** No node carries an Anonymous Read grant, so a logged-out visitor sees nothing and `/sitemap.xml` is empty."
+  "ui.mdPublishedNone": "**Nothing is published.** No node carries an Anonymous Read grant, so a logged-out visitor sees nothing and `/sitemap.xml` is empty.",
+  "menu.hideInPresentation": "Hide in presentation mode",
+  "menu.hideInPresentationTooltip": "Keep this off your own tiles and suggestions while presentation mode is on",
+  "menu.showInPresentation": "Show in presentation mode",
+  "menu.showInPresentationTooltip": "Stop hiding this from your own tiles and suggestions while presenting",
+  "presentation.mode": "Presentation mode",
+  "presentation.modeTooltip": "Hide the items you marked from your own tiles, cards and suggestions — for you only, and only until you turn it off",
+  "presentation.on": "On",
+  "presentation.off": "Off",
+  "presentation.indicator": "Presentation mode is on — marked items are hidden from your tiles and suggestions",
+  "presentation.markedTitle": "Hidden in presentation mode",
+  "presentation.markedBody": "This will stay off your own tiles, cards and suggestions while presentation mode is on. Nobody else is affected, and it is still open to you by its link.",
+  "presentation.unmarkedTitle": "Shown again",
+  "presentation.unmarkedBody": "This is no longer hidden while presentation mode is on.",
+  "presentation.signInRequiredTitle": "Sign-in required",
+  "presentation.signInRequiredBody": "Presentation mode is a personal setting, so you have to be signed in to use it."
 }

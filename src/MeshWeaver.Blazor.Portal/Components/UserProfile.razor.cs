@@ -8,6 +8,7 @@ using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
@@ -21,7 +22,7 @@ namespace MeshWeaver.Blazor.Portal.Components;
 /// profile, settings, login, and logout actions. Resolves the display name and the
 /// platform-admin flag from the authentication state and access context.
 /// </summary>
-public partial class UserProfile : ComponentBase
+public partial class UserProfile : ComponentBase, IDisposable
 {
     /// <summary>Navigation manager used for login, logout, and profile/settings routing.</summary>
     [Inject]
@@ -47,6 +48,13 @@ public partial class UserProfile : ComponentBase
     [Inject]
     public required PortalApplication PortalApp { get; init; }
 
+    /// <summary>
+    /// The MESH hub — deliberately not <see cref="PortalApp"/>'s per-circuit portal hub — used to
+    /// read and write the viewer's own profile for the presentation-mode toggle (#1803).
+    /// </summary>
+    [Inject]
+    public required IMessageHub MeshHub { get; init; }
+
     /// <summary>Cascaded authentication state used to read the signed-in user's claims.</summary>
     [CascadingParameter]
     public required Task<AuthenticationState> AuthenticationState { get; set; }
@@ -63,6 +71,13 @@ public partial class UserProfile : ComponentBase
     private string? username;
     private string? initials;
     private bool isPlatformAdmin;
+
+    // ----- Presentation mode (#1803) -----
+    // The quick toggle and its header indicator. The screen is read LIVE off the viewer's own
+    // profile so the header lights up the instant the mode is flipped — including from another tab
+    // — and so the state shown here can never disagree with what the tile surfaces are doing.
+    private PresentationScreen presentationScreen = PresentationScreen.Off;
+    private IDisposable? presentationSubscription;
     private string NameClaimType { get; } = "name";
     /// <summary>The claim type read for the user's preferred username (<c>preferred_username</c>).</summary>
     public string UsernameClaimType { get; } = "preferred_username";
@@ -96,8 +111,54 @@ public partial class UserProfile : ComponentBase
                 .Where(x => x).Take(1)
                 .Timeout(TimeSpan.FromSeconds(5), Observable.Return(false))
                 .FirstAsync().ToTask();
+
+            SubscribePresentationScreen();
         }
 
+    }
+
+    /// <summary>
+    /// Subscribes the viewer's live presentation screen so the menu entry and the header indicator
+    /// track the real state. Idempotent — <c>OnParametersSetAsync</c> can run more than once.
+    /// </summary>
+    private void SubscribePresentationScreen()
+    {
+        if (presentationSubscription is not null)
+            return;
+        presentationSubscription = AccessService.ViewerScreen(MeshHub)
+            .Subscribe(
+                screen => InvokeAsync(() =>
+                {
+                    if (presentationScreen == screen)
+                        return;
+                    presentationScreen = screen;
+                    StateHasChanged();
+                }),
+                ex => Logger.LogWarning(ex, "Presentation screen stream ended for the user menu"));
+    }
+
+    /// <summary>Whether presentation mode is currently on for this viewer.</summary>
+    private bool PresentationModeOn => presentationScreen.Active;
+
+    /// <summary>
+    /// Flips the viewer's presentation mode. Writes their OWN profile through the one mutation API,
+    /// so the owning user hub serialises it and every surface bound to that node — this menu, the
+    /// header indicator, every open tile surface — re-renders from the same write.
+    /// </summary>
+    private void TogglePresentationMode()
+    {
+        var viewerId = AccessService.ViewerId();
+        if (!PresentationScreenExtensions.IsPersonalViewer(viewerId))
+            return;
+        var on = !presentationScreen.Active;
+        var options = MeshHub.JsonSerializerOptions;
+        MeshHub.GetMeshNodeStream(viewerId!)
+            .Update(node => node with
+            {
+                Content = PresentationPreference.SetMode(node.ContentAs<User>(options), on)
+            })
+            .Subscribe(_ => { }, ex => Logger.LogWarning(ex,
+                "Failed to set presentation mode for {Viewer}", viewerId));
     }
     /// <summary>
     /// Derives the avatar initials from a name: the first letter for a single word, or the
@@ -181,4 +242,6 @@ public partial class UserProfile : ComponentBase
         Navigation.NavigateTo(logoutUrl, forceLoad: true);
     }
 
+    /// <summary>Releases the presentation-screen subscription when the header component goes away.</summary>
+    public void Dispose() => presentationSubscription?.Dispose();
 }

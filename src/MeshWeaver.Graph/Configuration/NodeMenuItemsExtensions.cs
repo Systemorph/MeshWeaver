@@ -173,7 +173,10 @@ public static class NodeMenuItemsExtensions
     /// </summary>
     private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> DefaultNodeMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
-        => GetMenuContext(host).Select(menuCtx =>
+        // The viewer's presentation screen (#1803) joins the node + permission streams so the
+        // hide/show entry flips the instant the mark is written — the same reason this provider is
+        // reactive at all. Resolved ONCE here, outside the projection.
+        => GetMenuContext(host).CombineLatest(host.ViewerScreen(), (menuCtx, screen) =>
         {
             var (menuPath, _, menuNode, perms) = menuCtx;
             var items = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
@@ -182,7 +185,7 @@ public static class NodeMenuItemsExtensions
             // item carrying an emoji so it reads at a glance. The Order encodes the grouping — the
             // aggregator re-sorts every provider's items by Order, so InstanceSync's
             // "Synchronizations" item (Order 36) slots into the middle section on its own.
-            //   10-18  edit / organize            ✏️ 🔖 ➡️ 📋 🗑️
+            //   10-18  edit / organize            ✏️ 🔖 🕶️ ➡️ 📋 🗑️
             //   30-38  content / history / sync    📁 🕘 🔌 (🔄)
             //   50     lifecycle                   ♻️
 
@@ -205,6 +208,11 @@ public static class NodeMenuItemsExtensions
                            ?? accessService?.CircuitContext?.ObjectId;
             var pin = PinLayoutArea.GetMenuItem(menuPath, viewerId);
             if (pin != null) items.Add(pin with { Order = 12, Icon = "🔖" });
+
+            // Display-only, viewer-scoped, and never gated on a permission of the TARGET: marking a
+            // node hidden edits the viewer's own profile, not the node.
+            var presentation = PresentationLayoutArea.GetMenuItem(menuPath, viewerId, screen);
+            if (presentation != null) items.Add(presentation);
 
             if (!isProtectedRoot)
             {

@@ -5,6 +5,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -56,7 +57,55 @@ public static class OgCardLayoutArea
             return Observable.Return<UiControl?>(
                 Controls.Markdown(host.Localize("ui.ogCard.noTarget")));
 
-        var cards = targets
+        // The viewer's presentation screen (#1803), resolved ONCE on the render turn — an OG card is
+        // a name, an icon and a logo, which is exactly what a screen share must not reveal. Switch,
+        // so flipping the mode rebuilds the grid from the surviving targets instead of leaving the
+        // previous card streams running behind it.
+        return host.ViewerScreen()
+            .Select(screen => PaintedTargets(targets, screen))
+            .DistinctUntilChanged(TargetListComparer)
+            .Select(painted => BuildCards(host, painted))
+            .Switch();
+    }
+
+    /// <summary>
+    /// The targets this viewer may be shown. A screened-out target is DROPPED rather than redacted:
+    /// a card whose title reads "hidden" still tells the room that something is being hidden, and
+    /// the point of the mode is that nothing on the page draws attention to what is missing.
+    /// External URLs carry no mesh path and are never screened.
+    /// </summary>
+    internal static IReadOnlyList<string> PaintedTargets(
+        IReadOnlyList<string> targets, PresentationScreen screen)
+        => screen.Filter(targets, target => IsExternal(target) ? null : target.Trim('/')).ToArray();
+
+    /// <summary>Two target lists are the same render when they hold the same targets in order.</summary>
+    private static readonly IEqualityComparer<IReadOnlyList<string>> TargetListComparer =
+        new TargetListEquality();
+
+    private sealed class TargetListEquality : IEqualityComparer<IReadOnlyList<string>>
+    {
+        public bool Equals(IReadOnlyList<string>? x, IReadOnlyList<string>? y)
+            => ReferenceEquals(x, y) || (x is not null && y is not null && x.SequenceEqual(y, StringComparer.Ordinal));
+
+        public int GetHashCode(IReadOnlyList<string> obj)
+        {
+            var hash = new HashCode();
+            foreach (var item in obj)
+                hash.Add(item, StringComparer.Ordinal);
+            return hash.ToHashCode();
+        }
+    }
+
+    /// <summary>
+    /// The live card grid for the targets that survived the screen — nothing at all when none did
+    /// (an empty frame would be its own tell).
+    /// </summary>
+    private static IObservable<UiControl?> BuildCards(LayoutAreaHost host, IReadOnlyList<string> painted)
+    {
+        if (painted.Count == 0)
+            return Observable.Return<UiControl?>(null);
+
+        var cards = painted
             .Select(target => CardStream(host, target).StartWith(PlaceholderCard(target)))
             .ToArray();
 

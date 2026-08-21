@@ -3,9 +3,11 @@ using System.Reactive.Linq;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Completion;
@@ -73,7 +75,7 @@ internal sealed class ChatCompletionOrchestrator(
         logger?.LogDebug("[ChatComplete] query={Query}, mode={Mode}, currentNamespace={NS}",
             query, mode.Mode, currentNamespace);
 
-        return mode.Mode switch
+        var produced = mode.Mode switch
         {
             CompletionMode.PartitionList => ProducePartitionList(mode.Filter),
             CompletionMode.PartitionDrillDown => ProducePartitionDrillDown(mode.Partition!, mode.Filter),
@@ -81,6 +83,54 @@ internal sealed class ChatCompletionOrchestrator(
             CompletionMode.CurrentNodeAndGlobal => ProduceCurrentAndGlobal(reference, currentNamespace),
             _ => Observable.Empty<CompletionBatch>()
         };
+
+        // The caller's presentation screen (#1803) is applied to EVERY producer at this one seam —
+        // a completion list is a name list, and it is the surface most likely to be on screen while
+        // someone types during a demo. Display-only: nothing here changes a query, a permission or a
+        // node, and every filtered item is still reachable by typing its full path.
+        //
+        // 🚨 Resolved HERE, synchronously on the caller's turn, and captured as a value. Reading the
+        // ambient AccessContext from inside a producer's projection would land after a scheduler hop
+        // with the AsyncLocal gone — resolving to "nobody", whose screen hides nothing. That is the
+        // silent-failure shape, not a hypothetical.
+        return ApplyPresentationScreen(produced);
+    }
+
+    /// <summary>
+    /// Filters every batch through the caller's presentation screen and drops batches left empty
+    /// (an empty batch would render as a category heading with nothing under it).
+    /// </summary>
+    private IObservable<CompletionBatch> ApplyPresentationScreen(IObservable<CompletionBatch> batches)
+    {
+        var screen = hub.ServiceProvider.GetService<AccessService>().ViewerScreen(hub).Take(1);
+        return screen.SelectMany(viewerScreen => viewerScreen == PresentationScreen.Off
+            // The common case — mode off — must not pay for a projection over every batch.
+            ? batches
+            : batches
+                .Select(batch => batch with
+                {
+                    Items = viewerScreen.Filter(batch.Items, CompletionPath).ToList()
+                })
+                .Where(batch => batch.Items.Count > 0));
+    }
+
+    /// <summary>
+    /// The mesh path a completion stands for: its <see cref="AutocompleteItem.Path"/> when the
+    /// producer set one, else the absolute <c>@Path/</c> insert text
+    /// (<see cref="EnsureAbsoluteInsertText"/> makes source A's items absolute before they get
+    /// here). Null for a completion that is not a node at all — a tag keyword, a command — which
+    /// the screen then keeps, correctly: it hides paths, not vocabulary.
+    /// </summary>
+    internal static string? CompletionPath(AutocompleteItem item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.Path))
+            return item.Path;
+        var insert = item.InsertText;
+        if (string.IsNullOrEmpty(insert) || insert[0] != '@')
+            return null;
+        var path = insert[1..].TrimEnd('/');
+        // "@/Partition/…" is the partition-scoped form of the same absolute path.
+        return path.Length == 0 ? null : path;
     }
 
     #region PartitionList & PartitionDrillDown

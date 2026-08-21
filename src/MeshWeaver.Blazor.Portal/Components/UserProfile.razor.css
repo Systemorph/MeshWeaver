@@ -58,3 +58,12 @@
 ::deep .sign-out-form {
     display: flex;
 }
+
+/* Presentation mode (#1803): the header indicator sits left of the avatar, in the same optical
+   line, and is present ONLY while the mode is on — it is the "clearly indicated" half of the
+   quick toggle. */
+.presentation-indicator {
+    display: inline-flex;
+    align-items: center;
+    margin-right: 6px;
+}
