@@ -247,8 +247,30 @@ public static class NodeSetCompiler
             File.Exists(pdbPath) ? pdbPath : null,
             inputs,
             CompiledDependencies.Compute(
-                ReferencedAssemblyNames(artifact.DllPath), dependencyIdOf, toolchainId));
+                ReferencedAssemblyNames(artifact.DllPath), dependencyIdOf, toolchainId,
+                GeneratedInputDigestOf(inputs, generatorPaths)));
     }
+
+    /// <summary>
+    /// The stage-1 CONTENT KEY digest of a resolved compile (#1707 slice 4): the generated text
+    /// plus everything else that decides the bytes given that text. Shared by this bake and the
+    /// runtime's <c>MeshNodeCompilationService</c> — the two paths differ only in where the nodes
+    /// came from, so their keys must agree for identical content, which is what makes a CI bake's
+    /// bytes adoptable by a portal.
+    ///
+    /// <para>The NuGet-resolved assemblies are folded in as generator CANDIDATES: they are what
+    /// <see cref="GeneratorPipeline.RunSourceGenerators"/> discovers over, and a change in what a
+    /// <c>#r "nuget:"</c> directive resolves to changes the emitted bytes.</para>
+    /// </summary>
+    internal static string GeneratedInputDigestOf(
+        CompileInputs inputs, IReadOnlyList<string> nugetAssemblyPaths) =>
+        GeneratedInputIdentity.OfGeneratedInput(
+            inputs.AssemblyName,
+            inputs.GeneratedSource,
+            EmitPipeline.OptionsFingerprint,
+            GeneratedInputIdentity.CompilerIdentity,
+            GeneratedInputIdentity.AssemblyFileIdentities(
+                GeneratorPipeline.EffectiveGeneratorPaths(nugetAssemblyPaths)));
 
     /// <summary>
     /// The include reader the tree bake hands <see cref="NodeCompileShaping.ResolveCodeIncludes"/>:

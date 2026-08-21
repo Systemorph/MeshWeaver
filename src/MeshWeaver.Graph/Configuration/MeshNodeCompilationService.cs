@@ -167,7 +167,7 @@ internal class MeshNodeCompilationService(
     // path even though caller 1 had just finished). Entries clear once the
     // task settles so a future re-compile (e.g. after source edit) starts
     // fresh.
-    private readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inflightCompiles =
+    private readonly ConcurrentDictionary<string, Lazy<Task<CompileEmit>>> _inflightCompiles =
         new(StringComparer.Ordinal);
 
     // Query expansion lives in CodeQueryResolver (MeshWeaver.Compiler) so the NodeType
@@ -274,15 +274,23 @@ internal class MeshNodeCompilationService(
         => GetAssemblyLocationWithLog(node).Select(t => t.Path);
 
     /// <summary>
-    /// One compile attempt's outcome: the assembly path (null on failure), the
-    /// <see cref="ActivityLog"/>, and — the point of carrying it — the ONE source snapshot
-    /// the attempt was taken against. Every downstream stage
-    /// (<see cref="DiscoverSourceVersionSnapshot"/>, <see cref="BuildFailureDiagnostics"/>)
-    /// reuses <see cref="Sources"/> instead of re-discovering; see
+    /// What one Roslyn emit produced: where the bytes landed, and the stage-1 CONTENT KEY digest
+    /// of the fully generated input that produced them (#1707 slice 4 — see
+    /// <see cref="GeneratedInputIdentity"/>).
+    /// </summary>
+    private readonly record struct CompileEmit(string? Path, string? InputDigest);
+
+    /// <summary>
+    /// One compile attempt's outcome: the assembly path (null on failure), the CONTENT KEY digest
+    /// of the input that produced it (null when no compile ran — a disk-cache hit; the dependency
+    /// record then simply carries no content key), the <see cref="ActivityLog"/>, and — the point
+    /// of carrying it — the ONE source snapshot the attempt was taken against. Every downstream
+    /// stage (<see cref="DiscoverSourceVersionSnapshot"/>, <see cref="BuildFailureDiagnostics"/>)
+    /// reuses <c>Sources</c> instead of re-discovering; see
     /// <see cref="GetAssemblyLocationWithLog"/>.
     /// </summary>
     private readonly record struct CompileAttempt(
-        string? Path, ActivityLog Log, IReadOnlyList<MeshNode> Sources);
+        string? Path, string? InputDigest, ActivityLog Log, IReadOnlyList<MeshNode> Sources);
 
     /// <summary>
     /// Companion to <see cref="GetAssemblyLocation"/> that also surfaces the
@@ -325,7 +333,7 @@ internal class MeshNodeCompilationService(
         if (string.IsNullOrEmpty(node.NodeType))
         {
             logger.LogDebug("Node {NodePath} has no NodeType, skipping assembly compilation", node.Path);
-            return Observable.Return(new CompileAttempt(null,
+            return Observable.Return(new CompileAttempt(null, null,
                 AppendInfo(log, $"Skipped — node '{node.Path}' has no NodeType.")
                     .Finish((int)hub.Version, ActivityStatus.Succeeded),
                 Array.Empty<MeshNode>()));
@@ -405,6 +413,8 @@ internal class MeshNodeCompilationService(
                                 node.Path, cachedDllPath, effectiveLastModified);
                             return Observable.Return(new CompileAttempt(
                                 cachedDllPath,
+                                // No compile ran, so there is no generated input to key on.
+                                null,
                                 AppendInfo(log,
                                     $"Cache hit — returning {cachedDllPath} (effective LastModified={effectiveLastModified:O}).")
                                     .Finish((int)hub.Version, ActivityStatus.Succeeded),
@@ -415,7 +425,7 @@ internal class MeshNodeCompilationService(
                     // Hand the snapshot down as the override — CompileCore then short-circuits
                     // its own SnapshotSources to this authoritative point-in-time set.
                     return CompileCore(node, ntDef, selfPath, log, sources)
-                        .Select(t => new CompileAttempt(t.Path, t.Log, sources));
+                        .Select(t => new CompileAttempt(t.Path, t.InputDigest, t.Log, sources));
                 });
         });
     }
@@ -802,7 +812,7 @@ internal class MeshNodeCompilationService(
     /// no <c>await</c> on hub round-trips — both are the canonical deadlock
     /// patterns documented in <c>Doc/Architecture/AsynchronousCalls.md</c>.
     /// </summary>
-    private IObservable<(string? Path, ActivityLog Log)> CompileCore(
+    private IObservable<(string? Path, string? InputDigest, ActivityLog Log)> CompileCore(
         MeshNode node, NodeTypeDefinition? ntDef, string selfPath, ActivityLog log,
         IReadOnlyList<MeshNode>? sourcesOverride = null)
     {
@@ -928,8 +938,9 @@ internal class MeshNodeCompilationService(
                         ct => OnThreadPool(() =>
                             CompileAsync(codeFile, configuration, contentCollections, node, ct)),
                         _cacheOptions.RoslynCompileTimeout, "roslyn-compile", node.Path)
-                    .Select(actualPath =>
+                    .Select(emit =>
                     {
+                        var actualPath = emit.Path;
                         ActivityLog finalLog;
                         string? finalPath;
                         if (cacheService.IsDiskCacheEnabled)
@@ -959,7 +970,8 @@ internal class MeshNodeCompilationService(
                             finalLog = AppendInfo(discoveryLog,
                                 $"Compiled assembly loaded in-memory ({actualPath}).");
                         }
-                        return (finalPath, finalLog.Finish((int)hub.Version, ActivityStatus.Succeeded));
+                        return (finalPath, emit.InputDigest,
+                            finalLog.Finish((int)hub.Version, ActivityStatus.Succeeded));
                     })
                     // 🚨 THE SINGLE REPORTER of a compile failure. Every CompilationException —
                     // Roslyn diagnostics from the disk emit (EmitCompilationToDirectory) or the
@@ -970,7 +982,7 @@ internal class MeshNodeCompilationService(
                     // same diagnostics too, which double-counted every failure in prod and put a
                     // context-free record first — do not re-add a log next to a `throw new
                     // CompilationException`.
-                    .Catch<(string?, ActivityLog), CompilationException>(ex =>
+                    .Catch<(string?, string?, ActivityLog), CompilationException>(ex =>
                     {
                         var diag = CompileDiagnostics.BuildSourceDiscoveryReport(executedQueries, matchedCodePaths);
                         // 🚨 ORDER BY ACTIONABILITY — issue #1840. This report leads with the
@@ -997,7 +1009,8 @@ internal class MeshNodeCompilationService(
                         var failedLog = AppendError(discoveryLog,
                                 $"Compilation failed: {ex.Message}\n--- Source discovery ---\n{diag}")
                             .Finish((int)hub.Version, ActivityStatus.Failed);
-                        return Observable.Return<(string?, ActivityLog)>((null, failedLog));
+                        return Observable.Return<(string?, string?, ActivityLog)>(
+                            (null, null, failedLog));
                     });
             });
     }
@@ -1107,7 +1120,7 @@ internal class MeshNodeCompilationService(
         IReadOnlyList<MeshNode>? sourcesOverride = null)
         => GetAssemblyLocationWithLog(node, sourcesOverride).SelectMany(attempt =>
         {
-            var (assemblyLocation, log, sources) = attempt;
+            var (assemblyLocation, _, log, sources) = attempt;
             if (string.IsNullOrEmpty(assemblyLocation))
                 // Failed compile: capture the per-source-file Roslyn diagnostics (one
                 // LSP-style per-file-tree compilation of all this NodeType's src+test) so
@@ -1144,7 +1157,8 @@ internal class MeshNodeCompilationService(
                 // the abandoned load thread is the honest cost.
                 .SelectMany(snapshot => BoundLeg(
                     _ => OnThreadPool(() =>
-                        CompileResultFromAssembly(node, assemblyLocation, log, snapshot)),
+                        CompileResultFromAssembly(
+                            node, assemblyLocation, log, snapshot, attempt.InputDigest)),
                     _cacheOptions.AssemblyLoadTimeout, "assembly-load", node.Path))
                 // Re-Finish the log after CompileResultFromAssembly. CompileCore already
                 // Finished it Succeeded, but CompileResultFromAssembly's downstream steps
@@ -1435,9 +1449,14 @@ internal class MeshNodeCompilationService(
         });
     }
 
+    /// <param name="generatedInputDigest">The stage-1 CONTENT KEY digest of the compile that
+    /// produced these bytes (#1707 slice 4), or null when no compile ran in this process — a
+    /// disk-cache hit or the assembly-hydration shortcut. Null simply leaves the record without a
+    /// content key; the toolchain entry still governs.</param>
     private NodeCompilationResult? CompileResultFromAssembly(
         MeshNode node, string assemblyLocation, ActivityLog log,
-        ImmutableDictionary<string, long> compiledSources)
+        ImmutableDictionary<string, long> compiledSources,
+        string? generatedInputDigest = null)
     {
 
             var nodeName = cacheService.SanitizeNodeName(node.Path);
@@ -1538,7 +1557,11 @@ internal class MeshNodeCompilationService(
                 var dependencies = Compiler.CompiledDependencies.Compute(
                     assembly.GetReferencedAssemblies().Select(n => n.Name),
                     NodeTypeCompilationHelpers.DependencyIdResolverOf(hub),
-                    NodeTypeCompilationHelpers.ProcessToolchainId);
+                    NodeTypeCompilationHelpers.ProcessToolchainId,
+                    // The CONTENT KEY (#1707 slice 4) is completed here: stage 1 came from the
+                    // emit, and the PRUNED reference surfaces are the record's own entries — the
+                    // set Roslyn proved the bytes actually bind.
+                    generatedInputDigest);
 
                 return new NodeCompilationResult(
                     assemblyLocation, configurations, log, compiledSources,
@@ -1568,7 +1591,7 @@ internal class MeshNodeCompilationService(
     /// Compiles CodeConfiguration into an assembly using Roslyn.
     /// Supports both disk-based and in-memory compilation.
     /// </summary>
-    private Task<string?> CompileAsync(
+    private Task<CompileEmit> CompileAsync(
         CodeConfiguration? codeFile,
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
@@ -1582,12 +1605,12 @@ internal class MeshNodeCompilationService(
         // once the task settles so a future invalidation triggers a fresh
         // compile instead of returning the stale completed task.
         var lazy = _inflightCompiles.GetOrAdd(nodeName, n =>
-            new Lazy<Task<string?>>(() => RunCompileAndEvict(
+            new Lazy<Task<CompileEmit>>(() => RunCompileAndEvict(
                 codeFile, hubConfiguration, contentCollections, node, n, ct)));
         return lazy.Value;
     }
 
-    private async Task<string?> RunCompileAndEvict(
+    private async Task<CompileEmit> RunCompileAndEvict(
         CodeConfiguration? codeFile,
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
@@ -1605,7 +1628,7 @@ internal class MeshNodeCompilationService(
         }
     }
 
-    private async Task<string?> CompileAsyncCore(
+    private async Task<CompileEmit> CompileAsyncCore(
         CodeConfiguration? codeFile,
         string? hubConfiguration,
         IReadOnlyList<ContentCollectionConfig>? contentCollections,
@@ -1661,6 +1684,20 @@ internal class MeshNodeCompilationService(
         // Parse + compile via the toolchain (EmitPipeline, #1707) — source path and encoding
         // embedded (critical for PDB source linking); canonical options; generators applied.
         var assemblyName = $"DynamicNode_{nodeName}";
+
+        // 🚨 THE CONTENT KEY's first stage (#1707 slice 4), taken HERE — the last point at which
+        // the fully generated input exists as text, and before a single Roslyn call. It keys the
+        // exact thing the toolchain's full-MVID proxy stands in for: what Roslyn is actually fed.
+        // The NuGet-resolved assemblies ride in as generator candidates, so a change in what a
+        // `#r "nuget:"` resolves to moves the key (GeneratorPipeline.EffectiveGeneratorPaths is
+        // the same set RunSourceGenerators loads — one resolution, no drift).
+        var generatedInputDigest = GeneratedInputIdentity.OfGeneratedInput(
+            assemblyName,
+            source,
+            EmitPipeline.OptionsFingerprint,
+            GeneratedInputIdentity.CompilerIdentity,
+            GeneratedInputIdentity.AssemblyFileIdentities(
+                GeneratorPipeline.EffectiveGeneratorPaths(nugetAssemblyPaths)));
         var compilation = GeneratorPipeline.RunSourceGenerators(
             EmitPipeline.CreateEmitCompilation(
                 source,
@@ -1685,6 +1722,6 @@ internal class MeshNodeCompilationService(
         }
 
         logger.LogInformation("Successfully compiled assembly for {NodePath} to {ActualPath}", node.Path, actualPath);
-        return actualPath;
+        return new CompileEmit(actualPath, generatedInputDigest);
     }
 }
