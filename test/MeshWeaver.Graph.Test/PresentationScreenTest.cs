@@ -301,6 +301,42 @@ public class PresentationScreenTest
         seenB.Should().ContainSingle().Which.Should().BeSameAs(PresentationScreen.Off);
     }
 
+    [Fact]
+    public void ASeededScreen_RendersEvenWhenTheProfileStreamNeverProduces()
+    {
+        // 🚨 The regression this pins is a WALL-CLOCK HANG, not a wrong value, and it has no failing
+        // test to point at when it happens — the shard just runs out of clock. The node menu joins
+        // the viewer's screen into a CombineLatest; that leg subscribes the VIEWER's own User node,
+        // which need not exist. A stream that ERRORS is answered by LastKnownOnFault; a stream that
+        // merely never produces is not, and an unseeded join then renders nothing, forever, outside
+        // any method timeout.
+        var never = Observable.Never<PresentationScreen>();
+        var menuish = Observable.Return("items");
+
+        var seen = new List<string>();
+        using var _ = menuish
+            .CombineLatest(never.Seeded(), (items, screen) => $"{items}/{screen.HidesAnything}")
+            .Subscribe(seen.Add);
+
+        // Without the seed this list is EMPTY — which is exactly what a hung shard looks like.
+        seen.Should().Equal("items/False");
+    }
+
+    [Fact]
+    public void ASeededScreen_StillDeliversTheRealScreenWhenItArrives()
+    {
+        // The seed must not swallow the answer: it is a floor, not a replacement.
+        var source = new Subject<PresentationScreen>();
+        var seen = new List<PresentationScreen>();
+        using var _ = source.Seeded().Subscribe(seen.Add);
+
+        seen.Should().ContainSingle().Which.Should().BeSameAs(PresentationScreen.Off);
+        source.OnNext(Active("Acme"));
+
+        seen.Should().HaveCount(2);
+        seen[1].Hides("Acme").Should().BeTrue();
+    }
+
     // ── Autocomplete projection ────────────────────────────────────────────────────────────────
 
     [Fact]

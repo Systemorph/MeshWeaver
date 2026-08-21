@@ -94,19 +94,31 @@ second permission system above.
    `host.ViewerScreen()` in a layout area, `Access.ViewerScreen(hub)` elsewhere. Reading the ambient
    `AccessContext` from inside a later emission lands after a scheduler hop with the `AsyncLocal`
    gone: it resolves to "nobody", whose screen hides nothing. That is the silent-failure shape.
-2. **Do not paint before the screen is known.** "Hidden items never appear or flash" is the
+2. **Gate only what would LEAK; seed everything else.** A surface that joins the screen into a
+   `CombineLatest` renders nothing until that leg produces — and the leg is a subscription to the
+   *viewer's own* `User` node, which need not exist (a test identity, a caller mid-onboarding). A
+   stream that **errors** is answered by the last-known-screen rule below; a stream that merely
+   **never produces** is not, and the join then stalls silently and forever, outside any test's
+   method timeout. The symptom is a wall-clock hang with no failing test to point at.
+   So: use `ViewerScreen()` where painting early leaks (tiles, cards, completions), and
+   `ViewerScreen().Seeded()` where the screen decides only how something is **labelled** — the node
+   menu's Hide/Show entry, for instance, describes the node the viewer is already looking at, so a
+   briefly wrong label is cosmetic while a menu that never renders is not. "This viewer has no
+   profile" is a defined, screened-safe answer (they have marked nothing); it belongs in the stream
+   as a **value**, never as something to wait for.
+3. **Do not paint before the screen is known** *(on the surfaces that gate)*. "Hidden items never appear or flash" is the
    requirement; a view that renders neutral and filters a beat later shows the audience exactly what
    the mode was turned on to hide. Gate the first paint on the first emission — an anonymous or
    system caller resolves synchronously, so the gate costs those views nothing.
-3. **Ask `HidesAnything`, never `== PresentationScreen.Off`.** They are different values: a viewer
+4. **Ask `HidesAnything`, never `== PresentationScreen.Off`.** They are different values: a viewer
    who marked things and then turned the mode off holds a screen that is not `Off` and yet hides
    nothing. `Filter` is a no-op for them either way — but anything ELSE your fast-path's other
    branch does is not, and that is how an empty completion category came to be suppressed for
    someone who was not presenting at all.
-4. **Never widen the screen on a fault.** The resolver holds the last known screen across a faulting
+5. **Never widen the screen on a fault.** The resolver holds the last known screen across a faulting
    profile stream (and logs it) rather than resetting to "nothing hidden" mid-presentation. Do not
    add a timeout that falls back to the neutral screen — that fails open.
-5. **Never consult it for anything but rendering.** No read, no write, no route, no permission.
+6. **Never consult it for anything but rendering.** No read, no write, no route, no permission.
 
 ---
 
