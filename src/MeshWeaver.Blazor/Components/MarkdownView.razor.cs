@@ -64,6 +64,9 @@ public partial class MarkdownView
     private Func<string, string?>? _cellCode;
     private Action<string, string>? _recordCellBuffer;
 
+    // Which document _cellBuffers belongs to — see RecordCellBuffer.
+    private string? _bufferedDocument;
+
     // True once THIS view actually created the per-view kernel Activity node (owner resolved +
     // CreateActivityAndSubmit called). Gates the dispose-time teardown: deleting/cancelling an
     // activity that was never created would post to a nonexistent address and NotFound-storm the
@@ -329,8 +332,17 @@ public partial class MarkdownView
 
     private void RecordCellBuffer(string submissionId, string text)
     {
-        if (!string.IsNullOrEmpty(submissionId))
-            _cellBuffers[submissionId] = text;
+        if (string.IsNullOrEmpty(submissionId))
+            return;
+        // Scoped to the document, for the same reason the editor's key is: this view survives
+        // navigation, and a buffer keyed by the cell alone would let one page's typed text be Run
+        // on the next page that reuses the id.
+        if (!string.Equals(_bufferedDocument, NodePathForEditing, StringComparison.Ordinal))
+        {
+            _cellBuffers.Clear();
+            _bufferedDocument = NodePathForEditing;
+        }
+        _cellBuffers[submissionId] = text;
     }
 
     // Re-posts one executable block's submission to the per-view kernel activity — the cell
@@ -359,7 +371,8 @@ public partial class MarkdownView
     /// that has not been persisted yet. Unedited cells return the parsed submission unchanged.
     /// </summary>
     private SubmitCodeRequest ApplyCellBuffer(SubmitCodeRequest submission) =>
-        submission.Id is { Length: > 0 } id
+        string.Equals(_bufferedDocument, NodePathForEditing, StringComparison.Ordinal)
+        && submission.Id is { Length: > 0 } id
         && _cellBuffers.TryGetValue(id, out var buffer)
         && buffer != submission.Code
             ? submission with { Code = buffer }

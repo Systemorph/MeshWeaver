@@ -1,5 +1,7 @@
 @using MeshWeaver.Blazor.Components.Monaco
 @using MeshWeaver.Data
+@using MeshWeaver.Graph
+@using System.Text.Json
 @using MeshWeaver.Markdown
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
@@ -112,15 +114,26 @@
     /// <summary>
     /// Writes the debounced buffer back into THIS fence and nowhere else.
     ///
+    /// <para>🚨 The body is read and written through <c>MarkdownOverviewLayoutArea</c>'s shape-aware
+    /// pair, never <c>ContentAs&lt;MarkdownContent&gt;</c> alone. A markdown node's content arrives
+    /// as a typed record on its own hub, as a bare <c>string</c>, and as a <c>JsonElement</c> frame
+    /// (<c>$type: MarkdownDocument</c> among them) across a query seam — and a typed-only read
+    /// returns null for the rest, so the save would silently do NOTHING on exactly the pages that
+    /// still render fine. That is the repository's canonical silent-failure shape.</para>
+    ///
     /// <para>A node whose body no longer holds the fence is deliberately left UNTOUCHED — returning
     /// it unchanged makes the merge patch empty. That is the only safe answer: the alternative
-    /// ("write the whole body") turns a renamed or deleted fence into a wiped exercise.</para>
+    /// ("write the whole body") turns a renamed or deleted fence into a wiped exercise. A node that
+    /// is not markdown at all is left untouched too: the write is reached from a rendered markdown
+    /// cell, so that is unreachable rather than an error worth throwing at a keystroke.</para>
     ///
-    /// <para>The derived fields travel with the edit. <see cref="MarkdownContent.PrerenderedHtml"/>
-    /// and <see cref="MarkdownContent.CodeSubmissions"/> are projections of the body, and
-    /// CodeSubmissions is what a Run re-posts — leaving them stale would serve the OLD code back on
-    /// the next render and run it. Everything the shape does not derive (authors, tags, abstract,
-    /// thumbnail, and the [JsonExtensionData] round-trip buffer) is carried over untouched.</para>
+    /// <para>The derived artefacts travel WITH the edit, exactly as
+    /// <c>MeshOperations.WithRerenderedMarkdown</c> does for an agent's edit:
+    /// <see cref="MarkdownContent.PrerenderedHtml"/>, <see cref="MarkdownContent.CodeSubmissions"/>
+    /// — which is what a Run re-posts, so a stale one would serve AND RUN the old code — and the
+    /// node-level <c>PreRenderedHtml</c> mirror, which the Overview and prerender paths read
+    /// instead of the content. Everything the shape does not derive (authors, tags, abstract,
+    /// thumbnail, and the [JsonExtensionData] round-trip buffer) is preserved by construction.</para>
     /// </summary>
     private void SaveFence(string value)
     {
@@ -129,30 +142,51 @@
         if (_cache is null || string.IsNullOrEmpty(path) || string.IsNullOrEmpty(id))
             return;
 
-        _cache.Update(path!,
-                current =>
-                {
-                    var content = current.ContentAs<MarkdownContent>(Hub.JsonSerializerOptions);
-                    if (content is null)
-                        return current;
-                    var updated = MarkdownFenceEditing.ReplaceFenceBody(content.Content, id, value);
-                    if (updated is null || updated == content.Content)
-                        return current;
-                    var reparsed = MarkdownContent.Parse(updated, currentNodePath: path);
-                    return current with
-                    {
-                        Content = content with
-                        {
-                            Content = updated,
-                            PrerenderedHtml = reparsed.PrerenderedHtml,
-                            CodeSubmissions = reparsed.CodeSubmissions,
-                        }
-                    };
-                },
+        _cache.Update(path!, current => WithFenceBody(current, id!, value, Hub.JsonSerializerOptions),
                 Hub.JsonSerializerOptions)
             .Subscribe(_ => { },
                 ex => _logger?.LogWarning(ex,
                     "Markdown cell auto-save failed for {Submission} in {Path}", id, path));
+    }
+
+    /// <summary>
+    /// The node with one fence's body replaced and every derived artefact rebuilt, or the node
+    /// UNCHANGED when it holds no such fence. Static and dependency-free so the whole write is
+    /// pinned without a circuit — see <c>MarkdownCellEditingTest</c>.
+    /// </summary>
+    public static MeshNode WithFenceBody(
+        MeshNode current, string submissionId, string value, JsonSerializerOptions options)
+    {
+        var markdown = MarkdownOverviewLayoutArea.GetMarkdownContent(current);
+        var updated = MarkdownFenceEditing.ReplaceFenceBody(markdown, submissionId, value);
+        if (updated is null || updated == markdown)
+            return current;
+
+        MeshNode written;
+        try
+        {
+            written = MarkdownOverviewLayoutArea.WithMarkdownContent(current, updated, options);
+        }
+        catch (InvalidOperationException)
+        {
+            // Not a markdown node after all — leave it alone rather than guess at its shape.
+            return current;
+        }
+
+        var reparsed = MarkdownContent.Parse(updated, current.Namespace, current.Path);
+        return written.Content is MarkdownContent content
+            ? written with
+            {
+                Content = content with
+                {
+                    PrerenderedHtml = reparsed.PrerenderedHtml,
+                    CodeSubmissions = reparsed.CodeSubmissions,
+                },
+                PreRenderedHtml = reparsed.PrerenderedHtml,
+            }
+            // A bare-string body carries no derived fields of its own; the node-level mirror is the
+            // only projection there is, and the Overview reads it.
+            : written with { PreRenderedHtml = reparsed.PrerenderedHtml };
     }
 
     public void Dispose() => _autoSave?.Dispose();
