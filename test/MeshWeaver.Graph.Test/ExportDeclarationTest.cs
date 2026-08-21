@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+using System.Reflection;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Messaging;
@@ -21,25 +24,44 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class ExportDeclarationTest
 {
-    /// <summary>
-    /// A configuration whose type declared nothing has no declaration — whatever the node type is
-    /// called. The two names here are exactly the ones the deleted fallback answered for.
-    /// </summary>
-    [Theory]
-    [InlineData("Deck")]
-    [InlineData("Publish/Deck")]
-    [InlineData("Markdown")]
-    [InlineData(null)]
-    public void UndeclaredType_HasNoExports_WhateverItIsCalled(string? nodeType)
+    /// <summary>A configuration whose type declared nothing has no declaration.</summary>
+    [Fact]
+    public void UndeclaredType_HasNoExports()
     {
-        // The node type's name is deliberately unused by the read: it is not an input to the
-        // question any more, which is the whole point. It stays a parameter so the case names
-        // record WHICH names a fallback used to answer for.
-        Assert.NotNull(nodeType ?? "(null)");
-
         var configuration = new MessageHubConfiguration(null, new Address("X"));
 
         Assert.Null(configuration.Get<ExportDeclaration>());
+    }
+
+    /// <summary>
+    /// 🚨 <b>No public export API may take a node type at all</b> — the guard that actually bites.
+    ///
+    /// <para>A test that merely reads an undeclared configuration cannot tell the two designs
+    /// apart: <c>Get&lt;ExportDeclaration&gt;()</c> returns null either way, so it would pass
+    /// unchanged if <c>Resolve(configuration, nodeType)</c> came back. What distinguishes them is
+    /// the SHAPE OF THE SURFACE — the deleted fallback existed because a reader could ask "and what
+    /// is this type called?", and the fix was to stop offering anywhere to ask. This asserts that:
+    /// no public member of the export declaration surface accepts a node-type parameter, so
+    /// reintroducing a name-based resolver fails here rather than silently restoring the guessing.
+    /// (Copilot review of this PR, which correctly called the first version tautological.)</para>
+    /// </summary>
+    [Fact]
+    public void NoPublicExportApi_AcceptsANodeType()
+    {
+        var offenders = new[] { typeof(ExportDeclaration), typeof(ExportDeclarationExtensions) }
+            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance))
+            .Where(m => m.GetParameters().Any(p =>
+                p.Name is not null
+                && p.Name.Contains("nodeType", StringComparison.OrdinalIgnoreCase)))
+            .Select(m => $"{m.DeclaringType!.Name}.{m.Name}({string.Join(", ", m.GetParameters().Select(p => p.Name))})")
+            .ToArray();
+
+        Assert.True(offenders.Length == 0,
+            "The export declaration is resolved from the type's hub CONFIGURATION alone. A member "
+            + "taking a node type is how the deleted suffix fallback was expressed, and its failure "
+            + "mode is silent — an unrecognised type composes as a plain document and a deck-shaped "
+            + "node exports an EMPTY file from a green activity. Found: "
+            + string.Join("; ", offenders));
     }
 
     /// <summary>A type that declares gets exactly what it declared — the only route in.</summary>
