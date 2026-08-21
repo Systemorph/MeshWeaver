@@ -497,9 +497,11 @@ if (gateBakeConfigured && !bakeSweepEnabled)
             + "({SweepKey}!=true), so the gate has nothing to measure. It has been DISARMED rather "
             + "than left registered and permanently green — a gate that reports healthy on every "
             + "rollout protects nothing and hides that it protects nothing. Enable the sweep to arm "
-            + "it, or set {GateKey}=false so the configuration stops claiming this protection.",
+            + "it, or set {GateKeyToDisable}=false so the configuration stops claiming this "
+            + "protection.",
             NodeTypeBakeGateExtensions.EnabledConfigKey,
-            DynamicTypePreWarmerHostedService.EnabledConfigKey);
+            DynamicTypePreWarmerHostedService.EnabledConfigKey,
+            NodeTypeBakeGateExtensions.EnabledConfigKey);
 
 // The escape hatch is a HOLE in an armed gate — small and deliberate, but a hole. Say so at boot,
 // so "the gate is on" and "the gate still refuses an unproven bake" cannot drift apart silently in
