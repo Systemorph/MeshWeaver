@@ -97,22 +97,42 @@ internal sealed class ChatCompletionOrchestrator(
     }
 
     /// <summary>
-    /// Filters every batch through the caller's presentation screen and drops batches left empty
-    /// (an empty batch would render as a category heading with nothing under it).
+    /// Filters every batch through the caller's presentation screen and drops batches the screen
+    /// left empty (a heading with nothing under it would itself say that something was removed).
+    ///
+    /// <para>🚨 The fast-path asks <see cref="PresentationScreen.HidesAnything"/>, NOT
+    /// <c>== PresentationScreen.Off</c>. A viewer who has marked things but currently has the mode
+    /// OFF holds a screen that is not <c>Off</c> and yet hides nothing — reference equality would
+    /// send them down the filtering branch, where <c>Filter</c> is correctly a no-op but the
+    /// empty-batch drop is NOT, silently suppressing a legitimately empty category for someone who
+    /// is not presenting at all. Whether a screen can hide anything is the question; ask it.</para>
     /// </summary>
     private IObservable<CompletionBatch> ApplyPresentationScreen(IObservable<CompletionBatch> batches)
     {
         var screen = hub.ServiceProvider.GetService<AccessService>().ViewerScreen(hub).Take(1);
-        return screen.SelectMany(viewerScreen => viewerScreen == PresentationScreen.Off
-            // The common case — mode off — must not pay for a projection over every batch.
+        return screen.SelectMany(viewerScreen => Screened(batches, viewerScreen));
+    }
+
+    /// <summary>
+    /// The projection itself, as a pure observable-in / observable-out function of the screen —
+    /// separated from the identity resolution above so the "hides nothing" leg is directly
+    /// executable by a test, with no hub and no AccessContext. That leg is exactly the one that was
+    /// wrong, and a test that could only assert the PREDICATE would not have caught it.
+    /// </summary>
+    /// <param name="batches">The producers' batches.</param>
+    /// <param name="screen">The caller's presentation screen.</param>
+    internal static IObservable<CompletionBatch> Screened(
+        IObservable<CompletionBatch> batches, PresentationScreen screen)
+        => !screen.HidesAnything
+            // Nothing to hide — mode off, or on with nothing marked. Pass the batches through
+            // untouched, byte for byte, so a non-presenting viewer's completions are unaffected.
             ? batches
             : batches
                 .Select(batch => batch with
                 {
-                    Items = viewerScreen.Filter(batch.Items, CompletionPath).ToList()
+                    Items = screen.Filter(batch.Items, CompletionPath).ToList()
                 })
-                .Where(batch => batch.Items.Count > 0));
-    }
+                .Where(batch => batch.Items.Count > 0);
 
     /// <summary>
     /// The mesh path a completion stands for: its <see cref="AutocompleteItem.Path"/> when the
