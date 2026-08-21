@@ -120,6 +120,9 @@ public partial class CollaborativeMarkdownView
     private Func<string, string?>? _cellCode;
     private Action<string, string>? _recordCellBuffer;
 
+    // Which document _cellBuffers belongs to — see RecordCellBuffer.
+    private string? _bufferedDocument;
+
     private Address ResolveActivityAddress()
     {
         var ownerPath = KernelOwnerPath();
@@ -603,8 +606,17 @@ public partial class CollaborativeMarkdownView
 
     private void RecordCellBuffer(string submissionId, string text)
     {
-        if (!string.IsNullOrEmpty(submissionId))
-            _cellBuffers[submissionId] = text;
+        if (string.IsNullOrEmpty(submissionId))
+            return;
+        // Scoped to the document, for the same reason the editor's key is: this view survives
+        // navigation, and a buffer keyed by the cell alone would let one page's typed text be Run
+        // on the next page that reuses the id.
+        if (!string.Equals(_bufferedDocument, BoundNodePath, StringComparison.Ordinal))
+        {
+            _cellBuffers.Clear();
+            _bufferedDocument = BoundNodePath;
+        }
+        _cellBuffers[submissionId] = text;
     }
 
     // Re-posts one executable block's submission to the per-view kernel activity — the cell
@@ -633,7 +645,8 @@ public partial class CollaborativeMarkdownView
     /// that has not been persisted yet. Unedited cells return the parsed submission unchanged.
     /// </summary>
     private SubmitCodeRequest ApplyCellBuffer(SubmitCodeRequest submission) =>
-        submission.Id is { Length: > 0 } id
+        string.Equals(_bufferedDocument, BoundNodePath, StringComparison.Ordinal)
+        && submission.Id is { Length: > 0 } id
         && _cellBuffers.TryGetValue(id, out var buffer)
         && buffer != submission.Code
             ? submission with { Code = buffer }
