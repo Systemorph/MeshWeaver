@@ -54,14 +54,15 @@
          the module static-asset provider (path-convention mapping + fingerprint/precompressed
          endpoint variants; see UiExtensibility.md "Razor assets from a runtime-loaded
          assembly"), not just this list. -->
-    <!-- Service modules NOT flippable for compile-time coupling (reasons: PR #1681) — Speech
-         (ISpeechTranscriber lives in the module; no contract split), Social (ApiCredentialNodeType
-         compiles against PlatformCredential; registration deliberately host-side; RELOCATING to
-         MeshWeaver.SocialMedia per the modularization program's task 63 (a program-plan task, not
-         a GitHub issue) — double-ship, this copy is the master until the flip:
-         see src/MeshWeaver.Social/README.md), Hosting.Grpc
-         (UseMeshWeaverGrpcWebWhenInstalled is middleware-order-coupled, cannot ride the endpoint hook). -->
-    <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
+    <!-- Service modules NOT flippable for compile-time coupling (reasons: PR #1681). Only ONE is
+         left: Hosting.Grpc, whose UseMeshWeaverGrpcWebWhenInstalled is middleware-order-coupled and
+         cannot ride the endpoint hook.
+         Speech is no longer among them — the coupling WAS "ISpeechTranscriber lives in the module",
+         and splitting the interface into MeshWeaver.Speech.Contract removed it; it is on the
+         closure lane below.
+         Social is relocating to MeshWeaver.SocialMedia (the modularization program's task 63, a
+         program-plan task rather than a GitHub issue) and already ships from the closure lane here;
+         see src/MeshWeaver.Social/README.md. -->
     <MeshModule Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Grpc/MeshWeaver.Hosting.Grpc.csproj" />
 
     <!-- Flipped off the ships-the-bits ProjectReference (#1644 step 2). -->
@@ -94,6 +95,11 @@
          same-identity prune is written around. -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
+    <!-- Voice. The compile-time coupling that pinned it to the thin lane is gone: ISpeechTranscriber
+         moved to MeshWeaver.Speech.Contract, so the portal's transcribe endpoint and the chat mic
+         name the interface without carrying the Whisper client, and Memex.LocalMesh installs the
+         module through Modules:Assemblies like everyone else. -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <!-- Import + its PRIVATE closure: the SIX MeshWeaver.DataSetReader* projects (the base, Csv,
          Excel, Excel.BinaryFormat, Excel.OpenXmlFormat, Excel.Utils) and MeshWeaver.DataStructures

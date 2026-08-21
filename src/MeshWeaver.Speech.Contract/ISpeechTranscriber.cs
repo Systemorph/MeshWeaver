@@ -8,7 +8,8 @@ public record SpeechTranscript(string Text)
     public string? Language { get; init; }
 }
 
-/// <summary>Per-call knobs; all optional — omitted values fall back to <see cref="SpeechConfiguration"/>.</summary>
+/// <summary>Per-call knobs; all optional — omitted values fall back to the implementation's own
+/// configuration (<c>SpeechConfiguration</c>, which lives with the Whisper client, not here).</summary>
 public record SpeechTranscriptionOptions
 {
     /// <summary>Override the configured Whisper language for this call (e.g. force <c>"fr"</c>).</summary>
@@ -29,7 +30,8 @@ public record SpeechTranscriptionOptions
 /// </summary>
 public interface ISpeechTranscriber
 {
-    /// <summary>True when a Whisper endpoint is configured and speech is enabled (mirrors <see cref="SpeechConfiguration.IsConfigured"/>).</summary>
+    /// <summary>True when the implementation is configured and speech is enabled. A host that has no
+/// transcriber at all resolves null instead — both mean "no voice", and every caller handles it.</summary>
     bool IsConfigured { get; }
 
     /// <summary>
