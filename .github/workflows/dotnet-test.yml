@@ -1401,6 +1401,106 @@ jobs:
         path: ${{ runner.temp }}/bake-plugins
         retention-days: 7
 
+
+  # ─────────────────── LANDED-MODULE GATE (Systemorph/MeshWeaver#1980) ───────────────────
+  # `plugin-gate` above covers the IN-MESH half of MeshWeaver.Plugins — the NodeType `Source/*.cs`
+  # the mesh Roslyn-compiles at runtime. It never builds that repo's `src/`, and since
+  # `0b3b4266f` ("Fourteen modules leave the platform") that is where sixteen COMPILED modules
+  # live: the AI packs, Observability, Markdown.Export, Mcp, Teams, the mail/blob/index adapters.
+  # They reference the platform by PROJECT path (`$(MeshWeaverRoot)`) and take their NuGet pins
+  # from its central `Directory.Packages.props`, so a platform change reaches them directly — and
+  # nothing in this repo compiled them. Their only check was the plugins repo's own CI, which
+  # builds against whatever platform ref that run resolves, i.e. AFTER the break is on main.
+  #
+  # 🚨 Both halves of that coupling have already fired:
+  #   • a DELETED PUBLIC API — `eafd353ed` removed `AddTracking()`; three NodeTypes kept calling
+  #     it, CI stayed green, and all three production portals hit `DynamicTypePreWarmer:
+  #     REFUSING READINESS` at the next framework bump.
+  #   • a DELETED PACKAGE PIN — on 2026-08-21 `Microsoft.Extensions.Options` left this repo's
+  #     central list and every landed module failed `NU1010` on the plugins repo's main and on
+  #     each of its six open PRs at once. This repo was green throughout. #1985 restored the
+  #     pins reactively, which is the shape this gate exists to replace.
+  # A module that does not build produces no bundle, and the capability simply vanishes from the
+  # image — a failure with no error anywhere near the change that caused it.
+  #
+  # ⏱️ ONE `dotnet build` over a generated solution, not sixteen: the platform's project graph is
+  # then compiled once rather than per module. Measured at 73 s wall-clock for all sixteen against
+  # a warm tree; the timeout below is set well above that and the step PRINTS its own elapsed time,
+  # so if this ever becomes the long pole it is re-scoped from evidence rather than by guess.
+  landed-modules-gate:
+    name: "Landed modules compile against this PR"
+    needs: [preflight, build]
+    # Identical guard to `plugin-gate`, for the identical reason: a fork PR cannot read the private
+    # plugins repo, and a fork cannot break its consumers in a way this run could prove either way.
+    # Expressed as a FORK check — NEVER as "is the credential set?", which is the same shape with
+    # none of the safety (a missing input must fail RED in preflight, not skip green here).
+    if: needs.build.result == 'success' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      failure: ${{ steps.modules.outputs.failure }}
+    steps:
+    - uses: actions/checkout@v7
+      with: { fetch-depth: 1 }
+    - uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 10.0.x
+    # 🚨 NO `continue-on-error`. See plugin-gate: on this path the deploy key is a PRECONDITION
+    # proven by preflight, so a checkout failure is a configuration fault and must be loud.
+    - name: Check out MeshWeaver.Plugins
+      uses: actions/checkout@v7
+      with:
+        repository: Systemorph/MeshWeaver.Plugins
+        ref: main
+        path: plugins-repo
+        ssh-key: ${{ secrets.PLUGINS_REPO_SSH_KEY }}
+        fetch-depth: 1
+    - name: "Build every landed module against this PR"
+      id: modules
+      run: |
+        set -uo pipefail
+        cd "$GITHUB_WORKSPACE/plugins-repo"
+        # The module set is DISCOVERED, never listed here: a list in this repo would go stale the
+        # first time the plugins repo adds a module, and it would go stale SILENTLY — the gate
+        # would keep passing while covering less. `*.Test` projects are excluded: this gate is
+        # about the shipped bundles, and the plugins repo runs their tests itself.
+        mapfile -t projects < <(find src -mindepth 2 -maxdepth 2 -name '*.csproj' \
+                                  ! -name '*.Test.csproj' | sort)
+        if [ "${#projects[@]}" -eq 0 ]; then
+          echo "::error::found no module projects under plugins-repo/src — a gate that covers nothing must not report green. Either the layout moved (update the discovery below) or the checkout is wrong."
+          echo "failure=no module projects discovered under plugins-repo/src" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        echo "Building ${#projects[@]} landed module(s) against this PR's platform tree:"
+        printf '  %s\n' "${projects[@]}"
+        dotnet new sln -n LandedModules >/dev/null
+        for p in "${projects[@]}"; do dotnet sln LandedModules.sln add "$p" >/dev/null; done
+        start=$SECONDS
+        # -warnaserror matches how these modules are actually shipped (the plugins repo inherits
+        # this repo's Directory.Build.props), so a warning introduced here fails here.
+        if ! dotnet build LandedModules.sln -c Release -warnaserror \
+               -p:MeshWeaverRoot="$GITHUB_WORKSPACE" 2>&1 | tee "${RUNNER_TEMP:-/tmp}/landed-modules.log"; then
+          # Report the FIRST real diagnostic, so the required check downstream can name the cause
+          # instead of saying "see the job". NU1010 (a pin this repo deleted) and CS0117 (an API
+          # this repo deleted) are the two shapes this gate was built for and both surface here.
+          first="$(grep -oE '(error|warning) [A-Z]+[0-9]+:.*' "${RUNNER_TEMP:-/tmp}/landed-modules.log" | head -1 | cut -c1-300)"
+          echo "::error::a landed module in MeshWeaver.Plugins does not build against this PR. ${first:-see the job log}"
+          echo "failure=${first:-a landed module in MeshWeaver.Plugins does not build against this PR}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### ❌ Landed modules do not build against this PR"
+            echo
+            echo "These modules live in \`MeshWeaver.Plugins/src\` and reference this repo by project path."
+            echo "A platform API or package pin they depend on was removed or renamed."
+            echo
+            echo '```'
+            grep -E '(error|warning) [A-Z]+[0-9]+:' "${RUNNER_TEMP:-/tmp}/landed-modules.log" | sort -u | head -20
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+        fi
+        echo "### ✅ ${#projects[@]} landed modules build against this PR ($((SECONDS - start))s)" >> "$GITHUB_STEP_SUMMARY"
+        echo "all ${#projects[@]} landed modules built in $((SECONDS - start))s"
+
   # ────────────────────────── CLIENTS GATE ──────────────────────────
   # Folds the `Clients` workflow's verdict into the repo's ONE required status check (#1568).
   #
@@ -1707,7 +1807,7 @@ jobs:
     # clients-gate is a NEEDS on the same principle as plugin-gate/doc-gate/licence-gate: a red
     # Clients workflow can stop ALL image publication (#1568), so it must be able to fail the
     # repo's only required status check.
-    needs: [precheck, preflight, build, test, plugin-gate, doc-gate, licence-gate, clients-gate]
+    needs: [precheck, preflight, build, test, plugin-gate, landed-modules-gate, doc-gate, licence-gate, clients-gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1988,6 +2088,22 @@ jobs:
     # 2026-08-10 it did exactly that for a `Store/Catalog` verdict of `compile=Ok render=ok
     # tests=FAILED`, on PR #1043 whose whole diff was MessageService.cs plus two test files
     # (issue #1077). Keep the API sentence CONDITIONAL on the phase actually being `compile`.
+    - name: Fail if a landed module does not build
+      if: needs.landed-modules-gate.result == 'failure'
+      env:
+        # Empty whenever the gate died before producing a diagnostic (checkout fault, no projects
+        # discovered). Degrades to "see the job", which is true either way.
+        MODULE_VERDICT: ${{ needs.landed-modules-gate.outputs.failure }}
+      run: |
+        set -uo pipefail
+        verdict="$(printf '%s' "${MODULE_VERDICT}" | head -1)"
+        echo "::error::A module in MeshWeaver.Plugins/src does not build against this PR. ${verdict:-See the 'Landed modules compile against this PR' job.}"
+        echo "These sixteen modules reference this repo by PROJECT path and take their NuGet pins"
+        echo "from its central Directory.Packages.props, so removing a public API or a PackageVersion"
+        echo "here breaks them. A module that does not build produces no bundle, and the capability"
+        echo "disappears from the image with no error near the change that caused it."
+        echo "Fix forward here, or land the plugins-side change first and say so in the PR body."
+        exit 1
     - name: Fail if the plugin gate failed
       if: needs.plugin-gate.result == 'failure'
       env:
