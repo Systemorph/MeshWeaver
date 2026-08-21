@@ -120,7 +120,11 @@ public class StreamRoutedSilenceGateTest(ITestOutputHelper output) : OrleansShar
             "the memory stream provider must expose its subscription registry — without it the "
             + "router cannot ask the question and this gate would be vacuous");
         var streamId = provider.GetStream<IMessageDelivery>(address.ToString()).StreamId;
-        var subscriptions = await manager!.GetSubscriptions(StreamProviders.Memory, streamId);
+        // Bounded, like every other wait here: the registry call is exactly the class of thing this
+        // PR is about, so a wedged one must fail this precondition FAST and name itself rather than
+        // ride the [Fact] timeout, where it would look like the gate's own assertion hanging.
+        var subscriptions = await manager!.GetSubscriptions(StreamProviders.Memory, streamId)
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         subscriptions.Should().BeEmpty(
             $"nothing has ever registered {address}, so its stream must have no subscriber — that "
             + "is the precondition the gate is about");
