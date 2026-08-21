@@ -1065,6 +1065,54 @@ public static class MemexConfiguration
     /// Starts the Memex portal application with the specified App component type.
     /// Pattern taken from MeshWeaver.Portal's StartPortalApplication.
     /// </summary>
+    /// <summary>
+    /// Sets the platform's security response headers on every response, via
+    /// <see cref="Microsoft.AspNetCore.Http.HttpResponse.OnStarting(System.Func{System.Threading.Tasks.Task})"/>
+    /// so they also land on static-file, error and redirect responses. Idempotent: the header
+    /// values are SET (not appended) and the Report-Only CSP is only written when absent, so
+    /// calling this twice on one host (the web pipeline in <see cref="StartMemexApplication{TApp}"/>
+    /// plus the deployed host's outermost layer) is safe and keeps endpoints mapped outside the
+    /// web pipeline (/api, /login, robots.txt) covered.
+    /// <para>The CSP is deliberately permissive — a superset of what the app already loads
+    /// ('unsafe-inline'/'unsafe-eval', blob:/data:, https:/wss:) so the Blazor circuit, the Monaco
+    /// editor and embedded https content keep working — and ships as
+    /// <c>Content-Security-Policy-Report-Only</c> first; renaming the header to
+    /// <c>Content-Security-Policy</c> enforces it once it is proven quiet.</para>
+    /// </summary>
+    public static WebApplication UseMemexSecurityHeaders(this WebApplication app)
+    {
+        app.Use((ctx, next) =>
+        {
+            var headers = ctx.Response.Headers;
+            ctx.Response.OnStarting(() =>
+            {
+                headers["X-Content-Type-Options"] = "nosniff";
+                headers["Cross-Origin-Resource-Policy"] = "same-site";
+                headers["Permissions-Policy"] =
+                    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
+                    "magnetometer=(), microphone=(), payment=(), usb=()";
+                if (!headers.ContainsKey("Content-Security-Policy-Report-Only"))
+                    headers["Content-Security-Policy-Report-Only"] =
+                        "default-src 'self'; " +
+                        "base-uri 'self'; " +
+                        "object-src 'none'; " +
+                        "frame-ancestors 'self'; " +
+                        "img-src 'self' data: blob: https:; " +
+                        "media-src 'self' data: blob: https:; " +
+                        "font-src 'self' data: https:; " +
+                        "style-src 'self' 'unsafe-inline' https:; " +
+                        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; " +
+                        "worker-src 'self' blob:; " +
+                        "connect-src 'self' https: wss:; " +
+                        "frame-src 'self' https:; " +
+                        "form-action 'self' https:";
+                return Task.CompletedTask;
+            });
+            return next();
+        });
+        return app;
+    }
+
     public static void StartMemexApplication<TApp>(this WebApplication app) where TApp : IComponent
     {
         var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(MemexConfiguration));
@@ -1118,50 +1166,11 @@ public static class MemexConfiguration
             return next();
         });
 
-        // Security response headers — set once, early, for every real response (health
-        // probes already short-circuited above, so they stay header-free and minimal).
-        // These harden the browser surface WITHOUT changing what the app may load: the CSP
-        // is deliberately permissive — it keeps 'unsafe-inline'/'unsafe-eval', blob:/data:
-        // and https:/wss:, so the Blazor Server circuit, the Monaco editor (eval + blob
-        // workers) and embedded https content keep working. It only adds the structural
-        // directives an OWASP ZAP scan flagged as missing (a default-src fallback so every
-        // fetch directive is defined, object-src 'none', base-uri 'self', frame-ancestors
-        // 'self'). Tightening it further (per-response nonces, dropping 'unsafe-inline') is
-        // a separate hardening pass, not this change.
-        //
-        // The CSP ships as Content-Security-Policy-Report-Only FIRST: it cannot block a
-        // single request, so it is safe to enforce on the production registry immediately
-        // while any would-be violations surface in the browser console. A one-line follow-up
-        // renames the header to Content-Security-Policy to enforce it once it is proven quiet.
-        app.Use((ctx, next) =>
-        {
-            var headers = ctx.Response.Headers;
-            ctx.Response.OnStarting(() =>
-            {
-                headers["X-Content-Type-Options"] = "nosniff";
-                headers["Cross-Origin-Resource-Policy"] = "same-site";
-                headers["Permissions-Policy"] =
-                    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
-                    "magnetometer=(), microphone=(), payment=(), usb=()";
-                if (!headers.ContainsKey("Content-Security-Policy-Report-Only"))
-                    headers["Content-Security-Policy-Report-Only"] =
-                        "default-src 'self'; " +
-                        "base-uri 'self'; " +
-                        "object-src 'none'; " +
-                        "frame-ancestors 'self'; " +
-                        "img-src 'self' data: blob: https:; " +
-                        "media-src 'self' data: blob: https:; " +
-                        "font-src 'self' data: https:; " +
-                        "style-src 'self' 'unsafe-inline' https:; " +
-                        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; " +
-                        "worker-src 'self' blob:; " +
-                        "connect-src 'self' https: wss:; " +
-                        "frame-src 'self' https:; " +
-                        "form-action 'self' https:";
-                return Task.CompletedTask;
-            });
-            return next();
-        });
+        // Security response headers on every response — see UseMemexSecurityHeaders. This
+        // covers the web pipeline; the deployed Distributed host ALSO calls it as its
+        // outermost middleware so endpoints mapped outside this pipeline (/api, /login,
+        // robots.txt) are covered too. Idempotent: the same header values, set once.
+        app.UseMemexSecurityHeaders();
 
         // `@/` is a markdown-authoring / autocomplete prefix — not a URL segment.
         // Authors occasionally leak `@/` into raw HTML hrefs or users paste broken links.

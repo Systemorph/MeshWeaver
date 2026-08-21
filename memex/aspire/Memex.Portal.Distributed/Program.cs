@@ -494,6 +494,12 @@ if (gateBake)
 
 var app = builder.Build();
 
+// Security response headers as the OUTERMOST middleware of the deployed host, so they cover
+// EVERY response — including endpoints mapped outside StartMemexApplication's web pipeline
+// (/api, /login, robots.txt), which a ZAP scan found were slipping through. Idempotent with
+// the call inside StartMemexApplication (same values, set once).
+app.UseMemexSecurityHeaders();
+
 // 🚨 The two PreWarm keys are ONE setting. The gate reads bake state that only the SWEEP writes,
 // and the health check reports Healthy while the bake is NotStarted — deliberately, so a config
 // mistake can never black-hole a pod forever. The consequence is that GateReadiness=true with
