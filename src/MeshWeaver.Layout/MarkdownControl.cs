@@ -37,4 +37,23 @@ public record MarkdownControl(object Markdown)
     /// Defaults to true.
     /// </summary>
     public object ShowReferences { get; init; } = true;
+
+    /// <summary>
+    /// Whether this viewer may WRITE the node named by <see cref="NodePath"/>. When true, the
+    /// markdown's executable cells (<c>```csharp --render X --show-code</c>) render as inline
+    /// editors that persist back into their own fence, instead of static <c>&lt;pre&gt;</c> blocks
+    /// (#1636). <c>false</c> — the default — is the read-only rendering.
+    ///
+    /// <para>🚨 Set it from the SERVER's permission fold and nowhere else:
+    /// <c>host.Hub.GetEffectivePermissions(path).HasFlag(Permission.Update)</c>, the same evaluator
+    /// the Code-node cell and <see cref="CollaborativeMarkdownControl.CanEdit"/> use. Defaulting to
+    /// false is what keeps this from widening access as a side effect: a producer that does not know
+    /// the answer does not get to guess it.</para>
+    /// </summary>
+    public bool CanEdit { get; init; }
+
+    /// <summary>Returns a copy whose executable cells are editable per <paramref name="canEdit"/>.</summary>
+    /// <param name="canEdit">True when the viewer holds <c>Permission.Update</c> on <see cref="NodePath"/>.</param>
+    /// <returns>A new instance with the updated CanEdit.</returns>
+    public MarkdownControl WithCanEdit(bool canEdit) => this with { CanEdit = canEdit };
 }

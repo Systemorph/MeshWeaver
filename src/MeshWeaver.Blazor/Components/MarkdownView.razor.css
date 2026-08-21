@@ -423,3 +423,17 @@
     border-radius: 4px;
     color: var(--annotation-delete-color);
 }
+
+/* The EDITABLE code segment (#1636). MarkdownCodeCellEditor REPLACES the server's `code-content`
+   marker div for a viewer holding Update, exactly as MarkdownCodeCellToolbar replaces the toolbar
+   marker — so the hydrated DOM carries `md-cell-editor`, NOT `code-content`, and anything selecting
+   the cell's code in a live Blazor page (e2e, styling) must look for this class. The `md-code-cell`
+   frame around it is untouched server HTML and still identifies a workbench. */
+.markdown-body ::deep .md-cell-editor {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.markdown-body ::deep .md-code-cell .md-cell-editor {
+    border-bottom: 1px solid var(--neutral-stroke-rest);
+}

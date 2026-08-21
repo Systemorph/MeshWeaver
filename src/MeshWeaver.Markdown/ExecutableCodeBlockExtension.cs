@@ -147,15 +147,37 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         var language = string.IsNullOrWhiteSpace(Info) ? "csharp" : Info;
         // --execute: silent execution (explicit opt-in).
         if (Args.TryGetValue(Execute, out var executionId))
-            return new(string.Join('\n', Lines.Lines)) { Id = executionId ?? Guid.NewGuid().AsString(), Language = language };
+            return new(Body()) { Id = executionId ?? Guid.NewGuid().AsString(), Language = language };
         if (SubmitCode is not null)
             return SubmitCode;
         // --render <AreaId>: execute + stream output to a named layout area.
         if (Args.TryGetValue(Render, out var renderId))
-            return new(string.Join('\n', Lines.Lines)) { Id = renderId ?? Guid.NewGuid().AsString(), Language = language };
+            return new(Body()) { Id = renderId ?? Guid.NewGuid().AsString(), Language = language };
         // Bare ```csharp blocks are documentation-only by default.
         // Use --execute for silent execution or --render <AreaId> to stream output.
         return null;
+    }
+
+    /// <summary>
+    /// The fence's body as a single string.
+    ///
+    /// <para>🚨 Bounded by <c>Lines.Count</c> and null-safe, which the raw
+    /// <c>string.Join('\n', Lines.Lines)</c> was neither. <c>StringLineGroup.Lines</c> is a
+    /// capacity-sized array that is <b>null until the first line is added</b>, so an EMPTY
+    /// executable fence — <c>```csharp --render X --show-code</c> with nothing between the fences,
+    /// the natural shape of a "write your answer here" workbench — threw out of
+    /// <see cref="Initialize"/> and took the whole document's parse down with it. It also joined the
+    /// unused tail of an over-allocated array, appending phantom blank lines to the submitted code.
+    /// Found while making markdown cells editable (#1636): clearing a cell is a legal edit, and it
+    /// must not brick the page it lives on.</para>
+    /// </summary>
+    private string Body()
+    {
+        var lines = Lines.Lines;
+        var count = Lines.Count;
+        if (lines is null || count <= 0)
+            return string.Empty;
+        return string.Join('\n', lines.Take(count));
     }
 
     /// <summary>
