@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MeshWeaver.Layout;
 
 /// <summary>
@@ -70,6 +72,17 @@ public record ToolCallEntry
     public string? Result { get; init; }
 
     /// <summary>Whether the tool call succeeded.</summary>
+    /// <remarks>
+    /// 🚨 <see cref="JsonIgnoreCondition.Never"/> is load-bearing — the declared-<c>true</c> bool
+    /// trap. The hub serializer runs <c>DefaultIgnoreCondition = WhenWritingDefault</c>, so
+    /// <c>IsSuccess = false</c> (which IS the CLR default for a bool) was omitted from the wire and
+    /// the reader rebuilt it as <c>true</c> from this initializer. A FAILED tool call therefore
+    /// persisted as a successful one no matter what the round computed — half of #1689's side note
+    /// ("records failed tool invocations with isSuccess: true"), and invisible from inside the
+    /// round, whose in-memory entry was correct. Writing the field unconditionally is what lets the
+    /// <c>false</c> survive the hop. Same fix, same reason, as <c>ImportDeleteRequest.Mirror</c>.
+    /// </remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public bool IsSuccess { get; init; } = true;
 
     /// <summary>
@@ -79,6 +92,18 @@ public record ToolCallEntry
     /// dispatch → <see cref="ToolCallStatus.Streaming"/>; clean completion →
     /// <see cref="ToolCallStatus.Success"/>; cancel → <see cref="ToolCallStatus.Cancelled"/>;
     /// error → <see cref="ToolCallStatus.Failed"/>.
+    ///
+    /// <para>⚠️ Known gap, deliberately left as-is: this is the same declared-non-default trap as
+    /// <see cref="IsSuccess"/> above, one enum value along. <see cref="ToolCallStatus.Streaming"/>
+    /// is the CLR default (0) while this initializer declares <see cref="ToolCallStatus.Success"/>,
+    /// so an explicitly-written <c>Streaming</c> serialises away and reads back as <c>Success</c>.
+    /// The terminal values that matter for round honesty — <see cref="ToolCallStatus.Failed"/> and
+    /// <see cref="ToolCallStatus.Cancelled"/> — are non-default and DO survive, and
+    /// <see cref="ToolCallVisibility.IsPending"/> already defines "dispatched, no result yet" as
+    /// "default status + null Result" precisely because of this. Adding
+    /// <c>JsonIgnore(Never)</c> here would start persisting <c>Streaming</c> and silently move
+    /// live delegations from the pending bucket into the running one, which is a rendering change
+    /// that belongs in its own commit — not a rider on a correctness fix.</para>
     /// </summary>
     public ToolCallStatus Status { get; init; } = ToolCallStatus.Success;
 
