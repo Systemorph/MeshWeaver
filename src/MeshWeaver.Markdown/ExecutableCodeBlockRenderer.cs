@@ -36,6 +36,16 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
     /// <summary>CSS class of the output segment holding the kernel result area inside the cell frame.</summary>
     public const string CellOutputClass = "md-code-cell-output";
 
+    /// <summary>
+    /// CSS class of the cell's CODE segment. Inside a cell frame it doubles as a marker: it carries
+    /// the same <see cref="SubmissionIdAttribute"/> / <see cref="LanguageAttribute"/> the toolbar
+    /// marker carries, so a client renderer can swap the static <c>&lt;pre&gt;</c> for a live editor
+    /// exactly the way it already swaps the toolbar marker for the Run bar (#1636). A client that
+    /// does not (React, React Native, any static HTML consumer) sees an ordinary div and keeps
+    /// rendering the fence read-only — the attributes are additive.
+    /// </summary>
+    public const string CellCodeClass = "code-content";
+
     /// <summary>Attribute on the toolbar marker carrying the block's submission id (= its result-area name).</summary>
     public const string SubmissionIdAttribute = "data-submission-id";
 
@@ -83,7 +93,7 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
 
         if (showsHeader)
         {
-            renderer.Write("<div class=\"code-content\">");
+            renderer.Write(OpenCodeSegment(fenced, isCell));
             renderer.Write($"<pre><code class='language-{fenced.Info}'>");
             renderer.WriteLine("```" + fenced.Info + $" {fenced.Arguments}");
 
@@ -95,7 +105,7 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
         }
         else if (showsCode)
         {
-            renderer.Write("<div class=\"code-content\">");
+            renderer.Write(OpenCodeSegment(fenced, isCell));
             base.Write(renderer, obj);
             renderer.Write("</div>");
         }
@@ -167,4 +177,16 @@ public class ExecutableCodeBlockRenderer : CodeBlockRenderer
     }
 
 
+    /// <summary>
+    /// The opening tag of the cell's code segment. Inside a cell frame it carries the submission id
+    /// and language — the marker a client needs to hydrate the segment into an editor; outside one
+    /// (a bare <c>--show-code</c> block with nothing to run) it stays a plain styling div, because
+    /// there is no submission to address and nothing to persist an edit into.
+    /// </summary>
+    private static string OpenCodeSegment(ExecutableCodeBlock fenced, bool isCell) =>
+        isCell
+            ? $"<div class=\"{CellCodeClass}\" " +
+              $"{SubmissionIdAttribute}=\"{HttpUtility.HtmlAttributeEncode(fenced.SubmitCode!.Id)}\" " +
+              $"{LanguageAttribute}=\"{HttpUtility.HtmlAttributeEncode(fenced.SubmitCode.Language)}\">"
+            : $"<div class=\"{CellCodeClass}\">";
 }
