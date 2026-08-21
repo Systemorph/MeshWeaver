@@ -394,6 +394,54 @@ public class GeneratedInputIdentityTest
             .Should().Contain(CompiledDependencies.ContentKey);
     }
 
+    /// <summary>
+    /// 🚨 A file NAME can be ambiguous — NuGet can resolve two different assemblies to the same
+    /// file name (two packages, or two TFM folders), and <c>RunSourceGenerators</c> loads BOTH.
+    /// Overwriting on collision would drop one from the key, so the key would claim "same input"
+    /// for a genuinely different effective generator set — the UNDER-invalidating direction — and
+    /// which one survived would depend on enumeration order, reintroducing the order-dependence
+    /// this type exists to remove.
+    /// </summary>
+    [Fact]
+    public void ACollidingGeneratorFileName_AggregatesEveryIdentity_OrderIndependently()
+    {
+        var dir = Directory.CreateTempSubdirectory("mw-gen-collide-");
+        try
+        {
+            // Two DIFFERENT unreadable-but-present files would both resolve `absent`, which cannot
+            // show aggregation — so use the real toolchain assemblies, which have distinct MVIDs,
+            // copied under ONE shared file name in two directories.
+            var real = typeof(GeneratedInputIdentity).Assembly.Location;
+            var other = typeof(Xunit.FactAttribute).Assembly.Location;
+            var a = Path.Combine(dir.FullName, "a"); Directory.CreateDirectory(a);
+            var b = Path.Combine(dir.FullName, "b"); Directory.CreateDirectory(b);
+            var first = Path.Combine(a, "Gen.dll");
+            var second = Path.Combine(b, "Gen.dll");
+            File.Copy(real, first);
+            File.Copy(other, second);
+
+            var ascending = GeneratedInputIdentity.AssemblyFileIdentities([first, second]);
+            var descending = GeneratedInputIdentity.AssemblyFileIdentities([second, first]);
+
+            ascending.Keys.Should().Equal("Gen.dll");
+            // BOTH identities are represented, and the order they arrived in does not matter.
+            ascending["Gen.dll"].Should().Contain(GeneratedInputIdentity.IdentitySeparator);
+            descending["Gen.dll"].Should().Be(ascending["Gen.dll"]);
+
+            // …and dropping one of the two MUST move the key — that is the whole point.
+            GeneratedInputIdentity.AssemblyFileIdentities([first])["Gen.dll"]
+                .Should().NotBe(ascending["Gen.dll"]);
+
+            // The SAME assembly reached by two paths is ONE input, so it collapses to one id.
+            var duplicated = GeneratedInputIdentity.AssemblyFileIdentities([first, first]);
+            duplicated["Gen.dll"].Should().NotContain(GeneratedInputIdentity.IdentitySeparator);
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
+
     [Fact]
     public void AssemblyFileIdentities_AreKeyedByFileName_NotByHostPath()
     {
