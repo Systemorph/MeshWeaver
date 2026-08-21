@@ -52,8 +52,11 @@ internal sealed class OutboundSendQueue : IDisposable
     private readonly IDisposable subscription;
 
     /// <summary>Creates the queue.</summary>
-    /// <param name="readCurrent">Authoritative read of the mail node's CURRENT content by path —
-    /// emits one value (null when the node no longer exists or carries no email).</param>
+    /// <param name="readCurrent">Authoritative read of the mail node's CURRENT content by path.
+    /// When it answers, it emits the content (null = a node without readable e-mail content, which
+    /// is skipped). An absent or unreachable node may emit NOTHING at all — the production seam is
+    /// the per-node stream, which stays silent rather than emitting an absence — and the queue's
+    /// read budget converts that silence into a fail-closed skip.</param>
     /// <param name="writeStatus">Writes the given status onto the node (the System-identity write
     /// lives behind this seam).</param>
     /// <param name="send">Performs the actual send; false or an error marks the mail Failed.</param>
