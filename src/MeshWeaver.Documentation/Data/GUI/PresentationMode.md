@@ -90,11 +90,6 @@ second permission system above.
 
 # Rules for a new surface
 
-0. **Ask `HidesAnything`, never `== PresentationScreen.Off`.** They are different values: a viewer
-   who marked things and then turned the mode off holds a screen that is not `Off` and yet hides
-   nothing. `Filter` is a no-op for them either way — but anything ELSE your fast-path's other
-   branch does is not, and that is how an empty completion category came to be suppressed for
-   someone who was not presenting at all.
 1. **Resolve the screen ONCE, on the render turn**, and pass it down as a value —
    `host.ViewerScreen()` in a layout area, `Access.ViewerScreen(hub)` elsewhere. Reading the ambient
    `AccessContext` from inside a later emission lands after a scheduler hop with the `AsyncLocal`
@@ -103,10 +98,15 @@ second permission system above.
    requirement; a view that renders neutral and filters a beat later shows the audience exactly what
    the mode was turned on to hide. Gate the first paint on the first emission — an anonymous or
    system caller resolves synchronously, so the gate costs those views nothing.
-3. **Never widen the screen on a fault.** The resolver holds the last known screen across a faulting
+3. **Ask `HidesAnything`, never `== PresentationScreen.Off`.** They are different values: a viewer
+   who marked things and then turned the mode off holds a screen that is not `Off` and yet hides
+   nothing. `Filter` is a no-op for them either way — but anything ELSE your fast-path's other
+   branch does is not, and that is how an empty completion category came to be suppressed for
+   someone who was not presenting at all.
+4. **Never widen the screen on a fault.** The resolver holds the last known screen across a faulting
    profile stream (and logs it) rather than resetting to "nothing hidden" mid-presentation. Do not
    add a timeout that falls back to the neutral screen — that fails open.
-4. **Never consult it for anything but rendering.** No read, no write, no route, no permission.
+5. **Never consult it for anything but rendering.** No read, no write, no route, no permission.
 
 ---
 
