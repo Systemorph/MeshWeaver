@@ -76,6 +76,15 @@
          because it is the simplest: six scoped .razor.css files, no collocated JS, no package
          references of its own. -->
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
+    <!-- The two map packs that were never modules at all: they rode Memex.Portal.Shared's
+         ProjectReference into the app closure while being listed under NO Modules:Assemblies, so
+         their bits shipped permanently inert. Here the bits are reachable the moment a deployment
+         lists the DLL. Both address their assets as ./_content/<Pack>/... — AppleMaps its
+         collocated AppleMapView.razor.js, OpenStreetMap that plus its vendored wwwroot/leaflet/
+         (css, js and the marker images the css resolves beside itself) — which is precisely the
+         shape the module static-asset provider serves out of modules/<Name>/wwwroot (#1724). -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.AppleMaps/MeshWeaver.Blazor.AppleMaps.csproj" />
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.OpenStreetMap/MeshWeaver.Blazor.OpenStreetMap.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <!-- Import + its PRIVATE closure: the SIX MeshWeaver.DataSetReader* projects (the base, Csv,
          Excel, Excel.BinaryFormat, Excel.OpenXmlFormat, Excel.Utils) and MeshWeaver.DataStructures
