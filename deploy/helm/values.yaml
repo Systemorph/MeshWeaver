@@ -151,6 +151,15 @@ instancesAdmin:
 # raises this without them fails the build instead of the deployment.
 replicas:
   portal: 1
+# ---- Extra env sources for the portal (verbatim EnvFromSource objects) ----
+# For env the chart does not own — typically a Key Vault CSI-synced Secret
+# (SecretProviderClass → k8s Secret). Without this key such a source can only
+# be attached by a live kubectl patch, which the next `helm upgrade` silently
+# drops (the memex-cloud AI-keys shape). Example:
+#   extraEnvFrom:
+#     - secretRef:
+#         name: memexcloud-portal-ai-secrets
+extraEnvFrom: []
 # ---- KEDA autoscaling (portal) --------------------------------------------
 # HA deployments autoscale the portal via a KEDA ScaledObject (templates/
 # memex-portal/scaledobject.yaml) instead of a fixed replica count. Off by
