@@ -51,16 +51,53 @@ public static class SettingsLayoutArea
 
         var ownNode = host.Workspace.GetMeshNodeStream();
         var permsStream = host.Hub.GetEffectivePermissions(hubPath);
+        var itemsStream = host.Hub.Configuration.ObserveSettingsMenuItems(host, ctx);
 
-        return ownNode.CombineLatest(permsStream, (node, perms) => (Node: node, Perms: perms))
-            .SelectMany(t => host.Hub.Configuration.EvaluateSettingsMenuItems(host, ctx, t.Perms)
-                .Select(items =>
-                {
-                    var canEdit = t.Perms.HasFlag(Permission.Update);
-                    var selectedTab = string.IsNullOrEmpty(tabId) && items.Count > 0 ? items[0].Id : (tabId ?? MetadataTab);
-                    return (UiControl?)BuildSettingsPage(host, t.Node, hubAddress, hubPath, selectedTab, canEdit, items);
-                }));
+        return MenuRenderInputs(ownNode, permsStream, itemsStream)
+            .Select(t =>
+            {
+                var selectedTab = string.IsNullOrEmpty(tabId) && t.Items.Count > 0
+                    ? t.Items[0].Id
+                    : (tabId ?? MetadataTab);
+                return (UiControl?)BuildSettingsPage(
+                    host, t.Node, hubAddress, hubPath, selectedTab, t.CanEdit, t.Items);
+            });
     }
+
+    /// <summary>
+    /// The ORDERING seam of the settings page: the node, the viewer's effective permissions and
+    /// the (unfiltered) tab set folded into ONE live chain, so the newest value of every input
+    /// wins — the shape the node menu has always used
+    /// (<c>NodeMenuItemsExtensions.GetMenuContext</c>).
+    ///
+    /// <para>🚨 <b>Why this is a named seam rather than three lines inline.</b> It used to be
+    /// <c>perms.SelectMany(p =&gt; items.Select(filter through p))</c>, which builds a SEPARATE live
+    /// provider chain per permission value, each frozen on the value it captured — and never
+    /// unsubscribes the old ones. Both inputs are long-lived and enrich on their own schedules:
+    /// <c>PermissionEvaluator</c> emits a low seed (an empty assignment set reads as
+    /// <see cref="Permission.None"/>) before the synced-assignment answer arrives, and a provider
+    /// re-emits whenever its own live check settles (a global-admin probe, a GitHub call, a
+    /// cross-partition query). So the FIRST chain — the one holding <see cref="Permission.None"/> —
+    /// stays subscribed and re-renders the whole menu the next time any provider speaks, replacing
+    /// the correct menu with the one an anonymous viewer would see. Nothing errors and nothing
+    /// logs; the tabs simply disappear, and which chain wins is a race that a busy install loses
+    /// far more often than a quiet one (#1962: the display-time-zone tab absent on the cloud
+    /// portal and present locally, with the <see cref="Permission.None"/> Notifications entry
+    /// beside it surviving — the exact fingerprint of a menu rendered through
+    /// <see cref="Permission.None"/>).</para>
+    ///
+    /// <para>Pure in its inputs (three observables in, one out), so the interleaving that produced
+    /// the defect is assertable with subjects — no hub, no circuit, no rendered area.</para>
+    /// </summary>
+    internal static IObservable<(MeshNode? Node, Permission Perms, bool CanEdit,
+            IReadOnlyList<SettingsMenuItemDefinition> Items)>
+        MenuRenderInputs(
+            IObservable<MeshNode> ownNode,
+            IObservable<Permission> perms,
+            IObservable<IReadOnlyList<SettingsMenuItemDefinition>> items)
+        => Observable.CombineLatest(ownNode, perms, items,
+            (node, p, i) => ((MeshNode?)node, p, p.HasFlag(Permission.Update),
+                SettingsMenuItemsExtensions.FilterByPermission(i, p)));
 
     private static UiControl BuildSettingsPage(
         LayoutAreaHost host,
