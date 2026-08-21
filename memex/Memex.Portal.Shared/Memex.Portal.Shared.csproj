@@ -33,6 +33,19 @@
          deployment turns each on by listing its DLL, which is what that switch is for. Their
          collocated JS and OpenStreetMap's vendored wwwroot/leaflet/ are already addressed as
          ./_content/<Pack>/... — exactly what the module static-asset provider serves (#1724). -->
+    <!-- 🚨 DIRECT ON PURPOSE, and it must not be "tidied away" as unused. MeshWeaver.Maps is a
+         CANONICAL CONTENT-SURFACE assembly (FrameworkBuildIdentity.ContentSurfaceAssemblies), and
+         until the view packs flipped (#1974) this host reached it only through them — every map
+         pack references it. Losing it from the COMPILE closure does not fail a build: the surface
+         manifest is written from @(ReferencePathWithRefAssemblies), so the line simply vanishes,
+         this host hashes Maps as 'absent' while mw-plugin-test still hashes a real surface id, and
+         the two hosts of ONE commit resolve DIFFERENT framework identities. Every bake then lands
+         at an address no portal reads — publication green, pods compiling everything at boot, every
+         cover serving a compilation-fallback card. That is the 2026-08-17 outage (#1814); it
+         recurred here the moment the map packs left, and
+         FrameworkBuildIdentityTest.CanonicalContentSurface_IsRecordedByEverySurfaceManifestHost
+         is what caught it. No portal code uses these types — the reference IS the point. -->
+    <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Graph\MeshWeaver.Blazor.Graph.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
