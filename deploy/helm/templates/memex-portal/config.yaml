@@ -228,6 +228,15 @@ data:
   AzureFoundry__Models__0: "{{ .Values.config.memex_portal.AzureFoundry__Models__0 }}"
   AzureFoundry__Models__1: "{{ .Values.config.memex_portal.AzureFoundry__Models__1 }}"
   AzureFoundry__Models__2: "{{ .Values.config.memex_portal.AzureFoundry__Models__2 }}"
+  AzureFoundry__Models__3: "{{ .Values.config.memex_portal.AzureFoundry__Models__3 }}"
+  # 🚨 A values key this template omits reaches NO container, with no error anywhere: the
+  # ConfigMap names every key explicitly, there is no catch-all range over config.memex_portal,
+  # and the Deployment's only env path is envFrom on this ConfigMap. Both keys below were set in
+  # values.aks.yaml and rendered by nothing (#1925) — SelfUpdate__MinRollInterval is the restart
+  # BUDGET from #1780, which AGENTS.md documents as the fix for restart churn and which sat inert;
+  # its predecessor SelfUpdate__PollInterval had the identical defect until #1778.
+  SelfUpdate__MinRollInterval: "{{ .Values.config.memex_portal.SelfUpdate__MinRollInterval }}"
+  WebhookInbox__Targets__0: "{{ .Values.config.memex_portal.WebhookInbox__Targets__0 }}"
   # ---- OpenAI-compatible provider (self-hosted / local: Ollama, vLLM, LM Studio, …) ----
   # Generic OpenAI-wire endpoint. Set Endpoint + Models (+ ApiKey in secrets) to seed a
   # provider + LanguageModel nodes pointing at any OpenAI-compatible gateway. Empty = inert.
