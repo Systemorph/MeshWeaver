@@ -148,6 +148,28 @@ public class PresentationSurfacesTest
     }
 
     [Fact]
+    public void AppsTab_LeavesSystemAreasAlone()
+    {
+        // A "~/" entry is a system AREA, not a mesh path — it names no node, so there is nothing for
+        // the screen to match and it must pass through even while the mode is up. Asserted because
+        // the code only says it in a comment, and a comment is not a test.
+        // Marking the system area TOO (a viewer can type anything into their own profile) must not
+        // make it disappear, and marking the only real app must not take the dock with it.
+        var apps = UserActivityLayoutAreas.BuildApps(
+            Owner,
+            new HomeConfig { DefaultApps = ["~/Settings"] },
+            installedApps: ["Acme"],
+            locale: null,
+            screen: Active("Acme", "~/Settings"));
+
+        // Every MESH path was screened away, so what is left is the system-area dock itself — a
+        // stack of tiles, not the "no apps" placeholder and not a query carrying the marked name.
+        apps.Should().BeOfType<StackControl>(
+            "the system area survives the screen; only the marked mesh app went");
+        apps.Should().NotBeOfType<MarkdownControl>();
+    }
+
+    [Fact]
     public void AppsTab_IsUnchangedWhenTheModeIsOff()
     {
         var apps = UserActivityLayoutAreas.BuildApps(
