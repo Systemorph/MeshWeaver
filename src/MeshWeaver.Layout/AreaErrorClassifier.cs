@@ -43,6 +43,37 @@ public static class AreaErrorClassifier
     }
 
     /// <summary>
+    /// 🚨 True when the error says the target hub is BEING RECYCLED — <c>"Hub X is shutting down"</c>
+    /// — as opposed to not existing.
+    ///
+    /// <para><b>These are two different statements and they deserve two different policies.</b>
+    /// <c>"No node found at 'X'"</c> says the address does not exist; retrying it forever is the
+    /// 2026-06-14 message storm that wedged a partition, so a bound is right.
+    /// <c>"Hub X is shutting down"</c> says the address EXISTS and is coming back — a per-node hub
+    /// recycle is a normal lifecycle event, and it happens on every package provision right after
+    /// the content lands. Counting a recycle against the same fixed attempt budget turns a routine
+    /// event into a permanently dead page: measured in Systemorph/MeshWeaver#1996, the client spent
+    /// its 5 retries (250·2ⁿ ms = 7.75 s) between 20:35:25.586 and 20:35:33.351 and gave up
+    /// <b>2.2 s before</b> the hub was serving again at 20:35:35.552.</para>
+    ///
+    /// <para>A bound where an EVENT belongs. What ends a recycle is the hub ANSWERING, which is a
+    /// thing the retry can observe — see <see cref="AreaStreamRetry.RetryAreaWithBackoff{T}"/>,
+    /// where a recycle switches the retry from "count attempts" to "keep probing, spaced, until it
+    /// answers", with a wall-clock guard only as a last resort.</para>
+    ///
+    /// <para>Deliberately a SUBSET of <see cref="IsTransientHubFailure"/>: everything this matches
+    /// is already retry-worthy, so the recycle policy can never widen WHAT is retried — only how
+    /// long a hub that announced its own return is waited for.</para>
+    /// </summary>
+    public static bool IsHubRecycling(Exception? ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+            if ((e.Message ?? string.Empty).Contains("is shutting down", StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    /// <summary>
     /// Returns the NodeType path of a <see cref="ErrorType.CompilationInProgress"/> NACK
     /// (so the GUI can swap to that NodeType's Progress view at once), or <c>null</c>.
     /// This is NOT retried — it has dedicated, immediate handling.
