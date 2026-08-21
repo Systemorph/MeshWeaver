@@ -122,9 +122,16 @@ big non-native types turn out to declare the native `MarkdownContent` anyway.
 ⚠️ Note `Skill` is NOT claimed by `AgentFileParser` — that parser returns null for anything whose
 front matter is not `nodeType: Agent` — so a markdown-authored skill goes through
 `MarkdownFileParser` like any other document. Its content type's body member is `Instructions`,
-which puts it in the same bucket as `Edu/Module` for this analysis. (Whether a `.md`-authored skill
-round-trips correctly TODAY is a separate question this note does not answer; most skills in the
-repos are authored as `.json`.)
+which puts it in the same bucket as `Edu/Module` for this analysis.
+
+🚨 …and those eleven do not even reach that bucket today: they import as `nodeType: Markdown`,
+because `MarkdownFileParser`'s YAML deserializer carries no naming convention (PascalCase-only)
+while `AgentFileParser`'s uses camelCase, and their front matter is lowercase `nodeType: Skill`.
+`IgnoreUnmatchedProperties()` makes the miss silent, so the type falls back to its `?? "Markdown"`
+default. Verified on memex: `Skill/thread`, all five `Hosting/Skill/*` and `Feedback/Skill/feedback`
+are Markdown nodes and therefore invisible to the slash-command list — issue #1984, which is this
+row's REAL state and the first live casualty of the gap this section describes. The table lists the
+DECLARED content type, which is what the count above is about.
 
 1. **A miss must not lose the extra frontmatter.** A cold-boot import (bake, first git-sync) can
    run before the type registers. Falling back to `MarkdownContent` drops `Notes`/`Background`
