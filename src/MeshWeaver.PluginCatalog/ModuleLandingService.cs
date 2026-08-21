@@ -148,12 +148,32 @@ public sealed class ModuleLandingService : IDisposable
         string? frameworkMvid = null,
         string? packagePath = null,
         string? version = null,
-        string? minMeshVersion = null)
+        string? minMeshVersion = null,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null)
         => pool.InvokeBlocking(_ =>
         {
-            LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion);
+            LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
+                staticAssets);
             return Unit.Default;
         });
+
+    /// <summary>
+    /// Validates one module-relative asset path: forward slashes, no rooting, no traversal, and
+    /// every segment a legal file name. These strings become PATHS UNDER the module folder, so a
+    /// segment that escapes it is a write anywhere the process can reach — refused here, before
+    /// any byte touches disk, exactly like the flat assembly names.
+    /// </summary>
+    internal static void ValidateAssetPath(string? value, string moduleName)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Contains('\\')
+            || value.StartsWith('/')
+            || Path.IsPathRooted(value))
+            throw new ArgumentException(
+                $"Module '{moduleName}': '{value}' is not a valid module-relative asset path.");
+        foreach (var segment in value.Split('/'))
+            ValidateFileName(segment, $"asset path segment of module '{moduleName}'");
+    }
 
     /// <summary>
     /// Reads the current activation list on this service's IO pool — the runtime counterpart of the
@@ -184,8 +204,11 @@ public sealed class ModuleLandingService : IDisposable
         string? frameworkMvid,
         string? packagePath,
         string? version,
-        string? minMeshVersion)
+        string? minMeshVersion,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null)
     {
+        foreach (var (relativePath, _) in staticAssets ?? [])
+            ValidateAssetPath(relativePath, name);
         ValidateFileName(name, "module name");
         if (assemblies is not { Count: > 0 })
             throw new ArgumentException($"Module '{name}': no assemblies to land.", nameof(assemblies));
@@ -241,6 +264,16 @@ public sealed class ModuleLandingService : IDisposable
         {
             foreach (var (fileName, bytes) in assemblies)
                 File.WriteAllBytes(Path.Combine(staging, fileName), bytes);
+            // Static web assets keep their RELATIVE path — a view pack's components request
+            // _content/<pack>/leaflet/leaflet.js, and the host's module asset provider serves
+            // <module folder>/wwwroot, so the shape has to survive the trip intact.
+            foreach (var (relativePath, bytes) in staticAssets ?? [])
+            {
+                var destination = Path.Combine(
+                    staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.WriteAllBytes(destination, bytes);
+            }
             Directory.Move(staging, target);
         }
         catch
