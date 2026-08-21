@@ -62,6 +62,22 @@ public static class GeneratorPipeline
     }
 
     /// <summary>
+    /// The generator-candidate assemblies a compile actually loads: the built-in generator (when a
+    /// copy is present beside the app) plus everything the node's <c>#r</c> directives resolved to,
+    /// minus a duplicate of the built-in. Extracted so the CONTENT KEY
+    /// (<see cref="GeneratedInputIdentity.OfGeneratedInput"/>) hashes the SAME set
+    /// <see cref="RunSourceGenerators"/> runs — a key computed over a different set would be a key
+    /// about a compile that never happened.
+    /// </summary>
+    internal static IReadOnlyList<string> EffectiveGeneratorPaths(
+        IReadOnlyList<string> generatorAssemblyPaths)
+        => BuiltInGeneratorPaths.Count == 0
+            ? generatorAssemblyPaths
+            : [.. BuiltInGeneratorPaths,
+               .. generatorAssemblyPaths.Where(p => !string.Equals(
+                   Path.GetFileName(p), BuiltInScopeGeneratorId + ".dll", StringComparison.OrdinalIgnoreCase))];
+
+    /// <summary>
     /// Runs the built-in scope generator plus any OTHER generator a node <c>#r</c>'d over
     /// <paramref name="compilation"/>. A node's own
     /// <c>#r "nuget:MeshWeaver.BusinessRules.Generator"</c> is filtered OUT — otherwise the same
@@ -73,11 +89,7 @@ public static class GeneratorPipeline
     internal static CSharpCompilation RunSourceGenerators(
         CSharpCompilation compilation, IReadOnlyList<string> generatorAssemblyPaths, ILogger logger, CancellationToken ct)
     {
-        IReadOnlyList<string> allPaths = BuiltInGeneratorPaths.Count == 0
-            ? generatorAssemblyPaths
-            : [.. BuiltInGeneratorPaths,
-               .. generatorAssemblyPaths.Where(p => !string.Equals(
-                   Path.GetFileName(p), BuiltInScopeGeneratorId + ".dll", StringComparison.OrdinalIgnoreCase))];
+        var allPaths = EffectiveGeneratorPaths(generatorAssemblyPaths);
         if (allPaths.Count == 0)
             return compilation;
         var generators = SourceGeneratorLoader.Discover(allPaths, logger);

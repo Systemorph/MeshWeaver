@@ -27,6 +27,21 @@ public static class EmitPipeline
             .WithPlatform(Platform.AnyCpu);
 
     /// <summary>
+    /// The canonical option set rendered for the CONTENT KEY (#1707 slice 4) — see
+    /// <see cref="GeneratedInputIdentity.OptionsFingerprint"/>. It lives here, beside the three
+    /// factories it renders, so an option added to one of them cannot be forgotten by the key:
+    /// the rendering is REFLECTED, so a new option joins automatically.
+    ///
+    /// <para>Process-constant (a <see cref="Lazy{T}"/> of an immutable string): the options are
+    /// literals, so this is a constant lookup rather than cached state.</para>
+    /// </summary>
+    internal static string OptionsFingerprint => _optionsFingerprint.Value;
+
+    private static readonly Lazy<string> _optionsFingerprint = new(() =>
+        GeneratedInputIdentity.OptionsFingerprint(
+            CreateParseOptions(), CreateCompilationOptions(), DebugInformationFormat.PortablePdb));
+
+    /// <summary>
     /// Builds the single-tree emit compilation for the generated source: parse with the source
     /// path and UTF-8 encoding embedded (critical for PDB source linking) + the canonical
     /// options.
