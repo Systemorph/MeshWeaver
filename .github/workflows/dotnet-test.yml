@@ -1513,7 +1513,14 @@ jobs:
         # creates `LandedModules.slnx`, and hard-coding `.sln` fails with "Could not find
         # solution or directory" — a fault that looks nothing like the breakage this gate is for.
         dotnet new sln -n LandedModules >/dev/null
-        sln="$(ls LandedModules.slnx LandedModules.sln 2>/dev/null | head -1)"
+        # 🚨 NOT `ls A B`: GNU coreutils `ls` exits 2 when an operand does not exist, and exactly
+        # one of these two names exists by design — so under `set -e` + `pipefail` that ends the
+        # step with exit 2 before anything is built. It is also indistinguishable in the UI from
+        # a real compile failure, which is how it survived one round of misdiagnosis.
+        sln=""
+        for candidate in LandedModules.slnx LandedModules.sln; do
+          if [ -f "$candidate" ]; then sln="$candidate"; break; fi
+        done
         if [ -z "$sln" ]; then
           echo "::error::dotnet new sln produced no solution file — cannot assemble the build."
           echo "failure=dotnet new sln produced no solution file" >> "$GITHUB_OUTPUT"
