@@ -206,7 +206,7 @@ internal class RoutingGrain(
             ReportSaturation(Interlocked.Increment(ref inFlightRoutes), addressPath);
             orderedDispatcher.Enqueue(
                 addressPath,
-                BuildStreamRoute(delivery, address, addressPath, streamProvider),
+                BuildPodHubRoute(delivery, address, addressPath, streamProvider, grainFactory),
                 () => ReportDrained(Interlocked.Decrement(ref inFlightRoutes)));
         }
         else
@@ -317,6 +317,102 @@ internal class RoutingGrain(
             "[ROUTE] Routing back-pressure [{ActivationId}#{Episode}] cleared after {ElapsedMs} ms — {InFlight} route(s) in flight",
             activationId, Volatile.Read(ref saturationEpisode), (long)lasted.TotalMilliseconds, inFlight);
     }
+
+    /// <summary>
+    /// Composes (does NOT run) the route to a POD-PROCESS hub: a directed grain call to the silo
+    /// that owns the address, falling back to the memory-stream publish when no silo claims it.
+    ///
+    /// <para>🚨 <b>This is the transport swap of issue #1742.</b> Every other cross-process leg in
+    /// the mesh is a grain call — retried, NACK'd, and heard about when it fails. This one was a
+    /// stream publish, and <b>a stream publish to nobody SUCCEEDS</b>: the reply is discarded, the
+    /// requester spends its full budget on silence, and nothing anywhere logs a thing. A directed
+    /// call has an OUTCOME, which is the entire point.</para>
+    ///
+    /// <para><b>The fallback is deliberate and is not scaffolding.</b>
+    /// <see cref="PodHubNotHereException"/> means "no silo serves this address through the grain
+    /// transport", and there are two very different reasons for that:</para>
+    /// <list type="bullet">
+    ///   <item>the owner is still on the PREVIOUS RELEASE and never claimed the address — true for
+    ///     the whole overlap window of every rolling deploy, which is precisely the window in which
+    ///     the last change in this area stranded 39 addresses by not having a fallback (#1770);</item>
+    ///   <item>the owner is an Orleans CLIENT process, which cannot host a grain at all. For those
+    ///     hubs the stream is not a legacy path, it is the only path — so this branch is
+    ///     PERMANENT.</item>
+    /// </list>
+    /// <para>Either way the fallback is safe rather than a return to silence, because the stream leg
+    /// now checks for a subscriber before it publishes and NACKs when there is none. Full plan,
+    /// including the one log line that says when the overlap window has closed:
+    /// <c>Doc/Architecture/PodHubDeliveryRollPlan</c>.</para>
+    /// </summary>
+    private IObservable<Unit> BuildPodHubRoute(
+        IMessageDelivery delivery,
+        Address address,
+        string addressPath,
+        IStreamProvider streamProvider,
+        IGrainFactory grainFactory)
+    {
+        void PostFailureToSender(string failureMessage, ErrorType errorType) =>
+            PostFailure(delivery, address, streamProvider, failureMessage, errorType);
+
+        return Observable
+            .Defer(() => grainFactory.GetGrain<IPodHubGrain>(addressPath).Deliver(delivery).ToObservable())
+            .Select(_ =>
+            {
+                RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_OK addr={addressPath} id={delivery.Id}");
+                return Unit.Default;
+            })
+            .Catch<Unit, Exception>(ex => IsPodHubNotHere(ex)
+                ? FallBackToStream()
+                // A REAL failure of the call — the owning silo threw, went away mid-call, or the
+                // placement could not be made. This is the whole gain over a publish: it is
+                // OBSERVABLE, so it becomes a terminal answer for the sender instead of silence.
+                : TerminalCallFailure(ex))
+            // Composition-time faults must ALSO reach the sender — see BuildGrainRoute's trailing
+            // Catch for the full rationale (the classic one: GetStream NRE'ing out of
+            // PersistentStreamProvider.IsRewindable while the stream provider is still starting).
+            .Catch<Unit, Exception>(ex =>
+            {
+                RoutingGrainTrace.Write($"RoutingGrain.RouteMessage ROUTE_FAULT id={delivery.Id} addr={addressPath} ex={ex.Message}");
+                logger.LogError(ex, "[ROUTE] Routing {Address} failed before the delivery could be attempted", addressPath);
+                PostFailureToSender($"Routing to '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
+                return Observable.Return(Unit.Default);
+            });
+
+        IObservable<Unit> FallBackToStream()
+        {
+            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_NOT_HERE addr={addressPath} id={delivery.Id}");
+            // 🚨 THE LINE THAT DECIDES WHEN THE OVERLAP WINDOW HAS CLOSED. Information, once per
+            // delivery that takes the fallback: during a roll it is the plan working; after a roll
+            // has fully completed, for a SILO-hosted address, it is a hub that never claimed itself
+            // and wants investigating. Never read its absence as proof — read a full rolling deploy
+            // with none of these as the signal that the grain transport carries everything it can.
+            logger.LogInformation(
+                "[ROUTE] Pod-hub grain for {Address} is not attached — falling back to the stream publish. "
+                + "Expected while a previous-release pod still owns that hub, and permanently for a hub "
+                + "owned by an Orleans client process (a client cannot host a grain).",
+                addressPath);
+            return BuildStreamRoute(delivery, address, addressPath, streamProvider);
+        }
+
+        IObservable<Unit> TerminalCallFailure(Exception ex)
+        {
+            RoutingGrainTrace.Write($"RoutingGrain.RouteMessage POD_HUB_FAULT addr={addressPath} id={delivery.Id} ex={ex.Message}");
+            logger.LogError(ex,
+                "[ROUTE] Directed delivery to pod hub {Address} failed — surfacing DeliveryFailure to sender {Sender}",
+                addressPath, delivery.Sender);
+            PostFailureToSender($"Delivery to '{addressPath}' failed: {ex.Message}", ErrorType.Failed);
+            return Observable.Return(Unit.Default);
+        }
+    }
+
+    /// <summary>
+    /// Is this the grain saying "not through this transport, not here"? Orleans wraps a thrown grain
+    /// exception on its way back to the caller, so the test walks the inner chain — matching by type
+    /// only, never by message text.
+    /// </summary>
+    internal static bool IsPodHubNotHere(Exception ex) =>
+        ex is PodHubNotHereException
+        || (ex.InnerException is not null && IsPodHubNotHere(ex.InnerException));
 
     /// <summary>
     /// Composes (does NOT run) the MEMORY-STREAM leg of a route: the "I'm a registered hosted hub,
