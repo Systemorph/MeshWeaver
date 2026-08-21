@@ -82,10 +82,61 @@ public class HomeTabsTest
     [Fact]
     public void Apps_ShippedDefaults_ComposeDockPlusGrid()
     {
-        // Shipped DefaultApps include the ~/Chat Threads tile → a dock row above the node grid.
+        // Shipped DefaultApps include the ~/Chat Threads tile → dock tiles INLINE with the node
+        // grid, one horizontal band.
         UserActivityLayoutAreas.BuildApps(NodePath, new HomeConfig(), installedApps: null)
             .Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(2, "system-tile dock + the node-card grid");
+            .Areas.Should().HaveCount(2, "system-tile dock + the node-card grid, inline");
+    }
+
+    [Fact]
+    public void Apps_IsOneCompactBand()
+    {
+        // The Apps tab is a phone-dock band, not a grid of full-size cards: a 140px cell floor
+        // (below the control's 200px default) so a typical app set fits ONE row, wrapping only
+        // when it must. Deliberately NO MaxColumns: the React client renders MaxColumns as an
+        // EXACT column count and would squeeze cards to slivers.
+        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
+        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
+            .Should().BeOfType<MeshSearchControl>().Subject;
+
+        apps.MinItemWidth.Should().Be(140);
+        apps.Sections!.ItemLimit.Should().Be(24);
+        apps.MaxColumns.Should().BeNull();
+        apps.Grid!.Spacing.Should().Be(12);
+    }
+
+    [Fact]
+    public void Apps_BudgetOf24_BoundsTheQueryItself()
+    {
+        // 24 tiles TOTAL: with 30 configured paths and no dock entry, the grid's path alternation
+        // carries exactly 24 entries — the QUERY is bounded, not just the rendered list.
+        var many = new HomeConfig
+        {
+            DefaultApps = Enumerable.Range(1, 30).Select(i => $"P{i}").ToList(),
+        };
+        var apps = UserActivityLayoutAreas.BuildApps(NodePath, many, installedApps: null)
+            .Should().BeOfType<MeshSearchControl>().Subject;
+
+        var firstLeg = apps.HiddenQuery!.ToString()!.Split('\n')[0];
+        firstLeg.Split(" OR ").Should().HaveCount(24, "the AppBudget slice bounds the path alternation");
+        firstLeg.Should().NotContain("P25", "entries beyond the budget are dropped in config order");
+    }
+
+    [Fact]
+    public void Apps_BudgetOf24_CountsDockTiles()
+    {
+        // Dock entries count against the same budget: the slice happens BEFORE the dock/grid
+        // split, so a config of ~/Chat + 30 paths still yields one band of at most 24 tiles.
+        var many = new HomeConfig
+        {
+            DefaultApps = new[] { "~/Chat" }
+                .Concat(Enumerable.Range(1, 30).Select(i => $"P{i}"))
+                .ToList(),
+        };
+        var band = UserActivityLayoutAreas.BuildApps(NodePath, many, installedApps: null)
+            .Should().BeOfType<StackControl>().Subject;
+        band.Areas.Should().HaveCount(2, "dock + grid, inline");
     }
 
     [Theory]

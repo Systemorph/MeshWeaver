@@ -283,7 +283,12 @@ public class MarkdownHtmlRenderer
         var seed = editing.CodeOf?.Invoke(submissionId)
                    ?? MarkdownFenceEditing.StripFenceHeader(HtmlEntity.DeEntitize(node.InnerText));
         builder.OpenComponent<MarkdownCodeCellEditor>(1);
-        builder.SetKey(submissionId);
+        // 🚨 The key is (node, cell), not the cell alone. LayoutAreaView keeps a markdown subtree
+        // MOUNTED across navigation, so a bare submission id would let a component survive from one
+        // document into another that happens to reuse the id — and the editor seeds ONCE, so the
+        // viewer would be shown, and could Run, the PREVIOUS page's code. Submission ids are short
+        // authored words (`spotgap`, `blank`), which makes the collision likely rather than exotic.
+        builder.SetKey($"{editing.NodePath}\u0000{submissionId}");
         builder.AddAttribute(2, nameof(MarkdownCodeCellEditor.SubmissionId), submissionId);
         builder.AddAttribute(3, nameof(MarkdownCodeCellEditor.Language),
             node.GetAttributeValue(ExecutableCodeBlockRenderer.LanguageAttribute, "csharp"));

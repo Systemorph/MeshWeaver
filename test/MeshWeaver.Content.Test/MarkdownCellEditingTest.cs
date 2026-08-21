@@ -1,5 +1,8 @@
+using System.Text.Json;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Graph;
 using MeshWeaver.Markdown;
+using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.AspNetCore.Components.RenderTree;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -162,5 +165,78 @@ public class MarkdownCellEditingTest
         // open is seeded with the saved answer rather than the original stub.
         stored.PrerenderedHtml.Should().NotBeNull();
         stored.PrerenderedHtml!.Should().Contain("var answer = 42;").And.NotContain("// TODO");
+    }
+
+    // ── The WRITE: what actually lands on the node ────────────────────────────────────────────
+
+    private static MeshNode NodeWith(object content) =>
+        new("SpotTheGap", "Course/Lesson/Exercise") { NodeType = "Edu/Exercise", Content = content };
+
+    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+
+    [Fact]
+    public void TheWrite_RebuildsEveryDerivedArtefact()
+    {
+        var node = NodeWith(new MarkdownContent { Content = Workbench, Authors = ["ada"], Tags = ["fp"] });
+
+        var written = MarkdownCodeCellEditor.WithFenceBody(node, "spotgap", "var answer = 42;", Options);
+
+        var content = written.Content.Should().BeOfType<MarkdownContent>().Subject;
+        content.Content.Should().Contain("var answer = 42;").And.NotContain("// TODO");
+
+        // CodeSubmissions is what a Run RE-POSTS. A stale one does not merely look wrong, it EXECUTES
+        // the old code and renders a confident result for source nobody is looking at.
+        content.CodeSubmissions.Should().NotBeNull();
+        content.CodeSubmissions!.Single(s => s.Id == "spotgap").Code.Trim().Should().Be("var answer = 42;");
+
+        // Two HTML projections, and the Overview / prerender paths read the NODE-level one rather
+        // than the content's — refreshing only the inner field serves the pre-edit page on reload.
+        content.PrerenderedHtml.Should().NotBeNull().And.Subject.As<string>()
+            .Should().Contain("var answer = 42;");
+        written.PreRenderedHtml.Should().Be(content.PrerenderedHtml);
+
+        // Metadata the shape does not derive is not collateral damage.
+        content.Authors.Should().Equal("ada");
+        content.Tags.Should().Equal("fp");
+    }
+
+    [Fact]
+    public void TheWrite_HandlesEveryShapeMarkdownContentArrivesIn()
+    {
+        // 🚨 The silent-failure shape this repository names first: content is typed on its own hub,
+        // a bare string elsewhere, and a JsonElement across a query seam. A typed-only read returns
+        // null for the last two, so the save would do NOTHING on pages that render perfectly.
+        var asString = MarkdownCodeCellEditor.WithFenceBody(
+            NodeWith(Workbench), "spotgap", "var answer = 1;", Options);
+        MarkdownOverviewLayoutArea.GetMarkdownContent(asString).Should().Contain("var answer = 1;");
+        asString.PreRenderedHtml.Should().NotBeNull("even a bare-string body has a node-level projection");
+
+        var element = JsonSerializer.SerializeToElement(
+            new { type = "MarkdownDocument", content = Workbench }, Options);
+        var asElement = MarkdownCodeCellEditor.WithFenceBody(
+            NodeWith(element), "spotgap", "var answer = 2;", Options);
+        MarkdownOverviewLayoutArea.GetMarkdownContent(asElement).Should().Contain("var answer = 2;");
+    }
+
+    [Fact]
+    public void TheWrite_LeavesTheNodeUNTOUCHEDWhenTheFenceIsGone()
+    {
+        // Returning the node unchanged makes the merge patch EMPTY. The alternative — "write the
+        // whole body" — turns a fence someone renamed into a wiped exercise.
+        var node = NodeWith(new MarkdownContent { Content = Workbench });
+
+        MarkdownCodeCellEditor.WithFenceBody(node, "nosuchcell", "x", Options)
+            .Should().BeSameAs(node);
+    }
+
+    [Fact]
+    public void TheWrite_LeavesANonMarkdownNodeAlone()
+    {
+        // Unreachable from a rendered markdown cell, so it is left alone rather than thrown at —
+        // a keystroke is not the place to surface a shape nobody can produce here.
+        var node = NodeWith(new { some = "other shape" });
+
+        MarkdownCodeCellEditor.WithFenceBody(node, "spotgap", "x", Options)
+            .Should().BeSameAs(node);
     }
 }

@@ -1152,16 +1152,49 @@ public partial class MeshSearchView
         }
     }
 
+    private int? BoundMinItemWidth
+    {
+        get
+        {
+            if (ViewModel?.MinItemWidth is int i) return i;
+            if (ViewModel?.MinItemWidth is JsonElement je && je.ValueKind == JsonValueKind.Number)
+                return je.GetInt32();
+            return null;
+        }
+    }
+
     private string CardGridStyle
     {
         get
         {
+            var parts = new List<string>();
+            // The px FLOOR is the cell's minimum width — 200 by default; MinItemWidth lowers it
+            // for compact tile bands (the home's Apps dock), raising the real per-row count.
+            var floor = BoundMinItemWidth.GetValueOrDefault(200);
+            if (floor <= 0) floor = 200;
             var maxCols = BoundMaxColumns;
-            if (!maxCols.HasValue || maxCols.Value <= 0) return "";
-            if (maxCols.Value == 1) return "grid-template-columns: 1fr;";
-            // Container-responsive: auto-fill capped at maxCols via percentage minimum
-            var pct = 100.0 / maxCols.Value;
-            return $"grid-template-columns: repeat(auto-fill, minmax(max({pct:F1}% - 8px, 200px), 1fr));";
+            if (maxCols is { } cols && cols > 0)
+            {
+                if (cols == 1)
+                    parts.Add("grid-template-columns: 1fr;");
+                else
+                {
+                    // Container-responsive: auto-fill capped at maxCols via percentage minimum.
+                    var pct = 100.0 / cols;
+                    parts.Add(
+                        $"grid-template-columns: repeat(auto-fill, minmax(max({pct:F1}% - 8px, {floor}px), 1fr));");
+                }
+            }
+            else if (BoundMinItemWidth is > 0)
+            {
+                // No MaxColumns set: the configured floor must STILL apply, or WithMinItemWidth
+                // silently no-ops against the stylesheet's default cell minimum.
+                parts.Add($"grid-template-columns: repeat(auto-fill, minmax({floor}px, 1fr));");
+            }
+            // WithGridSpacing is authored in px by every call site; unset keeps the stylesheet gap.
+            if (ViewModel?.Grid is { } grid && grid.Spacing > 0)
+                parts.Add($"gap: {grid.Spacing}px;");
+            return string.Join(" ", parts);
         }
     }
 
