@@ -111,6 +111,16 @@ spec:
                 name: "memex-portal-config"
             - secretRef:
                 name: "memex-portal-secrets"
+            # 🚨 Extra env sources the chart does not own — typically a Key Vault CSI-synced
+            # secret (secrets-store SecretProviderClass → k8s Secret). Without this key such a
+            # source can only be wired by a live kubectl patch on the Deployment, which the next
+            # `helm upgrade` silently DROPS — memex-cloud runs exactly that shape today
+            # (memexcloud-portal-ai-secrets carrying its AI provider keys), so its first
+            # repo-driven release would detach every provider key. Entries are verbatim
+            # EnvFromSource objects: {secretRef: {name: …}} or {configMapRef: {name: …}}.
+            {{- range .Values.extraEnvFrom }}
+            - {{ toYaml . | nindent 14 | trim }}
+            {{- end }}
           env:
             # 🩺 Crash diagnostics. We hit a native SIGSEGV (exit 139) in the Npgsql → SslStream TLS
             # read path: the process dies with NO managed exception, so the logs show nothing useful.
