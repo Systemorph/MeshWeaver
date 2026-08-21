@@ -982,5 +982,20 @@
   "versions.viewRedline": "Nachverfolgte Änderungen anzeigen",
   "settings.published": "Im Web veröffentlicht",
   "ui.mdPublishedIntro": "Jede Seite, die ein **abgemeldeter Besucher** öffnen kann — dieselbe Liste, die `/sitemap.xml` an Suchmaschinen liefert, aus derselben Quelle gelesen, damit beide nicht auseinanderlaufen.\n\nEine Seite ist öffentlich, weil sie eine **Leseberechtigung für Anonymous** trägt. Es gibt keinen separaten Schalter und keinen separaten Ort: Die öffentliche URL ist ihr gewöhnlicher Pfad. Änderbar im Reiter **Zugriff** des Knotens.",
-  "ui.mdPublishedNone": "**Nichts ist veröffentlicht.** Kein Knoten trägt eine Leseberechtigung für Anonymous, daher sieht ein abgemeldeter Besucher nichts und `/sitemap.xml` ist leer."
+  "ui.mdPublishedNone": "**Nichts ist veröffentlicht.** Kein Knoten trägt eine Leseberechtigung für Anonymous, daher sieht ein abgemeldeter Besucher nichts und `/sitemap.xml` ist leer.",
+  "menu.hideInPresentation": "Im Präsentationsmodus ausblenden",
+  "menu.hideInPresentationTooltip": "Bleibt bei eingeschaltetem Präsentationsmodus aus deinen Kacheln und Vorschlägen heraus",
+  "menu.showInPresentation": "Im Präsentationsmodus anzeigen",
+  "menu.showInPresentationTooltip": "Beim Präsentieren nicht mehr aus deinen Kacheln und Vorschlägen ausblenden",
+  "presentation.mode": "Präsentationsmodus",
+  "presentation.modeTooltip": "Blendet die von dir markierten Einträge aus deinen Kacheln, Karten und Vorschlägen aus — nur für dich, und nur bis du ihn ausschaltest",
+  "presentation.on": "Ein",
+  "presentation.off": "Aus",
+  "presentation.indicator": "Präsentationsmodus ist aktiv — markierte Einträge sind aus deinen Kacheln und Vorschlägen ausgeblendet",
+  "presentation.markedTitle": "Im Präsentationsmodus ausgeblendet",
+  "presentation.markedBody": "Das bleibt bei eingeschaltetem Präsentationsmodus aus deinen Kacheln, Karten und Vorschlägen heraus. Für andere ändert sich nichts, und über den Link erreichst du es weiterhin.",
+  "presentation.unmarkedTitle": "Wieder sichtbar",
+  "presentation.unmarkedBody": "Das wird im Präsentationsmodus nicht mehr ausgeblendet.",
+  "presentation.signInRequiredTitle": "Anmeldung erforderlich",
+  "presentation.signInRequiredBody": "Der Präsentationsmodus ist eine persönliche Einstellung — dafür musst du angemeldet sein."
 }

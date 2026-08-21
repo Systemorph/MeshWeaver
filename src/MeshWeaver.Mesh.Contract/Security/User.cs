@@ -53,6 +53,38 @@ public record User : AccessObject
     public IReadOnlyList<string> PinnedPaths { get; init; } = [];
 
     /// <summary>
+    /// The node paths this user marked "hide in presentation mode" (issue #1803) — their PERSONAL
+    /// privacy screen, stored here beside <see cref="PinnedPaths"/> for exactly the same reason:
+    /// it is a preference of the VIEWER, never a property of the shared node. Disguising a node's
+    /// display fields instead is global — every user sees the renamed tile and it needs a restore
+    /// step — which is the workaround this replaces.
+    ///
+    /// <para>🚨 DISPLAY-ONLY, and only while <see cref="PresentationMode"/> is on. A marked path is
+    /// still readable, still resolves by direct URL, still comes back from the mesh query engine,
+    /// and is completely unchanged for every other user: the marking grants nothing and denies
+    /// nothing. See <see cref="PresentationScreen"/>, which is the one place the two fields are
+    /// turned into a rendering decision.</para>
+    ///
+    /// <para>Marking a space covers its subtree — a path IS a name, so listing
+    /// <c>Acme/Q3-Renewal</c> under "Last edited" would leak exactly what marking <c>Acme</c> was
+    /// meant to keep off the screen.</para>
+    /// </summary>
+    public IReadOnlyList<string> HiddenPaths { get; init; } = [];
+
+    /// <summary>
+    /// Whether this user's presentation mode is currently ON — the quick toggle flipped before
+    /// sharing a screen (issue #1803). While it is on, every path in <see cref="HiddenPaths"/>
+    /// disappears from the user's OWN tile, card and completion surfaces; while it is off, the
+    /// markings do nothing at all, so turning it off is the complete undo with no restore step.
+    ///
+    /// <para>It lives on the profile rather than in circuit state so the mode survives navigation
+    /// and a reconnect mid-presentation — a privacy screen that silently drops on a dropped
+    /// WebSocket is worse than none. Signing out and back in keeps it on, deliberately and
+    /// visibly: the header indicator is lit whenever it is.</para>
+    /// </summary>
+    public bool PresentationMode { get; init; }
+
+    /// <summary>
     /// Long-form markdown body for the owner's home page — the SINGLE editable page, 1:1 with
     /// <c>Space.Body</c>. Empty/whitespace (the default) → the welcome template is shown, which embeds
     /// the home regions via <c>@@("area/…")</c> (Pinned, Catalog, Search, Composer). Set it to author

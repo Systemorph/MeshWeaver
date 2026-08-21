@@ -471,7 +471,16 @@ public static class UserActivityLayoutAreas
     {
         var options = host.Hub.JsonSerializerOptions;
         var syncStream = host.Workspace.GetStream(new MeshNodeReference());
-        return syncStream!.Select(change => BuildPinnedItems(change.Value.ContentAs<User>(options)));
+        // The VIEWER's presentation screen (#1803), resolved ONCE here on the render turn and
+        // combined in as a value — never re-read from an ambient context inside the projection
+        // below, which would resolve to "nobody" (and therefore hide nothing) on a later emission.
+        // 🚨 NOT .Seeded() — deliberately. This is a tile surface: painting a pinned card before
+        // the screen is known is the flash the mode exists to prevent, so it GATES. The node menu
+        // seeds instead because there the screen only picks a label. See Doc/GUI/PresentationMode
+        // rule 2 before "fixing" this to match the menu.
+        var screen = host.ViewerScreen();
+        return syncStream!.CombineLatest(screen,
+            (change, viewerScreen) => BuildPinnedItems(change.Value.ContentAs<User>(options), screen: viewerScreen));
     }
 
     /// <summary>The open-threads region — the owner's own threads that aren't Done yet, newest first.</summary>
@@ -493,6 +502,12 @@ public static class UserActivityLayoutAreas
         var ownerId = OwnerIdOf(host.Hub.Address.ToString());
         var options = host.Hub.JsonSerializerOptions;
         var locale = host.ViewerLocale();
+        // The viewer's presentation screen (#1803), resolved ONCE on the render turn.
+        // 🚨 NOT .Seeded() — deliberately. This is a tile surface: painting a pinned card before
+        // the screen is known is the flash the mode exists to prevent, so it GATES. The node menu
+        // seeds instead because there the screen only picks a label. See Doc/GUI/PresentationMode
+        // rule 2 before "fixing" this to match the menu.
+        var screen = host.ViewerScreen();
         // The home's DISPLAY CONFIG is DATA-DRIVEN: read the admin-editable Admin/HomeConfig platform
         // node reactively (shipped defaults when absent), so an admin's edit updates every open home
         // LIVE — no code change, no image roll. Combined with the caller's cross-partition grants
@@ -504,8 +519,9 @@ public static class UserActivityLayoutAreas
                 ObserveSharedTargets(host, ownerId),
                 ObserveInstalledApps(host, ownerId, options),
                 syncStream!.Select(change => change.Value.ContentAs<User>(options)).StartWith((User?)null),
-                (config, shared, installedApps, user) =>
-                    (UiControl?)BuildHome(ownerId, config, shared, installedApps, user, locale));
+                screen,
+                (config, shared, installedApps, user, viewerScreen) =>
+                    (UiControl?)BuildHome(ownerId, config, shared, installedApps, user, locale, viewerScreen));
     }
 
     /// <summary>
@@ -755,21 +771,31 @@ public static class UserActivityLayoutAreas
     /// </summary>
     internal static UiControl BuildHome(
         string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
-        IReadOnlyList<string>? installedApps = null, User? user = null, string? locale = null)
+        IReadOnlyList<string>? installedApps = null, User? user = null, string? locale = null,
+        PresentationScreen? screen = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
+        // 🚨 The viewer's presentation screen (#1803) is applied to the Shared-with-me, Pinned and
+        // Apps tabs HERE, before their queries are built — not only where the resulting cards are
+        // painted. Each of those three interpolates the viewer's PATHS into the control's query
+        // string, which the search view exposes in its options editor and carries in the `hq=`
+        // parameter of "open in search". A marked name reaching the address bar mid-presentation is
+        // the leak, whether or not a card for it is ever drawn. The Spaces tab's query is generic,
+        // so it is filtered where its results are painted and left untouched here.
+        var privacy = screen ?? PresentationScreen.Off;
         if (cfg.Style == HomeStyle.Catalog)
-            return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale);
+            return BuildCatalog(nodeOwnerId, cfg, sharedTargets, locale, privacy);
 
+        var visibleShared = privacy.Retain(sharedTargets);
         var tabs = Controls.Tabs.WithSkin(skin => skin.WithWidth("100%"));
-        if (sharedTargets is { Count: > 0 })
-            tabs = tabs.WithView(BuildSharedWithMe(sharedTargets, locale),
+        if (visibleShared.Count > 0)
+            tabs = tabs.WithView(BuildSharedWithMe(visibleShared, locale),
                 skin => skin.WithLabel(LocalizationCatalog.Get("home.sharedWithMe", locale)));
-        var pinned = BuildPinnedItems(user, withTitle: false);
+        var pinned = BuildPinnedItems(user, withTitle: false, screen: privacy);
         if (pinned is not null)
             tabs = tabs.WithView(pinned,
                 skin => skin.WithLabel(LocalizationCatalog.Get("home.pinned", locale)));
-        tabs = tabs.WithView(BuildApps(nodeOwnerId, cfg, installedApps, locale),
+        tabs = tabs.WithView(BuildApps(nodeOwnerId, cfg, installedApps, locale, privacy),
             skin => skin.WithLabel(LocalizationCatalog.Get("home.apps", locale)));
         tabs = tabs.WithView(BuildSpaces(nodeOwnerId, cfg, locale),
             skin => skin.WithLabel(LocalizationCatalog.Get("home.spaces", locale)));
@@ -839,15 +865,23 @@ public static class UserActivityLayoutAreas
     /// shape as <see cref="BuildSharedWithMe"/> so a never-opened app still shows.
     /// </summary>
     internal static UiControl BuildApps(
-        string nodeOwnerId, HomeConfig? config, IReadOnlyList<string>? installedApps, string? locale = null)
+        string nodeOwnerId, HomeConfig? config, IReadOnlyList<string>? installedApps,
+        string? locale = null, PresentationScreen? screen = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
-        var entries = (cfg.DefaultApps ?? [])
-            .Concat(installedApps ?? [])
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Select(p => p.StartsWith("~/", StringComparison.Ordinal) ? p : p.Trim('/'))
-            .Where(p => p.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        // An installed app's path goes straight into the `path:(…)` query below, so a marked one is
+        // dropped HERE — see the note in BuildHome for why the query string is itself a surface.
+        // A "~/" entry is a system AREA, not a mesh path: it names no node, so there is nothing for
+        // the screen to match and it is passed through untouched.
+        var entries = (screen ?? PresentationScreen.Off)
+            .Filter(
+                (cfg.DefaultApps ?? [])
+                    .Concat(installedApps ?? [])
+                    .Where(p => !string.IsNullOrWhiteSpace(p))
+                    .Select(p => p.StartsWith("~/", StringComparison.Ordinal) ? p : p.Trim('/'))
+                    .Where(p => p.Length > 0)
+                    .Distinct(StringComparer.OrdinalIgnoreCase),
+                p => p.StartsWith("~/", StringComparison.Ordinal) ? null : p)
             .ToList();
         var systemAreas = entries.Where(p => p.StartsWith("~/", StringComparison.Ordinal)).ToList();
         var paths = entries.Where(p => !p.StartsWith("~/", StringComparison.Ordinal)).ToList();
@@ -965,10 +999,15 @@ public static class UserActivityLayoutAreas
     /// </summary>
     internal static UiControl BuildCatalog(
         string nodeOwnerId, HomeConfig? config = null, IReadOnlyList<string>? sharedTargets = null,
-        string? locale = null)
+        string? locale = null, PresentationScreen? screen = null)
     {
         var cfg = config ?? HomeConfigNodeType.Defaults;
         var everything = BuildCatalogList(nodeOwnerId, cfg, exclusions: "", locale);
+        // Same rule as BuildHome: the shared band's targets are query-string content, so the
+        // presentation screen (#1803) applies before the query is built. The catalog list itself is
+        // a generic query and is deliberately NOT narrowed — a `-path:` clause would put the marked
+        // name in the same URL and start turning the screen into a second permission system.
+        sharedTargets = (screen ?? PresentationScreen.Off).Retain(sharedTargets);
 
         // No cross-partition invitations → the catalog IS the single list.
         if (sharedTargets is not { Count: > 0 })
@@ -1419,10 +1458,16 @@ public static class UserActivityLayoutAreas
     /// typed↔JsonElement frames, and <c>as</c> → null on JsonElement frames flips the band in/out,
     /// the render storm that vanished the home on chat launch).</para>
     /// </summary>
-    internal static UiControl? BuildPinnedItems(User? user, bool withTitle = true)
+    internal static UiControl? BuildPinnedItems(
+        User? user, bool withTitle = true, PresentationScreen? screen = null)
     {
-        var pinnedPaths = user?.PinnedPaths;
-        if (pinnedPaths == null || pinnedPaths.Count == 0)
+        // 🚨 Same reason as the shared band and the Apps tab: a pinned path is INTERPOLATED INTO THE
+        // QUERY STRING this control carries, so a marked one is dropped here rather than only where
+        // its card would be painted — otherwise the marked name still travels into the search box's
+        // options editor and the `hq=` URL. Display-only: the pin itself is untouched and comes
+        // straight back when presentation mode is turned off (#1803).
+        var pinnedPaths = (screen ?? PresentationScreen.Off).Retain(user?.PinnedPaths);
+        if (pinnedPaths.Count == 0)
             return null;
 
         var pathsClause = string.Join(" OR ", pinnedPaths);

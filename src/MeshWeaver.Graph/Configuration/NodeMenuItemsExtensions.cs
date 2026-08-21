@@ -173,7 +173,21 @@ public static class NodeMenuItemsExtensions
     /// </summary>
     private static IObservable<IReadOnlyCollection<NodeMenuItemDefinition>> DefaultNodeMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
-        => GetMenuContext(host).Select(menuCtx =>
+        // The viewer's presentation screen (#1803) joins the node + permission streams so the
+        // hide/show entry flips the instant the mark is written — the same reason this provider is
+        // reactive at all. Resolved ONCE here, outside the projection.
+        //
+        // 🚨 SEEDED, never awaited. The tile surfaces gate their first paint on the screen because
+        // painting early there LEAKS; this menu must not, because the screen decides only WHICH OF
+        // TWO LABELS the presentation entry carries (Hide vs Show) for the node the viewer is
+        // already looking at. A briefly wrong label is cosmetic; a menu that never renders is not.
+        // Without the seed, every node-menu render in the process awaits a subscription to the
+        // VIEWER's own User node — a node that need not exist (a test identity, a caller mid-
+        // onboarding) — and a CombineLatest whose leg never produces stalls silently and forever,
+        // outside any test's methodTimeout. "No such user node" is a defined, screened-safe value
+        // (PresentationScreen.Off); it must arrive as a VALUE, not as something to wait for.
+        => GetMenuContext(host).CombineLatest(
+            host.ViewerScreen().Seeded(), (menuCtx, screen) =>
         {
             var (menuPath, _, menuNode, perms) = menuCtx;
             var items = ImmutableList.CreateBuilder<NodeMenuItemDefinition>();
@@ -182,7 +196,7 @@ public static class NodeMenuItemsExtensions
             // item carrying an emoji so it reads at a glance. The Order encodes the grouping — the
             // aggregator re-sorts every provider's items by Order, so InstanceSync's
             // "Synchronizations" item (Order 36) slots into the middle section on its own.
-            //   10-18  edit / organize            ✏️ 🔖 ➡️ 📋 🗑️
+            //   10-18  edit / organize            ✏️ 🔖 🕶️ ➡️ 📋 🗑️
             //   30-38  content / history / sync    📁 🕘 🔌 (🔄)
             //   50     lifecycle                   ♻️
 
@@ -205,6 +219,11 @@ public static class NodeMenuItemsExtensions
                            ?? accessService?.CircuitContext?.ObjectId;
             var pin = PinLayoutArea.GetMenuItem(menuPath, viewerId);
             if (pin != null) items.Add(pin with { Order = 12, Icon = "🔖" });
+
+            // Display-only, viewer-scoped, and never gated on a permission of the TARGET: marking a
+            // node hidden edits the viewer's own profile, not the node.
+            var presentation = PresentationLayoutArea.GetMenuItem(menuPath, viewerId, screen);
+            if (presentation != null) items.Add(presentation);
 
             if (!isProtectedRoot)
             {
