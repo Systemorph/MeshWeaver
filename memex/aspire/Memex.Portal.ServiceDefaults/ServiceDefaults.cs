@@ -157,16 +157,34 @@ public static class ServiceDefaults
     /// <c>terminationGracePeriodSeconds</c>, so a pod with a forgotten open tab cannot block a
     /// rollout forever. No session, no state, no auth — infrastructure, exactly like
     /// <c>/health</c> and <c>/alive</c> beside it.</para>
+    ///
+    /// <para><b>…and it LOGS what it reports.</b> preStop probes with
+    /// <c>curl -sf -m 5 -o /dev/null</c>, which throws the count away and cannot tell a 503 from a
+    /// refused connection — so without a log line a pod sitting in <c>Terminating</c> is opaque
+    /// from outside, and "one forgotten tab" is indistinguishable from "the HTTP layer is wedged"
+    /// (#1794). Since a probe of this endpoint is the only notice the process gets that it is
+    /// terminating at all — preStop runs BEFORE SIGTERM — the probe is also the right moment to say
+    /// so. <see cref="DrainProgress"/> holds the rate limiting and the decision; see its remarks
+    /// for how the three cases read in the log.</para>
     /// </summary>
     public static WebApplication MapDrainEndpoint(this WebApplication app)
     {
-        app.MapGet("/drain", (IServiceProvider services) =>
+        // Process-wide, captured here rather than resolved: the endpoint is mapped once per app, so
+        // the closure IS the process scope, and this stays independent of whether the host happens
+        // to register Blazor's tracker. See DrainProgress for why the endpoint — not a timer — is
+        // the right place to notice that this pod is terminating.
+        var progress = new DrainProgress();
+
+        app.MapGet("/drain", (IServiceProvider services, ILogger<DrainProgress> logger) =>
         {
             // GetService, not GetRequired: a host without Blazor (a worker, a test host) has no
             // tracker and is trivially drained — never a 500 that a preStop would read as "keep
             // waiting" and then hard-kill at the grace ceiling anyway.
             var tracker = services.GetService<ActiveCircuitTracker>();
             var live = tracker?.Count ?? 0;
+
+            Report(logger, progress.Probe(live, DateTimeOffset.UtcNow));
+
             return live == 0
                 ? Results.Text("drained", "text/plain")
                 : Results.Text($"{live} circuit(s) still open", "text/plain",
@@ -174,6 +192,58 @@ public static class ServiceDefaults
         }).AllowAnonymous();
 
         return app;
+    }
+
+    /// <summary>
+    /// Writes the one line a probe is worth. Information: a pod termination is a rare lifecycle
+    /// event, and <see cref="DrainProgress.ReportInterval"/> already caps a full 1800 s drain at
+    /// roughly thirty lines. Each line is self-sufficient — it states the counts and the elapsed
+    /// time rather than requiring the reader to diff it against an earlier one.
+    /// </summary>
+    private static void Report(ILogger logger, DrainProbeReport report)
+    {
+        switch (report.Outcome)
+        {
+            case DrainProbeOutcome.TerminationBegun:
+                logger.LogInformation(
+                    "Drain: TERMINATION BEGUN — preStop is polling /drain, so Kubernetes has already " +
+                    "deleted this pod and removed it from the Service; the process has NOT been " +
+                    "SIGTERMed yet and keeps serving its {Live} open circuit(s) until they close or " +
+                    "the grace ceiling SIGKILLs it. Treat every log line after this one as coming " +
+                    "from a terminating replica, not a serving one.",
+                    report.LiveCircuits);
+                break;
+
+            case DrainProbeOutcome.StillDraining:
+                logger.LogInformation(
+                    "Drain: still draining after {Elapsed} — {Live} circuit(s) open (was " +
+                    "{Previous} at the last report, {Initial} when termination began) over " +
+                    "{Probes} probe(s). {Verdict}",
+                    report.Elapsed,
+                    report.LiveCircuits,
+                    report.CircuitsAtLastReport,
+                    report.CircuitsWhenTerminationBegan,
+                    report.ProbeCount,
+                    report.Progressing
+                        ? "Progressing — sessions are closing."
+                        : "NO progress since the last report; if the count stays flat this pod " +
+                          "will ride the grace period to SIGKILL.");
+                break;
+
+            case DrainProbeOutcome.Drained:
+                logger.LogInformation(
+                    "Drain: DRAINED after {Elapsed} over {Probes} probe(s) — the last circuit " +
+                    "closed ({Initial} were open when termination began). preStop returns now and " +
+                    "the process shuts down normally.",
+                    report.Elapsed,
+                    report.ProbeCount,
+                    report.CircuitsWhenTerminationBegan);
+                break;
+
+            case DrainProbeOutcome.Silent:
+            default:
+                break;
+        }
     }
 
     /// <summary>
