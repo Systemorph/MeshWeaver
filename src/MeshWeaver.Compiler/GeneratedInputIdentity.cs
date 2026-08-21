@@ -226,25 +226,47 @@ public static class GeneratedInputIdentity
     }
 
     /// <summary>
-    /// Assembly file name → implementation MVID ("N" format), read METADATA-ONLY so nothing is
-    /// loaded into the process. Keyed by FILE NAME rather than by full path: a path is a property
-    /// of the host's layout, and a key that carried one could never match between a bake container
-    /// and a portal pod. A missing or unreadable file resolves <see cref="AbsentId"/> — absence is
-    /// part of the key.
+    /// Assembly file name → its implementation MVID(s) ("N" format), read METADATA-ONLY so nothing
+    /// is loaded into the process. Keyed by FILE NAME rather than by full path: a path is a
+    /// property of the host's layout, and a key that carried one could never match between a bake
+    /// container and a portal pod. A missing or unreadable file resolves <see cref="AbsentId"/> —
+    /// absence is part of the key.
+    ///
+    /// <para>🚨 <b>A file name can be AMBIGUOUS, so the value is a SET, not the last writer.</b>
+    /// NuGet resolution can hand back two different assemblies with the same file name (two
+    /// packages, or two target-framework folders), and <c>RunSourceGenerators</c> loads BOTH paths.
+    /// Overwriting on collision would drop one of them from the key: the key would then claim
+    /// "same input" for a genuinely different effective generator set — the UNDER-invalidating
+    /// direction, i.e. stale bytes — and which one survived would depend on enumeration order,
+    /// reintroducing exactly the order-dependence this type exists to remove. So colliding entries
+    /// are de-duplicated and joined as ordinal-sorted MVIDs (<see cref="IdentitySeparator"/>).
+    /// The same assembly resolved twice by different paths still collapses to one id, which is
+    /// correct: it IS one input.</para>
     /// </summary>
     public static ImmutableSortedDictionary<string, string> AssemblyFileIdentities(
         IEnumerable<string> assemblyPaths)
     {
         ArgumentNullException.ThrowIfNull(assemblyPaths);
-        var builder = ImmutableSortedDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var byName = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         foreach (var path in assemblyPaths)
         {
             if (string.IsNullOrEmpty(path))
                 continue;
-            builder[Path.GetFileName(path)] = ReadMvid(path) ?? AbsentId;
+            var name = Path.GetFileName(path);
+            if (!byName.TryGetValue(name, out var ids))
+                byName[name] = ids = new SortedSet<string>(StringComparer.Ordinal);
+            ids.Add(ReadMvid(path) ?? AbsentId);
         }
+        var builder = ImmutableSortedDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        foreach (var (name, ids) in byName)
+            builder[name] = string.Join(IdentitySeparator, ids);
         return builder.ToImmutable();
     }
+
+    /// <summary>Joins the several MVIDs a single file NAME resolved to — see
+    /// <see cref="AssemblyFileIdentities"/>. Not a hex digit, so it can never be mistaken for part
+    /// of one MVID.</summary>
+    public const string IdentitySeparator = "+";
 
     private static string? ReadMvid(string path)
     {
