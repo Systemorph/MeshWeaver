@@ -1423,10 +1423,12 @@ jobs:
   # A module that does not build produces no bundle, and the capability simply vanishes from the
   # image — a failure with no error anywhere near the change that caused it.
   #
-  # ⏱️ ONE `dotnet build` over a generated solution, not sixteen: the platform's project graph is
-  # then compiled once rather than per module. Measured at 73 s wall-clock for all sixteen against
-  # a warm tree; the timeout below is set well above that and the step PRINTS its own elapsed time,
-  # so if this ever becomes the long pole it is re-scoped from evidence rather than by guess.
+  # ⏱️ ONE `dotnet build` over a generated solution, not thirty-one: the platform's project graph
+  # is then compiled once rather than per project, which is where nearly all of the cost is.
+  # Measured against a warm tree: **16 s for all 31** (sixteen modules + their test projects) in
+  # one build, versus 73 s for the sixteen modules built one invocation at a time. The timeout
+  # below is far above either, and the step PRINTS its own elapsed time, so if this ever becomes
+  # the long pole it is re-scoped from evidence rather than by guess.
   landed-modules-gate:
     name: "Landed modules compile against this PR"
     needs: [preflight, build]
@@ -1464,27 +1466,42 @@ jobs:
         # first time the plugins repo adds a module, and it would go stale SILENTLY — the gate
         # would keep passing while covering less. `*.Test` projects are excluded: this gate is
         # about the shipped bundles, and the plugins repo runs their tests itself.
-        mapfile -t projects < <(find src -mindepth 2 -maxdepth 2 -name '*.csproj' \
-                                  ! -name '*.Test.csproj' | sort)
+        # TEST projects are included, and that is not padding: the failure that reddened the
+        # plugins repo's main on 2026-08-21 was `MeshWeaver.OgCard.Test` failing to COMPILE —
+        # it moved out of this repo with its module and silently lost `InternalsVisibleTo`, so
+        # the seam constructor it needs became invisible (CS1729). A module-only sweep is blind
+        # to that whole class, and including the tests costs nothing measurable because they
+        # share the one build graph. They are COMPILED here, never run: executing them needs
+        # containers and is the plugins repo's own job.
+        mapfile -t projects < <(find src -mindepth 2 -maxdepth 2 -name '*.csproj' | sort)
         if [ "${#projects[@]}" -eq 0 ]; then
           echo "::error::found no module projects under plugins-repo/src — a gate that covers nothing must not report green. Either the layout moved (update the discovery below) or the checkout is wrong."
           echo "failure=no module projects discovered under plugins-repo/src" >> "$GITHUB_OUTPUT"
           exit 1
         fi
-        echo "Building ${#projects[@]} landed module(s) against this PR's platform tree:"
+        echo "Building ${#projects[@]} landed project(s) against this PR's platform tree:"
         printf '  %s\n' "${projects[@]}"
+        # 🚨 Resolve the file the SDK actually wrote rather than assuming an extension: .NET 10
+        # creates `LandedModules.slnx`, and hard-coding `.sln` fails with "Could not find
+        # solution or directory" — a fault that looks nothing like the breakage this gate is for.
         dotnet new sln -n LandedModules >/dev/null
-        for p in "${projects[@]}"; do dotnet sln LandedModules.sln add "$p" >/dev/null; done
+        sln="$(ls LandedModules.slnx LandedModules.sln 2>/dev/null | head -1)"
+        if [ -z "$sln" ]; then
+          echo "::error::dotnet new sln produced no solution file — cannot assemble the build."
+          echo "failure=dotnet new sln produced no solution file" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        for p in "${projects[@]}"; do dotnet sln "$sln" add "$p" >/dev/null; done
         start=$SECONDS
         # -warnaserror matches how these modules are actually shipped (the plugins repo inherits
         # this repo's Directory.Build.props), so a warning introduced here fails here.
-        if ! dotnet build LandedModules.sln -c Release -warnaserror \
+        if ! dotnet build "$sln" -c Release -warnaserror \
                -p:MeshWeaverRoot="$GITHUB_WORKSPACE" 2>&1 | tee "${RUNNER_TEMP:-/tmp}/landed-modules.log"; then
           # Report the FIRST real diagnostic, so the required check downstream can name the cause
           # instead of saying "see the job". NU1010 (a pin this repo deleted) and CS0117 (an API
           # this repo deleted) are the two shapes this gate was built for and both surface here.
           first="$(grep -oE '(error|warning) [A-Z]+[0-9]+:.*' "${RUNNER_TEMP:-/tmp}/landed-modules.log" | head -1 | cut -c1-300)"
-          echo "::error::a landed module in MeshWeaver.Plugins does not build against this PR. ${first:-see the job log}"
+          echo "::error::a landed project in MeshWeaver.Plugins does not build against this PR. ${first:-see the job log}"
           echo "failure=${first:-a landed module in MeshWeaver.Plugins does not build against this PR}" >> "$GITHUB_OUTPUT"
           {
             echo "### ❌ Landed modules do not build against this PR"
@@ -1498,8 +1515,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
         fi
-        echo "### ✅ ${#projects[@]} landed modules build against this PR ($((SECONDS - start))s)" >> "$GITHUB_STEP_SUMMARY"
-        echo "all ${#projects[@]} landed modules built in $((SECONDS - start))s"
+        echo "### ✅ ${#projects[@]} landed projects (modules + their tests) build against this PR ($((SECONDS - start))s)" >> "$GITHUB_STEP_SUMMARY"
+        echo "all ${#projects[@]} landed projects built in $((SECONDS - start))s"
 
   # ────────────────────────── CLIENTS GATE ──────────────────────────
   # Folds the `Clients` workflow's verdict into the repo's ONE required status check (#1568).
