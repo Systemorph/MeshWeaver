@@ -21,7 +21,22 @@ public partial class MarkdownFileParser : IFileFormatParser
         .UseYamlFrontMatter()
         .Build();
 
+    /// <summary>
+    /// 🚨 CASE-INSENSITIVE on purpose (#1984). Two parsers claim <c>.md</c> and configured YAML
+    /// differently: <c>AgentFileParser</c> binds camelCase but claims only <c>nodeType: Agent</c>,
+    /// so everything else falls through here — where a PascalCase-only deserializer never bound
+    /// <c>nodeType:</c>, <see cref="DeserializerBuilder.IgnoreUnmatchedProperties"/> swallowed the
+    /// miss, and the node defaulted to <c>Markdown</c>. Eleven skills authored exactly as this
+    /// repo's own guidance says imported as plain Markdown pages, silently, and so never reached
+    /// the slash-command list.
+    ///
+    /// <para>Adding a camelCase CONVENTION would have been the wrong fix: it swaps which casing
+    /// binds rather than accepting both, and 1146 files in the plugin repos author the same keys
+    /// PascalCase (<c>NodeType: Edu/Lesson</c>). Case-insensitive matching binds BOTH, which is
+    /// why the regression test pins the two spellings of the same key.</para>
+    /// </summary>
     private static readonly IDeserializer YamlDeserializer = new DeserializerBuilder()
+        .WithCaseInsensitivePropertyMatching()
         .IgnoreUnmatchedProperties()
         .Build();
 
