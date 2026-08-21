@@ -192,8 +192,15 @@ public static class LocalNodeRepo
         PackageManifest package, RepoSnapshot snapshot, ImmutableHashSet<string> packageIds)
     {
         var deps = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
-        foreach (var required in package.Requires)
-            if (packageIds.Contains(required) && required != package.Id)
+        // 🚨 THROUGH DependencyId, never the raw entry. A `requires` entry carries an optional
+        // version range — `"Store@^1.0.0"` — and comparing the whole string against a package ID
+        // matches nothing, so the edge silently disappears. Measured 2026-08-21 across
+        // MeshWeaver.Plugins: 51 of its 52 declared `requires` edges were dead, including every
+        // one of the eleven modules `Essentials` declares, so an `Mcp` change ordered (and, once
+        // the bake reads this same graph, REBUILT) without `Essentials`. `PackageDependencyGraph`
+        // has parsed it correctly all along; this reader is the one that drifted.
+        foreach (var required in package.Requires.Select(PackageDependencyGraph.DependencyId))
+            if (required.Length > 0 && packageIds.Contains(required) && required != package.Id)
                 deps.Add(required);
 
         var prefix = (package.SourceFolder ?? package.Id) + "/";
