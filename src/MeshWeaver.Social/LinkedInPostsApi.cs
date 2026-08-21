@@ -34,8 +34,15 @@ public static class LinkedInPostsApi
     /// LinkedIn versioned-API month header value (<c>LinkedIn-Version: YYYYMM</c>). LinkedIn pins
     /// each versioned endpoint to a month; bump this to a currently-supported version as LinkedIn
     /// rolls the window forward. Callers may override per-call.
+    ///
+    /// <para>🚨 A version LinkedIn has sunset fails every call with HTTP 426
+    /// <c>NONEXISTENT_VERSION</c> — publish included. Measured against the live API on 2026-08-19:
+    /// <c>202506</c> and <c>202508</c> both returned 426 "not active", while 202511 and everything
+    /// from 202601 on were still served. The pin had gone stale, so every publish from the mesh was
+    /// failing before it reached LinkedIn's business logic. Re-check this when a call starts
+    /// returning 426; the window rolls forward roughly a year behind the current month.</para>
     /// </summary>
-    public const string DefaultApiVersion = "202506";
+    public const string DefaultApiVersion = "202606";
 
     private static readonly Uri PostsEndpoint = new("https://api.linkedin.com/rest/posts");
     private const string SocialActionsBase = "https://api.linkedin.com/rest/socialActions/";
