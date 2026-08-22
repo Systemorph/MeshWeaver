@@ -43,14 +43,24 @@ namespace Memex.Portal.Shared.Api;
 /// this one is already what purchases are recorded against.</para>
 ///
 /// <para>🚨 <b>The key is TWO decisions, and for a long time only the first one ran (#1772).</b> The
-/// filter below authenticates — a valid <c>mwi_</c> key or 401 — and <see cref="IsGranted"/>
+/// filter below authenticates — a valid <c>mwi_</c> key or 401 — and <see cref="Decide"/>
 /// authorizes, per package, on <b>both</b> routes. Until #1772 the authenticated caller was written
 /// into <see cref="HttpContext.Items"/> and never read back, so any registered instance could
 /// download every installed package's bundle, paid courses included, while this very paragraph said
 /// otherwise. An instance key is provisioned to every registered installation; it is identity, never
-/// entitlement. The grant model is <see cref="PluginGrantEntry"/> matched against the install
-/// record's <see cref="PackageManifest.Source"/> — the same match <c>InstallByDefault</c> and
-/// <c>/api/plugins</c> make, so there is exactly one thing to keep honest.</para>
+/// entitlement. The grant model is <see cref="PluginGrantEntry"/> — the same match
+/// <c>InstallByDefault</c> and <c>/api/plugins</c> make, so there is exactly one thing to keep
+/// honest.</para>
+///
+/// <para>🚨 <b>The (source, package) binding the grant is matched against is anchored on the
+/// REGISTRY (#1782 gap 2), not on this instance's install records.</b> It used to come from the
+/// record's <see cref="PackageManifest.Source"/> and from nowhere else, which made two things true
+/// that should not have been: a package this instance had not itself installed could not be served
+/// at all (however plainly its content sat here), and "I cannot tell which source this is from" was
+/// answered as "you are not entitled to it". The record is now read as what it is — a CACHE of the
+/// registry's binding — and its absence sends the question upstream. See
+/// <see cref="PackageEntitlementAnchor"/> for the three outcomes and
+/// <see cref="PackageOriginAnchor"/> for the read; the GRANT match itself is untouched.</para>
 ///
 /// <para>🚨 <b>A refusal is byte-identical to "no such bundle"</b> (<see cref="NoSuchBundle"/>), and
 /// an ungranted package is absent from the index. The URL scheme is fully predictable, so a
@@ -116,7 +126,7 @@ public static class PluginBundleEndpoints
         group.MapGet("/{plugin}/{version}",
             (HttpContext http, string plugin, string version, CancellationToken ct) =>
                 Bundle(
-                    RootHub(http), plugin, version,
+                    http, RootHub(http), plugin, version,
                     Requested(http, "identity", FrameworkMvid),
                     Requested(http, "arch", ReleaseArchitecture.Live),
                     Caller(http),
@@ -248,26 +258,44 @@ public static class PluginBundleEndpoints
         http.Items.TryGetValue(CallerItemKey, out var value) ? value as AuthenticatedInstance : null;
 
     /// <summary>
-    /// 🚨 <b>THE PER-PACKAGE AUTHORIZATION</b> (#1772) — whether <paramref name="caller"/> may pull
-    /// <paramref name="package"/>, decided by the admin-owned <see cref="PluginGrant"/> its key
-    /// resolved to.
+    /// 🚨 <b>THE PER-PACKAGE AUTHORIZATION</b> (#1772), now anchored on the REGISTRY (#1782 gap 2) —
+    /// whether <paramref name="caller"/> may pull <paramref name="package"/>, decided by the
+    /// admin-owned <see cref="PluginGrant"/> its key resolved to.
     ///
-    /// <para>The grant is a set of <c>(source, package)</c> pairs, so the install record's
-    /// <see cref="PackageManifest.Source"/> — the registry source it was installed FROM — is what the
-    /// entry is matched against. Exactly the reading <c>PluginRegistryEndpoints</c> applies to its
-    /// listing and <c>InstanceAutoRegistrationService</c> applies to <c>InstallByDefault</c>; a
-    /// second, bundle-specific notion of entitlement would be a second thing to keep in step with
-    /// what purchases are recorded against.</para>
+    /// <para>The grant is a set of <c>(source, package)</c> pairs, and the whole question is where
+    /// the <c>source</c> half comes from. It used to come from the install record's
+    /// <see cref="PackageManifest.Source"/> and nowhere else — so a package this instance had not
+    /// itself installed had NO binding, and "I cannot tell which source this is from" came out as
+    /// "you are not entitled to it". <see cref="PackageEntitlementAnchor"/> inverts that: the
+    /// registry's own catalog is the authority, the install record is a cache of it, and a cache
+    /// miss asks upstream. The GRANT match is untouched — the same
+    /// <see cref="AuthenticatedInstance.Allows(string,string)"/> <c>/api/plugins</c> and <c>InstallByDefault</c>
+    /// make.</para>
     ///
-    /// <para>🚨 <b>An unstamped source fails CLOSED.</b> A record whose <c>Source</c> is null (one
-    /// written before the field existed, or installed from something that is not a configured
-    /// registry source) matches no entry at all — <see cref="PluginGrantEntry.Matches"/> compares the
-    /// source name, and <c>""</c> equals none of them. "Cannot determine" is a refusal, never a pass.
-    /// The consumer's own <c>PluginBundleClient</c> reads the resulting 404 as "no prebuilt bundle —
-    /// will compile", so the cost of that refusal is a compile, never a failed install.</para>
+    /// <para>🚨 <b>An unstamped record no longer fails dark.</b> A record whose <c>Source</c> is null
+    /// used to match no grant entry at all and was servable to nobody, silently. Now it simply
+    /// carries no CACHED binding, so the anchor answers for it — from the registry's catalog, never
+    /// from an invented source. If the anchor cannot be consulted either, the outcome is
+    /// <see cref="EntitlementOutcome.Indeterminate"/>: the bytes are still withheld (the consumer's
+    /// <c>PluginBundleClient</c> reads that 404 as "no prebuilt bundle — will compile", so the cost
+    /// is a compile), but it is recorded as UNKNOWN rather than asserted as a denial.</para>
+    ///
+    /// <para>🚨 <b>A caller the filter did not stamp is granted NOTHING</b>, and that is a real
+    /// negative rather than an unanswerable one: there is no anonymous branch on these routes, so a
+    /// null caller can only mean a route mapped outside the group (#1772).</para>
     /// </summary>
-    private static bool IsGranted(AuthenticatedInstance? caller, BundleEntry package) =>
-        caller is not null && caller.Allows(package.Source ?? "", package.PluginId);
+    private static EntitlementDecision Decide(
+        AuthenticatedInstance? caller, BundleEntry package, PackageOriginSnapshot anchor) =>
+        caller is null
+            ? new EntitlementDecision(
+                package.PluginId, EntitlementOutcome.Denied, EntitlementAnchorKind.None, null, true,
+                "no authenticated caller was stamped — these routes have no anonymous branch")
+            : PackageEntitlementAnchor.Resolve(
+                package.PluginId,
+                anchor.SourceOf(package.PluginId),
+                package.Source,
+                anchor.IsComplete,
+                source => caller.Allows(source, package.PluginId));
 
     /// <summary>
     /// 🚨 The ONE answer for a bundle this caller cannot have — used for "no such package", "no such
@@ -295,6 +323,32 @@ public static class PluginBundleEndpoints
         http.RequestServices.GetRequiredService<IMessageHub>();
 
     /// <summary>
+    /// 🚨 The ENTITLEMENT ANCHOR (#1782 gap 2) — the registry's own catalog, read as the authority
+    /// on which source carries which package.
+    ///
+    /// <para>Resolved from the REQUEST's services first, then the mesh's, exactly like
+    /// <c>ModuleLandingService</c>: it lets a host wire a different anchor (a test, an instance
+    /// serving a curated subset) without a second resolution rule. An instance with no anchor
+    /// registered at all is an authority on nothing — <see cref="AnchorState.Unconfigured"/>, which
+    /// falls back to the local cache and never to a denial.</para>
+    /// </summary>
+    private static PackageOriginAnchor? Anchor(HttpContext http) =>
+        http.RequestServices.GetService<PackageOriginAnchor>()
+        ?? RootHub(http).ServiceProvider.GetService<PackageOriginAnchor>();
+
+    /// <summary>The record that makes a degraded entitlement answer legible (#1782 gap 2). Same
+    /// two-step resolution as <see cref="Anchor"/>.</summary>
+    private static PackageEntitlementLedger? Ledger(HttpContext http) =>
+        http.RequestServices.GetService<PackageEntitlementLedger>()
+        ?? RootHub(http).ServiceProvider.GetService<PackageEntitlementLedger>();
+
+    /// <summary>Reads the anchor, or reports it unconfigured when this instance registers none.</summary>
+    private static IObservable<PackageOriginSnapshot> ReadAnchor(PackageOriginAnchor? anchor) =>
+        anchor?.Read()
+        ?? Observable.Return(
+            PackageOriginSnapshot.Empty(AnchorState.Unconfigured, DateTimeOffset.UtcNow));
+
+    /// <summary>
     /// What this instance can serve, and the framework identity it serves it for.
     ///
     /// <para>The framework MVID is at the TOP, not per-bundle: every assembly here was produced by
@@ -306,24 +360,37 @@ public static class PluginBundleEndpoints
     /// through an ingress, a port-forward or a custom domain must advertise the host the caller
     /// actually used, or every follow-up request goes somewhere it cannot reach.</para>
     ///
-    /// <para>🚨 <b>Scoped to what the caller was GRANTED</b> (#1772, <see cref="IsGranted"/>) — an
+    /// <para>🚨 <b>Scoped to what the caller was GRANTED</b> (#1772, <see cref="Decide"/>) — an
     /// ungranted package is simply not listed, so a caller cannot even learn it is installed here.
     /// That is what makes the download route's refusal non-informative: with the index filtered, "not
     /// in your index" and "404 on fetch" agree, and neither confirms existence. A caller granted
     /// nothing gets an empty <c>bundles</c> array, indistinguishable from a registry with nothing
     /// installed.</para>
+    ///
+    /// <para>🚨 <b>Only the DEGRADED decisions are recorded here</b> (#1782 gap 2). An index request
+    /// resolves every servable package at once and is polled by every consumer, so recording all of
+    /// them would fill a bounded ledger with routine grants and evict the answers worth keeping. The
+    /// download route records every decision it makes — one per actual fetch.</para>
     /// </summary>
     private static Task<IResult> Index(
         HttpContext http, IMessageHub rootHub, AuthenticatedInstance? caller, CancellationToken ct)
     {
         var baseUrl = $"{http.Request.Scheme}://{http.Request.Host}{RoutePrefix}";
+        var ledger = Ledger(http);
 
-        return ServableEntries(rootHub, ct)
-            .Select(servable =>
+        return Servable(rootHub, Anchor(http), ct)
+            .Select(state =>
             {
-                var granted = (IReadOnlyList<BundleEntry>)servable
-                    .Where(p => IsGranted(caller, p)).ToArray();
-                WarnAboutAnEmptyIndex(rootHub, caller, servable, granted);
+                var decisions = state.Entries
+                    .Select(entry => (Entry: entry, Decision: Decide(caller, entry, state.Anchor)))
+                    .ToArray();
+                foreach (var (_, decision) in decisions.Where(d => d.Decision.IsDegraded))
+                    ledger?.Record(decision);
+                WarnAboutDegradedResolution(rootHub, caller, state.Anchor,
+                    decisions.Select(d => d.Decision).ToArray());
+                var granted = (IReadOnlyList<BundleEntry>)decisions
+                    .Where(d => d.Decision.Serves).Select(d => d.Entry).ToArray();
+                WarnAboutAnEmptyIndex(rootHub, caller, state.Entries, granted);
                 return granted;
             })
             .SelectMany(packages => ServableModules(rootHub, packages)
@@ -359,7 +426,7 @@ public static class PluginBundleEndpoints
 
     /// <summary>
     /// 🚨 Names, on the index request, every install record with NO <see cref="BundleEntry.Source"/>
-    /// — the records <see cref="IsGranted"/> can never match, and which are therefore servable to
+    /// — the records <see cref="Decide"/> can never match, and which are therefore servable to
     /// nobody.
     ///
     /// <para>It belongs HERE rather than only on the download path, because the filtered index means
@@ -370,45 +437,133 @@ public static class PluginBundleEndpoints
     /// lane carries its source.</para>
     /// </summary>
     /// <summary>
-    /// Everything this registry can serve: its own INSTALL RECORDS (the catalog lane) UNIONED
-    /// with the modules PUBLISHED onto it (the activation sidecar — entries whose
-    /// <c>PackagePath</c> stamps the source a <c>PluginGrant</c> matches on). The union is what
-    /// makes a GitSync-native registry serve at all: memex-cloud provisions its packages as
-    /// Spaces and never runs the catalog install, so it has NO install records — with a
-    /// record-only index its bundle feed was permanently empty and every consumer read
-    /// SkipNoBundle (found live, 2026-08-20, the first real remote consumer). Records win on a
-    /// PluginId collision — a deliberate install is more intentional than a publish.
+    /// Everything this registry can serve, and the state of the anchor the entitlement decision
+    /// will be made against.
+    ///
+    /// <para>THREE contributors, in precedence order:</para>
+    /// <list type="number">
+    ///   <item>its own INSTALL RECORDS (the catalog lane) — a deliberate install is the most
+    ///     intentional statement, so it wins a <c>PluginId</c> collision;</item>
+    ///   <item>the modules PUBLISHED onto it (the activation sidecar). The union with (1) is what
+    ///     makes a GitSync-native registry serve at all: memex-cloud provisions its packages as
+    ///     Spaces and never runs the catalog install, so it has NO install records — with a
+    ///     record-only index its bundle feed was permanently empty and every consumer read
+    ///     SkipNoBundle (found live, 2026-08-20, the first real remote consumer);</item>
+    ///   <item>🚨 the packages the REGISTRY ANCHOR advertises whose content this instance actually
+    ///     holds (#1782 gap 2). This is the half that could not exist before the anchor: a package
+    ///     provisioned as a Space, with compiled NodeTypes and no install record and no published
+    ///     module, had nothing to bind a grant to and was therefore unreachable through the index
+    ///     however plainly it was installed.</item>
+    /// </list>
+    ///
+    /// <para>🚨 The sidecar's <c>PackagePath</c> source in (2) is now read as a CACHED claim rather
+    /// than as authority — <see cref="Decide"/> lets the anchor override it whenever the registry
+    /// carries the package. It is the publisher's own assertion about which source it belongs to,
+    /// and believing an uploader's assertion outright is exactly the invented anchor #1782 warned
+    /// would weaken #1777.</para>
     /// </summary>
-    private static IObservable<IReadOnlyList<BundleEntry>> ServableEntries(
-        IMessageHub rootHub, CancellationToken ct) =>
+    private static IObservable<(IReadOnlyList<BundleEntry> Entries, PackageOriginSnapshot Anchor)> Servable(
+        IMessageHub rootHub, PackageOriginAnchor? anchor, CancellationToken ct) =>
         InstalledPackages(rootHub, ct)
             .Do(packages => WarnAboutUnstampedRecords(rootHub, packages))
-            .SelectMany(records =>
-            {
-                var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
-                if (landing is null)
-                    return Observable.Return(records);
-                return landing.GetActivation().Take(1).Select(activation =>
+            .SelectMany(records => WithPublishedModules(rootHub, records))
+            .SelectMany(local => ReadAnchor(anchor)
+                .SelectMany(snapshot => WithAnchoredPackages(rootHub, local, snapshot)
+                    .Select(entries => (Entries: entries, Anchor: snapshot))));
+
+    /// <summary>Contributor (2): the modules published onto this instance that no install record
+    /// already covers.</summary>
+    private static IObservable<IReadOnlyList<BundleEntry>> WithPublishedModules(
+        IMessageHub rootHub, IReadOnlyList<BundleEntry> records)
+    {
+        var landing = rootHub.ServiceProvider.GetService<ModuleLandingService>();
+        if (landing is null)
+            return Observable.Return(records);
+        return landing.GetActivation().Take(1).Select(activation =>
+        {
+            var recorded = records.Select(r => r.PluginId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var published = activation.Entries
+                .Where(e => e.Enabled
+                    && !string.IsNullOrWhiteSpace(e.Version)
+                    && e.PackagePath?.Split('/') is { Length: 2 } segments
+                    && !recorded.Contains(segments[1]))
+                .Select(e =>
                 {
-                    var recorded = records.Select(r => r.PluginId)
-                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    var published = activation.Entries
-                        .Where(e => e.Enabled
-                            && !string.IsNullOrWhiteSpace(e.Version)
-                            && e.PackagePath?.Split('/') is { Length: 2 } segments
-                            && !recorded.Contains(segments[1]))
-                        .Select(e =>
-                        {
-                            var segments = e.PackagePath!.Split('/');
-                            return new BundleEntry(
-                                segments[1], e.Version!, segments[1],
-                                Module: e.Name,
-                                MinMeshVersion: e.MinMeshVersion,
-                                Source: segments[0]);
-                        });
-                    return (IReadOnlyList<BundleEntry>)records.Concat(published).ToArray();
+                    var segments = e.PackagePath!.Split('/');
+                    return new BundleEntry(
+                        segments[1], e.Version!, segments[1],
+                        Module: e.Name,
+                        MinMeshVersion: e.MinMeshVersion,
+                        Source: segments[0]);
                 });
-            });
+            return (IReadOnlyList<BundleEntry>)records.Concat(published).ToArray();
+        });
+    }
+
+    /// <summary>
+    /// Contributor (3): the packages the anchor advertises that nothing local already covers — the
+    /// gap-2 half.
+    ///
+    /// <para>🚨 <b>Gated on this instance actually HOLDING the package's partition</b>, because the
+    /// bundle is assembled from the NodeType assemblies under it. Advertising a package whose
+    /// content is not here would hand every consumer an empty archive to download and then count as
+    /// a miss — an index full of bundles that cannot carry anything is a worse answer than a
+    /// filtered one.</para>
+    ///
+    /// <para>🚨 …and that gate FAILS OPEN. If the partition list comes back empty — the query could
+    /// not answer, or this mesh does not register partitions the way it is read here — the
+    /// candidates are kept rather than dropped. A gate whose inability to answer removes entries is
+    /// the very shape this change exists to remove; it is an optimization, and an optimization must
+    /// never be the thing that denies.</para>
+    /// </summary>
+    private static IObservable<IReadOnlyList<BundleEntry>> WithAnchoredPackages(
+        IMessageHub rootHub, IReadOnlyList<BundleEntry> local, PackageOriginSnapshot anchor)
+    {
+        var covered = local.Select(e => e.PluginId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidates = anchor.Origins.Values
+            .Where(origin => !covered.Contains(origin.PackageId)
+                && !string.IsNullOrWhiteSpace(origin.ReleasedVersion))
+            .ToArray();
+        if (candidates.Length == 0)
+            return Observable.Return(local);
+
+        return HeldPartitions(rootHub).Select(held =>
+        {
+            var servable = held.Count == 0
+                ? candidates
+                : candidates.Where(origin => held.Contains(origin.Partition)).ToArray();
+            return (IReadOnlyList<BundleEntry>)local
+                .Concat(servable.Select(origin => new BundleEntry(
+                    PackagingManifest.IdPrefix + origin.PackageId,
+                    origin.ReleasedVersion!,
+                    origin.PackageId,
+                    Module: origin.Module,
+                    MinMeshVersion: origin.MinMeshVersion,
+                    // No CACHED binding: this entry exists only because the anchor advertises it,
+                    // and Decide reads that binding straight off the snapshot.
+                    Source: null)))
+                .ToArray();
+        });
+    }
+
+    /// <summary>
+    /// The partitions this mesh holds, from the <c>Admin/Partition</c> registry every Space writes.
+    /// An empty set means "could not answer" as much as "none", and both callers treat it that way
+    /// (see <see cref="WithAnchoredPackages"/>) — never as evidence of absence.
+    /// </summary>
+    private static IObservable<IReadOnlySet<string>> HeldPartitions(IMessageHub rootHub) =>
+        rootHub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                $"namespace:{PartitionNodeType.Namespace} nodeType:{PartitionNodeType.NodeType}"))
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
+            .Take(1)
+            .Select(c => (IReadOnlySet<string>)c.Items
+                .Select(node => node.Id)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase))
+            .Catch((Exception _) =>
+                Observable.Return((IReadOnlySet<string>)new HashSet<string>(StringComparer.OrdinalIgnoreCase)));
 
     /// <summary>
     /// 🚨 Says so when an index request serves NOTHING — the one outcome that is silent on both
@@ -452,6 +607,47 @@ public static class PluginBundleEndpoints
                 caller?.Instance.InstanceId ?? "an unauthenticated caller", servable.Count);
     }
 
+    /// <summary>
+    /// 🚨 Says so when entitlement was resolved WITHOUT the anchor (#1782 gap 2) — the state that
+    /// otherwise looks exactly like a normal day from both sides.
+    ///
+    /// <para>A registry that cannot list its sources still answers every request: granted packages
+    /// keep flowing from the cached bindings, and the packages nothing ever observed simply do not
+    /// appear. Nothing is red, nothing 500s, and the one difference — that some answers were
+    /// guesses the system declined to make — is invisible unless it is said out loud. The two
+    /// degradations get different lines because they need different responses: an anchor that
+    /// cannot be read at all is an operational failure to go and fix, while an UNKNOWN package is
+    /// the consumer-visible consequence of it.</para>
+    /// </summary>
+    private static void WarnAboutDegradedResolution(
+        IMessageHub rootHub, AuthenticatedInstance? caller, PackageOriginSnapshot anchor,
+        IReadOnlyList<EntitlementDecision> decisions)
+    {
+        if (anchor.IsComplete)
+            return;
+
+        var logger = rootHub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger(typeof(PluginBundleEndpoints));
+        if (logger is null)
+            return;
+
+        var unknown = decisions
+            .Where(d => d.Outcome == EntitlementOutcome.Indeterminate).ToArray();
+        logger.LogWarning(
+            "Plugin bundles: entitlement for {Instance} was resolved WITHOUT a complete registry "
+            + "answer — {Anchor}. {Cached} package(s) were answered from a previously observed "
+            + "binding (served as before, deliberately: an unreachable registry is not evidence of "
+            + "a missing entitlement) and {Unknown} could not be answered at all — those are "
+            + "UNKNOWN, not denials: {Names}",
+            caller?.Instance.InstanceId ?? "an unauthenticated caller",
+            anchor.Describe(),
+            decisions.Count(d => d.Anchor == EntitlementAnchorKind.Cache),
+            unknown.Length,
+            unknown.Length == 0
+                ? "(none)"
+                : string.Join(", ", unknown.Select(d => d.PackageId).Take(MissesReported)));
+    }
+
     private static void WarnAboutUnstampedRecords(
         IMessageHub rootHub, IReadOnlyList<BundleEntry> packages)
     {
@@ -462,9 +658,12 @@ public static class PluginBundleEndpoints
         rootHub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger(typeof(PluginBundleEndpoints))
             .LogWarning(
-                "Plugin bundles: {Count} install record(s) carry no registry source, so no "
-                + "PluginGrant can match them and their bundles are servable to NO instance: "
-                + "{Packages}. Re-install them through the registry to stamp the source (#1772).",
+                "Plugin bundles: {Count} install record(s) carry no registry source, so they have "
+                + "no CACHED binding and their entitlement can only be answered by the registry "
+                + "anchor: {Packages}. Before #1782 gap 2 that made them servable to NO instance, "
+                + "silently; they are now resolved upstream, and become UNKNOWN only when the "
+                + "anchor is unreachable too. Re-install them through the registry to stamp the "
+                + "source (#1772) and the answer stops depending on the registry being up.",
                 unstamped.Length,
                 string.Join(", ", unstamped.Select(p => p.PluginId).Take(MissesReported)));
     }
@@ -514,10 +713,13 @@ public static class PluginBundleEndpoints
     /// answers <see cref="NoSuchBundle"/>; which of the three it was goes to the log only.</para>
     /// </summary>
     private static Task<IResult> Bundle(
-        IMessageHub rootHub, string plugin, string version, string identity, string architecture,
-        AuthenticatedInstance? caller, CancellationToken ct) =>
-        ServableEntries(rootHub, ct)
-            .SelectMany(packages =>
+        HttpContext http, IMessageHub rootHub, string plugin, string version, string identity,
+        string architecture, AuthenticatedInstance? caller, CancellationToken ct)
+    {
+        var anchorService = Anchor(http);
+        var ledger = Ledger(http);
+        return Servable(rootHub, anchorService, ct)
+            .SelectMany(state =>
             {
                 // Named apart from the query-string reader Requested(HttpContext, …) above — one
                 // shadowing the other reads as a call to the wrong thing.
@@ -525,30 +727,45 @@ public static class PluginBundleEndpoints
                     string.Equals(p.PluginId, plugin, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(p.Version, version, StringComparison.OrdinalIgnoreCase);
 
-                var match = packages.FirstOrDefault(p => IsAsked(p) && IsGranted(caller, p));
-                if (match is not null)
-                    return Assemble(rootHub, match, identity, architecture);
+                var asked = state.Entries.FirstOrDefault(IsAsked);
+
+                // 🚨 The entitlement question is answered even when this instance holds nothing that
+                // matches, and it is answered the SAME way — because "I hold no bytes for it" and
+                // "you may not have it" are different facts and the second must never be inferred
+                // from the first. A package with no local entry has no cached binding, so the
+                // decision falls to the anchor: granted, denied, or UNKNOWN.
+                var decision = Decide(
+                    caller,
+                    asked ?? new BundleEntry(plugin, version, plugin),
+                    state.Anchor);
+                // Every download decision is recorded — one per actual fetch, which is the rate a
+                // bounded diagnostic can carry and the granularity an operator asks about.
+                ledger?.Record(decision);
+
+                if (asked is not null && decision.Serves)
+                    return Assemble(rootHub, asked, identity, architecture);
 
                 // The refusal is uniform on the wire; the LOG is where it is diagnosable, naming
-                // which instance asked and whether the record exists at all — including the
-                // fail-closed case an operator would otherwise chase for hours: an install record
-                // with no Source stamped can be granted by nobody (see IsGranted).
-                var installed = packages.FirstOrDefault(IsAsked);
+                // which instance asked, what the entitlement answer actually was, and whether this
+                // instance holds anything to serve. 🚨 The two halves are reported separately: an
+                // Indeterminate outcome is NOT a refusal of entitlement, and reporting it as one is
+                // how an unreachable registry would come to read as an unpaid customer.
                 rootHub.ServiceProvider.GetService<ILoggerFactory>()
                     ?.CreateLogger(typeof(PluginBundleEndpoints))
                     .LogWarning(
-                        "Plugin bundles: {Plugin}@{Version} refused for instance {Instance} — {Reason}",
+                        "Plugin bundles: {Plugin}@{Version} not served to instance {Instance} — "
+                        + "entitlement: {Decision}; bytes: {Bytes}. Anchor: {Anchor}",
                         plugin, version, caller?.Instance.InstanceId ?? "(none)",
-                        installed is null
-                            ? "no such install record on this instance"
-                            : installed.Source is { Length: > 0 } source
-                                ? $"installed from source '{source}', which this instance's grant does not cover"
-                                : "the install record carries NO source, so no grant entry can match it "
-                                  + "(re-install it through the registry to stamp one)");
+                        decision.Describe(),
+                        asked is null
+                            ? "this instance holds no servable entry at that id and version"
+                            : "held",
+                        state.Anchor.Describe());
                 return Observable.Return(NoSuchBundle());
             })
             .FirstAsync()
             .ToTask(ct);
+    }
 
     /// <summary>
     /// Reads the plugin's nodes and their assemblies, then builds the archive.
@@ -846,7 +1063,7 @@ public static class PluginBundleEndpoints
     /// question a distribution index is asked.</para>
     ///
     /// <para>🚨 <b>Unscoped by design — every caller of this method must apply
-    /// <see cref="IsGranted"/>.</b> It is the full inventory, which is precisely what no caller may
+    /// <see cref="Decide"/>.</b> It is the full inventory, which is precisely what no caller may
     /// see; the grant filter lives at the two route handlers because the download route also needs
     /// the unfiltered list to write a diagnosable log line. The <see cref="BundleEntry.Source"/> each
     /// entry carries is the only input that decision needs.</para>
@@ -876,11 +1093,15 @@ public static class PluginBundleEndpoints
     /// <param name="PluginId">The plugin's catalog id — also the id a grant entry names.</param>
     /// <param name="Module">The compiled module the install record declares, or null.</param>
     /// <param name="MinMeshVersion">The module's declared platform floor, or null.</param>
-    /// <param name="Source">🚨 The registry source name the package was installed from
-    /// (<see cref="PackageManifest.Source"/>) — the half of the grant pair that is NOT the package
-    /// id, and therefore the input to <see cref="IsGranted"/>. Null on a record written before the
-    /// field existed or installed from something that is not a configured source: it then matches no
-    /// grant entry, which is the fail-closed answer (#1772).</param>
+    /// <param name="Source">🚨 The CACHED registry-source binding — what a local observation says
+    /// this package came from (<see cref="PackageManifest.Source"/> on an install record, the
+    /// declared package path on a published module). It is the half of the grant pair that is not
+    /// the package id, but it is no longer the authority on it: <see cref="Decide"/> prefers the
+    /// registry anchor and uses this when the anchor does not carry the package or cannot be
+    /// consulted (#1782 gap 2). Null on a record written before the field existed, on something
+    /// installed from a source that is not configured, and on an entry that exists only because the
+    /// anchor advertises it — in every one of those cases the absence sends the question upstream
+    /// rather than answering it.</param>
     private sealed record BundleEntry(
         string PackageId, string Version, string PluginId, string? Module = null,
         string? MinMeshVersion = null, string? Source = null);
