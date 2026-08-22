@@ -31,7 +31,7 @@ name: Node repo publish-bake (reusable)
 #     repository_dispatch:
 #       # BOTH: the platform releasing, and an UPSTREAM of this repo publishing (#1755). The second
 #       # is what wakes a run that exited because its upstreams were not ready yet.
-#       types: [meshweaver-framework-released, meshweaver-upstream-published]
+#       types: [meshweaver-framework-released]
 #
 #   publish-bake:
 #     if: >
@@ -417,8 +417,11 @@ jobs:
             echo "Building anyway would gate this repo's content against an upstream that does not"
             echo "match the framework it is being built for."
             echo ""
-            echo "**Nothing to do.** This run is re-triggered automatically when the missing"
-            echo "upstream publishes (\`meshweaver-upstream-published\`)."
+            echo "**Nothing to do — if this repo has the \`schedule\` trigger.** The next"
+            echo "scheduled run re-reads the released image and rebuilds once the upstream has"
+            echo "published. Nothing wakes this repo otherwise: the dependent-dispatch lane was"
+            echo "removed deliberately (no cross-repo write credential), so a repo WITHOUT the"
+            echo "schedule stays behind here silently."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::error title=Upstreams not ready — did not build::at least one upstream of this repo has no published artifact for framework identity ${{ steps.identity.outputs.identity }}; exiting without building. The upstream's own publication re-triggers this run."
           exit 1
@@ -608,7 +611,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ────────────────── NO DEPENDENT DISPATCH: the wave is PULLED ──────────────────
-      # This used to POST `meshweaver-upstream-published` to repos named by `dependent-repos`,
+      # This used to POST an upstream-published event to repos named by `dependent-repos`,
       # using a token with write access to each of them. Both are gone.
       #
       # A publication is a FACT about the registry, not a message a publisher owes its readers.
