@@ -247,6 +247,47 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     /// </summary>
     public void EvictLoadContext(AssemblyLoadContext context)
     {
+        // 🚨 NOTHING MAY THROW OUT OF HERE — this runs on the FINALIZER THREAD.
+        //
+        // `Unloading` fires from an explicit `Unload()` AND from `AssemblyLoadContext.Finalize()`
+        // (→ `InitiateUnload()`), so at process teardown this body executes during finalization,
+        // where an escaping exception is not an error to log — it terminates the process. Observed
+        // repeatedly under the plugin-tester suite, which mints a collectible context per NodeType
+        // compile:
+        //
+        //   [FATAL ERROR] System.NullReferenceException
+        //     at ConditionalWeakTable`2.TryAdd(TKey, TValue)
+        //     at TypeRegistry.EvictLoadContext(AssemblyLoadContext)
+        //     at AssemblyLoadContext.InitiateUnload() / .Finalize() / GC.RunFinalizers()
+        //   Catastrophic failure: System.NullReferenceException
+        //
+        // Finalizers run in no defined order, so the CWT's own `Container` can be finalized before
+        // the context that is about to use it — `Container.Finalize` clears its parent's container
+        // — and the next `TryAdd` dereferences null. The verdict cost is total and out of all
+        // proportion to the cause: the test host reported "Test Run Failed" with 75 passed and 0
+        // failed, i.e. a whole green suite thrown away by a bookkeeping sweep on a registry that
+        // was about to cease to exist.
+        //
+        // There is nothing to salvage once the process is going away, so every failure of the
+        // sweep degrades to "not swept" — the exact same state the registry would be in if this
+        // handler had never been subscribed. It is deliberately a blanket catch: the value here is
+        // that the finalizer thread survives, not that any particular exception was anticipated.
+        try
+        {
+            EvictLoadContextCore(context);
+        }
+        catch (Exception ex)
+        {
+            // Trace, not a logger: this registry has none, and a logger's own state is exactly as
+            // likely to be torn down as the table that just failed.
+            System.Diagnostics.Debug.WriteLine(
+                $"TypeRegistry.EvictLoadContext: sweep abandoned ({ex.GetType().Name}: {ex.Message})"
+                + " — the registry is being torn down with the process.");
+        }
+    }
+
+    private void EvictLoadContextCore(AssemblyLoadContext context)
+    {
         // Mark FIRST so a registration racing this sweep routes to the weak shadow instead of
         // re-adding a strong, never-again-evictable entry.
         unloadingContexts.TryAdd(context, Sentinel);
