@@ -9,19 +9,18 @@ using Xunit;
 namespace MeshWeaver.PluginCatalog.Test;
 
 /// <summary>
-/// The registry's serve rules for module bundles (#1664 Slice C, the serving half): a registry may
-/// only fan out module bytes it could load itself — its own <c>modules/&lt;name&gt;/</c> tree,
-/// gated on the activation sidecar exactly as boot is (the platform FLOOR; the recorded MVID is
-/// diagnostic and never withholds a serve).
+/// The registry's serve rules for module bundles (#1664 Slice C, the serving half): a registry
+/// fans out the module bytes on its SHELF — its own <c>modules/&lt;name&gt;/</c> tree, minus what
+/// was uninstalled. 🚨 Deliberately NO serve-side platform-floor gate (2026-08-22): the shelf carries
+/// modules for platforms NEWER than the instance serving them (that inversion is what broke the
+/// publish/update deadlock — see <see cref="ModuleBundleSource"/>'s type doc); the floor rides
+/// the index and manifest, and the CONSUMER's own gate is what decides loadability there. The
+/// recorded MVID is diagnostic and never withholds a serve.
 /// </summary>
 public class ModuleBundleSourceTest : IDisposable
 {
     private readonly string baseDirectory =
         Path.Combine(Path.GetTempPath(), "mw-bundle-src-" + Guid.NewGuid().ToString("N"));
-
-    /// <summary>The production gate bound to a fixed running platform version.</summary>
-    private static string? Gate(string? floor) =>
-        ModulePlatformFloor.DeclineReason(floor, "3.2.0");
 
     public ModuleBundleSourceTest() => Directory.CreateDirectory(baseDirectory);
 
@@ -51,7 +50,7 @@ public class ModuleBundleSourceTest : IDisposable
         LayOut("MeshWeaver.Social", "MeshWeaver.Social.pdb", "Aux.dll", "readme.txt");
 
         var (files, decline) = ModuleBundleSource.Collect(
-            baseDirectory, "MeshWeaver.Social", Activation(), Gate);
+            baseDirectory, "MeshWeaver.Social", Activation());
 
         Assert.Null(decline);
         Assert.Equal("MeshWeaver.Social.dll", Path.GetFileName(files[0]));
@@ -71,8 +70,7 @@ public class ModuleBundleSourceTest : IDisposable
             Activation(new ModuleActivationEntry
             {
                 Name = "MeshWeaver.Social", MinMeshVersion = "3.0.0",
-            }),
-            Gate);
+            }));
 
         Assert.Null(decline);
         Assert.Single(files);
@@ -94,19 +92,22 @@ public class ModuleBundleSourceTest : IDisposable
                 Name = "MeshWeaver.Social",
                 FrameworkMvid = "ffff9999ffff9999ffff9999ffff9999",
                 MinMeshVersion = "3.0.0",
-            }),
-            Gate);
+            }));
 
         Assert.Null(decline);
         Assert.Single(files);
     }
 
     [Fact]
-    public void ALandingWhoseFloorExceedsTheRunningPlatform_IsRefused()
+    public void ALandingWhoseFloorExceedsTheRunningPlatform_IsStillServed()
     {
-        // The platform rolled BACK below the module's declared requirement: these are exactly the
-        // bytes this instance's own boot union skips, and a registry must never fan out a module
-        // it could not load itself.
+        // 🚨 The SHELF inversion (2026-08-22). This entry is either a HELD publish (a module for a
+        // platform newer than this registry — the extracted-modules deadlock case) or a landing
+        // the platform rolled back below; in both states this instance's own boot skips it while
+        // the shelf SERVES it. The old serve-side refusal ("never fan out a module it could not
+        // load itself") is exactly what deadlocked the registry against the platform update that
+        // needed these modules: the floor is the CONSUMER's gate, applied against the consumer's
+        // platform off the index/manifest — never the warehouse's.
         LayOut("MeshWeaver.Social");
 
         var (files, decline) = ModuleBundleSource.Collect(
@@ -114,11 +115,10 @@ public class ModuleBundleSourceTest : IDisposable
             Activation(new ModuleActivationEntry
             {
                 Name = "MeshWeaver.Social", MinMeshVersion = "9.0.0",
-            }),
-            Gate);
+            }));
 
-        Assert.Empty(files);
-        Assert.Contains("9.0.0", decline);
+        Assert.Null(decline);
+        Assert.Single(files);
     }
 
     [Fact]
@@ -131,8 +131,7 @@ public class ModuleBundleSourceTest : IDisposable
             Activation(new ModuleActivationEntry
             {
                 Name = "MeshWeaver.Social", Enabled = false,
-            }),
-            Gate);
+            }));
 
         Assert.Empty(files);
         Assert.Contains("uninstalled", decline);
@@ -147,7 +146,7 @@ public class ModuleBundleSourceTest : IDisposable
         Directory.CreateDirectory(Path.Combine(baseDirectory, "modules", "MeshWeaver.Social"));
 
         var (files, decline) = ModuleBundleSource.Collect(
-            baseDirectory, "MeshWeaver.Social", Activation(), Gate);
+            baseDirectory, "MeshWeaver.Social", Activation());
 
         Assert.Empty(files);
         Assert.Contains("does not exist", decline);
@@ -160,7 +159,7 @@ public class ModuleBundleSourceTest : IDisposable
     [InlineData("..")]
     public void AnInvalidModuleName_IsRefused(string name)
     {
-        var (files, decline) = ModuleBundleSource.Collect(baseDirectory, name, Activation(), Gate);
+        var (files, decline) = ModuleBundleSource.Collect(baseDirectory, name, Activation());
 
         Assert.Empty(files);
         Assert.NotNull(decline);
