@@ -258,7 +258,8 @@ public class BuiltInAgentProvider : IStaticNodeProvider
             }).ToList(),
             Plugins = frontMatter.Plugins?.Select(AgentPluginReference.Parse).ToList(),
             ContextMatchPattern = frontMatter.ContextMatchPattern,
-            ModelTier = frontMatter.ModelTier
+            ModelTier = frontMatter.ModelTier,
+            Translations = ReadTranslations(frontMatter.Translations)
         };
 
         // Node-level metadata (name, description, icon, group, order) lives on the
@@ -275,6 +276,30 @@ public class BuiltInAgentProvider : IStaticNodeProvider
             Order = frontMatter.Order,
             Content = agentConfig
         };
+    }
+
+    /// <summary>
+    /// Front matter → the typed translation map. Null for an absent or empty block, so an
+    /// untranslated agent carries no translations rather than an empty dictionary.
+    /// </summary>
+    private static IReadOnlyDictionary<string, LocalizedNodeText>? ReadTranslations(
+        Dictionary<string, LocalizedNodeTextEntry>? fm)
+    {
+        if (fm is not { Count: > 0 })
+            return null;
+        var map = new Dictionary<string, LocalizedNodeText>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (tag, text) in fm)
+        {
+            if (string.IsNullOrWhiteSpace(tag) || text is null)
+                continue;
+            map[tag.Trim()] = new LocalizedNodeText
+            {
+                Name = text.Name,
+                Description = text.Description,
+                Category = text.Category,
+            };
+        }
+        return map.Count == 0 ? null : map;
     }
 
     private static MeshNode ParseMarkdownNode(string yamlContent, string markdownBody, string relativePath)
@@ -350,6 +375,21 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         public List<DelegationEntry>? Delegations { get; set; }
         public List<HandoffEntry>? Handoffs { get; set; }
         public List<string>? Plugins { get; set; }
+
+        /// <summary>
+        /// <c>translations: { de: { name: …, description: …, category: … } }</c> — per-language
+        /// overrides of the DISPLAY metadata only. The markdown body is the agent's system prompt
+        /// and stays in one language; see <see cref="AgentConfiguration.Translations"/>.
+        /// </summary>
+        public Dictionary<string, LocalizedNodeTextEntry>? Translations { get; set; }
+    }
+
+    /// <summary>One language's display overrides, as written in the front matter.</summary>
+    private class LocalizedNodeTextEntry
+    {
+        public string? Name { get; set; }
+        public string? Description { get; set; }
+        public string? Category { get; set; }
     }
 
     private class DelegationEntry

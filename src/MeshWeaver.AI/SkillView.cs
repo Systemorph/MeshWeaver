@@ -39,25 +39,35 @@ public static class SkillView
     /// <c>Take(1)</c> on the live stream.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
-        => host.Workspace.GetMeshNodeStream()
-            .Select(node => (UiControl?)BuildOverview(host, node));
+    {
+        // 🌍 Resolve the viewer's language ONCE, on the render turn, and pass it down. Reading it
+        // inside the Select would read an AsyncLocal that the node-stream emission has already left
+        // behind, so a German viewer would get a German page frame around an English skill card.
+        var locale = host.ViewerLocale();
+        return host.Workspace.GetMeshNodeStream()
+            .Select(node => (UiControl?)BuildOverview(host, node, locale));
+    }
 
     private const string ContainerStyle = "max-width: 1080px; margin: 0 auto; padding: 24px; gap: 16px;";
 
-    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node)
+    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string? locale)
     {
         var container = Controls.Stack.WithWidth("100%").WithStyle(ContainerStyle);
 
+        var def = node.ContentAs<SkillDefinition>(host.Hub.JsonSerializerOptions);
+        // 🌍 Display text only. The INSTRUCTION body below is the skill's procedure — model-facing
+        // prompt text — and is rendered exactly as authored in every language.
+        var text = NodeTextTranslations.For(def, locale);
+
         // Title — the skill name (falls back to a humanised id).
-        var displayName = node?.Name ?? node?.Id?.Wordify() ?? "Skill";
+        var displayName = Localized(text?.Name, node?.Name) ?? node?.Id?.Wordify() ?? "Skill";
         container = container.WithView(Controls.Title(displayName, 1));
 
         // Subtitle — the slash word (`/id`) and the node's help text (description).
-        var subtitle = BuildSubtitleMarkdown(node);
+        var subtitle = BuildSubtitleMarkdown(node, Localized(text?.Description, node?.Description));
         if (!string.IsNullOrWhiteSpace(subtitle))
             container = container.WithView(Controls.Markdown(subtitle));
 
-        var def = node.ContentAs<SkillDefinition>(host.Hub.JsonSerializerOptions);
         if (def is null)
             return container;
 
@@ -75,10 +85,16 @@ public static class SkillView
         return container;
     }
 
-    private static string BuildSubtitleMarkdown(MeshNode? node)
+    /// <summary>Per-FIELD fallback: a translation that sets only one field keeps the authored rest.</summary>
+    private static string? Localized(string? translated, string? authored)
+        => string.IsNullOrWhiteSpace(translated) ? authored : translated;
+
+    private static string BuildSubtitleMarkdown(MeshNode? node, string? localizedDescription)
     {
+        // 🚨 The slash word is node.Id — the INVOCATION token — so it renders identically in every
+        // language. Localizing it would print a command the router cannot resolve.
         var slash = string.IsNullOrWhiteSpace(node?.Id) ? null : $"`/{node!.Id}`";
-        var description = string.IsNullOrWhiteSpace(node?.Description) ? null : node!.Description;
+        var description = string.IsNullOrWhiteSpace(localizedDescription) ? null : localizedDescription;
         return (slash, description) switch
         {
             ({ } s, { } d) => $"{s}\n\n{d}",

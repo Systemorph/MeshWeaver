@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using MeshWeaver.Mesh;
 
 namespace MeshWeaver.AI;
 
@@ -16,7 +17,7 @@ namespace MeshWeaver.AI;
 /// <see cref="Description"/> is kept because the agent runtime feeds it to the model as
 /// delegation metadata where only the detached configuration is in hand.)</para>
 /// </summary>
-public record AgentConfiguration
+public record AgentConfiguration : ILocalizedNodeText
 {
     /// <summary>
     /// Unique identifier for this agent. Equals the owning <see cref="MeshWeaver.Mesh.MeshNode.Id"/>
@@ -96,6 +97,22 @@ public record AgentConfiguration
     /// conversational surface (<c>AgentPickerProjection.IsUtilityAgent</c>).</para>
     /// </summary>
     public string? ModelTier { get; init; }
+
+    /// <summary>
+    /// Per-language overrides of the owning node's USER-VISIBLE display metadata (name /
+    /// description / category), keyed by BCP-47 tag — e.g. <c>de</c>. Rendered through
+    /// <see cref="NodeTextTranslations"/>, which resolves the tag exactly like the string catalog
+    /// and the <c>[Translation]</c> attributes do, so the three cannot disagree.
+    ///
+    /// <para>🚨 This localizes what the PICKER shows, and nothing else. In particular it must never
+    /// be applied to <see cref="Description"/> on this record or to <see cref="Instructions"/>:
+    /// those are the delegation catalogue and the system prompt — text a MODEL reads to decide
+    /// which agent to pick and how to behave — so translating them changes behaviour rather than
+    /// presentation. The agent's runtime identity (<see cref="Id"/>, and the paths delegations and
+    /// hand-offs name) is likewise untouched, so localizing a label can never re-point a
+    /// delegation.</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, LocalizedNodeText>? Translations { get; init; }
 
     /// <summary>
     /// Optional list of additional plugins this agent should load.
