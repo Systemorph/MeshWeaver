@@ -273,9 +273,24 @@ public class SelfUpdateHostedService : IHostedService
     /// record availability → (if armed) patch the workloads.</summary>
     private IObservable<Unit> RunOnce(UpdatePolicyContent policy) =>
         _http.Invoke(ct => _acr.ListTagsAsync(_options.PortalRepository, ct))
-            .Select(tags => VersionSelect.PickTarget(tags, policy.Policy, policy.RequireCiGreen))
-            .Where(target => !string.IsNullOrEmpty(target)
-                          && VersionSelect.IsNewer(target!, ShippedReleaseSeed.InstalledPlatformVersion))
+            // 🚨 The BEST ROLLABLE release, not merely the newest one. A target is only rollable if a
+            // sealed content bake exists for the identity that exact image resolves to, and picking
+            // the newest tag and stopping means one unbaked release freezes the instance FOREVER:
+            // it holds, the next platform build produces another unbaked tag, the bake publishes yet
+            // another identity, and the two never meet. memex sat on 3.0.0-rc6 held against
+            // 3.0.0-rc7.ci.4928 while three separate bakes published three other identities — every
+            // job green throughout, nothing to point at.
+            //
+            // So walk the candidates newest-first and take the first that the gate accepts. Still
+            // never backwards (IsNewer), still never into a boot storm (unsealed candidates are
+            // SKIPPED, not forced) — but a not-yet-baked head no longer blocks the releases behind
+            // it, and an instance always advances to the best release that can actually serve.
+            .Select(tags => VersionSelect
+                .PickTargets(tags, policy.Policy, policy.RequireCiGreen)
+                .Where(tag => VersionSelect.IsNewer(tag, ShippedReleaseSeed.InstalledPlatformVersion))
+                .ToArray())
+            .SelectMany(FirstRollable)
+            .Where(target => !string.IsNullOrEmpty(target))
             .SelectMany(target => RecordAvailable(target!)
                 // 🚨 BOOKKEEPING, NOT A GATE (#1020). RecordAvailable writes two cosmetic fields
                 // (LatestAvailableTag / CheckedAt) that drive the admin tab; the ROLL-FORWARD does not
@@ -320,6 +335,42 @@ public class SelfUpdateHostedService : IHostedService
     /// itself, and a gate that could not run at all resolves to a hold with its own reason rather
     /// than to an exception that kills the tick.</para>
     /// </summary>
+    /// <summary>
+    /// The newest candidate the availability gate accepts — or, when it accepts none, the newest
+    /// candidate anyway so the caller records the hold against the release an operator is actually
+    /// waiting for.
+    ///
+    /// <para>Sequential and LAZY by construction (<c>Concat</c> over a deferred enumerable): the
+    /// common case asks the gate exactly once, about the head. Only a held head costs a second
+    /// question, and only about the release below it.</para>
+    ///
+    /// <para>🚨 Returning the newest on total failure is deliberate, not a fallback that rolls
+    /// something unwanted: the caller re-gates whatever comes back, so an all-held list still ends
+    /// in a HOLD — with the newest tag's reason, which is the one that explains why the fleet is
+    /// not moving. Reporting the OLDEST candidate's reason instead would be true and useless.</para>
+    /// </summary>
+    private IObservable<string?> FirstRollable(string[] candidates)
+    {
+        if (candidates.Length == 0)
+            return Observable.Return<string?>(null);
+
+        var gate = ResolveAvailabilityGate();
+        // No gate wired: preserve today's behaviour exactly — the head, and GateThenApply reports
+        // the not-wired case itself.
+        if (gate is null)
+            return Observable.Return<string?>(candidates[0]);
+
+        return candidates
+            .Select(tag => Observable.Defer(() => gate.IsUpdatable(tag)
+                .Select(verdict => (tag, rollable: verdict.IsUpdatable))))
+            .Concat()
+            .FirstOrDefaultAsync(x => x.rollable)
+            .Select(x => x.tag ?? candidates[0])
+            // A gate that faults must not kill the tick: fall back to the head and let
+            // GateThenApply take the fail-safe hold it already knows how to take.
+            .Catch((Exception _) => Observable.Return<string?>(candidates[0]));
+    }
+
     private IObservable<Unit> GateThenApply(string target) =>
         Observable.Defer(() =>
         {
