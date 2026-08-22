@@ -83,21 +83,32 @@ public sealed class NodeTypeAdoptionRegistry
     /// Emits once no adoption is in flight for <paramref name="nodeTypePath"/> — immediately when
     /// none is. Cold.
     ///
-    /// <para>The wait leg hops to the task pool: the release fires on the seeding pipeline's
-    /// thread, and the kickoff's continuation writes to a hub — running that inline on the
-    /// releasing thread is the "work inside a Subscribe callback on the emission thread" shape the
-    /// compile watcher is explicitly built to avoid.</para>
+    /// <para>Race-free in both directions: the subject is subscribed BEFORE the reservation is
+    /// re-checked, so a release landing between the two is not lost.</para>
     /// </summary>
     /// <param name="nodeTypePath">The NodeType's mesh path.</param>
     public IObservable<Unit> WhenClear(string nodeTypePath) =>
-        Observable.Defer(() => IsReserved(nodeTypePath)
-            ? released
-                .Where(path => string.Equals(path, nodeTypePath, StringComparison.OrdinalIgnoreCase))
-                .Where(_ => !IsReserved(nodeTypePath))
-                .Take(1)
-                .Select(_ => Unit.Default)
-                .ObserveOn(TaskPoolScheduler.Default)
-            : Observable.Return(Unit.Default));
+        Observable.Defer(() => Observable
+            // 🚨 SUBSCRIBE FIRST, THEN RE-CHECK — never the other way round. Testing IsReserved and
+            // only then subscribing loses a release that lands in between, and the caller pays the
+            // FULL wait budget for a reservation that is already gone: a 30-second stall per type,
+            // which in a tree of hundreds is the whole job. Merge subscribes its sources in order,
+            // so the deferred re-check runs after the subject subscription is live and one of the
+            // two legs is guaranteed to answer.
+            .Merge(
+                released
+                    .Where(path => string.Equals(path, nodeTypePath, StringComparison.OrdinalIgnoreCase))
+                    .Where(_ => !IsReserved(nodeTypePath))
+                    .Select(_ => Unit.Default),
+                Observable.Defer(() => IsReserved(nodeTypePath)
+                    ? Observable.Empty<Unit>()
+                    : Observable.Return(Unit.Default)))
+            .Take(1)
+            // The release fires on the seeding pipeline's thread and the kickoff's continuation
+            // writes to a hub — running that inline on the releasing thread is the "work inside a
+            // Subscribe callback on the emission thread" shape the compile watcher is explicitly
+            // built to avoid.
+            .ObserveOn(TaskPoolScheduler.Default));
 
     private void Release(string nodeTypePath)
     {
