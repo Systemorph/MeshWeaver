@@ -49,11 +49,11 @@ public class PlatformBakeLaneGuard
 
         Assert.True(job.Contains("docker run", StringComparison.Ordinal)
                     && job.Contains("--entrypoint /app/mw-plugin-test", StringComparison.Ordinal)
-                    && job.Contains("--bake-output /bake", StringComparison.Ordinal),
+                    && job.Contains("--output /bake", StringComparison.Ordinal),
             $"'{JobName}' in {Workflow} must bake the platform's content by running mw-plugin-test "
-            + "INSIDE the image this run built (docker run … --entrypoint /app/mw-plugin-test … "
-            + "--bake-output /bake). The framework identity is a property of the shipped binaries, "
-            + "so only the image the pods run can produce a bake those pods will adopt.");
+            + "INSIDE the image this run built (docker run … --entrypoint /app/mw-plugin-test "
+            + "compile … --output /bake). The framework identity is a property of the shipped "
+            + "binaries, so only the image the pods run can produce a bake those pods will adopt.");
 
         Assert.True(job.Contains("--platform linux/amd64", StringComparison.Ordinal),
             $"'{JobName}' in {Workflow} must pin the bake platform explicitly. Architecture is part "
@@ -66,6 +66,55 @@ public class PlatformBakeLaneGuard
             $"'{JobName}' in {Workflow} must publish through .github/scripts/publish-bake-bundles.sh "
             + "— the one script whose '_complete' sentinel matches "
             + "ShippedPrebuiltBundles.CompletionSentinelFileName.");
+    }
+
+    /// <summary>
+    /// 🚨 THE SPLIT (#1763): the lane must PRODUCE with the compiler and JUDGE with a mesh, in that
+    /// order, as two separate runs.
+    ///
+    /// <para>Both halves are asserted, because either one alone is a silent regression of a
+    /// different kind. A lane that goes back to the fused
+    /// <c>mw-plugin-test &lt;root&gt; --bake-output</c> is a mesh compiling the content again —
+    /// the finding #1763 opens with, and invisible from the outside because the artifacts are
+    /// identical. A lane that keeps <c>compile</c> but drops the <c>--seed</c> gate has published
+    /// bundles nothing ever rendered or tested: the release gate is gone and every check still
+    /// passes.</para>
+    ///
+    /// <para><c>--seed</c> is also what makes the gate judge the BYTES THAT SHIP rather than a
+    /// private recompile of the same sources, so its absence quietly weakens the strongest claim
+    /// this lane makes.</para>
+    /// </summary>
+    [Fact]
+    public void PlatformBake_IsCompilerDriven_AndTheGateThenConsumesIt()
+    {
+        var job = ExecutableLinesOf(ReadJobBlock());
+
+        Assert.Contains("\"$IMAGE\" compile /repo/doc", job, StringComparison.Ordinal);
+
+        Assert.False(job.Contains("--bake-output", StringComparison.Ordinal),
+            $"'{JobName}' in {Workflow} must not bake through the GATE verb (--bake-output): that "
+            + "stands up an in-process mesh, imports the content and lets the MESH compile it — "
+            + "the mesh-driven bake #1763 exists to remove. Producing an assembly is a build step; "
+            + "use `compile <root> --output <dir>`, which has no MeshBuilder, no AddGraph() and no "
+            + "hub anywhere in its path (pinned by MeshFreeBakePathTest, and proved equivalent to "
+            + "the mesh's own resolution by BakeEquivalenceTest).");
+
+        Assert.True(job.Contains("--seed /bake", StringComparison.Ordinal),
+            $"'{JobName}' in {Workflow} must GATE the bake it just produced (--seed /bake). "
+            + "Splitting the bake out must not lose the gate: the platform's own shipped content "
+            + "failing to render or execute its Tests areas against the image that ships it is a "
+            + "release defect. With --seed the mesh CONSUMES the bake, so what it renders and "
+            + "tests is the assembly that will actually ship — publishing bundles no mesh ever "
+            + "exercised would be a strictly weaker release gate than the one this replaced.");
+
+        // Order matters: the gate consumes what the bake produced, so the bake command must appear
+        // first. A gate step accidentally moved above the bake would run against an empty /bake and
+        // refuse (BakeSeed.Read: "holds no *.zip bundles"), but as a red job rather than as the
+        // clear statement below.
+        Assert.True(
+            job.IndexOf("compile /repo/doc", StringComparison.Ordinal)
+            < job.IndexOf("--seed /bake", StringComparison.Ordinal),
+            $"'{JobName}' in {Workflow} must BAKE before it GATES — the gate consumes the bake.");
     }
 
     /// <summary>
