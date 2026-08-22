@@ -107,10 +107,16 @@ public static class PluginGateRunner
                         // into a green gate.
                         .SelectMany(report => BakeOutput.Persist(
                             harness.Mesh, options, snapshot, packages, report))))
-                // The CONSUMPTION postcondition (#1763), applied to whatever the run produced —
-                // including a run that already failed, so a shortfall is never masked by an
-                // unrelated red and never masks one. Adoption leaves no trace in a gate verdict, so
-                // without this the consuming half could stop working with every run still green.
+                // The CONSUMPTION postcondition (#1763), applied to every report the run PRODUCES
+                // — a red one included, so a shortfall neither masks an unrelated failure nor is
+                // masked by one. Adoption leaves no trace in a gate verdict (an adopted type
+                // renders and tests exactly like a compiled one), so without this the consuming
+                // half could stop working with every run still green.
+                //
+                // Placed BEFORE the Catch on purpose, in both directions: a fault in this fold is
+                // contained as a FatalError like any other, and a run that faulted upstream is
+                // reported by its fault rather than by a consumption verdict derived from a run
+                // that never happened.
                 .Select(report => WithSeedVerdict(harness, options, report))
                 .Catch((Exception ex) => Observable.Return(
                     new GateReport([]) { FatalError = $"{ex.GetType().Name}: {ex.Message}" }))
