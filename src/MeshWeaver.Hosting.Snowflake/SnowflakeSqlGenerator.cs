@@ -415,7 +415,8 @@ public class SnowflakeSqlGenerator
                 "ELSE 0 END) DESC, n.\"last_modified\" DESC NULLS LAST");
         }
 
-        if (query.Limit.HasValue)
+        // `is > 0`: MeshQueryRequest.NoLimit is non-positive and must not become `LIMIT -1`.
+        if (query.Limit is > 0)
             sql.Append($" LIMIT {query.Limit.Value}");
 
         return (sql.ToString(), parameters);
@@ -762,7 +763,8 @@ public class SnowflakeSqlGenerator
                 "ELSE 0 END) DESC, \"last_modified\" DESC NULLS LAST";
         }
 
-        if (query.Limit.HasValue)
+        // `is > 0`: MeshQueryRequest.NoLimit is non-positive and must not become `LIMIT -1`.
+        if (query.Limit is > 0)
             sql += $" LIMIT {query.Limit.Value}";
 
         return (sql, parameters);

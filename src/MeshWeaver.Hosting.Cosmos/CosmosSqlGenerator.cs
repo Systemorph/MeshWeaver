@@ -68,7 +68,8 @@ public class CosmosSqlGenerator
         var sql = new StringBuilder("SELECT");
 
         // Add TOP if limit specified
-        if (query.Limit.HasValue)
+        // `is > 0`: MeshQueryRequest.NoLimit is non-positive and must not become `TOP -1`.
+        if (query.Limit is > 0)
             sql.Append($" TOP {query.Limit.Value}");
 
         // When the caller projects via `select:` and didn't ask for "content",

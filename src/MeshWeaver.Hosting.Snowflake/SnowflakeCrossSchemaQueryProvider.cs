@@ -405,7 +405,10 @@ public class SnowflakeCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         var effectiveQuery = query with
         {
             IsMain = true,
-            Limit = query.Limit ?? 50,
+            // Three cases, and conflating the last two is how an enumeration silently becomes a
+            // page: no limit stated → the default page; MeshQueryRequest.NoLimit (non-positive) →
+            // the caller declared this an ENUMERATION, so every match; a positive limit → honour it.
+            Limit = query.Limit switch { null => 50, <= 0 => int.MaxValue, var stated => stated },
             OrderBy = query.OrderBy ?? (string.IsNullOrEmpty(query.TextSearch)
                 ? new OrderByClause("last_modified", Descending: true)
                 : null)
