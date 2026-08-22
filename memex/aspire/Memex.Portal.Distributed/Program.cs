@@ -415,7 +415,13 @@ builder.Services.AddHealthChecks()
     // deployment declares Modules:Required.
     .AddCheck("required_modules",
         new Memex.Portal.Distributed.RequiredModulesHealthCheck(builder.Configuration))
-    .AddCheck<Memex.Portal.Distributed.BundleAdoptionHealthCheck>("bundle_adoption");
+    .AddCheck<Memex.Portal.Distributed.BundleAdoptionHealthCheck>("bundle_adoption")
+    // 🚨 The other half of the same blindness (#1782 gap 2). Adoption's miss is invisible because
+    // a lazy compile absorbs it; an entitlement answer's degradation is invisible because every
+    // refusal is byte-identical on the wire by design. DEGRADED, never Unhealthy: serving a
+    // previously observed entitlement while the registry is unreachable is the CORRECT answer, and
+    // failing readiness over it would turn a brief registry outage into one of ours.
+    .AddCheck<Memex.Portal.Distributed.EntitlementAnchorHealthCheck>("entitlement_anchor");
 
 // The same shape, one dependency further out: DbVersionGate proves the MESH database is
 // migrated; this proves the ORLEANS database is provisioned. They are different databases,
