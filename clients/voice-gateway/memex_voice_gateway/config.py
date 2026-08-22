@@ -24,6 +24,17 @@ def _env(name: str, default: str | None = None) -> str | None:
     return value if value not in ("", None) else default
 
 
+def _keychain(service: str) -> str | None:
+    """A secret from the macOS keychain — tokens never ride in env files or chat."""
+    import subprocess
+    try:
+        out = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
+                             capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
 # What the SPEAKER says in its own voice (holding, errors, switch confirmations) — chosen by
 # the configured language; every instruction and prompt in this repo stays English.
 PHRASES: dict[str, dict[str, str]] = {
@@ -43,7 +54,8 @@ PHRASES: dict[str, dict[str, str]] = {
            "nothing_new": "No new answers.",
            "radio_on": "Here comes {station}. Say stop to end it.",
            "song_hint": "I cannot play single songs yet — but here comes {station}.",
-           "no_stations": "No radio stations are set up yet — add them under Voice, Station in the portal."},
+           "no_stations": "No radio stations are set up yet — add them under Voice, Station in the portal.",
+           "playing_song": "Here comes {title} by {artist}."},
     "de": {"hold": "Ich schaue nach. Einen Moment bitte.",
            "error": "Entschuldigung, das hat gerade nicht geklappt.",
            "connected": "Verbunden mit {name}.",
@@ -60,7 +72,8 @@ PHRASES: dict[str, dict[str, str]] = {
            "nothing_new": "Keine neuen Antworten.",
            "radio_on": "Hier kommt {station}. Sag Stopp, wenn es reicht.",
            "song_hint": "Einzelne Lieder kann ich noch nicht spielen — dafür kommt {station}.",
-           "no_stations": "Es sind noch keine Radiosender eingerichtet — füge sie im Portal unter Voice, Station hinzu."},
+           "no_stations": "Es sind noch keine Radiosender eingerichtet — füge sie im Portal unter Voice, Station hinzu.",
+           "playing_song": "Hier kommt {title} von {artist}."},
 }
 PHRASES["en"]["answer_to"] = "Answering your question: {question} —"
 PHRASES["de"]["answer_to"] = "Antwort auf deine Frage: {question} —"
@@ -116,6 +129,12 @@ class Config:
     # --- Home Assistant (optional) — a tool for the local brain, not a voice owner ---
     ha_url: str | None = None               # e.g. http://homeassistant.local:8123
     ha_token: str | None = None             # long-lived access token
+
+    # --- Music Assistant (optional) — songs/playlists via THEIR tooling (Spotify, Apple
+    # Music, Radio Browser providers); token from MA_TOKEN or the keychain entry
+    # `music-assistant-token` ---
+    ma_url: str = "http://127.0.0.1:8095"
+    ma_token: str | None = None
 
     # --- the spoken session (context cookie) + tool reach ---
     session_file: str = "~/.memex-voice/session.json"   # persisted context, per speaker
@@ -180,6 +199,8 @@ class Config:
             system_prompt_file=_env("SYSTEM_PROMPT_FILE"),
             ha_url=(_env("HA_URL") or "").rstrip("/") or None,
             ha_token=_env("HA_TOKEN"),
+            ma_url=(_env("MA_URL", Config.ma_url) or Config.ma_url).rstrip("/"),
+            ma_token=_env("MA_TOKEN") or _keychain("music-assistant-token"),
             session_file=_env("SESSION_FILE", Config.session_file) or Config.session_file,
             session_ttl_h=float(_env("SESSION_TTL_H", "8")),
             allow_destructive=(_env("ALLOW_DESTRUCTIVE", "false") or "false").lower() == "true",
