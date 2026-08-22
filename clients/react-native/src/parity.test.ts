@@ -48,6 +48,10 @@ const EXTERNALLY_PACKED_CONTROLS = [
   // AddGraphViews: its view derives from the pack's FormComponentBase).
   "TextField", "TextArea", "NumberField", "RadioGroup", "DateTime",
   "Combobox", "Listbox", "Select", "CheckBox", "Switch", "MeshNodePicker",
+  // Group B of the same extraction: the MeshNode surface renderers folded into the Graph pack
+  // (MeshWeaver.Blazor.Graph, AddGraphViews) — one registration, one home. MeshSearch STAYS in
+  // the base registry (its arm is still scraped above); it reaches the card via DispatchView.
+  "MeshNodeCard", "MeshNodeCollection",
 ];
 
 // Skins dispatched by an external view pack rather than a BlazorViewRegistry switch arm — same

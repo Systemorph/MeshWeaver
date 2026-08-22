@@ -10,7 +10,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.Graph;
 
 /// <summary>
 /// Blazor view for <c>MeshNodeCollectionControl</c> — renders a live, query-driven list of

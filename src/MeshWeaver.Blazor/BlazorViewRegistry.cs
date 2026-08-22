@@ -149,13 +149,13 @@ public static class BlazorViewRegistry
                 RedirectControl redirect => ControlView<RedirectControl, RedirectView>(redirect, stream, area),
                 SlideShowControl slideShow => ControlView<SlideShowControl, Components.SlideShowView>(slideShow, stream, area),
                 SearchBoxControl searchBox => ControlView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
-                // MeshNodePicker renders from the MeshWeaver.Blazor.Graph pack (AddGraphViews):
-                // the view derives from the EntityViews pack's FormComponentBase, so it moved out
-                // with the form controls — the base pack cannot reference the pack that
-                // references it.
-                MeshNodeCollectionControl collection => ControlView<MeshNodeCollectionControl, MeshNodeCollectionView>(collection, stream, area),
+                // The MeshNode surface renderers (Picker/Collection/Card/Thumbnail/ContentEditor/
+                // RoleEditor) render from the MeshWeaver.Blazor.Graph pack (AddGraphViews) — they
+                // are Graph surfaces, and the picker derives from the EntityViews pack's
+                // FormComponentBase, so the set moved out together (the base pack cannot reference
+                // the packs that reference it). MeshSearchView STAYS here and reaches the card
+                // through DispatchView, i.e. through whatever pack map the mesh registered.
                 MeshSearchControl meshSearch => ControlView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
-                MeshNodeCardControl card => ControlView<MeshNodeCardControl, MeshNodeCardView>(card, stream, area),
                 HighlightControl highlight => ControlView<HighlightControl, HighlightView>(highlight, stream, area),
                 DocumentSourceControl docSource => ControlView<DocumentSourceControl, DocumentSourceView>(docSource, stream, area),
                 AppearanceControl appearance => ControlView<AppearanceControl, AppearanceView>(appearance, stream, area),
