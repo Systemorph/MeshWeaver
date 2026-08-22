@@ -283,7 +283,18 @@ public class ProviderCredentialSeedWithoutMasterKeyTest(ITestOutputHelper output
         var stored = await ReadProviderAsync();
         stored!.ApiKey.Should().BeNullOrEmpty("the refusal must leave nothing behind at rest");
 
+        // 🚨 Warm the catalog FIRST, then assert the negative. A cold snapshot answers
+        // "unusable" for every model id, so asserting it straight after EnsureSubscription would pass
+        // whatever the code did — including with a configuration rung putting the key back.
         Resolver.EnsureSubscription();
+        await Observable.Interval(TimeSpan.FromMilliseconds(100))
+            .Select(_ => Resolver.Resolve(ModelId))
+            .Should().Within(30.Seconds())
+            .Match(r => r.Endpoint == ConfiguredEndpoint,
+                "the model and its provider node are in the resolver's snapshot");
+
+        Resolver.Resolve(ModelId).ApiKey.Should().BeNull(
+            "nothing was written, and nothing outside the node is consulted any more");
         Resolver.HasUsableCredential(ModelId).Should().BeFalse(
             "a refused seed leaves the model honestly unusable — the operator sets a master key, and "
             + "the next boot converges");
