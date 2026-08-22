@@ -65,6 +65,27 @@ public enum MeshSearchRenderMode
 public record MeshSearchSortOption(string Label, string Query);
 
 /// <summary>
+/// One SCOPE tab of a search surface — a display <paramref name="Label"/> and the scope's hidden
+/// <paramref name="Query"/>, rendered as a tab strip above the search header. Switching scopes
+/// swaps only the hidden query (and, when <see cref="SortOptions"/> is set, the sort choices)
+/// while the typed search text and the rest of the component state STAY — the scopes deliberately
+/// SHARE one search bar, which is what lets a search term follow the user across tabs. The FIRST
+/// tab is the initially active scope and should match the control's
+/// <see cref="MeshSearchControl.HiddenQuery"/>, which also serves as the fallback for clients
+/// that don't render scopes.
+/// </summary>
+/// <param name="Label">The tab's display text.</param>
+/// <param name="Query">The scope's full hidden query.</param>
+public record MeshSearchScopeTab(string Label, string Query)
+{
+    /// <summary>
+    /// Sort choices that REPLACE the control-level <see cref="MeshSearchControl.SortOptions"/>
+    /// while this scope is active (first = this scope's default). Null keeps the control-level set.
+    /// </summary>
+    public IReadOnlyList<MeshSearchSortOption>? SortOptions { get; init; }
+}
+
+/// <summary>
 /// A control that provides a configurable search with results displayed in a LayoutGrid.
 /// Supports hidden query parts (always applied), visible query (user-modifiable),
 /// and different render modes (flat, hierarchical, grouped).
@@ -139,6 +160,15 @@ public record MeshSearchControl()
     /// <see cref="HiddenQuery"/>. Null/empty ⇒ no sort dropdown (unchanged behaviour).
     /// </summary>
     public IReadOnlyList<MeshSearchSortOption>? SortOptions { get; init; }
+
+    /// <summary>
+    /// Scope tabs rendered as a strip above the search header (see
+    /// <see cref="MeshSearchScopeTab"/>): switching swaps the hidden query and (optionally) the
+    /// sort choices while the typed search text stays — the scopes SHARE one search bar. Null or
+    /// a single entry renders no strip. Clients without scope support fall back to
+    /// <see cref="HiddenQuery"/>, which should equal the first tab's query.
+    /// </summary>
+    public IReadOnlyList<MeshSearchScopeTab>? ScopeTabs { get; init; }
 
     /// <summary>
     /// Whether to exclude the base path node from results (default true).
@@ -334,6 +364,11 @@ public record MeshSearchControl()
     /// <param name="options">The user-selectable sort choices; the first is the default and should match <see cref="HiddenQuery"/>.</param>
     public MeshSearchControl WithSortOptions(params MeshSearchSortOption[] options) =>
         this with { SortOptions = options };
+
+    /// <summary>Returns a copy with the scope-tab strip set (see <see cref="ScopeTabs"/>).</summary>
+    /// <param name="tabs">The scopes; the first is initially active and should match <see cref="HiddenQuery"/>.</param>
+    public MeshSearchControl WithScopeTabs(params MeshSearchScopeTab[] tabs) =>
+        this with { ScopeTabs = tabs };
 
     // Grid fluent methods
     /// <summary>Returns a copy with responsive grid column widths set per breakpoint (MUI grid units, 1–12).</summary>
