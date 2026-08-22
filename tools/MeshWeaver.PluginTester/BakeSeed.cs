@@ -168,9 +168,11 @@ public sealed class BakeSeedConsumer(
             var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("bake-seed");
             return ShippedPrebuiltBundles
                 .SeedForTypes(hub, typePaths, logger, imageDirectory: seed.Directory,
-                    // Explicitly NOT the deployment's published root: the gate consumes exactly the
-                    // bake it was pointed at, never whatever else the host happens to hold. A
-                    // second source would make "the gate adopted N" unattributable.
+                    // The gate consumes exactly the bake it was pointed at. Null here falls back to
+                    // the host's PreWarm:PrebuiltBundleRoot configuration, which for the gate mesh
+                    // is empty by construction (its IConfiguration is a bare ConfigurationBuilder)
+                    // — so there is only ever one source and "the gate adopted N" stays
+                    // attributable to the bake under test.
                     publishedRoot: null)
                 .Do(count => Interlocked.Add(ref adopted, count));
         });

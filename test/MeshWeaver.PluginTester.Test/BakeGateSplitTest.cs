@@ -256,6 +256,72 @@ public class BakeGateSplitTest(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// 🚨 One type's failure must fail THAT TYPE, never the whole bake.
+    ///
+    /// <para>The per-type catch used to name exactly two exception types; anything else unwound
+    /// past the bundle writer and killed the run — <c>FATAL</c>, exit 70, and zero bundles for the
+    /// packages that had compiled perfectly. Measured on <c>samples/Graph/Data</c>: one
+    /// <c>FatalProtocolException</c> out of the NuGet resolver (a host-configuration fault on a
+    /// single type carrying a <c>#r "nuget:"</c> directive) discarded a bake in which 23 of 24
+    /// NodeTypes were already built.</para>
+    ///
+    /// <para>It is also an EQUIVALENCE break, which is why it belongs in this file: the mesh-driven
+    /// producer contains exactly this per type (the type settles at <c>CompilationStatus.Error</c>
+    /// and the ratchet decides what that is worth), so a known-debt failure the gate tolerates
+    /// would become a total bake failure on the other side.</para>
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public void OneTypesFailure_FailsThatType_NotTheWholeBake()
+    {
+        // A source referencing a package from a source that does not exist: the resolver throws a
+        // NuGetProtocol fault, which is neither a CompilationException nor a source-discovery one.
+        const string brokenNodeType =
+            """{"$type":"MeshNode","id":"Broken","namespace":"Widget","path":"Widget/Broken","mainNode":"Widget/Broken","name":"Broken","nodeType":"NodeType","state":"Active","content":{"$type":"NodeTypeDefinition","description":"References a package that cannot resolve.","configuration":"config => config.WithContentType<Broken>()","includeGlobalTypes":true}}""";
+        const string brokenSource =
+            """
+            #r "nuget:This.Package.Does.Not.Exist.Anywhere, 999.999.999"
+
+            public record Broken
+            {
+                public int Answer() => 1;
+            }
+            """;
+
+        var repo = CreateRepo();
+        Write(repo, "Widget/Broken.json", brokenNodeType);
+        Write(repo, "Widget/Broken/Source/Broken.cs", brokenSource);
+        var bakeDir = TempDirectory("mw-split-contained");
+        var log = new StringWriter();
+        try
+        {
+            var report = TreeBake.Run(new TreeBake.Options
+            {
+                RepoRoot = repo,
+                OutputDirectory = bakeDir,
+                Output = log,
+            });
+            output.WriteLine(log.ToString());
+
+            // The bake completed and produced a VERDICT — not a fatal that discards everything.
+            Assert.Null(report.FatalError);
+            var broken = Assert.Single(report.Types, t => t.NodePath == "Widget/Broken");
+            Assert.False(broken.Success);
+            Assert.NotNull(broken.Error);
+
+            // …and the healthy type still shipped, which is the half a fatal would have destroyed.
+            var healthy = Assert.Single(report.Types, t => t.NodePath == "Widget/Thing");
+            Assert.True(healthy.Success, healthy.Error);
+            Assert.Contains("Widget/Thing", AssembliesOf(bakeDir).Keys);
+            Assert.NotEqual(0, report.ExitCode);
+        }
+        finally
+        {
+            Cleanup(repo);
+            Cleanup(bakeDir);
+        }
+    }
+
     // ── fixture ──
 
     private static string CreateRepo()
