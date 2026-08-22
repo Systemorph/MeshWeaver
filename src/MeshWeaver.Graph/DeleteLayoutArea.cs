@@ -237,8 +237,8 @@ public static class DeleteLayoutArea
                 var confirmation = formValues.GetValueOrDefault("confirmation")?.ToString()?.Trim();
                 if (confirmation != "DELETE")
                 {
-                    ShowDialog(ctx, "Confirmation Required",
-                        "Please type **DELETE** in the confirmation field to proceed.");
+                    ShowDialog(ctx, host.Localize("ui.confirmationRequired"),
+                        host.Localize("ui.confirmationDialogText"));
                     return;
                 }
 
@@ -352,8 +352,11 @@ public static class DeleteLayoutArea
     /// "no matches" — pretending empty would invite a confirm that deletes less than the user was
     /// told.</summary>
     private static IObservable<(string Query, IReadOnlyList<string> Paths, string? Error)> QuerySnapshot(
-        IMeshService meshQuery, string query) =>
+        LayoutAreaHost host, IMeshService meshQuery, string query) =>
         meshQuery.Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+            // Gate on the INITIAL snapshot, not merely the first emission — a live change racing
+            // the subscribe must not become the "review set" (the repo-wide query idiom).
+            .Where(c => c.ChangeType == QueryChangeType.Initial)
             .Take(1)
             .Select(c => (Query: query,
                 Paths: (IReadOnlyList<string>)c.Items
@@ -364,7 +367,7 @@ public static class DeleteLayoutArea
             .Timeout(TimeSpan.FromSeconds(10))
             .Catch<(string Query, IReadOnlyList<string> Paths, string? Error), Exception>(ex =>
                 Observable.Return((query, (IReadOnlyList<string>)Array.Empty<string>(),
-                    (string?)(ex is TimeoutException ? "the query did not answer in time" : ex.Message))));
+                    (string?)(ex is TimeoutException ? host.Localize("ui.queryTimeout") : ex.Message))));
 
     /// <summary>
     /// The query-set delete page: resolves every query to a snapshot, prunes redundant descendants
@@ -380,16 +383,16 @@ public static class DeleteLayoutArea
     {
         if (queries.Count == 0)
             return Observable.Return<UiControl?>(BuildQuerySetInfo(host, backHref,
-                "No queries were provided — nothing to delete."));
+                host.Localize("ui.deleteNoQueries")));
         if (meshQuery is null)
             return Observable.Return<UiControl?>(BuildQuerySetInfo(host, backHref,
-                "The mesh query service is not available on this hub."));
+                host.Localize("ui.deleteQueryServiceUnavailable")));
 
         var placeholder = (UiControl?)Controls.Stack.WithStyle("padding: 24px;")
             .WithView(Controls.Html(
-                "<p style=\"color: var(--neutral-foreground-hint);\">Resolving query results…</p>"));
+                $"<p style=\"color: var(--neutral-foreground-hint);\">{System.Web.HttpUtility.HtmlEncode(host.Localize("ui.resolvingQueryResults"))}</p>"));
 
-        return Observable.CombineLatest(queries.Select(q => QuerySnapshot(meshQuery, q)))
+        return Observable.CombineLatest(queries.Select(q => QuerySnapshot(host, meshQuery, q)))
             .Select(snapshots => (UiControl?)BuildQuerySetPage(host, anchorPath, backHref, meshQuery, snapshots))
             .StartWith(placeholder);
     }
@@ -418,11 +421,13 @@ public static class DeleteLayoutArea
         IList<(string Query, IReadOnlyList<string> Paths, string? Error)> snapshots)
     {
         var paths = PruneRedundantDescendants(snapshots.SelectMany(s => s.Paths));
+        // Catalog strings are trusted markup-free text; every DYNAMIC part (query, error) is
+        // HTML-encoded before it is interpolated.
         var queryLines = string.Join("", snapshots.Select(s =>
             $"<li><code>{System.Web.HttpUtility.HtmlEncode(s.Query)}</code>" +
             (s.Error is null
-                ? $" — {s.Paths.Count} match(es)"
-                : $" — <span style=\"color: var(--colorStatusDangerForeground1, #d32f2f);\">query failed: {System.Web.HttpUtility.HtmlEncode(s.Error)}</span>") +
+                ? $" — {host.LocalizePlural("plural.match", s.Paths.Count)}"
+                : $" — <span style=\"color: var(--colorStatusDangerForeground1, #d32f2f);\">{host.Localize("ui.queryFailed", System.Web.HttpUtility.HtmlEncode(s.Error))}</span>") +
             "</li>"));
 
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
@@ -437,18 +442,17 @@ public static class DeleteLayoutArea
             .WithView(Controls.H2(host.Localize("ui.deleteQueryResults")).WithStyle("margin: 0; color: var(--error);")));
 
         stack = stack.WithView(Controls.Html(
-            "<div style=\"margin-bottom: 16px;\"><p style=\"margin: 0 0 8px 0; font-weight: 600;\">Queries</p>" +
+            $"<div style=\"margin-bottom: 16px;\"><p style=\"margin: 0 0 8px 0; font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(host.Localize("ui.queries"))}</p>" +
             $"<ul style=\"margin: 0;\">{queryLines}</ul></div>"));
 
         if (paths.Count == 0)
             return stack.WithView(Controls.Html(
-                "<p style=\"color: var(--neutral-foreground-hint);\">No nodes match these queries " +
-                "(only nodes you can read are listed) — nothing to delete.</p>"));
+                $"<p style=\"color: var(--neutral-foreground-hint);\">{System.Web.HttpUtility.HtmlEncode(host.Localize("ui.deleteNoMatches"))}</p>"));
 
         var listed = paths.Take(MaxListedPaths)
             .Select(p => $"<li><code>{System.Web.HttpUtility.HtmlEncode(p)}</code></li>");
         var elided = paths.Count > MaxListedPaths
-            ? $"<li>… and {paths.Count - MaxListedPaths} more</li>"
+            ? $"<li>{System.Web.HttpUtility.HtmlEncode(host.Localize("ui.andMore", paths.Count - MaxListedPaths))}</li>"
             : string.Empty;
 
         stack = stack.WithView(Controls.Html(
@@ -456,10 +460,8 @@ public static class DeleteLayoutArea
             "background: var(--colorStatusDangerBackground1, rgba(211,47,47,0.12)); " +
             "border: 1px solid var(--colorStatusDangerBorder1, rgba(211,47,47,0.5)); " +
             "color: var(--colorStatusDangerForeground1, #d32f2f);\">" +
-            "<p style=\"margin: 0 0 8px 0; font-weight: 600;\">Warning: This action cannot be undone!</p>" +
-            $"<p style=\"margin: 0 0 8px 0;\">This will permanently delete the <strong>{paths.Count} node(s)</strong> below, " +
-            "<strong>each including all of its descendants</strong>. Deletions run under YOUR identity — " +
-            "any node you may not delete is refused by the server and listed here.</p>" +
+            $"<p style=\"margin: 0 0 8px 0; font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(host.Localize("ui.deleteWarningTitle"))}</p>" +
+            $"<p style=\"margin: 0 0 8px 0;\">{System.Web.HttpUtility.HtmlEncode(host.Localize("ui.deleteSetWarning", host.LocalizePlural("plural.node", paths.Count)))}</p>" +
             $"<ul style=\"margin: 0;\">{string.Join("", listed)}{elided}</ul>" +
             "</div>"));
 
@@ -521,13 +523,14 @@ public static class DeleteLayoutArea
                 var confirmation = formValues.GetValueOrDefault("confirmation")?.ToString()?.Trim();
                 if (confirmation != "DELETE")
                 {
-                    ShowDialog(ctx, "Confirmation Required",
-                        "Please type **DELETE** in the confirmation field to proceed.");
+                    ShowDialog(ctx, host.Localize("ui.confirmationRequired"),
+                        host.Localize("ui.confirmationDialogText"));
                     return;
                 }
 
                 ctx.Host.UpdateData(progressId,
-                    new QuerySetProgress(DeleteStatusKind.InFlight, $"Deleting… 0/{paths.Count}"));
+                    new QuerySetProgress(DeleteStatusKind.InFlight,
+                        host.Localize("ui.deletingProgress", 0, paths.Count)));
 
                 var results = new List<(string Path, string? Error)>();
                 paths
@@ -543,12 +546,13 @@ public static class DeleteLayoutArea
                         {
                             results.Add(result);
                             ctx.Host.UpdateData(progressId, new QuerySetProgress(
-                                DeleteStatusKind.InFlight, $"Deleting… {results.Count}/{paths.Count}"));
+                                DeleteStatusKind.InFlight,
+                                host.Localize("ui.deletingProgress", results.Count, paths.Count)));
                         },
                         ex => ctx.Host.UpdateData(progressId, new QuerySetProgress(
                             DeleteStatusKind.Failed,
-                            $"Delete run failed: {System.Web.HttpUtility.HtmlEncode(ex.Message)}")),
-                        () => FinishQuerySetDelete(ctx, meshQuery, results, anchorPath, progressId));
+                            host.Localize("ui.deleteRunFailed", System.Web.HttpUtility.HtmlEncode(ex.Message)))),
+                        () => FinishQuerySetDelete(ctx, host, meshQuery, results, anchorPath, progressId));
             });
 
         return Task.CompletedTask;
@@ -559,6 +563,7 @@ public static class DeleteLayoutArea
     /// does — redirecting to the nearest surviving ancestor.</summary>
     private static void FinishQuerySetDelete(
         UiActionContext ctx,
+        LayoutAreaHost host,
         IMeshService meshQuery,
         IReadOnlyList<(string Path, string? Error)> results,
         string anchorPath,
@@ -569,17 +574,19 @@ public static class DeleteLayoutArea
 
         if (failures.Count == 0)
             ctx.Host.UpdateData(progressId, new QuerySetProgress(
-                DeleteStatusKind.Done, $"Deleted {deleted} node(s)."));
+                DeleteStatusKind.Done,
+                System.Web.HttpUtility.HtmlEncode(
+                    host.Localize("ui.deletedCount", host.LocalizePlural("plural.node", deleted)))));
         else
         {
             var lines = string.Join("", failures.Select(f =>
                 $"<li><code>{System.Web.HttpUtility.HtmlEncode(f.Path)}</code> — {System.Web.HttpUtility.HtmlEncode(f.Error!)}</li>"));
             ctx.Host.UpdateData(progressId, new QuerySetProgress(
                 DeleteStatusKind.Failed,
-                $"Deleted {deleted} of {results.Count} node(s). Refused or failed:" +
+                System.Web.HttpUtility.HtmlEncode(host.Localize("ui.deletedPartial",
+                    deleted, host.LocalizePlural("plural.node", results.Count))) +
                 $"<ul style=\"margin: 8px 0 0 0;\">{lines}</ul>" +
-                "<p style=\"margin: 8px 0 0 0;\">A refusal means your identity does not hold Delete " +
-                "on that node — the server is the authority.</p>"));
+                $"<p style=\"margin: 8px 0 0 0;\">{System.Web.HttpUtility.HtmlEncode(host.Localize("ui.deleteRefusalNote"))}</p>"));
         }
 
         // The anchor (or an ancestor of it) may itself be in the deleted set — then this page's
@@ -601,8 +608,7 @@ public static class DeleteLayoutArea
         DeleteStatusKind.InFlight => Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("align-items: center; gap: 12px; padding: 12px 16px; background: var(--neutral-layer-2); border-radius: 6px; margin-bottom: 16px;")
-            .WithView(Controls.Progress("Deleting…", 0))
-            .WithView(Controls.Body(status.Html ?? "Deleting…")),
+            .WithView(Controls.Progress(status.Html ?? string.Empty, 0)),
         DeleteStatusKind.Done => Controls.Html(
             "<div style=\"padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; " +
             "background: var(--colorStatusSuccessBackground1, rgba(16,124,16,0.12)); " +
@@ -613,8 +619,10 @@ public static class DeleteLayoutArea
             $"color: var(--colorStatusDangerForeground1, #d32f2f);\">{status.Html}</div>"),
     };
 
-    /// <summary>Progress record for the query-set delete (<see cref="DeleteStatusKind"/> + the
-    /// pre-rendered status HTML, whose dynamic parts are always HTML-encoded at the write site).</summary>
+    /// <summary>Progress record for the query-set delete: <see cref="DeleteStatusKind"/> + the
+    /// status content — plain text while in flight (rendered through text controls), pre-rendered
+    /// HTML for the terminal states, whose dynamic parts are always HTML-encoded at the write
+    /// site. All user-facing text is localized at the write site, where the host is available.</summary>
     private sealed record QuerySetProgress(DeleteStatusKind Kind, string? Html = null);
 
     /// <summary>
@@ -625,19 +633,28 @@ public static class DeleteLayoutArea
     /// Pure — pinned in unit tests.
     /// </summary>
     /// <param name="paths">The combined matched paths, in any order, duplicates allowed.</param>
-    /// <returns>The de-duplicated set with covered descendants removed, sorted ordinally.</returns>
+    /// <returns>The de-duplicated set with covered descendants removed, subtree-sorted.</returns>
     internal static IReadOnlyList<string> PruneRedundantDescendants(IEnumerable<string> paths)
     {
+        // Linear after the sort — but the sort key matters for CORRECTNESS, not just speed. A plain
+        // lexicographic order does NOT keep a subtree contiguous: '-' (0x2D) and '.' (0x2E) sort
+        // BELOW '/' (0x2F), so between "A" and its child "A/y" a sibling "A-x" or "A.md" would
+        // interleave, and a single running ancestor would forget "A" before reaching "A/y".
+        // Substituting '/' with '\0' (below every path character) makes each subtree a contiguous
+        // range, and then kept entries never nest — so ONE remembered ancestor decides coverage.
+        string? ancestor = null;
         var result = new List<string>();
-        // Sorted ascending, a prefix always precedes its extensions, so one pass suffices.
         foreach (var path in paths
                      .Where(p => !string.IsNullOrEmpty(p))
                      .Distinct(StringComparer.OrdinalIgnoreCase)
-                     .OrderBy(p => p, StringComparer.OrdinalIgnoreCase))
+                     .OrderBy(p => p.Replace('/', '\0'), StringComparer.OrdinalIgnoreCase))
         {
-            if (!result.Any(kept => path.Length > kept.Length + 1
-                                    && path.StartsWith(kept + "/", StringComparison.OrdinalIgnoreCase)))
-                result.Add(path);
+            if (ancestor is not null
+                && path.Length > ancestor.Length + 1
+                && path.StartsWith(ancestor + "/", StringComparison.OrdinalIgnoreCase))
+                continue;
+            result.Add(path);
+            ancestor = path;
         }
         return result;
     }
