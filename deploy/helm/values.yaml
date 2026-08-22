@@ -135,6 +135,48 @@ instancesAdmin:
   # Instances tab (→ Instances__GrafanaBaseUrl). Empty = the tab shows a configure-me hint
   # instead of links. Only meaningful where clusterRead is true (the company instance).
   grafanaBaseUrl: ""
+# ---- Instance lifecycle operator (the Hosting plugin) ----------------------
+# Arms self-service instance provisioning, suspension, backup, restore and teardown. The identity
+# this reaches can DELETE NAMESPACES and DROP DATABASES across the fleet, so it is off here and
+# enabled on the CONTROL INSTANCE only.
+#
+# 🚨 Enabling this is four things, not one, and three of them are outside the chart:
+#   1. `kubectl apply -f deploy/aks/manifests/hosting-operator/` (ops namespace, the two
+#      ServiceAccounts, the jobrunner Role + token Secret)
+#   2. a federated credential on the operator managed identity for
+#      system:serviceaccount:<namespace>:<serviceAccount>
+#   3. the hosting-operator image built and pushed (deploy/aks/operator/)
+#   4. the jobrunner token mounted into the portal at tokenFile, via extraVolumes /
+#      extraVolumeMounts below
+# With `enabled: true` and any of those missing, HostingOperator.Resolve refuses and names what it
+# could not find — by design: an unconfigured mesh cannot be talked into provisioning.
+hostingOperator:
+  enabled: false
+  # The ops namespace and the Job's (powerful) ServiceAccount. Both appear VERBATIM in the
+  # federated credential's subject, which Azure matches as a string — rename either and the token
+  # exchange fails at run time with an error naming neither.
+  namespace: "memex-ops"
+  serviceAccount: "hosting-operator"
+  # REQUIRED when enabled — the chart fails the render without it rather than letting every action
+  # refuse later. The chart is baked into this image, so its tag is also the chart version a
+  # provision deploys.
+  image: ""
+  # Where the portal reads the jobrunner bearer token. Deliberately not the pod's own projected
+  # token: this capability is meant to be removable by deleting one volume mount.
+  tokenFile: "/var/run/secrets/hosting-operator/token"
+  deadlineSeconds: 3600
+  # Environment handed to every operator Job. Named keys — the plugin turns each into KEY=VALUE.
+  # A step that needs one it did not get refuses by name, so an incomplete map fails loudly at the
+  # step rather than producing a half-provisioned instance.
+  environment: {}
+  #   AZ_RESOURCE_GROUP:     memex-aks-rg
+  #   AZ_DNS_RESOURCE_GROUP: dns
+  #   AZ_PORTAL_IDENTITY:    <portal user-assigned identity name>
+  #   AZ_OIDC_ISSUER:        <az aks show --query oidcIssuerProfile.issuerURL -o tsv>
+  #   INGRESS_IP:            <the ingress controller's public IP>
+  #   PAYWALL_URL:           https://<control instance>/suspended
+  #   VALUES_FILE:           /opt/hosting/values/fleet-template.yaml
+  #   CATALOG_CONFIG:        /tmp/hosting-catalog-config
 # ---- Fixed replica count (portal) ------------------------------------------
 # Read ONLY when keda.enabled is false — with KEDA on, the HPA owns spec.replicas and the chart
 # deliberately renders no such field (see templates/memex-portal/deployment.yaml).

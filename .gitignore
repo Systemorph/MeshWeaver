@@ -38,6 +38,17 @@ bld/
 # installs it from here) — not build output. Re-include it.
 !/deploy/homebrew/bin/
 !/deploy/homebrew/bin/**
+# ...and deploy/aks/operator/bin holds the instance-lifecycle operator SCRIPTS (the image COPYs
+# them at /opt/hosting/bin) — source, not build output. Re-include it.
+#
+# 🚨 THIS RULE'S ABSENCE IS WHY THOSE SCRIPTS DID NOT EXIST. The Dockerfile shipped with
+# `COPY bin/ /opt/hosting/bin/` and an ENTRYPOINT of /opt/hosting/bin/run.sh against a directory
+# git refuses to track, so `git add` on them exited 0 and did nothing — the classic silent
+# failure: no error, no warning, and a file that is simply not there on the next checkout. The
+# mesh's side of the seam was complete and unit-tested the whole time; the shell half was being
+# written into a hole.
+!/deploy/aks/operator/bin/
+!/deploy/aks/operator/bin/**
 # A real `.env` is deployment configuration — hosts, database names, keys. `deploy/.env.example`
 # is the documented surface and is tracked; the filled-in copy beside a compose file never is.
 # `deploy/compose/.env` and `deploy/compose-ha/.env` had been committed as Aspire emitted them

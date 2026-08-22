@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# hosting-restore --database <db> --server <pg> --store-uri <uri>
+#
+# Restore an archive over an instance's database.
+#
+# 🚨 The plan puts a PRE-RESTORE backup and its verification ahead of this step, and quiesces the
+# portal before it. That ordering is the mesh's, not this script's — but this script still refuses
+# to run against a database something is actively writing, because a restore into a live database
+# produces a half-old, half-new instance that looks fine.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-restore"
+
+database="" server="" store_uri=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --database)  database="${2:-}";  shift 2 ;;
+    --server)    server="${2:-}";    shift 2 ;;
+    --store-uri) store_uri="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag database "$database"
+hosting::need_flag server "$server"
+hosting::need_flag store-uri "$store_uri"
+hosting::safe_name database "$database"
+
+if hosting::dry; then
+  echo "  DRY-RUN would restore ${store_uri} into ${database} on ${server}"
+  hosting::say restore dry-run
+  exit 0
+fi
+
+hosting::need_env PGPASSWORD "the admin password for the flexible server"
+pg_user="${PGUSER:-memexadmin}"
+archive="/tmp/restore.dump"
+
+hosting::log "downloading ${store_uri}"
+az storage blob download --blob-url "$store_uri" --file "$archive" --auth-mode login --output none \
+  || hosting::die "could not download ${store_uri} — nothing has been changed"
+
+pg_restore --list "$archive" >/dev/null 2>&1 \
+  || hosting::die "the downloaded archive has no readable table of contents — refusing to restore from it"
+
+# Refuse a database with live writers. A restore is not atomic across sessions.
+active="$(PGPASSWORD="$PGPASSWORD" psql -h "$server" -U "$pg_user" -d postgres -tAc \
+  "SELECT count(*) FROM pg_stat_activity WHERE datname = '${database}' AND pid <> pg_backend_pid()" 2>/dev/null | tr -d ' ')" || active=""
+if [ -n "$active" ] && [ "$active" -gt 0 ]; then
+  hosting::die "${active} session(s) are still connected to ${database}. The plan quiesces the portal (scale to 0) before this step; if connections remain, something else is writing and a restore would interleave with it. Refusing."
+fi
+
+hosting::log "restoring into ${database} (clean, single transaction)"
+# --single-transaction so a failure leaves the database as it was, rather than half-restored.
+if ! PGPASSWORD="$PGPASSWORD" pg_restore -h "$server" -U "$pg_user" -d "$database" \
+      --clean --if-exists --no-owner --no-privileges --single-transaction "$archive"; then
+  rm -f "$archive"
+  hosting::die "pg_restore failed. --single-transaction means the database is unchanged, not half-restored."
+fi
+
+rm -f "$archive"
+hosting::say restore completed
+hosting::log "restored. NOT verified — hosting-verify-restore is what reads it back."

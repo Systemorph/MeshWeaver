@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# hosting-verify --host <fqdn>
+#
+# Does the instance actually ANSWER, over TLS, as itself?
+#
+# 🚨 The three things that fail independently and all look like "deployed" from inside the cluster:
+# DNS resolving to the ingress, the certificate matching the host, and the app returning 200. A
+# rollout status proves none of them. This is the step that turns "helm says deployed" into "a
+# browser can open it", so it deliberately does NOT pass --insecure.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-verify"
+
+host="" path="${HOSTING_VERIFY_PATH:-/}" attempts="${HOSTING_VERIFY_ATTEMPTS:-30}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --host)     host="${2:-}";     shift 2 ;;
+    --path)     path="${2:-}";     shift 2 ;;
+    --attempts) attempts="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag host "$host"
+hosting::safe_host host "$host"
+
+if hosting::dry; then
+  echo "  DRY-RUN would probe https://${host}${path} up to ${attempts} times"
+  hosting::say verify dry-run
+  exit 0
+fi
+
+url="https://${host}${path}"
+hosting::log "probing ${url}"
+
+last_status="" last_error=""
+for i in $(seq 1 "$attempts"); do
+  # --fail-with-body is not universal on alpine curl; read the status explicitly instead.
+  last_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" 2>/tmp/hosting-verify.err)" || true
+  last_error="$(cat /tmp/hosting-verify.err 2>/dev/null || true)"
+  if [ "$last_status" = "200" ] || [ "$last_status" = "302" ] || [ "$last_status" = "401" ]; then
+    hosting::log "answered ${last_status} on attempt ${i}"
+    hosting::say verify "$last_status"
+    # Report the certificate the host actually served, so a wrong-cert ingress is visible in the log
+    # rather than only in a browser.
+    subject="$(echo | openssl s_client -servername "$host" -connect "${host}:443" 2>/dev/null \
+      | openssl x509 -noout -subject 2>/dev/null || true)"
+    [ -n "$subject" ] && hosting::log "served certificate ${subject}"
+    exit 0
+  fi
+  [ "$i" -lt "$attempts" ] && sleep 10
+done
+
+hosting::die "https://${host}${path} never answered (last status '${last_status:-none}'${last_error:+, last transport error: ${last_error}}) after ${attempts} attempts. An instance that helm deployed but nobody can open is not provisioned. Check, in this order: the A record resolves to the ingress IP, the TLS secret matches this host, the portal pods are Ready."
