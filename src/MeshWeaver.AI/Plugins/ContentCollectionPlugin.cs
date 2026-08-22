@@ -42,6 +42,9 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
     /// <param name="query">Free-text query matched semantically against indexed chunk text.</param>
     /// <param name="scope">Node path to anchor the search at (this path and each ancestor prefix); defaults to the agent's current context.</param>
     /// <param name="limit">Maximum number of chunk hits to return (1-200, default 20); not deduped by file.</param>
+    /// <param name="cancellationToken">The round's token — cancelling it unwinds the tool call and
+    /// disposes the search. Bound automatically by <c>AIFunctionFactory</c>; never part of the
+    /// tool's JSON schema.</param>
     /// <returns>A JSON string of the form <c>{count, results:[{documentPath, collectionPath, filePath, chunkIndex, rank, snippet}]}</c>.</returns>
     [Description(
         "Semantic search over INDEXED content chunks — the chunk-level companion to the node `Search`. " +
@@ -57,14 +60,22 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
     public Task<string> SearchChunks(
         [Description("Free-text query (matched semantically against indexed chunk text — 1000-char windows, 150-char overlap). May also carry `namespace:<node>/<collection>` and `scope:subtree|exact|ancestorsandself` to target one collection.")] string query,
         [Description("Node path to anchor the search at — this path AND each ancestor prefix are searched (e.g. 'ACME/Reports'). Defaults to the agent's current context; ignored when the query carries a `namespace:` token.")] string? scope = null,
-        [Description("Maximum number of chunk hits to return (1-200, default 20). Not deduped by file — chunk-level hits are the point.")] int limit = 20)
+        [Description("Maximum number of chunk hits to return (1-200, default 20). Not deduped by file — chunk-level hits are the point.")] int limit = 20,
+        CancellationToken cancellationToken = default)
     {
         var scopePath = !string.IsNullOrWhiteSpace(scope)
             ? MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, scope))
             : chat.Context?.Context;
 
-        return ChunkNavigation.SearchChunks(hub.ServiceProvider, query, scopePath, limit)
-            .FirstAsync().ToTask();
+        // 🚨 Was `.FirstAsync().ToTask()` with NO token (#1956): a stalled embedder parked the round
+        // — and its Ai-pool gate permit — with nothing able to end the wait, and FirstAsync turned
+        // an empty completion into a "Sequence contains no elements" fault rather than an answer.
+        return ToolTask.Bridge(
+            ChunkNavigation.SearchChunks(hub.ServiceProvider, query, scopePath, limit),
+            cancellationToken,
+            json => json,
+            ex => $"Error searching chunks: {ex.Message}",
+            () => "{\"count\":0,\"results\":[],\"note\":\"the chunk index completed without answering — nothing was searched\"}");
     }
 
     /// <summary>
@@ -74,6 +85,8 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
     /// <param name="collectionPath">The content collection path the chunk belongs to (from a search hit).</param>
     /// <param name="filePath">The file path within the collection (from a search hit).</param>
     /// <param name="chunkIndex">0-based chunk index within the file (or a prev/next index to step).</param>
+    /// <param name="cancellationToken">The round's token — cancelling it unwinds the tool call and
+    /// disposes the read.</param>
     /// <returns>A JSON string of the form <c>{found, collectionPath, filePath, chunkIndex, text, prevIndex, nextIndex, totalChunks}</c>.</returns>
     [Description(
         "Reads ONE indexed content chunk by its 0-based index within a file, with prev/next links so you " +
@@ -84,9 +97,14 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
     public Task<string> GetChunk(
         [Description("The content collection path the chunk belongs to (the 'collectionPath' from a search_chunks hit).")] string collectionPath,
         [Description("The file path within the collection (the 'filePath' from a search_chunks hit).")] string filePath,
-        [Description("0-based chunk index within the file (the 'chunkIndex' from a search_chunks hit, or a prevIndex/nextIndex to step).")] int chunkIndex)
-        => ChunkNavigation.GetChunk(hub.ServiceProvider, collectionPath, filePath, chunkIndex)
-            .FirstAsync().ToTask();
+        [Description("0-based chunk index within the file (the 'chunkIndex' from a search_chunks hit, or a prevIndex/nextIndex to step).")] int chunkIndex,
+        CancellationToken cancellationToken = default)
+        => ToolTask.Bridge(
+            ChunkNavigation.GetChunk(hub.ServiceProvider, collectionPath, filePath, chunkIndex),
+            cancellationToken,
+            json => json,
+            ex => $"Error reading chunk {chunkIndex} of '{filePath}': {ex.Message}",
+            () => $"{{\"found\":false,\"collectionPath\":\"{collectionPath}\",\"filePath\":\"{filePath}\",\"chunkIndex\":{chunkIndex},\"note\":\"the chunk index completed without answering\"}}");
 
     /// <summary>
     /// Agent tool: uploads text content (SVG, markdown, JSON, CSS, etc.) into a node's content
@@ -110,21 +128,11 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
         var resolvedPath = MeshOperations.ResolvePath(MeshOperations.ResolveContextPath(chat, nodePath));
         var address = new Address(resolvedPath);
 
-        // hub.Observe(...) + TCS — never `await` a hub response from
-        // a plugin method: that blocks the hub scheduler. The callback fires on a non-hub
-        // thread when the response arrives and resolves the TCS to unblock the caller.
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
-        var registration = timeoutCts.Token.Register(() =>
-        {
-            if (cancellationToken.IsCancellationRequested)
-                tcs.TrySetCanceled(cancellationToken);
-            else
-                tcs.TrySetResult($"Error uploading to {resolvedPath}: the operation timed out waiting for a response.");
-        });
-        _ = tcs.Task.ContinueWith(_ => { registration.Dispose(); timeoutCts.Dispose(); }, TaskScheduler.Default);
-
+        // hub.Observe(...) bridged by ToolTask — never `await` a hub response from a plugin method:
+        // that blocks the hub scheduler. The callback fires on a non-hub thread when the response
+        // arrives. The 30 s bound is now Rx's own Timeout rather than a hand-rolled linked
+        // CancellationTokenSource + ContinueWith, so the token, the timeout, the error and the
+        // EMPTY completion are one set of terminals with one disposal path (#1956).
         var delivery = hub.Post(
             new SaveContentRequest
             {
@@ -134,27 +142,20 @@ public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentP
             },
             o => o.WithTarget(address))!;
 
-        hub.Observe(delivery)
-            .Subscribe(
-                callback =>
-                {
-                    if (callback.Message is SaveContentResponse typed)
-                    {
-                        tcs.TrySetResult(typed.Success
-                            ? $"Uploaded `{filePath}` to @{resolvedPath}/{collectionName}/{filePath}"
-                            : $"Error: {typed.Error}");
-                    }
-                    else
-                    {
-                        tcs.TrySetResult($"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} uploading to {resolvedPath}.");
-                    }
-                },
-                ex => tcs.TrySetResult(
-                    $"Error uploading to {resolvedPath}: {ex.Message ?? "delivery failed"}. " +
-                    $"Check that '{nodePath}' resolves to an existing node — pass the MeshNode's " +
-                    "`path` property, not its `name`."));
-
-        return tcs.Task;
+        return ToolTask.Bridge(
+            hub.Observe(delivery).Take(1).Timeout(TimeSpan.FromSeconds(30)),
+            cancellationToken,
+            callback => callback.Message is SaveContentResponse typed
+                ? typed.Success
+                    ? $"Uploaded `{filePath}` to @{resolvedPath}/{collectionName}/{filePath}"
+                    : $"Error: {typed.Error}"
+                : $"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} uploading to {resolvedPath}.",
+            ex => ex is TimeoutException
+                ? $"Error uploading to {resolvedPath}: the operation timed out waiting for a response."
+                : $"Error uploading to {resolvedPath}: {ex.Message ?? "delivery failed"}. " +
+                  $"Check that '{nodePath}' resolves to an existing node — pass the MeshNode's " +
+                  "`path` property, not its `name`.",
+            () => $"Error uploading to {resolvedPath}: the callback stream ended without a response.");
     }
 }
 

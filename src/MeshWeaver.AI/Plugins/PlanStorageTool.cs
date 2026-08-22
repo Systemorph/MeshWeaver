@@ -34,12 +34,17 @@ public static class PlanStorageTool
                 Content = planContent
             };
 
-            // Use IObservable CreateNode — no await, no deadlock
-            var tcs = new TaskCompletionSource<string>();
-            meshService.CreateNode(planNode).Subscribe(
-                _ => tcs.TrySetResult($"Plan stored at {execCtx.ThreadPath}/Plan"),
-                ex => tcs.TrySetResult($"Error storing plan: {ex.Message}"));
-            return tcs.Task;
+            // Use IObservable CreateNode — no await, no deadlock. Every terminal settles, and the
+            // round's token is observed: before #1956 this was a bare TaskCompletionSource with a
+            // 2-arg Subscribe, so an empty completion left the task pending and Stop no-opped on a
+            // create that was merely slow (bounded only by the hub's 30 s RequestTimeout, during
+            // which the round holds its Ai-pool gate permit).
+            return ToolTask.Bridge(
+                meshService.CreateNode(planNode),
+                cancellationToken,
+                _ => $"Plan stored at {execCtx.ThreadPath}/Plan",
+                ex => $"Error storing plan: {ex.Message}",
+                () => $"Plan was not stored at {execCtx.ThreadPath}/Plan — the create completed without confirming the node.");
         }
 
         return AIFunctionFactory.Create(
