@@ -40,6 +40,37 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     public IObservable<IMessageHub> HubAdded => _hubAdded.AsObservable();
 
     /// <summary>
+    /// Every disposal-PROGRESS signal from anywhere in this collection's hosted subtree — each
+    /// hub's <c>RunLevel</c> transitions, recursively, plus hubs that appear while the merge is
+    /// live (<see cref="HubAdded"/>).
+    ///
+    /// <para>🚨 This is what stops an owner OUT-RUNNING the mechanism that answers it (#1701).
+    /// The owner's disposal watchdog is armed at the owner's own <c>Dispose()</c>; a child's is
+    /// armed strictly later, in the owner's <c>DisposeHostedHubs</c> phase — so with a fixed
+    /// DURATION watchdog the owner ALWAYS expires first, reports
+    /// <c>DISPOSAL DEADLOCK DETECTED … RunLevel=DisposeHostedHubs</c>, and force-tears-down a
+    /// subtree that was merely still working. That is the same inversion #1317 removed one level
+    /// down (<see cref="DisposeHubsReactive"/>'s flat 5 s cap), left in place one level up. Feeding
+    /// subtree progress back to the owner turns its watchdog into a STALL detector: a healthy
+    /// nested teardown keeps re-arming it, and a genuinely wedged one still trips — the difference
+    /// being that the message is then TRUE.</para>
+    ///
+    /// <para>Depth-capped like the diagnostics walk, and every child's stream is Catch-guarded:
+    /// a progress signal must never fault the teardown it is reporting on.</para>
+    /// </summary>
+    /// <param name="depth">Current recursion depth; the walk stops at the same cap as the
+    /// diagnostics snapshot.</param>
+    /// <returns>A hot stream of progress descriptions; never faults.</returns>
+    internal IObservable<string> SubtreeDisposalProgress(int depth) =>
+        // Defer so the snapshot is taken at SUBSCRIBE time (the owner subscribes inside its own
+        // Dispose, by which point the children it must wait for are present).
+        Observable.Defer(() => Hubs.ToArray().ToObservable().Merge(HubAdded))
+            .SelectMany(h => h is MessageHub concrete
+                ? concrete.DisposalProgressAtDepth(depth)
+                : Observable.Empty<string>())
+            .Catch<string, Exception>(_ => Observable.Empty<string>());
+
+    /// <summary>
     /// Looks up the hosted hub for <paramref name="address"/>, optionally creating
     /// it. Existing-hub lookups and <see cref="HostedHubCreation.Never"/> probes
     /// are lock-free pure reads; creation is single-flighted per address and runs
