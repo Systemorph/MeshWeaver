@@ -74,7 +74,6 @@
          which a landed pack rendered unstyled with its collocated JS 404ing. Analysis leads
          because it is the simplest: six scoped .razor.css files, no collocated JS, no package
          references of its own. -->
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Analysis/MeshWeaver.Blazor.Analysis.csproj" />
     <!-- The two map packs that were never modules at all: they rode Memex.Portal.Shared's
          ProjectReference into the app closure while being listed under NO Modules:Assemblies, so
          their bits shipped permanently inert. Here the bits are reachable the moment a deployment
@@ -82,8 +81,6 @@
          collocated AppleMapView.razor.js, OpenStreetMap that plus its vendored wwwroot/leaflet/
          (css, js and the marker images the css resolves beside itself) — which is precisely the
          shape the module static-asset provider serves out of modules/<Name>/wwwroot (#1724). -->
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.AppleMaps/MeshWeaver.Blazor.AppleMaps.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.OpenStreetMap/MeshWeaver.Blazor.OpenStreetMap.csproj" />
     <!-- The last two packs off the thin lane, which completes the set (#1974). Both were already
          modules — listed under Modules:Assemblies and activated there — so this moves only where
          their bits ship, not whether they run. GoogleMaps carries scoped CSS plus collocated JS.
@@ -93,14 +90,10 @@
          portal's reference means the host stops serving that namespace, so the copy under the
          module's wwwroot/_content/ becomes the one that answers, which is exactly the case the
          same-identity prune is written around. -->
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Blazor.GoogleMaps/MeshWeaver.Blazor.GoogleMaps.csproj" />
     <!-- Voice. The compile-time coupling that pinned it to the thin lane is gone: ISpeechTranscriber
          moved to MeshWeaver.Speech.Contract, so the portal's transcribe endpoint and the chat mic
          name the interface without carrying the Whisper client, and Memex.LocalMesh installs the
          module through Modules:Assemblies like everyone else. -->
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Speech/MeshWeaver.Speech.csproj" />
-    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <!-- Import + its PRIVATE closure: the SIX MeshWeaver.DataSetReader* projects (the base, Csv,
          Excel, Excel.BinaryFormat, Excel.OpenXmlFormat, Excel.Utils) and MeshWeaver.DataStructures
          beneath them — nothing outside their own test project references any of them.
@@ -129,6 +122,7 @@
          Graph:Storage during boot. Shipping the bits costs image size in every deployment;
          ACTIVATION stays the deployment's Modules:Assemblies choice, and no memex portal lists
          them (they all run PostgreSQL). -->
+    <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Social/MeshWeaver.Social.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
     <MeshModuleClosure Include="$(MSBuildThisFileDirectory)../src/MeshWeaver.Hosting.Snowflake/MeshWeaver.Hosting.Snowflake.csproj" />
   </ItemGroup>

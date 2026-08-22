@@ -410,6 +410,11 @@ builder.Services.AddHealthChecks()
 // surface looks like a healthy day (2026-08-20). DEGRADED on a miss, never Unhealthy: compiling is
 // correct behaviour, and failing readiness would turn a distribution regression into an outage.
 builder.Services.AddHealthChecks()
+    // 🚨 Unhealthy when a declared-required module is missing, so a rollout that would silently
+    // drop a feature STALLS and the pods that still have it keep serving. Inert unless the
+    // deployment declares Modules:Required.
+    .AddCheck("required_modules",
+        new Memex.Portal.Distributed.RequiredModulesHealthCheck(builder.Configuration))
     .AddCheck<Memex.Portal.Distributed.BundleAdoptionHealthCheck>("bundle_adoption");
 
 // The same shape, one dependency further out: DbVersionGate proves the MESH database is

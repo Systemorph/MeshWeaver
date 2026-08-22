@@ -12,6 +12,24 @@ public static class MeshBuilderModuleActivation
     public const string AssembliesKey = "Modules:Assemblies";
 
     /// <summary>
+    /// The modules this deployment cannot correctly serve without — the loud half of
+    /// <see cref="AssembliesKey"/>.
+    ///
+    /// <para>🚨 <b>Why this exists.</b> A listed-but-absent module is SKIPPED, deliberately: a host
+    /// that will not start is worse than one missing a feature, and that rule is what stopped the
+    /// 3.0.0-rc5 boot loop. But the same silence is a trap once modules START LEAVING THE IMAGE. Ship
+    /// a build whose image no longer carries a pack, land it on an instance that never installed the
+    /// package, and the feature simply is not there — charts blank, maps blank, voice mute — behind
+    /// one stderr line and a green rollout. Nothing fails, so nothing is noticed.</para>
+    ///
+    /// <para>Naming a module here says "absent is a FAULT here". It does not change boot: the host
+    /// still starts (see above). It changes VISIBILITY — the host reports the absence, and a
+    /// readiness probe wired to it stalls the rollout so the pods that still have the module keep
+    /// serving.</para>
+    /// </summary>
+    public const string RequiredKey = "Modules:Required";
+
+    /// <summary>
     /// Resolves each <c>Modules:Assemblies</c> entry through
     /// <see cref="MeshBuilder.ResolveModulePath(string)"/> — one resolver, shared, probing
     /// <c>modules/&lt;name&gt;/</c> before the app closure — and installs what is actually there.
@@ -45,10 +63,35 @@ public static class MeshBuilderModuleActivation
         // and this assembly deliberately takes Configuration.Abstractions only. For a string array
         // the two read identically — the children of Modules:Assemblies ARE the entries.
         var entries = configuration.GetSection(AssembliesKey).GetChildren().Select(child => child.Value);
-        var resolved = ResolveInstallable(entries, MeshBuilder.ResolveModulePath, File.Exists,
-            onSkip ?? (message => Console.Error.WriteLine($"[ModuleActivation] {message}")));
+        var report = onSkip ?? (message => Console.Error.WriteLine($"[ModuleActivation] {message}"));
+        var resolved = ResolveInstallable(entries, MeshBuilder.ResolveModulePath, File.Exists, report);
+
+        // The loud half. Absent-and-required is reported at boot as well as by the health check, so
+        // it is in the pod log the operator already has open — not only behind a probe endpoint.
+        foreach (var missing in MissingRequired(configuration, MeshBuilder.ResolveModulePath, File.Exists))
+            report($"REQUIRED module '{missing}' is NOT present. This deployment declares it under "
+                + $"{RequiredKey}, so whatever it provides is missing and that is a fault, not a "
+                + "choice. The host is starting anyway — a host that will not start is worse — but a "
+                + "readiness probe wired to RequiredModulesAbsent will hold the rollout.");
 
         return resolved.Length == 0 ? builder : builder.InstallAssemblies(resolved);
+    }
+
+    /// <summary>
+    /// The required modules this host cannot resolve — empty when the deployment declares none, or
+    /// when every declared one is present. Pure and configuration-driven on purpose: the boot path
+    /// and the health check ask the SAME question the same way, so a probe can never disagree with
+    /// the log line that preceded it.
+    /// </summary>
+    public static string[] MissingRequired(
+        IConfiguration configuration, Func<string, string> resolve, Func<string, bool> exists)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var required = configuration.GetSection(RequiredKey).GetChildren().Select(child => child.Value);
+        return [.. required
+            .Where(entry => !string.IsNullOrWhiteSpace(entry))
+            .Where(entry => !exists(resolve(entry!)))
+            .Select(entry => entry!)];
     }
 
     /// <summary>

@@ -32,7 +32,6 @@
              relocated to MeshWeaver.SocialMedia (src/MeshWeaver.Social/README.md), and a test
              reference moves with the test, unlike the ships-the-bits Memex.Portal.Shared
              reference that actually blocks the flip. Move this test when the module goes. -->
-        <ProjectReference Include="..\..\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Grpc\MeshWeaver.Hosting.Grpc.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
@@ -45,7 +44,8 @@
       <!-- TestScheduler: RoutingGrainStreamPostBoundTest drives the stream-post timeout
            deterministically (issue #1028) instead of waiting on the wall clock. -->
       <PackageReference Include="Microsoft.Reactive.Testing" />
-    </ItemGroup>
+      <ProjectReference Include="..\..\src\MeshWeaver.Social\MeshWeaver.Social.csproj" />
+  </ItemGroup>
 
 
 </Project>
