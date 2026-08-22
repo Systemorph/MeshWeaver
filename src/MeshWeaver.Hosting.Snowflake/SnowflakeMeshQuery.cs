@@ -240,8 +240,14 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
 
         var parsedQuery = _parser.Parse(request.Query);
 
+        // A non-positive limit — from the request OR from the query string's `limit:all`
+        // (MeshQueryRequest.CompleteQualifier) — is the framework's "return every match" encoding.
+        // It must CLEAR the cap rather than become a `LIMIT -1` (invalid SQL) or a `count >= -1`
+        // early return (which yields exactly one row, silently).
         if (request.Limit.HasValue)
-            parsedQuery = parsedQuery with { Limit = request.Limit };
+            parsedQuery = parsedQuery with { Limit = request.Limit is > 0 ? request.Limit : null };
+        else if (parsedQuery.Limit is <= 0)
+            parsedQuery = parsedQuery with { Limit = null };
 
         parsedQuery = StripTypeFilter(parsedQuery);
 
@@ -269,7 +275,9 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 if (string.IsNullOrEmpty(vectorUserId) || vectorUserId == WellKnownUsers.System)
                     vectorUserId = null;
                 var vectorNamespace = parsedQuery.Path ?? request.DefaultPath;
-                var topK = parsedQuery.Limit ?? request.Limit ?? 50;
+                // A vector search always needs a real k; "no cap" takes the same default.
+                var topK = parsedQuery.Limit is > 0 ? parsedQuery.Limit.Value
+                    : request.Limit is > 0 ? request.Limit.Value : 50;
                 // Strip the text part from the filter so VectorSearchAsync's
                 // WHERE clause has the structured predicates only.
                 var structuralFilter = parsedQuery with { TextSearch = null };
@@ -330,7 +338,8 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                     ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
                     : node;
                 count++;
-                if (parsedQuery.Limit.HasValue && count >= parsedQuery.Limit.Value)
+                // `is > 0`: NoLimit is non-positive, and `count >= -1` is true on the first row.
+                if (parsedQuery.Limit is > 0 && count >= parsedQuery.Limit.Value)
                     yield break;
             }
             yield break;
@@ -357,7 +366,8 @@ public class SnowflakeMeshQuery : IMeshQueryProvider, IVectorSearchProvider
                 : node;
 
             countOrig++;
-            if (parsedQuery.Limit.HasValue && countOrig >= parsedQuery.Limit.Value)
+            // `is > 0`: see above.
+            if (parsedQuery.Limit is > 0 && countOrig >= parsedQuery.Limit.Value)
                 yield break;
         }
     }

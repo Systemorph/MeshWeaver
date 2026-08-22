@@ -124,6 +124,13 @@ public class CosmosMeshQuery : IMeshQueryProvider
         {
             parsedQuery = parsedQuery with { Limit = request.Limit is > 0 ? request.Limit : null };
         }
+        else if (parsedQuery.Limit is <= 0)
+        {
+            // Same encoding arriving through the QUERY STRING instead — `limit:all`
+            // (MeshQueryRequest.CompleteQualifier), which the security fold uses because it can
+            // only pass strings.
+            parsedQuery = parsedQuery with { Limit = null };
+        }
 
         // Strip $type filters — all items in the nodes container are MeshNodes,
         // so $type:MeshNode is always true and other $type values always false.
@@ -173,7 +180,8 @@ public class CosmosMeshQuery : IMeshQueryProvider
                     ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
                     : node;
                 count++;
-                if (parsedQuery.Limit.HasValue && count >= parsedQuery.Limit.Value)
+                // `is > 0`: NoLimit is non-positive, and `count >= -1` is true on the first row.
+                if (parsedQuery.Limit is > 0 && count >= parsedQuery.Limit.Value)
                     yield break;
             }
             yield break;
@@ -202,7 +210,8 @@ public class CosmosMeshQuery : IMeshQueryProvider
 
             // Apply limit
             countOrig++;
-            if (parsedQuery.Limit.HasValue && countOrig >= parsedQuery.Limit.Value)
+            // `is > 0`: see above.
+            if (parsedQuery.Limit is > 0 && countOrig >= parsedQuery.Limit.Value)
                 yield break;
         }
     }

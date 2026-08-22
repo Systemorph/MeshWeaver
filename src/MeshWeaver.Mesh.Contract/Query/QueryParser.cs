@@ -578,7 +578,14 @@ public partial class QueryParser
 
                 if (field.Equals("limit", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (int.TryParse(value, out var limitValue))
+                    // `limit:all` is the query-string spelling of MeshQueryRequest.Complete() —
+                    // this read is an ENUMERATION, so every match must come back. It exists for the
+                    // readers that never see a MeshQueryRequest (the synced-query cache builds its
+                    // own), where the absence of a limit is silently the cross-schema fan-out's
+                    // 50-row page.
+                    if (value.Equals("all", StringComparison.OrdinalIgnoreCase))
+                        limit = Services.MeshQueryRequest.NoLimit;
+                    else if (int.TryParse(value, out var limitValue))
                         limit = limitValue;
                     continue;
                 }

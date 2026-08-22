@@ -1674,7 +1674,11 @@ public class PostgreSqlStorageAdapter : IScopedQueryStorageAdapter, IAsyncDispos
                   "ELSE 0 END) DESC, last_modified DESC NULLS LAST";
         }
 
-        if (query.Limit.HasValue)
+        // `is > 0`, never HasValue: MeshQueryRequest.NoLimit is non-positive ("return every
+        // match"), and emitting it verbatim produces `LIMIT -1` — Postgres 2201W, which surfaces
+        // as an AVAILABILITY failure of whatever read it was under. The sibling generators
+        // (PostgreSqlSqlGenerator) already guard this way; this branch did not.
+        if (query.Limit is > 0)
             sql += $" LIMIT {query.Limit.Value}";
 
         return (sql, parameters);
