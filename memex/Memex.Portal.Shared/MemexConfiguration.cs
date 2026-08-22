@@ -7,6 +7,7 @@ using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
+using MeshWeaver.Blazor.EntityViews;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Hosting.Grpc;
@@ -1031,6 +1032,7 @@ public static class MemexConfiguration
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
                 .AddChatViews()   // Register ThreadChatView
                 .AddUserProfileViews() // Register UserProfilePageView
+                .AddEntityViews() // The entity form/edit renderers (extracted from the base pack)
             )
             .AddBlazor(layoutClient => layoutClient
                 // 🚨 The portal hub is the per-user sub-hub that hosts the
