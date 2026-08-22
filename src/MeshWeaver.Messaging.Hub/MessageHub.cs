@@ -1463,6 +1463,34 @@ public sealed class MessageHub : IMessageHub
     public IObservable<Unit> DisposalCompleted => disposalCompleted.AsObservable();
 
     /// <summary>
+    /// Every disposal-PROGRESS signal from this hub and its hosted SUBTREE: each hub's
+    /// <c>RunLevel</c> transition, recursively. Not a heartbeat — nothing here is emitted on a
+    /// timer, so a stream that goes quiet means the teardown genuinely stopped moving.
+    ///
+    /// <para>Consumed by the disposal watchdog, which re-arms on every signal (see
+    /// <see cref="Dispose"/>). Exposed so a test can assert the difference between "slow but
+    /// progressing" and "wedged" without waiting on wall-clock.</para>
+    /// </summary>
+    public IObservable<string> DisposalProgress => DisposalProgressAtDepth(0);
+
+    /// <summary>
+    /// <see cref="DisposalProgress"/> with the recursion depth threaded through, so the subtree
+    /// walk is capped exactly like the diagnostics snapshot.
+    /// </summary>
+    /// <param name="depth">Current recursion depth.</param>
+    /// <returns>A hot stream of progress descriptions; never faults.</returns>
+    internal IObservable<string> DisposalProgressAtDepth(int depth)
+    {
+        // RunLevelChanged is a BehaviorSubject, so subscribing reports the CURRENT level at once —
+        // that first emission is the "we are observing from here" mark, and it costs nothing
+        // because the watchdog re-arms on it exactly as it would on a transition.
+        var own = runLevelChanged.Select(level => $"{Address} → {level}");
+        return depth >= MaxHostedHubRecursionDepth
+            ? own
+            : own.Merge(hostedHubs.SubtreeDisposalProgress(depth + 1));
+    }
+
+    /// <summary>
     /// Set when the Quiescing-phase drain budget (<see cref="QuiesceTimeout"/>)
     /// expires with callbacks still pending. Tests inspect this on the root mesh
     /// (and recursively on hosted hubs via <see cref="GetDisposalDiagnostics"/>)
@@ -1580,19 +1608,46 @@ public sealed class MessageHub : IMessageHub
         // immediately. (The original uncancelled `Task.Delay(25s)` rooted the ENTIRE hub graph
         // — cache, data sources, action block, subscriptions — for 25 s after EVERY dispose,
         // even a fast one: TimerQueue → TimerQueueTimer → DelayPromise → state machine → hub.)
-        watchdogSubscription = Observable
-            .Timer(DisposalWatchdogTimeout)
+        //
+        // 🚨 It measures a STALL, not a DURATION (#1701). A fixed-duration watchdog on an owner
+        // OUT-RUNS the very mechanism that answers it: the owner arms at its own Dispose(), a
+        // child arms strictly later — in the owner's DisposeHostedHubs phase — for the same 8 s.
+        // So whenever a child needs its own watchdog to produce an answer, the OWNER's expires
+        // first and reports "DISPOSAL DEADLOCK DETECTED … RunLevel=DisposeHostedHubs" about a
+        // subtree that was working correctly, then force-tears it down mid-flight. That is the
+        // #1317 inversion ("a join must not out-run the answers it is joining") left in place one
+        // level up, and it is why #1701's captures show TWO force-teardown pairs of which only the
+        // inner one carries information.
+        //
+        // Switch() over the progress stream re-arms the timer on every sign of life anywhere in
+        // the subtree, so a healthy nested teardown never trips however deep it is, and a hub that
+        // genuinely stops moving still trips 8 s later — with the message finally TRUE: no
+        // progress, rather than "not finished yet".
+        watchdogSubscription = DisposalProgress
+            .StartWith($"{Address} Dispose() called")
+            .Select(reason => Observable.Timer(DisposalWatchdogTimeout).Select(_ => reason))
+            .Switch()
             .TakeUntil(disposalCompleted)
+            .Take(1)
+            // 🚨 OFF the progress path. Switch serialises its downstream delivery under its own
+            // gate, and a progress signal originates INSIDE the emitting hub's `locker` (the
+            // RunLevel setter runs under it in HandleShutdownCore). Running the force-teardown
+            // inline would therefore hold Switch's gate while taking a child's `locker`, while
+            // that child holds its `locker` and wants Switch's gate — a lock-order inversion that
+            // wedges the child's action block on its own ShutdownRequest (measured: the child
+            // sitting at Executing(ShutdownRequest, 8000ms) with deliveryActionCompleted=False).
+            // The pre-Switch watchdog ran on the bare timer thread; this restores that isolation.
+            .ObserveOn(System.Reactive.Concurrency.DefaultScheduler.Instance)
             .Subscribe(
-                _ =>
+                lastProgress =>
                 {
                     if (DisposalSignalled)
                         return;
                     logger.LogError(
-                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within {Timeout}. " +
-                        "RunLevel={RunLevel}. Forcing out-of-band teardown so children/subscriptions cannot leak.\n" +
-                        "{Diagnostics}",
-                        Address, DisposalWatchdogTimeout, RunLevel, DescribeWedge());
+                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} made no teardown progress for {Timeout} " +
+                        "(last progress: {LastProgress}). RunLevel={RunLevel}. Forcing out-of-band teardown " +
+                        "so children/subscriptions cannot leak.\n{Diagnostics}",
+                        Address, DisposalWatchdogTimeout, lastProgress, RunLevel, DescribeWedge());
                     ForceTeardownAfterWatchdog();
                 },
                 // disposalCompleted faulting (SignalDisposalFaulted) propagates through TakeUntil;
