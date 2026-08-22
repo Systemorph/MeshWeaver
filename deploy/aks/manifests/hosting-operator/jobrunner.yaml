@@ -41,3 +41,24 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "delete"]
+---
+# 🚨 The binding that makes the Role above real — shipped MISSING from #2051: the Role and the
+# ServiceAccount both existed, nothing connected them, and the portal's token met a 403 on its
+# first CreateJob. From the mesh that is indistinguishable from a misconfigured operator ("launch
+# failed"), which is why it survived until the first live enablement (2026-08-22). A Role without
+# a RoleBinding is furniture.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hosting-jobrunner
+  namespace: memex-ops
+  labels:
+    app.kubernetes.io/managed-by: meshweaver-hosting
+subjects:
+  - kind: ServiceAccount
+    name: hosting-jobrunner
+    namespace: memex-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hosting-jobrunner
