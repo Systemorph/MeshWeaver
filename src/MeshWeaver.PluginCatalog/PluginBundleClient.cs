@@ -50,6 +50,10 @@ public sealed class PluginBundleClient
     private readonly HttpClient _http;
     private readonly ILogger<PluginBundleClient>? _logger;
 
+    // The count that proves the lane works (#1782 gap 4). Optional: a host that registers no
+    // ledger loses the counting, never the fetching.
+    private readonly BundleAdoptionLedger? _ledger;
+
     // ONE index read per client, shared by every package the install pass covers. PromiseSlot, not
     // a plain cached field: concurrent first callers share the single run, and a fault EVICTS so
     // the next caller retries rather than replaying a transient failure forever (#1369).
@@ -73,6 +77,7 @@ public sealed class PluginBundleClient
             ?.CreateClient(InstanceRegistrationClient.HttpClientName) ?? SharedHttp;
         _logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger<PluginBundleClient>();
+        _ledger = hub.ServiceProvider.GetService<BundleAdoptionLedger>();
     }
 
     /// <summary>What the registry advertises: the framework its assemblies were built against, and
@@ -159,19 +164,53 @@ public sealed class PluginBundleClient
                         _registryUrl, reason,
                         index.Architecture ?? "(an architecture it does not state)",
                         ReleaseArchitecture.Live);
-                    return Observable.Return(0);
+                    return Miss(pluginId, BundleAdoptionKind.FrameworkDeclined, reason);
                 }
 
                 var bundle = index.Bundles?.FirstOrDefault(b =>
                     string.Equals(b.Plugin, pluginId, StringComparison.OrdinalIgnoreCase));
 
-                return bundle is null
-                    ? Observable.Return(0)
-                    : Download(pluginId, bundle.Version)
-                        .SelectMany(bytes => bytes is null
-                            ? Observable.Return(0)
-                            : SeedAll(pluginId, bytes));
+                if (bundle is null)
+                {
+                    // 🚨 THE MISS THAT WAS COMPLETELY SILENT (#1782 gap 4). This branch returned 0
+                    // with no log line at all, so "the registry does not advertise this package for
+                    // my lane" was indistinguishable from a healthy adoption — and the compile that
+                    // followed looked like normal behaviour rather than the distribution lane being
+                    // dark. It is exactly the shape of the 2026-08-20 outage, seen from the
+                    // consumer: an empty index, every consumer quietly compiling, nothing in any
+                    // log worth reading.
+                    _logger?.LogWarning(
+                        "Bundle for {Plugin}: {Registry} does not advertise it on framework "
+                        + "{Identity}/{Architecture} — it will be COMPILED here. Either that "
+                        + "registry has no install record and no published module for it, or its "
+                        + "index is filtered by this instance's grant. {Advertised} package(s) are "
+                        + "advertised to this instance.",
+                        pluginId, _registryUrl, PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                        ReleaseArchitecture.Live, index.Bundles?.Count ?? 0);
+                    return Miss(pluginId, BundleAdoptionKind.NotAdvertised,
+                        $"{_registryUrl} advertises {index.Bundles?.Count ?? 0} package(s) to this "
+                        + "instance, and this is not one of them");
+                }
+
+                return Download(pluginId, bundle.Version)
+                    .SelectMany(result => result.Bytes is null
+                        ? Miss(pluginId, result.Kind, result.Reason)
+                        : SeedAll(pluginId, result.Bytes));
             });
+
+    /// <summary>
+    /// Records a miss and reports it as the zero every caller already handles.
+    ///
+    /// <para>The integer return is deliberately unchanged: adoption must never fail an install, and
+    /// widening the contract would ripple through five call sites for no gain. What changes is that
+    /// the zero is no longer the ONLY thing that happened — the reason is named in the log and
+    /// counted in the ledger, so "the lane is dark" is answerable after the fact.</para>
+    /// </summary>
+    private IObservable<int> Miss(string pluginId, BundleAdoptionKind kind, string? reason)
+    {
+        _ledger?.Record(new BundleAdoptionOutcome(pluginId, kind, _registryUrl, Reason: reason));
+        return Observable.Return(0);
+    }
 
     /// <summary>
     /// Fetches <paramref name="pluginId"/>'s bundle and LANDS the compiled module it carries into
@@ -243,9 +282,10 @@ public sealed class PluginBundleClient
                             "Module '{Module}' of {Plugin}: {Reason}",
                             moduleName, pluginId, verdict.Reason);
                         return Download(pluginId, bundle!.Version)
-                            .SelectMany(bytes => bytes is null
-                                ? Observable.Return(0)
-                                : LandFromBundle(pluginId, moduleName, packagePath, bundle.Version, bytes));
+                            .SelectMany(result => result.Bytes is null
+                                ? Miss(pluginId, result.Kind, result.Reason)
+                                : LandFromBundle(
+                                    pluginId, moduleName, packagePath, bundle.Version, result.Bytes));
                     })))
             .Catch((Exception ex) =>
             {
@@ -327,7 +367,14 @@ public sealed class PluginBundleClient
     /// <summary>
     /// Downloads the bundle, or emits null when the registry has none for this plugin/version.
     /// </summary>
-    private IObservable<byte[]?> Download(string pluginId, string version) =>
+    /// <summary>
+    /// A fetch's outcome: the bytes, or the NAMED reason there are none. A bare <c>byte[]?</c>
+    /// collapsed "404 for this lane" and "the registry is down" into the same null, and the caller
+    /// then collapsed that into the same 0 as a successful adoption.
+    /// </summary>
+    private sealed record FetchResult(byte[]? Bytes, BundleAdoptionKind Kind, string? Reason = null);
+
+    private IObservable<FetchResult> Download(string pluginId, string version) =>
         _httpPool.Invoke(async ct =>
         {
             // 🚨 The consumer asks IN ITS OWN LANE (#1751): the registry resolves each NodeType's
@@ -347,7 +394,9 @@ public sealed class PluginBundleClient
                 _logger?.LogInformation(
                     "No prebuilt bundle for {Plugin}@{Version} at {Registry} — will compile",
                     pluginId, version, _registryUrl);
-                return null;
+                return new FetchResult(null, BundleAdoptionKind.NotServed,
+                    $"the registry advertises {pluginId}@{version} but serves no bytes for "
+                    + $"{PrebuiltAssemblySeeder.LiveFrameworkMvid}/{ReleaseArchitecture.Live}");
             }
 
             if (!resp.IsSuccessStatusCode)
@@ -359,10 +408,13 @@ public sealed class PluginBundleClient
                 _logger?.LogWarning(
                     "Bundle fetch for {Plugin}@{Version} failed ({Status}) — will compile",
                     pluginId, version, (int)resp.StatusCode);
-                return null;
+                return new FetchResult(null, BundleAdoptionKind.FetchFailed,
+                    $"HTTP {(int)resp.StatusCode} from {_registryUrl}");
             }
 
-            return await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            return new FetchResult(
+                await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false),
+                BundleAdoptionKind.Adopted);
         });
 
     /// <summary>
@@ -383,7 +435,7 @@ public sealed class PluginBundleClient
                     _logger?.LogInformation(
                         "Bundle for {Plugin} DECLINED whole: {Reason} — compiling instead",
                         pluginId, reason);
-                    return Observable.Return(0);
+                    return Miss(pluginId, BundleAdoptionKind.BundleDeclined, reason);
                 }
 
                 // 🚨 The producer's per-type MISSES (#1751), surfaced here rather than only in the
@@ -403,7 +455,8 @@ public sealed class PluginBundleClient
                 {
                     _logger?.LogInformation(
                         "Bundle for {Plugin} carried no assemblies — compiling instead", pluginId);
-                    return Observable.Return(0);
+                    return Miss(pluginId, BundleAdoptionKind.NoAssemblies,
+                        "the bundle carried no assemblies");
                 }
 
                 return assemblies
@@ -412,9 +465,19 @@ public sealed class PluginBundleClient
                         a.Dependencies))
                     .Concat()
                     .Count(adopted => adopted)
-                    .Do(count => _logger?.LogInformation(
-                        "Bundle for {Plugin}: adopted {Adopted}/{Total} prebuilt assemblies",
-                        pluginId, count, assemblies.Count));
+                    .Do(count =>
+                    {
+                        _logger?.LogInformation(
+                            "Bundle for {Plugin}: adopted {Adopted}/{Total} prebuilt assemblies",
+                            pluginId, count, assemblies.Count);
+                        // 🚨 A PARTIAL adoption is recorded as the partial thing it is. Rounding
+                        // "adopted 3 of 12" up to "adopted" is how a regression hides inside a
+                        // success — the other nine are compiled here, which is precisely the cost
+                        // this lane exists to remove.
+                        _ledger?.Record(new BundleAdoptionOutcome(
+                            pluginId, BundleAdoptionKind.Adopted, _registryUrl,
+                            Adopted: count, Offered: assemblies.Count));
+                    });
             });
 
     // Per-REQUEST auth header — never on the client: _http can be the process-wide SharedHttp, and

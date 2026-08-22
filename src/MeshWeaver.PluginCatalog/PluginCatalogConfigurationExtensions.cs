@@ -126,7 +126,15 @@ public static class PluginCatalogConfigurationExtensions
                 // fails with a denied-path error the publisher sees as HTTP 409. See ModuleRoot.
                 .AddSingleton(sp => new ModuleLandingService(
                     sp.GetService<ILogger<ModuleLandingService>>(),
-                    ModuleRoot.Resolve(sp.GetService<IConfiguration>()))))
+                    ModuleRoot.Resolve(sp.GetService<IConfiguration>())))
+                // The COUNT that proves the distribution lane works (#1782 gap 4). Adoption's only
+                // evidence used to be a log line, and the most important miss — "the registry does
+                // not advertise this package for my lane" — had no line at all. With lazy
+                // compile-on-access replacing instance pre-bake (#1746), a miss is absorbed so
+                // completely that the lane can go dark while every surface looks like a healthy
+                // day; that is exactly what 2026-08-20 was. A plain singleton, process-scoped and
+                // bounded: a diagnostic, never a source of truth.
+                .AddSingleton<BundleAdoptionLedger>())
             .ConfigureHub(config =>
             {
                 config.TypeRegistry.AddPluginCatalogTypes();
