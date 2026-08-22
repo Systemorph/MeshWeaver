@@ -296,6 +296,12 @@ public static class GraphConfigurationExtensions
                     // user-visible notification. Instance maps only — no static state. See
                     // NodeTypeCompileParkRegistry + InstallCompileWatcher's parked short-circuit.
                     services.AddSingleton<NodeTypeCompileParkRegistry>();
+                    // Mesh-scoped adoption interlock (#1763): a prebuilt adoption ACTIVATES
+                    // the NodeType hub it is about to stamp, and that activation is what arms
+                    // the first-build kickoff — so without this the seeder's own probe started
+                    // the Roslyn compile the adoption exists to avoid, and the fresh compile
+                    // overwrote the adopted build milliseconds later. Instance maps only.
+                    services.AddSingleton<NodeTypeAdoptionRegistry>();
                     // Mesh-scoped spacing for the compilation-overlay self-heal. A self-heal
                     // disposes the very hub that holds its watcher, so without memory that
                     // outlives the recycle a pair whose re-enrichment keeps faulting would
