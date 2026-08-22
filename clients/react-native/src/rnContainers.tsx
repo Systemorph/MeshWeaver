@@ -7,6 +7,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import { View, Text, Pressable, Modal, ScrollView, StyleSheet, Linking, Image } from "react-native";
+// 🚨 THIS SIDE-EFFECT IMPORT MUST STAY ABOVE `expo-video`, and it is not decoration.
+// expo-video@57's WEB build defines `class VideoPlayerWeb extends globalThis.expo.SharedObject`
+// at module-evaluation time (build/VideoPlayer.web.js), but nothing in its own import graph
+// (VideoModule -> NativeVideoModule.web, VideoView.web -> VideoPlayer.web) ever pulls
+// expo-modules-core — whose `src/index.ts` is what runs `installExpoGlobalPolyfill()` and creates
+// `globalThis.expo` on web. Neither does this app's entry: expo/AppEntry.js -> registerRootComponent
+// -> Expo.fx.web -> winter/async-require/rsc, none of which touch expo-modules-core. So on the web
+// export, importing expo-video FIRST throws
+//     TypeError: Cannot read properties of undefined (reading 'SharedObject')
+// before React ever mounts — a blank page with the noscript text, not a video that fails to play.
+// (expo-audio does not have this problem: its index.js re-exports from 'expo' on the first line.)
+// Importing `expo` here evaluates expo-modules-core and installs the global first. Router-based
+// Expo apps get this for free from their entry, which is why upstream has not hit it.
+import "expo";
 import { VideoView, useVideoPlayer } from "expo-video";
 import {
   useLocalize,
