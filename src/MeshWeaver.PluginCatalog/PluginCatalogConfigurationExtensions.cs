@@ -126,6 +126,16 @@ public static class PluginCatalogConfigurationExtensions
                 // fails with a denied-path error the publisher sees as HTTP 409. See ModuleRoot.
                 .AddSingleton(sp => new ModuleLandingService(
                     sp.GetService<ILogger<ModuleLandingService>>(),
+                    ModuleRoot.Resolve(sp.GetService<IConfiguration>())))
+                // The restart-as-activation READER (#1979): which landed modules are not loaded in
+                // THIS process. Registered beside the writer and rooted at the same resolved
+                // module root — a reader looking at a different directory than the writer is how
+                // "installed, and nothing happened" becomes unexplainable. A plain singleton: it
+                // starts nothing and writes nothing, so an instance that never asks pays nothing.
+                // 🚨 It is registered rather than merely constructible so a NodeType's layout area
+                // can resolve it from hub.ServiceProvider — the Store's install step is the
+                // surface where the missing last step is actually met.
+                .AddSingleton(sp => new PendingModuleActivations(
                     ModuleRoot.Resolve(sp.GetService<IConfiguration>()))))
             .ConfigureHub(config =>
             {
