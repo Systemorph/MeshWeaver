@@ -47,10 +47,12 @@
          is what caught it. No portal code uses these types — the reference IS the point. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Maps\MeshWeaver.Maps.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Graph\MeshWeaver.Blazor.Graph.csproj" />
-    <!-- The entity form/edit renderers, carved out of MeshWeaver.Blazor onto the view-pack seam.
-         Referenced + registered (AddEntityViews) exactly like the Graph pack; the module-lane
-         flip (the Analysis/#1974 shape) is a separate, later step. -->
-    <ProjectReference Include="..\..\src\MeshWeaver.Blazor.EntityViews\MeshWeaver.Blazor.EntityViews.csproj" />
+    <!-- MeshWeaver.Blazor.EntityViews is deliberately NOT referenced (the Analysis/#1974 shape):
+         it ships via the registry as a module, its EntityViewsViewPackModuleAttribute registers
+         the views when the DLL is listed under Modules:Assemblies, and Modules:Required declares
+         it so a rollout that lost the pack stalls on readiness instead of shipping blank edit
+         forms. A reference here would put the DLL back in the app closure, where the module
+         landing refuses the same-identity module (409 on every instance). -->
     <ProjectReference Include="..\..\src\MeshWeaver.Blazor.Portal\MeshWeaver.Blazor.Portal.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Blazor\MeshWeaver.Hosting.Blazor.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
