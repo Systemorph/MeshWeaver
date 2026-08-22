@@ -92,13 +92,20 @@ public static class UpdatePolicySettingsTab
                     // 🚨 The manual roll honours the SAME release-availability gate as the poller
                     // (#1754). A gate only the unattended path respects is not a gate — and this
                     // button is exactly the moment an operator, seeing an update that never
-                    // applied, would force the roll the poller refused for good reason. Absent the
-                    // service the button behaves as before (nothing to check against), which is
-                    // said out loud rather than read as a pass.
+                    // applied, would force the roll the poller refused for good reason.
+                    //
+                    // 🚨 An UNWIRED gate is a HOLD here too. It used to resolve to NotEnforced,
+                    // which is `IsUpdatable: true` — so the one host where nothing checks anything
+                    // was also the one host where this button never refused. NotEnforced is the
+                    // single stated applicability exemption (a deployment that consumes no CI
+                    // bakes); a missing registration is not an exemption, it is the absence of a
+                    // verdict, and it must not render as a pass.
                     var gate = h.Hub.ServiceProvider.GetService<ReleaseAvailabilityService>();
                     var decision = gate is null
-                        ? Observable.Return(UpdatabilityVerdict.NotEnforced(
-                            "no release-availability gate is registered on this install"))
+                        ? Observable.Return(UpdatabilityVerdict.Unavailable(
+                            "no release-availability gate is registered on this install, so nothing "
+                            + "could check whether the packages it deploys have usable artifacts for "
+                            + "this release — that is a hold, not clearance to proceed"))
                         : gate.IsUpdatable(tag);
                     decision.Subscribe(verdict =>
                     {
