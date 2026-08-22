@@ -38,6 +38,7 @@
     <Project Path="src/MeshWeaver.AI.Application/MeshWeaver.AI.Application.csproj" />
     <Project Path="src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
+    <Project Path="src/MeshWeaver.Blazor.EntityViews/MeshWeaver.Blazor.EntityViews.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Graph/MeshWeaver.Blazor.Graph.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Portal/MeshWeaver.Blazor.Portal.csproj" />
     <Project Path="src/MeshWeaver.Blazor/MeshWeaver.Blazor.csproj" />

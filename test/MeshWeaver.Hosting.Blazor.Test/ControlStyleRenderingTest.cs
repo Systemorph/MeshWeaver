@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Blazor.EntityViews;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
@@ -107,6 +108,10 @@ public class ControlStyleRenderingTest(ITestOutputHelper output) : MonolithMeshT
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddBlazor()
+            // The entity form/edit views left the base registry for the EntityViews pack; this
+            // harness names EditorView / NumberFieldView<> / RadioGroupView<> by type, so it
+            // registers the pack the same way the portal does.
+            .ConfigureHub(config => config.AddEntityViews())
             .ConfigureServices(services => services
                 // The two ambient browser services every view assumes. Neither is exercised by a
                 // static render, but Blazor's [Inject] pipeline throws if they are unregistered.

@@ -11,8 +11,9 @@ namespace MeshWeaver.Blazor.Graph;
 public static class BlazorGraphExtensions
 {
     /// <summary>
-    /// Adds the Graph Blazor views (MeshNodeEditorView, MeshNodeThumbnailView) to the configuration.
-    /// Also enables @ autocomplete for unified content references in markdown editors.
+    /// Adds the Graph Blazor views (MeshNodeEditorView, MeshNodeThumbnailView, MeshNodePickerView, …)
+    /// to the configuration. Also enables @ autocomplete for unified content references in markdown
+    /// editors.
     /// </summary>
     public static MessageHubConfiguration AddGraphViews(this MessageHubConfiguration configuration)
     {
@@ -24,7 +25,11 @@ public static class BlazorGraphExtensions
                 .WithView<MeshNodeThumbnailControl, MeshNodeThumbnailView>()
                 .WithView<MeshNodeCardControl, MeshNodeCardView>()
                 .WithView<MeshNodeContentEditorControl, MeshNodeContentEditorView>()
-                .WithView<MeshNodeRoleEditorControl, MeshNodeRoleEditorView>())
+                .WithView<MeshNodeRoleEditorControl, MeshNodeRoleEditorView>()
+                // The picker lives HERE (it is a Graph surface) but derives from the EntityViews
+                // pack's FormComponentBase — it left the base pack with the form controls because
+                // the base pack cannot reference the pack that references it.
+                .WithView<MeshNodePickerControl, MeshNodePickerView>())
             .AddMeshNavigation();  // Enable @ autocomplete in markdown editors
     }
 }

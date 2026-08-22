@@ -23,6 +23,13 @@
         <PackageReference Include="System.Reactive" />
     </ItemGroup>
     <ItemGroup>
+        <!-- 🚨 Looks unused since SelectView left for MeshWeaver.Blazor.EntityViews — DO NOT
+             remove. MeshWeaver.Application.Styles is a CANONICAL content-surface assembly
+             (FrameworkBuildIdentity.ContentSurfaceAssemblies): dropping it from a project that
+             still reaches it transitively (Layout references it too) is harmless to the build but
+             invites the #1814/#2021 identity fork the moment the transitive edge changes — the
+             in-mesh compile then resolves a DIFFERENT copy of the styles assembly than the one
+             the portal rendered with, and icons/styles silently diverge per pod. -->
         <ProjectReference Include="..\MeshWeaver.Application.Styles\MeshWeaver.Application.Styles.csproj" />
         <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
         <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
