@@ -122,7 +122,8 @@ public class AgentFileParser : IFileFormatParser
             }).ToList(),
             Plugins = frontMatter.Plugins?.Select(AgentPluginReference.Parse).ToList(),
             ContextMatchPattern = frontMatter.ContextMatchPattern,
-            ModelTier = frontMatter.ModelTier
+            ModelTier = frontMatter.ModelTier,
+            Translations = ReadTranslations(frontMatter.Translations)
         };
 
         var node = new MeshNode(id, ns)
@@ -187,7 +188,8 @@ public class AgentFileParser : IFileFormatParser
             Plugins = agentConfig?.Plugins?.Select(p => p.Methods is { Count: > 0 }
                 ? $"{p.Name}:{string.Join(",", p.Methods)}"
                 : p.Name).ToList(),
-            ModelTier = agentConfig?.ModelTier
+            ModelTier = agentConfig?.ModelTier,
+            Translations = WriteTranslations(agentConfig?.Translations)
         };
 
         // Always write YAML block for agent files
@@ -257,7 +259,8 @@ public class AgentFileParser : IFileFormatParser
                 ModelTier = ExtractString(element, "modelTier"),
                 Delegations = ExtractDelegations(element),
                 Handoffs = ExtractHandoffs(element),
-                Plugins = ExtractPlugins(element)
+                Plugins = ExtractPlugins(element),
+                Translations = ExtractTranslations(element)
             };
         }
         catch
@@ -280,6 +283,33 @@ public class AgentFileParser : IFileFormatParser
             return prop.ValueKind == System.Text.Json.JsonValueKind.True;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Reads <c>translations</c> off an UNTYPED content element — the shape a node arrives in when
+    /// the hub did not type it. Omitting it here would make the sync-back drop every translation a
+    /// mesh-edited agent carries, silently and only on that path.
+    /// </summary>
+    private static IReadOnlyDictionary<string, LocalizedNodeText>? ExtractTranslations(
+        System.Text.Json.JsonElement element)
+    {
+        if (!element.TryGetProperty("translations", out var prop)
+            || prop.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return null;
+
+        var map = new Dictionary<string, LocalizedNodeText>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in prop.EnumerateObject())
+        {
+            if (entry.Value.ValueKind != System.Text.Json.JsonValueKind.Object)
+                continue;
+            map[entry.Name] = new LocalizedNodeText
+            {
+                Name = ExtractString(entry.Value, "name"),
+                Description = ExtractString(entry.Value, "description"),
+                Category = ExtractString(entry.Value, "category"),
+            };
+        }
+        return map.Count == 0 ? null : map;
     }
 
     private static List<AgentDelegation>? ExtractDelegations(System.Text.Json.JsonElement element)
@@ -397,6 +427,47 @@ public class AgentFileParser : IFileFormatParser
         return (id, ns);
     }
 
+    /// <summary>
+    /// Front matter → the typed translation map. Null for an absent or empty block, so an
+    /// untranslated agent round-trips to a file with no <c>translations:</c> key.
+    /// </summary>
+    private static IReadOnlyDictionary<string, LocalizedNodeText>? ReadTranslations(
+        Dictionary<string, LocalizedNodeTextFrontMatter>? fm)
+    {
+        if (fm is not { Count: > 0 })
+            return null;
+        var map = new Dictionary<string, LocalizedNodeText>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (tag, text) in fm)
+        {
+            if (string.IsNullOrWhiteSpace(tag) || text is null)
+                continue;
+            map[tag.Trim()] = new LocalizedNodeText
+            {
+                Name = text.Name,
+                Description = text.Description,
+                Category = text.Category,
+            };
+        }
+        return map.Count == 0 ? null : map;
+    }
+
+    /// <summary>The exact inverse of <see cref="ReadTranslations"/>.</summary>
+    private static Dictionary<string, LocalizedNodeTextFrontMatter>? WriteTranslations(
+        IReadOnlyDictionary<string, LocalizedNodeText>? translations)
+    {
+        if (translations is not { Count: > 0 })
+            return null;
+        var map = new Dictionary<string, LocalizedNodeTextFrontMatter>(StringComparer.Ordinal);
+        foreach (var (tag, text) in translations)
+            map[tag] = new LocalizedNodeTextFrontMatter
+            {
+                Name = text.Name,
+                Description = text.Description,
+                Category = text.Category,
+            };
+        return map;
+    }
+
     private static MeshNodeState ParseState(string? state)
     {
         if (string.IsNullOrEmpty(state))
@@ -432,7 +503,23 @@ public class AgentFileParser : IFileFormatParser
         public List<DelegationFrontMatter>? Delegations { get; set; }
         public List<HandoffFrontMatter>? Handoffs { get; set; }
         public List<string>? Plugins { get; set; }
+
+        /// <summary>
+        /// <c>translations: { de: { name: …, description: …, category: … } }</c> — per-language
+        /// overrides of the DISPLAY metadata only. The markdown body is the agent's system prompt
+        /// and stays in one language; see <see cref="AgentConfiguration.Translations"/>.
+        /// </summary>
+        public Dictionary<string, LocalizedNodeTextFrontMatter>? Translations { get; set; }
     }
+
+    /// <summary>One language's display overrides, as written in the front matter.</summary>
+    private class LocalizedNodeTextFrontMatter
+    {
+        public string? Name { get; set; }
+        public string? Description { get; set; }
+        public string? Category { get; set; }
+    }
+
 
     /// <summary>
     /// YAML model for delegation configuration.

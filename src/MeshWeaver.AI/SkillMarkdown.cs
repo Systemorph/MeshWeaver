@@ -97,6 +97,7 @@ public static class SkillMarkdown
             AutoMount = fm.AutoMount,
             LaunchesSubThread = fm.LaunchesSubThread,
             Harness = fm.Harness,
+            Translations = ReadTranslations(fm.Translations),
             Action = fm.Action is null ? null : new SkillAction
             {
                 Kind = Enum.TryParse<SkillActionKind>(fm.Action.Kind, ignoreCase: true, out var kind)
@@ -149,6 +150,7 @@ public static class SkillMarkdown
             AutoMount = def.AutoMount ? null : false,               // default true → omit
             LaunchesSubThread = def.LaunchesSubThread ? true : null, // default false → omit
             Harness = def.Harness,
+            Translations = WriteTranslations(def.Translations),
             Action = def.Action is null ? null : new SkillActionFrontMatterOut
             {
                 // Pick is the default enum value → omit (Parse defaults a missing kind to Pick).
@@ -166,6 +168,48 @@ public static class SkillMarkdown
         return body.Length == 0 ? $"---\n{yaml}\n---\n" : $"---\n{yaml}\n---\n\n{body}\n";
     }
 
+    /// <summary>
+    /// Front matter → the typed translation map. Returns null for an absent or empty block so a
+    /// skill with no translations round-trips to a file with no <c>translations:</c> key — the same
+    /// omit-the-default rule every other field here follows.
+    /// </summary>
+    private static IReadOnlyDictionary<string, LocalizedNodeText>? ReadTranslations(
+        Dictionary<string, LocalizedNodeTextFrontMatter>? fm)
+    {
+        if (fm is not { Count: > 0 })
+            return null;
+        var map = new Dictionary<string, LocalizedNodeText>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (tag, text) in fm)
+        {
+            if (string.IsNullOrWhiteSpace(tag) || text is null)
+                continue;
+            map[tag.Trim()] = new LocalizedNodeText
+            {
+                Name = text.Name,
+                Description = text.Description,
+                Category = text.Category,
+            };
+        }
+        return map.Count == 0 ? null : map;
+    }
+
+    /// <summary>The exact inverse of <see cref="ReadTranslations"/>.</summary>
+    private static Dictionary<string, LocalizedNodeTextFrontMatter>? WriteTranslations(
+        IReadOnlyDictionary<string, LocalizedNodeText>? translations)
+    {
+        if (translations is not { Count: > 0 })
+            return null;
+        var map = new Dictionary<string, LocalizedNodeTextFrontMatter>(StringComparer.Ordinal);
+        foreach (var (tag, text) in translations)
+            map[tag] = new LocalizedNodeTextFrontMatter
+            {
+                Name = text.Name,
+                Description = text.Description,
+                Category = text.Category,
+            };
+        return map;
+    }
+
     // ── The frontmatter models ──────────────────────────────────────────────
 
     // Read model — matches the hand-authored files (camelCase, missing fields default).
@@ -181,6 +225,21 @@ public static class SkillMarkdown
         public bool LaunchesSubThread { get; set; }
         public string? Harness { get; set; }
         public SkillActionFrontMatter? Action { get; set; }
+
+        /// <summary>
+        /// <c>translations: { de: { name: …, description: …, category: … } }</c> — per-language
+        /// overrides of the DISPLAY metadata only. The body below the front matter is the skill's
+        /// procedure and stays in one language; see <see cref="SkillDefinition.Translations"/>.
+        /// </summary>
+        public Dictionary<string, LocalizedNodeTextFrontMatter>? Translations { get; set; }
+    }
+
+    /// <summary>One language's display overrides, as written in the front matter.</summary>
+    internal sealed class LocalizedNodeTextFrontMatter
+    {
+        public string? Name { get; set; }
+        public string? Description { get; set; }
+        public string? Category { get; set; }
     }
 
     internal sealed class SkillActionFrontMatter
@@ -206,6 +265,7 @@ public static class SkillMarkdown
         public bool? LaunchesSubThread { get; set; }
         public string? Harness { get; set; }
         public SkillActionFrontMatterOut? Action { get; set; }
+        public Dictionary<string, LocalizedNodeTextFrontMatter>? Translations { get; set; }
     }
 
     private sealed class SkillActionFrontMatterOut
