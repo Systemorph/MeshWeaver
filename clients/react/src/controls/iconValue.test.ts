@@ -3,7 +3,7 @@
 // ("most SVGs are not showing").
 
 import { describe, expect, it } from "vitest";
-import { classifyIcon, iconForRendering, isEmojiIcon, isIconUrl } from "./iconValue.js";
+import { backplatePalette, classifyIcon, ensureBackplate, hasBackplate, iconForRendering, isEmojiIcon, isIconUrl } from "./iconValue.js";
 
 describe("classifyIcon", () => {
   it("classifies inline SVG documents", () => {
@@ -59,5 +59,55 @@ describe("node-icon helpers", () => {
   it("isIconUrl accepts rooted paths and extensions", () => {
     expect(isIconUrl("/static/NodeTypeIcons/space.svg")).toBe(true);
     expect(isIconUrl("Document")).toBe(false);
+  });
+});
+
+// Mirrors the server's IconBackplateTest (MeshWeaver.Graph.Test) — the policy is shared and the
+// two implementations must not drift: same detection, same palette, same deterministic hue.
+describe("ensureBackplate", () => {
+  const monochrome =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/></svg>';
+  const plated =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='5' fill='#4338CA'/><path d='M10 5.5V10' stroke='#fff'/></svg>";
+
+  it("leaves an authored plate untouched", () => {
+    expect(ensureBackplate(plated)).toBe(plated);
+  });
+
+  it("leaves a thread identicon (full-bleed rect on its own canvas) untouched", () => {
+    const identicon =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#e8f4fd"/><rect x="20" y="20" width="20" height="20" fill="#0078d4"/></svg>';
+    expect(ensureBackplate(identicon)).toBe(identicon);
+  });
+
+  it("plates a monochrome outline and recolors currentColor to white", () => {
+    const out = ensureBackplate(monochrome);
+    expect(out.startsWith("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='5'")).toBe(true);
+    expect(out).not.toContain("currentColor");
+    expect(out).toContain('stroke="#fff"');
+    expect(out).toContain("<svg x='3' y='3' width='18' height='18'");
+    expect(out).toContain('viewBox="0 0 24 24"'); // the glyph keeps its own coordinate system
+  });
+
+  it("is deterministic and draws its hue from the shared palette", () => {
+    const one = ensureBackplate(monochrome);
+    expect(ensureBackplate(monochrome)).toBe(one);
+    expect(backplatePalette.some((hue) => one.includes(`fill='${hue}'`))).toBe(true);
+  });
+
+  it("does not mistake rx or a small ornamental rect for a plate", () => {
+    expect(hasBackplate("<svg viewBox='0 0 24 24'><rect x='9' y='9' width='6' height='6' fill='#333'/></svg>")).toBe(false);
+    // rx='5' on an authored plate must not be read as x='5' (the C# bug this pins).
+    expect(hasBackplate(plated)).toBe(true);
+  });
+
+  it("does not count a fill='none' full-canvas rect as a plate", () => {
+    expect(hasBackplate("<svg viewBox='0 0 24 24'><rect width='24' height='24' fill='none' stroke='currentColor'/></svg>")).toBe(false);
+  });
+
+  it("classifyIcon routes inline svg through the plate", () => {
+    const out = classifyIcon(monochrome);
+    expect(out.kind).toBe("svg");
+    expect(out.text).toContain("<rect width='24' height='24' rx='5'");
   });
 });
