@@ -54,8 +54,15 @@ public static class MeshDataSourceExtensions
     /// <para>🚨 A probe hub must never be used to WRITE. With no own-node subscription and no
     /// persistence sampler it has no node identity and would not persist anything.</para>
     /// </summary>
-    public static MessageHubConfiguration AsTransientNodeProbe(this MessageHubConfiguration config)
-        => config.Set(new TransientNodeProbe());
+    /// <param name="config">The hub configuration to mark.</param>
+    /// <param name="startDataSources">FALSE only for a probe that reads nothing but the type
+    /// registry (the schema validation/lookup probes): its data sources are configured but never
+    /// started, so no sync/ stream can race the probe's immediate dispose (the CD-killing
+    /// ProbeHubCostTest flake). Leave TRUE (default) for any probe that snapshots data — the
+    /// model probe's reads depend on started sources.</param>
+    public static MessageHubConfiguration AsTransientNodeProbe(
+        this MessageHubConfiguration config, bool startDataSources = true)
+        => config.Set(new TransientNodeProbe(startDataSources));
 
     /// <summary>
     /// Marker that records every <see cref="AddMeshDataSource(MessageHubConfiguration, Func{MeshDataSource, MeshDataSource})"/>

@@ -337,7 +337,7 @@ public sealed record DataContext : IDisposable
         // hosted hub creation … during disposal" warning: the exact line ProbeHubCostTest pins
         // as a teardown fault, flaking CI red twice on 2026-08-22 and switching CD off both
         // times. Lazy stream creation on a real request is untouched. See TransientNodeProbe.
-        if (Hub.Configuration.Get<TransientNodeProbe>() is not null)
+        if (Hub.Configuration.Get<TransientNodeProbe>() is { StartDataSources: false })
         {
             logger.LogDebug(
                 "DataContext: {Address} is a transient node probe — not starting its {Count} data "
