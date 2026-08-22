@@ -191,6 +191,49 @@ public static class ServiceDefaults
                     statusCode: StatusCodes.Status503ServiceUnavailable);
         }).AllowAnonymous();
 
+        // 🚨 What SIGTERM FOUND — and the line whose ABSENCE is the evidence of a hard kill
+        // (#1971). preStop used to poll /drain with no bound of its own, so a pod whose sessions
+        // outlived terminationGracePeriodSeconds was SIGKILLed with a live Orleans silo: this
+        // callback never ran, the host's 90 s ShutdownTimeout never ran, and the silo never
+        // departed membership. The deployment's safe-to-evict annotation records what that costs
+        // ("each abrupt departure left a ZOMBIE entry in the Orleans membership table … writes
+        // timed out mesh-wide"). With preStop bounded to drainSeconds − shutdownMarginSeconds,
+        // SIGTERM arrives INSIDE the grace and this runs — so "did the pod depart cleanly" becomes
+        // a question Loki can answer, which it could not before in either direction.
+        app.Lifetime.ApplicationStopping.Register(() =>
+        {
+            var logger = app.Services.GetService<ILoggerFactory>()?.CreateLogger<DrainProgress>();
+            if (logger is null)
+                return;
+
+            var tracker = app.Services.GetService<ActiveCircuitTracker>();
+            var report = progress.Abandon(tracker?.Count ?? 0, DateTimeOffset.UtcNow);
+
+            if (!report.TerminationWasObserved)
+                logger.LogInformation(
+                    "Drain: SHUTDOWN with no drain probe ever seen — SIGTERM arrived without a "
+                    + "preStop (a node eviction, a local Ctrl-C, or a chart that lost its "
+                    + "lifecycle hook). {Live} circuit(s) were open. Shutting down in order.",
+                    report.LiveCircuits);
+            else if (report.CutSessionsOff)
+                logger.LogWarning(
+                    "Drain: GIVING UP after {Elapsed} — {Live} circuit(s) are STILL OPEN and are "
+                    + "being cut off ({Initial} were open when termination began). The drain "
+                    + "window expired, so preStop returned and SIGTERM was delivered while there "
+                    + "is still grace left to shut down in. Cutting off the last stragglers "
+                    + "deliberately is the trade: riding to the ceiling instead would SIGKILL this "
+                    + "process with a live silo, leaving a zombie membership entry the cluster "
+                    + "keeps placing activations on. Raise portal.drainSeconds if sessions this "
+                    + "long are expected.",
+                    report.Elapsed, report.LiveCircuits, report.CircuitsWhenTerminationBegan);
+            else
+                logger.LogInformation(
+                    "Drain: shutting down cleanly after {Elapsed} — no circuits remain "
+                    + "({Initial} were open when termination began). The silo departs membership "
+                    + "in order.",
+                    report.Elapsed, report.CircuitsWhenTerminationBegan);
+        });
+
         return app;
     }
 
