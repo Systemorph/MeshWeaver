@@ -1183,7 +1183,24 @@ jobs:
       #     inert there too. They still compile-GATE on every PR (dotnet-test.yml's doc-gate runs
       #     the samples stage): correctness of that content is proven, its assemblies are simply
       #     not worth shipping. Before/after for this job: 8 packages / 28 assemblies → 1 / 4.
-      - name: "Bake the platform's OWN shipped content INSIDE the promoted image"
+      # ── THE BAKE — a BUILD STEP, with no mesh anywhere in it (#1763) ────────────────────────
+      # 🚨 This step and the GATE below used to be ONE `docker run`, and that fusion is the finding
+      # #1763 opens with: producing an assembly is a build step, and the mesh's job is to CONSUME a
+      # bake, not to produce one. The old command stood up an in-process mesh, imported the content,
+      # let the MESH compile every NodeType and collected what it produced — a headless mesh rather
+      # than a serving portal, but exactly "compile through mesh nodes".
+      #
+      # `compile` resolves NodeType sources straight from the staged tree and compiles them with
+      # MeshWeaver.Compiler: no MeshBuilder, no AddGraph(), no import, no hub scheduler, no per-type
+      # activation. That equivalence is not assumed — `BakeEquivalenceTest` bakes one content set
+      # BOTH ways and pins that the two producers agree on the bundle set, the resolved source set,
+      # the per-type dependency records and the emitted surfaces.
+      #
+      # It is the SAME BINARY in the SAME IMAGE as the gate below, which is what makes their
+      # framework identities provably equal (see MeshWeaver.PluginTester.csproj — the bake and the
+      # gate share one project on purpose). A leaner compiler-only project would resolve a DIFFERENT
+      # identity and every bundle it baked would be declined by every portal, silently.
+      - name: "BAKE the platform's OWN shipped content (compiler-driven, no mesh)"
         env:
           IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
           SHA: ${{ needs.gate.outputs.sha }}
@@ -1196,7 +1213,8 @@ jobs:
           mkdir -p "$STAGE"
           bash .github/scripts/stage-doc-gate.sh src/MeshWeaver.Documentation/Data "$STAGE/doc"
           # The known-debt ratchet travels INTO the mount: the tester runs in the container and
-          # cannot see the checkout. Same file the doc-gate passes, so the same verdict applies.
+          # cannot see the checkout. Same file BOTH halves read, so the split cannot make the same
+          # ratchet mean two different things depending on which half is looking at it.
           cp .github/doc-gate.allow "$STAGE/doc-gate.allow"
           # The image's tester runs as a non-root user: it must be able to read the mount and write
           # the bake directory.
@@ -1205,27 +1223,53 @@ jobs:
           rm -rf "$BAKE"
           mkdir -p "$BAKE"
           chmod 777 "$BAKE"
-          # A red tester FAILS this job: the platform's own shipped content not compiling against
-          # the image that ships it is a release defect, not a reason to publish less.
+          # A red bake FAILS this job: the platform's own shipped content not compiling against the
+          # image that ships it is a release defect, not a reason to publish less.
           # --pull never: the image is already in the local store (the retrying step above pulled
           # it), so a registry blip here can no longer be mistaken for a bake failure.
-          echo "── baking /repo/doc against $IMAGE"
-          docker run --rm --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
-            --entrypoint /app/mw-plugin-test "$IMAGE" /repo/doc \
-            --allow /repo/doc-gate.allow --bake-output /bake --source-sha "$SHA"
-          # Postconditions, not hopes: a green tester that wrote no identity, or no bundles, is a
+          echo "── baking /repo/doc against $IMAGE (no mesh)"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" compile /repo/doc \
+            --output /bake --allow /repo/doc-gate.allow --source-sha "$SHA"
+          # Postconditions, not hopes: a green bake that wrote no identity, or no bundles, is a
           # bake-stage regression — never a quiet publish of nothing.
           if [ ! -s "$BAKE/framework-mvid.txt" ]; then
-            echo "::error::the tester ran green but wrote no bake identity ($BAKE/framework-mvid.txt) — the bake stage regressed (or the image predates --bake-output support)."
+            echo "::error::the bake ran green but wrote no identity ($BAKE/framework-mvid.txt) — the bake stage regressed (or the image predates the compile verb)."
             exit 1
           fi
           if ! ls "$BAKE"/*.zip >/dev/null 2>&1; then
-            echo "::error::the tester ran green but produced no bundles under $BAKE — nothing could be published."
+            echo "::error::the bake ran green but produced no bundles under $BAKE — nothing could be published."
             exit 1
           fi
           echo "BAKE_DIR=$BAKE" >> "$GITHUB_ENV"
           echo "baked identity: $(cat "$BAKE/framework-mvid.txt")"
           ls -l "$BAKE"/*.zip
+      # ── THE GATE — a mesh, CONSUMING the bake above (#1763) ─────────────────────────────────
+      # 🚨 The gate legitimately needs a mesh: rendering a layout area and executing a `Tests` area
+      # are runtime behaviours. What it must NOT do is produce the bytes it is judging. With
+      # `--seed` it adopts the bake's assemblies for every NodeType it installs, so what renders and
+      # what runs the Tests areas is the assembly that will actually ship — a strictly stronger
+      # release gate than the fused run ever was, which proved only that a private recompile of the
+      # same sources worked.
+      #
+      # THE GATE STILL FAILS THE JOB. Splitting the steps must not lose the gate: the platform's own
+      # shipped content failing to render or test against the image that ships it is a release
+      # defect. It also fails if the bake was DECLARED but not consumed — adoption leaves no trace
+      # in a gate verdict (an adopted type renders exactly like a compiled one), so "the consuming
+      # half silently stopped working" is invisible unless it is a verdict. `--seed` additionally
+      # refuses, before the mesh boots, a bake keyed to a framework identity this process does not
+      # resolve: that mismatch would otherwise decline every assembly one by one and leave the gate
+      # green having judged none of the bytes that ship (#1814's shape, one level down).
+      - name: "GATE the bake: render + execute Tests areas on the BAKED bytes"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/bake-stage"
+          echo "── gating /repo/doc against $IMAGE, consuming the bake in /bake"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE_DIR:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" /repo/doc \
+            --allow /repo/doc-gate.allow --seed /bake
       # ─────────── THE ADDRESS CHECK — publish only to an address the portal actually reads ───────────
       # 🚨 The framework identity is an ADDRESS, and until now NOTHING in this pipeline could observe
       # that the producer and the consumer disagree about it. The bake publishes under the identity
@@ -1354,88 +1398,29 @@ jobs:
   #
   # 🚨 Provisioning note (#1755): a subscriber whose own upstreams are not yet published EXITS
   # without building and is re-woken by its upstream's `meshweaver-upstream-published` event, so
-  # naming every satellite here is CORRECT but noisy — the dependent repos paint one red per
-  # release before their upstream publishes. Naming only the ROOTS (the repos with no upstreams:
-  # MeshWeaver.Plugins) gets the identical result quietly, because the satellite→satellite edge in
-  # node-repo-publish-bake carries the wave the rest of the way. Either list is safe; the roots-only
-  # list is the tidy one.
-  # 🚧 TRANSITIONAL — ADDRESSED notification, where the design calls for a BROADCAST.
-  # A publisher must not know its dependents: a release is announced once, to everyone, and whoever
-  # depends on it reacts. `BAKE_SUBSCRIBER_REPOS` is a hand-maintained SECOND COPY of a graph memex
-  # already holds (every package root's `requires`, which PackageGraph.Levels already orders), and a
-  # missing entry fails silently — the omitted repo just never rebuilds for the release, with
-  # nothing red anywhere. Kept because the broadcast does not exist yet; the App credential below
-  # at least makes it work rather than sit dormant.
-  # 🚨 DO NOT extend this list to more repos. Naming another dependent is not progress toward the
-  # target shape, it is one more copy of the graph to keep honest. See
-  # Doc/Architecture/ReleaseGates → "A publisher NEVER knows its dependents".
-  notify-dependents:
-    name: "Notify dependent repos"
-    needs: [gate, portal-image, promote]
-    if: needs.gate.outputs.publish == 'true' && needs.promote.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # 🚨 The `secrets` context is NOT available in a step-level `if:`, so configuredness is
-      # probed HERE, in a run step, rather than as a condition on the mint below. Getting that
-      # wrong does not fail loudly — the expression evaluates empty, the step runs anyway, and
-      # the mint fails with an authentication error that reads like a broken credential rather
-      # than an absent one.
-      - name: "Is the dispatch configured?"
-        id: cfg
-        env:
-          APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-          APP_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-          REPOS: ${{ vars.BAKE_SUBSCRIBER_REPOS }}
-        run: |
-          set -euo pipefail
-          if [ -z "${APP_ID:-}" ] || [ -z "${APP_KEY:-}" ] || [ -z "${REPOS:-}" ]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Dependent-repo dispatch NOT CONFIGURED — set repo var BAKE_SUBSCRIBER_REPOS (owner/repo, whitespace-separated) plus secrets DEPENDENT_DISPATCH_APP_ID and DEPENDENT_DISPATCH_APP_PRIVATE_KEY (the meshweaver-cloud GitHub App) so node repos rebake on every framework release."
-            echo "### ⚠️ Dependent-repo dispatch not configured (BAKE_SUBSCRIBER_REPOS / DEPENDENT_DISPATCH_APP_ID / DEPENDENT_DISPATCH_APP_PRIVATE_KEY)" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # The dispatch credential is the **meshweaver-cloud GitHub App** — the SAME machine identity
-      # the registry already uses for private-repo reads, not a second one to keep honest. Why an
-      # App and not a PAT:
-      #   • a PAT belongs to a PERSON — it carries that person's whole access, dies when they
-      #     rotate it or leave, and makes "who released this" a human name in every subscriber's
-      #     audit log;
-      #   • the installation grants exactly `contents: write` + `metadata: read`, which is the
-      #     minimum `POST /repos/{owner}/{repo}/dispatches` needs and nothing more;
-      #   • the minted token expires in an hour, so a leak has a floor on its blast radius.
-      # The token is scoped to this owner's installation; every subscriber must be a repo the
-      # App is installed on (it is installed org-wide today).
-      - name: "Mint an installation token for the subscribers"
-        id: app
-        if: steps.cfg.outputs.configured == 'true'
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
-          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
-      - name: "Dispatch meshweaver-framework-released"
-        if: steps.cfg.outputs.configured == 'true'
-        env:
-          TOKEN: ${{ steps.app.outputs.token }}
-          REPOS: ${{ vars.BAKE_SUBSCRIBER_REPOS }}
-          SHA: ${{ needs.gate.outputs.sha }}
-          VERSION: ${{ needs.portal-image.outputs.version }}
-        run: |
-          set -euo pipefail
-          for repo in $REPOS; do
-            echo "→ $repo"
-            curl -sS -o /tmp/resp -w '%{http_code}\n' -X POST \
-              -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$repo/dispatches" \
-              -d "{\"event_type\":\"meshweaver-framework-released\",\"client_payload\":{\"sha\":\"$SHA\",\"version\":\"$VERSION\"}}" \
-              | grep -q '^2' \
-              || echo "::warning::dispatch to $repo failed ($(cat /tmp/resp)) — its next own push (or the next release) re-bakes it."
-          done
-          echo "### 📣 Framework release dispatched to: $REPOS" >> "$GITHUB_STEP_SUMMARY"
+  # ────────────────── NO DEPENDENT DISPATCH: the wave is PULLED, not pushed ──────────────────
+  # There is deliberately no job here that tells the node repos a release happened.
+  #
+  # There used to be (`notify-dependents`), and its own comment called it TRANSITIONAL — "an
+  # ADDRESSED notification where the design calls for a BROADCAST … a publisher must not know its
+  # dependents". It needed `BAKE_SUBSCRIBER_REPOS` (a hand-maintained second copy of a graph memex
+  # already holds) plus a GitHub App credential with write access to every satellite. It was never
+  # provisioned, so for its whole life it printed "NOT CONFIGURED" and did nothing — while the
+  # fleet quietly stayed a release behind, which is exactly the silent failure the comment warned
+  # a missing entry would cause.
+  #
+  # 🚨 It is not coming back, and adding a token is not the fix. A release is a FACT about the
+  # registry — memex.meshweaver.cloud publishes the released image, and that is the one source of
+  # truth. Each node repo's scheduled run reads it and bakes for the identity it finds
+  # (`Resolve the bake target` in each repo's ci.yml, on the `schedule` trigger). Pull, not push:
+  #   • no credential — the platform needs no write access to any satellite, and no person's PAT
+  #     is in the loop;
+  #   • no list — a new repo participates by having the schedule, not by being named here;
+  #   • no silent gap — a repo that stops baking shows up as an instance HELD on its own
+  #     UpdatePolicy, naming the bundles and the identity, instead of nothing anywhere.
+  #
+  # The cost is latency: up to one schedule interval (twice hourly) instead of seconds. That is
+  # the right trade for removing a cross-repo write credential from the release path.
 
   # ────────────────── NOTIFY THE PLATFORM-UPDATE AGENT (optional) ──────────────────
   # After the release is ARMED (promote's last PUT), tell the registry instance's mesh that a new
@@ -1602,7 +1587,7 @@ jobs:
 
   alert-on-failure:
     name: "Alert: CD failed on main"
-    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images, publish-bake, notify-dependents]
+    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images, publish-bake]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5

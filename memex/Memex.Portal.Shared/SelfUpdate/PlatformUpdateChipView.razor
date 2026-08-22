@@ -16,44 +16,16 @@
     reasoning (and the tests) live; this file is markup and wiring.
 *@
 
-<style>
-    .platform-build-chip .platform-build-chip__deployed {
-        font-size: 11px;
-        opacity: 0.75;
-        margin-inline-start: 4px;
-        white-space: nowrap;
-    }
-
-    .platform-build-chip--update .platform-build-chip__deployed {
-        opacity: 1;
-        font-weight: 600;
-    }
-
-    /* Narrow viewports keep the glyph — the part that says "act on me" — and drop the text, which
-       is still on the tooltip and on the About page. */
-    @@media (max-width: 720px) {
-        .platform-build-chip .platform-build-chip__deployed {
-            display: none;
-        }
-    }
-</style>
-
 <FluentButton Appearance="Appearance.Stealth" BackgroundColor="transparent"
               class="@(chip.IsUpdate ? "platform-build-chip platform-build-chip--update" : "platform-build-chip")"
               Title="@chip.Tooltip" aria-label="@chip.Tooltip"
               OnClick="@Activate">
-    @* 🚨 The glyph is UNCONDITIONAL, and that is load-bearing rather than decorative: the text is
-       dropped on a narrow viewport AND absent whenever the deployment time is unknown, so a state
-       with no glyph would render an empty button — invisible, still clickable, and with nothing to
-       hover for the tooltip. Keeping every state glyphed means "the chip always shows something"
-       holds by construction instead of by several rules agreeing with each other. *@
+    @* 🚨 GLYPH ONLY, and the button carries no text in any state. This sits in a strip of icon
+       buttons; rendering a label made this one wider than its siblings and pushed its glyph off
+       their shared centre line — one visibly misaligned icon in a row of eight. Everything the chip
+       has to say now rides on Title/aria-label, which is why PlatformUpdateChip.Describe folds the
+       deployment time into the tooltip in every state rather than leaving it to a separate field. *@
     <FluentIcon Value="@Glyph" Color="@GlyphColor" />
-    @* WHEN, not WHICH BUILD — "Last deployed 08-18 15:35". Suppressed entirely when the deployment
-       time is unknown, rather than shown as an epoch date; the glyph alone is a valid chip. *@
-    @if (chip.DisplayText is { } text)
-    {
-        <span class="platform-build-chip__deployed">@text</span>
-    }
 </FluentButton>
 
 @code {

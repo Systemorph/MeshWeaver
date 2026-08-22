@@ -31,12 +31,28 @@ name: Node repo publish-bake (reusable)
 #     repository_dispatch:
 #       # BOTH: the platform releasing, and an UPSTREAM of this repo publishing (#1755). The second
 #       # is what wakes a run that exited because its upstreams were not ready yet.
-#       types: [meshweaver-framework-released, meshweaver-upstream-published]
+#       types: [meshweaver-framework-released]
+#     # 🚨 REQUIRED, not optional. The dispatch above has NEVER been armed, and the cross-repo
+#     # PAT it needed was removed on purpose (2026-08-21), so THIS POLL is how a satellite learns a
+#     # release happened. Without it the repo bakes only on its own pushes while the platform mints
+#     # an identity per merge, so every portal boots on an identity nobody baked and falls back to a
+#     # full in-mesh Roslyn sweep. Measured 2026-08-22: 3 of 4 satellites had no schedule and
+#     # followed nothing, behind a wall of green ticks. Stagger the minute per repo. Full rationale:
+#     # CiContentBake.md -> "Following the release is a POLL in every satellite".
+#     schedule:
+#       - cron: "17,47 * * * *"
+#
+#   # The schedule MUST share the dispatch's concurrency lane: a scheduled run carries the DEFAULT
+#   # BRANCH ref, so in the `github.ref` group a poll can cancel a main run mid-`tag-modules`.
+#   concurrency:
+#     group: ${{ github.workflow }}-${{ (github.event_name == 'repository_dispatch' || github.event_name == 'schedule') && 'framework-release' || github.ref }}
+#     cancel-in-progress: true
 #
 #   publish-bake:
 #     if: >
 #       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-#       github.event_name == 'repository_dispatch'
+#       github.event_name == 'repository_dispatch' ||
+#       github.event_name == 'schedule'
 #     needs: [preflight, validate, compile-check, test-repos]
 #     permissions: { contents: read, id-token: write }   # OIDC — must be granted BY the caller
 #     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-publish-bake.yml@<40-char platform commit sha>
@@ -56,7 +72,6 @@ name: Node repo publish-bake (reusable)
 #       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
 #       upstream-sources: plugins                    # exit unless `plugins` is published for the
 #                                                    # framework identity this bake targets
-#       dependent-repos: ''                          # e.g. Systemorph/MeshWeaver.Reinsurance
 #       stage-repo: Systemorph/MeshWeaver.Plugins
 #       stage-modules: Store
 #     secrets:
@@ -66,7 +81,6 @@ name: Node repo publish-bake (reusable)
 #       azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 #       azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 #       stage-repo-token: ${{ secrets.MESHWEAVER_REPO_TOKEN }}
-#       dependent-dispatch-token: ${{ secrets.DEPENDENT_DISPATCH_TOKEN }}   # iff dependent-repos
 #
 # The real topology, and the order it produces without any central scheduler:
 #
@@ -148,16 +162,6 @@ on:
         required: false
         type: string
         default: ''
-      dependent-repos:
-        description: >-
-          Repositories to notify (owner/repo, whitespace-separated) once THIS repo's publication
-          lands — the satellite→satellite edge of the cascade. It is what wakes a downstream repo
-          that exited on `upstream-sources`, so without it that repo never rebuilds for the
-          release. Declaring it REQUIRES the `dependent-dispatch-token` secret; declaring one
-          without the other fails red rather than silently breaking the chain.
-        required: false
-        type: string
-        default: ''
       stage-repo:
         description: >-
           Repository to stage cross-repo modules from (e.g. Systemorph/MeshWeaver.Plugins),
@@ -233,12 +237,6 @@ on:
       stage-repo-token:
         description: Token able to read stage-repo (needed only when stage-modules is set).
         required: false
-      dependent-dispatch-token:
-        description: >-
-          Token with repo scope on every repo named by `dependent-repos`, used to fire the
-          `meshweaver-upstream-published` event that wakes them. Required exactly when
-          `dependent-repos` is set.
-        required: false
 
 jobs:
   publish-bake:
@@ -262,8 +260,6 @@ jobs:
           STAGE_TOKEN: ${{ secrets.stage-repo-token }}
           BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
           STAGE_MODULES: ${{ inputs.stage-modules }}
-          DEPENDENT_REPOS: ${{ inputs.dependent-repos }}
-          DEPENDENT_TOKEN: ${{ secrets.dependent-dispatch-token }}
           NARROW: ${{ inputs.narrow-by-affected }}
           PRE_BAKE: ${{ inputs.pre-bake-script }}
         run: |
@@ -283,9 +279,6 @@ jobs:
           # break the chain silently — every downstream repo would sit un-rebuilt for the whole
           # release with nothing red anywhere. Asserted here, as a DECLARED-INPUT check, never as
           # an "is the secret set?" probe that decides whether to run.
-          if [ -n "${DEPENDENT_REPOS:-}" ] && [ -z "${DEPENDENT_TOKEN:-}" ]; then
-            missing+=("dependent-dispatch-token (secret) — token with repo scope on ${DEPENDENT_REPOS}; without it this repo's publication cannot wake its dependents and they never rebuild for the release")
-          fi
           # 🚨 A DECLARED-INPUT contradiction, asserted here rather than resolved silently at run
           # time. A pre-bake hook that writes BAKE_MOUNT_DIR OWNS the mount's composition (it can
           # filter, snapshot or synthesise packages), so "the affected closure" is not a set this
@@ -440,8 +433,11 @@ jobs:
             echo "Building anyway would gate this repo's content against an upstream that does not"
             echo "match the framework it is being built for."
             echo ""
-            echo "**Nothing to do.** This run is re-triggered automatically when the missing"
-            echo "upstream publishes (\`meshweaver-upstream-published\`)."
+            echo "**Nothing to do — if this repo has the \`schedule\` trigger.** The next"
+            echo "scheduled run re-reads the released image and rebuilds once the upstream has"
+            echo "published. Nothing wakes this repo otherwise: the dependent-dispatch lane was"
+            echo "removed deliberately (no cross-repo write credential), so a repo WITHOUT the"
+            echo "schedule stays behind here silently."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::error title=Upstreams not ready — did not build::at least one upstream of this repo has no published artifact for framework identity ${{ steps.identity.outputs.identity }}; exiting without building. The upstream's own publication re-triggers this run."
           exit 1
@@ -629,59 +625,22 @@ jobs:
             echo "- identity: \`$(cat "$BAKE_DIR/framework-mvid.txt")\`"
             echo "- source: \`${{ inputs.bake-source }}\`  targets: \`${BAKE_PUBLISH_TARGETS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-      # ───────────────────── WAKE THE DEPENDENTS (#1755) ─────────────────────
-      # 🚨 The edge that makes "exit, don't wait" work at all. A downstream repo whose upstream was
-      # not ready EXITED — it is not polling and nothing else will ever start it again. This
-      # publication is the event it is waiting for, so this repo fires it.
+
+      # ────────────────── NO DEPENDENT DISPATCH: the wave is PULLED ──────────────────
+      # This used to POST an upstream-published event to repos named by `dependent-repos`,
+      # using a token with write access to each of them. Both are gone.
       #
-      # Until this existed only the PLATFORM dispatched, so the very first satellite→satellite
-      # dependency (Education on Plugins) would have deadlocked on its first use: Education exits,
-      # Plugins publishes, and nothing tells Education to try again until the next platform release.
+      # A publication is a FACT about the registry, not a message a publisher owes its readers.
+      # memex.meshweaver.cloud is the one source of truth for what is released and what is sealed;
+      # a dependent repo's SCHEDULED run reads it and rebuilds if it must. Pull, not push — so no
+      # cross-repo credential exists to leak, no hand-maintained dependents list can silently omit
+      # a repo, and a repo that stops rebuilding surfaces as an instance HELD on its own
+      # UpdatePolicy (naming the bundles and the identity) rather than as nothing at all.
       #
-      # It runs only after the publish it announces — an event claiming an artifact that is not
-      # sealed would send every dependent into a build against something that is not there. The
-      # payload carries the framework identity so a receiver can gate on the exact generation, and
-      # the platform version when this run was itself woken by one (the receiver needs it to resolve
-      # the released image).
-      # …and only when there WAS a publication to announce. scope=none means the artefact the
-      # dependents gate on is already sealed — a dependent that exited waiting for it did so
-      # before it existed, and the run that created it fired this event then. Waking them for a
-      # no-op would put every downstream repo through a full build on every scheduled poll.
-      - name: Notify dependent repos
-        if: inputs.dependent-repos != '' && steps.scope.outputs.scope != 'none'
-        env:
-          TOKEN: ${{ secrets.dependent-dispatch-token }}
-          REPOS: ${{ inputs.dependent-repos }}
-          SOURCE: ${{ inputs.bake-source }}
-          VERSION: ${{ github.event.client_payload.version }}
-        run: |
-          set -euo pipefail
-          # The token is asserted in preflight (declaring dependents declares the obligation), so
-          # reaching here without one is impossible rather than tolerated.
-          IDENTITY="$(cat "$BAKE_DIR/framework-mvid.txt" | tr -d '[:space:]')"
-          failed=0
-          for repo in $REPOS; do
-            echo "→ $repo"
-            code=$(curl -sS -o /tmp/dispatch-resp -w '%{http_code}' -X POST \
-              -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$repo/dispatches" \
-              -d "{\"event_type\":\"meshweaver-upstream-published\",\"client_payload\":{\"source\":\"$SOURCE\",\"identity\":\"$IDENTITY\",\"version\":\"${VERSION:-}\",\"sha\":\"$GITHUB_SHA\"}}") || code=000
-            case "$code" in
-              2*) echo "woken: $repo";;
-              # 🚨 NOT a warning. A lost dispatch here leaves a repo that already exited with
-              # nothing to wake it — it silently never rebuilds for this release, which is the
-              # terminal-exit failure #1755 names explicitly. The publication itself has already
-              # landed and is idempotent, so failing the job is safe and a re-run re-notifies.
-              *)  echo "::error::could not wake $repo (HTTP $code: $(cat /tmp/dispatch-resp)) — it exited waiting for THIS publication and nothing else will re-trigger it."
-                  failed=1;;
-            esac
-          done
-          echo "### 📣 Dependents woken: $REPOS" >> "$GITHUB_STEP_SUMMARY"
-          exit "$failed"
-      # 🚨 An explicit, GREEN step rather than a tail of grey skips. "Already published" and "the
-      # job silently did nothing" render identically in the UI otherwise, and AGENTS.md's rule is
-      # that a gate which did not run must never look like one that passed. This one says which
-      # verdict was reached, on what evidence, and names both shas.
+      # 🚨 A caller that relies on this MUST have the `schedule` trigger. Without it the repo only
+      # ever bakes against its pin on its own pushes, never against the released image, and the
+      # fleet stays a release behind with everything green.
+
       - name: Nothing to bake (this content is already sealed for this identity)
         if: steps.scope.outputs.scope == 'none'
         env:

@@ -194,9 +194,12 @@ Two post-promote legs ride every armed release (#1660 WS3):
 
 **`publish-bake`** runs the content the image itself embeds (the `Doc` tree — and **only** that:
 node-repo content, Store packages and the samples trees arrive already compiled or are gate-only,
-see [CI Content Bake](/Doc/Architecture/CiContentBake)) through `mw-plugin-test --bake-output`
-**inside the `mw-plugin-test` image this run just built and promoted**, then copies the bundles onto
-the portals' shared storage,
+see [CI Content Bake](/Doc/Architecture/CiContentBake)) **inside the `mw-plugin-test` image this run
+just built and promoted**, in two steps (#1763): `mw-plugin-test compile … --output /bake` — the
+BAKE, a build step with no mesh in it — and then `mw-plugin-test … --seed /bake` — the GATE, a mesh
+that CONSUMES that bake, so what renders and runs its `Tests` areas is the assembly about to be
+published. A red gate still fails the job. It then copies the bundles onto the portals' shared
+storage,
 laid out `prebuilt-bundles/<framework-identity>/<source>/<bundle>.zip`
 (`.github/scripts/publish-bake-bundles.sh`). Baking in the image is not an implementation detail —
 it is the whole correctness argument. The framework identity is derived from the **binaries a host

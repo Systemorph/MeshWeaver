@@ -239,7 +239,18 @@ public static class PrebuiltAssemblySeeder
 
         var workspace = hub.GetWorkspace();
 
-        return workspace.GetMeshNodeStream(nodeTypePath)
+        // 🚨 RESERVE BEFORE TOUCHING THE STREAM (#1763). Opening the type's node stream ACTIVATES
+        // its hub, and activation is what arms the first-build kickoff — so without the
+        // reservation the seeder's own probe started the Roslyn compile this adoption exists to
+        // avoid, and that compile overwrote the adopted build milliseconds later. The reservation
+        // has to be taken before the subscribe below, which is why it wraps the whole pipeline in
+        // an Observable.Using rather than sitting inside a SelectMany. See
+        // NodeTypeAdoptionRegistry for the measured trace.
+        var reservations = hub.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
+
+        return Observable.Using(
+            () => reservations?.Reserve(nodeTypePath) ?? NoReservation.Instance,
+            _ => workspace.GetMeshNodeStream(nodeTypePath)
             .Where(node => node is not null)
             .Take(1)
             .SelectMany(node =>
@@ -319,6 +330,18 @@ public static class PrebuiltAssemblySeeder
                             nodeTypePath, version, NodeTypeCompilationHelpers.FrameworkVersion);
                         return true;
                     });
-            });
+            }));
+    }
+
+    /// <summary>The no-op reservation handle for a host with no adoption registry (an older or
+    /// minimal composition): the interlock is absent, never faked.</summary>
+    private sealed class NoReservation : IDisposable
+    {
+        public static readonly NoReservation Instance = new();
+
+        public void Dispose()
+        {
+            // Nothing reserved, nothing to release.
+        }
     }
 }
