@@ -414,6 +414,47 @@ commit ⇒ same identity, but `:latest` moves, so a busy trunk makes them agree 
 3. The identity its last bake published (`bake published: identity=…` in the job log) against the
    identity in `heldReason`. **Different values are the whole bug**; equal values mean look elsewhere.
 
+### 🚨 DO NOT hand-roll while self-update is armed — it overrides you within minutes
+
+Measured 2026-08-22, after several confusing "failed rolls": every `kubectl set image` was reverted
+by the instance itself. The deployment was set to `ci.4908`; minutes later it carried `ci.4964`,
+because `SelfUpdateHostedService` patches its own Deployment toward the newest tag. Each attempt
+therefore rolled to a DIFFERENT image than the one chosen, and the failures analysed afterwards
+belonged to an image nobody had picked.
+
+The tell is cheap and worth taking first:
+
+```
+kubectl -n <ns> get deploy memex-portal-deployment \
+  -o jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
+If that is not what you set, the updater is driving. **Pause it before touching the image** — set
+`Admin/UpdatePolicy` → `policy: None` on the instance — and restore the policy afterwards.
+
+🚨 **A roll that fails readiness is SAFE and must not be repeated.** The old ReplicaSet keeps
+serving, so nothing is down; re-rolling the same image just repeats the refusal. Read the new pod's
+health checks and fix what they name. Rolling and reverting in a loop teaches nothing and churns a
+production database.
+
+### Extraction has TWO halves: out of the image, and preInstalled
+
+Removing a module from the image takes away the guarantee that every deployment has it. Marking the
+package `preInstalled` is what puts that guarantee back — it is what makes the catalog seed it into
+`{source}/_DefaultInstallLedger`, and that ledger's entries are exactly the packages carrying the
+flag.
+
+Ship only the first half and the readiness gate reports, correctly:
+
+```
+required_modules Unhealthy: 4 required module(s) absent … This image does not
+ship them and no install landed them.
+```
+
+⚠️ **Provisioning a package is NOT installing its module.** Provisioning creates the node partition;
+landing the DLL is a separate step that the catalog performs for pre-installed packages. Confusing
+the two costs a deploy.
+
 ### Breaking the deadlock by hand
 
 The selection fix cannot deploy itself — an instance cannot roll to receive the change that lets it
