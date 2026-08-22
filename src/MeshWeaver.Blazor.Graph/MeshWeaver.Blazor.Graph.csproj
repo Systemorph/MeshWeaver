@@ -15,6 +15,11 @@
 
     <ItemGroup>
         <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
+        <!-- MeshNodePickerView derives from the EntityViews pack's FormComponentBase. A
+             pack-to-pack reference on purpose: the picker moved here (not into EntityViews)
+             because it is a GRAPH surface, and it left the base pack because the base pack
+             cannot reference the pack that references it. -->
+        <ProjectReference Include="..\MeshWeaver.Blazor.EntityViews\MeshWeaver.Blazor.EntityViews.csproj" />
         <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
         <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />

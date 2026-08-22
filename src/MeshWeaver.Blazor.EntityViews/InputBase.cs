@@ -2,7 +2,7 @@
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.EntityViews;
 
 /// <summary>
 /// Base class for text-input form components that carry size and length constraints

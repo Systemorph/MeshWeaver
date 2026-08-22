@@ -95,9 +95,15 @@ public static class BlazorViewRegistry
 
             control = control.PopSkin(out var skin);
             if (skin != null)
+                // A skin this registry does not know yields null (MapSkinnedView DECLINES on its
+                // terminal arm), and the decline propagates: DefaultFormatting returns null, so
+                // later-registered maps — view packs like MeshWeaver.Blazor.EntityViews, which
+                // owns EditorSkin/EditFormSkin/PropertySkin — are consulted, and only after every
+                // map declined does the FallbackViewMap slot render the escaped-HTML fallback.
+                // Before this, the terminal arm THREW and the catch below turned the throw into a
+                // NON-NULL error card, so first-match-wins stopped dead and a pack registered
+                // after AddBlazor() could never render its skins.
                 return MapSkinnedView(control, stream, area, skin);
-
-            var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
             return control switch
             {
@@ -115,14 +121,12 @@ public static class BlazorViewRegistry
                 // the select-to-comment affordance that is the whole point of the wrapper.
                 CommentableControl commentable => ControlView<CommentableControl, CommentableView>(commentable, stream, area),
                 IContainerControl container => ControlView<IContainerControl, ContainerView>(container, stream, area),
-                NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString()!) ?? throw new InvalidOperationException($"Type not found: {number.Type}")), stream, area),
-                TextFieldControl textbox => ControlView<TextFieldControl, TextFieldView>(textbox, stream, area),
-                TextAreaControl textbox => ControlView<TextAreaControl, TextAreaView>(textbox, stream, area),
-                RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type?.ToString() ?? throw new ArgumentException($"Cannot find type {radioGroup.Type} for radio group.")) ?? throw new InvalidOperationException($"Type not found: {radioGroup.Type}")), stream, area),
-                DateTimeControl dateTime => ControlView<DateTimeControl, DateTimeView>(dateTime, stream, area),
-                ComboboxControl combobox => ControlView<ComboboxControl, Combobox>(combobox, stream, area),
-                ListboxControl listbox => ControlView<ListboxControl, Listbox>(listbox, stream, area),
-                SelectControl select => ControlView<SelectControl, SelectView>(select, stream, area),
+                // The entity form controls (TextField/TextArea/NumberField/RadioGroup/DateTime/
+                // Combobox/Listbox/Select/CheckBox/Switch) render from the
+                // MeshWeaver.Blazor.EntityViews view pack (AddEntityViews), together with the
+                // EditorSkin/EditFormSkin/PropertySkin views — the second control set extracted
+                // onto the pack seam after Analysis. The react parity ratchet lists them under
+                // EXTERNALLY_PACKED_CONTROLS.
                 ButtonControl button => ControlView<ButtonControl, ButtonView>(button, stream, area),
                 IconControl icon => ControlView<IconControl, IconView>(icon, stream, area),
                 BadgeControl badge => ControlView<BadgeControl, BadgeView>(badge, stream, area),
@@ -131,8 +135,6 @@ public static class BlazorViewRegistry
                 NodeExportControl nodeExport => ControlView<NodeExportControl, NodeExportView>(nodeExport, stream, area),
                 ExportDocumentControl exportDoc => ControlView<ExportDocumentControl, ExportDocumentView>(exportDoc, stream, area),
                 ProgressControl progress => ControlView<ProgressControl, ProgressView>(progress, stream, area),
-                CheckBoxControl checkbox => ControlView<CheckBoxControl, Checkbox>(checkbox, stream, area),
-                SwitchControl switchCtrl => ControlView<SwitchControl, Switch>(switchCtrl, stream, area),
                 ItemTemplateControl itemTemplate
                     => ControlView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
                 CollaborativeMarkdownControl collaborativeMarkdown => ControlView<CollaborativeMarkdownControl, CollaborativeMarkdownView>(collaborativeMarkdown, stream, area),
@@ -147,7 +149,10 @@ public static class BlazorViewRegistry
                 RedirectControl redirect => ControlView<RedirectControl, RedirectView>(redirect, stream, area),
                 SlideShowControl slideShow => ControlView<SlideShowControl, Components.SlideShowView>(slideShow, stream, area),
                 SearchBoxControl searchBox => ControlView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
-                MeshNodePickerControl picker => ControlView<MeshNodePickerControl, MeshNodePickerView>(picker, stream, area),
+                // MeshNodePicker renders from the MeshWeaver.Blazor.Graph pack (AddGraphViews):
+                // the view derives from the EntityViews pack's FormComponentBase, so it moved out
+                // with the form controls — the base pack cannot reference the pack that
+                // references it.
                 MeshNodeCollectionControl collection => ControlView<MeshNodeCollectionControl, MeshNodeCollectionView>(collection, stream, area),
                 MeshSearchControl meshSearch => ControlView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
                 MeshNodeCardControl card => ControlView<MeshNodeCardControl, MeshNodeCardView>(card, stream, area),
@@ -227,7 +232,7 @@ public static class BlazorViewRegistry
         => StandardView<TControl, TView>(control, stream, area);
 
 
-    private static ViewDescriptor MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement>? stream, string area, object skin)
+    private static ViewDescriptor? MapSkinnedView(UiControl control, ISynchronizationStream<JsonElement>? stream, string area, object skin)
     {
         return skin switch
         {
@@ -238,9 +243,8 @@ public static class BlazorViewRegistry
             MainSkin main => StandardSkinnedView<MainView>(main, stream, area, control),
             ToolbarSkin toolbar => StandardSkinnedView<ToolbarView>(toolbar, stream, area, control),
             LayoutStackSkin stack => StandardSkinnedView<LayoutStackView>(stack, stream, area, control),
-            EditorSkin editor => StandardSkinnedView<EditorView>(editor, stream, area, control),
-            EditFormSkin edit => StandardSkinnedView<EditFormView>(edit, stream, area, control),
-            PropertySkin editItem => StandardSkinnedView<PropertyView>(editItem, stream, area, control),
+            // EditorSkin / EditFormSkin / PropertySkin render from the MeshWeaver.Blazor.EntityViews
+            // view pack (AddEntityViews) — see the decline note on the terminal arm below.
             SplitterSkin splitter => StandardSkinnedView<SplitterView>(splitter, stream, area, control),
             LayoutGridItemSkin gridItem => StandardSkinnedView<LayoutGridItemView>(gridItem, stream, area, control),
             HeaderSkin header => StandardSkinnedView<HeaderView>(header, stream, area, control),
@@ -251,7 +255,15 @@ public static class BlazorViewRegistry
             TabsSkin tabs => StandardSkinnedView<TabsView>(tabs, stream, area, control),
             SplitterPaneSkin splitter => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
             MenuItemSkin menuItem => StandardSkinnedView<MenuItemView>(menuItem, stream, area, control),
-            _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
+            // 🚨 No match ⇒ DECLINE (null), never throw. The old terminal arm threw
+            // NotSupportedException, which DefaultFormatting's catch converted into a NON-NULL
+            // error-card descriptor — so first-match-wins STOPPED, and a skin owned by a
+            // later-registered view pack (EntityViews' EditorSkin/EditFormSkin/PropertySkin) could
+            // never reach its map. Declining lets later maps be consulted; a skin NO pack owns now
+            // renders through the FallbackViewMap slot (escaped HTML) instead of a loud error
+            // card — the same last-resort behaviour an unknown CONTROL has always had, pinned by
+            // UnknownSkin_* in ViewPackFallbackOrderingTest.
+            _ => null,
         };
     }
 

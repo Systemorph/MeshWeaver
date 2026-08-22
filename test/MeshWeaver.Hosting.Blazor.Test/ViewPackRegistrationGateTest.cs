@@ -1,4 +1,5 @@
 using System;
+using MeshWeaver.Blazor.EntityViews;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
@@ -51,16 +52,17 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
             .AddLayoutClient()
             .AddGraphViews()
             .AddChatViews()
-            .AddUserProfileViews();
+            .AddUserProfileViews()
+            .AddEntityViews();
 
     /// <summary>
     /// Resolves <paramref name="control"/> through the client's real
     /// <see cref="LayoutClientConfiguration"/> and asserts the descriptor targets
     /// <paramref name="expectedView"/>.
     /// </summary>
-    private void AssertPackResolves(UiControl control, Type expectedView, string packEntryPoint)
+    private static void AssertPackResolves(IMessageHub client, UiControl control, Type expectedView, string packEntryPoint)
     {
-        var layoutClient = GetClient().ServiceProvider.GetRequiredService<ILayoutClient>();
+        var layoutClient = client.ServiceProvider.GetRequiredService<ILayoutClient>();
 
         var descriptor = layoutClient.GetViewDescriptor(control, null, "gate");
 
@@ -82,8 +84,50 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
     [InlineData(typeof(MeshNodeCardControl), typeof(MeshWeaver.Blazor.Components.MeshNodeCardView))]
     [InlineData(typeof(MeshNodeContentEditorControl), typeof(MeshWeaver.Blazor.Components.MeshNodeContentEditorView))]
     [InlineData(typeof(MeshNodeRoleEditorControl), typeof(MeshWeaver.Blazor.Components.MeshNodeRoleEditorView))]
+    [InlineData(typeof(MeshNodePickerControl), typeof(MeshNodePickerView))]
     public void GraphPack_RegistersItsViews(Type controlType, Type viewType)
-        => AssertPackResolves(CreateControl(controlType), viewType, "AddGraphViews");
+    {
+        var client = GetClient();
+        AssertPackResolves(client, CreateControl(client, controlType), viewType, "AddGraphViews");
+    }
+
+    /// <summary>
+    /// <c>AddEntityViews</c> (MeshWeaver.Blazor.EntityViews) — every form control the pack
+    /// registers resolves to the pack's view, including the two reflection-closed generics
+    /// (<c>NumberFieldView&lt;T&gt;</c> / <c>RadioGroupView&lt;T&gt;</c>, closed on the control's
+    /// declared value type through the hub's type registry).
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(TextFieldControl), typeof(TextFieldView))]
+    [InlineData(typeof(TextAreaControl), typeof(TextAreaView))]
+    [InlineData(typeof(DateTimeControl), typeof(DateTimeView))]
+    [InlineData(typeof(ComboboxControl), typeof(Combobox))]
+    [InlineData(typeof(ListboxControl), typeof(Listbox))]
+    [InlineData(typeof(SelectControl), typeof(SelectView))]
+    [InlineData(typeof(CheckBoxControl), typeof(Checkbox))]
+    [InlineData(typeof(SwitchControl), typeof(Switch))]
+    [InlineData(typeof(NumberFieldControl), typeof(NumberFieldView<int>))]
+    [InlineData(typeof(RadioGroupControl), typeof(RadioGroupView<string>))]
+    public void EntityViewsPack_RegistersItsControlViews(Type controlType, Type viewType)
+    {
+        var client = GetClient();
+        AssertPackResolves(client, CreateControl(client, controlType), viewType, "AddEntityViews");
+    }
+
+    /// <summary>
+    /// <c>AddEntityViews</c> — the three entity-editing SKINS resolve to the pack's skinned
+    /// views. The skin rides the control's skin stack, exactly as the renderer sees it; the
+    /// pack's map pops it and returns the skin view.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(EditorSkin), typeof(EditorView))]
+    [InlineData(typeof(EditFormSkin), typeof(EditFormView))]
+    [InlineData(typeof(PropertySkin), typeof(PropertyView))]
+    public void EntityViewsPack_RegistersItsSkinViews(Type skinType, Type viewType)
+    {
+        var skinned = new HtmlControl("<p>x</p>").AddSkin((Skin)Activator.CreateInstance(skinType)!);
+        AssertPackResolves(GetClient(), skinned, viewType, "AddEntityViews");
+    }
 
     /// <summary>
     /// <c>AddChatViews</c> (MeshWeaver.Blazor.Portal) — the thread-chat control resolves to the
@@ -91,7 +135,7 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
     /// </summary>
     [Fact]
     public void ChatPack_RegistersItsViews()
-        => AssertPackResolves(new ThreadChatControl(), typeof(ThreadChatView), "AddChatViews");
+        => AssertPackResolves(GetClient(), new ThreadChatControl(), typeof(ThreadChatView), "AddChatViews");
 
     /// <summary>
     /// <c>AddUserProfileViews</c> (MeshWeaver.Blazor.Portal) — the user-profile control resolves
@@ -99,7 +143,7 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
     /// </summary>
     [Fact]
     public void UserProfilePack_RegistersItsViews()
-        => AssertPackResolves(new UserProfileControl(), typeof(UserProfilePageView), "AddUserProfileViews");
+        => AssertPackResolves(GetClient(), new UserProfileControl(), typeof(UserProfilePageView), "AddUserProfileViews");
 
     /// <summary>
     /// Guards the gate itself: a control NO pack registers resolves to null on this hub (there is
@@ -120,18 +164,35 @@ public class ViewPackRegistrationGateTest(ITestOutputHelper output) : HubTestBas
     }
 
     /// <summary>
-    /// Instantiates a control record for the theory rows: the constructors differ only in how many
-    /// required path/title strings they take, and the values are irrelevant to view resolution
-    /// (matching is by TYPE).
+    /// Instantiates a control record for the theory rows: the constructors differ only in the
+    /// required path/title/options arguments they take, and the values are irrelevant to view
+    /// resolution (matching is by TYPE) — EXCEPT the two reflection-closed generics, whose
+    /// <c>Type</c> field must name a registry type so the pack's map can close
+    /// <c>NumberFieldView&lt;T&gt;</c> / <c>RadioGroupView&lt;T&gt;</c>, exactly as the editor
+    /// builders produce it in production (<c>typeRegistry.GetOrAddType(propertyType)</c>).
     /// </summary>
-    private static UiControl CreateControl(Type controlType) =>
-        controlType switch
+    private static UiControl CreateControl(IMessageHub client, Type controlType)
+    {
+        var typeRegistry = client.ServiceProvider.GetRequiredService<MeshWeaver.Domain.ITypeRegistry>();
+        return controlType switch
         {
             _ when controlType == typeof(MeshNodeEditorControl) => new MeshNodeEditorControl(),
             _ when controlType == typeof(MeshNodeThumbnailControl) => new MeshNodeThumbnailControl("path", "title"),
             _ when controlType == typeof(MeshNodeCardControl) => new MeshNodeCardControl("path"),
             _ when controlType == typeof(MeshNodeContentEditorControl) => new MeshNodeContentEditorControl("path"),
             _ when controlType == typeof(MeshNodeRoleEditorControl) => new MeshNodeRoleEditorControl("path", 0),
+            _ when controlType == typeof(MeshNodePickerControl) => new MeshNodePickerControl("/data"),
+            _ when controlType == typeof(TextFieldControl) => new TextFieldControl("/data"),
+            _ when controlType == typeof(TextAreaControl) => new TextAreaControl("/data"),
+            _ when controlType == typeof(DateTimeControl) => new DateTimeControl("/data"),
+            _ when controlType == typeof(ComboboxControl) => new ComboboxControl("/data", Array.Empty<object>()),
+            _ when controlType == typeof(ListboxControl) => new ListboxControl("/data", Array.Empty<object>()),
+            _ when controlType == typeof(SelectControl) => new SelectControl("/data", Array.Empty<object>()),
+            _ when controlType == typeof(CheckBoxControl) => new CheckBoxControl("/data"),
+            _ when controlType == typeof(SwitchControl) => new SwitchControl("/data"),
+            _ when controlType == typeof(NumberFieldControl) => new NumberFieldControl("/data", typeRegistry.GetOrAddType(typeof(int))),
+            _ when controlType == typeof(RadioGroupControl) => new RadioGroupControl("/data", Array.Empty<object>(), typeRegistry.GetOrAddType(typeof(string))),
             _ => throw new ArgumentOutOfRangeException(nameof(controlType), controlType, "add the control here when the gate gains a row")
         };
+    }
 }

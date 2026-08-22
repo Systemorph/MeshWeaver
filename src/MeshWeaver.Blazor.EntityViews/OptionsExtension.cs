@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Reflection;
 
-namespace MeshWeaver.Blazor.Components;
+namespace MeshWeaver.Blazor.EntityViews;
 
 /// <summary>
 /// Utility class for converting layout control options into a strongly-typed
