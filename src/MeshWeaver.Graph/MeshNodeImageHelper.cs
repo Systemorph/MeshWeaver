@@ -157,7 +157,13 @@ public static class MeshNodeImageHelper
         var parsed = DomainIcon.Parse(value);
         return parsed?.Provider switch
         {
-            DomainIcon.InlineSvgProvider => new RenderableIcon(IconRenderKind.InlineSvg, parsed.Id),
+            // Inline svg passes through the backplate policy: an icon without a full-bleed plate
+            // gets a generated one here, at the ONE seam every surface classifies through, so a
+            // currentColor outline or a dark pictorial can never render invisibly on one theme
+            // (IconBackplate). Icons that already paint a plate — every authored store mark, every
+            // thread identicon — pass through byte-identical.
+            DomainIcon.InlineSvgProvider => new RenderableIcon(
+                IconRenderKind.InlineSvg, IconBackplate.Ensure(parsed.Id)),
             DomainIcon.UrlProvider => new RenderableIcon(IconRenderKind.Image, parsed.Id),
             DomainIcon.TextProvider => new RenderableIcon(IconRenderKind.Glyph, parsed.Id),
             DomainIcon.FluentProvider when ShippedIconFor(parsed.Id) is { } url
@@ -344,9 +350,13 @@ public static class MeshNodeImageHelper
         var cluster = glyph.Length == 0
             ? glyph
             : glyph[..StringInfo.GetNextTextElementLength(glyph)];
+        // The glyph sits on a generated plate (hue stable per glyph) for the same reason inline
+        // svg does: a favicon renders on whatever the browser's tab strip paints, and the plate is
+        // what keeps it legible there. Text is white for the rare monogram; an emoji ignores fill.
         return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\">"
+               + "<rect width=\"32\" height=\"32\" rx=\"7\" fill=\"" + IconBackplate.HueFor(cluster) + "\"/>"
                + "<text x=\"16\" y=\"17\" text-anchor=\"middle\" dominant-baseline=\"central\" "
-               + "font-size=\"28\">" + XmlEscape(cluster) + "</text></svg>";
+               + "font-size=\"24\" fill=\"#fff\">" + XmlEscape(cluster) + "</text></svg>";
     }
 
     /// <summary>Escapes the five XML markup characters so a glyph like <c>R&amp;D</c> still yields
