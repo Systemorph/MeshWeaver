@@ -105,4 +105,66 @@ public class VersionSelectTest
 
     private static readonly JsonSerializerOptions Web =
         new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
+
+    // ───────── PickTargets: the ordered candidate list (the deadlock fix) ─────────
+
+    /// <summary>
+    /// The newest eligible tag is simply the first candidate — so the two selectors can never
+    /// disagree about what "best" means.
+    /// </summary>
+    [Fact]
+    public void PickTargets_FirstCandidate_IsExactlyPickTarget()
+    {
+        string[] tags = ["3.0.0-rc7.ci.4928", "3.0.0-rc7.ci.4900", "3.0.0-rc6", "main", "6943991"];
+
+        var best = VersionSelect.PickTarget(tags, UpdatePolicyKind.Continuous);
+        var all = VersionSelect.PickTargets(tags, UpdatePolicyKind.Continuous);
+
+        Assert.Equal(best, all.First());
+    }
+
+    /// <summary>
+    /// 🚨 The deadlock this exists to break. memex sat on 3.0.0-rc6 held against
+    /// 3.0.0-rc7.ci.4928 because no sealed bake existed for that image — while three separate
+    /// bakes published three OTHER identities. Newest-only selection can never escape that: each
+    /// new build produces another unbaked tag. Walking the ordered list lets the caller take the
+    /// newest release that is actually sealed.
+    /// </summary>
+    [Fact]
+    public void PickTargets_IsOrderedNewestFirst_SoTheCallerCanSkipAnUnbakedHead()
+    {
+        string[] tags = ["3.0.0-rc7.ci.4900", "3.0.0-rc7.ci.4928", "3.0.0-rc6", "3.0.0-rc7.ci.4910"];
+
+        var candidates = VersionSelect.PickTargets(tags, UpdatePolicyKind.Continuous);
+
+        Assert.Equal(["3.0.0-rc7.ci.4928", "3.0.0-rc7.ci.4910", "3.0.0-rc7.ci.4900", "3.0.0-rc6"], candidates);
+
+        // The caller's move: head is unbaked, so it rolls to the next one down rather than freezing.
+        var sealedTags = new HashSet<string> { "3.0.0-rc7.ci.4910", "3.0.0-rc6" };
+        Assert.Equal("3.0.0-rc7.ci.4910", candidates.First(sealedTags.Contains));
+    }
+
+    /// <summary>Every exclusion PickTarget applies applies here too — same filter, one place.</summary>
+    [Fact]
+    public void PickTargets_ExcludesRidTags_ShaTags_And_Edge()
+    {
+        string[] tags =
+        [
+            "3.0.0-rc7.ci.4928", "3.0.0-rc7.ci.4928-linux-x64", "3.0.0-rc7.ci.4928-linux-arm64",
+            "main", "6943991", "3.0.0-edge.51",
+        ];
+
+        var candidates = VersionSelect.PickTargets(tags, UpdatePolicyKind.Continuous);
+
+        Assert.Equal(["3.0.0-rc7.ci.4928"], candidates);
+    }
+
+    [Fact]
+    public void PickTargets_Stable_TakesOnlyCleanReleases_And_None_TakesNothing()
+    {
+        string[] tags = ["3.1.0", "3.0.0-rc7.ci.4928", "3.0.0"];
+
+        Assert.Equal(["3.1.0", "3.0.0"], VersionSelect.PickTargets(tags, UpdatePolicyKind.Stable));
+        Assert.Empty(VersionSelect.PickTargets(tags, UpdatePolicyKind.None));
+    }
 }
