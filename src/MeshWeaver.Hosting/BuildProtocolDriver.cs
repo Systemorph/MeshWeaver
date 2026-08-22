@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
@@ -47,6 +48,36 @@ public static class BuildProtocolDriver
     public static readonly TimeSpan GrantWindow = TimeSpan.FromSeconds(15);
 
     /// <summary>
+    /// How many times the claim HANDSHAKE is attempted when the coordination node cannot be
+    /// reached at all (#1635).
+    ///
+    /// <para>The handshake is the first thing the sweep does, and it is a <c>SubscribeRequest</c>
+    /// to <c>Admin/Build</c>. At pod startup that grain may not have activated yet, so the request
+    /// dies on the hub's own 60 s request budget with a <see cref="TimeoutException"/> — which
+    /// propagated out of <see cref="Run"/>, faulted the whole warm-up stream and made the pod
+    /// REFUSE READINESS, stalling the rollout on a race that clears itself in seconds. Observed on
+    /// <c>memex-portal-deployment-f96d46ddf-mrgqf</c>, 2026-08-15 07:44:25Z.</para>
+    ///
+    /// <para>🚨 <b>The retry does NOT make it permissive.</b> When every attempt fails the
+    /// handshake still throws — the sweep still faults, readiness is still refused, the rollout
+    /// still stalls. What changes is that a transient race no longer counts as unreachable, and
+    /// that the terminal failure is a <see cref="BuildCoordinationUnreachableException"/> which
+    /// SAYS the coordination node was unreachable instead of leaving an operator to infer it from
+    /// a bare timeout. A check that cannot reach its evidence must fail loudly, never
+    /// permissively.</para>
+    /// </summary>
+    public const int CoordinationAttempts = 3;
+
+    /// <summary>
+    /// Backoff before re-attempting the claim handshake. Small and bounded on purpose: each failed
+    /// attempt already costs the hub's own request budget (60 s), so the wait between them only has
+    /// to outlast a grain activation, not a deployment.
+    /// </summary>
+    /// <param name="attemptsSoFar">How many attempts have already failed (1-based).</param>
+    public static TimeSpan CoordinationBackoff(int attemptsSoFar) =>
+        TimeSpan.FromSeconds(attemptsSoFar <= 1 ? 5 : 15);
+
+    /// <summary>
     /// Claim → bake → GO; or, when the claim is held elsewhere, subscribe to the GO and report the
     /// share's state when it arrives.
     /// </summary>
@@ -81,7 +112,16 @@ public static class BuildProtocolDriver
             ? BuildClaimRequest.BakePriority
             : 0;
 
-        return mesh.RequestBuildClaim(holder, fingerprint, priority: priority)
+        // 🚨 The handshake is RETRIED, the bake is not. Everything downstream of the registration
+        // is the sweep itself, whose failures are verdicts about this image and must reach the
+        // gate untouched. Only reaching the coordination node at all is retried — see
+        // CoordinationAttempts for why, and for why exhausting them is still a refusal.
+        return RetryUnreachableCoordination(
+                () => mesh.RequestBuildClaim(holder, fingerprint, priority: priority).Take(1),
+                CoordinationAttempts,
+                CoordinationBackoff,
+                Scheduler.Default,
+                logger)
             .SelectMany(_ => mesh.ObserveBuildClaim(holder)
                 .Take(1)
                 .Timeout(GrantWindow)
@@ -459,6 +499,103 @@ public static class BuildProtocolDriver
     // ── shared ──────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
+    /// Runs <paramref name="handshake"/>, re-attempting it while the failure means the coordination
+    /// node could not be REACHED (#1635) — and giving up loudly when it does not clear.
+    ///
+    /// <para>Pure Rx over an injected factory and scheduler so the policy is unit-testable without
+    /// a mesh: the property that matters is not the happy path but that exhausting the attempts
+    /// still ERRORS. A readiness gate whose evidence is unreachable must fail closed; the retry
+    /// exists only so a grain that is still activating does not count as unreachable.</para>
+    ///
+    /// <para>Only "unreachable" is retried. Any other error — a malformed state, a rejected write,
+    /// a bug — surfaces on the first attempt, unwrapped, because retrying it would just delay the
+    /// same verdict by minutes and bury the cause under three identical stack traces.</para>
+    /// </summary>
+    /// <typeparam name="T">The handshake's emission.</typeparam>
+    /// <param name="handshake">Cold factory for one attempt. Re-invoked per attempt.</param>
+    /// <param name="attempts">Total attempts, including the first. Values below 1 mean one attempt.</param>
+    /// <param name="backoff">Delay before the next attempt, given how many have failed (1-based).</param>
+    /// <param name="scheduler">Scheduler for the backoff delay.</param>
+    /// <param name="logger">Diagnostics.</param>
+    public static IObservable<T> RetryUnreachableCoordination<T>(
+        Func<IObservable<T>> handshake,
+        int attempts,
+        Func<int, TimeSpan> backoff,
+        IScheduler scheduler,
+        ILogger? logger)
+    {
+        var total = Math.Max(1, attempts);
+
+        IObservable<T> Attempt(int attemptNumber) => Observable
+            .Defer(handshake)
+            .Catch((Exception ex) =>
+            {
+                if (!IsUnreachable(ex))
+                    return Observable.Throw<T>(ex);
+
+                if (attemptNumber >= total)
+                {
+                    // Loud, and it NAMES what it could not reach. The bare TimeoutException this
+                    // replaces said "no response ... → target Admin/Build" and was read as a
+                    // compile problem for as long as anyone looked at it.
+                    var unreachable = new BuildCoordinationUnreachableException(
+                        $"BuildProtocol: could not reach the build coordination node "
+                        + $"'{BuildNodeType.RootPath}' in {total} attempt(s) — the pre-warm sweep "
+                        + "never started, so this process has verified NOTHING about its NodeTypes "
+                        + "on this image. This is a refusal, not a pass: readiness stays refused "
+                        + "and the rollout holds the previous image. A restart re-attempts.",
+                        ex);
+                    logger?.LogError(unreachable, "{Message}", unreachable.Message);
+                    return Observable.Throw<T>(unreachable);
+                }
+
+                var wait = backoff(attemptNumber);
+                logger?.LogWarning(ex,
+                    "BuildProtocol: attempt {Attempt}/{Total} could not reach the coordination "
+                    + "node '{Path}' — its hub is most likely still activating. Retrying in "
+                    + "{Wait}. If every attempt fails the sweep FAULTS and readiness is refused.",
+                    attemptNumber, total, BuildNodeType.RootPath, wait);
+
+                return wait <= TimeSpan.Zero
+                    ? Observable.Defer(() => Attempt(attemptNumber + 1))
+                    : Observable.Timer(wait, scheduler)
+                        .SelectMany(_ => Attempt(attemptNumber + 1));
+            });
+
+        return Attempt(1);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="exception"/> means the coordination node was never reached, as
+    /// opposed to having answered something we did not like. A hub request that gets no response
+    /// dies as a <see cref="TimeoutException"/>, and it can arrive wrapped (an
+    /// <see cref="AggregateException"/> from a merged inner stream), so the walk is over the whole
+    /// chain rather than the outermost type.
+    /// </summary>
+    /// <summary>
+    /// Whether a faulted warm-up stream failed because the coordination node was never reached,
+    /// rather than because the sweep produced a bad verdict. Consumed by the readiness refusal so
+    /// the two are distinguishable in the health payload — see #1635.
+    /// </summary>
+    public static bool DescribesUnreachableCoordination(Exception? exception) => exception switch
+    {
+        null => false,
+        BuildCoordinationUnreachableException => true,
+        AggregateException aggregate => aggregate.InnerExceptions.Any(DescribesUnreachableCoordination),
+        { InnerException: { } inner } => DescribesUnreachableCoordination(inner),
+        _ => false,
+    };
+
+    internal static bool IsUnreachable(Exception exception) => exception switch
+    {
+        TimeoutException => true,
+        AggregateException aggregate => aggregate.InnerExceptions.Any(IsUnreachable),
+        { InnerException: { } inner } => IsUnreachable(inner),
+        _ => false,
+    };
+
+
+    /// <summary>
     /// Derive the chunk plan: one chunk per first path segment (the partition — which is exactly a
     /// plugin's footprint for plugin content). Deterministic, order-independent, and derived rather
     /// than invented, per the design doc.
@@ -493,3 +630,16 @@ public static class BuildProtocolDriver
     private sealed record OpenedChunk(
         string Name, string Path, string ActivityPath, IReadOnlyList<string> Members);
 }
+
+/// <summary>
+/// The build coordination node (<c>Admin/Build</c>) could not be reached, so the pre-warm sweep
+/// never ran (#1635).
+///
+/// <para>Distinct from every failure the sweep itself can produce: those are verdicts about
+/// whether this image builds its NodeTypes, this one is the absence of a verdict. Both refuse
+/// readiness — a pod that verified nothing must not claim it did — but only this one is worth
+/// restarting on, which is why it has its own name in the log instead of arriving as a bare
+/// <see cref="TimeoutException"/> whose target an operator has to decode.</para>
+/// </summary>
+public sealed class BuildCoordinationUnreachableException(string message, Exception innerException)
+    : Exception(message, innerException);
