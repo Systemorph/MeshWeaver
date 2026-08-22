@@ -43,8 +43,10 @@ and no NuGet package — see [Plugins](/Doc/Architecture/Plugins).
 Because of that, it is iterated **far faster than the platform underneath it**: daily during a build
 phase, and thereafter by whoever owns the domain rather than by whoever owns the framework.
 
-<div style='border:1px solid #dbe4ee;border-radius:10px;background:#ffffff;padding:18px 20px;margin:20px 0'>
-<svg viewBox="0 0 900 452" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block" role="img" aria-label="Two layers: content modules deployed from Git and iterated daily, sitting on a platform harness deployed as a versioned image and changed rarely; the harness routes a mesh address to the code that answers it.">
+<div style='border:1px solid #dbe4ee;border-radius:10px;padding:18px 20px;margin:20px 0'>
+<svg class="mw-figure" viewBox="0 0 900 452" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block" role="img" aria-label="Two layers: content modules deployed from Git and iterated daily, sitting on a platform harness deployed as a versioned image and changed rarely; the harness routes a mesh address to the code that answers it.">
+<style>@media (prefers-color-scheme: dark){svg.mw-figure{filter:invert(1) hue-rotate(180deg)}} :root[data-theme="dark"] svg.mw-figure{filter:invert(1) hue-rotate(180deg)} :root[data-theme="light"] svg.mw-figure{filter:none}</style>
+<rect x="0" y="0" width="900" height="452" rx="8" fill="#ffffff"/>
 <rect x="176" y="26" width="706" height="132" rx="10" fill="#eef2ff" stroke="#c7d2fe"/>
 <text x="192" y="50" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="13" font-weight="700" letter-spacing="1.6" fill="#4338ca">CONTENT — WHAT THE DOMAIN OWNER CHANGES</text>
 <rect x="192" y="62" width="158" height="52" rx="7" fill="#ffffff" stroke="#c7d2fe"/>
