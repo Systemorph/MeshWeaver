@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -7,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.SelfUpdate;
 using MeshWeaver.Data;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -41,11 +43,28 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
 {
     private const string CandidateTag = "9999.0.0-ci.1";
 
+    /// <summary>
+    /// 🚨 This host CONSUMES CI BAKES — it configures a published bundle root, exactly as a
+    /// production portal does. That is load-bearing for every unwired-gate case below.
+    ///
+    /// <para>The gate's applicability is decided from configuration
+    /// (<see cref="ReleaseAvailabilityService.NotApplicableReason"/>): a deployment with no bundle
+    /// root already compiles its content at every boot, so a registered gate answers
+    /// <c>NotEnforced</c> for it and its ABSENCE is therefore not an unanswered question. Only a
+    /// deployment that actually consumes bakes has something an unwired gate has failed to
+    /// verify — so a test host that configured nothing could only ever assert the trivial
+    /// case.</para>
+    /// </summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         // AddGitHubSyncTypes registers the BuildCompletion satellite — the record the workflow_run
         // webhook writes and the self-update watch reacts to. Types only, no credentials: the same
         // production registration rather than a duplicate declaration that could drift from it.
-        => base.ConfigureMesh(builder).AddUpdatePolicyType().AddGitHubSyncTypes();
+        => base.ConfigureMesh(builder).AddUpdatePolicyType().AddGitHubSyncTypes()
+            .ConfigureServices(services => services.AddSingleton<IConfiguration>(
+                new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [ShippedPrebuiltBundles.PublishedRootConfigKey] = "/data/prebuilt-bundles",
+                }).Build()));
 
     /// <summary>Fake registry (the documented IO seam): one build newer than anything installed.</summary>
     private sealed class FakeAcrTagLister : IAcrTagLister
@@ -268,6 +287,97 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
+    /// 🚨 <b>"Cannot verify" and "verified as nothing to verify" are DIFFERENT states, and only the
+    /// first may hold.</b> This is the case the first cut of the unwired-gate hold swept in, caught
+    /// by <c>SelfUpdateRollFloorTest</c>: a deployment that consumes no CI bakes already compiles
+    /// its content at every boot, so a REGISTERED gate answers <c>NotEnforced</c> for it — its
+    /// absence is the same answer reached from configuration, not an unanswered question.
+    ///
+    /// <para>Holding here would have frozen an environment the gate was never going to protect,
+    /// and — because the manual roll honours the same verdict — an install with no roll history
+    /// could never have taken its first update at all. A fail-closed rule drawn one state too wide
+    /// is its own outage.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnUnwiredGate_OnADeploymentThatConsumesNoBakes_IsNotEnforced_AndRolls()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var updater = new RecordingUpdater();
+        await SeedPolicyNode();
+        // This service reads a configuration with NO published bundle root — the one difference
+        // from AnUnwiredGate_HoldsTheRoll_AndSaysItCouldNotLook, and the whole distinction.
+        var service = new GatedSelfUpdateService(
+            Mesh, new FakeAcrTagLister(), updater, FastPoll(),
+            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(),
+            gate: null, configuration: new ConfigurationBuilder().Build());
+
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            var applied = await updater.Patched
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(ct);
+            applied.Should().Be(CandidateTag);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// The interaction the two gates have with each other: a NEVER-ROLLED install, on a deployment
+    /// that does consume bakes, with no gate registered.
+    ///
+    /// <para>It HOLDS — and the two gates are independent, which is the point. The pacing floor
+    /// (#1778) asks "has this install rolled too recently?" and a never-rolled install passes it
+    /// trivially; the availability gate asks "can the packages this environment deploys survive the
+    /// target?" and an unwired gate has not answered that. Passing the first does not make the
+    /// second verifiable. Pinned because the tempting reading — "no history, so nothing can be
+    /// wrong, so let it through" — would reopen exactly the hole #1754 closed, on the instance
+    /// least likely to be watched.</para>
+    ///
+    /// <para>It is not a brick: the hold is re-evaluated every tick and clears the moment the gate
+    /// is registered, it is named on <c>Admin/UpdatePolicy</c> and logged at Error, and
+    /// <see cref="SelfUpdateOptions.AllowUnverifiedRoll"/> is the deliberate one-line opt-out. No
+    /// host in this repo can reach the state at all — <c>AddSelfUpdate</c> registers the gate
+    /// unconditionally.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task NeverRolled_WithTheGateUnavailable_StillHolds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var updater = new RecordingUpdater();   // LastRolledAtAsync → null: never rolled.
+        await SeedPolicyNode();
+        var service = new GatedSelfUpdateService(
+            Mesh, new FakeAcrTagLister(), updater,
+            FastPoll() with { MinRollInterval = TimeSpan.FromHours(1) },
+            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(), gate: null);
+
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            var held = await Mesh.GetWorkspace()
+                .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions))
+                .Where(content => content.IsHeld(CandidateTag))
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(ct);
+
+            held.HeldIndeterminate.Should().BeTrue(
+                "clearing the PACING floor says nothing about whether the release is AVAILABLE — "
+                + "the two gates answer different questions");
+            updater.Tags.Should().BeEmpty();
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
     /// The escape hatch is DELIBERATE and CONFIGURED, in the shape this repo already uses for
     /// <c>PreWarm:AllowUnprovenBake</c>: an operator can still roll unverified, but only by setting
     /// the key — never by omission, and never silently.
@@ -309,9 +419,15 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         IDeploymentUpdater updater,
         SelfUpdateOptions options,
         ILogger<SelfUpdateHostedService>? logger,
-        ReleaseAvailabilityService? gate)
+        ReleaseAvailabilityService? gate,
+        IConfiguration? configuration = null)
         : SelfUpdateHostedService(hub, acr, updater, options, logger)
     {
         protected override ReleaseAvailabilityService? ResolveAvailabilityGate() => gate;
+
+        /// <summary>Present a deployment that consumes no CI bakes when the test asks for one —
+        /// the one key the unwired-gate distinction turns on.</summary>
+        protected override IConfiguration? ResolveConfiguration() =>
+            configuration ?? base.ResolveConfiguration();
     }
 }

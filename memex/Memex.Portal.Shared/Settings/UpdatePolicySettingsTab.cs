@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -100,13 +101,24 @@ public static class UpdatePolicySettingsTab
                     // single stated applicability exemption (a deployment that consumes no CI
                     // bakes); a missing registration is not an exemption, it is the absence of a
                     // verdict, and it must not render as a pass.
+                    //
+                    // 🚨 …and the hold is SCOPED to what is actually unverifiable. On a deployment
+                    // that consumes no CI bakes a registered gate answers NotEnforced anyway, so
+                    // its absence is the same answer reached from configuration — not an
+                    // unanswered question. Holding there would freeze an install the gate was
+                    // never going to protect.
                     var gate = h.Hub.ServiceProvider.GetService<ReleaseAvailabilityService>();
-                    var decision = gate is null
-                        ? Observable.Return(UpdatabilityVerdict.Unavailable(
-                            "no release-availability gate is registered on this install, so nothing "
-                            + "could check whether the packages it deploys have usable artifacts for "
-                            + "this release — that is a hold, not clearance to proceed"))
-                        : gate.IsUpdatable(tag);
+                    var decision = gate is not null
+                        ? gate.IsUpdatable(tag)
+                        : Observable.Return(
+                            ReleaseAvailabilityService.NotApplicableReason(
+                                h.Hub.ServiceProvider.GetService<IConfiguration>()) is { } notApplicable
+                                ? UpdatabilityVerdict.NotEnforced(notApplicable)
+                                : UpdatabilityVerdict.Unavailable(
+                                    "no release-availability gate is registered on this install, so "
+                                    + "nothing could check whether the packages it deploys have "
+                                    + "usable artifacts for this release — that is a hold, not "
+                                    + "clearance to proceed"));
                     decision.Subscribe(verdict =>
                     {
                         if (!verdict.IsUpdatable)

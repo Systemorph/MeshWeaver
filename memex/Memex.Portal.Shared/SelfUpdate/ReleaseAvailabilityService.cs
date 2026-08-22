@@ -64,6 +64,30 @@ public class ReleaseAvailabilityService(
     public string? PublishedRoot => configuration[ShippedPrebuiltBundles.PublishedRootConfigKey];
 
     /// <summary>
+    /// 🚨 <b>Does this gate APPLY to this deployment at all?</b> Returns the reason it does not, or
+    /// <c>null</c> when it does.
+    ///
+    /// <para>Decided from CONFIGURATION alone, which is what makes it answerable by a caller that
+    /// has no instance of this service — and that is the whole point. "Cannot verify" and "verified
+    /// as nothing to verify" are different states, and only the first may hold. A deployment that
+    /// consumes no CI bakes already compiles its content at every boot, so a registered gate would
+    /// answer <see cref="UpdatabilityVerdict.NotEnforced"/> for it; the gate being ABSENT on such a
+    /// deployment tells you nothing new, and holding on it would freeze an environment the gate was
+    /// never going to protect.</para>
+    ///
+    /// <para>Static and shared on purpose: the poller's unwired path (#1754) and
+    /// <see cref="IsUpdatable"/> must reach the same applicability answer, and a rule that only one
+    /// caller honours is not a rule.</para>
+    /// </summary>
+    /// <param name="configuration">The host's configuration; null reads as "nothing configured".</param>
+    public static string? NotApplicableReason(IConfiguration? configuration) =>
+        string.IsNullOrWhiteSpace(configuration?[ShippedPrebuiltBundles.PublishedRootConfigKey])
+            ? $"this deployment consumes no CI bakes ({ShippedPrebuiltBundles.PublishedRootConfigKey} "
+              + "is not configured), so it already compiles its content at every boot — the "
+              + "release-availability gate has nothing to enforce here"
+            : null;
+
+    /// <summary>
     /// Is <paramref name="targetVersion"/> a release this environment may be rolled to? Cold —
     /// the file-system leaves run on the <see cref="IoPoolNames.FileSystem"/> pool, never on a hub
     /// action block — and total: every failure resolves to a HOLD carrying its reason, so a
@@ -72,12 +96,11 @@ public class ReleaseAvailabilityService(
     public virtual IObservable<UpdatabilityVerdict> IsUpdatable(string? targetVersion) =>
         Observable.Defer(() =>
         {
-            var publishedRoot = PublishedRoot;
-            if (string.IsNullOrWhiteSpace(publishedRoot))
-                return Observable.Return(UpdatabilityVerdict.NotEnforced(
-                    $"this deployment consumes no CI bakes ({ShippedPrebuiltBundles.PublishedRootConfigKey} "
-                    + "is not configured), so it already compiles its content at every boot — the "
-                    + "release-availability gate has nothing to enforce here"));
+            // ONE applicability rule, shared with the poller's unwired path — see NotApplicableReason.
+            if (NotApplicableReason(configuration) is { } notApplicable)
+                return Observable.Return(UpdatabilityVerdict.NotEnforced(notApplicable));
+
+            var publishedRoot = PublishedRoot!;
 
             return RequiredPackages(publishedRoot)
                 .SelectMany(required => PublishedBundleCatalogue
