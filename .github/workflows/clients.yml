@@ -174,7 +174,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # 22, not 20, since the Expo SDK 57 upgrade (#1584): react-native 0.86 and metro both
+          # declare `engines.node: ^20.19.4 || ^22.13.0 || ^24.3.0 || >= 25.0.0`. Node 20 only
+          # clears that floor on its very last patches AND went end-of-life 2026-04-30, so pinning
+          # the major to 20 makes the job depend on setup-node continuing to resolve a 20.19.4+
+          # patch of an unsupported line. The react job has been on 22 for its own reason (jsdom).
+          node-version: 22
       # The aliased renderer source (../react/src) needs its own deps (react) resolvable.
       - name: Install renderer deps
         working-directory: clients/react
@@ -185,7 +190,7 @@ jobs:
         working-directory: clients/grpc-web
         run: npm ci --no-audit --no-fund && npm run gen
       # Every package the typecheck and the render test need (react-native, react,
-      # react-test-renderer, @types/*, expo-av, vitest, typescript) is ALREADY declared in
+      # react-test-renderer, @types/*, expo-audio/expo-video, vitest, typescript) is ALREADY declared in
       # package.json, so the old `--no-save <explicit list>` form pinned nothing extra and installed
       # the same 979-package tree anyway.
       # 🚨 It also CRASHED npm: `package.json` grew an `overrides` block in 457ad8dd3 (the Dependabot
@@ -261,7 +266,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22 # same floor as the RN connector job above — see its note
       # The source-linked renderer core (../react/src) needs its own deps resolvable during the web export.
       - name: Install renderer deps
         working-directory: clients/react
