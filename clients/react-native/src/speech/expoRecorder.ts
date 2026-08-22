@@ -25,6 +25,14 @@
 // PER PLATFORM, expo-audio declares them at the TOP LEVEL and keeps only the codec-specific bits in
 // `ios`/`android`/`web`. `bitRate` in particular has no per-platform slot any more, so the two
 // values expo-av carried (256 kbps iOS / 64 kbps Android) are selected here by Platform.
+//
+// One correction taken while porting: the container is now THREE cases, not two. Both this file and
+// its expo-av predecessor branched on `Platform.OS === "ios"` alone, so Expo WEB — which records
+// `audio/webm` via MediaRecorder, and always did — was labelled `.m4a` / `audio/mp4` on the way to
+// the transcribe endpoint. `CONTAINER` below keeps the label and the bytes together.
+// (Web capture is still not end-to-end: the recorder yields a `blob:` URL, and transcription.ts
+// posts a `uri` through React Native's `{uri,name,type}` FormData extension, which is native-only.
+// That gap predates this port and is not addressed here — but the label is no longer also wrong.)
 
 import {
   AudioModule,
@@ -40,12 +48,20 @@ import type { Recorder } from "./recorder";
 import type { AudioInput } from "./transcription";
 
 const ios = Platform.OS === "ios";
+const web = Platform.OS === "web";
+
+/** What each platform actually produces — the label must match the bytes, see `stop()`. */
+const CONTAINER = ios
+  ? { extension: ".wav", contentType: "audio/wav", fileName: "audio.wav" }
+  : web
+    ? { extension: ".webm", contentType: "audio/webm", fileName: "audio.webm" }
+    : { extension: ".m4a", contentType: "audio/mp4", fileName: "audio.m4a" };
 
 const RECORDING_OPTIONS: RecordingOptions = {
   isMeteringEnabled: false,
   // Top-level now (see the note above). `ios`/`android` below re-state the extension because the
   // platform blocks are spread OVER these on the way to the native module.
-  extension: ios ? ".wav" : ".m4a",
+  extension: CONTAINER.extension,
   sampleRate: 16_000,
   numberOfChannels: 1,
   // LINEAR PCM ignores bitRate (it is sampleRate x channels x depth); the value is carried over
@@ -145,8 +161,8 @@ export class ExpoAudioRecorder implements Recorder {
     if (!uri) throw new Error("Recording produced no file.");
     return {
       uri,
-      contentType: ios ? "audio/wav" : "audio/mp4",
-      fileName: ios ? "audio.wav" : "audio.m4a",
+      contentType: CONTAINER.contentType,
+      fileName: CONTAINER.fileName,
       durationMs,
     };
   }

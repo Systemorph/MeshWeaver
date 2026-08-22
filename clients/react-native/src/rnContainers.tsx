@@ -168,6 +168,10 @@ const Video: ControlComponent = ({ control }) => {
   const [started, setStarted] = useState(false);
   useEffect(() => {
     if (!player) return;
+    // Reset with the PLAYER, not just on unmount: useVideoPlayer memoizes on the source, so a
+    // control whose Src changes in place gets a new player — and without this the poster for the
+    // NEW video would stay hidden because the OLD one had started.
+    setStarted(false);
     const sub = player.addListener("playingChange", ({ isPlaying }) => {
       if (isPlaying) setStarted(true);
     });

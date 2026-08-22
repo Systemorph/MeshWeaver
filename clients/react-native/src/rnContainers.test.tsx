@@ -180,6 +180,27 @@ describe("Video", () => {
     expect(byType(r.toJSON() as Json, "Image")).toHaveLength(0);
   });
 
+  it("brings the poster back when the Src changes after the first video played", () => {
+    const tree = (src: string): AreaTree => ({
+      areas: { main: { $type: "Video", src, poster: "https://cdn/p.jpg" } },
+    });
+    const render = (src: string) => (
+      <RegistryProvider pack={rnPack}>
+        <ScopeProvider source={new StaticAreaSource(tree(src))} area="main">
+          <RenderArea areaKey="main" />
+        </ScopeProvider>
+      </RegistryProvider>
+    );
+    let r!: TestRenderer.ReactTestRenderer;
+    TestRenderer.act(() => { r = TestRenderer.create(render("https://cdn/a.mp4")); });
+    TestRenderer.act(() => byType(r.toJSON() as Json, "Video")[0].props.player.emit("playingChange", { isPlaying: true }));
+    expect(byType(r.toJSON() as Json, "Image")).toHaveLength(0);
+    // A new Src is a NEW player, so the poster is owed again — `started` must not be sticky.
+    TestRenderer.act(() => { r.update(render("https://cdn/b.mp4")); });
+    expect(byType(r.toJSON() as Json, "Video")[0].props.player.source).toBe("https://cdn/b.mp4");
+    expect(byType(r.toJSON() as Json, "Image")).toHaveLength(1);
+  });
+
   it("renders no poster when the control carries none", () => {
     const j = renderTree({ areas: { main: { $type: "Video", src: "https://cdn/x.mp4" } } });
     expect(byType(j, "Video")).toHaveLength(1);
