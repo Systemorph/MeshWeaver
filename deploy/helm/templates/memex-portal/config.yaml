@@ -283,15 +283,35 @@ data:
   AzureAIS__Endpoint: "{{ .Values.config.memex_portal.AzureAIS__Endpoint | default "" }}"
   AzureAIS__Order: "{{ .Values.config.memex_portal.AzureAIS__Order | default "0" }}"
   # ---- Agent web search (WebSearchPlugin) — optional --------------------------
-  # SearchWeb is advertised to agents ONLY when a provider is configured; with these empty the
+  # SearchWeb is advertised to agents ONLY when a provider is configured; with these unset the
   # tool is not offered at all (agents fall back to FetchWebPage on explicit URLs). The
   # deployment supplies the Google Programmable Search credentials (API key + Search-Engine id /
   # cx) — get them from the Google Cloud console + programmablesearchengine.google.com. Provider
-  # defaults to auto-detect ("" → Google when key+cx are set); set "Google" to force. Bing
+  # auto-detects when ABSENT (Google when key+cx are set); set "Google" to force. Bing
   # (WebSearch:Provider=Bing) is retired (API shut down 2025-08-11) and kept only for back-compat.
-  WebSearch__Provider: "{{ .Values.config.memex_portal.WebSearch__Provider | default "" }}"
-  WebSearch__Google__ApiKey: "{{ .Values.config.memex_portal.WebSearch__Google__ApiKey | default "" }}"
-  WebSearch__Google__Cx: "{{ .Values.config.memex_portal.WebSearch__Google__Cx | default "" }}"
+  #
+  # 🚨 EMITTED ONLY WHEN SET — for an enum, EMPTY IS NOT ABSENT, and the difference is an outage.
+  # WebSearch:Provider binds to WebSearchProviderType, whose default None means "auto-detect"; ""
+  # is not a member of it, so binding throws FormatException in WebSearchPlugin's constructor.
+  # ChatClientAgentFactory resolves plugins through GetServices<IAgentPlugin>(), which activates
+  # the WHOLE array — so ONE unconstructable plugin strips EVERY custom tool from EVERY agent, and
+  # the log names the wrong victim ("Plugin 'ExecutiveAssistant' failed to resolve … ->
+  # WebSearchPlugin"). memex.systemorph.com lost every agent tool exactly this way after its first
+  # chart-driven deploy (2026-08-20 → 2026-08-22, ~100 failures/24h); memex-cloud and atioz were
+  # unaffected only because no chart had ever rendered their ConfigMap. This is the same rule the
+  # OpenAICompatible__DiscoverModels note above states: `default ""` is safe ONLY for keys whose
+  # consumer reads them as strings. Guarded rather than `default "None"` so an instance that
+  # configures no web search renders no WebSearch keys at all — the shape the two healthy
+  # namespaces already run, and one that cannot be re-broken by a future rename of the enum member.
+  {{- if .Values.config.memex_portal.WebSearch__Provider }}
+  WebSearch__Provider: "{{ .Values.config.memex_portal.WebSearch__Provider }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.WebSearch__Google__ApiKey }}
+  WebSearch__Google__ApiKey: "{{ .Values.config.memex_portal.WebSearch__Google__ApiKey }}"
+  {{- end }}
+  {{- if .Values.config.memex_portal.WebSearch__Google__Cx }}
+  WebSearch__Google__Cx: "{{ .Values.config.memex_portal.WebSearch__Google__Cx }}"
+  {{- end }}
   # ---- Observability (OTLP collector) — optional ----------------------------
   OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_ENDPOINT | default "" }}"
   OTEL_EXPORTER_OTLP_PROTOCOL: "{{ .Values.config.memex_portal.OTEL_EXPORTER_OTLP_PROTOCOL | default "" }}"
