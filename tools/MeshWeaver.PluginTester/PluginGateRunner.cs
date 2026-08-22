@@ -54,6 +54,18 @@ public sealed record GateOptions
     /// provenance. Null falls back to the repo snapshot's own commit sha.
     /// </summary>
     public string? SourceSha { get; init; }
+
+    /// <summary>
+    /// The BAKE this gate run CONSUMES (#1763), read and address-checked before the mesh boots.
+    /// Null (the default) keeps the gate self-producing — it compiles the content itself, which
+    /// is the emergency/standalone shape and stays supported.
+    ///
+    /// <para>With a seed the gate stops being a producer: <c>PackageInstaller</c>'s existing
+    /// adopt-before-compile step takes the bake's bytes for every type it installs, and what the
+    /// gate then renders and executes <c>Tests</c> on is the assembly that will actually ship —
+    /// a strictly stronger claim than judging a private compile of the same sources.</para>
+    /// </summary>
+    public BakeSeed? Seed { get; init; }
 }
 
 /// <summary>
@@ -83,7 +95,7 @@ public static class PluginGateRunner
     public static IObservable<GateReport> Run(GateOptions options) =>
         Observable.Defer(() =>
         {
-            var harness = GateMesh.Create(options.Output);
+            var harness = GateMesh.Create(options.Output, options.Seed);
             var pool = harness.ServiceProvider.GetRequiredService<IoPoolRegistry>()
                 .Get("plugin-test:files");
             return LocalNodeRepo.Load(options.RepoRoot, pool)
@@ -95,10 +107,40 @@ public static class PluginGateRunner
                         // into a green gate.
                         .SelectMany(report => BakeOutput.Persist(
                             harness.Mesh, options, snapshot, packages, report))))
+                // The CONSUMPTION postcondition (#1763), applied to whatever the run produced —
+                // including a run that already failed, so a shortfall is never masked by an
+                // unrelated red and never masks one. Adoption leaves no trace in a gate verdict, so
+                // without this the consuming half could stop working with every run still green.
+                .Select(report => WithSeedVerdict(harness, options, report))
                 .Catch((Exception ex) => Observable.Return(
                     new GateReport([]) { FatalError = $"{ex.GetType().Name}: {ex.Message}" }))
                 .Finally(harness.Dispose);
         });
+
+    /// <summary>
+    /// Folds the bake-consumption verdict into the report: prints what was adopted, and turns a
+    /// shortfall into a fatal error. A run with no <see cref="GateOptions.Seed"/> is unchanged.
+    /// </summary>
+    private static GateReport WithSeedVerdict(
+        GateMesh harness, GateOptions options, GateReport report)
+    {
+        if (harness.SeedConsumer is not { } consumer)
+            return report;
+        var expected = consumer.Seed.DeclaredTypePaths.Intersect(consumer.Requested).Count;
+        options.Output.WriteLine(
+            $"seed: adopted {consumer.Adopted} of {expected} baked assembly(ies) for the "
+            + $"{consumer.Requested.Count} installed NodeType(s) "
+            + $"(bake: {consumer.Seed.Describe()})");
+        if (consumer.Shortfall() is not { } shortfall)
+            return report;
+        // Appended, never replacing: a run that failed for its own reasons keeps that reason.
+        return report with
+        {
+            FatalError = report.FatalError is null
+                ? $"bake consumption: {shortfall}"
+                : $"{report.FatalError}\nbake consumption: {shortfall}",
+        };
+    }
 
     private static IObservable<GateReport> RunPackages(
         GateMesh harness, GateOptions options, RepoSnapshot snapshot,
@@ -418,13 +460,21 @@ public static class PluginGateRunner
         /// <summary>The mesh's root service provider.</summary>
         public required IServiceProvider ServiceProvider { get; init; }
 
+        /// <summary>
+        /// The bake-consuming <see cref="IPrebuiltAssemblyConsumer"/> when this run was given a
+        /// seed, else null. Held so the run can read its accounting for the postcondition.
+        /// </summary>
+        public BakeSeedConsumer? SeedConsumer { get; init; }
+
         private readonly List<IHostedService> startedHostedServices = [];
         private readonly TextWriter output;
 
         private GateMesh(TextWriter output) => this.output = output;
 
         /// <summary>Boots the gate mesh (blocking — runs once at the console boundary).</summary>
-        public static GateMesh Create(TextWriter output)
+        /// <param name="output">Progress sink.</param>
+        /// <param name="seed">The bake this run consumes, or null to compile the content itself.</param>
+        public static GateMesh Create(TextWriter output, BakeSeed? seed = null)
         {
             var services = new ServiceCollection();
             services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
@@ -458,6 +508,20 @@ public static class PluginGateRunner
 
             var runRoot = Path.Combine(Path.GetTempPath(),
                 $"mw-plugin-test-{Environment.ProcessId}-{Guid.NewGuid():N}");
+            // 🚨 THE CONSUMING SEAM (#1763). Registering an IPrebuiltAssemblyConsumer is the WHOLE
+            // wiring: `PackageInstaller` already asks for one before it issues any release request
+            // (#1707 slice 3), so a gate handed a bake adopts its bytes and a gate handed none
+            // resolves nothing and compiles, exactly as before. No new call site, no second
+            // ordering to get wrong, and the adopt-before-compile step the gate exercises is the
+            // one a portal runs. Registered as an INSTANCE (not a factory) so the accounting the
+            // postcondition reads is one object, whichever container resolves the interface.
+            IMessageHub? meshHub = null;
+            var seedConsumer = seed is null
+                ? null
+                : new BakeSeedConsumer(
+                    () => meshHub ?? throw new InvalidOperationException(
+                        "the gate mesh was asked for prebuilt assemblies before it finished booting"),
+                    seed);
             var builder = new MeshBuilder(c => c.Invoke(services), AddressExtensions.CreateMeshAddress())
                 .UseMonolithMesh()
                 .AddInMemoryPersistence()
@@ -479,16 +543,24 @@ public static class PluginGateRunner
                 })
                 .ConfigureServices(s => s.Configure<CompilationCacheOptions>(o =>
                     o.CacheDirectory = Path.Combine(runRoot, "compilation-cache")))
+                .ConfigureServices(s => seedConsumer is null
+                    ? s
+                    : s.AddSingleton<IPrebuiltAssemblyConsumer>(seedConsumer))
                 .ConfigureHub(c => c.WithRequestTimeout(TimeSpan.FromSeconds(120)));
             services.AddSingleton(builder.BuildHub);
 
+            if (seed is not null)
+                output.WriteLine($"consuming bake '{seed.Directory}' — {seed.Describe()}");
+
             var provider = services.CreateMeshWeaverServiceProvider();
             var mesh = provider.GetRequiredService<IMessageHub>();
+            meshHub = mesh;
             var harness = new GateMesh(output)
             {
                 Mesh = mesh,
                 Client = CreateClient(mesh),
                 ServiceProvider = provider,
+                SeedConsumer = seedConsumer,
             };
 
             // Pre-warm the NodeType hubs a runtime CreateNode would otherwise recurse on
