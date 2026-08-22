@@ -111,6 +111,18 @@ public class DeleteQuerySetTest
     public void Prune_IgnoresEmptyEntries()
         => DeleteLayoutArea.PruneRedundantDescendants(["", "ACME/Old"]).Should().Equal("ACME/Old");
 
+    /// <summary>
+    /// The linear prune's correctness pin: '-' (and '.') sort BELOW '/', so a plain lexicographic
+    /// order interleaves the sibling "A-x" between "A" and its descendant "A/y" — a naive
+    /// last-kept-ancestor scan would then forget "A" and keep "A/y". The subtree-contiguous sort
+    /// key ('/' substituted below every path character) is what makes one remembered ancestor
+    /// sufficient; this pins it.
+    /// </summary>
+    [Fact]
+    public void Prune_DashSiblingCannotShadowTheAncestor()
+        => DeleteLayoutArea.PruneRedundantDescendants(["A", "A-x", "A/y"])
+            .Should().Equal("A", "A-x");
+
     // ---- CoversPath (the redirect-off-the-dead-anchor decision) -------------------------
 
     [Theory]
