@@ -211,17 +211,14 @@ public sealed class PackageOriginAnchor
         var listings = configured.Select(source => source.Source
             .ListPackages(source.GitRef)
             .Take(1)
-            .Select(packages => (Source: source, Packages: packages, Failure: (string?)null))
+            .Select(packages => new SourceListing(source, packages, null))
             .Catch((Exception exception) =>
             {
                 logger?.LogWarning(exception,
                     "Entitlement anchor: listing source {Name} @ {Ref} failed — an ABSENCE from this "
                     + "read is therefore not evidence that a package is uncarried",
                     source.Name, source.GitRef);
-                return Observable.Return((
-                    Source: source,
-                    Packages: (IReadOnlyList<PackageManifest>)[],
-                    Failure: (string?)exception.Message));
+                return Observable.Return(new SourceListing(source, [], exception.Message));
             }));
 
         return listings.CombineLatest()
@@ -230,9 +227,7 @@ public sealed class PackageOriginAnchor
     });
 
     /// <summary>Folds one read into a snapshot and remembers it.</summary>
-    private PackageOriginSnapshot Observe(
-        IReadOnlyList<(ConfiguredPackageSource Source, IReadOnlyList<PackageManifest> Packages, string? Failure)> perSource,
-        DateTimeOffset now)
+    private PackageOriginSnapshot Observe(IList<SourceListing> perSource, DateTimeOffset now)
     {
         var failures = perSource.Where(x => x.Failure is not null)
             .Select(x => $"{x.Source.Name}: {x.Failure}").ToArray();
@@ -242,12 +237,12 @@ public sealed class PackageOriginAnchor
         // The FIRST configured source wins on an id collision — the same precedence the merged
         // catalog applies, so the anchor and the listing can never disagree about which source a
         // package belongs to.
-        foreach (var (source, packages, _) in perSource)
-        foreach (var package in packages.Where(p => !string.IsNullOrWhiteSpace(p.Id)))
+        foreach (var listing in perSource)
+        foreach (var package in listing.Packages.Where(p => !string.IsNullOrWhiteSpace(p.Id)))
             observed.TryAdd(
                 package.Id,
                 new PackageOrigin(
-                    package.Id, source.Name, package.ReleasedVersion, package.Module,
+                    package.Id, listing.Source.Name, package.ReleasedVersion, package.Module,
                     package.MinMeshVersion, package.TargetPartition));
 
         if (failures.Length == 0)
@@ -282,6 +277,11 @@ public sealed class PackageOriginAnchor
         Volatile.Write(ref last, snapshot);
         return snapshot;
     }
+
+    /// <summary>One source's contribution to a read — named rather than a tuple so the nullable
+    /// failure survives the inference through CombineLatest.</summary>
+    private sealed record SourceListing(
+        ConfiguredPackageSource Source, IReadOnlyList<PackageManifest> Packages, string? Failure);
 
     private static TimeSpan Freshness(IConfiguration configuration) =>
         int.TryParse(configuration?[FreshnessConfigKey], out var seconds)
