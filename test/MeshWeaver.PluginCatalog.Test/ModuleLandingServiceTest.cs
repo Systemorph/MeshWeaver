@@ -124,6 +124,83 @@ public class ModuleLandingServiceTest : IDisposable
         ModuleActivationSidecar.Read(baseDirectory).Entries.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// 🚨 The SHELF lane (2026-08-22): the publish path lands an above-floor module as HELD — bytes on
+    /// disk, activation entry recorded (that is what makes the serve side list it for consumers,
+    /// whose own gates apply the floor against THEIR platforms) — while nothing here loads it:
+    /// PendingRestart is NOT raised, because a restart of THIS process cannot activate a held
+    /// entry (boot's floor gate skips it), and a "restart required" no restart can clear is a
+    /// false prompt. The adopt path refusing the same floor is pinned above
+    /// (<see cref="LandModule_PlatformBelowDeclaredFloor_Refuses_NamingBothVersions"/>) — the two
+    /// paths differing on exactly this one verdict IS the design.
+    /// </summary>
+    [Fact]
+    public async Task ShelveModule_PlatformBelowDeclaredFloor_LandsBytesAsHeld_WithoutPendingRestart()
+    {
+        using var service = Service;
+
+        var outcome = await service
+            .ShelveModule("Acme.Widgets", [("Acme.Widgets.dll", [1, 2])],
+                LiveFrameworkMvid, packagePath: "Plugins/acme-widgets", version: "2.0.0",
+                minMeshVersion: "999.0.0")
+            .FirstAsync().ToTask();
+
+        outcome.Held.Should().BeTrue("the floor exceeds the running platform — shelved, not activated");
+        outcome.HoldReason.Should().Contain("999.0.0").And.Contain(
+            ModulePlatformFloor.RunningVersion!,
+            "the hold reason names BOTH versions so the publisher can see which side is behind");
+
+        var list = ModuleActivationSidecar.Read(baseDirectory);
+        var entry = list.Entries.Should().ContainSingle(
+            "the entry is what the serve side lists and what boot re-gates").Subject;
+        entry.Enabled.Should().BeTrue("held is DERIVED from the floor, never a disabled entry");
+        entry.MinMeshVersion.Should().Be("999.0.0",
+            "the recorded floor is the ONE fact held-ness derives from — boot, the serve index "
+            + "and the pending-restart surface all read it");
+        entry.Version.Should().Be("2.0.0");
+        var dir = ModuleLandingService.ModuleDirectoryFor(baseDirectory, "Acme.Widgets", entry);
+        File.ReadAllBytes(Path.Combine(dir, "Acme.Widgets.dll")).Should().Equal([1, 2],
+            "the bytes ARE on the shelf — that is the whole point of the hold");
+        list.PendingRestart.Should().BeFalse(
+            "a restart cannot activate a held module, so nothing is pending on one");
+    }
+
+    [Fact]
+    public async Task ShelveModule_FloorSatisfied_IsAnOrdinaryLanding()
+    {
+        using var service = Service;
+
+        var outcome = await service
+            .ShelveModule("Acme.Widgets", [("Acme.Widgets.dll", [7])],
+                LiveFrameworkMvid, version: "2.0.0", minMeshVersion: "0.0.1")
+            .FirstAsync().ToTask();
+
+        outcome.Held.Should().BeFalse("a satisfied floor shelves and activates in one landing");
+        outcome.HoldReason.Should().BeNull();
+        var list = ModuleActivationSidecar.Read(baseDirectory);
+        list.Entries.Should().ContainSingle().Subject.Enabled.Should().BeTrue();
+        list.PendingRestart.Should().BeTrue("the ordinary landing loads at the next restart");
+    }
+
+    [Fact]
+    public async Task ShelveModule_AppClosureNameCollision_StillRefuses()
+    {
+        // A held module DOES load eventually (the platform update satisfies its floor), so the
+        // same-identity trap-door must hold on the shelf lane too — shelving a module named after
+        // an app-closure assembly would shadow the platform's own binary at exactly that boot.
+        File.WriteAllBytes(Path.Combine(baseDirectory, "Acme.Platform.dll"), [1]);
+
+        using var service = Service;
+        var act = () => service
+            .ShelveModule("Acme.Platform", [("Acme.Platform.dll", [2])],
+                LiveFrameworkMvid, minMeshVersion: "999.0.0")
+            .FirstAsync().ToTask();
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .Which.Message.Should().Contain("Acme.Platform.dll");
+        Directory.Exists(Path.Combine(baseDirectory, "modules", "Acme.Platform")).Should().BeFalse();
+    }
+
     [Fact]
     public async Task LandModule_ForeignBuiltAgainstMvid_Lands_TheMvidIsDiagnosticOnly()
     {
