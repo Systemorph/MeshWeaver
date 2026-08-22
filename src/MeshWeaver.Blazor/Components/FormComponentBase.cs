@@ -6,7 +6,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.DataBinding;
 
-namespace MeshWeaver.Blazor.EntityViews;
+namespace MeshWeaver.Blazor.Components;
 
 /// <summary>
 /// Base class for data-bound form components that bind a single typed value

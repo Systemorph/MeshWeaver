@@ -4,8 +4,8 @@ using MeshWeaver.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using LayoutOption=MeshWeaver.Layout.Option;
-using Option=MeshWeaver.Blazor.EntityViews.OptionsExtension.Option;
-namespace MeshWeaver.Blazor.EntityViews;
+using Option=MeshWeaver.Blazor.Components.OptionsExtension.Option;
+namespace MeshWeaver.Blazor.Components;
 
 /// <summary>
 /// Base class for list-based form components (drop-downs, radio groups, etc.) that bind a
