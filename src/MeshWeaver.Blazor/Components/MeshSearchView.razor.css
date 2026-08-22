@@ -2,6 +2,70 @@
     width: 100%;
 }
 
+/* ----- Scope tabs: one shared search bar across scopes ----- */
+.mesh-search-scopes {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    margin-bottom: 12px;
+    overflow-x: auto;
+}
+
+.mesh-search-scope {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--neutral-foreground-rest);
+    white-space: nowrap;
+}
+
+.mesh-search-scope:hover {
+    color: var(--accent-fill-rest, #0078d4);
+}
+
+.mesh-search-scope-active {
+    border-bottom-color: var(--accent-fill-rest, #0078d4);
+    color: var(--accent-fill-rest, #0078d4);
+    font-weight: 600;
+}
+
+/* ----- Header: search box + view-options bar share ONE row on desktop, wrap when narrow ----- */
+.mesh-search-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.mesh-search-header .mesh-search-box {
+    flex: 1 1 320px;
+    min-width: 240px;
+    width: auto;
+    margin-bottom: 12px;
+}
+
+.mesh-search-header .mesh-search-viewbar {
+    flex: 0 0 auto;
+    margin-left: auto;
+    margin-bottom: 12px;
+}
+
+/* The search input is DESKTOP-only: under the mobile breakpoint the input, Search button and
+   query-gear hide (the chrome search covers mobile), while title/create/view-options stay. */
+@media (max-width: 640px) {
+    .mesh-search-mobile-hide {
+        display: none !important;
+    }
+
+    .mesh-search-header .mesh-search-box {
+        flex: 0 1 auto;
+        min-width: 0;
+    }
+}
+
 .mesh-search-box {
     margin-bottom: 16px;
     width: 100%;
