@@ -75,8 +75,29 @@ spec:
           #     pod is not — so waiting costs the rollout nothing and costs a working user nothing.
           #     Poll until the pod reports "drained", i.e. its last circuit closed.
           #
-          # Bounded by terminationGracePeriodSeconds above: a forgotten open tab delays the pod's
-          # exit, it cannot block the rollout for ever — k8s SIGKILLs at the ceiling.
+          # 🚨 …and the SESSION drain has its OWN deadline, short of the grace ceiling (#1971).
+          # It used to poll forever and rely on terminationGracePeriodSeconds to stop it — which
+          # means the pod was SIGKILLed WITH A LIVE ORLEANS SILO whenever a session outlived the
+          # grace: preStop never returned, so the host's 90 s ShutdownTimeout never ran,
+          # ApplicationStopping never fired, and the silo never departed membership. The
+          # safe-to-evict annotation on this deployment records the cost — "each abrupt departure
+          # left a ZOMBIE entry in the Orleans membership table: the cluster kept placing new grain
+          # activations on the dead silo, so writes timed out mesh-wide".
+          #
+          # Riding to the ceiling was the NORMAL outcome of a roll, not the exception (memex,
+          # 2026-08-21: a terminating pod still executing application code 68 s before the ceiling,
+          # while a serving pod had five circuits open at an arbitrary moment). So the roll design
+          # was protecting users from the FAST teardown by guaranteeing the ABRUPT one.
+          #
+          # Now the loop stops at (drainSeconds − shutdownMarginSeconds) and RETURNS, so SIGTERM is
+          # delivered with the margin still available to shut down in. The trade is made
+          # explicitly — cut off the last stragglers, logged and counted, rather than keep everyone
+          # and then die abruptly — instead of by accident. `date +%s` is POSIX and present in
+          # every base image this chart can run on; if it were somehow absent the guard below falls
+          # back to the previous unbounded behaviour rather than skipping the drain entirely.
+          #
+          # Bounded by terminationGracePeriodSeconds above as well: a forgotten open tab delays the
+          # pod's exit, it cannot block the rollout for ever.
           #
           # 🚨 The probe tool is `curl`, and that is MEASURED, not assumed. This block previously
           # used `wget` on the reasoning "curl is not in the base image; wget is (Debian aspnet)" —
@@ -103,7 +124,13 @@ spec:
                   - >-
                     sleep 15;
                     command -v curl >/dev/null 2>&1 || exit 0;
+                    DEADLINE={{ sub (.Values.portal.drainSeconds | default 1800) (.Values.portal.shutdownMarginSeconds | default 120) }};
+                    START=$(date +%s 2>/dev/null || echo 0);
                     while ! curl -sf -m 5 -o /dev/null http://127.0.0.1:8080/drain; do
+                      NOW=$(date +%s 2>/dev/null || echo 0);
+                      if [ "$START" -gt 0 ] && [ $((NOW - START)) -ge "$DEADLINE" ]; then
+                        exit 0;
+                      fi;
                       sleep 5;
                     done
           envFrom:

@@ -213,4 +213,73 @@ public class DrainProgressTest
         report.Outcome.Should().Be(DrainProbeOutcome.StillDraining);
         report.ProbeCount.Should().Be(13, "twelve silent probes plus this one");
     }
+
+    // ── what SIGTERM found (#1971) ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 🚨 The line whose EXISTENCE is the point. Before preStop was bounded, a pod whose sessions
+    /// outlived the grace was SIGKILLed with a live Orleans silo — so nothing ran at shutdown, and
+    /// "did this pod depart membership cleanly?" was unanswerable from Loki in either direction.
+    /// A drain that gives up at its deadline reports the sessions it is cutting off, by count.
+    /// </summary>
+    [Fact]
+    public void GivingUpAtTheDeadline_ReportsTheSessionsItCutsOff()
+    {
+        var progress = new DrainProgress();
+        progress.Probe(5, T0);
+        progress.Probe(3, T0.AddSeconds(600));
+
+        var report = progress.Abandon(3, T0.AddSeconds(1680));
+
+        report.CutSessionsOff.Should().BeTrue();
+        report.LiveCircuits.Should().Be(3);
+        report.CircuitsWhenTerminationBegan.Should().Be(5);
+        report.Elapsed.Should().Be(TimeSpan.FromSeconds(1680));
+        report.TerminationWasObserved.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The ordinary roll: everyone finished, then SIGTERM. It must NOT read as sessions being cut
+    /// off — a warning on every clean roll is a warning nobody reads on the roll that matters.
+    /// </summary>
+    [Fact]
+    public void ADrainThatFinished_ReportsNoSessionsCutOff()
+    {
+        var progress = new DrainProgress();
+        progress.Probe(2, T0);
+        progress.Probe(0, T0.AddSeconds(30));
+
+        var report = progress.Abandon(0, T0.AddSeconds(31));
+
+        report.CutSessionsOff.Should().BeFalse();
+        report.CircuitsWhenTerminationBegan.Should().Be(2);
+        report.TerminationWasObserved.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// SIGTERM with no preStop at all — a node eviction, a local Ctrl-C, a chart that lost its
+    /// lifecycle hook. Distinguished from "the drain ran and gave up", because the two need
+    /// different responses: one is a session-length problem, the other is a missing hook.
+    /// </summary>
+    [Fact]
+    public void ShutdownWithoutAnyProbe_SaysNoDrainWasEverObserved()
+    {
+        var report = new DrainProgress().Abandon(4, T0);
+
+        report.TerminationWasObserved.Should().BeFalse();
+        report.LiveCircuits.Should().Be(4);
+        report.CircuitsWhenTerminationBegan.Should().Be(4,
+            "with no probe to compare against, the shutdown count is the only count there is");
+        report.Elapsed.Should().Be(TimeSpan.Zero);
+    }
+
+    /// <summary>A clamped count must never turn into a phantom cut-off session.</summary>
+    [Fact]
+    public void ANegativeCountIsClampedAtShutdownToo()
+    {
+        var progress = new DrainProgress();
+        progress.Probe(1, T0);
+
+        progress.Abandon(-3, T0.AddSeconds(5)).CutSessionsOff.Should().BeFalse();
+    }
 }
