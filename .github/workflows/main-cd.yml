@@ -1587,7 +1587,7 @@ jobs:
 
   alert-on-failure:
     name: "Alert: CD failed on main"
-    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images, publish-bake, notify-dependents]
+    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images, publish-bake]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
