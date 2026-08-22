@@ -18,9 +18,10 @@ namespace MeshWeaver.AI.Plugins;
 /// with <c>.SubscribeOn(TaskPoolScheduler.Default)</c> (NEVER
 /// <c>Observable.FromAsync</c>, which is forbidden outside <c>IoPool</c>) so blocking
 /// enumeration never touches the hub scheduler, and writes go through
-/// <c>hub.Observe(...).Subscribe(...)</c> with a
-/// <see cref="TaskCompletionSource{T}"/> bridging the off-hub callback thread back
-/// to the caller. See <c>Doc/Architecture/AsynchronousCalls</c> for the rationale:
+/// <c>hub.Observe(...)</c>, with <see cref="ToolTask.Bridge{T}"/> bridging the off-hub
+/// callback thread back to the caller — every terminal settles (value, error, EMPTY
+/// completion) and the round's cancellation token is observed (#1956).
+/// See <c>Doc/Architecture/AsynchronousCalls</c> for the rationale:
 /// any <c>await</c> on a hub-backed operation from inside a plugin method will
 /// deadlock the hub scheduler under load.
 /// </summary>
@@ -65,48 +66,48 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
 
         var resolvedInput = MeshOperations.ResolveContextPath(chat, documentPath);
         var resolvedPath = MeshOperations.ResolvePath(resolvedInput);
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Read the document off the hub scheduler, then fan into hub.Observe(...).
         // No `await` anywhere — the subscription runs the read on TaskPoolScheduler and
-        // the write's response arrives on the observe subscription. Both resolve the TCS.
-        ops.Get(resolvedInput)
-            .SubscribeOn(TaskPoolScheduler.Default)
-            .Subscribe(
-                docJson => AddCommentContinuation(
-                    docJson, resolvedPath, documentPath, selectedText, commentText, tcs),
-                err => tcs.TrySetResult($"Error reading '{documentPath}': {err.Message}"));
-
-        return tcs.Task;
+        // the write's response arrives on the observe subscription.
+        //
+        // 🚨 Every terminal settles and the round's token is observed (#1956): before, a bare
+        // TaskCompletionSource with a 2-arg Subscribe left the task pending forever when the read
+        // completed WITHOUT emitting, and `cancellationToken` appeared only in the doc comment — so
+        // a parked AddComment held its Ai-pool gate permit through IoPool.Drain and Stop no-opped.
+        return ToolTask.Bridge(
+            ops.Get(resolvedInput)
+                .SubscribeOn(TaskPoolScheduler.Default)
+                .Take(1)
+                .SelectMany(docJson => AddCommentContinuation(
+                    docJson, resolvedPath, documentPath, selectedText, commentText)),
+            cancellationToken,
+            answer => answer,
+            err => $"Error reading '{documentPath}': {err.Message}",
+            () => $"Document not found: {documentPath}");
     }
 
-    private void AddCommentContinuation(
+    /// <summary>
+    /// The continuation, as an observable of the tool's ANSWER. It formats its own failures rather
+    /// than erroring, so the bridge's error arm keeps naming the read that actually failed.
+    /// </summary>
+    private IObservable<string> AddCommentContinuation(
         string docJson,
         string resolvedPath,
         string documentPath,
         string selectedText,
-        string commentText,
-        TaskCompletionSource<string> tcs)
+        string commentText)
     {
         if (docJson.StartsWith("Not found") || docJson.StartsWith("Error"))
-        {
-            tcs.TrySetResult($"Document not found: {documentPath}");
-            return;
-        }
+            return Observable.Return($"Document not found: {documentPath}");
 
         var content = ExtractContent(docJson);
         if (string.IsNullOrEmpty(content))
-        {
-            tcs.TrySetResult($"Could not extract content from {documentPath}");
-            return;
-        }
+            return Observable.Return($"Could not extract content from {documentPath}");
 
         var start = content.IndexOf(selectedText, StringComparison.Ordinal);
         if (start < 0)
-        {
-            tcs.TrySetResult($"Text '{selectedText}' not found in document {documentPath}");
-            return;
-        }
+            return Observable.Return($"Text '{selectedText}' not found in document {documentPath}");
 
         var words = selectedText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var startFragment = string.Join(" ", words.Take(Math.Min(5, words.Length)));
@@ -122,11 +123,10 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
             Author = chat.Context?.Path ?? "agent"
         };
 
-        PostAndReport<CreateCommentResponse>(
+        return PostAndReport<CreateCommentResponse>(
             request,
             new Address(resolvedPath),
             documentPath,
-            tcs,
             resp => resp.Success
                 ? $"Comment added on \"{selectedText}\" in {documentPath}"
                 : $"Error adding comment: {resp.Error ?? "unknown error"}");
@@ -165,33 +165,36 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
 
         var resolvedInput = MeshOperations.ResolveContextPath(chat, documentPath);
         var resolvedPath = MeshOperations.ResolvePath(resolvedInput);
-        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Probe existence first — the single most common agent mistake is passing a display name
         // instead of a path, and "Document not found" is far more actionable than whatever the write
-        // path reports for an address that routes nowhere.
-        ops.Get(resolvedInput)
-            .SubscribeOn(TaskPoolScheduler.Default)
-            .Subscribe(
-                docJson => SuggestEditContinuation(docJson, resolvedPath, documentPath, originalText, newText, tcs),
-                err => tcs.TrySetResult($"Error reading '{documentPath}': {err.Message}"));
-
-        return tcs.Task;
+        // path reports for an address that routes nowhere. Same three-terminal bridge as
+        // AddComment: value, error, and the EMPTY completion that used to park the round (#1956).
+        return ToolTask.Bridge(
+            ops.Get(resolvedInput)
+                .SubscribeOn(TaskPoolScheduler.Default)
+                .Take(1)
+                .SelectMany(docJson => SuggestEditContinuation(
+                    docJson, resolvedPath, documentPath, originalText, newText)),
+            cancellationToken,
+            answer => answer,
+            err => $"Error reading '{documentPath}': {err.Message}",
+            () => $"Document not found: {documentPath}");
     }
 
-    private void SuggestEditContinuation(
+    /// <summary>
+    /// The continuation, as an observable of the tool's ANSWER — see
+    /// <see cref="AddCommentContinuation"/> for why it formats its own failures.
+    /// </summary>
+    private IObservable<string> SuggestEditContinuation(
         string docJson,
         string resolvedPath,
         string documentPath,
         string originalText,
-        string newText,
-        TaskCompletionSource<string> tcs)
+        string newText)
     {
         if (docJson.StartsWith("Not found") || docJson.StartsWith("Error"))
-        {
-            tcs.TrySetResult($"Document not found: {documentPath}");
-            return;
-        }
+            return Observable.Return($"Document not found: {documentPath}");
 
         var options = hub.JsonSerializerOptions;
 
@@ -199,20 +202,19 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
         // the probe above only established existence; splicing the text it returned would lose any
         // edit that landed in between. DefaultIfEmpty guarantees the tool always answers: an update
         // that completes without emitting must not leave the agent's task pending forever.
-        hub.GetMeshNodeStream(resolvedPath)
+        return hub.GetMeshNodeStream(resolvedPath)
             .Update(live => MarkdownOverviewLayoutArea.WithMarkdownContent(
                 live, Splice(MarkdownOverviewLayoutArea.GetMarkdownContent(live), originalText, newText), options))
             .Take(1)
-            .DefaultIfEmpty()
-            .Subscribe(
-                written => tcs.TrySetResult(written is null
-                    ? $"The edit produced no change in {documentPath}."
-                    : Describe(documentPath, originalText, newText)),
-                err =>
-                {
-                    logger.LogWarning(err, "SuggestEdit failed for {Path}", resolvedPath);
-                    tcs.TrySetResult($"Error editing '{documentPath}': {err.Message}");
-                });
+            .Select(written => written is null
+                ? $"The edit produced no change in {documentPath}."
+                : Describe(documentPath, originalText, newText))
+            .Catch((Exception err) =>
+            {
+                logger.LogWarning(err, "SuggestEdit failed for {Path}", resolvedPath);
+                return Observable.Return($"Error editing '{documentPath}': {err.Message}");
+            })
+            .DefaultIfEmpty($"The edit produced no change in {documentPath}.");
     }
 
     /// <summary>
@@ -255,45 +257,41 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
     }
 
     /// <summary>
-    /// Posts a request via <c>hub.Observe(...)</c> and resolves <paramref name="tcs"/>
-    /// from the subscription. No <c>await</c>: the response arrives on a non-hub thread
-    /// when the response arrives. Routing failures surface as a user-actionable
-    /// error pointing the agent back at the "use `path`, not `name`" rule.
+    /// Posts a request via <c>hub.Observe(...)</c> and projects the callback into the tool's ANSWER.
+    /// No <c>await</c>: the response arrives on a non-hub thread. Routing failures surface as a
+    /// user-actionable error pointing the agent back at the "use `path`, not `name`" rule, and a
+    /// response that never comes at all still answers — <c>DefaultIfEmpty</c> is what keeps an
+    /// evicted callback stream from parking the round.
     /// </summary>
-    private void PostAndReport<TResponse>(
+    private IObservable<string> PostAndReport<TResponse>(
         IRequest<TResponse> request,
         Address target,
         string originalInput,
-        TaskCompletionSource<string> tcs,
         Func<TResponse, string> formatSuccess)
     {
         var delivery = hub.Post(request, o => o.WithTarget(target))!;
-        hub.Observe(delivery)
-            .Subscribe(
-                callback =>
-                {
-                    if (callback.Message is TResponse typed)
-                    {
-                        try { tcs.TrySetResult(formatSuccess(typed)); }
-                        catch (Exception ex) { tcs.TrySetResult($"Error formatting response: {ex.Message}"); }
-                    }
-                    else
-                    {
-                        tcs.TrySetResult($"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} for {originalInput}.");
-                    }
-                },
-                ex =>
-                {
-                    logger.LogWarning(
-                        ex,
-                        "Delivery to {Target} failed for {RequestType}. Original input: {OriginalInput}",
-                        target, request.GetType().Name, originalInput);
-                    tcs.TrySetResult(
-                        $"Error: {ex.Message ?? "delivery failed"}. " +
-                        $"Check that '{originalInput}' resolves to an existing node — pass the MeshNode's " +
-                        "`path` property, not its `name`. If you only know the display name, call " +
-                        "Search('name:\"...\"') and use the `path` field of the match.");
-                });
+        return hub.Observe(delivery)
+            .Take(1)
+            .Select(callback =>
+            {
+                if (callback.Message is not TResponse typed)
+                    return $"Error: unexpected response {callback.Message?.GetType().Name ?? "null"} for {originalInput}.";
+                try { return formatSuccess(typed); }
+                catch (Exception ex) { return $"Error formatting response: {ex.Message}"; }
+            })
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(
+                    ex,
+                    "Delivery to {Target} failed for {RequestType}. Original input: {OriginalInput}",
+                    target, request.GetType().Name, originalInput);
+                return Observable.Return(
+                    $"Error: {ex.Message ?? "delivery failed"}. " +
+                    $"Check that '{originalInput}' resolves to an existing node — pass the MeshNode's " +
+                    "`path` property, not its `name`. If you only know the display name, call " +
+                    "Search('name:\"...\"') and use the `path` field of the match.");
+            })
+            .DefaultIfEmpty($"Error: no response for {originalInput} — the request was delivered but the callback stream ended without one.");
     }
 
     private static string? ExtractContent(string rawJson)
