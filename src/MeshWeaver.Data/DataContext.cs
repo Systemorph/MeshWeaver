@@ -330,6 +330,21 @@ public sealed record DataContext : IDisposable
             return;
         dataSourcesInitialized = true;
 
+        // 🚨 A transient probe hub never STARTS its sources. It is built purely so the registry
+        // maps written by Initialize (inside Build) can be read, and it is disposed in the same
+        // breath — so the eager GetStream here (a sync/ sub-hub per source, on the init turn)
+        // races that dispose, and when dispose wins HostedHubsCollection logs its "Rejecting
+        // hosted hub creation … during disposal" warning: the exact line ProbeHubCostTest pins
+        // as a teardown fault, flaking CI red twice on 2026-08-22 and switching CD off both
+        // times. Lazy stream creation on a real request is untouched. See TransientNodeProbe.
+        if (Hub.Configuration.Get<TransientNodeProbe>() is not null)
+        {
+            logger.LogDebug(
+                "DataContext: {Address} is a transient node probe — not starting its {Count} data "
+                + "sources (streams stay lazy)", Hub.Address, DataSourcesById.Count);
+            return;
+        }
+
         foreach (var dataSource in DataSourcesById.Values)
         {
             dataSource.Initialize();
