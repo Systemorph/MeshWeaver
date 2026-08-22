@@ -111,7 +111,7 @@ public class MeshFreeBakePathTest(ITestOutputHelper output)
             var seed = FindMethod(@namespace, typeName, methodName);
             var seen = new HashSet<MethodDefinitionHandle>();
             var queue = new Queue<MethodDefinitionHandle>();
-            var names = ImmutableSortedSet.CreateBuilder(StringComparer.Ordinal);
+            var names = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
             queue.Enqueue(seed);
             seen.Add(seed);
             var walked = 0;
