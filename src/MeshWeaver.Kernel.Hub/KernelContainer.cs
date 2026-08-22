@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
@@ -121,7 +122,6 @@ public class KernelContainer(IServiceProvider serviceProvider)
             .WithInitialization(hub =>
             {
                 DisposeOnTimeout(hub);
-                StartActivityControlPlane(hub);
                 // NOTE: deliberately NO InitializeActivityLifecycle here. The
                 // kernel hub IS the executor — it activates in order to RUN the
                 // script, so its own activity is legitimately Running the instant
@@ -131,6 +131,19 @@ public class KernelContainer(IServiceProvider serviceProvider)
                 // executor (e.g. NodeType compile, where the owner re-requests
                 // from its own state). See ActivityControlPlane.md.
             })
+            // 🚨 The OBSERVABLE overload, deliberately (#1868). StartActivityControlPlane reaches
+            // hub construction — WatchControlPlane → SubscribeWithReEstablish → AcquireStream →
+            // Workspace.GetStream → SynchronizationStream..ctor, whose constructor ALWAYS calls
+            // GetHostedHub(sync/{clientId}, HostedHubCreation.Always). Run as a SYNCHRONOUS buildup
+            // action it did that from inside MessageHubConfiguration.Build, so a disposal racing
+            // this hub's creation raced a TREE of constructions rather than one frame. The
+            // observable overload runs on the InitializeHubRequest turn, after Build returns and
+            // still before the Initialize gate opens, so nothing observable to a message changes.
+            .WithInitialization(hub => Observable.Defer(() =>
+            {
+                StartActivityControlPlane(hub);
+                return Observable.Return(Unit.Default);
+            }))
             .WithHandler<SubmitCodeRequest>(ForwardSubmitCodeRequest)
             .WithHandler<CancelScriptRequest>(ForwardCancelRequest);
     }
