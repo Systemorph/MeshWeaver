@@ -80,10 +80,21 @@ az role assignment create --assignee "<operatorIdentityPrincipalId>" \
 kubectl apply -f manifests/hosting-operator/
 
 # 4. Build and push the operator image.
-docker build -t "$ACR/hosting-operator:1" operator/ && docker push "$ACR/hosting-operator:1"
+#    🚨 The build context is `deploy/`, NOT the operator directory: the image carries the CHART
+#    (/opt/hosting/chart) as well as the scripts, so the image tag is also the chart version a
+#    provision deploys. Building from operator/ produces an image with no chart, which fails at
+#    the "Deploy release" step rather than at build time.
+docker build -f deploy/aks/operator/Dockerfile -t "$ACR/hosting-operator:1" deploy/ \
+  && docker push "$ACR/hosting-operator:1"
 
 # 5. Mount the jobrunner token into the portal and set Hosting:Operator:* — README.md in
 #    manifests/hosting-operator/ has the exact values.
+#    🚨 Those keys are rendered by the CHART, from `hostingOperator.*` in the values file — they
+#    are NOT free-form config.memex_portal entries. The ConfigMap names every key explicitly and
+#    the Deployment reads it via envFrom, so a Hosting__* key set anywhere else reaches no
+#    container: memex declared Hosting__Operator__Enabled: "true" for two days while its live
+#    ConfigMap carried no Hosting__* key at all, and every action refused as "disabled on this
+#    installation". See deploy/helm/values.yaml -> hostingOperator.
 ```
 
 Then record the store in the mesh, once, as a `Hosting/BackupStore` node — `account` and

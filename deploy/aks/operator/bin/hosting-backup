@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# hosting-backup --database <db> --server <pg> --store-uri <uri> --object <name>
+#
+# Dump one instance's database and upload it. Reports size and digest.
+#
+# 🚨 IT NEVER CLAIMS VERIFICATION. This step dumps, checks the archive is non-empty, uploads with
+# --overwrite false, and prints what it measured. That is all. `verified=true` comes from
+# hosting-verify-backup ALONE, and only after downloading the archive back and reading its table of
+# contents — because a truncated upload exits zero and an empty database dumps perfectly. Every
+# destructive phase in the plan waits behind the VERIFY, not behind this.
+#
+# --overwrite false: an archive is immutable. A re-run that silently overwrote a verified archive
+# with a fresh (unverified) one would destroy the evidence the teardown is waiting on.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-backup"
+
+database="" server="" store_uri="" object=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --database)  database="${2:-}";  shift 2 ;;
+    --server)    server="${2:-}";    shift 2 ;;
+    --store-uri) store_uri="${2:-}"; shift 2 ;;
+    --object)    object="${2:-}";    shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag database "$database"
+hosting::need_flag server "$server"
+hosting::need_flag store-uri "$store_uri"
+hosting::need_flag object "$object"
+hosting::safe_name database "$database"
+
+# The object NAME is reported even though the store URI already contains it: the record needs to say
+# WHICH archive it is waiting on, and reading that back out of a URL is guesswork.
+hosting::say object "$object"
+
+if hosting::dry; then
+  echo "  DRY-RUN would pg_dump ${database} from ${server} and upload to ${store_uri}"
+  hosting::say backup dry-run
+  exit 0
+fi
+
+hosting::need_env PGPASSWORD "the admin password for the flexible server (mounted from Key Vault)"
+pg_user="${PGUSER:-memexadmin}"
+archive="/tmp/${database}.dump"
+
+version="$(PGPASSWORD="$PGPASSWORD" psql -h "$server" -U "$pg_user" -d "$database" -tAc 'SHOW server_version' 2>/dev/null | tr -d ' ')" || true
+[ -n "$version" ] && hosting::say pgversion "$version"
+
+hosting::log "dumping ${database} from ${server} (custom format, compressed)"
+# -Fc: the custom format is what pg_restore reads selectively and what carries a table of contents —
+# a plain SQL dump cannot be verified the way hosting-verify-backup verifies.
+if ! PGPASSWORD="$PGPASSWORD" pg_dump -h "$server" -U "$pg_user" -d "$database" \
+      --format=custom --compress=6 --no-owner --no-privileges --file "$archive"; then
+  hosting::die "pg_dump of ${database} failed. Nothing has been uploaded and nothing destructive has run — the plan stops here by design."
+fi
+
+size="$(wc -c < "$archive" | tr -d ' ')"
+[ "$size" -gt 0 ] || hosting::die "pg_dump produced a ZERO-BYTE archive for ${database}. An empty file uploads perfectly and restores to nothing."
+sha="$(sha256sum "$archive" | cut -d' ' -f1)"
+
+hosting::say size "$size"
+hosting::say sha256 "$sha"
+hosting::log "archive ${size} bytes, sha256 ${sha}"
+
+hosting::log "uploading to ${store_uri}"
+if ! az storage blob upload --blob-url "$store_uri" --file "$archive" \
+      --auth-mode login --overwrite false --output none; then
+  hosting::die "upload to ${store_uri} failed (or an archive already exists there — they are immutable by design, so a re-run must target a new object rather than overwrite a verified one)."
+fi
+
+rm -f "$archive"
+hosting::log "uploaded. NOT verified — hosting-verify-backup is what reads it back."

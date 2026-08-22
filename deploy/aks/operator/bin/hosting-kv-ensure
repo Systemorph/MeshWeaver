@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# hosting-kv-ensure --vault <name> --prefix <prefix> --namespace <ns>
+#
+# Make sure the per-instance Key Vault secrets EXIST, and mint the ones only this step can mint.
+#
+# 🚨 IT NEVER OVERWRITES AN EXISTING SECRET, and the master key is why. `Ai-KeyProtection-MasterKey`
+# is the at-rest envelope key: every `enc:` provider key in that instance's database is sealed with
+# it. Regenerating it does not "reset" anything — it makes every stored credential permanently
+# unreadable, with no error at the time and a broken AI stack later. So an existing secret is left
+# exactly as it is, and only an ABSENT one is created. That also makes a re-provision safe, which
+# is what lets the mesh treat provisioning as idempotent.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-kv-ensure"
+
+vault="" prefix="" namespace=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vault)     vault="${2:-}";     shift 2 ;;
+    --prefix)    prefix="${2:-}";    shift 2 ;;
+    --namespace) namespace="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag vault "$vault"
+hosting::need_flag namespace "$namespace"
+hosting::safe_name vault "$vault"
+hosting::safe_name namespace "$namespace"
+[ -z "$prefix" ] || hosting::safe_name prefix "$prefix"
+
+# The per-instance secrets an instance cannot boot without. Names are the vault's, dash-separated;
+# the SecretProviderClass maps each onto its config key (see secretproviderclass.reference.yaml in
+# the config repo). `generate` secrets are minted here because nothing else can; `require` secrets
+# must be supplied out-of-band and their absence is a REFUSAL, not a silent gap.
+#
+#   name                          how
+GENERATED="Ai-KeyProtection-MasterKey"
+REQUIRED="PluginCatalog-RegistryToken"
+
+created=0 kept=0 missing=()
+
+kv_exists() {
+  az keyvault secret show --vault-name "$vault" --name "$1" --query id -o tsv >/dev/null 2>&1
+}
+
+for suffix in $GENERATED; do
+  name="${prefix}${suffix}"
+  if kv_exists "$name"; then
+    hosting::log "keep    ${name} (exists — NEVER regenerated: it seals this instance's stored enc: values)"
+    kept=$((kept + 1))
+    continue
+  fi
+  hosting::log "create  ${name} (256-bit, base64)"
+  if hosting::dry; then created=$((created + 1)); continue; fi
+  # /dev/urandom, not az's generator: the value never leaves this process except into the vault.
+  value="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+  az keyvault secret set --vault-name "$vault" --name "$name" --value "$value" --output none \
+    || hosting::die "could not create ${name} in vault ${vault}"
+  unset value
+  created=$((created + 1))
+done
+
+for suffix in $REQUIRED; do
+  name="${prefix}${suffix}"
+  if kv_exists "$name"; then
+    hosting::log "found   ${name}"
+    kept=$((kept + 1))
+  else
+    missing+=("$name")
+  fi
+done
+
+if [ ${#missing[@]} -gt 0 ]; then
+  hosting::die "vault ${vault} is missing $(IFS=,; echo "${missing[*]}"). These are ISSUED, not generated — a registry consumer key comes from the registry installation (see the plugin registry docs), and minting a random value here would produce an instance that boots, registers nothing, and shows an empty Store with no error. Create them in the vault, then re-request the action."
+fi
+
+hosting::log "vault ${vault}: ${created} created, ${kept} already present"
+hosting::say kv_created "$created"
+hosting::say kv_kept "$kept"
