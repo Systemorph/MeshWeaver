@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# hosting-dns upsert --zone <zone> --host <fqdn> --target <ip>
+# hosting-dns delete --zone <zone> --host <fqdn>
+#
+# The instance's A record in the fleet's Azure DNS zone.
+#
+# 🚨 The record NAME is the host with the zone suffix removed — Azure DNS stores relative names, and
+# passing the FQDN creates `memex.systemorph.com.systemorph.com`, which resolves for nobody and is
+# invisible until someone opens the browser. `@` is the apex.
+#
+# 🚨 delete refuses a record pointing somewhere unexpected. A teardown that deletes the wrong A
+# record takes a live instance off the internet, and DNS deletion has no undo beyond re-creating it
+# and waiting out every resolver's TTL.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-dns"
+
+mode="${1:-}"
+case "$mode" in
+  upsert|delete) shift ;;
+  *) hosting::die "first argument must be 'upsert' or 'delete', got '${mode:-<none>}'" ;;
+esac
+
+zone="" host="" target=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --zone)   zone="${2:-}";   shift 2 ;;
+    --host)   host="${2:-}";   shift 2 ;;
+    --target) target="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag zone "$zone"
+hosting::need_flag host "$host"
+hosting::need_env AZ_DNS_RESOURCE_GROUP "the resource group holding the DNS zone"
+hosting::safe_host zone "$zone"
+hosting::safe_host host "$host"
+
+rg="$AZ_DNS_RESOURCE_GROUP"
+
+# Relative name: strip the zone suffix. Apex → '@'.
+if [ "$host" = "$zone" ]; then
+  record="@"
+elif [[ "$host" == *".${zone}" ]]; then
+  record="${host%".${zone}"}"
+else
+  hosting::die "host '${host}' is not inside zone '${zone}' — refusing to create a record in a zone that does not own the name"
+fi
+
+current="$(az network dns record-set a show -g "$rg" -z "$zone" -n "$record" \
+  --query "aRecords[].ipv4Address" -o tsv 2>/dev/null || true)"
+
+if [ "$mode" = "delete" ]; then
+  if [ -z "$current" ]; then
+    hosting::log "A record ${record}.${zone} is already absent"
+    hosting::say dns absent
+    exit 0
+  fi
+  hosting::log "delete A record ${record}.${zone} (currently ${current})"
+  hosting::do az network dns record-set a delete -g "$rg" -z "$zone" -n "$record" --yes --output none \
+    || hosting::die "could not delete A record ${record} in zone ${zone}"
+  hosting::say dns deleted
+  exit 0
+fi
+
+hosting::need_flag target "$target"
+[[ "$target" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] \
+  || hosting::die "target '${target}' is not an IPv4 address. It comes from \$INGRESS_IP — an empty or wrong value here points the new instance's hostname at nothing."
+
+if [ "$current" = "$target" ]; then
+  hosting::log "A record ${record}.${zone} already points at ${target}"
+  hosting::say dns kept
+  exit 0
+fi
+
+if [ -n "$current" ]; then
+  hosting::log "A record ${record}.${zone} points at ${current}; repointing to ${target}"
+  hosting::do az network dns record-set a remove-record -g "$rg" -z "$zone" -n "$record" \
+    --ipv4-address "$current" --keep-empty-record-set --output none \
+    || hosting::die "could not remove the existing A record value"
+else
+  hosting::log "create A record ${record}.${zone} → ${target}"
+fi
+
+hosting::do az network dns record-set a add-record -g "$rg" -z "$zone" -n "$record" \
+  --ipv4-address "$target" --output none \
+  || hosting::die "could not add A record ${record} → ${target} in zone ${zone}"
+
+hosting::say dns upserted
