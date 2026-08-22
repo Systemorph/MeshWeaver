@@ -466,7 +466,17 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // Correctness is unaffected either way: lazy compilation still builds every
                     // type on first access. What changes is only whether this pod may CLAIM to have
                     // verified its NodeTypes on this image.
-                    gate?.MarkFaulted("the warm-up stream faulted before the sweep could finish");
+                    // Name the ABSENCE of a verdict apart from a bad one (#1635). Both refuse
+                    // readiness — a pod that verified nothing must never claim it did — but an
+                    // unreachable coordination node is a startup race that a restart clears,
+                    // while a faulted sweep is usually this image. An operator reading the health
+                    // payload should not have to decode a bare TimeoutException's target to tell
+                    // which of the two they have.
+                    gate?.MarkFaulted(
+                        BuildProtocolDriver.DescribesUnreachableCoordination(ex)
+                            ? "the build coordination node could not be reached, so the sweep "
+                              + "never started"
+                            : "the warm-up stream faulted before the sweep could finish");
                     if (gate is { GatesReadiness: true, Phase: BakePhase.Faulted })
                         logger.LogCritical(ex,
                             "DynamicTypePreWarmer: REFUSING READINESS — the warm-up stream FAULTED, "
