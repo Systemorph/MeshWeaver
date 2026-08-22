@@ -63,11 +63,63 @@ The two concerns are now split, and they are different kinds of thing:
 | | what it is | how it runs |
 |---|---|---|
 | **BAKE** — produce assemblies | a **build step** | `mw-compiler compile <root> --output <dir>`: resolve NodeType sources from the git tree, compile with `MeshWeaver.Compiler`, emit **DLL + PDB**, write the bundle. No `MeshBuilder`, no `AddGraph()`, no import, no hub. |
-| **GATE** — prove it works | a **runtime** check | `mw-plugin-test <root>`: stand up a mesh, render each type's default area, execute its `Tests` area. Rendering and running tests are genuine runtime behaviours; producing an assembly is not. |
+| **GATE** — prove it works | a **runtime** check | `mw-plugin-test <root> --seed <dir>`: stand up a mesh, **adopt the bake's assemblies**, render each type's default area, execute its `Tests` area. Rendering and running tests are genuine runtime behaviours; producing an assembly is not. |
 
 **The emergency path is untouched.** A live instance with no usable artifact still compiles its own
 — #1707 requires it, because there will always be code that never went through CI. That is
 *recovery*, not a build lane.
+
+### The gate CONSUMES the bake — `--seed <dir>`
+
+`--seed` points the gate at a bake directory. The wiring is one registration and no new pipeline:
+the gate registers an `IPrebuiltAssemblyConsumer` over that directory, and `PackageInstaller`'s
+existing adopt-before-compile step (#1707 slice 3) asks it for every NodeType it installs. It
+delegates to `ShippedPrebuiltBundles.SeedForTypes` — **the same consumption implementation a portal
+runs** — so the framework gate, the per-type dependency-record gate and the already-current skip
+that decide the verdict are the ones that ship. A gate with no `--seed` resolves nothing and
+compiles exactly as before.
+
+What that buys is not speed, it is *what the gate is judging*: with a seed, the assembly that
+renders and runs the `Tests` areas **is the assembly that will ship**. Without one, the gate proves
+that a private recompile of the same sources worked and publishes different bytes.
+
+Two refusals guard it, because both failures are otherwise invisible:
+
+- **The address check, before the mesh boots.** A bake keyed to a framework identity this process
+  does not resolve would be declined assembly by assembly, and the gate would compile the whole
+  tree itself and exit GREEN having judged none of the bytes that ship. `--seed` refuses such a
+  directory as a usage error naming both identities. Same for a directory with no bundles, no
+  `framework-mvid.txt`, or bundles from mixed producers.
+- **The consumption postcondition, after the run.** The gate is RED if the bake declared
+  assemblies for types it installed and adopted fewer. Adoption leaves no trace in a gate verdict —
+  an adopted type renders and tests exactly like a compiled one — so "the consuming half silently
+  stopped working" cannot be noticed unless it is a verdict.
+
+### 🚨 An adoption used to lose a race with the first-build kickoff
+
+Adopting a prebuilt assembly writes the NodeType's node, and that write goes through the type's OWN
+hub — so `PrebuiltAssemblySeeder.Seed` **activates the hub it is about to stamp**. Activation is
+exactly what arms the first-build kickoff (`CompilationStatus is null` + no usable build ⇒ flip
+`Pending`), so the seeder's own probe started the Roslyn compile the adoption exists to avoid:
+
+```
+54.709  MeshNodeStreamCache: opening shared stream for Widget/Thing   <- the seeder
+54.728  First-build kickoff: no usable build - flipping CompilationStatus=Pending
+54.7xx  Prebuilt assembly ADOPTED for Widget/Thing ... no compile needed
+54.7xx  [ReleaseRequestWatcher] ... satisfied by the existing current build - no compile dispatched
+54.8xx  Compiling assembly for Widget_Thing (disk, 0 NuGet refs)      <- overwrites the adoption
+```
+
+Every signal said the adoption had worked, because it had. The release request was correctly
+*satisfied*; the kickoff simply never asked. So install-time consumption saved nothing anywhere —
+on a portal as much as in a gate — and the type was re-stamped over the adopted build milliseconds
+later.
+
+`NodeTypeAdoptionRegistry` is the interlock: the seeder reserves the path **before** it opens the
+stream, i.e. before the activation that arms the kickoff, and the kickoff waits for the reservation
+to clear and then re-evaluates. It **delays, never cancels** — a declined adoption still compiles,
+so there is no skip-trapdoor — and the wait is bounded, so a leaked reservation costs a delay rather
+than an unbuilt type.
 
 ### Source resolution without a mesh
 
@@ -145,6 +197,30 @@ Three consequences worth carrying:
   non-deterministic one. What the surface comparison proves is that the concatenation order of
   independent top-level declarations does not affect what is emitted, which is why the old lane's
   non-determinism was survivable.
+
+### Byte-equality IS reachable — through adoption, not through recompilation
+
+Two independent compiles of the same content still cannot be byte-equal, and that is not only the
+old lane's fault: `CSharpCompilationOptions` here is not `WithDeterministic(true)`, so Roslyn mints
+a fresh MVID per emit, and `DynamicMeshNodeAttributeGenerator` stamps `// Generated at: {UtcNow}`
+into the generated skeleton — both are *normalised out of the content key* (`GeneratedInputIdentity`)
+precisely because neither can be removed from the bytes. So "compare the digests" remains the wrong
+check between producers, and `BakeEquivalenceTest`'s surface comparison remains the right one.
+
+What the split makes byte-equal is something else, and it is the property the gate needs: **the
+bytes the gate judges are the bytes the bake produced**, because they are the *same bytes*, adopted
+rather than rebuilt. Measured on the Doc tree, comparing the bake's bundle with the bundle a seeded
+gate re-emits from its own store:
+
+```
+bake/Widget.zip     c97474b87fb87ae4921096ba77c6a3124cddb0d1d2eb72d8d7794bc47a384517
+gateout/Widget.zip  c97474b87fb87ae4921096ba77c6a3124cddb0d1d2eb72d8d7794bc47a384517
+```
+
+`BakeGateSplitTest` asserts exactly that, with the unseeded gate as its control in the same test:
+its bytes must DIFFER, because a compile is not reproducible — which is what makes byte-identity
+evidence of adoption rather than of coincidence. If compilation is ever made deterministic, that
+control fails loudly instead of the assertion quietly proving nothing.
 
 ## The identity rule: adoptable when the SURFACE is unchanged
 
@@ -401,9 +477,21 @@ coverage collapse in the logs of the *first* pod of a bad roll.
 ## The delivery: main-cd bakes IN THE IMAGE, then publishes
 
 `main-cd`'s **`publish-bake`** job runs the content the image itself embeds — the `Doc` tree, staged
-by `.github/scripts/stage-doc-gate.sh`, the same staging the PR gate judges — through
-`docker run … mw-plugin-test … --bake-output` against **the `mw-plugin-test` image this very CD run
-built and promoted**, and copies the resulting bundles to the portals'
+by `.github/scripts/stage-doc-gate.sh`, the same staging the PR gate judges — in **two steps against
+the `mw-plugin-test` image this very CD run built and promoted**:
+
+```
+docker run … --entrypoint /app/mw-plugin-test "$IMAGE" compile /repo/doc \
+  --output /bake --allow /repo/doc-gate.allow --source-sha "$SHA"     # the BAKE — no mesh
+docker run … --entrypoint /app/mw-plugin-test "$IMAGE" /repo/doc \
+  --allow /repo/doc-gate.allow --seed /bake                            # the GATE — consumes it
+```
+
+The gate still fails the job: the platform's own shipped content failing to render or execute its
+`Tests` areas against the image that ships it is a release defect, and splitting the steps must not
+lose that. `PlatformBakeLaneGuard` pins both halves — `--bake-output` (the mesh-driven bake) is
+banned in that job, `--seed` is required, and the bake must come first. The job then copies the
+resulting bundles to the portals'
 shared storage (`.github/scripts/publish-bake-bundles.sh`), laid out
 `prebuilt-bundles/<identity>/<source>/<bundle>.zip`, sealed by a `_complete` sentinel written
 strictly LAST. Each booting pod seeds ONLY its own identity's SEALED source directories
