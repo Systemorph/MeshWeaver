@@ -222,6 +222,83 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
+    /// 🚨 <b>An UNWIRED gate is a hold, not a pass.</b> The poller used to log at Information and
+    /// roll — so the one host where nothing checked anything was also the one host that never
+    /// refused. A gate that cannot run must never look like a gate that passed, and #1754's own
+    /// rule is that "cannot determine" is not "clear to proceed".
+    ///
+    /// <para>As with every other hold, "no patch happened" is not the assertion — that would pass
+    /// against a poller that had simply died. The positive signal is the hold WRITTEN where the
+    /// Updates tab reads it, flagged INDETERMINATE: this is a wiring defect to fix, never a verdict
+    /// about the release.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnUnwiredGate_HoldsTheRoll_AndSaysItCouldNotLook()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var updater = new RecordingUpdater();
+        await SeedPolicyNode();
+        var service = new GatedSelfUpdateService(
+            Mesh, new FakeAcrTagLister(), updater, FastPoll(),
+            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(), gate: null);
+
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            var held = await Mesh.GetWorkspace()
+                .GetMeshNodeStream(UpdatePolicyNodeType.NodePath)
+                .Select(node => UpdatePolicyNodeType.Parse(node, Mesh.JsonSerializerOptions))
+                .Where(content => content.IsHeld(CandidateTag))
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(ct);
+
+            held.HeldIndeterminate.Should().BeTrue(
+                "an unwired gate is the ABSENCE of a verdict — an availability failure to fix, "
+                + "never an incompatibility to re-bake");
+            held.HeldReason.Should().Contain("no release-availability gate is registered");
+            held.HeldReason.Should().Contain("not clearance to proceed");
+
+            updater.Tags.Should().BeEmpty("an unverified release must not be rolled");
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// The escape hatch is DELIBERATE and CONFIGURED, in the shape this repo already uses for
+    /// <c>PreWarm:AllowUnprovenBake</c>: an operator can still roll unverified, but only by setting
+    /// the key — never by omission, and never silently.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnUnwiredGate_RollsOnlyWhenTheOperatorOptedInDeliberately()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var updater = new RecordingUpdater();
+        await SeedPolicyNode();
+        var service = new GatedSelfUpdateService(
+            Mesh, new FakeAcrTagLister(), updater,
+            FastPoll() with { AllowUnverifiedRoll = true },
+            Mesh.ServiceProvider.GetService<ILogger<SelfUpdateHostedService>>(), gate: null);
+
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            var applied = await updater.Patched
+                .FirstAsync()
+                .Timeout(TimeSpan.FromSeconds(30))
+                .ToTask(ct);
+            applied.Should().Be(CandidateTag);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
     /// The poller with the gate supplied directly. The production poller resolves it from the mesh's
     /// service provider; injecting it here keeps the test from rebuilding the whole mesh just to
     /// register one singleton, without changing which code path decides.
@@ -232,7 +309,7 @@ public class SelfUpdateAvailabilityGateTest(ITestOutputHelper output) : Monolith
         IDeploymentUpdater updater,
         SelfUpdateOptions options,
         ILogger<SelfUpdateHostedService>? logger,
-        ReleaseAvailabilityService gate)
+        ReleaseAvailabilityService? gate)
         : SelfUpdateHostedService(hub, acr, updater, options, logger)
     {
         protected override ReleaseAvailabilityService? ResolveAvailabilityGate() => gate;

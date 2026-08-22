@@ -74,6 +74,22 @@ public record SelfUpdateOptions
     /// </summary>
     public TimeSpan EventCoalesceWindow { get; init; } = TimeSpan.FromMinutes(1);
 
+    /// <summary>
+    /// 🚨 Roll even though the release-availability gate is NOT WIRED into this host.
+    ///
+    /// <para>Default <c>false</c>: an unwired gate is a HOLD. The gate answers "does every package
+    /// this environment deploys have a usable artifact for the target release" (#1754), and a host
+    /// that has no gate registered has not answered it — it has failed to ask. That is the absence
+    /// of a verdict, not a passing one, and this repo has paid for treating the two the same more
+    /// than once.</para>
+    ///
+    /// <para>Set it <c>true</c> to roll unverified — deliberately, in configuration, where it is
+    /// visible — exactly as <c>PreWarm:AllowUnprovenBake</c> lets a pod serve on an unproven bake.
+    /// The roll then proceeds AND says so, at Warning, on every tick. It can never waive a gate
+    /// that DID run: a real hold is unaffected by this key.</para>
+    /// </summary>
+    public bool AllowUnverifiedRoll { get; init; }
+
     /// <summary>The policy seeded onto <c>Admin/UpdatePolicy</c> when it doesn't exist yet, and the
     /// fallback used before the policy node's first live emission.</summary>
     public UpdatePolicyKind DefaultPolicy { get; init; } = UpdatePolicyKind.Continuous;

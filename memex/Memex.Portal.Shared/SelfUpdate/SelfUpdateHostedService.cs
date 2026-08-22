@@ -324,15 +324,7 @@ public class SelfUpdateHostedService : IHostedService
         {
             var gate = ResolveAvailabilityGate();
             if (gate is null)
-                // No gate registered at all (a host that wires the poller without it). Say so once
-                // per tick rather than silently rolling as if it had passed.
-                return Observable.Defer(() =>
-                {
-                    _logger?.LogInformation(
-                        "[SelfUpdate] no release-availability gate is registered — rolling {Tag} "
-                        + "without checking whether its packages are available.", target);
-                    return Apply(target);
-                });
+                return GateNotWired(target);
 
             return gate.IsUpdatable(target)
                 .SelectMany(verdict =>
@@ -354,6 +346,54 @@ public class SelfUpdateHostedService : IHostedService
                         target, ShippedReleaseSeed.InstalledPlatformVersion, verdict.HoldReason);
                     return RecordHold(target, verdict).Catch(HoldWriteFailed(target));
                 });
+        });
+
+    /// <summary>
+    /// 🚨 <b>No gate is registered on this host — so the roll HOLDS.</b>
+    ///
+    /// <para>This branch used to log at Information and roll anyway. That is the trap this whole
+    /// area keeps falling into: a gate that cannot run must never look like a gate that passed. The
+    /// gate answers "does every package this environment deploys have a usable artifact for the
+    /// target release"; a host with no gate registered has not answered it — it has failed to ask.
+    /// An unwired check is the absence of a verdict, not a passing one, and #1754's own rule says
+    /// "cannot determine" is not "clear to proceed".</para>
+    ///
+    /// <para>It is a hold with all the properties that make a hold safe rather than a freeze: it is
+    /// recorded on the policy node so the Updates tab NAMES it, it is logged at Error (a wiring
+    /// defect nobody sees is how an environment sits un-updated for weeks), and it is re-evaluated
+    /// from scratch on every tick — registering the gate clears it with no manual un-sticking.</para>
+    ///
+    /// <para>The deliberate escape hatch is <see cref="SelfUpdateOptions.AllowUnverifiedRoll"/>:
+    /// set it in configuration, where it is visible, and the roll proceeds while saying so at
+    /// Warning on every tick. It can never waive a gate that DID run.</para>
+    /// </summary>
+    private IObservable<Unit> GateNotWired(string target) =>
+        Observable.Defer(() =>
+        {
+            if (_options.AllowUnverifiedRoll)
+            {
+                _logger?.LogWarning(
+                    "[SelfUpdate] rolling {Tag} UNVERIFIED — no release-availability gate is "
+                    + "registered on this host and '{Key}:{Property}' is set, so nothing checked "
+                    + "whether the packages this environment deploys have artifacts for it. Unset "
+                    + "that key to make the missing gate a hold again.",
+                    target, SelfUpdateOptions.SectionName, nameof(SelfUpdateOptions.AllowUnverifiedRoll));
+                return Apply(target);
+            }
+
+            var verdict = UpdatabilityVerdict.Unavailable(
+                "no release-availability gate is registered on this host, so nothing could check "
+                + "whether the packages this environment deploys have usable artifacts for this "
+                + $"release — that is a hold, not clearance to proceed. Register "
+                + $"{nameof(ReleaseAvailabilityService)} (it is wired by AddSelfUpdate), or set "
+                + $"'{SelfUpdateOptions.SectionName}:{nameof(SelfUpdateOptions.AllowUnverifiedRoll)}'"
+                + " to roll unverified on purpose.");
+
+            _logger?.LogError(
+                "[SelfUpdate] HOLDING update to {Tag} (staying on {Current}) — {Reason}",
+                target, ShippedReleaseSeed.InstalledPlatformVersion, verdict.HoldReason);
+
+            return RecordHold(target, verdict).Catch(HoldWriteFailed(target));
         });
 
     /// <summary>
