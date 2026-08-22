@@ -2,6 +2,7 @@
   <PropertyGroup>
     <Nullable>enable</Nullable>
     <StaticWebAssetBasePath>_content/MeshWeaver.Blazor.EntityViews</StaticWebAssetBasePath>
+    <Description>Entity form/edit view pack for MeshWeaver: the text/number/date/choice inputs plus the Editor/EditForm/Property skin views. Ships as a module — list the DLL under Modules:Assemblies to activate.</Description>
   </PropertyGroup>
 
   <ItemGroup>

@@ -22,11 +22,19 @@ carved out of the base `MeshWeaver.Blazor` pack onto the view-pack seam (the
 | `EditFormSkin` | `EditFormView` |
 | `PropertySkin` | `PropertyView` |
 
-Plus the shared form-component bases (`FormComponentBase`, `InputBase`, `ListBase`) and the
-`OptionsExtension.Option` list-item model — `MeshWeaver.Blazor.Graph`'s `MeshNodePickerView`
-derives from `FormComponentBase`, which is why that pack references this one.
+The shared form-component bases (`FormComponentBase`, `InputBase`, `ListBase`) and the
+`OptionsExtension.Option` list-item model live in the BASE pack (`MeshWeaver.Blazor.Components`),
+not here: they are app-closure infrastructure shared with `MeshWeaver.Blazor.Graph`'s
+`MeshNodePickerView`, and an edge from the app-closure Graph pack into this module would drag
+this DLL back into the closure — where the module landing refuses the same-identity module.
 
 ## Registration
+
+This pack ships as a MODULE (a registry bundle, the Analysis/Radzen/GoogleMaps lane):
+`EntityViewsViewPackModuleAttribute` applies the registration when the DLL is listed under
+`Modules:Assemblies`, and the portals declare it under `Modules:Required` so a rollout that lost
+the pack stalls on readiness instead of shipping blank edit forms. Compiled-in hosts (tests) call
+it directly:
 
 ```csharp
 configuration.AddEntityViews();

@@ -7,7 +7,6 @@ using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.Social;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.Blazor.EntityViews;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Hosting.Grpc;
@@ -1032,7 +1031,10 @@ public static class MemexConfiguration
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
                 .AddChatViews()   // Register ThreadChatView
                 .AddUserProfileViews() // Register UserProfilePageView
-                .AddEntityViews() // The entity form/edit renderers (extracted from the base pack)
+                // The entity form/edit renderers (MeshWeaver.Blazor.EntityViews) are a MODULE now:
+                // the DLL's EntityViewsViewPackModuleAttribute folds AddEntityViews() when it is
+                // listed under Modules:Assemblies, and Modules:Required gates a rollout that lost
+                // it. No compiled call here — see the csproj note beside the removed reference.
             )
             .AddBlazor(layoutClient => layoutClient
                 // 🚨 The portal hub is the per-user sub-hub that hosts the

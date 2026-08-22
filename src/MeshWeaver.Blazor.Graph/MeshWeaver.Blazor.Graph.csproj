@@ -14,12 +14,13 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- 🚨 Deliberately NO reference to MeshWeaver.Blazor.EntityViews. This pack stays in the
+             APP CLOSURE while EntityViews ships as a MODULE (registry bundle) — an edge from here
+             would drag EntityViews.dll back into the closure, and the module landing refuses a
+             module whose entry DLL collides with an app-closure file. The shared form bases
+             (FormComponentBase & co.) live in the base pack for exactly this reason:
+             MeshNodePickerView inherits them from MeshWeaver.Blazor.Components. -->
         <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-        <!-- MeshNodePickerView derives from the EntityViews pack's FormComponentBase. A
-             pack-to-pack reference on purpose: the picker moved here (not into EntityViews)
-             because it is a GRAPH surface, and it left the base pack because the base pack
-             cannot reference the pack that references it. -->
-        <ProjectReference Include="..\MeshWeaver.Blazor.EntityViews\MeshWeaver.Blazor.EntityViews.csproj" />
         <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
         <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />

@@ -30,9 +30,9 @@ public static class BlazorGraphExtensions
                 .WithView<MeshNodeCollectionControl, MeshNodeCollectionView>()
                 .WithView<MeshNodeContentEditorControl, MeshNodeContentEditorView>()
                 .WithView<MeshNodeRoleEditorControl, MeshNodeRoleEditorView>()
-                // The picker lives HERE (it is a Graph surface) but derives from the EntityViews
-                // pack's FormComponentBase — it left the base pack with the form controls because
-                // the base pack cannot reference the pack that references it.
+                // The picker lives HERE (it is a Graph surface); it derives from the base pack's
+                // FormComponentBase — the shared form infrastructure stays in the app closure so
+                // this pack never references the module-lane EntityViews pack (see the csproj).
                 .WithView<MeshNodePickerControl, MeshNodePickerView>())
             .AddMeshNavigation();  // Enable @ autocomplete in markdown editors
     }
