@@ -88,6 +88,12 @@ public sealed record ProviderCredentialSeedResult(
 /// be persisted that must be tagged, whichever <see cref="IMasterKeyProvider"/> a hardened
 /// deployment plugs in.</para>
 ///
+/// <para><b>Two replicas booting together both run it, and that is fine.</b> Whichever writes first
+/// wins; the other reads a keyed node and reports
+/// <see cref="ProviderSeedOutcome.AlreadyAdministered"/>. In the narrow window where both decide to
+/// write, both values decrypt to the same key — the ciphertexts differ only by nonce — so there is
+/// nothing to serialise and no lock to hold.</para>
+///
 /// <para><b>Where it runs.</b> Only on a deployment that serves the <c>Provider</c> partition from
 /// the DB (the static-repo import path) — that is the only place a node can go stale, and the only
 /// place there is a node to write. On the in-memory path
