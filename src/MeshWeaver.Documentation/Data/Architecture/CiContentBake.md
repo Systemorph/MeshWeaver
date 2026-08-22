@@ -749,12 +749,25 @@ does not carry, so it yields nothing and every scheduled run takes the fail-loud
 
 Counting occurrences in each repo's `origin/main:.github/workflows/ci.yml`:
 
-| Repo | `schedule:` | `FOLLOW_RELEASE` | follows releases? |
+| Repo | `schedule:` | `FOLLOW_RELEASE` | followed releases? |
 |---|---|---|---|
 | **MeshWeaver.Plugins** | 1 | 2 | ✅ |
 | MeshWeaver.Education | 0 | 0 | ❌ pushes only |
 | MeshWeaver.Reinsurance | 0 | 0 | ❌ pushes only |
 | MeshWeaver.SocialMedia | 0 | 0 | ❌ pushes only |
+
+All four follow releases as of 2026-08-22 (Education #195, Reinsurance #80, SocialMedia #46), on
+staggered crons in dependency order: Plugins `17,47`, SocialMedia `7,37`, Education `32` (hourly —
+a run there boots four disposable meshes), Reinsurance `22,52`.
+
+🚨 **MeshWeaver.Education satisfies part 3 differently, and the grep below reports it as a
+ZERO.** It has no pin to diverge from: it deliberately tracks `mw-plugin-test:main`, so its existing
+"Resolve the bake image" step already targets the current release on a poll and it carries no
+`FOLLOW_RELEASE` variable at all. That is correct, and `:main` IS the newest promoted release —
+promote phase B moves the tag in the same job that arms the release in phase C. **Do not "fix" it by
+adding the variable**; check that the repo resolves a released image on its poll, by whatever means
+its bake target is chosen. Counting a string is a shortcut, and this is the row where the shortcut
+lies.
 
 All three carried the `repository_dispatch` receiver and a comment calling it *"DORMANT until the
 platform provisions…"* — so the wall of green ticks was truthful about the gates and silent about
@@ -769,11 +782,16 @@ thing that gets fixed in one repo and left in three:
 
 ```bash
 for r in MeshWeaver.Plugins MeshWeaver.Education MeshWeaver.Reinsurance MeshWeaver.SocialMedia; do
-  echo "=== $r ==="
-  gh api repos/Systemorph/$r/contents/.github/workflows/ci.yml --jq .content | base64 -d \
-    | grep -c "FOLLOW_RELEASE\|^  schedule:"
+  printf "%-26s " "$r"
+  c=$(gh api repos/Systemorph/$r/contents/.github/workflows/ci.yml --jq .content | base64 -d)
+  echo "schedule=$(echo "$c" | grep -c '^  schedule:')" \
+       "bake-runs-on-poll=$(echo "$c" | grep -c "event_name == 'schedule'")"
 done
 ```
+
+`schedule=1` and a non-zero `bake-runs-on-poll` are the two that hold for **every** repo. How the
+bake TARGET is resolved is the third part and it varies (see the Education note above), so read that
+one rather than counting it.
 
 #### The production signature
 
