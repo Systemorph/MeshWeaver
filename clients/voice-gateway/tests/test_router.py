@@ -200,3 +200,44 @@ def test_station_name_alone_plays_despite_lost_first_word():
         assert out == "Hier kommt Radio SRF 3." and played[-1].endswith("srf3/mp3/128")
 
     asyncio.run(scenario())
+
+
+def test_named_song_resolves_through_music_assistant():
+    class FakeBrainOnly:
+        async def ask(self, text): return "h"
+        async def await_reply(self, handle, budget_s): return None
+        async def close(self): pass
+
+    class FakeMa:
+        def __init__(self, tracks, players):
+            self.tracks, self._players, self.played = tracks, players, []
+        async def search(self, query, **kw): return {"tracks": self.tracks}
+        async def players(self): return self._players
+        async def play(self, uri, player_id): self.played.append((uri, player_id))
+        async def close(self): pass
+
+    async def scenario():
+        router = BrainRouter({"lokal": FakeBrainOnly()}, "lokal",
+                             phrases={"playing_song": "Hier kommt {title} von {artist}.",
+                                      "song_hint": "Noch nicht — dafür {station}.",
+                                      "radio_on": "Hier kommt {station}."})
+        router.stations = {"energy zürich": ("Energy Zürich", "https://example.test/e.mp3")}
+        played_radio = []
+        async def player(url): played_radio.append(url)
+        router.player = player
+        # MA connected: the named song resolves and plays through THEIR tooling.
+        router.music = FakeMa([{"uri": "spotify://track/1", "name": "Komet",
+                                "artists": [{"name": "Udo Lindenberg"}]}],
+                              [{"player_id": "sat1", "available": True}])
+        out = await router.handle_command(
+            "Ich möchte, dass du mir ein Lied spielst und es sollte Komet heißen.")
+        assert out == "Hier kommt Komet von Udo Lindenberg."
+        assert router.music.played == [("spotify://track/1", "sat1")]
+        assert not played_radio
+        # MA finds nothing → the radio fallback with the honest sentence, never silence.
+        router.music = FakeMa([], [])
+        out = await router.handle_command(
+            "Kannst du mir bitte ein Lied spielen, es sollte Zebrastreifen heißen?")
+        assert "Noch nicht" in out and played_radio
+
+    asyncio.run(scenario())

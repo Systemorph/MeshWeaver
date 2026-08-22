@@ -129,11 +129,17 @@ async def run() -> None:
         await router.refresh_stations()
     except Exception:
         logging.getLogger(__name__).warning("station refresh failed", exc_info=True)
+    if cfg.ma_token:
+        from .musicassistant import MusicAssistant
+        router.music = MusicAssistant(cfg.ma_url, cfg.ma_token)
     capabilities = []
     if router.stations:
         names = ", ".join(name for name, _ in router.stations.values())
         capabilities.append(f"Radio is available ({names}) and handled for you "
                             "automatically — never claim you cannot play radio.")
+    if router.music is not None:
+        capabilities.append("Specific songs and playlists play through the connected "
+                            "music services — also handled for you automatically.")
     if cfg.ha_url and cfg.ha_token:
         capabilities.append("The smart home is reachable through the home_assistant tool.")
     router.apply_system_prompt(prompt_text
