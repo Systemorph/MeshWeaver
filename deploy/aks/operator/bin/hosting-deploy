@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# hosting-deploy --namespace <ns> --release <name> --database <db> --values <file> --config-file <file>
+#
+# Install (or upgrade) the portal release for ONE instance.
+#
+# 🚨 WHERE THE PER-INSTANCE VALUES COME FROM, because this is the piece a fleet gets wrong. There is
+# NO checked-in `values.<newinstance>.yaml`, and there must not be: a self-service instance is
+# created after the repo was last edited. So the shape is base + derived:
+#
+#   --values <file>   the FLEET TEMPLATE — everything every instance shares. Reviewed, in git.
+#   --set …           this instance's IDENTITY only: namespace, host, database, TLS secret, the
+#                     Key Vault prefix. Derived from the deployment record, which is itself the
+#                     reviewed artefact (it arrives in the config repo by write-through PR).
+#
+# The chart ships in this image at /opt/hosting/chart, so the operator image version IS the chart
+# version it deploys. That pinning is deliberate: the scripts and the templates they --set against
+# change together, and a chart pulled at run time could drift from the flags used here.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-deploy"
+
+CHART="${HOSTING_CHART:-/opt/hosting/chart}"
+
+namespace="" release="" database="" values="" config_file=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace)   namespace="${2:-}";   shift 2 ;;
+    --release)     release="${2:-}";     shift 2 ;;
+    --database)    database="${2:-}";    shift 2 ;;
+    --values)      values="${2:-}";      shift 2 ;;
+    --config-file) config_file="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::need_flag release "$release"
+hosting::need_flag database "$database"
+hosting::safe_name namespace "$namespace"
+hosting::safe_name release "$release"
+hosting::safe_name database "$database"
+
+[ -d "$CHART" ] || hosting::die "no chart at ${CHART}. It is baked into the operator image (COPY helm/ /opt/hosting/chart) precisely so a run cannot deploy a chart nobody reviewed — an image built without it is broken, not degraded."
+[ -n "$values" ] && [ -f "$values" ] \
+  || hosting::die "the fleet template values file '${values:-<unset>}' does not exist. It is supplied as \$VALUES_FILE by Hosting:Operator:Environment and mounted into the job; without it the release would fall through to CHART DEFAULTS, which point at ghcr.io/…:latest and an in-cluster Postgres this fleet does not run."
+
+# Per-instance identity, derived from the record. Everything else comes from the template.
+host="${HOSTING_HOST:-}"
+tls_secret="${HOSTING_TLS_SECRET:-${namespace}-tls}"
+pg_host="${HOSTING_PG_HOST:-}"
+
+sets=(
+  --set "ingress.tlsSecret=${tls_secret}"
+  --set "config.memex_migration.MEMEX_DATABASENAME=${database}"
+  --set "config.memex_portal.MEMEX_DATABASENAME=${database}"
+)
+[ -n "$host" ] && sets+=( --set "ingress.host=${host}" )
+if [ -n "$pg_host" ]; then
+  sets+=(
+    --set "config.memex_portal.MEMEX_HOST=${pg_host}"
+    --set "config.memex_migration.MEMEX_HOST=${pg_host}"
+    --set "config.memex_migration.MEMEX_JDBCCONNECTIONSTRING=jdbc:postgresql://${pg_host}:5432/${database}"
+  )
+fi
+
+# The catalog config the mesh composed (plugin mounts + pre-install patterns) is a values FILE, so
+# it layers like any other and stays visible in `helm get values`.
+files=( -f "$values" )
+if [ -n "$config_file" ] && [ -f "$config_file" ]; then
+  files+=( -f "$config_file" )
+  hosting::log "catalog config: ${config_file} ($(wc -c < "$config_file") bytes)"
+else
+  hosting::log "catalog config: none supplied — the instance will come up with no plugin mounts"
+fi
+
+hosting::log "chart     ${CHART}"
+hosting::log "release   ${release} → namespace ${namespace}"
+hosting::log "database  ${database}"
+
+hosting::do kubectl create namespace "$namespace" --dry-run=client -o yaml \
+  | { hosting::dry && cat >/dev/null || kubectl apply -f - ; } \
+  || hosting::die "could not ensure namespace ${namespace}"
+
+# --atomic: a failed install ROLLS BACK rather than leaving a half-created release that the next
+# attempt then has to `helm uninstall` before it can proceed. --wait so "deployed" means the pods
+# actually came up; the plan's next step (rollout status) then verifies rather than discovers.
+hosting::do helm upgrade "$release" "$CHART" \
+  --install --namespace "$namespace" --create-namespace \
+  --atomic --wait --timeout 15m \
+  "${files[@]}" "${sets[@]}" \
+  || hosting::die "helm upgrade of ${release} in ${namespace} failed (rolled back by --atomic)"
+
+hosting::say release "$release"
+hosting::say namespace "$namespace"

@@ -191,6 +191,50 @@ data:
   Instances__GrafanaBaseUrl: "{{ .Values.instancesAdmin.grafanaBaseUrl }}"
 {{- end }}
 {{- end }}
+{{- /* ---- Instance lifecycle operator (the Hosting plugin) — OFF unless declared ----
+
+  🚨 THESE KEYS WERE TEMPLATED BY NOTHING UNTIL NOW, and that is the whole reason this block exists.
+  The ConfigMap names every key explicitly and the Deployment's only env path is `envFrom` on it, so
+  a key no template mentions reaches NO container. memex's overlay declared
+  `Hosting__Operator__Enabled: "true"` under a "THE CONTROL INSTANCE, and only here" comment, and
+  the live ConfigMap carried zero `Hosting__*` keys — so HostingOperator.Resolve reported
+  "instance actions are disabled on this installation" on the one installation that is supposed to
+  run them. Exactly the `Modules__Root` defect (Memex#53), which is invariant 8 of
+  check-chart-invariants.
+
+  🚨 OFF BY DEFAULT, AND THAT IS A SECURITY PROPERTY, not a convenience. The identity this arms can
+  delete namespaces and drop databases across the fleet. An installation that does not declare
+  `hostingOperator.enabled` renders `false` and cannot be talked into provisioning anything. */}}
+  Hosting__Operator__Enabled: "{{ (.Values.hostingOperator).enabled | default "false" }}"
+{{- if (.Values.hostingOperator).enabled }}
+{{- if not (.Values.hostingOperator).image }}
+{{- fail "hostingOperator.enabled is true but hostingOperator.image is unset. The operator runs every lifecycle action as a Job from that image; without it HostingOperator.Resolve refuses with 'no operator image configured' and every action on this installation fails at the point of use rather than here. Set hostingOperator.image to the hosting-operator build this fleet runs." }}
+{{- end }}
+  # The ops namespace the Jobs run in, and the POWERFUL ServiceAccount they run as. Both are
+  # matched by NAME in the federated credential's subject (system:serviceaccount:<ns>:<sa>), so
+  # changing either here means changing it in manifests/hosting-operator/ and in backups.bicep.
+  Hosting__Operator__Namespace: "{{ (.Values.hostingOperator).namespace | default "memex-ops" }}"
+  Hosting__Operator__ServiceAccount: "{{ (.Values.hostingOperator).serviceAccount | default "hosting-operator" }}"
+  # The operator image IS the chart version it deploys (the chart is baked into it), so pin it like
+  # any other image and bump it deliberately.
+  Hosting__Operator__Image: "{{ .Values.hostingOperator.image }}"
+  # Deliberately NOT the pod's own projected token: a second identity has to arrive as a mounted
+  # Secret, and that indirection is the point — this capability is removed by deleting one volume
+  # mount, without touching the portal's identity or its self-update permissions. Mount it with
+  # .Values.extraVolumes / .Values.extraVolumeMounts.
+  Hosting__Operator__TokenFile: "{{ (.Values.hostingOperator).tokenFile | default "/var/run/secrets/hosting-operator/token" }}"
+  # Read with int.TryParse, which falls back to 3600 — but a PARSEABLE default is emitted anyway,
+  # per the rule stated at OpenAICompatible__DiscoverModels: `default ""` is safe only for strings.
+  Hosting__Operator__DeadlineSeconds: "{{ (.Values.hostingOperator).deadlineSeconds | default 3600 }}"
+{{- /* Named keys, not an indexed list: HostingOperator.ReadEnvironment turns a non-numeric child
+       key into `KEY=VALUE` itself, so the values file stays readable as a map. These reach every
+       operator Job as environment — AZ_RESOURCE_GROUP, AZ_PORTAL_IDENTITY, AZ_OIDC_ISSUER,
+       AZ_DNS_RESOURCE_GROUP, INGRESS_IP, PAYWALL_URL, VALUES_FILE, CATALOG_CONFIG. A step that
+       needs one and does not get it refuses BY NAME (hosting::need_env). */}}
+{{- range $key, $value := (.Values.hostingOperator).environment }}
+  Hosting__Operator__Environment__{{ $key }}: "{{ $value }}"
+{{- end }}
+{{- end }}
 {{- if (.Values.portalNext).enabled }}
   # ---- Next.js React frontend (FEATURE-FLAGGED — see .Values.portalNext) -----
   # Non-empty ReactAppUrl is what enables FrontendSelection: it shows the user

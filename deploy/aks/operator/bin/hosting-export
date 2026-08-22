@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# hosting-export --store-uri <uri> --secret <name> [--namespace <ns>] [--hours <n>]
+#
+# Mint a time-limited download URL for a backup archive and hand it over in a one-shot Secret.
+#
+# 🚨 IT NEVER PRINTS THE URL. A user-delegation SAS is a bearer credential: anyone holding the
+# string downloads the archive. Printing it would put it in the pod log, which the mesh streams into
+# an activity record and a node — three durable copies of a credential that was meant to be
+# transient. So it goes into a Secret the mesh reads ONCE and deletes, and the log gets the expiry
+# and nothing else.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-export"
+
+store_uri="" secret="" namespace="${HOSTING_OPS_NAMESPACE:-memex-ops}" hours="${HOSTING_EXPORT_HOURS:-24}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --store-uri) store_uri="${2:-}"; shift 2 ;;
+    --secret)    secret="${2:-}";    shift 2 ;;
+    --namespace) namespace="${2:-}"; shift 2 ;;
+    --hours)     hours="${2:-}";     shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag store-uri "$store_uri"
+hosting::need_flag secret "$secret"
+hosting::safe_name secret "$secret"
+hosting::safe_name namespace "$namespace"
+
+if hosting::dry; then
+  echo "  DRY-RUN would mint a ${hours}h SAS for ${store_uri} into secret ${secret}"
+  hosting::say export dry-run
+  exit 0
+fi
+
+expiry="$(date -u -d "+${hours} hours" '+%Y-%m-%dT%H:%MZ' 2>/dev/null || date -u -v"+${hours}H" '+%Y-%m-%dT%H:%MZ')"
+[ -n "$expiry" ] || hosting::die "could not compute an expiry ${hours}h from now"
+
+account="$(printf '%s' "$store_uri" | sed -n 's#^https://\([^.]*\)\..*#\1#p')"
+container="$(printf '%s' "$store_uri" | sed -n 's#^https://[^/]*/\([^/]*\)/.*#\1#p')"
+blob="$(printf '%s' "$store_uri" | sed -n 's#^https://[^/]*/[^/]*/\(.*\)$#\1#p')"
+[ -n "$account" ] && [ -n "$container" ] && [ -n "$blob" ] \
+  || hosting::die "could not parse account/container/blob out of the store URI"
+
+# --as-user: a USER-DELEGATION SAS, signed by the workload identity's own key, so it is revocable
+# and carries this identity's audit trail. An account-key SAS would need the storage key on disk.
+sas="$(az storage blob generate-sas --account-name "$account" --container-name "$container" \
+        --name "$blob" --permissions r --expiry "$expiry" --as-user --auth-mode login -o tsv 2>/dev/null)" \
+  || hosting::die "could not mint a user-delegation SAS for ${blob}"
+[ -n "$sas" ] || hosting::die "the SAS came back empty"
+
+kubectl -n "$namespace" create secret generic "$secret" \
+  --from-literal=url="${store_uri}?${sas}" \
+  --from-literal=expires="$expiry" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null \
+  || hosting::die "could not write the handover secret ${secret} in ${namespace}"
+unset sas
+
+hosting::log "download URL written to secret ${namespace}/${secret}, expires ${expiry}"
+hosting::log "(the URL itself is deliberately not printed — it is a bearer credential)"
+hosting::say export_secret "$secret"
+hosting::say export_expires "$expiry"

@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# hosting-verify-restore --database <db> --server <pg>
+#
+# Read the restored database back: does it hold the tables and rows an instance needs?
+#
+# 🚨 `pg_restore` exiting zero says the archive replayed, not that the result is a working instance.
+# A restore into the wrong database, or of an archive from a different schema version, replays
+# cleanly and leaves something that cannot serve. So this queries the restored database directly and
+# refuses on an empty one.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-verify-restore"
+
+database="" server=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --database) database="${2:-}"; shift 2 ;;
+    --server)   server="${2:-}";   shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag database "$database"
+hosting::need_flag server "$server"
+hosting::safe_name database "$database"
+
+if hosting::dry; then
+  echo "  DRY-RUN would query ${database} on ${server} for restored content"
+  hosting::say verify dry-run
+  exit 0
+fi
+
+hosting::need_env PGPASSWORD "the admin password for the flexible server"
+pg_user="${PGUSER:-memexadmin}"
+
+q() { PGPASSWORD="$PGPASSWORD" psql -h "$server" -U "$pg_user" -d "$database" -tAc "$1" 2>/dev/null | tr -d ' '; }
+
+version="$(q 'SHOW server_version')" || true
+[ -n "$version" ] || hosting::die "cannot connect to ${database} on ${server} after the restore"
+hosting::say pgversion "$version"
+
+tables="$(q "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema')")"
+hosting::say tables "${tables:-0}"
+hosting::log "restored database holds ${tables:-0} table(s)"
+
+[ "${tables:-0}" -ge 1 ] \
+  || hosting::die "the restored database has NO user tables. pg_restore reported success, so this is an archive/target mismatch rather than a transfer failure — the instance would start and serve nothing."
+
+# The mesh's own node storage is the table that decides whether this is a MeshWeaver database at
+# all. Absent, the restore replayed something else entirely.
+nodes="$(q "SELECT count(*) FROM information_schema.tables WHERE table_name = 'mesh_nodes'")"
+if [ "${nodes:-0}" -lt 1 ]; then
+  hosting::die "no 'mesh_nodes' table anywhere in ${database}. The archive restored cleanly but is not a MeshWeaver instance database — refusing to report a verified restore."
+fi
+
+hosting::say verified true
+hosting::log "restore verified"

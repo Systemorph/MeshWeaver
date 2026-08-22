@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# hosting-kv-purge --vault <name> --prefix <prefix> --namespace <ns>
+#
+# Remove an instance's Key Vault secrets at teardown.
+#
+# 🚨 SOFT-DELETE ONLY — never `--purge`. The vault's soft-delete retention is the last chance to
+# recover an instance torn down by mistake, and the master key is unrecoverable by any other means:
+# without it a restored database is a pile of undecryptable `enc:` values. A purge would convert a
+# reversible mistake into permanent data loss, so this step deliberately cannot make one.
+#
+# 🚨 It refuses an EMPTY prefix. With no prefix every name below resolves to the FLEET-WIDE secret
+# (`Ai-KeyProtection-MasterKey` is memex's own), so tearing down one instance would delete the
+# control instance's envelope key. That is the single most destructive typo available here.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-kv-purge"
+
+vault="" prefix="" namespace=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vault)     vault="${2:-}";     shift 2 ;;
+    --prefix)    prefix="${2:-}";    shift 2 ;;
+    --namespace) namespace="${2:-}"; shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag vault "$vault"
+hosting::need_flag namespace "$namespace"
+hosting::safe_name vault "$vault"
+hosting::safe_name namespace "$namespace"
+
+[ -n "$prefix" ] || hosting::die "refusing to purge with an EMPTY --prefix: every per-instance secret name would resolve to the fleet-wide one, so this would delete the CONTROL instance's Ai-KeyProtection-MasterKey rather than the torn-down instance's. A deployment record without keyVaultSecretPrefix should not reach this step."
+hosting::safe_name prefix "$prefix"
+
+SUFFIXES="Ai-KeyProtection-MasterKey PluginCatalog-RegistryToken"
+
+deleted=0 absent=0
+for suffix in $SUFFIXES; do
+  name="${prefix}${suffix}"
+  if ! az keyvault secret show --vault-name "$vault" --name "$name" --query id -o tsv >/dev/null 2>&1; then
+    hosting::log "absent  ${name}"
+    absent=$((absent + 1))
+    continue
+  fi
+  hosting::log "delete  ${name} (soft-delete — recoverable for the vault's retention window)"
+  hosting::do az keyvault secret delete --vault-name "$vault" --name "$name" --output none \
+    || hosting::die "could not delete ${name} from vault ${vault}"
+  deleted=$((deleted + 1))
+done
+
+hosting::log "vault ${vault}: ${deleted} soft-deleted, ${absent} already absent"
+hosting::say kv_deleted "$deleted"
