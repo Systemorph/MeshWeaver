@@ -1,17 +1,38 @@
 @using Icon = MeshWeaver.Domain.Icon
 @inherits SkinnedView<NavGroupControl, NavGroupSkin, NavGroup>
 
-<FluentNavGroup Href="@Href" Icon="@Icon?.ToFluentIcon()" Title="@Title" Class="@Class" Style="@Style" Expanded="@Expanded">
-    
-    <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
+@* A Fluent icon name goes through FluentNavGroup's own Icon slot; the other icon forms a node can
+   carry (image URL, inline SVG, emoji — what MeshNodeImageHelper.ResolveNodeIcon returns) have no
+   Fluent component, so they render through the TitleTemplate with the shared NodeIconGlyph —
+   otherwise a group heading silently loses the icon every link beside it shows. *@
+@if (FluentIcon is null && Icon is not null)
+{
+    <FluentNavGroup Href="@Href" Title="@Title" Class="@Class" Style="@Style" Expanded="@Expanded">
+        <TitleTemplate>
+            <NodeIconGlyph Value="@Icon" />
+            <span>@Title</span>
+        </TitleTemplate>
+        <ChildContent>
+            <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
+        </ChildContent>
+    </FluentNavGroup>
+}
+else
+{
+    <FluentNavGroup Href="@Href" Icon="@FluentIcon" Title="@Title" Class="@Class" Style="@Style" Expanded="@Expanded">
 
-</FluentNavGroup>
+        <DispatchView ViewModel="@ViewModel" Stream="@Stream" Area="@Area" />
+
+    </FluentNavGroup>
+}
 
 @code{
     protected string? Title;
     protected string? Href;
     protected Icon? Icon;
     private bool Expanded;
+
+    private Microsoft.FluentUI.AspNetCore.Components.Icon? FluentIcon => Icon?.ToFluentIcon();
 
     protected override void BindData()
     {

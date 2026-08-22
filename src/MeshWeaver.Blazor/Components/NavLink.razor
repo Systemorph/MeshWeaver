@@ -1,4 +1,3 @@
-@using MeshWeaver.Graph
 @inherits NavItemView<NavLinkControl, NavLink>
 
 @if (IsInMenuContext)
@@ -10,7 +9,7 @@
         }
         else
         {
-            @RawIcon
+            <NodeIconGlyph Value="@Icon" />
         }
         <span>@Title</span>
     </a>
@@ -18,7 +17,7 @@
 else
 {
     <FluentNavLink Href="@Href" Icon="@ResolvedFluentIcon" OnClick="@OnClick"
-                   Class="@NavLinkClass" Style="@Style">@RawIcon@Title</FluentNavLink>
+                   Class="@NavLinkClass" Style="@Style"><NodeIconGlyph Value="@Icon" />@Title</FluentNavLink>
 }
 
 @code {
@@ -45,25 +44,4 @@ else
             return string.IsNullOrEmpty(joined) ? null : joined;
         }
     }
-
-    // A MeshNode.Icon travels as a raw string and Icon.Parse classifies it (see Domain.Icon):
-    // Fluent names render through the FluentIcon slot above; the other forms render here with the
-    // SAME mechanism the node cards/thumbnails use — an image URL / data URI as <img>, inline
-    // <svg> markup verbatim (sized via MeshNodeImageHelper.SizeInlineSvg), and a text glyph
-    // (emoji) as text. Anything else renders nothing — never a throw, never a per-render log.
-    private RenderFragment RawIcon => __builder =>
-    {
-        if (Icon is { Provider: MeshWeaver.Domain.Icon.UrlProvider } urlIcon)
-        {
-            <img src="@urlIcon.Id" alt="" style="width: 20px; height: 20px; flex-shrink: 0; vertical-align: middle;" />
-        }
-        else if (Icon is { Provider: MeshWeaver.Domain.Icon.InlineSvgProvider } svgIcon)
-        {
-            <span style="display: inline-flex; flex-shrink: 0; vertical-align: middle;">@((MarkupString)MeshNodeImageHelper.SizeInlineSvg(svgIcon.Id, 20))</span>
-        }
-        else if (Icon is { Provider: MeshWeaver.Domain.Icon.TextProvider } textIcon)
-        {
-            <span style="font-size: 16px; flex-shrink: 0; vertical-align: middle;">@textIcon.Id</span>
-        }
-    };
 }

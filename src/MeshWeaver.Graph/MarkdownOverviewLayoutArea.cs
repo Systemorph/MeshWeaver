@@ -205,6 +205,10 @@ public static class MarkdownOverviewLayoutArea
     {
         var group = new NavGroupControl(node?.Name ?? host.Localize("nav.contents"))
             .WithSkin(s => s.WithExpanded(true));
+        // The heading shows the DOCUMENT's icon, same resolution as its children below — without it
+        // the doc title was the one line of the index with no icon.
+        if (MeshNodeImageHelper.ResolveNodeIcon(node) is { } groupIcon)
+            group = group.WithIcon(groupIcon);
         foreach (var child in subNodes)
         {
             var href = $"/{child.Path}";
