@@ -2749,8 +2749,14 @@ public class MeshOperations
                     var probeAddress = new Address($"{addressPrefix}/{Guid.NewGuid():N}");
                     // Stamp the NodeType path so a WithContentType reached from this probe records
                     // an EXACT registry entry rather than a bare-name one (see NodeTypePathHolder).
+                    // startDataSources: false — this probe reads NOTHING but the type registry,
+                    // which Initialize fills inside Build; starting sources would open a sync/
+                    // stream whose creation races the probeHub.Dispose() below (the CD-killing
+                    // ProbeHubCostTest flake). Probes that snapshot data keep the default.
                     var probeHub = hub.GetHostedHub(
-                        probeAddress, c => hubConfig(c.WithNodeTypePath(nodeType)).AsTransientNodeProbe());
+                        probeAddress,
+                        c => hubConfig(c.WithNodeTypePath(nodeType))
+                            .AsTransientNodeProbe(startDataSources: false));
                     if (probeHub == null) return null;
                     try
                     {
