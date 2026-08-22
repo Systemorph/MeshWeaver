@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -101,15 +102,44 @@ public static class DataExtensions
     }
 
 
+    /// <summary>
+    /// Resolves the hub's <see cref="IWorkspace"/> (constructing it, and therefore its data
+    /// context's streams and their sub-hubs) and opens its initialization gate — on the hub's
+    /// INIT TURN, never inside <c>Build</c>. See the call site for why (#1868).
+    ///
+    /// <para>A static method group, so <c>WithInitialization</c>'s delegate-identity idempotency
+    /// still collapses repeat registrations from composed configurators.</para>
+    /// </summary>
+    /// <param name="hub">The hub being initialized.</param>
+    /// <returns>An observable that completes once the workspace's gate is open.</returns>
+    private static IObservable<Unit> OpenWorkspaceInitializationGate(IMessageHub hub) =>
+        // Defer so the work happens at SUBSCRIBE time (the init turn), not when the observable is
+        // constructed — HandleInitialize builds the whole Concat chain up front.
+        Observable.Defer(() =>
+        {
+            ((Workspace)hub.GetWorkspace()).OpenInitializationGate();
+            return Observable.Return(Unit.Default);
+        });
+
     private static MessageHubConfiguration GetDefaultConfiguration(MessageHubConfiguration config)
     {
         return config
-            .WithInitialization(h => h.GetWorkspace())
-            // Initialize workspace and open gate after hub is fully constructed (handlers registered)
-            .WithInitialization(h =>
-            {
-                ((Workspace)h.GetWorkspace()).OpenInitializationGate();
-            })
+            // 🚨 The OBSERVABLE overload, deliberately (#1868). These two ran as SYNCHRONOUS
+            // buildup actions, i.e. INSIDE MessageHubConfiguration.Build — and resolving the
+            // workspace constructs hubs: Workspace..ctor → DataContext.Initialize →
+            // DataSource.GetStream → SynchronizationStream..ctor, whose constructor ALWAYS calls
+            // GetHostedHub(sync/{clientId}, HostedHubCreation.Always). So every data-enabled hub
+            // built a sub-hub, and a second Autofac container, inside its own Build — 1,350 nested
+            // Builds per green MeshWeaver.FutuRe.Test run, all depth 2. A disposal that races a
+            // construction then races a TREE of constructions rather than one frame, which is the
+            // shape behind the whole shutdown-race family (#645/#715/#967/#1573).
+            //
+            // The observable overload runs on the InitializeHubRequest turn — after Build has
+            // returned and message processing has started — and BuildupActions are Concat-ed, so
+            // this still runs FIRST and still completes before the Initialize gate opens. Messages
+            // cannot overtake it: they defer behind that gate exactly as before. Same shape #774
+            // already applied to MeshDataSource.SubscribeToOwnDeletion.
+            .WithInitialization(OpenWorkspaceInitializationGate)
             .WithRoutes(routes => routes.WithHandler((delivery, _) => RouteStreamMessage(routes.Hub, delivery)))
             .WithServices(sc =>
             {

@@ -272,6 +272,7 @@ public sealed class MessageHub : IMessageHub
     /// </summary>
     internal void StartMessageProcessing()
     {
+        messageProcessingStarted = true;
         messageService.Start();
         InstallStaleCallbackScanner();
         if (!Configuration.DeferredInitialization)
@@ -1387,8 +1388,73 @@ public sealed class MessageHub : IMessageHub
         HostedHubCreation create
     )
     {
+        if (create != HostedHubCreation.Never && !messageProcessingStarted)
+            ReportHubConstructionDuringBuild(address);
         var messageHub = hostedHubs.GetHub(address, config, create);
         return messageHub;
+    }
+
+    /// <summary>
+    /// Set by <see cref="StartMessageProcessing"/>, the LAST thing
+    /// <c>MessageHubConfiguration.Build</c> does. Until then this hub is still inside its own
+    /// <c>Build</c>: its <c>SyncBuildupActions</c> are running and nothing it constructs can have
+    /// been reached from a message.
+    /// </summary>
+    private bool messageProcessingStarted;
+
+    private ImmutableList<Address> hubsConstructedDuringBuild = ImmutableList<Address>.Empty;
+
+    /// <summary>
+    /// The addresses of hubs this hub constructed from inside its own <c>Build</c> — the #1868
+    /// invariant's evidence, recorded on the instance rather than only logged so a test can assert
+    /// on it without depending on log plumbing. Empty is the invariant holding.
+    /// </summary>
+    public IReadOnlyList<Address> HubsConstructedDuringBuild => hubsConstructedDuringBuild;
+
+    /// <summary>
+    /// 🚨 <b>The invariant: <c>Build</c> must not construct another hub</b> (#1868).
+    ///
+    /// <para><b>The fact.</b> <c>MessageHubConfiguration.Build</c> runs <c>SyncBuildupActions</c>
+    /// inline, before <see cref="StartMessageProcessing"/>. Two of those actions reached code that
+    /// creates hubs — <c>DataExtensions.GetDefaultConfiguration</c>'s <c>h.GetWorkspace()</c>
+    /// (→ <c>Workspace..ctor</c> → <c>DataContext.Initialize</c> → <c>DataSource.GetStream</c> →
+    /// <c>SynchronizationStream..ctor</c>) and <c>KernelContainer</c>'s
+    /// <c>StartActivityControlPlane</c> (→ <c>WatchControlPlane</c> → <c>AcquireStream</c> →
+    /// <c>Workspace.GetStream</c>) — and <c>SynchronizationStream</c>'s constructor ALWAYS calls
+    /// <c>GetHostedHub(…, HostedHubCreation.Always)</c>. So every data-enabled hub built at least
+    /// one <c>sync/{clientId}</c> sub-hub, and a second Autofac container, inside its own
+    /// <c>Build</c>. Measured with a depth counter on a GREEN run of
+    /// <c>MeshWeaver.FutuRe.Test</c>: <b>1,350 nested Builds</b>, all depth=2.</para>
+    ///
+    /// <para><b>Why it matters</b> — and explicitly NOT as a crash claim, which #1867 withdrew and
+    /// 1,350 nestings per green run refute. <i>A disposal that races a construction races a TREE of
+    /// them.</i> That is the shape behind the whole shutdown-race family (#645, #715, #967, #1573),
+    /// each of which had to widen its guard to cover work started by a construction that had itself
+    /// been started by a construction. <c>HostedHubsCollection</c>'s in-flight counter tracks the
+    /// OUTER creation; the inner one it spawns is a second entry, on the same thread, whose
+    /// refusal/finish semantics are only correct because the guards were extended by hand, one
+    /// incident at a time. It also makes <c>Build</c> reachable from arbitrary reactive emissions —
+    /// the 08-18 dump has one nested <c>Build</c> reached from <c>MessageService.DrainOne</c> and
+    /// one from a <c>MeshQuery</c> emission.</para>
+    ///
+    /// <para><b>Reported, not thrown.</b> The invariant is not yet universally true: this reports
+    /// the two adopted sites' regressions and any new one, without turning an unadopted third-party
+    /// configurator into a hard failure. Step 2 of the adoption — stopping
+    /// <c>SynchronizationStream</c>'s constructor from creating its sub-hub eagerly — is what makes
+    /// throwing here viable; it is deliberately not attempted with ~96 sites dereferencing
+    /// <c>ISynchronizationStream.Hub</c> as non-null.</para>
+    /// </summary>
+    /// <param name="inner">Address of the hub whose construction was requested.</param>
+    private void ReportHubConstructionDuringBuild(Address inner)
+    {
+        ImmutableInterlocked.Update(ref hubsConstructedDuringBuild, l => l.Add(inner));
+        TryLog(LogLevel.Error,
+            "[BUILD-NESTING] Hub {Outer} constructed hub {Inner} from inside its own Build — a "
+            + "SyncBuildupAction reached hub construction, so a disposal racing {Outer}'s creation "
+            + "races a TREE of constructions rather than one frame (#1868). Move the initialization "
+            + "to the OBSERVABLE WithInitialization overload, which runs on InitializeHubRequest "
+            + "after Build has returned.",
+            Address, inner);
     }
 
     /// <summary>
