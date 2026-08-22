@@ -136,9 +136,28 @@ silent:
    Build-and-Test**. But its `event` is `workflow_dispatch`, not `push`, so the `workflow_run` gate
    still skips. It is the most convincing possible "it shipped" signal, with no image behind it.
 
-**Neither is terminal now**, because the reconciler reads the *check on the commit* rather than the
-event that produced it — so a dispatched Build-and-Test does eventually lead to an image, within one
-reconcile tick. To kick CD by hand, use its own door:
+3. **Build-and-Test settled RED on main.** CD's push path then decides "⛔ nothing will be built" —
+   and until 2026-08-22 that run ended **SUCCESS**, with the refusal visible only in its step
+   summary. One flaky shard (`ProbeHubCostTest`, a probe hub racing its own dispose — fixed the
+   same day) kept CD reporting green no-ops for hours while both production instances waited on
+   the release it was not building. Since then `delivery-verdict` FAILS on that state and
+   `alert-on-failure` pages it: **a red main is an incident for a continuously-delivered product,
+   never a quiet skip.** The operator move is unchanged by the alarm: read the failing test; a
+   flake → `gh run rerun <id> --failed` (a green rerun fires a fresh `workflow_run`, which
+   publishes by itself); a real failure → fixing main IS the release path.
+
+Two diagnosis cheats, both learned the hard way on 2026-08-22:
+
+- **A CD run with ZERO jobs** ("This run likely failed because of a workflow file issue") means the
+  workflow FILE is invalid — every run since the breaking merge produced nothing. The classic cause
+  is a `needs:` naming a deleted job. Parse before pushing:
+  `python3 -c "import yaml; d=yaml.safe_load(open('.github/workflows/main-cd.yml')); jobs=set(d['jobs']); print([(n,dep) for n,j in d['jobs'].items() for dep in ([j.get('needs')] if isinstance(j.get('needs'),str) else j.get('needs') or []) if dep not in jobs])"`
+- **A green CD run whose jobs are all `skipped`** shipped nothing by decision — read the `Decide`
+  step's last line for which branch fired, and believe that line over the tick.
+
+**Neither of the first two is terminal now**, because the reconciler reads the *check on the
+commit* rather than the event that produced it — so a dispatched Build-and-Test does eventually
+lead to an image, within one reconcile tick. To kick CD by hand, use its own door:
 
 ```bash
 gh workflow run main-cd.yml --ref main     # heals HEAD; cannot publish an untested tree

@@ -1583,11 +1583,29 @@ jobs:
             exit 1
           fi
 
+          # 🚨 THE OTHER INVISIBLE STATE — the push path's ⛔ branch. CD enters via workflow_run,
+          # i.e. only after Build-and-Test COMPLETED on main, so GREEN != true here is a suite
+          # that has SETTLED red — never one still running. The gate then records "⛔ nothing
+          # will be built" in the step summary and the run ends SUCCESS: continuous delivery is
+          # switched off for every commit until someone happens to open the summary. Measured
+          # 2026-08-22: one flaky shard on 1b0b834 kept CD reporting green no-ops from 11:48
+          # while both production instances waited on the release it was not building. A red
+          # main is an incident for a continuously-delivered product; this run must be RED so
+          # alert-on-failure files it. (A rerun that goes green fires a fresh workflow_run,
+          # which publishes and supersedes this alarm — nothing to un-stick by hand.)
+          if [ "$REASON" = "push" ] && [ "$PUBLISH" != "true" ] && [ "$GREEN" != "true" ]; then
+            echo "::error::the required check on main \`$SHORT\` settled RED, so this CD run built nothing — delivery is OFF until main is green again. Re-run the failed Build-and-Test jobs (a green rerun re-enters CD by itself); if the failure is real, fixing main IS the release path."
+            exit 1
+          fi
+
           echo "OK — either something was published, or not publishing was the correct answer."
 
   alert-on-failure:
     name: "Alert: CD failed on main"
-    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images, publish-bake]
+    # delivery-verdict is in this list ON PURPOSE: it is the job that turns the two
+    # invisible do-nothing states (green-but-stuck reconcile, red-main push) into failures,
+    # and a failure nobody is paged for is still invisible.
+    needs: [gate, portal-image, migration-image, plugin-test-image, portal-next-image, promote, verify-images, publish-bake, delivery-verdict]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
