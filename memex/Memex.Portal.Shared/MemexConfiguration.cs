@@ -1129,10 +1129,10 @@ public static class MemexConfiguration
         // 'self'). Tightening it further (per-response nonces, dropping 'unsafe-inline') is
         // a separate hardening pass, not this change.
         //
-        // The CSP ships as Content-Security-Policy-Report-Only FIRST: it cannot block a
-        // single request, so it is safe to enforce on the production registry immediately
-        // while any would-be violations surface in the browser console. A one-line follow-up
-        // renames the header to Content-Security-Policy to enforce it once it is proven quiet.
+        // The CSP is ENFORCED. It shipped Content-Security-Policy-Report-Only first (#1988);
+        // enforcing it here was validated by driving real Chrome over the live public pages
+        // against that Report-Only header and observing ZERO violations, so the enforced policy
+        // blocks nothing the app legitimately loads.
         app.Use((ctx, next) =>
         {
             var headers = ctx.Response.Headers;
@@ -1140,11 +1140,12 @@ public static class MemexConfiguration
             {
                 headers["X-Content-Type-Options"] = "nosniff";
                 headers["Cross-Origin-Resource-Policy"] = "same-site";
+                headers["Cross-Origin-Opener-Policy"] = "same-origin";
                 headers["Permissions-Policy"] =
                     "accelerometer=(), camera=(), geolocation=(), gyroscope=(), " +
                     "magnetometer=(), microphone=(), payment=(), usb=()";
-                if (!headers.ContainsKey("Content-Security-Policy-Report-Only"))
-                    headers["Content-Security-Policy-Report-Only"] =
+                if (!headers.ContainsKey("Content-Security-Policy"))
+                    headers["Content-Security-Policy"] =
                         "default-src 'self'; " +
                         "base-uri 'self'; " +
                         "object-src 'none'; " +
