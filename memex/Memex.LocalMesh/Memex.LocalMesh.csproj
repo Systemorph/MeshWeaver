@@ -32,9 +32,5 @@
 
        MeshModulesClosureSubset narrows the shared lane to the one module this host wants, so no
        publish+prune is hand-rolled here. -->
-  <PropertyGroup>
-    <MeshModulesClosureSubset>MeshWeaver.Speech</MeshModulesClosureSubset>
-  </PropertyGroup>
-  <Import Project="..\MeshModulesPublish.targets" />
 
 </Project>
