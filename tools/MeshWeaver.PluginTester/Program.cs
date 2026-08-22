@@ -7,7 +7,7 @@ using MeshWeaver.PluginTester;
 
 using MeshWeaver.Compiler;
 // mw-plugin-test <repo-root> [--compile-timeout <seconds>] [--render-timeout <seconds>]
-//                            [--allow <file>] [--report <file>]
+//                            [--allow <file>] [--report <file>] [--seed <dir>]
 //                            [--bake-output <dir>] [--source-sha <sha>]
 //
 // The MeshWeaver.Plugins PR gate: imports each node-repo package of the checkout into a fresh
@@ -21,6 +21,12 @@ using MeshWeaver.Compiler;
 // <package>.zip per package + framework-mvid.txt) into <dir> — the artifact half of #1660 WS1:
 // the same compile that proves the content produces the bytes a consumer loads instead of
 // re-compiling. --source-sha records the synced commit in each bundle manifest.
+// --seed CONSUMES a bake instead of producing one (#1763): the bundles a `compile` run wrote are
+// adopted for every NodeType the gate installs, so what the gate renders and runs `Tests` on is
+// the assembly that ships. The directory is read and ADDRESS-CHECKED before the mesh boots, and
+// the run goes red if the bake was declared but not consumed — a gate that silently compiled the
+// tree itself passes identically to one that consumed the bake, so the shortfall has to be a
+// verdict rather than something nobody can observe.
 //
 // The one Task bridge lives HERE, at the console boundary — everything below Run() is reactive.
 
@@ -29,7 +35,7 @@ using MeshWeaver.Compiler;
 // bundle format. There is NO MeshBuilder, NO AddGraph(), NO content import and NO hub anywhere in
 // its path: producing an assembly is a build step, and the mesh's job is to CONSUME a bake.
 //
-//     mw-compiler compile <checkout-root> --output <dir> [--source-sha <sha>]
+//     mw-compiler compile <checkout-root> --output <dir> [--allow <file>] [--source-sha <sha>]
 //
 // Everything BELOW this block is the GATE (`mw-plugin-test <root>`), which legitimately stands up a
 // mesh because rendering a layout area and executing a `Tests` area are runtime behaviours. The two
@@ -71,6 +77,8 @@ static int RunCompile(string[] args)
     string? compileRoot = null;
     string? outputDirectory = null;
     string? compileSourceSha = null;
+    var compileAllow = GateAllowlist.Empty;
+    var compileAllowApplied = false;
     for (var i = 0; i < args.Length; i++)
     {
         switch (args[i])
@@ -81,12 +89,43 @@ static int RunCompile(string[] args)
             case "--source-sha" when i + 1 < args.Length:
                 compileSourceSha = args[++i];
                 break;
-            case "--output" or "--source-sha":
+            // 🚨 THE SAME RATCHET THE GATE READS. Splitting the bake out of the gate must not
+            // split the VERDICT: a known-debt compile failure the gate tolerates has to be
+            // tolerated here too, or the same ratchet file means two different things depending on
+            // which half of the lane is looking at it — and the first legitimate allow entry
+            // would break the bake as though the bake had regressed. Only `compile` entries can
+            // apply here; render / tests / install / idempotence are runtime checks the bake does
+            // not perform, and an entry for one of those is NOT reported stale by this verb
+            // (the gate that does perform them owns that judgement).
+            case "--allow" when i + 1 < args.Length:
+            {
+                var compileAllowPath = args[++i];
+                if (!File.Exists(compileAllowPath))
+                {
+                    Console.Error.WriteLine(GateAllowlist.MissingFileMessage(compileAllowPath));
+                    return 2;
+                }
+                try
+                {
+                    compileAllow = GateAllowlist.Load(compileAllowPath);
+                }
+                catch (FormatException ex)
+                {
+                    Console.Error.WriteLine(
+                        $"compile: --allow file '{GateAllowlist.Describe(compileAllowPath)}' is "
+                        + $"malformed — {ex.Message}");
+                    return 2;
+                }
+                compileAllowApplied = true;
+                break;
+            }
+            case "--output" or "--source-sha" or "--allow":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value.");
                 return 2;
             case "--help" or "-h":
                 Console.WriteLine(
-                    "usage: mw-compiler compile <checkout-root> --output <dir> [--source-sha <sha>]");
+                    "usage: mw-compiler compile <checkout-root> --output <dir> [--allow <file>] "
+                    + "[--source-sha <sha>]");
                 return 0;
             default:
                 if (args[i].StartsWith('-') || compileRoot is not null)
@@ -117,12 +156,40 @@ static int RunCompile(string[] args)
     });
     if (bake.FatalError is not null)
         Console.Error.WriteLine($"compile: FATAL — {bake.FatalError}");
+    var newFailures = 0;
+    var knownDebt = 0;
     foreach (var failed in bake.Types.Where(t => !t.Success))
+    {
+        if (compileAllow.Allows(failed.NodePath, "compile"))
+        {
+            knownDebt++;
+            Console.Error.WriteLine(
+                $"compile: RED [known-debt] {failed.NodePath} — {failed.Error}");
+            continue;
+        }
+        newFailures++;
         Console.Error.WriteLine($"compile: RED {failed.NodePath} — {failed.Error}");
+    }
+    // A STALE entry fails, exactly as it does in the gate: the list may only shrink, and an entry
+    // whose type now compiles is a line to delete rather than debt to carry.
+    var stale = compileAllow.Entries
+        .Where(e => string.Equals(e.Check, "compile", StringComparison.OrdinalIgnoreCase))
+        .Where(e => bake.Types.Any(t => t.Success
+            && string.Equals(t.NodePath, e.Scope, StringComparison.OrdinalIgnoreCase)))
+        .ToList();
+    foreach (var entry in stale)
+        Console.Error.WriteLine(
+            $"compile: STALE allow entry (now compiles — remove it): {entry}");
     Console.WriteLine(
         $"compile: {bake.Types.Count(t => t.Success)}/{bake.Types.Length} NodeType(s) compiled, "
-        + $"{bake.Bundles.Length} bundle(s), framework={bake.FrameworkIdentity}");
-    return bake.ExitCode;
+        + $"{bake.Bundles.Length} bundle(s), framework={bake.FrameworkIdentity}"
+        + (compileAllowApplied
+            ? $" — {knownDebt} known-debt failure(s) allowed, {newFailures} new, "
+              + $"{stale.Count} stale allow entr(ies)"
+            : string.Empty));
+    if (!compileAllowApplied)
+        return bake.ExitCode;
+    return bake.FatalError is null && newFailures == 0 && stale.Count == 0 ? 0 : 1;
 }
 
 // 🚨 THE `framework-identity` VERB — the ADDRESS CHECK (#1814).
@@ -245,6 +312,7 @@ static async Task<int> RunGate(string[] args)
     string? reportPath = null;
     string? bakeOutput = null;
     string? sourceSha = null;
+    BakeSeed? seed = null;
 
     for (var i = 0; i < args.Length; i++)
     {
@@ -290,13 +358,30 @@ static async Task<int> RunGate(string[] args)
             case "--bake-output" when i + 1 < args.Length:
                 bakeOutput = args[++i];
                 break;
+            // 🚨 THE OTHER HALF OF THE SPLIT (#1763): the gate CONSUMES a bake instead of
+            // producing one. Read and address-checked BEFORE the mesh boots — a gate pointed at a
+            // bake it cannot consume compiles the tree itself and passes, which is
+            // indistinguishable from a gate that consumed it perfectly, so the failure has to be
+            // refused here rather than discovered never.
+            case "--seed" when i + 1 < args.Length:
+            {
+                var (readSeed, problem) = BakeSeed.Read(
+                    args[++i], MeshWeaver.Graph.Configuration.PrebuiltAssemblySeeder.LiveFrameworkMvid);
+                if (problem is not null)
+                {
+                    Console.Error.WriteLine($"mw-plugin-test: --seed — {problem}");
+                    return 2;
+                }
+                seed = readSeed;
+                break;
+            }
             case "--source-sha" when i + 1 < args.Length:
                 sourceSha = args[++i];
                 break;
             // A value-taking option as the LAST argument would otherwise fall through to the default
             // case as "Unknown argument" — a misleading message for a missing value.
             case "--compile-timeout" or "--render-timeout" or "--allow" or "--report"
-                or "--bake-output" or "--source-sha":
+                or "--bake-output" or "--seed" or "--source-sha":
                 Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
                 return 2;
             // Diagnostic: print the framework build identity this process resolves — the exact value
@@ -316,8 +401,8 @@ static async Task<int> RunGate(string[] args)
             case "--help" or "-h":
                 Console.WriteLine(
                     "usage: mw-plugin-test <repo-root> [--compile-timeout <s>] [--render-timeout <s>] "
-                    + "[--allow <file>] [--report <file>] [--bake-output <dir>] [--source-sha <sha>] "
-                    + "[--print-framework-identity]");
+                    + "[--allow <file>] [--report <file>] [--seed <dir>] [--bake-output <dir>] "
+                    + "[--source-sha <sha>] [--print-framework-identity]");
                 return 0;
             default:
                 if (args[i].StartsWith('-') || root is not null)
@@ -337,6 +422,7 @@ static async Task<int> RunGate(string[] args)
         RenderTimeout = renderTimeout,
         BakeOutputDirectory = bakeOutput,
         SourceSha = sourceSha,
+        Seed = seed,
     };
 
     Console.WriteLine($"mw-plugin-test: gating node repos under '{Path.GetFullPath(options.RepoRoot)}'");

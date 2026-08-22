@@ -1183,7 +1183,24 @@ jobs:
       #     inert there too. They still compile-GATE on every PR (dotnet-test.yml's doc-gate runs
       #     the samples stage): correctness of that content is proven, its assemblies are simply
       #     not worth shipping. Before/after for this job: 8 packages / 28 assemblies → 1 / 4.
-      - name: "Bake the platform's OWN shipped content INSIDE the promoted image"
+      # ── THE BAKE — a BUILD STEP, with no mesh anywhere in it (#1763) ────────────────────────
+      # 🚨 This step and the GATE below used to be ONE `docker run`, and that fusion is the finding
+      # #1763 opens with: producing an assembly is a build step, and the mesh's job is to CONSUME a
+      # bake, not to produce one. The old command stood up an in-process mesh, imported the content,
+      # let the MESH compile every NodeType and collected what it produced — a headless mesh rather
+      # than a serving portal, but exactly "compile through mesh nodes".
+      #
+      # `compile` resolves NodeType sources straight from the staged tree and compiles them with
+      # MeshWeaver.Compiler: no MeshBuilder, no AddGraph(), no import, no hub scheduler, no per-type
+      # activation. That equivalence is not assumed — `BakeEquivalenceTest` bakes one content set
+      # BOTH ways and pins that the two producers agree on the bundle set, the resolved source set,
+      # the per-type dependency records and the emitted surfaces.
+      #
+      # It is the SAME BINARY in the SAME IMAGE as the gate below, which is what makes their
+      # framework identities provably equal (see MeshWeaver.PluginTester.csproj — the bake and the
+      # gate share one project on purpose). A leaner compiler-only project would resolve a DIFFERENT
+      # identity and every bundle it baked would be declined by every portal, silently.
+      - name: "BAKE the platform's OWN shipped content (compiler-driven, no mesh)"
         env:
           IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
           SHA: ${{ needs.gate.outputs.sha }}
@@ -1196,7 +1213,8 @@ jobs:
           mkdir -p "$STAGE"
           bash .github/scripts/stage-doc-gate.sh src/MeshWeaver.Documentation/Data "$STAGE/doc"
           # The known-debt ratchet travels INTO the mount: the tester runs in the container and
-          # cannot see the checkout. Same file the doc-gate passes, so the same verdict applies.
+          # cannot see the checkout. Same file BOTH halves read, so the split cannot make the same
+          # ratchet mean two different things depending on which half is looking at it.
           cp .github/doc-gate.allow "$STAGE/doc-gate.allow"
           # The image's tester runs as a non-root user: it must be able to read the mount and write
           # the bake directory.
@@ -1205,27 +1223,53 @@ jobs:
           rm -rf "$BAKE"
           mkdir -p "$BAKE"
           chmod 777 "$BAKE"
-          # A red tester FAILS this job: the platform's own shipped content not compiling against
-          # the image that ships it is a release defect, not a reason to publish less.
+          # A red bake FAILS this job: the platform's own shipped content not compiling against the
+          # image that ships it is a release defect, not a reason to publish less.
           # --pull never: the image is already in the local store (the retrying step above pulled
           # it), so a registry blip here can no longer be mistaken for a bake failure.
-          echo "── baking /repo/doc against $IMAGE"
-          docker run --rm --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
-            --entrypoint /app/mw-plugin-test "$IMAGE" /repo/doc \
-            --allow /repo/doc-gate.allow --bake-output /bake --source-sha "$SHA"
-          # Postconditions, not hopes: a green tester that wrote no identity, or no bundles, is a
+          echo "── baking /repo/doc against $IMAGE (no mesh)"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" compile /repo/doc \
+            --output /bake --allow /repo/doc-gate.allow --source-sha "$SHA"
+          # Postconditions, not hopes: a green bake that wrote no identity, or no bundles, is a
           # bake-stage regression — never a quiet publish of nothing.
           if [ ! -s "$BAKE/framework-mvid.txt" ]; then
-            echo "::error::the tester ran green but wrote no bake identity ($BAKE/framework-mvid.txt) — the bake stage regressed (or the image predates --bake-output support)."
+            echo "::error::the bake ran green but wrote no identity ($BAKE/framework-mvid.txt) — the bake stage regressed (or the image predates the compile verb)."
             exit 1
           fi
           if ! ls "$BAKE"/*.zip >/dev/null 2>&1; then
-            echo "::error::the tester ran green but produced no bundles under $BAKE — nothing could be published."
+            echo "::error::the bake ran green but produced no bundles under $BAKE — nothing could be published."
             exit 1
           fi
           echo "BAKE_DIR=$BAKE" >> "$GITHUB_ENV"
           echo "baked identity: $(cat "$BAKE/framework-mvid.txt")"
           ls -l "$BAKE"/*.zip
+      # ── THE GATE — a mesh, CONSUMING the bake above (#1763) ─────────────────────────────────
+      # 🚨 The gate legitimately needs a mesh: rendering a layout area and executing a `Tests` area
+      # are runtime behaviours. What it must NOT do is produce the bytes it is judging. With
+      # `--seed` it adopts the bake's assemblies for every NodeType it installs, so what renders and
+      # what runs the Tests areas is the assembly that will actually ship — a strictly stronger
+      # release gate than the fused run ever was, which proved only that a private recompile of the
+      # same sources worked.
+      #
+      # THE GATE STILL FAILS THE JOB. Splitting the steps must not lose the gate: the platform's own
+      # shipped content failing to render or test against the image that ships it is a release
+      # defect. It also fails if the bake was DECLARED but not consumed — adoption leaves no trace
+      # in a gate verdict (an adopted type renders exactly like a compiled one), so "the consuming
+      # half silently stopped working" is invisible unless it is a verdict. `--seed` additionally
+      # refuses, before the mesh boots, a bake keyed to a framework identity this process does not
+      # resolve: that mismatch would otherwise decline every assembly one by one and leave the gate
+      # green having judged none of the bytes that ship (#1814's shape, one level down).
+      - name: "GATE the bake: render + execute Tests areas on the BAKED bytes"
+        env:
+          IMAGE: ${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/bake-stage"
+          echo "── gating /repo/doc against $IMAGE, consuming the bake in /bake"
+          docker run --rm --init --pull never --platform linux/amd64 -v "$STAGE:/repo" -v "$BAKE_DIR:/bake" \
+            --entrypoint /app/mw-plugin-test "$IMAGE" /repo/doc \
+            --allow /repo/doc-gate.allow --seed /bake
       # ─────────── THE ADDRESS CHECK — publish only to an address the portal actually reads ───────────
       # 🚨 The framework identity is an ADDRESS, and until now NOTHING in this pipeline could observe
       # that the producer and the consumer disagree about it. The bake publishes under the identity
