@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reflection;
@@ -215,6 +216,35 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
 
     private bool isDisposed;
     private readonly object disposeLock = new();
+
+    /// <summary>
+    /// Everything <see cref="RegisterForDisposal(IDisposable)"/> coupled to THIS STREAM's lifetime,
+    /// disposed SYNCHRONOUSLY inside <see cref="Dispose"/>.
+    ///
+    /// <para>🚨 It used to be the hub's composite instead, and that is a leak, not a detail (#1613).
+    /// <c>MessageHub.Dispose()</c> disposes nothing synchronously: it closes hosted-hub creation,
+    /// cancels in-flight handlers, posts <c>ShutdownRequest(Quiescing)</c> and RETURNS. The hub's
+    /// <c>disposables</c> composite is walked in the ShutDown phase — several posted messages and
+    /// action-block turns later, bounded by nothing, on a host that is itself tearing down. So a
+    /// registrant whose whole job is to release something the moment the stream dies (the
+    /// <c>hub.Observe</c> subscription for the initial <c>SubscribeRequest</c>, whose disposal is
+    /// what removes the pending callback from <c>responseSubjects</c>) was released minutes of
+    /// scheduling later, or never.</para>
+    ///
+    /// <para>Locally that never showed, because the callback was not closed by disposal at all — the
+    /// owner's reply closed it. It only surfaces when the owner is still <c>Starting</c> and the
+    /// delivery sits <c>DEFERRED gates=[DataContextInit,Initialize]</c>: no reply, and the only
+    /// remaining closer too slow. That is why it read as a flaky test while being present in every
+    /// run.</para>
+    ///
+    /// <para>The hub registration is KEPT as a backstop — this composite is hooked onto the hub once,
+    /// so a hub that tears down WITHOUT the stream being disposed still releases everything.
+    /// <see cref="CompositeDisposable"/> is idempotent, so the two paths cannot double-dispose.</para>
+    /// </summary>
+    private readonly CompositeDisposable streamDisposables = new();
+
+    /// <summary>0 until the composite above has been hooked onto the hub's own disposal (once).</summary>
+    private int hubDisposalHooked;
     private readonly ILogger<SynchronizationStream<TStream>> logger;
 
     /// <summary>
@@ -895,7 +925,16 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             try { disposable.Dispose(); } catch { /* best-effort */ }
             return;
         }
-        Hub.RegisterForDisposal(_ => disposable.Dispose());
+
+        // Hook the stream's composite onto the hub ONCE — the backstop for a hub that tears down
+        // without Dispose() ever being called on the stream. Everything else rides the composite,
+        // which Dispose() walks SYNCHRONOUSLY (see the field note).
+        if (Interlocked.Exchange(ref hubDisposalHooked, 1) == 0)
+            Hub.RegisterForDisposal(streamDisposables);
+
+        // CompositeDisposable.Add disposes the registrant immediately if the composite is already
+        // disposed, so a registration racing Dispose() cannot leak.
+        streamDisposables.Add(disposable);
     }
 
     /// <summary>
@@ -1602,9 +1641,32 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // remaining lifetime.
         Store.OnCompleted();
         // The shared children were registered for disposal on THIS stream (CreateReducedStream),
-        // so the hub teardown below is what disposes them; dropping the index here just stops this
+        // so the composite below is what disposes them; dropping the index here just stops this
         // corpse from referencing them.
         sharedReduceCache.Clear();
+
+        // 🚨 SYNCHRONOUSLY, and BEFORE Hub.Dispose() — this is the whole point of the stream owning
+        // its own composite (#1613). The registrant that matters most is the hub.Observe
+        // subscription for the initial SubscribeRequest: disposing it is what removes the pending
+        // callback from responseSubjects. Routed through the hub's ShutDown phase instead, that
+        // removal happened several action-block turns after the caller had already gone away — so a
+        // subscribe the owner never answered (because the owner was still Starting and the delivery
+        // sat DEFERRED behind its init gates) stayed pending until the ~30 s RequestTimeout.
+        //
+        // Guarded: Dispose() is called from consumers' `.Finally(stream.Dispose)`, and a throw out
+        // of an Rx Finally REPLACES the terminal notification. A faulting registrant must be
+        // reported, never allowed to swap a completion for an error — and Hub.Dispose() below still
+        // has to run.
+        try
+        {
+            streamDisposables.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "[SYNC_STREAM] Registrant faulted while disposing stream {StreamId}", StreamId);
+        }
+
         if (Hub is not null && Hub.RunLevel <= MessageHubRunLevel.Started)
             Hub.Dispose();
     }
