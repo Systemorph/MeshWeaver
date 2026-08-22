@@ -141,6 +141,19 @@ public class SuppliedNavigationRailTest
     }
 
     [Fact]
+    public void TheHeadingAndTheGroupsKeepTheirIcons()
+    {
+        var rail = SuppliedNavigationRail.Plan(Supplied() with { Icon = "🎓" }, "Course/L1");
+
+        rail.Home.Icon.Should().Be("🎓", "the heading shows the indexed root's own icon");
+        rail.Groups.Single(g => g.Path == "Course/L1").Icon.Should().Be("📘",
+            "an entry that becomes a group keeps its icon on the heading instead of losing it "
+            + "for having children");
+        rail.Groups.Single(g => g.Path == "Course/L2").Icon.Should().BeNull(
+            "no icon supplied renders a plain heading");
+    }
+
+    [Fact]
     public void ItRendersAsOneCollapsibleNavMenu()
     {
         var menu = SuppliedNavigationRail.Render(SuppliedNavigationRail.Plan(Supplied(), "Course/L1"));
