@@ -1976,14 +1976,12 @@ public partial class MeshSearchView
             return;
         }
 
+        // A refused delete is USER-FACING, never a silent no-op: the server is the authority (the
+        // trash affordance is convenience), so its refusal must reach the viewer. SurfaceError is
+        // the canonical surface — modal via PortalErrorSink + inline + Error log.
         _affordanceSubscriptions.Add(MeshQuery.DeleteNode(path).Subscribe(
             _ => { },
-            ex =>
-            {
-                var logger = MeshHub.ServiceProvider.GetService<ILoggerFactory>()
-                    ?.CreateLogger("MeshWeaver.MeshSearchView");
-                logger?.LogWarning(ex, "MeshSearchView delete failed: {Path}", path);
-            }));
+            ex => SurfaceError(ex, $"Deleting '{path}'")));
 
         if (string.Equals(_keyboardSelectedPath, path, StringComparison.OrdinalIgnoreCase))
             _keyboardSelectedPath = null;
