@@ -775,9 +775,123 @@ GitHub subject formats (classic and immutable; **register both, always** — see
 `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` secrets set on all four repos.
 **A red publish-bake was designed debt until 2026-08-17 and is a real failure after it** —
 treat any surviving allowlist or "credentials pending" reference to a satellite's publish lane
-as historical. The framework-release dispatch that fans a platform release out to the satellites is
-still dormant (`BAKE_SUBSCRIBER_REPOS` / `DEPENDENT_DISPATCH_TOKEN` unprovisioned); until it is
-armed, a satellite re-bakes on its own `main` pushes only.
+as historical.
+
+### 🚨 Following the release is a POLL in every satellite — and only one repo had it
+
+**This is the single defect that makes a fleet boot on an identity nobody baked, and it has been
+rediscovered at least four times. Read this before touching a bake trigger.**
+
+Two cadences produce the bundles and consume them, and they do not match:
+
+| | minted by | how often (measured 2026-08-22) |
+|---|---|---|
+| a framework **identity** | every platform `main` merge (`promote` phase C arms `memex-portal-ai:<version>`) | **1733** release-shaped portal tags |
+| a **bundle** for that identity | a satellite `publish-bake` run | a handful of pushes per repo per day |
+
+An instance self-updates to the newest release tag. If no satellite baked against *that* release,
+`prebuilt-bundles/<identity>/<source>/` does not exist, every pod falls back to the in-mesh Roslyn
+sweep, and the boot takes minutes instead of seconds. **The bundles are not missing because
+publication is broken — they are missing because nothing told the satellites a release happened.**
+
+So a satellite must **follow the release**, and it must do so by POLLING. The push
+`repository_dispatch` fan-out is not the mechanism and must not be relied on:
+
+- it was **never armed** (`BAKE_SUBSCRIBER_REPOS` / `DEPENDENT_DISPATCH_TOKEN` unprovisioned), so
+  `notify-dependents` reported SUCCESS while notifying nobody — a green tick over a no-op;
+- it required a human-minted cross-repo PAT on four satellites, which was **removed deliberately on
+  2026-08-21**. Credentials that let one repo drive another's CI are not the architecture we want.
+
+A poll needs nothing provisioned and nobody to remember. It uses the ACR credentials the satellite
+already has for its gates.
+
+#### The four parts — a repo has ALL of them or it follows nothing
+
+1. **`on: schedule:`** with a cron. Stagger the minute per repo so four repos do not wake together.
+2. **A `framework-release` concurrency lane** that `schedule` shares with `repository_dispatch`:
+
+   ```yaml
+   concurrency:
+     group: ${{ github.workflow }}-${{ (github.event_name == 'repository_dispatch' || github.event_name == 'schedule') && 'framework-release' || github.ref }}
+     cancel-in-progress: true
+   ```
+
+   🚨 **The schedule MUST be in that lane.** A scheduled run carries the DEFAULT BRANCH ref, so left
+   in the `github.ref` group it shares the main-push group and — with `cancel-in-progress` — a
+   half-hourly poll can cancel a main run part-way through `tag-modules`, work the scheduled
+   replacement does not do and nothing else recovers. Release polling supersedes release polling;
+   it never supersedes a push.
+3. **A `FOLLOW_RELEASE` bake-target resolution** in `preflight`: on a release trigger resolve the
+   digest `MW_TEST_IMAGE` currently points at and pass THAT down; on a push keep the pin (that bake
+   certifies the bits the gates just ran). It must **fail loud** when the digest cannot be resolved
+   — a silent fall back to the pin republishes an already-published identity and leaves the instance
+   held, reporting success.
+4. **`schedule` in the `publish-bake` job's `if:`** — parts 1–3 do nothing if the bake itself is
+   still gated to pushes and dispatches.
+
+Use `docker manifest inspect -v … | jq '… .Descriptor.digest'`. **Not**
+`imagetools inspect --format '{{.Manifest.Digest}}'`: that template reads a member an OCI manifest
+does not carry, so it yields nothing and every scheduled run takes the fail-loud branch.
+
+#### Measured 2026-08-22 — three of four repos followed nothing
+
+Counting occurrences in each repo's `origin/main:.github/workflows/ci.yml`:
+
+| Repo | `schedule:` | `FOLLOW_RELEASE` | followed releases? |
+|---|---|---|---|
+| **MeshWeaver.Plugins** | 1 | 2 | ✅ |
+| MeshWeaver.Education | 0 | 0 | ❌ pushes only |
+| MeshWeaver.Reinsurance | 0 | 0 | ❌ pushes only |
+| MeshWeaver.SocialMedia | 0 | 0 | ❌ pushes only |
+
+All four follow releases as of 2026-08-22 (Education #195, Reinsurance #80, SocialMedia #46), on
+staggered crons in dependency order: Plugins `17,47`, SocialMedia `7,37`, Education `32` (hourly —
+a run there boots four disposable meshes), Reinsurance `22,52`.
+
+🚨 **MeshWeaver.Education satisfies part 3 differently, and the grep below reports it as a
+ZERO.** It has no pin to diverge from: it deliberately tracks `mw-plugin-test:main`, so its existing
+"Resolve the bake image" step already targets the current release on a poll and it carries no
+`FOLLOW_RELEASE` variable at all. That is correct, and `:main` IS the newest promoted release —
+promote phase B moves the tag in the same job that arms the release in phase C. **Do not "fix" it by
+adding the variable**; check that the repo resolves a released image on its poll, by whatever means
+its bake target is chosen. Counting a string is a shortcut, and this is the row where the shortcut
+lies.
+
+All three carried the `repository_dispatch` receiver and a comment calling it *"DORMANT until the
+platform provisions…"* — so the wall of green ticks was truthful about the gates and silent about
+the fact that nothing had baked for the current release in weeks.
+
+🚨 **A dormant receiver reads exactly like an armed one.** That is the whole trap, and it is the
+same shape as `if: ${{ vars.X != '' }}` on a gate: *the evidence that it did not run is the absence
+of evidence.* Do not conclude a repo follows releases because it has a `repository_dispatch:` block.
+
+**Re-measure before acting on that table** — it is a snapshot, and this is exactly the kind of
+thing that gets fixed in one repo and left in three:
+
+```bash
+for r in MeshWeaver.Plugins MeshWeaver.Education MeshWeaver.Reinsurance MeshWeaver.SocialMedia; do
+  printf "%-26s " "$r"
+  c=$(gh api repos/Systemorph/$r/contents/.github/workflows/ci.yml --jq .content | base64 -d)
+  echo "schedule=$(echo "$c" | grep -c '^  schedule:')" \
+       "bake-runs-on-poll=$(echo "$c" | grep -c "event_name == 'schedule'")"
+done
+```
+
+`schedule=1` and a non-zero `bake-runs-on-poll` are the two that hold for **every** repo. How the
+bake TARGET is resolved is the third part and it varies (see the Education note above), so read that
+one rather than counting it.
+
+#### The production signature
+
+When this is missing you do not see a red gate. You see:
+
+- an instance **held** on an old version, or rolling and then taking minutes per pod to boot;
+- `/data/prebuilt-bundles` holding **many** identities (101 on memex-cloud, 2026-08-21) and **none**
+  of them the one the booting pod resolves;
+- `/app/prebuilt` **empty** — the image lane contributes nothing, so the store is the only source;
+- boot logs showing a full Roslyn sweep (`compiled=<N>`) instead of `adopted … from … sealed bundles`.
+
+Every one of those reads as "the bake is broken". The bake is fine. Nothing invited it.
 
 **Measured in production, 2026-08-17** — for satellite content the lane is not a design any more,
 it is observed behaviour. On `memex` running `3.0.0-rc4.ci.4049` (identity
