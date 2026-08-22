@@ -282,7 +282,23 @@ public static class TreeBake
                     + $"[{compiled.Inputs.MatchedSourcePaths.Length} source(s), "
                     + $"{compiled.Dependencies.Count} dependency record entr(ies)]");
             }
-            catch (Exception ex) when (ex is CompilationException or SourceDiscoveryUnavailableException)
+            // 🚨 A FAILING TYPE FAILS THAT TYPE — never the whole bake. The catch used to name
+            // exactly two exception types, and anything else escaped BakeAll, unwound past the
+            // bundle writer and killed the run: `mw-plugin-test: FATAL — …`, exit 70, zero bundles
+            // written for the packages that compiled perfectly.
+            //
+            // Measured on samples/Graph/Data: `FatalProtocolException: The local source
+            // 'dist/packages' doesn't exist` out of the NuGet resolver — a host-configuration
+            // fault on ONE type with a `#r "nuget:"` directive — discarded a bake in which 23 of
+            // 24 NodeTypes had already compiled. The mesh-driven producer contains exactly this
+            // per type (the type settles at CompilationStatus.Error and the gate's ratchet decides
+            // what that is worth), so an escaping exception here is also an EQUIVALENCE break: the
+            // two producers must fail the same way, or a known-debt entry that the gate tolerates
+            // becomes a total bake failure.
+            //
+            // Cancellation still propagates: it is the caller's decision to stop, not a verdict
+            // about this type.
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 results.Add(new TypeResult(
                     candidate.Node.Path, candidate.Package,
