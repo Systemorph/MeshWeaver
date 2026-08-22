@@ -404,6 +404,14 @@ builder.Services.AddHealthChecks()
         new Memex.Portal.Distributed.PendingModuleActivationHealthCheck(
             MeshWeaver.PluginCatalog.ModuleRoot.Resolve(builder.Configuration)));
 
+// Is this instance ADOPTING the assemblies the registry is meant to serve it, or quietly compiling
+// them itself (#1782 gap 4)? With instance-level pre-bake giving way to lazy compile-on-access, a
+// fetch miss is absorbed so completely that the whole distribution lane can go dark while every
+// surface looks like a healthy day (2026-08-20). DEGRADED on a miss, never Unhealthy: compiling is
+// correct behaviour, and failing readiness would turn a distribution regression into an outage.
+builder.Services.AddHealthChecks()
+    .AddCheck<Memex.Portal.Distributed.BundleAdoptionHealthCheck>("bundle_adoption");
+
 // The same shape, one dependency further out: DbVersionGate proves the MESH database is
 // migrated; this proves the ORLEANS database is provisioned. They are different databases,
 // provisioned by different phases, and #1798 is what happens when only the first is checked —
