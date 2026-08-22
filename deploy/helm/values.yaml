@@ -232,6 +232,29 @@ portal:
   # assemblies. 30 minutes covers a working session; lower it where memory is tighter than
   # continuity.
   drainSeconds: 1800
+  # 🚨 The tail of drainSeconds RESERVED for the process's own shutdown — NOT part of the session
+  # drain. preStop stops polling at (drainSeconds − shutdownMarginSeconds) and returns, so SIGTERM
+  # is delivered while there is still grace left to shut down IN.
+  #
+  # Without it the whole grace was spent waiting, and a pod whose sessions outlived it was SIGKILLed
+  # WITH A LIVE ORLEANS SILO: the host's 90 s ShutdownTimeout never ran, ApplicationStopping never
+  # fired, and the silo never departed membership. This deployment's own
+  # `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` annotation records the cost — "each
+  # abrupt departure left a ZOMBIE entry in the Orleans membership table: the cluster kept placing
+  # new grain activations on the dead silo, so writes timed out mesh-wide". And riding to the
+  # ceiling was the NORMAL outcome of a roll, not the exception (measured on memex 2026-08-21: a
+  # terminating pod still executing application code at 09:09:44Z, gone at the ceiling 09:10:52Z,
+  # while a serving pod had five circuits open at an arbitrary moment) — so the roll design was
+  # protecting users from the FAST teardown by guaranteeing the ABRUPT one. See #1971.
+  #
+  # 120 s: comfortably above the host's own 90 s ShutdownTimeout (Memex.Portal.Distributed
+  # Program.cs), which is the budget this margin exists to make room for.
+  #
+  # The trade this makes EXPLICIT rather than by accident: at the deadline the last stragglers are
+  # cut off — deliberately, logged, naming the count — instead of everyone being kept and the
+  # process then dying abruptly. Raise drainSeconds if sessions that long are expected; do not
+  # shrink this below the host's ShutdownTimeout.
+  shutdownMarginSeconds: 120
 migration:
   image: "ghcr.io/systemorph/memex-migration:latest"
 

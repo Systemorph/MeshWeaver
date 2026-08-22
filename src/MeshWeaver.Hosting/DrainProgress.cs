@@ -184,4 +184,64 @@ public sealed class DrainProgress
                     next.ProbeCount);
         }
     }
+
+    /// <summary>
+    /// 🚨 <b>The line that only exists if the process was allowed to shut down at all</b> — SIGTERM
+    /// arrived, and this is what it found.
+    ///
+    /// <para><b>Why it matters more than it reads.</b> <c>preStop</c> used to poll <c>/drain</c>
+    /// with no bound of its own, so a pod whose sessions outlived
+    /// <c>terminationGracePeriodSeconds</c> was SIGKILLed WITH A LIVE ORLEANS SILO: the host's 90 s
+    /// <c>ShutdownTimeout</c> never ran, <c>ApplicationStopping</c> never fired, and the silo never
+    /// departed membership. The deployment's own
+    /// <c>cluster-autoscaler.kubernetes.io/safe-to-evict: "false"</c> annotation records what that
+    /// costs — <i>"each abrupt departure left a ZOMBIE entry in the Orleans membership table: the
+    /// cluster kept placing new grain activations on the dead silo, so writes timed out mesh-wide"</i>
+    /// (#1971). Riding to the ceiling was the NORMAL outcome of a roll, not the exception.</para>
+    ///
+    /// <para>With preStop bounded to <c>drainSeconds − shutdownMarginSeconds</c>, SIGTERM arrives
+    /// inside the grace and this line is emitted. Its ABSENCE after a termination is therefore the
+    /// evidence of a hard kill — which is exactly the question #1971 could not answer by reading
+    /// Loki, because there was nothing to read either way.</para>
+    ///
+    /// <para>Pure with respect to <paramref name="now"/>, like <see cref="Probe"/>, and safe to
+    /// call when no probe was ever seen (a pod SIGTERMed without a preStop, e.g. a node
+    /// eviction).</para>
+    /// </summary>
+    /// <param name="liveCircuits">Circuits still open when shutdown began.</param>
+    /// <param name="now">Shutdown's timestamp.</param>
+    public DrainAbandonReport Abandon(int liveCircuits, DateTimeOffset now)
+    {
+        if (liveCircuits < 0)
+            liveCircuits = 0;
+
+        var current = Volatile.Read(ref state);
+        return new DrainAbandonReport(
+            liveCircuits,
+            current is null ? TimeSpan.Zero : now - current.StartedAt,
+            current?.CircuitsWhenTerminationBegan ?? liveCircuits,
+            TerminationWasObserved: current is not null);
+    }
+}
+
+/// <summary>
+/// What SIGTERM found — the shutdown counterpart of <see cref="DrainProbeReport"/>.
+/// </summary>
+/// <param name="LiveCircuits">Circuits still open when shutdown began. Above zero means these
+/// sessions are being cut off: the drain window expired before they closed.</param>
+/// <param name="Elapsed">How long the drain ran, or <see cref="TimeSpan.Zero"/> when no probe was
+/// ever seen.</param>
+/// <param name="CircuitsWhenTerminationBegan">Circuits open at the first probe.</param>
+/// <param name="TerminationWasObserved">Whether a <c>/drain</c> probe was ever seen. False means
+/// SIGTERM arrived with no preStop at all — a node eviction, a local Ctrl-C, or a chart that lost
+/// its lifecycle hook. Distinguished because "the drain ran and gave up" and "there was no drain"
+/// need different responses.</param>
+public sealed record DrainAbandonReport(
+    int LiveCircuits,
+    TimeSpan Elapsed,
+    int CircuitsWhenTerminationBegan,
+    bool TerminationWasObserved)
+{
+    /// <summary>True when sessions are being cut off by this shutdown.</summary>
+    public bool CutSessionsOff => LiveCircuits > 0;
 }
