@@ -24,7 +24,7 @@ import { attachInstanceStore, currentInstance, discoverInstances, mergeDiscovere
 import { type ClientDestination } from "./src/screens";
 import { ThemeProvider, useTheme } from "./src/theme";
 import { ChatComposer } from "./src/chat";
-import { ExpoAvRecorder } from "./src/speech/expoRecorder";
+import { ExpoAudioRecorder } from "./src/speech/expoRecorder";
 import { SpeechTranscriptionClient } from "./src/speech/transcription";
 import type { ThreadSubmitter } from "./src/speech/pushToTalk";
 
@@ -40,7 +40,7 @@ import type { ThreadSubmitter } from "./src/speech/pushToTalk";
 
 // The chat composer + CENTRALIZED speech pipeline (distinct from the shell's VoiceScreen, which is
 // the browser's on-device Web Speech API). `namespacePath` anchors new threads (your partition);
-// speech records via expo-av and posts the audio to the portal's `POST /api/speech/transcribe`
+// speech records via expo-audio and posts the audio to the portal's `POST /api/speech/transcribe`
 // (the centralized Whisper container — see src/speech/transcription.ts; for a dev container use
 // `speech: { url: "http://localhost:8080", path: "/inference" }`). Set CHAT to null to hide the
 // composer entirely. Submission rides the SAME gRPC-web connection the renderer uses.
@@ -237,7 +237,7 @@ function AppInner() {
     const url = CHAT.speech.url ?? inst.url;
     if (!url) return null; // no portal to transcribe against
     return {
-      recorder: new ExpoAvRecorder(),
+      recorder: new ExpoAudioRecorder(),
       transcriber: new SpeechTranscriptionClient({
         url,
         token: CHAT.speech.token ?? inst.token,

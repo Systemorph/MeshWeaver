@@ -6,8 +6,8 @@
 // button. That is exactly what the new parity ratchet caught.
 
 import { useEffect, useRef, useState } from "react";
-import { View, Text, Pressable, Modal, ScrollView, StyleSheet, Linking } from "react-native";
-import { Video as ExpoVideo, ResizeMode } from "expo-av";
+import { View, Text, Pressable, Modal, ScrollView, StyleSheet, Linking, Image } from "react-native";
+import { VideoView, useVideoPlayer } from "expo-video";
 import {
   useLocalize,
   ControlRenderer,
@@ -127,15 +127,38 @@ const Dialog: ControlComponent = ({ control }) => {
 
 // ── Video ────────────────────────────────────────────────────────────────────
 /**
- * Native video playback (expo-av). `Kind: "embed"` on the web renders an <iframe> for a YouTube /
+ * Native video playback (expo-video). `Kind: "embed"` on the web renders an <iframe> for a YouTube /
  * Vimeo page URL — there is no native iframe, so an embed opens in the system browser behind a
  * poster-style press target. A direct media Src plays inline with native controls.
+ *
+ * 🚨 Ported from `expo-av` (removed in Expo SDK 57) — see #1584. The prop renames are mechanical
+ * (`useNativeControls` → `nativeControls`, `resizeMode={ResizeMode.CONTAIN}` → `contentFit="contain"`)
+ * and the source moved off the view onto a PLAYER object (`useVideoPlayer`). One prop has no
+ * successor at all: expo-video has NO `posterSource`/`usePoster` — `VideoViewProps` carries no
+ * poster of any kind, and `VideoSource.metadata.artwork` is the lock-screen/now-playing image, not
+ * an in-view one. `VideoControl.Poster` is a real field ("Poster image URL shown before playback
+ * starts") that Blazor honours as `<video poster>`, so it is reproduced here as an overlay Image
+ * that clears on the first `playingChange` — `pointerEvents="none"` so the native play control
+ * underneath still takes the tap. Same visible behaviour, one nuance: expo-av swapped the poster
+ * out when the video LOADED, this clears it when playback STARTS (which is what `<video poster>`
+ * does).
  */
 const Video: ControlComponent = ({ control }) => {
   const src = useText(control.src);
   const poster = useText(control.poster);
   const title = useText(control.title);
   const isEmbed = s(control.kind).toLowerCase() === "embed";
+  // The player is a hook, so it is created unconditionally — an embed or an empty Src gives it a
+  // null source, which expo-video accepts and treats as "nothing loaded".
+  const player = useVideoPlayer(!src || isEmbed ? null : src);
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    if (!player) return;
+    const sub = player.addListener("playingChange", ({ isPlaying }) => {
+      if (isPlaying) setStarted(true);
+    });
+    return () => sub.remove();
+  }, [player]);
   // Blazor renders nothing for an empty Src — hooks are all above, so the early return stays legal.
   if (!src) return null;
   if (isEmbed) {
@@ -147,15 +170,22 @@ const Video: ControlComponent = ({ control }) => {
     );
   }
   return (
-    <ExpoVideo
-      style={styles.video}
-      source={{ uri: src }}
-      posterSource={poster ? { uri: poster } : undefined}
-      usePoster={!!poster}
-      useNativeControls
-      resizeMode={ResizeMode.CONTAIN}
-      accessibilityLabel={title || undefined}
-    />
+    <View style={styles.video}>
+      <VideoView
+        style={styles.videoSurface}
+        player={player}
+        nativeControls
+        contentFit="contain"
+        accessibilityLabel={title || undefined}
+      />
+      {poster && !started ? (
+        // `pointerEvents` is a View prop (RN keeps it off style deliberately), so the overlay is a
+        // View wrapper — without it the poster would swallow the tap on the native play button.
+        <View style={styles.videoPoster} pointerEvents="none">
+          <Image source={{ uri: poster }} style={styles.videoSurface} resizeMode="contain" accessible={false} />
+        </View>
+      ) : null}
+    </View>
   );
 };
 
@@ -243,7 +273,10 @@ const styles = StyleSheet.create({
   dialogActions: { flexDirection: "row", justifyContent: "flex-end", gap: 8 },
   dialogButton: { backgroundColor: "#edebe9", paddingVertical: 8, paddingHorizontal: 14, borderRadius: 6 },
   dialogButtonText: { color: "#242424", fontWeight: "600" },
-  video: { width: "100%", aspectRatio: 16 / 9, backgroundColor: "#000", borderRadius: 6 },
+  video: { width: "100%", aspectRatio: 16 / 9, backgroundColor: "#000", borderRadius: 6, overflow: "hidden" },
+  videoSurface: { width: "100%", height: "100%" },
+  // The poster sits ON the surface (expo-video has no poster prop) and must not eat the play tap.
+  videoPoster: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000" },
   videoEmbed: {
     width: "100%",
     aspectRatio: 16 / 9,

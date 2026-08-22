@@ -109,7 +109,7 @@ app only **records** audio and posts it for transcription. Nothing is recognized
 
 The pipeline (`src/speech/` + `src/chat.tsx`):
 
-1. **Capture** — `ExpoAvRecorder` (`expo-av`): 16 kHz mono; WAV/LINEARPCM on iOS, AAC/.m4a on Android.
+1. **Capture** — `ExpoAudioRecorder` (`expo-audio`): 16 kHz mono; WAV/LINEARPCM on iOS, AAC/.m4a on Android.
 2. **Transcribe** — `SpeechTranscriptionClient` POSTs multipart (`file` + `language` +
    `response_format=json`) to the portal's `POST /api/speech/transcribe` (the endpoint
    CentralizedSpeech.md specifies; still "next" server-side — for dev, point it straight at a Whisper

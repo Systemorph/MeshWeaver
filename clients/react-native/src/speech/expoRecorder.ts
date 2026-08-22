@@ -1,36 +1,70 @@
-// Expo (expo-av) microphone capture — the RN implementation of the Recorder seam. Capture only:
+// Expo (expo-audio) microphone capture — the RN implementation of the Recorder seam. Capture only:
 // recognition happens on the centralized Whisper container (transcription.ts), never on-device.
 //
 // Format: 16 kHz mono — what Whisper wants. iOS records WAV/LINEARPCM (the safe interchange format
 // the whisper.cpp server always accepts); Android's MediaRecorder cannot produce WAV, so it records
 // AAC/.m4a — the portal transcribe endpoint (or a Whisper container built with ffmpeg + `--convert`)
 // transcodes it. See deploy/whisper/Dockerfile and transcription.ts's TODO(portal endpoint).
+//
+// 🚨 Ported from `expo-av` (removed in Expo SDK 57) — see #1584. The FORMAT contract above is what
+// /api/speech/transcribe consumes, so it is preserved byte-for-byte; only the API moved:
+//
+//   expo-av                                        expo-audio
+//   ────────────────────────────────────────────── ──────────────────────────────────────────────
+//   Audio.requestPermissionsAsync()                requestRecordingPermissionsAsync()
+//   Audio.setAudioModeAsync({allowsRecordingIOS,   setAudioModeAsync({allowsRecording,
+//                            playsInSilentModeIOS})                    playsInSilentMode})
+//   Audio.Recording.createAsync(o) -> {recording}  new AudioRecorder(o); prepareToRecordAsync(); record()
+//   recording.stopAndUnloadAsync() -> {durationMillis}  getStatus().durationMillis, then stop()
+//   recording.getURI()                             recorder.uri
+//   Audio.IOSAudioQuality.HIGH  (0x60)             AudioQuality.HIGH        (96 — same value)
+//   Audio.AndroidOutputFormat.MPEG_4               'mpeg4'                  (string union now)
+//   Audio.AndroidAudioEncoder.AAC                  'aac'
+//
+// The one shape change that is not a rename: expo-av declared extension/sampleRate/channels/bitRate
+// PER PLATFORM, expo-audio declares them at the TOP LEVEL and keeps only the codec-specific bits in
+// `ios`/`android`/`web`. `bitRate` in particular has no per-platform slot any more, so the two
+// values expo-av carried (256 kbps iOS / 64 kbps Android) are selected here by Platform.
 
-import { Audio } from "expo-av";
+import {
+  AudioModule,
+  AudioQuality,
+  IOSOutputFormat,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  type AudioRecorder,
+  type RecordingOptions,
+} from "expo-audio";
 import { Platform } from "react-native";
 import type { Recorder } from "./recorder";
 import type { AudioInput } from "./transcription";
 
-const RECORDING_OPTIONS: Audio.RecordingOptions = {
+const ios = Platform.OS === "ios";
+
+const RECORDING_OPTIONS: RecordingOptions = {
   isMeteringEnabled: false,
+  // Top-level now (see the note above). `ios`/`android` below re-state the extension because the
+  // platform blocks are spread OVER these on the way to the native module.
+  extension: ios ? ".wav" : ".m4a",
+  sampleRate: 16_000,
+  numberOfChannels: 1,
+  // LINEAR PCM ignores bitRate (it is sampleRate x channels x depth); the value is carried over
+  // from the expo-av options unchanged so nothing about the produced files moves.
+  bitRate: ios ? 256_000 : 64_000,
   ios: {
     extension: ".wav",
-    outputFormat: Audio.IOSOutputFormat.LINEARPCM,
-    audioQuality: Audio.IOSAudioQuality.HIGH,
+    outputFormat: IOSOutputFormat.LINEARPCM,
+    audioQuality: AudioQuality.HIGH,
     sampleRate: 16_000,
-    numberOfChannels: 1,
-    bitRate: 256_000,
     linearPCMBitDepth: 16,
     linearPCMIsBigEndian: false,
     linearPCMIsFloat: false,
   },
   android: {
     extension: ".m4a",
-    outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-    audioEncoder: Audio.AndroidAudioEncoder.AAC,
+    outputFormat: "mpeg4",
+    audioEncoder: "aac",
     sampleRate: 16_000,
-    numberOfChannels: 1,
-    bitRate: 64_000,
   },
   web: {
     mimeType: "audio/webm",
@@ -38,42 +72,93 @@ const RECORDING_OPTIONS: Audio.RecordingOptions = {
   },
 };
 
-export class ExpoAvRecorder implements Recorder {
-  private recording: Audio.Recording | null = null;
+/**
+ * The per-platform, FLATTENED options the native/web recorder constructor actually takes.
+ *
+ * expo-audio does this internally in `useAudioRecorder` (`utils/options.createRecordingOptions`),
+ * but that helper is not part of the package's public surface and this seam is a plain class, not
+ * a hook — `PushToTalkController` is not a React component. Flattening here is 10 lines and keeps
+ * the seam imperative; the alternative is reshaping the whole speech pipeline around a hook.
+ */
+function platformOptions(o: RecordingOptions): Partial<RecordingOptions> {
+  const common = {
+    extension: o.extension,
+    sampleRate: o.sampleRate,
+    numberOfChannels: o.numberOfChannels,
+    bitRate: o.bitRate,
+    isMeteringEnabled: o.isMeteringEnabled ?? false,
+  };
+  if (Platform.OS === "ios") return { ...common, ...o.ios } as Partial<RecordingOptions>;
+  if (Platform.OS === "android") return { ...common, ...o.android } as Partial<RecordingOptions>;
+  return { ...common, ...o.web } as Partial<RecordingOptions>;
+}
+
+type RecorderCtor = new (options: Partial<RecordingOptions>) => AudioRecorder;
+
+/**
+ * expo-audio exposes NO imperative recorder constructor under one name on every platform: the
+ * native build's `AudioModule` is the `NativeAudioModule` instance carrying `AudioRecorder`, while
+ * on web `index.js` resolves to `ExpoAudio.web.js`, whose `AudioModule` is the module NAMESPACE of
+ * `AudioModule.web` and carries `AudioRecorderWeb`. Both classes implement the same `AudioRecorder`
+ * interface — only the TYPES describe the native shape alone, hence the cast.
+ */
+function recorderCtor(): RecorderCtor {
+  const mod = AudioModule as unknown as {
+    AudioRecorder?: RecorderCtor;
+    AudioRecorderWeb?: RecorderCtor;
+  };
+  const ctor = mod.AudioRecorder ?? mod.AudioRecorderWeb;
+  if (!ctor) throw new Error("expo-audio exposes no AudioRecorder on this platform.");
+  return ctor;
+}
+
+export class ExpoAudioRecorder implements Recorder {
+  private recorder: AudioRecorder | null = null;
 
   async start(): Promise<void> {
-    if (this.recording) throw new Error("Already recording.");
-    const permission = await Audio.requestPermissionsAsync();
+    if (this.recorder) throw new Error("Already recording.");
+    const permission = await requestRecordingPermissionsAsync();
     if (!permission.granted) throw new Error("Microphone permission denied.");
-    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-    const { recording } = await Audio.Recording.createAsync(RECORDING_OPTIONS);
-    this.recording = recording;
+    // Renamed, not re-scoped: expo-av's allowsRecordingIOS/playsInSilentModeIOS are expo-audio's
+    // allowsRecording/playsInSilentMode (both still iOS-only in effect).
+    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+    const Ctor = recorderCtor();
+    const recorder = new Ctor(platformOptions(RECORDING_OPTIONS));
+    // No argument on purpose. The native prototype re-flattens whatever it is given, and the web
+    // class ignores arguments entirely — in both, the CONSTRUCTOR options are the authoritative
+    // ones (iOS builds its AVAudioRecorder from them), so re-passing them here can only diverge.
+    await recorder.prepareToRecordAsync();
+    recorder.record();
+    this.recorder = recorder;
   }
 
   async stop(): Promise<AudioInput> {
-    const recording = this.recording;
-    if (!recording) throw new Error("Not recording.");
-    this.recording = null;
-    const status = await recording.stopAndUnloadAsync();
-    const uri = recording.getURI();
+    const recorder = this.recorder;
+    if (!recorder) throw new Error("Not recording.");
+    this.recorder = null;
+    // Read the duration BEFORE stopping: expo-av returned it FROM stopAndUnloadAsync(), but
+    // expo-audio's stop() resolves void and the web recorder drops its MediaRecorder inside stop(),
+    // after which getStatus() can no longer measure the elapsed time.
+    const durationMs = recorder.getStatus().durationMillis;
+    await recorder.stop();
+    const uri = recorder.uri;
     if (!uri) throw new Error("Recording produced no file.");
-    const wav = Platform.OS === "ios";
     return {
       uri,
-      contentType: wav ? "audio/wav" : "audio/mp4",
-      fileName: wav ? "audio.wav" : "audio.m4a",
-      durationMs: status.durationMillis,
+      contentType: ios ? "audio/wav" : "audio/mp4",
+      fileName: ios ? "audio.wav" : "audio.m4a",
+      durationMs,
     };
   }
 
   async cancel(): Promise<void> {
-    const recording = this.recording;
-    if (!recording) return;
-    this.recording = null;
+    const recorder = this.recorder;
+    if (!recorder) return;
+    this.recorder = null;
     try {
-      await recording.stopAndUnloadAsync();
+      await recorder.stop();
     } catch {
-      // Already unloaded — cancelling must not mask the error that triggered it.
+      // Already stopped — cancelling must not mask the error that triggered it.
     }
   }
 }

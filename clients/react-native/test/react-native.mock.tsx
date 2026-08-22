@@ -22,7 +22,12 @@ export const StatusBar = host("StatusBar");
 export const Modal = host("Modal");
 export const FlatList = host("FlatList");
 
-export const StyleSheet = { create: <T,>(styles: T): T => styles };
+const absoluteFillObject = { position: "absolute", left: 0, right: 0, top: 0, bottom: 0 } as const;
+export const StyleSheet = {
+  create: <T,>(styles: T): T => styles,
+  absoluteFill: absoluteFillObject,
+  absoluteFillObject,
+};
 
 // LayoutGridItem resolves its column span against the live viewport width (RN has no media
 // queries). A desktop-ish width keeps the headless assertions on the largest-breakpoint branch.
