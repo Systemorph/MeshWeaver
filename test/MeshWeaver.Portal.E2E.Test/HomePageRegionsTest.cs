@@ -38,14 +38,12 @@ public class HomePageRegionsTest(PortalFixture fixture)
 
         // (b) The catalog — embedded via @@("area/Catalog") — must fill the home width.
         //
-        // The catalog region is the TABBED home (UserActivityLayoutAreas.BuildHome): a TabsControl
-        // (Shared with me · Pinned · Apps · Spaces — the first two only when present) rendering
-        // <fluent-tabs>, whose active panel holds a MeshSearch (<div class="mesh-search-container">).
-        // The default e2e user has the onboarding-seeded pins and no shares, so the active first
-        // tab is Pinned — a MeshSearch either way.
-        // Wait (don't count): CountAsync doesn't wait, so a transient 0 before the tabs render
+        // The catalog region is ONE scoped search surface (UserActivityLayoutAreas.BuildHome): a
+        // MeshSearch whose SCOPE TABS (Shared with me · Pinned · Apps · Spaces · All — the first
+        // two only when present) render as the .mesh-search-scopes strip and share one search bar.
+        // Wait (don't count): CountAsync doesn't wait, so a transient 0 before the strip renders
         // would flake this assertion.
-        await page.Locator("fluent-tabs").First
+        await page.Locator(".mesh-search-scopes").First
             .WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });
         var catalog = page.Locator(".mesh-search-container").First;
         await catalog.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 60_000 });

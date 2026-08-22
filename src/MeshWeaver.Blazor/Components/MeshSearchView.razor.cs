@@ -141,7 +141,8 @@ public partial class MeshSearchView
 
     // Basic properties
     private string? BoundTitle => ViewModel?.Title?.ToString();
-    private string BoundHiddenQuery => _overriddenHiddenQuery ?? ViewModel?.HiddenQuery?.ToString() ?? "";
+    private string BoundHiddenQuery =>
+        _overriddenHiddenQuery ?? ActiveScopeTab?.Query ?? ViewModel?.HiddenQuery?.ToString() ?? "";
     private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
     private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search...";
     private string BoundNamespace => ViewModel?.Namespace?.ToString() ?? "";
@@ -305,12 +306,56 @@ public partial class MeshSearchView
         }
     }
 
+    // ----- Scope tabs (one shared search bar across scopes) -----
+    // The active tab's index. Scope switching swaps ONLY the hidden query (and the sort set) while
+    // the typed search text and every other bit of component state stay — that is the whole point:
+    // a search term follows the user across the tabs because they are ONE component.
+    private int _activeScopeIndex;
+
+    /// <summary>The scope tabs supplied by the control (empty ⇒ no strip).</summary>
+    private IReadOnlyList<MeshSearchScopeTab> BoundScopeTabs => ViewModel?.ScopeTabs ?? [];
+
+    /// <summary>Render the scope strip only for two or more scopes.</summary>
+    private bool HasScopeTabs => BoundScopeTabs.Count > 1;
+
+    /// <summary>The active scope, when scopes are declared.</summary>
+    private MeshSearchScopeTab? ActiveScopeTab =>
+        BoundScopeTabs.Count > 0 && _activeScopeIndex >= 0 && _activeScopeIndex < BoundScopeTabs.Count
+            ? BoundScopeTabs[_activeScopeIndex]
+            : null;
+
+    /// <summary>
+    /// Activates a scope tab: swap the base hidden query to the scope's, reset the sort choice to
+    /// the scope's own default, and re-query — keeping the search text (<c>_currentValue</c>)
+    /// untouched, exactly like a sort switch.
+    /// </summary>
+    private void SelectScope(int index)
+    {
+        if (index == _activeScopeIndex || index < 0 || index >= BoundScopeTabs.Count)
+            return;
+        _activeScopeIndex = index;
+        _viewSortLabel = null;                     // back to the scope's default (first) sort
+        _overriddenHiddenQuery = null;             // the scope query IS the new base
+        _lastBoundHiddenQuery = BoundHiddenQuery;  // keep OnParametersSet from re-triggering
+        _collapsedGroups.Clear();
+        if (IsPrecomputedMode)
+            return;
+        if (IsNamespaceTreeMode)
+            ResetTree();
+        else if (IsGraphNavigatorMode)
+            ResetGraphNavigator();
+        else
+            LoadResults();
+    }
+
     // ----- Sort-by dropdown (view-options) -----
     // The selected option's Label. null ⇒ the default (first) option.
     private string? _viewSortLabel;
 
-    /// <summary>The user-selectable sort choices supplied by the control (empty ⇒ no Sort-by dropdown).</summary>
-    private IReadOnlyList<MeshSearchSortOption> BoundSortOptions => ViewModel?.SortOptions ?? [];
+    /// <summary>The user-selectable sort choices supplied by the control (empty ⇒ no Sort-by dropdown).
+    /// An active scope's own sort set REPLACES the control-level one.</summary>
+    private IReadOnlyList<MeshSearchSortOption> BoundSortOptions =>
+        ActiveScopeTab?.SortOptions ?? ViewModel?.SortOptions ?? [];
 
     /// <summary>Render the Sort-by dropdown only when the control declares options.</summary>
     private bool HasSortOptions => BoundSortOptions.Count > 0;

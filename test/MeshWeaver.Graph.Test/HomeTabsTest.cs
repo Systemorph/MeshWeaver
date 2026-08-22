@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.Json;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -9,48 +10,71 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The TABBED home surface (<see cref="UserActivityLayoutAreas.BuildHome"/>) — the phone-home model:
-/// <b>Shared with me</b> first (only with cross-partition grants, last-accessed ranking with a
-/// completeness fallback), then <b>Pinned</b> (only with pins), then <b>Apps</b> (config-declared
-/// default apps ∪ the owner's installed <c>App</c> records — every app exactly once), then
-/// <b>Spaces</b> (the catalog WITHOUT store items, so nothing is listed twice, and WITHOUT an
-/// embedded search box — the chrome search covers it). <see cref="HomeStyle.Catalog"/> switches
-/// back to the legacy single-list <see cref="UserActivityLayoutAreas.BuildCatalog"/> (covered by
-/// <see cref="HomeCatalogTest"/>).
+/// The home surface (<see cref="UserActivityLayoutAreas.BuildHome"/>) — ONE
+/// <see cref="MeshSearchControl"/> whose SCOPE TABS are the phone-home tabs: Shared with me (only
+/// with grants, store items excluded) · Pinned (only with pins) · Apps (default ∪ installed apps,
+/// 24-budgeted) · Spaces (catalog without store items) · All (everything, every depth). The scopes
+/// share one search bar by construction — the typed term survives tab switches and every tab is
+/// searchable. The search input is desktop-only (the view hides it on mobile); the <c>~/</c>
+/// system tiles render as a dock row above the search. <see cref="HomeStyle.Catalog"/> switches
+/// back to the legacy single list (covered by <see cref="HomeCatalogTest"/>).
 /// </summary>
 public class HomeTabsTest
 {
     private const string NodePath = "rbuergi";
 
-    private static string[] TabLabels(UiControl home) =>
-        home.Should().BeOfType<TabsControl>().Subject.Areas
-            .Select(a => a.Skins.OfType<TabSkin>().Single().Label!.ToString()!)
-            .ToArray();
+    /// <summary>A config whose DefaultApps carry no ~/ entry, so BuildHome returns the bare search
+    /// control (no dock stack) and its scopes are directly assertable.</summary>
+    private static HomeConfig NoDock(params string[] apps) =>
+        new() { DefaultApps = apps.Length > 0 ? apps : ["Store", "Doc"] };
+
+    private static MeshSearchControl Search(UiControl home) =>
+        home.Should().BeOfType<MeshSearchControl>().Subject;
+
+    private static string[] ScopeLabels(MeshSearchControl search) =>
+        search.ScopeTabs!.Select(t => t.Label).ToArray();
+
+    // ── Structure ───────────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Home_Default_IsTabbed_AppsThenSpaces()
+    public void Home_Default_IsDockPlusOneSearchSurface()
     {
-        // No shares, no pins → exactly the two always-present tabs, Apps before Spaces.
-        var home = UserActivityLayoutAreas.BuildHome(NodePath);
-
-        TabLabels(home).Should().Equal("Apps", "Spaces");
+        // Shipped DefaultApps include ~/Chat → a dock row above ONE search control.
+        UserActivityLayoutAreas.BuildHome(NodePath)
+            .Should().BeOfType<StackControl>().Subject
+            .Areas.Should().HaveCount(2, "system-tile dock + the single scoped search surface");
     }
 
     [Fact]
-    public void Home_WithShares_SharedWithMeComesFirst()
+    public void Home_NoShareNoPin_ScopesAreAppsSpacesAll()
     {
-        var home = UserActivityLayoutAreas.BuildHome(NodePath, sharedTargets: ["OrgA/Module"]);
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath, NoDock()));
 
-        TabLabels(home).Should().Equal("Shared with me", "Apps", "Spaces");
+        ScopeLabels(search).Should().Equal("Apps", "Spaces", "All");
     }
 
     [Fact]
-    public void Home_WithPins_PinnedComesBeforeApps()
+    public void Home_WithSharesAndPins_ScopeOrder()
     {
-        var home = UserActivityLayoutAreas.BuildHome(NodePath,
-            sharedTargets: ["OrgA/Module"], user: new User { PinnedPaths = ["Doc/GUI"] });
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath, NoDock(),
+            sharedTargets: ["OrgA/Module"], user: new User { PinnedPaths = ["Doc/GUI"] }));
 
-        TabLabels(home).Should().Equal("Shared with me", "Pinned", "Apps", "Spaces");
+        ScopeLabels(search).Should().Equal("Shared with me", "Pinned", "Apps", "Spaces", "All");
+    }
+
+    [Fact]
+    public void Home_OneSharedSearchBar_DesktopOn()
+    {
+        // The bar is ON (the view hides the input responsively on mobile); the control-level
+        // hidden query and sort options are the FIRST scope's — the fallback contract for clients
+        // without scope support.
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath, NoDock(),
+            sharedTargets: ["OrgA/Module"]));
+
+        search.ShowSearchBox.Should().Be(true);
+        search.HiddenQuery!.ToString().Should().Be(search.ScopeTabs![0].Query);
+        search.SortOptions!.Select(o => o.Query)
+            .Should().Equal(search.ScopeTabs![0].SortOptions!.Select(o => o.Query));
     }
 
     [Fact]
@@ -59,90 +83,117 @@ public class HomeTabsTest
         var home = UserActivityLayoutAreas.BuildHome(NodePath,
             new HomeConfig { Style = HomeStyle.Catalog });
 
-        home.Should().BeOfType<MeshSearchControl>("the legacy escape hatch is the tab-less catalog");
+        home.Should().BeOfType<MeshSearchControl>().Subject
+            .ScopeTabs.Should().BeNull("the legacy escape hatch is the scope-less catalog");
     }
 
-    // ── Apps tab ────────────────────────────────────────────────────────────────────────────────
+    // ── Shared-with-me scope ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Shared_ExcludesStoreItems_AndKeepsTheCompletenessFallback()
+    {
+        // The silent per-viewer entitlement grants (StandardPacks) made every plugin partition
+        // read as "shared with me" — store items are excluded here because an app is represented
+        // on the Apps scope, exactly once. And source:accessed is an INNER join, so the default
+        // last-accessed option stays a two-leg union with a plain fallback.
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath, NoDock(),
+            sharedTargets: ["OrgA/Module", "OrgB/Deck"]));
+
+        var shared = search.ScopeTabs![0];
+        shared.Label.Should().Be("Shared with me");
+        var legs = shared.Query.Split('\n');
+        legs.Should().HaveCount(2, "the accessed leg alone would hide a never-opened share");
+        legs[0].Should().Contain("source:accessed");
+        legs[1].Should().NotContain("source:accessed");
+        foreach (var leg in legs)
+        {
+            leg.Should().Contain("path:OrgA/Module|OrgB/Deck");
+            leg.Should().Contain("-nodeType:Store/Plugin");
+            leg.Should().Contain("-nodeType:Store/Catalog");
+            leg.Should().Contain("-nodeType:User",
+                "a grant resolving to another user's home partition must not list that person's space as shared");
+        }
+    }
+
+    // ── Apps scope ──────────────────────────────────────────────────────────────────────────────
 
     [Fact]
     public void Apps_UnionsConfigDefaultsAndInstalled_EachAppExactlyOnce()
     {
-        // Node-path union tested through the pure query core — "store" dedupes case-insensitively
-        // against the shipped default "Store", "Chess" appears once.
-        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
-        var apps = UserActivityLayoutAreas.BuildApps(
-                NodePath, noDock, installedApps: ["Chess", "store", "Chess"])
-            .Should().BeOfType<MeshSearchControl>().Subject;
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath, NoDock(),
+            installedApps: ["Chess", "store", "Chess"]));
 
-        var query = apps.HiddenQuery!.ToString()!;
-        query.Should().Contain("path:(Store OR Doc OR Chess)");
-        query.Should().NotContain("store OR");
-    }
-
-    [Fact]
-    public void Apps_ShippedDefaults_ComposeDockPlusGrid()
-    {
-        // Shipped DefaultApps include the ~/Chat Threads tile → dock tiles INLINE with the node
-        // grid, one horizontal band.
-        UserActivityLayoutAreas.BuildApps(NodePath, new HomeConfig(), installedApps: null)
-            .Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(2, "system-tile dock + the node-card grid, inline");
-    }
-
-    [Fact]
-    public void Apps_IsOneCompactBand()
-    {
-        // The Apps tab is a phone-dock band, not a grid of full-size cards: a 140px cell floor
-        // (below the control's 200px default) so a typical app set fits ONE row, wrapping only
-        // when it must. Deliberately NO MaxColumns: the React client renders MaxColumns as an
-        // EXACT column count and would squeeze cards to slivers.
-        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
-        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        apps.MinItemWidth.Should().Be(140);
-        apps.Sections!.ItemLimit.Should().Be(24);
-        apps.MaxColumns.Should().BeNull();
-        apps.Grid!.Spacing.Should().Be(12);
+        var apps = search.ScopeTabs!.Single(t => t.Label == "Apps");
+        // Defaults (Store, Doc) ∪ installed (Chess) — "store" dedupes case-insensitively.
+        apps.Query.Should().Contain("path:(Store OR Doc OR Chess)");
+        apps.Query.Should().NotContain("store OR");
+        // Default order alphabetical; all three sorts offered, scope-locally.
+        apps.SortOptions![0].Query.Should().Be(apps.Query);
+        apps.Query.Should().Contain("sort:Name-asc");
+        apps.SortOptions.Should().HaveCount(3);
     }
 
     [Fact]
     public void Apps_BudgetOf24_BoundsTheQueryItself()
     {
-        // 24 tiles TOTAL: with 30 configured paths and no dock entry, the grid's path alternation
-        // carries exactly 24 entries — the QUERY is bounded, not just the rendered list.
-        var many = new HomeConfig
-        {
-            DefaultApps = Enumerable.Range(1, 30).Select(i => $"P{i}").ToList(),
-        };
-        var apps = UserActivityLayoutAreas.BuildApps(NodePath, many, installedApps: null)
-            .Should().BeOfType<MeshSearchControl>().Subject;
+        var many = NoDock(Enumerable.Range(1, 30).Select(i => $"P{i}").ToArray());
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath, many));
 
-        var firstLeg = apps.HiddenQuery!.ToString()!.Split('\n')[0];
+        var apps = search.ScopeTabs!.Single(t => t.Label == "Apps");
+        var firstLeg = apps.Query.Split('\n')[0];
         firstLeg.Split(" OR ").Should().HaveCount(24, "the AppBudget slice bounds the path alternation");
         firstLeg.Should().NotContain("P25", "entries beyond the budget are dropped in config order");
     }
 
     [Fact]
-    public void Apps_BudgetOf24_CountsDockTiles()
+    public void AppEntries_BudgetCountsDockTiles_SliceBeforeTheSplit()
     {
-        // Dock entries count against the same budget: the slice happens BEFORE the dock/grid
-        // split, so a config of ~/Chat + 30 paths still yields one band of at most 24 tiles.
-        var many = new HomeConfig
+        var cfg = new HomeConfig
         {
             DefaultApps = new[] { "~/Chat" }
                 .Concat(Enumerable.Range(1, 30).Select(i => $"P{i}"))
                 .ToList(),
         };
-        var band = UserActivityLayoutAreas.BuildApps(NodePath, many, installedApps: null)
-            .Should().BeOfType<StackControl>().Subject;
-        band.Areas.Should().HaveCount(2, "dock + grid, inline");
+
+        var (systemAreas, paths) = UserActivityLayoutAreas.AppEntries(cfg, installedApps: null);
+
+        systemAreas.Should().Equal("~/Chat");
+        paths.Should().HaveCount(23, "24 total minus the dock tile — dock counts against the budget");
     }
+
+    // ── Spaces + All scopes ─────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Spaces_ExcludesStoreItems_TheDedupRule()
+    {
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath, NoDock()));
+
+        var spaces = search.ScopeTabs!.Single(t => t.Label == "Spaces");
+        foreach (var option in spaces.SortOptions!)
+        {
+            option.Query.Should().Contain("-nodeType:Store/Plugin");
+            option.Query.Should().Contain("-nodeType:Store/Catalog");
+        }
+    }
+
+    [Fact]
+    public void All_SearchesEverything_AtEveryDepth()
+    {
+        var search = Search(UserActivityLayoutAreas.BuildHome(NodePath, NoDock()));
+
+        var all = search.ScopeTabs!.Last();
+        all.Label.Should().Be("All");
+        all.Query.Should().Contain("is:main context:search");
+        all.Query.Should().NotContain("namespace:", "All is the SUBTREE query — everything, every depth");
+        all.Query.Should().NotContain("-nodeType:Store/Plugin", "the All scope hides nothing");
+    }
+
+    // ── System (dock) tiles ─────────────────────────────────────────────────────────────────────
 
     [Theory]
     [InlineData("~/Chat")]
     [InlineData("~/Chat/")]   // extra slashes normalize — the known-tile lookup keys on the TRIMMED segment
-    public void Apps_SystemTile_ThreadsDockTile_TargetsTheViewersChatArea(string entry)
+    public void SystemTile_ThreadsDockTile_TargetsTheViewersChatArea(string entry)
     {
         var tile = UserActivityLayoutAreas.BuildSystemAppTile(NodePath, entry);
 
@@ -153,7 +204,7 @@ public class HomeTabsTest
     }
 
     [Fact]
-    public void Apps_SystemTile_UnknownAreaFallsBack_MalformedIsNull()
+    public void SystemTile_UnknownAreaFallsBack_MalformedIsNull()
     {
         var unknown = UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "~/Foo");
         unknown!.Title.Should().Be("Foo");
@@ -163,115 +214,38 @@ public class HomeTabsTest
         UserActivityLayoutAreas.BuildSystemAppTile(NodePath, "Store").Should().BeNull();
     }
 
-    [Fact]
-    public void Apps_DefaultOrderIsAlphabetical_AllThreeSortsOffered()
-    {
-        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
-        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        apps.SortOptions![0].Label.Should().Be("Alphabetical");
-        apps.SortOptions![0].Query.Should().Be(apps.HiddenQuery!.ToString());
-        apps.HiddenQuery!.ToString().Should().Contain("sort:Name-asc");
-        apps.SortOptions!.Select(o => o.Label).OrderBy(l => l, StringComparer.Ordinal).Should()
-            .Equal("Alphabetical", "Last accessed", "Last modified");
-    }
+    // ── Install manifests → installed apps ──────────────────────────────────────────────────────
 
     [Fact]
-    public void Apps_LastAccessedSort_IsAUnionWithACompletenessFallback()
+    public void InstalledItemsOf_YieldsOnlyItemsWithALiveInstall()
     {
-        // source:accessed is an INNER join on the caller's access log — alone it would HIDE a
-        // never-opened app. The last-accessed option must therefore be a two-leg path-keyed union:
-        // accessed-ranked first, plain fallback second.
-        var noDock = new HomeConfig { DefaultApps = ["Store", "Doc"] };
-        var apps = UserActivityLayoutAreas.BuildApps(NodePath, noDock, installedApps: null)
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        var lastAccessed = apps.SortOptions!.Single(o => o.Label == "Last accessed").Query;
-        var legs = lastAccessed.Split('\n');
-        legs.Should().HaveCount(2);
-        legs[0].Should().Contain("source:accessed");
-        legs[1].Should().NotContain("source:accessed");
-        legs[1].Should().Contain("path:(");
-    }
-
-    [Fact]
-    public void Apps_NoAppsAnywhere_RendersAHint()
-    {
-        UserActivityLayoutAreas.BuildApps(NodePath, new HomeConfig { DefaultApps = [] }, installedApps: [])
-            .Should().BeOfType<MarkdownControl>("an empty Apps tab must explain itself, not render blank");
-    }
-
-    // ── Threads app (the /{user}/Chat page) ─────────────────────────────────────────────────────
-
-    [Fact]
-    public void ThreadsApp_IsARailPlusComposer()
-    {
-        UserActivityLayoutAreas.BuildThreadsApp(NodePath)
-            .Should().BeOfType<StackControl>().Subject
-            .Areas.Should().HaveCount(2, "the vertical thread rail + the composer pane");
-    }
-
-    [Fact]
-    public void ThreadsRail_ListsOpenThreads_RowsDelegateToTheRailItemArea()
-    {
-        var rail = UserActivityLayoutAreas.BuildThreadsRail(NodePath);
-
-        var query = rail.HiddenQuery!.ToString()!;
-        query.Should().Contain($"namespace:{NodePath}/*_Thread");
-        query.Should().Contain("nodeType:Thread");
-        query.Should().Contain("-content.status:Done", "closing a thread (✕ → MarkThreadDone) must remove it from the rail");
-        query.Should().Contain("sort:LastModified-desc");
-        // Flat + one column, NOT List: the List renderer ignores ItemArea, so the ✕ overlay would
-        // never render there — Flat is the ItemArea path the pinned grid proves.
-        rail.RenderMode.Should().Be(MeshSearchRenderMode.Flat);
-        rail.MaxColumns.Should().Be(1, "the rail is a vertical menu");
-        rail.ItemArea.Should().Be("RailItem", "each row renders via the thread hub's RailItem area (title + ✕)");
-        rail.ShowSearchBox.Should().Be(false);
-    }
-
-    // ── Spaces tab (dedup) ──────────────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void Spaces_ExcludesStoreItems_TheDedupRule()
-    {
-        // An app is represented exactly once: plugin covers + the store root live on the Apps tab
-        // (or in the Store), so the Spaces tab filters them out of every sort option's query.
-        var spaces = UserActivityLayoutAreas.BuildSpaces(NodePath)
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        foreach (var option in spaces.SortOptions!)
+        // The Store's per-user install manifest ({owner}/_Install/{slug}) is mesh-compiled and read
+        // UNTYPED by design: items[] with a non-empty installedPath ARE the installed apps.
+        var manifest = JsonSerializer.SerializeToElement(new
         {
-            option.Query.Should().Contain("-nodeType:Store/Plugin");
-            option.Query.Should().Contain("-nodeType:Store/Catalog");
-        }
+            repo = "https://github.com/Systemorph/MeshWeaver.Plugins",
+            items = new object[]
+            {
+                new { item = "Chess", installedPath = "rbuergi/Chess", installedAt = "2026-08-01" },
+                new { item = "Publish", installedPath = (string?)null },        // un-installed: keeps entitlement only
+                new { item = (string?)null, installedPath = "rbuergi/Ghost" },  // malformed: no item id
+                new { item = "Training/", installedPath = "rbuergi/Training" }, // normalizes
+            },
+        });
+
+        UserActivityLayoutAreas.InstalledItemsOf(manifest, new JsonSerializerOptions())
+            .Should().Equal("Chess", "Training");
     }
 
     [Fact]
-    public void Spaces_HasNoEmbeddedSearchBox()
+    public void InstalledItemsOf_ToleratesGarbage()
     {
-        // Every client chrome already carries a global search; an embedded box would double it
-        // (the two-search-bars problem on the mobile clients).
-        UserActivityLayoutAreas.BuildSpaces(NodePath)
-            .Should().BeOfType<MeshSearchControl>().Subject
-            .ShowSearchBox.Should().Be(false);
-    }
-
-    // ── Shared-with-me tab ──────────────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void SharedWithMe_DefaultsToLastAccessed_WithACompletenessFallback()
-    {
-        var shared = UserActivityLayoutAreas.BuildSharedWithMe(["OrgA/Module", "OrgB/Deck"])
-            .Should().BeOfType<MeshSearchControl>().Subject;
-
-        shared.SortOptions![0].Label.Should().Be("Last accessed");
-        var legs = shared.HiddenQuery!.ToString()!.Split('\n');
-        legs.Should().HaveCount(2, "the accessed leg alone would hide a share the caller never opened");
-        legs[0].Should().Contain("source:accessed");
-        legs[0].Should().Contain("path:OrgA/Module|OrgB/Deck");
-        legs[1].Should().NotContain("source:accessed");
-        legs[1].Should().Contain("path:OrgA/Module|OrgB/Deck");
+        var options = new JsonSerializerOptions();
+        UserActivityLayoutAreas.InstalledItemsOf(null, options).Should().BeEmpty();
+        UserActivityLayoutAreas.InstalledItemsOf(JsonSerializer.SerializeToElement(42), options).Should().BeEmpty();
+        UserActivityLayoutAreas.InstalledItemsOf(
+                JsonSerializer.SerializeToElement(new { items = "nope" }), options)
+            .Should().BeEmpty();
     }
 
     // ── Config ──────────────────────────────────────────────────────────────────────────────────
