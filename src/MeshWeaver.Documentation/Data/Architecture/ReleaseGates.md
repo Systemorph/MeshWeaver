@@ -204,8 +204,10 @@ workflow every node repo calls. A caller declares its upstreams:
 with:
   bake-source: education
   upstream-sources: plugins          # exit unless `plugins` is published for the target identity
-  dependent-repos: Systemorph/MeshWeaver.Reinsurance
 ```
+
+(There is no `dependent-repos` any more — a publisher does not name its readers. A repo that exits
+here comes back on its own `schedule`; see below.)
 
 Before staging or baking anything the job resolves the identity it is about to target — from the
 **image**, with `mw-plugin-test --print-framework-identity`, because that is the only place an
@@ -229,31 +231,30 @@ platform ──▶ plugins (no upstreams)          builds, publishes
 one, so "upstreams not ready, did not build" must never be a grey skip or a silent success. A red
 here is also simply *true*: this repo has not been rebuilt for this release yet.
 
-### The edge that makes it work: a satellite wakes its own dependents
+### The edge that makes it work: the exited repo RETRIES on its schedule
 
-Until now only the **platform** dispatched. A downstream repo that exited was waiting for an event
-nobody fired, so the very first satellite→satellite dependency would have deadlocked on first use.
-So `node-repo-publish-bake` now fires `meshweaver-upstream-published` — carrying
-`{source, identity, version, sha}` — to each repo in `dependent-repos`, **after** the publication it
-announces has sealed.
+A repo that exits because an upstream is not published yet must have something bring it back.
 
-Two rules keep that edge honest:
+There used to be a dispatch for that: `node-repo-publish-bake` fired `meshweaver-upstream-published`
+to each repo in `dependent-repos`, using a token with write access to every one of them. **Both are
+removed.** The publisher no longer knows its dependents, and no cross-repo credential exists.
 
-- **Declaring `dependent-repos` declares an obligation**, so its token is asserted in preflight and
-  a missing one fails RED. Without the token those repos never wake, and nothing anywhere would be
-  red about it.
-- **A failed dispatch fails the job**, unlike the platform's reporter-class notification. A lost
-  wake-up leaves a repo that already exited with nothing to re-trigger it — the terminal-exit
-  failure this design must not have. The publication is already sealed and idempotent, so re-running
-  is safe.
-
-Receivers subscribe to both event types:
+What brings the exited repo back is its own **`schedule`** trigger: it re-reads the released image
+from the registry and rebuilds once the upstream has published. Pull, not push.
 
 ```yaml
 on:
   repository_dispatch:
-    types: [meshweaver-framework-released, meshweaver-upstream-published]
+    types: [meshweaver-framework-released]
+  schedule:
+    - cron: "17,47 * * * *"      # 🚨 without this the repo NEVER retries
 ```
+
+> 🚨 **The schedule is not optional decoration.** A repo without it exits waiting for an event that
+> no longer exists and never rebuilds — silently, with everything green. That is the same
+> terminal-exit failure the dispatch was invented to prevent; the cure is now the schedule, and it
+> is the one thing to check when a source's bundles are the ones missing from an instance's
+> `heldReason`.
 
 ### Build only what you own — the half that is not done
 
@@ -284,7 +285,7 @@ take the released bytes rather than remake them.
 #### 🚨 A publisher NEVER knows its dependents — a release is a BROADCAST
 
 State this before the mechanics, because the obvious implementation is the wrong one. It is
-tempting to let each repo name the repos it must wake (`dependent-repos`), and that list is exactly
+tempting to let each repo name the repos it must wake, and such a list is exactly
 what must not exist:
 
 > **A repo declares its UPSTREAMS. It never declares its DOWNSTREAMS.** A release is PUBLISHED —
@@ -344,11 +345,11 @@ upstreams are released and builds. The publisher names nobody.
 
 Until these land, a satellite still stages from source, and that staging is the one sanctioned
 exception to the rule at the top of this page — marked transitional everywhere it appears so it is
-never mistaken for the intended shape. The same applies to the `dependent-repos` input on
-`node-repo-publish-bake` and to CD's `BAKE_SUBSCRIBER_REPOS`: both are ADDRESSED notification, both
-are transitional scaffolding for a broadcast that does not exist yet, and **neither may be extended
-to new repos.** Wiring one more dependent into a list is not progress toward this design; it is one
-more copy of the graph to keep honest.
+never mistaken for the intended shape. The same applied to the removed `dependent-repos` input on
+`node-repo-publish-bake` and to CD's `BAKE_SUBSCRIBER_REPOS`. **Both are now GONE** — they were
+ADDRESSED notification where the design calls for a broadcast, and both needed a cross-repo write
+credential. Neither may be reintroduced: wiring a dependent into a list is not progress toward this
+design, it is one more copy of a graph memex already holds, whose missing entry fails silently.
 
 #### Why this is also the cure for the recompile leak
 
@@ -358,6 +359,72 @@ content at boot precisely when no sealed bake is available for its framework, wh
 this page's gate exists to prevent. Every path that ends in "somebody rebuilt what should have been
 fetched" ends in another ALC. Fixing the distribution — released artifacts, fetched, never
 rebuilt — removes the recompiles rather than making each one cheaper.
+
+## 🚨 How a fleet goes stale while every check is green (2026-08-22)
+
+memex.meshweaver.cloud sat on a day-old release and would not move. Nothing was red: CI green, CD
+green, bakes green, the portal healthy. The instance was doing exactly what this page asks of it —
+and could never stop.
+
+Read `Admin/UpdatePolicy` on the instance first; the hold is recorded there, not in CI:
+
+```
+heldTag    : 3.0.0-rc7.ci.4928
+heldReason : no sealed content bake for framework identity se3bf749… — the bundle 'Store'
+             is not published for release 3.0.0-rc7.ci.4928, so this instance would
+             recompile it at boot
+```
+
+**Three defects compounded, and each is invisible alone.**
+
+### 1. The instance froze instead of falling back
+
+The poller picked the NEWEST tag and stopped. Unbaked ⇒ hold. The next platform build produced
+another unbaked tag, the next bake published yet another identity, and the two never met. The head
+is always the release *least* likely to be baked, and it blocked every release behind it that was.
+A sister instance had rolled cleanly to `ci.4908` — memex should have taken that and did not.
+
+Fixed by selecting the newest **baked** release: walk candidates newest-first and take the first
+the gate accepts. Never backwards, never into a boot storm, but a not-yet-baked head no longer
+freezes the fleet.
+
+### 2. Nothing ever baked for the released identity
+
+A bake follows the release only on `repository_dispatch`/`schedule`; a `main` push bakes the PIN,
+whose identity is already published. The dispatch needed a cross-repo write credential that was
+never provisioned, so for its whole life it printed "NOT CONFIGURED" and did nothing.
+
+Fixed by deleting the dispatch instead of provisioning it: a release is a FACT about the registry,
+so each repo's SCHEDULED run reads it and rebuilds. Pull, not push — no credential, no
+hand-maintained dependents list.
+
+> ⚠️ **A repo without the `schedule` trigger cannot participate at all.** It bakes only against its
+> pin, on its own pushes, forever. Check this first when one source's bundles are the ones missing.
+
+### 3. The bake and the roll aimed at different images
+
+The bake resolves `mw-plugin-test:latest`; the instance rolls to `memex-portal-ai:<tag>`. Same
+commit ⇒ same identity, but `:latest` moves, so a busy trunk makes them agree only by luck.
+
+### What to check, in order
+
+1. `Admin/UpdatePolicy` on the instance — `heldTag`/`heldReason` name the identity and the bundles.
+2. Which SOURCE owns the missing bundles (`plugins`, `education`, …) — then whether that repo has a
+   `schedule` trigger and when it last baked.
+3. The identity its last bake published (`bake published: identity=…` in the job log) against the
+   identity in `heldReason`. **Different values are the whole bug**; equal values mean look elsewhere.
+
+### Breaking the deadlock by hand
+
+The selection fix cannot deploy itself — an instance cannot roll to receive the change that lets it
+roll. Once, by hand, roll it to a release a SISTER INSTANCE is already serving: that release is
+proven baked for the packages the two share, so the cost is bounded to whatever only this instance
+has installed.
+
+🚨 Portal and migration images must move TOGETHER; a portal tag without a matching migration tag is
+an ImagePullBackOff. And the namespaces are CROSSED — `memex` serves memex.systemorph.com,
+`memex-cloud` serves memex.meshweaver.cloud. Verify with the running image before patching, never
+from the name.
 
 ## See also
 

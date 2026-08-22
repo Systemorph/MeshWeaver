@@ -687,9 +687,12 @@ GitHub subject formats (classic and immutable; **register both, always** — see
 `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` secrets set on all four repos.
 **A red publish-bake was designed debt until 2026-08-17 and is a real failure after it** —
 treat any surviving allowlist or "credentials pending" reference to a satellite's publish lane
-as historical. The framework-release dispatch that fans a platform release out to the satellites is
-still dormant (`BAKE_SUBSCRIBER_REPOS` / `DEPENDENT_DISPATCH_TOKEN` unprovisioned); until it is
-armed, a satellite re-bakes on its own `main` pushes only.
+as historical. 🚨 **There is no framework-release dispatch any more** — it was removed on
+2026-08-22 rather than provisioned (a publisher must not know its readers, and the credential to
+tell them is not worth holding). A satellite bakes for a RELEASED identity on its **`schedule`**;
+without that trigger it bakes only its pin, on its own pushes, forever. See
+[Release Availability Gates](/Doc/Architecture/ReleaseGates) → "How a fleet goes stale while every
+check is green".
 
 **Measured in production, 2026-08-17** — for satellite content the lane is not a design any more,
 it is observed behaviour. On `memex` running `3.0.0-rc4.ci.4049` (identity
@@ -726,10 +729,10 @@ types. The satellites escape it precisely because they bake INSIDE the image.
   `mw-plugin-test` run; its content moves with the platform commit it is baking, so a
   content-diff baseline is a different question from the node repos' one.
 - **The cross-repo rebuild cascade is a separate axis.** `narrow-by-affected` answers "which of
-  THIS repo's modules changed". "Which repos must rebuild, in what order, when an upstream
-  publishes" is the `upstream-sources` gate plus `dependent-repos`, and it is still dormant in
-  practice for this repo's dependents: `DEPENDENT_DISPATCH_TOKEN` is unprovisioned, so Plugins
-  declares no `dependent-repos` and Education/Reinsurance are woken only by their own schedule.
+  THIS repo's modules changed". "Which repos must rebuild, when an upstream publishes" is the
+  `upstream-sources` gate plus each repo's own **`schedule`** — there is no dispatch and no
+  dependent list. A repo missing the schedule never rebuilds for a release, and the only symptom is
+  an instance HELD on bundles from that repo's source.
 - **An arm64 install adopts nothing the amd64 lane publishes** — the two architectures of one image
   resolve different identities (see the identity rule above). Local arm64 installs compile at boot
   as they always have; nothing may paper over this by publishing the same bundles twice.
