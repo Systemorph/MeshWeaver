@@ -133,6 +133,35 @@
     color: var(--error-foreground);
 }
 
+/* Two-step confirm pair (check / dismiss) — visible while armed. */
+.mesh-node-collection-delete-confirm {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.mesh-node-collection-delete-confirm button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    background: var(--neutral-layer-1, #fff);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mesh-node-collection-delete-yes {
+    color: var(--error, #d32f2f);
+    border-color: var(--error, #d32f2f) !important;
+}
+
+.mesh-node-collection-delete-no {
+    color: var(--neutral-foreground-hint, #666);
+}
+
 .mesh-node-collection-add {
     background: none;
     border: 1px dashed var(--neutral-stroke-rest);

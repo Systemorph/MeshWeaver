@@ -675,6 +675,7 @@
   "ui.createNew": "Neu erstellen",
   "ui.dataModel": "Datenmodell",
   "ui.deleteNode": "Node löschen",
+  "ui.deleteQueryResults": "Abfrageergebnisse löschen",
   "ui.editComment": "Kommentar bearbeiten",
   "ui.examples": "Beispiele",
   "ui.exercises": "Übungen",
