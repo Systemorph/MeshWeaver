@@ -22,15 +22,17 @@ public enum PlatformUpdateChipAction
 /// reason <see cref="Settings.AboutSettingsTab.UpdateStatusMarkdown"/> takes its localizer as a
 /// function). The component holds only markup and wiring.
 /// </summary>
-/// <param name="DisplayText">
-/// What the header shows: when this build was last deployed, or <c>null</c> when that is unknown
-/// (the glyph still renders, so the button is never blank-but-clickable).
+/// <param name="Tooltip">
+/// The full sentence on hover — build identity in every state, and the deployment time.
+///
+/// <para>🚨 The chip renders a GLYPH ONLY. It sits in a strip of icon buttons, and a chip that also
+/// rendered text was wider than its siblings and pushed its own glyph off their shared centre line.
+/// So everything the chip has to say is here, and this string is the whole surface: if a fact is not
+/// in it, the reader cannot get at it without opening the About page.</para>
 /// </param>
-/// <param name="Tooltip">The full sentence on hover — build identity in every state.</param>
 /// <param name="IsUpdate">Whether an update is pending, which is what the chip styles on.</param>
 /// <param name="Action">What a click does.</param>
 public record PlatformUpdateChip(
-    string? DisplayText,
     string Tooltip,
     bool IsUpdate,
     PlatformUpdateChipAction Action)
@@ -131,25 +133,31 @@ public record PlatformUpdateChip(
             ? $"{localize("about.lastDeployed")} {when}"
             : null;
 
+        // 🚨 The deployment time is TOOLTIP-ONLY, and it must appear in every state. The header
+        // strip is icon buttons; a chip that also rendered text was wider than its siblings and
+        // pushed its own glyph off their shared centre line — visible as one misaligned icon in a
+        // row of eight. Dropping the text fixes the row, so the time has to land here or it is
+        // simply lost, and "when was this deployed?" is the question the chip exists to answer.
+        var withDeployed = (string sentence) => deployed is null ? sentence : $"{sentence} {deployed}.";
+
         return status.Availability switch
         {
             PlatformUpdateAvailability.UpdateAvailable => new(
-                deployed,
-                $"{localize("about.updateAvailable")} — {status.LatestVersion}. {running}. "
-                + localize("ui.updateRefreshHint"),
+                withDeployed(
+                    $"{localize("about.updateAvailable")} — {status.LatestVersion}. {running}. "
+                    + localize("ui.updateRefreshHint")),
                 IsUpdate: true,
                 PlatformUpdateChipAction.Refresh),
 
             PlatformUpdateAvailability.UpdateHeld => new(
-                deployed,
-                $"{localize("about.updateHeld")} — {status.LatestVersion}. {running}.",
+                withDeployed($"{localize("about.updateHeld")} — {status.LatestVersion}. {running}."),
                 IsUpdate: true,
                 PlatformUpdateChipAction.OpenAbout),
 
             // UpToDate and Unknown are the same chip on purpose. Unknown means nothing is polling,
             // so claiming "up to date" would be an unfounded verdict (PlatformUpdateAvailability
             // .Unknown) — but the running build is a fact either way, and it is the whole point.
-            _ => new(deployed, running, IsUpdate: false, PlatformUpdateChipAction.OpenAbout),
+            _ => new(withDeployed(running), IsUpdate: false, PlatformUpdateChipAction.OpenAbout),
         };
     }
 }
