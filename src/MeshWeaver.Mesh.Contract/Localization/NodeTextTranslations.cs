@@ -164,5 +164,60 @@ public static class NodeTextTranslations
         return result;
     }
 
+    /// <summary>
+    /// The fields a declared translation MUST carry — the two a person actually reads in a picker
+    /// row. <see cref="LocalizedNodeText.Category"/> is deliberately optional: a category is one
+    /// grouping label shared by a whole pack ("Skills"), so requiring it per node would mean
+    /// twenty-one copies of the same word, and a pack that does need it can still set it.
+    /// </summary>
+    public static ImmutableList<string> RequiredFields { get; } = ["name", "description"];
+
+    /// <summary>
+    /// 🚨 THE HALF-LOCALIZED GUARD. What <paramref name="node"/> is MISSING to be fully localized
+    /// into <paramref name="requiredLocales"/>, as <c>"{locale}:{field}"</c> entries — empty when
+    /// it is complete.
+    ///
+    /// <para>The rule is per PACK, not per node, and it is the only rule that makes a translated
+    /// pack trustworthy. A missing translation is invisible: the field falls back to English, so a
+    /// German picker with three English rows in it looks like a design choice rather than a gap.
+    /// Callers derive <paramref name="requiredLocales"/> from the pack's own union of declared
+    /// languages (<see cref="DeclaredLocales"/>), so an English-only pack requires nothing — the
+    /// gate is "do not ship HALF a language", never "you must ship every language".</para>
+    ///
+    /// <para>A required field is only required when the node HAS one: a node with no description
+    /// cannot be missing a translated description.</para>
+    /// </summary>
+    /// <param name="node">The node to check.</param>
+    /// <param name="requiredLocales">The languages this node's pack must cover.</param>
+    /// <returns>The missing <c>"{locale}:{field}"</c> entries, ordered.</returns>
+    public static ImmutableList<string> MissingTranslations(
+        MeshNode node, IEnumerable<string> requiredLocales)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(requiredLocales);
+        var missing = ImmutableList.CreateBuilder<string>();
+        foreach (var locale in requiredLocales.Select(Locales.Resolve).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal))
+        {
+            if (string.Equals(locale, Locales.Default, StringComparison.OrdinalIgnoreCase))
+                continue;   // English IS the authored text — there is nothing to declare.
+            var text = For(node.Content, locale);
+            foreach (var field in RequiredFields)
+            {
+                var authored = field switch
+                {
+                    "name" => node.Name,
+                    "description" => node.Description,
+                    "category" => node.Category,
+                    _ => null,
+                };
+                if (Blank(authored))
+                    continue;   // nothing to translate
+                if (Blank(text?.Get(field)))
+                    missing.Add($"{locale}:{field}");
+            }
+        }
+        return missing.ToImmutable();
+    }
+
     private static bool Blank(string? value) => string.IsNullOrWhiteSpace(value);
 }
