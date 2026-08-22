@@ -29,12 +29,6 @@ namespace MeshWeaver.Graph;
 public static class MeshDataSourceExtensions
 {
     /// <summary>
-    /// Marker declaring that a hub exists ONLY to be interrogated for type information and
-    /// will be disposed immediately — see <see cref="AsTransientNodeProbe"/>.
-    /// </summary>
-    internal sealed record TransientNodeProbe;
-
-    /// <summary>
     /// Declares this hub a <b>transient probe</b>: it applies a NodeType's configuration purely
     /// so its <see cref="MeshWeaver.Domain.ITypeRegistry"/> / <see cref="MeshDataSource.ContentType"/>
     /// can be read, and is disposed in the same breath. Such a hub gets the data context (which is
