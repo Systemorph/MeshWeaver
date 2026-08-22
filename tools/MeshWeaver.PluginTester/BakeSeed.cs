@@ -82,7 +82,11 @@ public sealed record BakeSeed(
                 + "consume. A gate asked to consume a bake and handed an empty one has no way to "
                 + "tell that apart from a bake it consumed perfectly.");
 
-        var declared = ImmutableSortedSet.CreateBuilder<string>(StringComparer.Ordinal);
+        // 🚨 OrdinalIgnoreCase, matching ShippedPrebuiltBundles.SeedForTypes' own path set
+        // exactly. The accounting below decides a VERDICT by comparing this set with what
+        // the installer asked for, so a comparer stricter than the seeder's would report a
+        // shortfall for an assembly the seeder had happily adopted under a case difference.
+        var declared = ImmutableSortedSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var bundle in bundles)
         {
             BundleReader.Manifest? manifest;
@@ -142,8 +146,10 @@ public sealed class BakeSeedConsumer(
     BakeSeed seed) : IPrebuiltAssemblyConsumer
 {
     private readonly object gate = new();
+    // Same comparer as BakeSeed.DeclaredTypePaths and as the seeder's own path set — the three
+    // are intersected to reach a verdict and must agree on what "the same node path" means.
     private ImmutableSortedSet<string> requested =
-        ImmutableSortedSet.Create<string>(StringComparer.Ordinal);
+        ImmutableSortedSet.Create<string>(StringComparer.OrdinalIgnoreCase);
     private int adopted;
 
     /// <summary>Every NodeType path an install asked this consumer about, ordinal.</summary>
