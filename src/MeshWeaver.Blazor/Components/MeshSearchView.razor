@@ -13,8 +13,8 @@
             @for (var i = 0; i < BoundScopeTabs.Count; i++)
             {
                 var idx = i;
-                <button type="button" role="tab" aria-selected="@(idx == _activeScopeIndex)"
-                        class="mesh-search-scope@(idx == _activeScopeIndex ? " mesh-search-scope-active" : "")"
+                <button type="button" role="tab" aria-selected="@(idx == ActiveScopeIndex)"
+                        class="mesh-search-scope@(idx == ActiveScopeIndex ? " mesh-search-scope-active" : "")"
                         @onclick="() => SelectScope(idx)">@BoundScopeTabs[idx].Label</button>
             }
         </div>

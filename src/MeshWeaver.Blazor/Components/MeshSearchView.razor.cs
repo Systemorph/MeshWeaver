@@ -307,10 +307,14 @@ public partial class MeshSearchView
     }
 
     // ----- Scope tabs (one shared search bar across scopes) -----
-    // The active tab's index. Scope switching swaps ONLY the hidden query (and the sort set) while
-    // the typed search text and every other bit of component state stay — that is the whole point:
-    // a search term follows the user across the tabs because they are ONE component.
-    private int _activeScopeIndex;
+    // The active tab is tracked by its LABEL, not an index: the scope list is REACTIVE (a scope
+    // like Shared-with-me appears/disappears as grants, pins or the presentation screen change),
+    // so a bare index could silently re-point at a DIFFERENT scope on a list change. The label
+    // re-resolves against the current list on every read; a vanished label clamps to the first
+    // tab. Scope switching swaps ONLY the hidden query (and the sort set) while the typed search
+    // text and every other bit of component state stay — that is the whole point: a search term
+    // follows the user across the tabs because they are ONE component.
+    private string? _activeScopeLabel;
 
     /// <summary>The scope tabs supplied by the control (empty ⇒ no strip).</summary>
     private IReadOnlyList<MeshSearchScopeTab> BoundScopeTabs => ViewModel?.ScopeTabs ?? [];
@@ -318,11 +322,25 @@ public partial class MeshSearchView
     /// <summary>Render the scope strip only for two or more scopes.</summary>
     private bool HasScopeTabs => BoundScopeTabs.Count > 1;
 
+    /// <summary>The active tab's index, re-resolved from the label against the CURRENT list —
+    /// clamped to the first tab when the label is unset or its scope vanished.</summary>
+    private int ActiveScopeIndex
+    {
+        get
+        {
+            var tabs = BoundScopeTabs;
+            if (tabs.Count == 0 || _activeScopeLabel is null)
+                return 0;
+            for (var i = 0; i < tabs.Count; i++)
+                if (tabs[i].Label == _activeScopeLabel)
+                    return i;
+            return 0;
+        }
+    }
+
     /// <summary>The active scope, when scopes are declared.</summary>
     private MeshSearchScopeTab? ActiveScopeTab =>
-        BoundScopeTabs.Count > 0 && _activeScopeIndex >= 0 && _activeScopeIndex < BoundScopeTabs.Count
-            ? BoundScopeTabs[_activeScopeIndex]
-            : null;
+        BoundScopeTabs.Count > 0 ? BoundScopeTabs[ActiveScopeIndex] : null;
 
     /// <summary>
     /// Activates a scope tab: swap the base hidden query to the scope's, reset the sort choice to
@@ -331,9 +349,9 @@ public partial class MeshSearchView
     /// </summary>
     private void SelectScope(int index)
     {
-        if (index == _activeScopeIndex || index < 0 || index >= BoundScopeTabs.Count)
+        if (index == ActiveScopeIndex || index < 0 || index >= BoundScopeTabs.Count)
             return;
-        _activeScopeIndex = index;
+        _activeScopeLabel = BoundScopeTabs[index].Label;
         _viewSortLabel = null;                     // back to the scope's default (first) sort
         _overriddenHiddenQuery = null;             // the scope query IS the new base
         _lastBoundHiddenQuery = BoundHiddenQuery;  // keep OnParametersSet from re-triggering
